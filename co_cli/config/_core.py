@@ -281,7 +281,7 @@ def load_config(
             try:
                 data = json.load(f)
             except Exception as e:
-                print(f"Error loading settings.json: {e}. Using defaults.")
+                print(f"Error loading settings.json: {e}. Using defaults.")  # noqa: T201 — bootstrap error before logging is configured
 
     project_config = find_project_config(_project_dir)
     if project_config is not None:
@@ -289,7 +289,7 @@ def load_config(
             try:
                 data = _deep_merge_settings(data, json.load(f))
             except Exception as e:
-                print(f"Error loading project config {project_config}: {e}. Skipping.")
+                print(f"Error loading project config {project_config}: {e}. Skipping.")  # noqa: T201 — bootstrap error before logging is configured
 
     context = {"env": _env} if _env is not None else None
     try:
@@ -304,7 +304,7 @@ def load_config(
         raise ValueError(f"Invalid configuration{hint}:\n{exc}") from exc
 
     for warning in _validate_personality(resolved.personality):
-        print(f"Warning: {warning}")
+        print(f"Warning: {warning}")  # noqa: T201 — personality validation warning at bootstrap, logger not yet configured
 
     return resolved
 
@@ -326,7 +326,7 @@ def get_settings() -> Settings:
         except ValueError as e:
             import sys
 
-            print(f"Configuration error: {e}", file=sys.stderr)
+            print(f"Configuration error: {e}", file=sys.stderr)  # noqa: T201 — fatal startup error to stderr, logger not yet configured
             raise SystemExit(1) from e
     return _settings
 

@@ -258,7 +258,8 @@ def test_group_by_turn_orphan_prevention():
         if isinstance(m, ModelRequest)
         for p in m.parts
     )
-    assert g0_has_call and g0_has_return
+    assert g0_has_call
+    assert g0_has_return
     # Dropping group 0 leaves group 1 with no orphaned ToolReturnPart
     remaining = groups_to_messages(groups[1:])
     for msg in remaining:

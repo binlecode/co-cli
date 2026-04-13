@@ -517,3 +517,122 @@ async def test_lifecycle_skips_non_file_tools(tmp_path):
     )
 
     assert result_args == {"query": "hello"}
+
+
+# --- staleness guard ---
+
+
+@pytest.mark.asyncio
+async def test_read_file_records_mtime(tmp_path):
+    """read_file records the file's mtime in file_read_mtimes on success."""
+    target = tmp_path / "tracked.txt"
+    target.write_text("content")
+    ctx = _make_ctx(tmp_path)
+
+    await read_file(ctx, path="tracked.txt")
+
+    assert str(target) in ctx.deps.file_read_mtimes
+    assert ctx.deps.file_read_mtimes[str(target)] == target.stat().st_mtime
+
+
+@pytest.mark.asyncio
+async def test_write_file_staleness_blocked(tmp_path):
+    """write_file returns error when file was modified since last read."""
+    target = tmp_path / "stale.txt"
+    target.write_text("original")
+    ctx = _make_ctx(tmp_path)
+    # Simulate: agent recorded an old mtime of 0.0 — file on disk has a newer mtime
+    ctx.deps.file_read_mtimes[str(target)] = 0.0
+
+    result = await write_file(ctx, path="stale.txt", content="overwrite")
+
+    assert result.metadata.get("error") is True
+    assert "changed since last read" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_edit_file_staleness_blocked(tmp_path):
+    """edit_file returns error when file was modified since last read."""
+    target = tmp_path / "stale.txt"
+    target.write_text("original content")
+    ctx = _make_ctx(tmp_path)
+    ctx.deps.file_read_mtimes[str(target)] = 0.0
+
+    result = await edit_file(ctx, path="stale.txt", search="original", replacement="new")
+
+    assert result.metadata.get("error") is True
+    assert "changed since last read" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_write_file_new_file_skips_staleness(tmp_path):
+    """write_file skips staleness check for paths that were never read."""
+    ctx = _make_ctx(tmp_path)
+
+    result = await write_file(ctx, path="brand_new.txt", content="hello")
+
+    assert not result.metadata.get("error")
+
+
+@pytest.mark.asyncio
+async def test_write_file_staleness_mtime_updated_after_write(tmp_path):
+    """write_file updates file_read_mtimes after a successful write so the second write does not false-positive."""
+    target = tmp_path / "data.txt"
+    target.write_text("initial")
+    ctx = _make_ctx(tmp_path)
+
+    # Read the file so mtime is registered
+    await read_file(ctx, path="data.txt")
+
+    result1 = await write_file(ctx, path="data.txt", content="first write")
+    assert not result1.metadata.get("error")
+
+    # Second write must also succeed — mtime was updated after the first write
+    result2 = await write_file(ctx, path="data.txt", content="second write")
+    assert not result2.metadata.get("error")
+
+
+# --- file size guard + encoding detection ---
+
+
+@pytest.mark.asyncio
+async def test_edit_file_size_guard(tmp_path):
+    """edit_file returns error when file exceeds _MAX_EDIT_BYTES."""
+    from co_cli.tools.files import _MAX_EDIT_BYTES
+
+    target = tmp_path / "huge.txt"
+    target.write_bytes(b"x" * (_MAX_EDIT_BYTES + 1))
+
+    result = await edit_file(_make_ctx(tmp_path), path="huge.txt", search="x", replacement="y")
+
+    assert result.metadata.get("error") is True
+    assert "too large" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_read_file_utf16le(tmp_path):
+    """read_file succeeds on UTF-16LE files with BOM."""
+    target = tmp_path / "utf16.txt"
+    # BOM (FF FE) + UTF-16LE payload
+    target.write_bytes(b"\xff\xfe" + "hello utf16".encode("utf-16-le"))
+
+    result = await read_file(_make_ctx(tmp_path), path="utf16.txt")
+
+    assert not result.metadata.get("error")
+    assert "hello utf16" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_edit_file_utf16(tmp_path):
+    """edit_file succeeds on UTF-16 files with BOM — edit applies and file remains valid UTF-16."""
+    target = tmp_path / "utf16edit.txt"
+    target.write_bytes(b"\xff\xfe" + "hello world".encode("utf-16-le"))
+    ctx = _make_ctx(tmp_path)
+
+    result = await edit_file(ctx, path="utf16edit.txt", search="hello", replacement="goodbye")
+
+    assert not result.metadata.get("error")
+    assert result.metadata["replacements"] == 1
+    # Encoding must be preserved — file is still readable as UTF-16 with the replacement applied
+    updated_content = target.read_text(encoding="utf-16")
+    assert "goodbye world" in updated_content

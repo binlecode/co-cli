@@ -12,6 +12,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from tests._frontend import SilentFrontend
 from tests._settings import make_settings
 
 from co_cli.deps import CoDeps
@@ -21,57 +22,6 @@ from co_cli.memory._extractor import (
     fire_and_forget_extraction,
 )
 from co_cli.tools.shell_backend import ShellBackend
-
-# ---------------------------------------------------------------------------
-# Minimal silent frontend for fire-and-forget tests
-# ---------------------------------------------------------------------------
-
-
-class _SilentFrontend:
-    """Silent Frontend for extraction tests — no terminal output."""
-
-    def on_text_delta(self, accumulated: str) -> None:
-        pass
-
-    def on_text_commit(self, final: str) -> None:
-        pass
-
-    def on_thinking_delta(self, accumulated: str) -> None:
-        pass
-
-    def on_thinking_commit(self, final: str) -> None:
-        pass
-
-    def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
-        pass
-
-    def on_tool_progress(self, tool_id: str, message: str) -> None:
-        pass
-
-    def on_tool_complete(self, tool_id: str, result: object) -> None:
-        pass
-
-    def on_status(self, message: str) -> None:
-        pass
-
-    def on_reasoning_progress(self, text: str) -> None:
-        pass
-
-    def on_final_output(self, text: str) -> None:
-        pass
-
-    def prompt_approval(self, description: str) -> str:
-        return "n"
-
-    def clear_status(self) -> None:
-        pass
-
-    def set_input_active(self, active: bool) -> None:
-        pass
-
-    def cleanup(self) -> None:
-        pass
-
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -192,7 +142,7 @@ async def test_last_extracted_idx_advances_on_success(tmp_path: Path) -> None:
         model=llm_model,
     )
 
-    frontend = _SilentFrontend()
+    frontend = SilentFrontend()
 
     # Build a minimal message list for extraction
     messages = [
@@ -212,3 +162,31 @@ async def test_last_extracted_idx_advances_on_success(tmp_path: Path) -> None:
 
     # Cursor must have advanced to cursor_start + len(delta)
     assert deps.session.last_extracted_message_idx == cursor_start + len(delta)
+
+
+@pytest.mark.asyncio
+async def test_cursor_does_not_advance_on_extraction_failure(tmp_path: Path) -> None:
+    """Cursor must NOT advance when agent.run() raises (except Exception guard)."""
+    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    # model=None → _model=None passed to agent.run() → raises → except Exception fires
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(),
+        memory_dir=memory_dir,
+        model=None,
+    )
+    frontend = SilentFrontend()
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="I always prefer dark mode in editors")]),
+    ]
+    cursor_start = 0
+    fire_and_forget_extraction(messages, deps=deps, frontend=frontend, cursor_start=cursor_start)
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        await drain_pending_extraction(timeout_ms=5_000)
+
+    # Cursor must NOT have advanced — extraction failed
+    assert deps.session.last_extracted_message_idx == 0

@@ -35,7 +35,7 @@ def make_coder_agent(model: Any) -> Agent[CoDeps, CoderOutput]:
     Caller passes model_settings at agent.run() time.
     """
     agent = cast(
-        Agent[CoDeps, CoderOutput],
+        "Agent[CoDeps, CoderOutput]",
         _make_base_agent(
             model,
             CoderOutput,
@@ -69,7 +69,7 @@ def make_research_agent(model: Any) -> Agent[CoDeps, ResearchOutput]:
     Caller passes model_settings at agent.run() time.
     """
     agent = cast(
-        Agent[CoDeps, ResearchOutput],
+        "Agent[CoDeps, ResearchOutput]",
         _make_base_agent(
             model,
             ResearchOutput,
@@ -106,7 +106,7 @@ def make_analysis_agent(model: Any) -> Agent[CoDeps, AnalysisOutput]:
     Caller passes model_settings at agent.run() time.
     """
     agent = cast(
-        Agent[CoDeps, AnalysisOutput],
+        "Agent[CoDeps, AnalysisOutput]",
         _make_base_agent(
             model,
             AnalysisOutput,
@@ -144,7 +144,7 @@ def make_thinking_agent(model: Any) -> Agent[CoDeps, ThinkingOutput]:
     Caller passes model_settings at agent.run() time.
     """
     return cast(
-        Agent[CoDeps, ThinkingOutput],
+        "Agent[CoDeps, ThinkingOutput]",
         _make_base_agent(
             model,
             ThinkingOutput,

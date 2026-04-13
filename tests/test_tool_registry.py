@@ -158,7 +158,7 @@ def test_approval_resume_filter_narrows_to_approved_plus_always() -> None:
     assert _approval_resume_filter(ctx, ToolDefinition(name="write_file", description="")) is False
     # Another deferred tool NOT in resume set — hidden
     assert (
-        _approval_resume_filter(ctx, ToolDefinition(name="save_memory", description="")) is False
+        _approval_resume_filter(ctx, ToolDefinition(name="save_article", description="")) is False
     )
 
 
@@ -200,8 +200,8 @@ def test_approval_resume_filter_hides_previously_discovered_deferred() -> None:
     # This validates BC-4: discovery state doesn't grant resume visibility
     deps = _make_deps(resume_tool_names=frozenset({"edit_file"}))
     ctx = _make_ctx(deps)
-    # save_memory is deferred, not in resume set — must be hidden
+    # save_article is deferred, not in resume set — must be hidden
     # regardless of whether it was previously discovered via search_tools
     assert (
-        _approval_resume_filter(ctx, ToolDefinition(name="save_memory", description="")) is False
+        _approval_resume_filter(ctx, ToolDefinition(name="save_article", description="")) is False
     )

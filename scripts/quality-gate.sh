@@ -4,8 +4,7 @@
 # Usage:
 #   scripts/quality-gate.sh lint          # ruff check + format (fast, per-task)
 #   scripts/quality-gate.sh lint --fix    # ruff auto-fix + format
-#   scripts/quality-gate.sh types         # lint + pyright (integration)
-#   scripts/quality-gate.sh full          # lint + pyright + pytest (ship gate)
+#   scripts/quality-gate.sh full          # lint + pytest (ship gate)
 #
 # Skill files and CI call this script — add new tools here, not in
 # individual skill files. Pre-commit hook is self-contained in .git/hooks/.
@@ -38,7 +37,7 @@ echo "=== quality-gate: $LEVEL ==="
 echo ""
 
 # --- Lint (ruff) ---
-echo "[1/3] lint"
+echo "[1/2] lint"
 if [[ -n "$FIX" ]]; then
     echo "  → ruff check --fix"
     uv run ruff check --fix
@@ -54,18 +53,9 @@ step_status "lint" pass
 
 [[ "$LEVEL" == "lint" ]] && { echo ""; echo "=== PASS ==="; exit 0; }
 
-# --- Types (pyright) ---
-echo ""
-echo "[2/3] types"
-echo "  → pyright"
-uv run pyright 2>&1 | grep -E "^/|error:|warning:|[0-9]+ error|[0-9]+ warning" || true
-step_status "types" pass
-
-[[ "$LEVEL" == "types" ]] && { echo ""; echo "=== PASS ==="; exit 0; }
-
 # --- Full (pytest) ---
 echo ""
-echo "[3/3] tests"
+echo "[2/2] tests"
 PYTEST_ARGS=(-v)
 if [[ "${CI:-}" == "true" ]]; then
     PYTEST_ARGS+=(-m "not local")

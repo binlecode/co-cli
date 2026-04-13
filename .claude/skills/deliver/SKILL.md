@@ -53,6 +53,18 @@ Edit only files in `files:`. If a strictly necessary extra file must be touched,
 - Comments go on the line above, never trailing at end of code line
 - Use the project `console` object for terminal output; never hardcode color names
 
+### Step 3b — Test quality gate (if new tests were written)
+
+For each new test function added, answer:
+1. **Deletion check**: if this test is deleted, which specific production regression goes undetected?
+   If the answer is "none obvious", the test is waste — either remove it or fix the assertion.
+2. **Fixture wiring**: every `tmp_path` or injected fixture must be passed to a production function.
+   If not, the assertion trivially passes — remove or fix the test.
+3. **No duplication**: does an existing test already exercise this exact code path and invariant?
+   If yes, remove the weaker one.
+4. **Assertion strength**: every assertion must check the actual property, not just truthiness.
+   `assert result` → `assert result == expected_value`.
+
 ### Step 4 — Lint fix
 ```bash
 scripts/quality-gate.sh lint --fix

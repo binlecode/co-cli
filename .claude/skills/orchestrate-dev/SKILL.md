@@ -65,6 +65,10 @@ Reads `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`. Executes each task. 
      - Run pytest scoped to your affected test files. Fix any failures before reporting —
        do not surface red tests to TL. If a failure cannot be fixed without a design
        decision, stop and escalate rather than reporting a broken result.
+     - For every new test written: (1) answer "if deleted, which regression goes undetected?" —
+       if none, remove or fix; (2) every injected fixture (`tmp_path`, etc.) must be passed to
+       a production function; (3) no duplicate code paths/invariants with existing tests;
+       (4) assert the actual property, not just truthiness.
      - Report: files changed, what was done, test outcome (green or escalated), any ⚠ Extra file: paths
      ```
    - Announce assignments and sequencing before any work begins:
@@ -150,6 +154,7 @@ Fix any remaining violations that auto-fix cannot resolve. Then read every chang
 | **No mocks or fakes** | Any test using mocks, patches, `monkeypatch`, or isolated helpers with no real services — blocking, remove it |
 | **Scope creep** | Changes outside `files:` not announced as `⚠ Extra file:` |
 | **Over-engineering** | Abstractions, utilities, or helpers not required by the task spec — if a junior wrote it and you'd push back, remove it |
+| **Test quality** | For every new test: (1) deletion check — "which regression goes undetected if deleted?" (if none, remove/fix); (2) fixture wiring — `tmp_path` and other fixtures must be passed to a production function, not just declared; (3) no duplicates — same code path + invariant already covered by an existing test; (4) assertion strength — `assert result` must be `assert result == expected_value` |
 
 **Security:**
 - Command injection (user input passed to shell without sanitization)

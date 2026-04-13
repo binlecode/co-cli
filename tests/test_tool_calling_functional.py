@@ -61,7 +61,7 @@ def _make_deps(session_id: str) -> CoDeps:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prompt,expected_tool,arg_key,arg_contains",
+    ("prompt", "expected_tool", "arg_key", "arg_contains"),
     [
         (
             "Use the run_shell_command tool to execute: git status\nDo NOT describe what you would do — call the tool now.",

@@ -74,6 +74,10 @@ def test_memory_write_tools_not_in_agent() -> None:
     assert "save_memory" not in descs, "save_memory must not be registered in agent"
     assert "update_memory" not in descs, "update_memory must not be registered in agent"
     assert "append_memory" not in descs, "append_memory must not be registered in agent"
+    # save_insight is extractor-only — must never appear in the main agent tool_index
+    assert "save_insight" not in _NATIVE_INDEX, (
+        "save_insight must not be registered in main agent — extractor-only tool"
+    )
     # Read tools are always-visible (not deferred), so present in tool_index but not deferred
     assert "search_memories" in _NATIVE_INDEX
     assert "list_memories" in _NATIVE_INDEX

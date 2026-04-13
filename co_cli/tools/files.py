@@ -28,12 +28,24 @@ def _enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
     return resolved
 
 
+_MAX_EDIT_BYTES = 10 * 1024 * 1024  # 10 MB hard block for edit_file
+
+
 def _safe_mtime(p: Path) -> float:
     """Return file mtime, falling back to 0.0 for broken symlinks or inaccessible paths."""
     try:
         return p.stat().st_mtime
     except OSError:
         return 0.0
+
+
+def _detect_encoding(path: Path) -> str:
+    """Detect file encoding from BOM prefix — returns 'utf-16' or 'utf-8'."""
+    with open(path, "rb") as fh:
+        raw = fh.read(2048)
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16"
+    return "utf-8"
 
 
 def _is_recursive_pattern(pattern: str) -> bool:
@@ -154,10 +166,12 @@ async def read_file(
         return tool_error(f"Path is a directory: {path}")
 
     try:
-        content = resolved.read_text(encoding="utf-8")
+        enc = _detect_encoding(resolved)
+        content = resolved.read_text(encoding=enc)
     except UnicodeDecodeError:
         return tool_error(f"Binary file — cannot display as text: {path}")
 
+    ctx.deps.file_read_mtimes[str(resolved)] = resolved.stat().st_mtime
     all_lines = content.splitlines(keepends=True)
     total_line_count = len(all_lines)
 
@@ -267,9 +281,16 @@ async def write_file(
 
     try:
         async with ctx.deps.resource_locks.try_acquire(str(resolved)):
+            path_key = str(resolved)
+            if (
+                path_key in ctx.deps.file_read_mtimes
+                and _safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]
+            ):
+                return tool_error("File changed since last read — re-read before writing")
             resolved.parent.mkdir(parents=True, exist_ok=True)
             resolved.write_text(content, encoding="utf-8")
             byte_count = len(content.encode("utf-8"))
+            ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
             return tool_output(
                 f"Written: {path} ({byte_count} bytes)",
                 ctx=ctx,
@@ -314,11 +335,24 @@ async def edit_file(
     if not resolved.exists():
         return tool_error(f"File not found: {path}")
 
+    # Staleness check before acquiring lock — fail-fast, no lock held on stale error
+    path_key = str(resolved)
+    if (
+        path_key in ctx.deps.file_read_mtimes
+        and _safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]
+    ):
+        return tool_error("File changed since last read — re-read before writing")
+
     from co_cli.tools.resource_lock import ResourceBusyError
 
     try:
         async with ctx.deps.resource_locks.try_acquire(str(resolved)):
-            content = resolved.read_text(encoding="utf-8")
+            if resolved.stat().st_size > _MAX_EDIT_BYTES:
+                return tool_error(
+                    f"File too large to edit in-place ({resolved.stat().st_size // 1024} KB) — use shell tools"
+                )
+            enc = _detect_encoding(resolved)
+            content = resolved.read_text(encoding=enc)
             count = content.count(search)
 
             if count == 0:
@@ -330,7 +364,8 @@ async def edit_file(
                 )
 
             updated = content.replace(search, replacement)
-            resolved.write_text(updated, encoding="utf-8")
+            resolved.write_text(updated, encoding=enc)
+            ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
 
             return tool_output(
                 f"Edited: {path} ({count} replacement(s))",

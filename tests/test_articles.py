@@ -87,7 +87,8 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
     raw = files[0].read_text(encoding="utf-8")
     assert "Version 2" in raw, "Consolidated file must have new content"
     fm = yaml.safe_load(raw.split("---")[1])
-    assert "v1" in fm["tags"] and "v2" in fm["tags"], "Tags must be merged"
+    assert "v1" in fm["tags"], "Tags must be merged"
+    assert "v2" in fm["tags"], "Tags must be merged"
 
 
 @pytest.mark.asyncio

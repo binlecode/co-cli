@@ -171,12 +171,12 @@ def get_model_inference(provider: str, model_name: str | None) -> ModelInference
         num_ctx / extra_body.
     """
     if not model_name:
-        return cast(ModelInference, dict(DEFAULT_INFERENCE))
+        return cast("ModelInference", dict(DEFAULT_INFERENCE))
 
     quirks = _load_quirk(provider.lower(), model_name)
     if quirks and "inference" in quirks:
-        return cast(ModelInference, dict(quirks["inference"]))
-    return cast(ModelInference, dict(DEFAULT_INFERENCE))
+        return cast("ModelInference", dict(quirks["inference"]))
+    return cast("ModelInference", dict(DEFAULT_INFERENCE))
 
 
 def get_counter_steering(provider: str, model_name: str) -> str:

@@ -150,22 +150,6 @@ Acceptance criteria:
 
 ## Phase 4 — Polish (as time allows)
 
-### 9. Split CLAUDE.md + HARNESS.md
-
-CLAUDE.md at 182 lines covers orientation, engineering rules, testing discipline, review
-checklist, and workflow all in one file. Dense for cold-start agent navigation.
-
-Tasks:
-- [ ] extract orientation layer into `docs/HARNESS.md` (pattern origin, principles, repo map, SDLC flow)
-- [ ] keep CLAUDE.md as working rules + setup + entry point index (target: under 80 lines)
-- [ ] update CLAUDE.md to list `docs/HARNESS.md` as first entry point
-
-Acceptance criteria:
-- new coding agent can orient from CLAUDE.md in under 30 seconds
-- HARNESS.md contains the full pattern explanation and reading order
-
----
-
 ### 10. `docs/product-specs/`
 
 Product intent is split across README (user-facing) and DESIGN files (implementation-facing).
@@ -207,7 +191,6 @@ Tasks:
 | 2 | 5 | exec-plans lifecycle | 2h | Atomic: CLAUDE.md + 2 skills + memory |
 | 3 | 6+7 | Release automation + drop CHANGELOG | 2h | Coupled — ship together; includes skill cleanup |
 | 3 | 8 | `docs/ARCHITECTURE.md` entrypoint | 1h | |
-| 4 | 9 | Split CLAUDE.md + HARNESS.md | 2h | Medium disruption |
 | 4 | 10 | `docs/product-specs/` | 1h | |
 | 4 | 11 | Move ROADMAP to `docs/` root | 15m | |
 | 4 | 12 | `docs/PLANS.md` | 30m | |
