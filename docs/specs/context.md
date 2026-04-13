@@ -1,5 +1,25 @@
 # Co CLI — Context & Session Design
 
+## Product Intent
+
+**Goal:** Own prompt context assembly, history governance, and all persistent state outside the model.
+**Functional areas:**
+- Static and dynamic instruction layers
+- Five history processors (compaction, summarization, trim, tag injection, memory recall)
+- Session and transcript persistence (JSONL)
+- Memory and article storage (FTS5 search)
+- Knowledge index and background tasks
+
+**Non-goals:**
+- Concurrent-instance safety (no file lock — deferred)
+- TTL-based session cleanup
+
+**Success criteria:** Context fully reconstructed from disk each turn; memory extraction fires fire-and-forget; compaction has circuit breaker.
+**Status:** Stable
+**Known gaps:** Concurrent-instance safety — no file lock or PID guard (deferred).
+
+---
+
 Covers how co-cli assembles prompt context, governs in-session history, persists sessions and transcripts, and routes knowledge retrieval. Startup sequencing lives in [system.md](system.md), one-turn orchestration in [core-loop.md](core-loop.md), tool contracts in [tools.md](tools.md).
 
 ## 1. What & How

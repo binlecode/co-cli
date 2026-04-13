@@ -1,5 +1,25 @@
 # Co CLI Core Loop Design
 
+## Product Intent
+
+**Goal:** Own foreground-turn execution from prompt input to post-turn finalization.
+**Functional areas:**
+- Turn orchestration and stream segment execution
+- Approval flow and approval-resume narrowing
+- History processors (compaction, summarization, context trimming)
+- Inline compaction with circuit breaker
+- Retries and interrupt handling
+
+**Non-goals:**
+- Multi-turn planning graphs
+- Persistent approval memory across sessions
+- Multi-agent coordination
+
+**Success criteria:** Turn contract is stateless (state on CoDeps only); approval resume narrows toolset; compaction circuit breaker prevents cascade.
+**Status:** Stable
+
+---
+
 For top-level architecture and startup sequencing, see [system.md](system.md) and [flow-bootstrap.md](flow-bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Persistent context layers and storage live in [context.md](context.md).
 
 ## 1. Foreground Turn Flow

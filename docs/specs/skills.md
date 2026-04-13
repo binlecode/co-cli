@@ -1,5 +1,24 @@
 # Co CLI Skills Design
 
+## Product Intent
+
+**Goal:** Define the skill system — markdown prompt overlays dispatched via slash commands.
+**Functional areas:**
+- Three-tier load order (builtin → project → user)
+- Frontmatter parsing and load gating
+- Containment check and security scan
+- Skill registry, dispatch, and argument expansion (`$ARGUMENTS`, `$N`, `$0`)
+- Skill-env injection and lifecycle (set before turn, cleaned up after)
+
+**Non-goals:**
+- Tool registration (skills are prompt overlays only)
+- Cross-session skill state
+
+**Success criteria:** Skills load in correct tier order; security scan enforced on user/project tiers; skill env cleaned up after each turn.
+**Status:** Stable
+
+---
+
 This doc owns the skill system: markdown skill files, frontmatter parsing, load order, capability gating, security scanning, slash-command dispatch, argument substitution, and skill-env injection. It does not own callable tools or turn execution internals.
 
 ## 1. What & How

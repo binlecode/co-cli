@@ -1,5 +1,24 @@
 # LLM Models
 
+## Product Intent
+
+**Goal:** Define the single-model architecture, provider abstraction, and per-call settings suppression.
+**Functional areas:**
+- Model factory (`build_model`) and provider selection
+- Per-call `ModelSettings` and `NOREASON_SETTINGS` (reasoning suppression)
+- Provider quirks (Ollama `num_ctx`, Gemini safety settings)
+- Model dependency checks at startup
+
+**Non-goals:**
+- Multi-model routing
+- Model-level caching
+- Streaming token budgets
+
+**Success criteria:** Single model used for all tasks; reasoning suppressed on non-reasoning calls; Ollama `num_ctx` baked at Modelfile level.
+**Status:** Stable
+
+---
+
 ## 1. What & How
 
 Co CLI supports two providers (`ollama-openai`, `gemini`) and a single-model architecture:
