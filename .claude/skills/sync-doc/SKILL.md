@@ -1,25 +1,25 @@
 ---
 name: sync-doc
-description: Fix doc-only inaccuracies in DESIGN docs in-place — wrong schema, stale names, phantom features. Use when the fix is docs-only and doesn't warrant a full plan→dev cycle. Also invoked automatically by orchestrate-dev after each delivery.
+description: Fix doc-only inaccuracies in specs (docs/specs/) in-place — wrong schema, stale names, phantom features. Use when the fix is docs-only and doesn't warrant a full plan→dev cycle. Also invoked automatically by orchestrate-dev after each delivery.
 ---
 
 # sync-doc
 
-Direct execution skill — no planning ceremony. Read doc → read source → diff claims → fix in-place.
+Direct execution skill — no planning ceremony. Read spec → read source → diff claims → fix in-place.
 
 **When to use sync-doc vs orchestrate-dev:**
-- Use **sync-doc** when the fix is doc-only: wrong schema description, stale function name, phantom feature in a DESIGN doc. No code changes, no Gate 1 approval needed — it's a 5-minute correction, not a delivery.
+- Use **sync-doc** when the fix is doc-only: wrong schema description, stale function name, phantom feature in a spec. No code changes, no Gate 1 approval needed — it's a 5-minute correction, not a delivery.
 - Use **orchestrate-dev** when fixing the inaccuracy requires code changes, schema migrations, or new tests. Doc-only fixes don't warrant the full plan → dev → gates ceremony.
 
 ## Invocation
 
 ```
-/sync-doc                          # all DESIGN docs
-/sync-doc DESIGN-knowledge.md     # specific doc (filename or path)
-/sync-doc DESIGN-knowledge DESIGN-core   # multiple docs (partial names matched)
+/sync-doc                          # all specs
+/sync-doc context.md               # specific spec (filename or path)
+/sync-doc context core-loop        # multiple specs (partial names matched)
 ```
 
-If no argument is given, run against all `docs/DESIGN-*.md` files.
+If no argument is given, run against all `docs/specs/*.md` files.
 
 ---
 
@@ -27,8 +27,8 @@ If no argument is given, run against all `docs/DESIGN-*.md` files.
 
 ### Step 1 — Resolve scope
 
-- No args: glob `docs/DESIGN-*.md`, process all.
-- Args: match each arg against filenames in `docs/` (exact or prefix match). Abort with a clear error if a given name matches nothing.
+- No args: glob `docs/specs/*.md`, process all.
+- Args: match each arg against filenames in `docs/specs/` (exact or prefix match). Abort with a clear error if a given name matches nothing.
 
 ### Step 2 — For each doc
 
@@ -76,8 +76,8 @@ Check every factual claim against the source. Inaccuracy patterns to look for:
 | **Wrong field name** | Struct/dataclass/schema field name misspelled or renamed in code |
 | **Stale file path** | File listed in Files section has been moved or deleted |
 | **Missing coverage** | Shipped feature with no doc coverage at all (add a minimal description, don't over-document) |
-| **Stale cross-doc index** | `DESIGN-core.md` Component Docs table missing a `docs/DESIGN-*.md` file, or referencing a renamed/deleted one. Check once per sync-doc run regardless of scope — glob actual `docs/DESIGN-*.md` files and diff against the table in `DESIGN-core.md`. |
-| **Stale term in out-of-scope docs** | A renamed API, decorator, or concept appears in DESIGN docs outside the explicit invocation scope. When an API rename is *confirmed* by reading source (not suspected), widen scope to grep all `docs/DESIGN-*.md` files for the old term. Announce the expansion before fixing: `⚠ Expanding scope: renaming <old> → <new> across all DESIGN docs.` |
+| **Stale cross-doc index** | `system.md` Component Docs table missing a `docs/specs/` file, or referencing a renamed/deleted one. Check once per sync-doc run regardless of scope — glob actual `docs/specs/*.md` files and diff against the table in `system.md`. |
+| **Stale term in out-of-scope docs** | A renamed API, decorator, or concept appears in specs outside the explicit invocation scope. When an API rename is *confirmed* by reading source (not suspected), widen scope to grep all `docs/specs/*.md` files for the old term. Announce the expansion before fixing: `⚠ Expanding scope: renaming <old> → <new> across all specs.` |
 
 #### 2d. Fix in-place
 
@@ -98,22 +98,22 @@ After processing all docs, output a table:
 
 | Doc | Status | Changes |
 |-----|--------|---------|
-| DESIGN-knowledge.md | fixed | Phase 2 status corrected; 5 config entries added |
-| DESIGN-knowledge.md | fixed | doc_tags section rewritten (phantom SQL table) |
-| DESIGN-core.md | clean | no inaccuracies found |
-| DESIGN-tools.md | fixed | search_knowledge tool registration corrected |
+| context.md | fixed | Phase 2 status corrected; 5 config entries added |
+| context.md | fixed | doc_tags section rewritten (phantom SQL table) |
+| system.md | clean | no inaccuracies found |
+| tools.md | fixed | search_knowledge tool registration corrected |
 ```
 
 If any doc had a stale file path in its Files section (source file doesn't exist), flag it explicitly:
 ```
-⚠ DESIGN-foo.md: Files section references co_cli/old_module.py — file not found. Manual review needed.
+⚠ foo.md: Files section references co_cli/old_module.py — file not found. Manual review needed.
 ```
 
 ---
 
 ## Scope boundaries
 
-- **Only DESIGN docs** — never modify TODO docs, ROADMAP docs, CLAUDE.md, or `docs/reference/RESEARCH-*.md` / `docs/reference/ROADMAP-*.md` files. These are permanent research and reference records that are never edited by sync-doc.
+- **Only specs** (`docs/specs/`) — never modify exec-plans, ROADMAP docs, CLAUDE.md, or `docs/reference/RESEARCH-*.md` / `docs/reference/ROADMAP-*.md` files. These are permanent research and reference records that are never edited by sync-doc.
 - **Factual fixes only** — never restructure sections, rename headings, or change the doc's scope
 - **No new sections** unless a shipped feature has zero coverage anywhere in the doc
 - **No code changes** — if you find a code gap (e.g., a setting in the doc that's missing from the project's config module), document it as `*(no env var — code gap)*` in the Config table, don't fix the code. **Exception (step 2b2):** source-file docstring and comment fixes are required — when step 2b2 identifies stale API refs, decorator renames, or behaviour description mismatches in a source file's docstrings or inline comments, fix them directly in the source file using the Edit tool. Only docstring/comment text is in scope; functional logic changes remain forbidden.

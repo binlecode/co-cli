@@ -96,7 +96,7 @@ Note: the Gate 1 final section is appended first, then the `---` separator and `
     Omit if there are no dependencies. Always use list syntax, even for a single dependency.
   - For `code-feature`: Red-Green-Refactor test requirement
   - For `doc-restructure`: Accuracy check requirement (grep/read the code, confirm claim is correct)
-- **No DESIGN doc update tasks:** DESIGN docs are updated automatically by `sync-doc` post-delivery — they are outputs of delivery, not inputs. Any task whose `files:` list includes a `docs/DESIGN-*.md` path is invalid and must be removed before implementation begins.
+- **No spec update tasks:** specs in `docs/specs/` are updated automatically by `sync-doc` post-delivery — they are outputs of delivery, not inputs. Any task whose `files:` list includes a `docs/specs/` path is invalid and must be removed before implementation begins.
 - **Guard condition parity:** For each new tool that mirrors an existing one, list its guard conditions (e.g. `max_requests < 1`, empty-string check) and compare against the nearest existing peer tool. Note intentional divergences inline in the task — do not leave them implicit for Core Dev to catch.
 - Decisions must include rationale and alternatives considered.
 

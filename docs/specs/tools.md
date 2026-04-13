@@ -1,6 +1,6 @@
 # Co CLI — Tools
 
-> For system overview and approval boundary: [DESIGN-system.md](DESIGN-system.md). For the agent loop, orchestration, and approval flow: [DESIGN-core-loop.md](DESIGN-core-loop.md). For skill loading and slash-command dispatch: [DESIGN-skills.md](DESIGN-skills.md).
+> For system overview and approval boundary: [system.md](system.md). For the agent loop, orchestration, and approval flow: [core-loop.md](core-loop.md). For skill loading and slash-command dispatch: [skills.md](skills.md).
 
 ## 1. What & How
 
@@ -72,7 +72,7 @@ SDK idioms that drive the design:
 
 **State lifetime matters:**
 
-- Discovery state is managed by the SDK via message history — `ToolSearchToolset` scans for prior `search_tools` results in `ToolReturnPart` messages. No session-level discovery cache. History compaction preserves these breadcrumbs (see DESIGN-context.md).
+- Discovery state is managed by the SDK via message history — `ToolSearchToolset` scans for prior `search_tools` results in `ToolReturnPart` messages. No session-level discovery cache. History compaction preserves these breadcrumbs (see context.md).
 - `runtime.resume_tool_names` is not discovery state. It is a one-shot per-resume allowlist used only while continuing an approval-gated segment.
 - `resume_tool_names` is populated from the currently approved tool calls just before the resume segment runs, then cleared when the approval loop exits. It does not grant visibility on future turns.
 

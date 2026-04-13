@@ -1,6 +1,6 @@
 # Co CLI Core Loop Design
 
-For top-level architecture and startup sequencing, see [DESIGN-system.md](DESIGN-system.md) and [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Persistent context layers and storage live in [DESIGN-context.md](DESIGN-context.md).
+For top-level architecture and startup sequencing, see [system.md](system.md) and [flow-bootstrap.md](flow-bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Persistent context layers and storage live in [context.md](context.md).
 
 ## 1. Foreground Turn Flow
 
@@ -318,7 +318,7 @@ The intentional simplification remains:
 
 ## 3. Config
 
-These settings most directly shape one-turn orchestration behavior. Context-storage and knowledge-index settings are documented in [DESIGN-context.md](DESIGN-context.md).
+These settings most directly shape one-turn orchestration behavior. Context-storage and knowledge-index settings are documented in [context.md](context.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |

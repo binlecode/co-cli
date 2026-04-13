@@ -2,7 +2,7 @@
 
 ## 1. What & How
 
-Canonical startup flow for co-cli. This doc is the sole owner for the sequence from settings loading through `display_welcome_banner()`: layered config load, deps initialization (`create_deps()`), model and tool registry construction, MCP connection, skill loading, knowledge backend resolution and sync, session restore, startup status reporting, and the final boundary into the REPL. Skill file format, load gates, and dispatch semantics live in [DESIGN-skills.md](DESIGN-skills.md).
+Canonical startup flow for co-cli. This doc is the sole owner for the sequence from settings loading through `display_welcome_banner()`: layered config load, deps initialization (`create_deps()`), model and tool registry construction, MCP connection, skill loading, knowledge backend resolution and sync, session restore, startup status reporting, and the final boundary into the REPL. Skill file format, load gates, and dispatch semantics live in [skills.md](skills.md).
 
 Bootstrap owns sequencing. Integration health checks (`check_runtime()` in `co_cli/bootstrap/check.py`) are not called during bootstrap; they are invoked on-demand by the `/status` tool in `co_cli/tools/capabilities.py`.
 
@@ -199,7 +199,7 @@ else:
     deps.session.session_path = new_session_path(deps.sessions_dir)  # path only, no file write
 ```
 
-No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing lifecycle are owned by [DESIGN-context.md](DESIGN-context.md).
+No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing lifecycle are owned by [context.md](context.md).
 
 ### Step 13. Print startup status and enter the REPL boundary
 

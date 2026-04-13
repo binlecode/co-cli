@@ -1,6 +1,6 @@
 # Co CLI System Design
 
-This doc defines the top-level runtime architecture of `co-cli`: the major subsystems, their boundaries, and how control moves through the system. It does not own component internals. Startup sequencing lives in [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md), turn orchestration in [DESIGN-core-loop.md](DESIGN-core-loop.md), context and persistence in [DESIGN-context.md](DESIGN-context.md), tools in [DESIGN-tools.md](DESIGN-tools.md), skills in [DESIGN-skills.md](DESIGN-skills.md), model/provider rules in [DESIGN-llm-models.md](DESIGN-llm-models.md), and telemetry in [DESIGN-observability.md](DESIGN-observability.md).
+This doc defines the top-level runtime architecture of `co-cli`: the major subsystems, their boundaries, and how control moves through the system. It does not own component internals. Startup sequencing lives in [flow-bootstrap.md](flow-bootstrap.md), turn orchestration in [core-loop.md](core-loop.md), context and persistence in [context.md](context.md), tools in [tools.md](tools.md), skills in [skills.md](skills.md), model/provider rules in [llm-models.md](llm-models.md), and telemetry in [observability.md](observability.md).
 
 ## 1. What & How
 
@@ -111,14 +111,14 @@ Persistent state is also intentionally small in surface area:
 
 The specialized DESIGN docs own the detailed behavior inside each boundary:
 
-- bootstrap order and degradation policy: [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md)
-- turn execution, approvals, and retries: [DESIGN-core-loop.md](DESIGN-core-loop.md)
-- REPL loop, completer, and slash commands: [DESIGN-tui.md](DESIGN-tui.md)
-- memories, sessions, transcripts, and knowledge search: [DESIGN-context.md](DESIGN-context.md)
-- tool registration and approval behavior: [DESIGN-tools.md](DESIGN-tools.md)
-- skill loading and dispatch: [DESIGN-skills.md](DESIGN-skills.md)
-- provider and model selection rules: [DESIGN-llm-models.md](DESIGN-llm-models.md)
-- tracing and log viewers: [DESIGN-observability.md](DESIGN-observability.md)
+- bootstrap order and degradation policy: [flow-bootstrap.md](flow-bootstrap.md)
+- turn execution, approvals, and retries: [core-loop.md](core-loop.md)
+- REPL loop, completer, and slash commands: [tui.md](tui.md)
+- memories, sessions, transcripts, and knowledge search: [context.md](context.md)
+- tool registration and approval behavior: [tools.md](tools.md)
+- skill loading and dispatch: [skills.md](skills.md)
+- provider and model selection rules: [llm-models.md](llm-models.md)
+- tracing and log viewers: [observability.md](observability.md)
 
 ## 3. Config
 
@@ -146,11 +146,11 @@ These settings most directly affect top-level system assembly.
 | `co_cli/deps.py` | Shared runtime contract and workspace path resolution |
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
 | `co_cli/observability/_telemetry.py` | SQLite-backed telemetry exporter used by the session runtime |
-| `docs/DESIGN-flow-bootstrap.md` | Startup sequencing and degradation details |
-| `docs/DESIGN-core-loop.md` | Foreground-turn behavior and approval resumes |
-| `docs/DESIGN-tui.md` | REPL loop, completer, slash command registry and dispatch |
-| `docs/DESIGN-context.md` | Prompt context, persistence, and knowledge retrieval |
-| `docs/DESIGN-tools.md` | Tool surface, approval classes, and visibility |
-| `docs/DESIGN-skills.md` | Skill loading and slash-command delegation |
-| `docs/DESIGN-llm-models.md` | Provider and model selection rules |
-| `docs/DESIGN-observability.md` | Telemetry pipeline and trace viewers |
+| `docs/flow-bootstrap.md` | Startup sequencing and degradation details |
+| `docs/core-loop.md` | Foreground-turn behavior and approval resumes |
+| `docs/tui.md` | REPL loop, completer, slash command registry and dispatch |
+| `docs/context.md` | Prompt context, persistence, and knowledge retrieval |
+| `docs/tools.md` | Tool surface, approval classes, and visibility |
+| `docs/skills.md` | Skill loading and slash-command delegation |
+| `docs/llm-models.md` | Provider and model selection rules |
+| `docs/observability.md` | Telemetry pipeline and trace viewers |

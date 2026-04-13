@@ -18,6 +18,6 @@ Violations of this rule are import errors waiting to happen. If you find yoursel
 
 ## Full Architecture Detail
 
-See [`docs/DESIGN-system.md`](DESIGN-system.md) for the complete runtime architecture, subsystem responsibilities, `CoDeps` shape, capability surface, and security boundaries.
+See [`docs/specs/system.md`](specs/system.md) for the complete runtime architecture, subsystem responsibilities, `CoDeps` shape, capability surface, and security boundaries.
 
-For component internals, see the relevant `DESIGN-*.md` docs in `docs/`.
+For component internals, see the relevant specs in `docs/specs/`.

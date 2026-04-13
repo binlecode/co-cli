@@ -1,6 +1,6 @@
 # Co CLI — Context & Session Design
 
-Covers how co-cli assembles prompt context, governs in-session history, persists sessions and transcripts, and routes knowledge retrieval. Startup sequencing lives in [DESIGN-system.md](DESIGN-system.md), one-turn orchestration in [DESIGN-core-loop.md](DESIGN-core-loop.md), tool contracts in [DESIGN-tools.md](DESIGN-tools.md).
+Covers how co-cli assembles prompt context, governs in-session history, persists sessions and transcripts, and routes knowledge retrieval. Startup sequencing lives in [system.md](system.md), one-turn orchestration in [core-loop.md](core-loop.md), tool contracts in [tools.md](tools.md).
 
 ## 1. What & How
 

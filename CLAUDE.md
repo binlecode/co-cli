@@ -34,11 +34,11 @@ uv run pytest 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
 
 ### Architecture
 
-See `docs/DESIGN-system.md` for architecture, `CoDeps`, capability surface, and security boundaries. See `docs/DESIGN-core-loop.md` for agent loop internals, orchestration, and approval mechanics.
+See `docs/specs/system.md` for architecture, `CoDeps`, capability surface, and security boundaries. See `docs/specs/core-loop.md` for agent loop internals, orchestration, and approval mechanics.
 
 ### Knowledge System
 
-All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/memory/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs in `search.db`. See `docs/DESIGN-context.md` for the full schema, tool API, lifecycle, and work record provenance model.
+All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/memory/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs in `search.db`. See `docs/specs/context.md` for the full schema, tool API, lifecycle, and work record provenance model.
 
 ## Engineering Rules
 
@@ -144,24 +144,24 @@ git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/comple
 
 ## Docs
 
-### DESIGN Doc Conventions
+### Spec Conventions
 
-DESIGN docs are **post-implementation documentation** — they always stay in sync with the latest code and are the authoritative reference during planning. They must never appear as tasks in a TODO file: DESIGN doc updates are outputs of delivery, not inputs to it. All updates happen automatically through `/sync-doc` (auto-invoked by `orchestrate-dev` after delivery). Any TODO task whose `files:` list includes a `docs/DESIGN-*.md` path is invalid and must be removed.
+Specs in `docs/specs/` are **post-implementation documentation** — they always stay in sync with the latest code and are the authoritative reference during planning. They must never appear as tasks in an exec-plan: spec updates are outputs of delivery, not inputs to it. All updates happen automatically through `/sync-doc` (auto-invoked by `orchestrate-dev` after delivery). Any task whose `files:` list includes a `docs/specs/` path is invalid and must be removed.
 
-Every component DESIGN doc follows this four-section template:
+Every component spec follows this four-section template:
 
 1. **What & How** — one paragraph + architecture diagram
 2. **Core Logic** — processing flows, key functions, design decisions, error handling, security
 3. **Config** — settings table (`Setting | Env Var | Default | Description`); skip if no configuration
 4. **Files** — file table (`File | Purpose`)
 
-Never paste source code into DESIGN docs. Use pseudocode to explain processing logic and describe detailed implementation. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
+Never paste source code into specs. Use pseudocode to explain processing logic. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
 
-Start at `docs/DESIGN-system.md` for top-level system architecture, `CoDeps`, capability surface, and security boundaries. `docs/DESIGN-core-loop.md` covers the agent loop, orchestration, and approval flow. All component docs live in `docs/` and are named `DESIGN-<component>.md` and `DESIGN-flow-<component>.md`.
+Start at `docs/specs/system.md` for top-level system architecture, `CoDeps`, capability surface, and security boundaries. `docs/specs/core-loop.md` covers the agent loop, orchestration, and approval flow. All component specs live in `docs/specs/` and are named `<component>.md` and `flow-<component>.md`.
 
-`DESIGN-flow-*.md` docs are sequence-owning documents. Their `Core Logic` section must follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
+`flow-*.md` specs are sequence-owning documents. Their `Core Logic` section must follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
 
-`docs/reference/` is for research, proposals, and background material (`RESEARCH-*`, `ROADMAP-*`) and is not linked from DESIGN docs.
+`docs/reference/` is for research, proposals, and background material (`RESEARCH-*`, `ROADMAP-*`) and is not linked from specs.
 
 ### Artifact Lifecycle
 

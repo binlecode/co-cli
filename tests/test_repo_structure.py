@@ -14,10 +14,10 @@ REQUIRED_DOCS = [
     "CLAUDE.md",
     "README.md",
     "docs/ARCHITECTURE.md",
-    "docs/DESIGN-system.md",
-    "docs/DESIGN-core-loop.md",
-    "docs/DESIGN-tools.md",
-    "docs/DESIGN-context.md",
+    "docs/specs/system.md",
+    "docs/specs/core-loop.md",
+    "docs/specs/tools.md",
+    "docs/specs/context.md",
 ]
 
 REQUIRED_DIRS = [

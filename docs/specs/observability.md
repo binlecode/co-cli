@@ -19,7 +19,7 @@ Co CLI uses OpenTelemetry (OTel) to trace every agent operation. All data stays 
 │     TracerProvider(resource=service.name, version)        │
 │                         │                                 │
 │                         ▼                                 │
-│            BatchSpanProcessor                             │
+│            SimpleSpanProcessor                            │
 │                         │                                 │
 │                         ▼                                 │
 │            SQLiteSpanExporter                             │
@@ -57,7 +57,7 @@ Telemetry is bootstrapped at module load time, before any agent is created:
 ```python
 resource = Resource.create({"service.name": "co-cli", "service.version": version})
 tracer_provider = TracerProvider(resource=resource)
-tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
+tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
 trace.set_tracer_provider(tracer_provider)
 
 Agent.instrument_all(InstrumentationSettings(
@@ -117,8 +117,8 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 | `invoke_agent {name}` | INTERNAL | `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `pydantic_ai.all_messages` |
 | `chat {model}` | CLIENT | `gen_ai.request.model`, `gen_ai.response.finish_reasons`, `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
 | `running tools` | INTERNAL | list of tool names |
-| `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `tool_arguments`, `tool_response`; enriched by `CoToolLifecycle.after_tool_execute` with `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.result_size` (int); `rag.backend` (`fts5`, `hybrid`, or `grep`) stamped by `search_memories` and `search_knowledge` to identify the active retrieval path |
-| `delegate_{role}` | INTERNAL | `delegation.role`, `delegation.model`, `delegation.request_limit`, `delegation.requests_used` — emitted by `co-cli.delegation` tracer; covers full sub-agent run including retry loop |
+| `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`; enriched by `CoToolLifecycle.after_tool_execute` with `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.result_size` (int); `rag.backend` (`fts5`, `hybrid`, or `grep`) stamped by `search_memories` and `search_knowledge` to identify the active retrieval path |
+| `subagent_{role}` | INTERNAL | `subagent.role`, `subagent.model`, `subagent.request_limit`, `subagent.requests_used` — emitted by `co-cli.subagent` tracer; covers one sub-agent run including optional retry |
 | `background_task_execute` | INTERNAL | `task.command`, `task.description`, `task.cwd` — span ID passed to `spawn_task()` for cross-session task linkage |
 
 ### Trace HTML Viewer (`co traces`)
@@ -127,7 +127,7 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 
 **Stats panel** shows total traces, total spans, and tool call count.
 
-**Attribute rendering:** priority keys (`gen_ai.tool.name`, `tool_arguments`, `gen_ai.request.model`, `gen_ai.input/output.messages`, token counts) appear first. Long values are truncated at 200 chars with an `[expand]` toggle that pretty-prints JSON in-place. `logfire.*` internal attributes are suppressed.
+**Attribute rendering:** tool, model, message, and token fields are rendered first, then the remaining attributes are appended. Long values are truncated at 200 chars with an `[expand]` toggle that pretty-prints JSON in-place. `logfire.*` internal attributes are suppressed.
 
 **Color scheme** — consistent across all three viewers:
 
@@ -197,7 +197,7 @@ FROM spans WHERE parent_id IS NULL ORDER BY start_time DESC LIMIT 10;
 -- Tool calls with arguments and duration (v3 attribute names)
 SELECT datetime(start_time/1e9, 'unixepoch', 'localtime') AS time,
     json_extract(attributes, '$.gen_ai.tool.name') AS tool,
-    json_extract(attributes, '$.tool_arguments') AS args,
+    json_extract(attributes, '$.gen_ai.tool.call.arguments') AS args,
     duration_ms
 FROM spans WHERE name LIKE 'execute_tool%' ORDER BY start_time DESC;
 
@@ -216,11 +216,11 @@ FROM spans WHERE name LIKE 'invoke_agent%' GROUP BY model;
 | Agent stuck in tool loop | `co tail -v` | Repeating `chat → tool` without `stop` finish reason |
 | Context growing too large | `co tail --models-only` | `in=` token count growing each model call |
 | Tool returning errors | `co tail --tools-only` | `ERROR` status on tool spans |
-| Spans not appearing | Wait up to 5 s | `BatchSpanProcessor` buffers before flushing |
+| Spans not appearing | Check for an active run | `co tail` only shows completed spans after they are exported |
 
 ### Privacy
 
-All data stays local. Tool responses and full conversation history are captured in span attributes. To clear all traces: `rm ~/.co-cli/co-cli-logs.db`.
+All data stays local. Tool responses and full conversation history are captured in span attributes. There is currently no built-in retention or pruning policy for this DB. To clear all traces: `rm ~/.co-cli/co-cli-logs.db`.
 
 ## 3. Config
 
