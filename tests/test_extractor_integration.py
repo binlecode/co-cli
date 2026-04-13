@@ -19,6 +19,7 @@ from co_cli.tools.shell_backend import ShellBackend
 
 
 @pytest.mark.asyncio
+@pytest.mark.local
 async def test_insights_extractor_writes_file_for_clear_preference(tmp_path: Path) -> None:
     """Extractor agent must detect a clear preference and write at least one insight file."""
     memory_dir = tmp_path / "memory"

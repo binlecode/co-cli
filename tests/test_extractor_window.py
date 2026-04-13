@@ -126,6 +126,7 @@ def test_cursor_excludes_messages_before_start() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.local
 async def test_last_extracted_idx_advances_on_success(tmp_path: Path) -> None:
     """fire_and_forget_extraction must advance last_extracted_message_idx on success."""
     from co_cli._model_factory import build_model

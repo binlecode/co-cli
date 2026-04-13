@@ -166,6 +166,7 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
 
 
 @pytest.mark.asyncio
+@pytest.mark.local
 async def test_compact_produces_two_message_history():
     """/compact on non-empty history returns ReplaceTranscript with 2 messages and compaction_applied."""
     msgs = _make_messages(6)
