@@ -190,7 +190,7 @@ git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/comple
 ```
 
 - `/orchestrate-plan <slug>`: create or refine `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
-- `/orchestrate-dev <slug>`: execute from `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), append delivery summary to plan, auto-invoke sync-doc.
+- `/orchestrate-dev <slug>`: execute from `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`, mark completed tasks `✓ DONE` (never delete mid-delivery), append delivery summary to plan, auto-invoke sync-doc.
 - `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification against running system. Appends pass/fail verdict to plan. **PASS means ship — no further gate needed.**
 - `/sync-doc [doc...]`: fix spec inaccuracies in `docs/specs/` in-place. No args means all specs. Auto-invoked by `orchestrate-dev`.
 - `/deliver [slug]`: lightweight solo delivery — implement a clear task directly, test-gate, self-review, and ship. No subagent orchestration. Use instead of `/orchestrate-dev` when the task is simple enough for a single-dev pass, or without a slug for ad-hoc work described inline.
