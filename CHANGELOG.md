@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.90] - 2026-04-13
+
+### Added
+- **Exec-plans lifecycle**: exec-plans live at `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`; on Gate 2 PASS use `git mv` to `completed/` — plans are never deleted, full lifecycle preserved in git history.
+- **Structural test**: `test_repo_structure.py` now asserts `docs/exec-plans/active/` and `docs/exec-plans/completed/` exist.
+
+### Changed
+- **Workflow skills updated**: `orchestrate-plan`, `orchestrate-dev`, `deliver`, and `review-impl` all use exec-plans paths and `git mv` ship step; `docs/TODO-<slug>.md` pattern retired.
+- **Plan migration**: all 21 existing `docs/TODO-*.md` plans renamed to `2026-04-13-<slug>.md` and moved to `docs/exec-plans/active/` via `git mv`.
+
 ## [0.7.88] - 2026-04-13
 
 ### Added

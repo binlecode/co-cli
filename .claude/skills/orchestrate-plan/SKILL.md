@@ -1,16 +1,16 @@
 ---
 name: orchestrate-plan
-description: Orchestrate the planning phase. TL drafts the plan, then spawns Core Dev (implementation risk) and PO (scope + first principles) as parallel subagents to critique it. All roles share docs/TODO-<slug>.md as the workbench. Use when starting a new major feature, doc restructuring, or refactoring.
+description: Orchestrate the planning phase. TL drafts the plan, then spawns Core Dev (implementation risk) and PO (scope + first principles) as parallel subagents to critique it. All roles share docs/exec-plans/active/YYYY-MM-DD-<slug>.md as the workbench. Use when starting a new major feature, doc restructuring, or refactoring.
 argument-hint: "<slug>"
 ---
 
 # Plan Orchestration Workflow
 
-**TL is the orchestrator and the planning gate.** Plan will create or refine `docs/TODO-<slug>.md` — creating it for new work, refining an existing one before dev. TL validates current state before drafting — review is not a separate prerequisite. Two subagents are spawned after each TL draft: **Core Dev** critiques from an implementation and risk perspective; **PO** challenges scope, first principles, and over-engineering. All roles share `docs/TODO-<slug>.md` as the convergence workbench — every role reads from it and appends its output to it.
+**TL is the orchestrator and the planning gate.** Plan will create or refine `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` (use today's date) — creating it for new work, refining an existing one before dev. TL validates current state before drafting — review is not a separate prerequisite. Two subagents are spawned after each TL draft: **Core Dev** critiques from an implementation and risk perspective; **PO** challenges scope, first principles, and over-engineering. All roles share `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` as the convergence workbench — every role reads from it and appends its output to it.
 
 **Slug for this delivery: `$ARGUMENTS`** — use this value wherever `<slug>` appears below.
 
-**Consumes:** docs/reference/RESEARCH-<scope>.md (if exists), source. **Produces:** docs/TODO-<slug>.md (created or refined)
+**Consumes:** docs/reference/RESEARCH-<scope>.md (if exists), source. **Produces:** docs/exec-plans/active/YYYY-MM-DD-<slug>.md (created or refined)
 
 ---
 
@@ -31,10 +31,10 @@ State the task type at the top of the TL draft (e.g. "Task type: code-feature").
 
 ## Workbench File Structure
 
-`docs/TODO-<slug>.md` is the single shared artifact. Every role appends to it in order:
+`docs/exec-plans/active/YYYY-MM-DD-<slug>.md` is the single shared artifact. Every role appends to it in order:
 
 ```
-# TODO: <Feature Name>
+# Plan: <Feature Name>
 ... plan content: Context, Problem & Outcome, Scope, Behavioral Constraints, Failure Modes (conditional), High-Level Design, Tasks, Testing, Open Questions ...
 
 ---
@@ -77,12 +77,12 @@ Note: the Gate 1 final section is appended first, then the `---` separator and `
    Describe the specific inaccuracies found. Run /sync-doc to fix docs first.
    ```
    This check happens inline — no separate pre-planning step is required.
-3. If `docs/TODO-<slug>.md` already exists, read it. **Shipped-work check:** For each section or phase, spot-check one key file it names in `files:`. If that file already implements the described behavior, mark the section as "shipped — skip" in your notes and call it out in the Context section. Do not draft tasks for already-implemented work.
+3. Check if a plan already exists by globbing `docs/exec-plans/active/*-<slug>.md`. If found, read it. **Shipped-work check:** For each section or phase, spot-check one key file it names in `files:`. If that file already implements the described behavior, mark the section as "shipped — skip" in your notes and call it out in the Context section. Do not draft tasks for already-implemented work.
 4. For each open question you intend to list, first try to answer it by reading existing source files. An open question answerable by inspection weakens the plan and will be flagged by Core Dev.
 5. **For `doc-restructure` and `doc+code` tasks**: Run a **Code Accuracy Verification** pass — read each source file referenced by the target docs and check every factual claim against the code. List inaccuracies explicitly in the Context section before proposing structure changes.
 6. **For AI behavioral features** (new agents, personality changes, tool-chain modifications affecting model output): before drafting, run N representative inputs through the current system and annotate observed failure modes. List findings in `## Failure Modes` in the TODO before writing `## High-Level Design`. Do not write criteria against imagined failure space — only against observed behavior.
 
-**Draft `docs/TODO-<slug>.md`** filling all sections:
+**Draft `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`** filling all sections:
 - **Context, Problem & Outcome, Scope, Behavioral Constraints, Failure Modes (conditional for AI behavioral features), High-Level Design, Implementation Plan, Testing, Open Questions**
   - **Problem & Outcome** must include a `Failure cost:` line immediately after `Problem:` — what the user cannot do / what silently breaks as a result of the problem.
 - Each task must be atomic (single agent session, ≤5 files touched) with:
@@ -102,7 +102,7 @@ Note: the Gate 1 final section is appended first, then the `---` separator and `
 
 > **Output contract:** `files:` and `done_when:` on every task are mandatory — they are consumed by `/orchestrate-dev` to drive implementation and verification. A task missing either field will block the dev phase. Core Dev must also verify that `prerequisites:` chains form a DAG — flag any task that transitively depends on itself as a blocking issue.
 
-**Append to `docs/TODO-<slug>.md`** (after a `---` separator and `# Audit Log` heading on first cycle):
+**Append to `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`** (after a `---` separator and `# Audit Log` heading on first cycle):
 ```
 ## Cycle C1 — Team Lead
 Submitting for Core Dev review.
@@ -112,7 +112,7 @@ Submitting for Core Dev review.
 
 ## Phase 2 — Core Dev + PO: Critique
 
-Spawn Core Dev and PO as parallel subagents. Both read `docs/TODO-<slug>.md` and append their critiques — Core Dev under `## Cycle C1 — Core Dev`, PO under `## Cycle C1 — PO`.
+Spawn Core Dev and PO as parallel subagents. Both read `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` and append their critiques — Core Dev under `## Cycle C1 — Core Dev`, PO under `## Cycle C1 — PO`.
 
 ### Core Dev
 
@@ -177,7 +177,7 @@ Output appended to the workbench under `## Cycle C1 — PO`:
 
 TL reads the updated workbench and processes every Core Dev and PO issue. Decide: **adopt**, **modify**, or **reject** with brief rationale.
 
-**Append to `docs/TODO-<slug>.md`**:
+**Append to `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`**:
 ```
 ## Cycle C1 — Team Lead Decisions
 
@@ -192,7 +192,7 @@ TL reads the updated workbench and processes every Core Dev and PO issue. Decide
 
 For every **adopt** or **modify** decision, the `Change` column must describe the specific change with enough detail for Core Dev to locate and verify it in the plan (e.g. which task, which field, what was added). A vague summary like "updated plan" is not acceptable. `reject` entries use `—`.
 
-**Update the plan section** of `docs/TODO-<slug>.md` applying all adopted and modified changes.
+**Update the plan section** of `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` applying all adopted and modified changes.
 
 ---
 
@@ -216,7 +216,7 @@ Human decision required before proceeding.
 
 When stopping normally:
 
-1. **Append the final section** to `docs/TODO-<slug>.md`:
+1. **Append the final section** to `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`:
 ```
 ## Final — Team Lead
 
@@ -227,9 +227,9 @@ Plan approved.
 > Once approved, run: `/orchestrate-dev <slug>`
 ```
 
-2. **Strip the Audit Log from the TODO** — remove the `---` separator and everything from
+2. **Strip the Audit Log from the plan** — remove the `---` separator and everything from
    `# Audit Log` to (but not including) the `## Final — Team Lead` section just appended.
-   The TODO file must be clean after this step: only tasks, plan content, and the Final section remain.
+   The plan file must be clean after this step: only tasks, plan content, and the Final section remain.
 
 ---
 

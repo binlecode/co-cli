@@ -7,19 +7,19 @@ description: Deep self-correcting implementation review. Evidence-first scan, au
 
 **Invocation:** `/review-impl <slug>`
 
-Reads `docs/TODO-<slug>.md`. Runs a deep, self-correcting review of every `✓ DONE` task: evidence-first spec check, quality scan, auto-fix of blocking issues, full test suite with mandatory RCA, doc sync, and behavioral verification. Appends verdict to TODO. After PASS, no further gate needed — ship directly.
+Reads `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`. Runs a deep, self-correcting review of every `✓ DONE` task: evidence-first spec check, quality scan, auto-fix of blocking issues, full test suite with mandatory RCA, doc sync, and behavioral verification. Appends verdict to plan. After PASS, no further gate needed — ship directly.
 
 **Default stance: issues exist. PASS is earned, not assumed.**
 
-**Consumes:** `docs/TODO-<slug>.md`, source files in each task's `files:`. **Produces:** appends `## Implementation Review — <date>` to `docs/TODO-<slug>.md`.
+**Consumes:** `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`, source files in each task's `files:`. **Produces:** appends `## Implementation Review — <date>` to the plan file.
 
 ---
 
 ## Phase 1 — Load
 
-1. Read `docs/TODO-<slug>.md`. If not found, stop:
+1. Locate the plan file: glob `docs/exec-plans/active/*-<slug>.md`. If not found, stop:
    ```
-   ✗ No TODO at docs/TODO-<slug>.md.
+   ✗ No plan at docs/exec-plans/active/*-<slug>.md.
    ```
 2. Extract all `✓ DONE` tasks. If none, stop:
    ```
@@ -196,7 +196,7 @@ If no user-facing surface was changed: skip and note "no user-facing changes —
 
 Only append after: all blocking findings resolved, test suite green, doc sync complete, final re-scan clean, behavioral verification passed or skipped with justification.
 
-Append to `docs/TODO-<slug>.md`:
+Append to `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`:
 
 ```markdown
 ## Implementation Review — <date>

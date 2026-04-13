@@ -118,27 +118,27 @@ The workflow skills map onto the dev workflow. Human gates are at decisions, not
 [optional] TL researches scope → docs/reference/RESEARCH-<scope>.md
 [optional] 👤  TL reads research: gaps to address in design?
     ↓
-TL:  /orchestrate-plan <slug>  → docs/TODO-<slug>.md  (TL + Core Dev + PO)
-  - create TODO if none exists
-  - refine TODO if one exists
+TL:  /orchestrate-plan <slug>  → docs/exec-plans/active/YYYY-MM-DD-<slug>.md  (TL + Core Dev + PO)
+  - create plan if none exists
+  - refine plan if one exists
   - validate current state inline (no separate review step)
     ↓
 👤  Gate 1: PO + TL approve plan          (right problem? correct scope?)
     ↓
-Dev: /orchestrate-dev <slug>              (implement + self-review + test + sync-doc → delivery summary appended to TODO)
+Dev: /orchestrate-dev <slug>              (implement + self-review + test + sync-doc → delivery summary appended to plan)
     ↓
-TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full tests + behavioral verification → verdict appended to TODO)
+TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full tests + behavioral verification → verdict appended to plan)
     ↓
-👤  Gate 2: TL reads TODO                 (plan + ✓ DONE marks + delivery summary + review-impl verdict — PASS means ship)
+👤  Gate 2: TL reads plan                 (plan + ✓ DONE marks + delivery summary + review-impl verdict — PASS means ship)
     ↓
 ship
     ↓
-🗑  Delete TODO-<slug>.md
+git mv docs/exec-plans/active/YYYY-MM-DD-<slug>.md docs/exec-plans/completed/
 ```
 
-- `/orchestrate-plan <slug>`: create or refine `docs/TODO-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
-- `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), append delivery summary to TODO, auto-invoke sync-doc.
-- `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification against running system. Appends pass/fail verdict to TODO. **PASS means ship — no further gate needed.**
+- `/orchestrate-plan <slug>`: create or refine `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
+- `/orchestrate-dev <slug>`: execute from `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), append delivery summary to plan, auto-invoke sync-doc.
+- `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification against running system. Appends pass/fail verdict to plan. **PASS means ship — no further gate needed.**
 - `/sync-doc [doc...]`: fix DESIGN doc inaccuracies in-place. No args means all docs. Auto-invoked by `orchestrate-dev`.
 - `/deliver [slug]`: lightweight solo delivery — implement a clear task directly, test-gate, self-review, and ship. No subagent orchestration. Use instead of `/orchestrate-dev` when the task is simple enough for a single-dev pass, or without a slug for ad-hoc work described inline.
 
@@ -165,9 +165,9 @@ Start at `docs/DESIGN-system.md` for top-level system architecture, `CoDeps`, ca
 
 ### Artifact Lifecycle
 
-- `REPORT-*.md` and `TODO-*.md` live directly in `docs/`, not in subdirectories.
+- `REPORT-*.md` lives directly in `docs/`.
 - `REPORT-<scope>.md` is permanent — only eval/benchmark/script runs produce these.
-- `TODO-<slug>.md` tracks a delivery: plan, `✓ DONE` marks (never delete mid-delivery), delivery summary, and review verdict. Deleted after Gate 2 PASS.
+- Exec-plans live at `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` (creation date). Each plan tracks: plan content, `✓ DONE` marks (never delete mid-delivery), delivery summary, and review verdict. On Gate 2 PASS, use `git mv docs/exec-plans/active/YYYY-MM-DD-<slug>.md docs/exec-plans/completed/` — never delete.
 
 ## Reference Repos
 

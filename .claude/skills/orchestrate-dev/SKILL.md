@@ -9,17 +9,17 @@ description: Execute a reviewed plan as a dev team — TL leads and codes alongs
 
 **Invocation:** `/orchestrate-dev <slug>`
 
-Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` — never deletes mid-delivery. Appends delivery summary to TODO. TODO deleted after Gate 2 PASS.
+Reads `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` — never deletes mid-delivery. Appends delivery summary to plan. Plan moved to `completed/` after Gate 2 PASS.
 
-**Consumes:** docs/TODO-<slug>.md. **Produces:** ✓ DONE marks + delivery summary appended to TODO.
+**Consumes:** docs/exec-plans/active/YYYY-MM-DD-<slug>.md. **Produces:** ✓ DONE marks + delivery summary appended to plan.
 
 ---
 
 ## Phase 1 — Load Plan
 
-1. Read `docs/TODO-<slug>.md`. If the file does not exist, stop with:
+1. Locate the plan file: glob `docs/exec-plans/active/*-<slug>.md` to find the exact filename (the date prefix varies). If no match, stop with:
    ```
-   ✗ No plan found at docs/TODO-<slug>.md. Run /orchestrate-plan first.
+   ✗ No plan found at docs/exec-plans/active/*-<slug>.md. Run /orchestrate-plan first.
    ```
 2. Extract from each task:
    - `id` (TASK-1, TASK-2…)
@@ -253,7 +253,7 @@ The reviewer has no access to the implementation conversation — cold read only
 - Test policy: no mocks or fakes — blocking regardless of other quality
 - Security: command injection, path traversal, SQL injection, missing input validation
 
-**Reviewer output** (append to `docs/TODO-<slug>.md` under `## Independent Review`):
+**Reviewer output** (append to `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` under `## Independent Review`):
 
 ```markdown
 ## Independent Review
@@ -283,18 +283,18 @@ Record result: clean / fixed (what was fixed).
 
 ### Step 5 — TODO lifecycle
 
-For every task that reached ✓ pass, mark it done in `docs/TODO-<slug>.md` — do not delete or remove it. The task record is preserved as a track log for debugging, troubleshooting, and potential revert.
+For every task that reached ✓ pass, mark it done in the plan file — do not delete or remove it. The task record is preserved as a track log for debugging, troubleshooting, and potential revert.
 
 Mark a completed task by prepending `✓ DONE` to its heading, e.g.:
 ```
 ### ✓ DONE — TASK-1: <title>
 ```
 
-- **All tasks shipped (done or deferred):** mark all shipped tasks `✓ DONE`. Keep the file — it tracks the full delivery through Gate 2 PASS. Delete after review-impl returns PASS verdict.
-- **Deferred items remain:** mark shipped tasks done; leave deferred tasks unmarked. Same Gate 2 PASS deletion rule applies.
+- **All tasks shipped (done or deferred):** mark all shipped tasks `✓ DONE`. Keep the file — it tracks the full delivery through Gate 2 PASS. Move to `completed/` after review-impl returns PASS verdict.
+- **Deferred items remain:** mark shipped tasks done; leave deferred tasks unmarked. Same Gate 2 PASS move rule applies.
 - **Partial delivery (some tasks blocked):** mark ✓ DONE for passed tasks; leave blocked and unstarted tasks unmarked.
-- Apply this update before appending the delivery summary. The summary must describe the current TODO state.
-- If a passed task is not marked `✓ DONE` in `docs/TODO-<slug>.md`, the delivery tracking is incomplete. Fix before proceeding.
+- Apply this update before appending the delivery summary. The summary must describe the current plan state.
+- If a passed task is not marked `✓ DONE` in the plan file, the delivery tracking is incomplete. Fix before proceeding.
 
 ---
 
@@ -302,7 +302,7 @@ Mark a completed task by prepending `✓ DONE` to its heading, e.g.:
 
 Fix any test failures or doc sync inaccuracies before appending this summary — it reflects final state after fixes, not intermediate state.
 
-Append to `docs/TODO-<slug>.md`:
+Append to `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`:
 
 ```markdown
 ## Delivery Summary — <date>
@@ -330,13 +330,15 @@ Append to `docs/TODO-<slug>.md`:
 
 Run only after `/review-impl` returns PASS. Do not ship a DELIVERED-only delivery — Gate 2 requires the review-impl PASS verdict first.
 
-### Step 1 — Delete TODO
+### Step 1 — Archive plan
+
+Locate the plan file (glob `docs/exec-plans/active/*-<slug>.md`) then move it to completed:
 
 ```
-rm docs/TODO-<slug>.md
+git mv docs/exec-plans/active/YYYY-MM-DD-<slug>.md docs/exec-plans/completed/
 ```
 
-Grep the repo for the slug to confirm no stale references remain.
+Grep the repo for the slug to confirm no stale references remain in source code (DESIGN docs referencing this plan by name are expected — only source code references are stale).
 
 ### Step 2 — Bump version
 

@@ -30,6 +30,11 @@ REQUIRED_PACKAGES = [
     "co_cli/observability",
 ]
 
+REQUIRED_DIRS = [
+    "docs/exec-plans/active",
+    "docs/exec-plans/completed",
+]
+
 
 @pytest.mark.parametrize("doc", REQUIRED_DOCS)
 def test_required_doc_exists(doc: str) -> None:
@@ -39,3 +44,8 @@ def test_required_doc_exists(doc: str) -> None:
 @pytest.mark.parametrize("package", REQUIRED_PACKAGES)
 def test_required_package_exists(package: str) -> None:
     assert (ROOT / package).is_dir(), f"Required package missing: {package}"
+
+
+@pytest.mark.parametrize("directory", REQUIRED_DIRS)
+def test_required_dir_exists(directory: str) -> None:
+    assert (ROOT / directory).is_dir(), f"Required directory missing: {directory}"
