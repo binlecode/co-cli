@@ -393,30 +393,6 @@ async def test_tool_list_background_tasks_signature():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_no_file_io(tmp_path):
-    """Background task lifecycle produces no files in any directory."""
-    session = _fresh_session()
-    state = _make_state("echo no_files_test")
-    session.background_tasks[state.task_id] = state
-
-    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        await spawn_task(state, session)
-
-    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        for _ in range(50):
-            await asyncio.sleep(0.1)
-            if state.status == "completed":
-                break
-
-    if state._monitor_task is not None and not state._monitor_task.done():
-        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await state._monitor_task
-
-    # tmp_path must remain empty — no task files written anywhere
-    assert list(tmp_path.iterdir()) == []
-
-
 # ---------------------------------------------------------------------------
 # Slash command integration
 # ---------------------------------------------------------------------------

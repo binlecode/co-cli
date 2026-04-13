@@ -18,10 +18,14 @@ def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:
 
 
 def test_get_status_reads_repo_root_pyproject():
-    """get_status() must read version from repo-root pyproject.toml, not co_cli/."""
+    """get_status() reads version from repo-root pyproject.toml in MAJOR.MINOR.PATCH format."""
+    import re
+
     info = get_status(settings)
 
-    assert info.version
+    assert re.fullmatch(r"\d+\.\d+\.\d+", info.version), (
+        f"Version must match MAJOR.MINOR.PATCH, got {info.version!r}"
+    )
 
 
 # -- check_security --------------------------------------------------------

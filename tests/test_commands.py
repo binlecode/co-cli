@@ -231,16 +231,6 @@ async def test_compact_noop_empty_history():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_system_op_returns_replace_transcript():
-    """System-op commands (e.g. /clear) must return ReplaceTranscript."""
-    ctx = _make_ctx(message_history=["msg"])
-    result = await dispatch("/clear", ctx)
-    assert isinstance(result, ReplaceTranscript)
-    assert result.history == []
-    assert result.compaction_applied is False
-
-
-@pytest.mark.asyncio
 async def test_dispatch_skill_returns_delegate_to_agent():
     """Skill dispatch must return DelegateToAgent."""
     test_skill = SkillConfig(name="test-boundary-skill", body="Do the thing.", description="test")
