@@ -38,7 +38,7 @@ See `docs/specs/system.md` for architecture, `CoDeps`, capability surface, and s
 
 ### Knowledge System
 
-All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/memory/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs in `search.db`. See `docs/specs/context.md` for the full schema, tool API, lifecycle, and work record provenance model.
+All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/memory/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs in `search.db`. See `docs/specs/memory.md` for memory storage and recall, `docs/specs/library.md` for library/knowledge indexing, and `docs/specs/context.md` for prompt assembly and history governance.
 
 ## Engineering Rules
 
@@ -49,7 +49,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Comments**: no trailing comments; put comments on the line above, not at end of code lines.
 - **`__init__.py`**: must be docstring-only (one-line module docstring or empty); never add imports, re-exports, or code. When converting a module to a package, all content goes into `_core.py` or named private submodules — never into `__init__.py`.
 - **`_prefix.py` helpers**: leading-underscore modules are package-private. If imported outside the package, drop the underscore.
-- **Class naming conventions** (enforced — violations block merge): every public type must use one of these suffixes: `*State` (mutable lifecycle data), `*Result` (immutable pass/fail outcome), `*Output` (agent/pipeline payload), `*Config` (configuration — preferred; `*Settings` acceptable for Pydantic sub-models), `*Info` (read-only descriptor), `*Registry` (registration lookup table — built during a registration phase, queried at runtime), `*Store` (persistent storage layer), `*Context` (input bag for a call), `*Event` (async/streaming event), `*Error` (exception class), `*Enum` (enumeration — co-cli convention; distinguishes enum types from data containers). Exception: discriminated union leaves that exist purely as tagged members of a union type (e.g. `type Outcome = Foo | Bar`) are exempt.
+- **Class naming**: names must reveal the class's role. Prefer established suffix conventions where they fit: `*State` (mutable lifecycle data), `*Result` (immutable pass/fail outcome), `*Output` (agent/pipeline payload), `*Config` (configuration — preferred; `*Settings` acceptable for Pydantic sub-models), `*Info` (read-only descriptor), `*Registry` (registration lookup table), `*Store` (persistent storage layer), `*Context` (input bag for a call), `*Event` (async/streaming event), `*Error` (exception class), `*Enum` (enumeration). Self-evident named concepts (e.g. `ShellBackend`, `AgentLoop`) do not need a suffix.
 - **Variable and function naming**: use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
 - **Display**: use the project's shared `console` object for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Quality gates**: `scripts/quality-gate.sh` is the single source of truth for all automated checks. `lint` = ruff (pre-commit enforced), `types` = lint + pyright, `full` = lint + pyright + pytest. Tool configs live in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
@@ -65,6 +65,37 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **User-global paths**: `~/.co-cli/` (overridable via `CO_CLI_HOME`). Project-local: `.co-cli/`.
 - **Versioning**: `MAJOR.MINOR.PATCH`; patch odd = bugfix, even = feature. Bump only in `pyproject.toml`. Git history is the changelog; releases use GitHub Releases — tag `vX.Y.Z` and push to trigger `.github/workflows/release.yml`.
 - **No `.env` files**: use `settings.json` or env vars.
+
+#### Adding a Tool
+
+1. **Create `co_cli/tools/your_tool.py`**:
+   ```python
+   from pydantic_ai import RunContext
+   from pydantic_ai.messages import ToolReturn
+   from co_cli.deps import CoDeps
+   from co_cli.tools.tool_output import tool_output
+   from co_cli.tools.tool_errors import tool_error
+
+   async def your_tool(ctx: RunContext[CoDeps], param: str) -> ToolReturn:
+       """One-line description — this line becomes the tool schema description."""
+       result = await ctx.deps.something.do_work(param)
+       return tool_output(result, ctx=ctx)
+   ```
+   All runtime resources come from `ctx.deps.*`. First docstring line is the tool description — make it count.
+
+2. **Import in `co_cli/agent.py`**:
+   ```python
+   from co_cli.tools.your_tool import your_tool
+   ```
+
+3. **Register in `_build_native_toolset()` in `co_cli/agent.py`**:
+   ```python
+   # Read-only, always in context:
+   _register_tool(your_tool, visibility=_always_visible)
+   # Mutating, discovered on-demand:
+   _register_tool(your_tool, approval=True, visibility=_deferred_visible)
+   ```
+   `ALWAYS` = present every turn. `DEFERRED` = discovered via search_tools when needed. Set `approval=True` for any tool that writes files, spawns processes, or calls external write APIs.
 
 ### Testing
 
@@ -104,6 +135,23 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 
 - Prefer fail-fast over redundant fallbacks. Clean up dead code during implementation, not as a separate pass.
 - After renames or file moves: (1) grep for ALL remaining references to the old name across the whole repo, (2) check test imports specifically — they are the most common miss, (3) run the full test suite. Done only when grep finds zero stale references AND tests pass.
+
+### Known Pitfalls
+
+**DO NOT hardcode `~/.co-cli` or `Path.home() / ".co-cli"` in source code.**
+Use `USER_DIR` and derived constants (`SETTINGS_FILE`, `SEARCH_DB`, etc.) from `co_cli/config/_core.py`. Tests override `CO_CLI_HOME` to a temp dir — hardcoded paths bypass this and bleed state across test runs.
+
+**DO NOT put approval prompts or approval logic inside tool functions.**
+Use `requires_approval=True` at `_register_tool()` and let the chat loop handle the UX. Tools that implement their own approval checks bypass the deferred approval mechanism and break approval-resume flow.
+
+**DO NOT return a raw `str`, `dict`, or `list` from a tool.**
+Always use `tool_output()` for results and `tool_error()` for failures. Raw returns silently omit tracing metadata and structured fields the chat loop depends on.
+
+**DO NOT hold mutable module-level state in tool files.**
+Tool modules are imported once and shared across all agent runs in the same process. Mutable globals cause test interference and session bleed. All mutable state must live in `ctx.deps.*`.
+
+**DO NOT put imports, re-exports, or executable code in `__init__.py`.**
+Package `__init__.py` files must be docstring-only. When a module becomes a package, all content goes into `_core.py` or named private submodules. Violating this causes circular imports and breaks the `_prefix.py` visibility contract.
 
 ## Workflow
 
@@ -171,6 +219,8 @@ Specs index:
 - `docs/specs/core-loop.md` — agent loop, turn orchestration, approval flow
 - `docs/specs/flow-bootstrap.md` — startup sequence from settings load to REPL entry
 - `docs/specs/context.md` — prompt context assembly, history governance, session persistence
+- `docs/specs/memory.md` — memory storage, extraction, recall, and REPL management
+- `docs/specs/library.md` — library article indexing, KnowledgeStore FTS5/hybrid search
 - `docs/specs/tools.md` — tool registration, visibility tiers, approval model, tool catalog
 - `docs/specs/skills.md` — skill system, load order, dispatch, argument expansion
 - `docs/specs/llm-models.md` — single-model architecture, provider abstraction, model quirks
