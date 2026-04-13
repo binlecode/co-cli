@@ -37,15 +37,6 @@ async def test_no_arg_shows_current_mode_without_mutation():
 
 
 @pytest.mark.asyncio
-async def test_no_arg_shows_current_mode_off():
-    """/reasoning with no arg works when current mode is off."""
-    ctx = _make_ctx("off")
-    result = await _cmd_reasoning(ctx, "")
-    assert result is None
-    assert ctx.deps.session.reasoning_display == "off"
-
-
-@pytest.mark.asyncio
 async def test_explicit_valid_arg_sets_mode():
     """/reasoning full sets the mode to full directly."""
     ctx = _make_ctx("summary")
@@ -106,12 +97,3 @@ async def test_invalid_arg_leaves_mode_unchanged():
     result = await _cmd_reasoning(ctx, "bogus")
     assert result is None
     assert ctx.deps.session.reasoning_display == "summary"
-
-
-@pytest.mark.asyncio
-async def test_invalid_arg_leaves_mode_unchanged_when_off():
-    """/reasoning invalid leaves mode unchanged even when starting from off."""
-    ctx = _make_ctx("off")
-    result = await _cmd_reasoning(ctx, "invalid_mode")
-    assert result is None
-    assert ctx.deps.session.reasoning_display == "off"

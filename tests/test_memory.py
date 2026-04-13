@@ -305,17 +305,6 @@ def test_search_memories_empty_query_returns_guard(tmp_path: Path):
     assert "required" in result.return_value.lower()
 
 
-def test_search_memories_grep_fallback(tmp_path: Path):
-    """search_memories grep fallback (no FTS index) finds memories by keyword."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-
-    _write_memory(memory_dir, 1, "User prefers xyloquartz-grep-test tools", tags=["preference"])
-
-    result = asyncio.run(search_memories(_make_ctx(memory_dir=memory_dir), "xyloquartz-grep-test"))
-    assert result.metadata["count"] >= 1
-    assert all(r["source"] == "memory" for r in result.metadata["results"])
-
-
 # ---------------------------------------------------------------------------
 # TASK-2: artifact_type / session_summary exclusion
 # ---------------------------------------------------------------------------

@@ -94,6 +94,7 @@ def test_path_hint_uses_noun_phrase():
     """Path approval hint is a noun phrase, not bracket notation."""
     subject = resolve_approval_subject("write_file", {"path": "src/foo.py", "content": ""})
     assert "[always → session:" not in subject.display
+    assert "this session" in subject.display
 
 
 def test_domain_hint_uses_noun_phrase():
