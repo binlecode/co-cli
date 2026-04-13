@@ -14,6 +14,7 @@ REQUIRED_DOCS = [
     "CLAUDE.md",
     "README.md",
     "docs/ARCHITECTURE.md",
+    "docs/specs/mission.md",
     "docs/specs/system.md",
     "docs/specs/core-loop.md",
     "docs/specs/tools.md",
