@@ -66,10 +66,16 @@ step_status "types" pass
 # --- Full (pytest) ---
 echo ""
 echo "[3/3] tests"
-echo "  → pytest"
+PYTEST_ARGS=(-v)
+if [[ "${CI:-}" == "true" ]]; then
+    PYTEST_ARGS+=(-m "not local")
+    echo "  → pytest -m 'not local'  (CI: skipping local-infrastructure tests)"
+else
+    echo "  → pytest"
+fi
 mkdir -p .pytest-logs
 LOG=".pytest-logs/$(date +%Y%m%d-%H%M%S)-gate.log"
-uv run pytest -v 2>&1 | tee "$LOG"
+uv run pytest "${PYTEST_ARGS[@]}" 2>&1 | tee "$LOG"
 PYTEST_EXIT=${PIPESTATUS[0]}
 
 echo ""

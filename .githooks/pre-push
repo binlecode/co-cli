@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Pre-push hook: full quality gate (lint + pyright + pytest).
+# Blocks push if any check fails.
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+scripts/quality-gate.sh full

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Matches requires-python = ">=3.12" in pyproject.toml
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Activate git hooks
+        run: git config core.hooksPath .githooks
+
+      - name: Run quality gate
+        # CI=true is set automatically by GitHub Actions.
+        # quality-gate.sh detects CI=true and adds -m "not local" to skip
+        # tests that require Ollama or other local infrastructure.
+        run: scripts/quality-gate.sh full

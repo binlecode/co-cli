@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.88] - 2026-04-13
+
+### Added
+- **Version-controlled git hooks**: `.githooks/pre-commit` (lint) and `.githooks/pre-push` (full gate) checked into repo; `git config core.hooksPath .githooks` replaces `scripts/install-hooks.sh` runtime generation.
+- **Structural tests**: `tests/test_repo_structure.py` asserts required docs and packages exist — pytest fails if the harness tree drifts.
+- **GitHub Actions CI**: `.github/workflows/ci.yml` triggers on push/PR to main; runs `scripts/quality-gate.sh full` with Ollama-gated tests skipped via `pytest.mark.local`.
+- **`pytest.mark.local` marker**: `test_tool_calling_functional.py` (all tests) and two approval tests in `test_commands.py` marked; `CI=true` in `quality-gate.sh` automatically adds `-m "not local"`.
+
 ## [0.7.86] - 2026-04-12
 
 ### Changed

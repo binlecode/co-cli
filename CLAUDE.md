@@ -2,20 +2,26 @@
 
 This file provides guidance to Claude Code (`claude.ai/code`) when working with this repository.
 
-## Build & Run Commands
+## Setup (run once after clone)
 
 ```bash
 uv sync                          # Install all dependencies (runtime + dev)
+git config core.hooksPath .githooks  # Activate version-controlled git hooks
+```
+
+## Build & Run Commands
+
+```bash
 uv run co chat                   # Interactive REPL
 uv run co status                 # System health check
 uv run co logs                   # Datasette trace viewer (table)
 uv run co traces                 # Nested HTML trace viewer
 
 # Quality gates (scripts/quality-gate.sh — single source of truth for all checks)
-scripts/quality-gate.sh lint              # ruff check + format (pre-commit hook runs this)
+scripts/quality-gate.sh lint              # ruff check + format (pre-commit hook)
 scripts/quality-gate.sh lint --fix        # ruff auto-fix + format
 scripts/quality-gate.sh types             # lint + pyright
-scripts/quality-gate.sh full              # lint + pyright + pytest (ship gate)
+scripts/quality-gate.sh full              # lint + pyright + pytest (pre-push hook + ship gate)
 
 # ALL pytest runs MUST pipe to a timestamped log under .pytest-logs/ (mkdir -p first).
 # Never truncate output before the log file (no | head, | tail, | grep before tee).
@@ -134,6 +140,7 @@ ship
 - `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), append delivery summary to TODO, auto-invoke sync-doc.
 - `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification against running system. Appends pass/fail verdict to TODO. **PASS means ship — no further gate needed.**
 - `/sync-doc [doc...]`: fix DESIGN doc inaccuracies in-place. No args means all docs. Auto-invoked by `orchestrate-dev`.
+- `/deliver [slug]`: lightweight solo delivery — implement a clear task directly, test-gate, self-review, and ship. No subagent orchestration. Use instead of `/orchestrate-dev` when the task is simple enough for a single-dev pass, or without a slug for ad-hoc work described inline.
 
 ## Docs
 
@@ -164,4 +171,18 @@ Start at `docs/DESIGN-system.md` for top-level system architecture, `CoDeps`, ca
 
 ## Reference Repos
 
-Peer CLI tools in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-peer-systems.md` for detailed notes and `docs/reference/RESEARCH-peer-personality.md` for personality research.
+Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-peer-personality.md` for personality research.
+
+| Repo | Relevance to co-cli |
+|------|---------------------|
+| `fork-claude-code` | Agent CLI, tool approval, config, compaction, TUI |
+| `hermes-agent` | Direct co-cli peer — agent CLI, REPL, streaming |
+| `elizaos` | Character personality schema, tool policy layering, memory scoping |
+| `letta` | Memory architecture (MemGPT-style) |
+| `gemini-cli` | Agent CLI, config patterns, tool design |
+| `opencode` | Agent CLI, tool patterns, config |
+| `opensouls` | CognitiveStep + MentalProcess chaining (TypeScript, near-stale) |
+
+### Research Rules
+
+- **Correct repo targeting**: when comparing peer repos, always use `fork-claude-code` (at `~/workspace_genai/fork-claude-code`), not the public `claude-code`. Confirm the exact path before reading anything. Do not proceed with analysis until repo paths are verified.

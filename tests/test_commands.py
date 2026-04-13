@@ -145,6 +145,7 @@ _PROMPT_SHELL = (
 
 
 @pytest.mark.asyncio
+@pytest.mark.local
 async def test_approval_approve():
     """Approving a deferred tool call through production orchestration executes it and returns a response.
 
@@ -183,6 +184,7 @@ async def test_approval_approve():
 
 
 @pytest.mark.asyncio
+@pytest.mark.local
 async def test_approval_deny():
     """Denying a deferred tool call through production orchestration; LLM still responds.
 

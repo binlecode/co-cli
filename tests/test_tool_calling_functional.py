@@ -27,6 +27,8 @@ from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 
+pytestmark = pytest.mark.local
+
 _CONFIG = settings
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
 _CONFIG_NO_MCP = _CONFIG.model_copy(update={"mcp_servers": {}})

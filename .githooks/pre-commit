@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Pre-commit hook: ruff lint + format check.
+# Blocks commit if any violation is found.
+
+set -euo pipefail
+
+# Skip if no Python files are staged
+if ! git diff --cached --name-only | grep -q '\.py$'; then
+    echo "pre-commit: no Python files staged, skipping lint"
+    exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+scripts/quality-gate.sh lint
