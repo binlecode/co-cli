@@ -39,7 +39,7 @@ Tasks:
 - [x] add `tests/test_repo_structure.py`
 - [x] assert required docs: `CLAUDE.md`, `README.md`, `docs/DESIGN-system.md`, `docs/DESIGN-core-loop.md`, `docs/DESIGN-tools.md`, `docs/DESIGN-context.md`
 - [x] assert required packages: `co_cli/tools/`, `co_cli/context/`, `co_cli/config/`, `co_cli/knowledge/`, `co_cli/memory/`, `co_cli/bootstrap/`, `co_cli/commands/`, `co_cli/observability/`
-- [ ] assert `docs/ARCHITECTURE.md` once item 8 is shipped
+- [x] assert `docs/ARCHITECTURE.md` once item 8 is shipped
 
 Acceptance criteria:
 - `pytest` fails if any required doc or package goes missing
@@ -137,10 +137,10 @@ Architecture lives in `docs/DESIGN-system.md` which is thorough but doesn't expl
 one-way dependency rules. A coding agent looks for `ARCHITECTURE.md` — it doesn't exist.
 
 Tasks:
-- [ ] add `docs/ARCHITECTURE.md` as slim entrypoint stating dependency direction
-- [ ] document the one-way rule: `main → bootstrap → agent → tools/context/config/knowledge/memory`
-- [ ] point to `DESIGN-system.md` for full detail
-- [ ] add `docs/ARCHITECTURE.md` to structural test assertions (item 3)
+- [x] add `docs/ARCHITECTURE.md` as slim entrypoint stating dependency direction
+- [x] document the one-way rule: `main → bootstrap → agent → tools/context/config/knowledge/memory`
+- [x] point to `DESIGN-system.md` for full detail
+- [x] add `docs/ARCHITECTURE.md` to structural test assertions (item 3)
 
 Acceptance criteria:
 - dependency direction is explicitly stated and findable in one step

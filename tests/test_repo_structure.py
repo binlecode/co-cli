@@ -13,6 +13,7 @@ ROOT = Path(__file__).parent.parent
 REQUIRED_DOCS = [
     "CLAUDE.md",
     "README.md",
+    "docs/ARCHITECTURE.md",
     "docs/DESIGN-system.md",
     "docs/DESIGN-core-loop.md",
     "docs/DESIGN-tools.md",

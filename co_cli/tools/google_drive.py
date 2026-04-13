@@ -18,6 +18,48 @@ _DRIVE_NOT_CONFIGURED = (
 )
 
 
+def _resolve_page_token(ctx: RunContext[CoDeps], query: str, page: int) -> str:
+    """Return the stored page token for the given page, or raise ModelRetry."""
+    tokens = ctx.deps.session.drive_page_tokens.get(query, [])
+    token_index = page - 2  # page 2 -> index 0, page 3 -> index 1
+    if token_index >= len(tokens):
+        raise ModelRetry(
+            f"Page {page} not available. Search from page 1 first, "
+            f"then request pages sequentially."
+        )
+    return tokens[token_index]
+
+
+def _store_page_token(ctx: RunContext[CoDeps], query: str, page: int, next_token: str) -> None:
+    """Persist next_token so future pages can be requested."""
+    if query not in ctx.deps.session.drive_page_tokens:
+        ctx.deps.session.drive_page_tokens[query] = []
+    tokens = ctx.deps.session.drive_page_tokens[query]
+    target_index = page - 1  # page 1 result -> index 0 stores token for page 2
+    if len(tokens) <= target_index:
+        tokens.append(next_token)
+    else:
+        tokens[target_index] = next_token
+
+
+def _format_drive_results(
+    ctx: RunContext[CoDeps], items: list[dict[str, Any]], page: int, next_token: str
+) -> ToolReturn:
+    """Format Drive file list into a tool_output."""
+    lines = []
+    for item in items:
+        name = item.get("name", "Untitled")
+        modified = item.get("modifiedTime", "")[:10]
+        url = item.get("webViewLink", "")
+        file_id = item.get("id", "")
+        lines.append(f"- {modified}  {name}\n  {url}\n  (id: {file_id})")
+    display = f"Page {page} — Found {len(items)} files:\n\n" + "\n".join(lines)
+    has_more = bool(next_token)
+    if has_more:
+        display += f"\n\n(More results available — request page {page + 1})"
+    return tool_output(display, ctx=ctx, page=page, has_more=has_more)
+
+
 def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
     """Search files in Google Drive by name or content. Returns up to 10
     results per page. Matches files whose name contains the query OR whose
@@ -56,17 +98,8 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
             "pageSize": 10,
             "fields": "nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink)",
         }
-
-        # Look up stored page token for pages > 1
         if page > 1:
-            tokens = ctx.deps.session.drive_page_tokens.get(query, [])
-            token_index = page - 2  # page 2 -> index 0, page 3 -> index 1
-            if token_index >= len(tokens):
-                raise ModelRetry(
-                    f"Page {page} not available. Search from page 1 first, "
-                    f"then request pages sequentially."
-                )
-            request_kwargs["pageToken"] = tokens[token_index]
+            request_kwargs["pageToken"] = _resolve_page_token(ctx, query, page)
 
         results = service.files().list(**request_kwargs).execute()
         items = results.get("files", [])
@@ -75,31 +108,11 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
                 return tool_output("No files found.", ctx=ctx, count=0, page=1, has_more=False)
             return tool_output("No more results.", ctx=ctx, count=0, page=page, has_more=False)
 
-        # Store next page token for future use
         next_token = results.get("nextPageToken", "")
         if next_token:
-            if query not in ctx.deps.session.drive_page_tokens:
-                ctx.deps.session.drive_page_tokens[query] = []
-            tokens = ctx.deps.session.drive_page_tokens[query]
-            # Ensure token is stored at the right index
-            target_index = page - 1  # page 1 result -> index 0 stores token for page 2
-            if len(tokens) <= target_index:
-                tokens.append(next_token)
-            else:
-                tokens[target_index] = next_token
+            _store_page_token(ctx, query, page, next_token)
 
-        lines = []
-        for item in items:
-            name = item.get("name", "Untitled")
-            modified = item.get("modifiedTime", "")[:10]
-            url = item.get("webViewLink", "")
-            file_id = item.get("id", "")
-            lines.append(f"- {modified}  {name}\n  {url}\n  (id: {file_id})")
-        display = f"Page {page} — Found {len(items)} files:\n\n" + "\n".join(lines)
-        has_more = bool(next_token)
-        if has_more:
-            display += f"\n\n(More results available — request page {page + 1})"
-        return tool_output(display, ctx=ctx, page=page, has_more=has_more)
+        return _format_drive_results(ctx, items, page, next_token)
     except ModelRetry:
         raise
     except Exception as e:

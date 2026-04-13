@@ -152,6 +152,47 @@ async def _run_foreground_turn(
     return await _finalize_turn(turn_result, message_history, deps, frontend)
 
 
+async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None:
+    """Drain pending extractions and release all resources before exit."""
+    from co_cli.memory._extractor import drain_pending_extraction
+
+    await drain_pending_extraction()
+    if deps is not None:
+        from co_cli.tools.background import kill_task
+
+        for task_state in deps.session.background_tasks.values():
+            if task_state.status == "running":
+                try:
+                    await kill_task(task_state)
+                except Exception:
+                    pass
+        deps.shell.cleanup()
+    await stack.aclose()
+
+
+def _apply_command_outcome(
+    outcome: object,
+    message_history: list[ModelMessage],
+    deps: CoDeps,
+) -> tuple[bool, list[ModelMessage], str, dict[str, str | None]]:
+    """Map a command outcome to loop control signals.
+
+    Returns (should_continue, new_history, new_input, saved_env).
+    should_continue=True means `continue` the while loop; False means proceed to agent turn.
+    """
+    if isinstance(outcome, ReplaceTranscript):
+        if outcome.compaction_applied:
+            write_compact_boundary(deps.session.session_path)
+        return True, outcome.history, "", {}
+    if isinstance(outcome, DelegateToAgent):
+        saved_env: dict[str, str | None] = {k: os.environ.get(k) for k in outcome.skill_env}
+        os.environ.update(outcome.skill_env)
+        deps.runtime.active_skill_name = outcome.skill_name
+        return False, message_history, outcome.delegated_input, saved_env
+    # LocalOnly
+    return True, message_history, "", {}
+
+
 async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     frontend = TerminalFrontend()
 
@@ -179,7 +220,6 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
 
-        # Resume hint: check if a transcript exists for the current session
         if deps.session.session_path.exists():
             console.print("[dim]Previous session available — /resume to continue[/dim]")
 
@@ -195,13 +235,12 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                 frontend.set_input_active(True)
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
                 frontend.set_input_active(False)
-                last_interrupt_time = 0.0  # Reset on successful input
+                last_interrupt_time = 0.0
                 if user_input.lower() in ["exit", "quit"]:
                     break
                 if not user_input.strip():
                     continue
 
-                # /command — slash commands, no LLM
                 if user_input.startswith("/"):
                     cmd_ctx = CommandContext(
                         message_history=message_history,
@@ -210,18 +249,10 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                         completer=completer,
                     )
                     outcome = await dispatch_command(user_input, cmd_ctx)
-                    if isinstance(outcome, ReplaceTranscript):
-                        message_history = outcome.history
-                        if outcome.compaction_applied:
-                            write_compact_boundary(deps.session.session_path)
-                        continue
-                    elif isinstance(outcome, DelegateToAgent):
-                        # Skill dispatched — fall through to LLM turn with delegated input
-                        user_input = outcome.delegated_input
-                        deps.runtime.active_skill_name = outcome.skill_name
-                        _saved_env = {k: os.environ.get(k) for k in outcome.skill_env}
-                        os.environ.update(outcome.skill_env)
-                    else:  # LocalOnly
+                    should_continue, message_history, user_input, _saved_env = (
+                        _apply_command_outcome(outcome, message_history, deps)
+                    )
+                    if should_continue:
                         continue
 
                 message_history = await _run_foreground_turn(
@@ -246,22 +277,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
-        # Drain pending memory extraction before exit
-        from co_cli.memory._extractor import drain_pending_extraction
-
-        await drain_pending_extraction()
-
-        if deps is not None:
-            from co_cli.tools.background import kill_task
-
-            for task_state in deps.session.background_tasks.values():
-                if task_state.status == "running":
-                    try:
-                        await kill_task(task_state)
-                    except Exception:
-                        pass
-            deps.shell.cleanup()
-        await stack.aclose()
+        await _drain_and_cleanup(deps, stack)
 
 
 @app.command()

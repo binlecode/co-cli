@@ -38,9 +38,6 @@ _TRACER = otel_trace.get_tracer("co.memory")
 
 logger = logging.getLogger(__name__)
 
-# MemoryEntry and load_memories are re-imported from co_cli.memory.recall
-# (extracted to break context/ → tools/ cycle)
-
 
 def grep_recall(
     memories: list[MemoryEntry],
@@ -94,6 +91,90 @@ def filter_memories(
 
 
 # ---------------------------------------------------------------------------
+# Private helpers for _recall_for_context
+# ---------------------------------------------------------------------------
+
+
+def _collect_related_memories(
+    matches: list[MemoryEntry],
+    memory_dir: Any,
+) -> list[MemoryEntry]:
+    """One-hop traversal: surface related memories linked from matched entries."""
+    match_ids = {str(m.id) for m in matches}
+    has_related = any(m.related for m in matches)
+    if has_related:
+        all_by_slug: dict[str, MemoryEntry] = {m.path.stem: m for m in load_memories(memory_dir)}
+    else:
+        all_by_slug = {}
+    related_entries: list[MemoryEntry] = []
+    for m in matches:
+        if not m.related:
+            continue
+        for slug in m.related:
+            linked = all_by_slug.get(slug)
+            if linked and str(linked.id) not in match_ids:
+                related_entries.append(linked)
+                match_ids.add(str(linked.id))
+            if len(related_entries) >= 5:
+                break
+        if len(related_entries) >= 5:
+            break
+    return related_entries
+
+
+def _format_recall_results(
+    ctx: RunContext[CoDeps],
+    query: str,
+    matches: list[MemoryEntry],
+    related_entries: list[MemoryEntry],
+) -> ToolReturn:
+    """Format matched and related memories into a tool_output."""
+    lines = [
+        f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"
+    ]
+    result_dicts: list[dict[str, Any]] = []
+    for r in matches:
+        display_id = str(r.id)[:8] if isinstance(r.id, str) else str(r.id)
+        lines.append(f"**Memory {display_id}** (created {r.created[:10]})")
+        if r.tags:
+            lines.append(f"Tags: {', '.join(r.tags)}")
+        lines.append(f"{r.content}\n")
+        result_dicts.append(
+            {
+                "id": r.id,
+                "path": str(r.path),
+                "content": r.content,
+                "tags": r.tags,
+                "created": r.created,
+            }
+        )
+    if related_entries:
+        lines.append("**Related memories:**\n")
+        for r in related_entries:
+            display_id = str(r.id)[:8] if isinstance(r.id, str) else str(r.id)
+            lines.append(f"**Memory {display_id}** (created {r.created[:10]})")
+            if r.tags:
+                lines.append(f"Tags: {', '.join(r.tags)}")
+            lines.append(f"{r.content}\n")
+            result_dicts.append(
+                {
+                    "id": r.id,
+                    "path": str(r.path),
+                    "content": r.content,
+                    "tags": r.tags,
+                    "created": r.created,
+                    "related_hop": True,
+                }
+            )
+    return tool_output(
+        "\n".join(lines),
+        ctx=ctx,
+        count=len(matches) + len(related_entries),
+        results=result_dicts,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public tools
 # ---------------------------------------------------------------------------
 
@@ -128,7 +209,6 @@ async def _recall_for_context(
         created_before: ISO8601 date string; only return memories created on or before this date.
     """
     memory_dir = ctx.deps.memory_dir
-
     memories = load_memories(memory_dir)
     memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
     memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
@@ -142,77 +222,8 @@ async def _recall_for_context(
             results=[],
         )
 
-    # One-hop traversal: surface related memories (§14.1)
-    match_ids = {str(m.id) for m in matches}
-    # Lazy full load: only when matched entries have related slugs to follow
-    has_related = any(m.related for m in matches)
-    if has_related:
-        _all_memories = load_memories(memory_dir)
-        all_by_slug: dict[str, MemoryEntry] = {m.path.stem: m for m in _all_memories}
-    else:
-        all_by_slug: dict[str, MemoryEntry] = {}
-
-    related_entries: list[MemoryEntry] = []
-    for m in matches:
-        if not m.related:
-            continue
-        for slug in m.related:
-            linked = all_by_slug.get(slug)
-            if linked and str(linked.id) not in match_ids:
-                related_entries.append(linked)
-                match_ids.add(str(linked.id))
-            if len(related_entries) >= 5:
-                break
-        if len(related_entries) >= 5:
-            break
-
-    # Format as markdown list
-    lines = [
-        f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"
-    ]
-    result_dicts: list[dict[str, Any]] = []
-    for r in matches:
-        display_id = str(r.id)[:8] if isinstance(r.id, str) else str(r.id)
-        lines.append(f"**Memory {display_id}** (created {r.created[:10]})")
-        if r.tags:
-            lines.append(f"Tags: {', '.join(r.tags)}")
-        lines.append(f"{r.content}\n")
-        result_dicts.append(
-            {
-                "id": r.id,
-                "path": str(r.path),
-                "content": r.content,
-                "tags": r.tags,
-                "created": r.created,
-            }
-        )
-
-    # Append related memories section
-    if related_entries:
-        lines.append("**Related memories:**\n")
-        for r in related_entries:
-            display_id = str(r.id)[:8] if isinstance(r.id, str) else str(r.id)
-            lines.append(f"**Memory {display_id}** (created {r.created[:10]})")
-            if r.tags:
-                lines.append(f"Tags: {', '.join(r.tags)}")
-            lines.append(f"{r.content}\n")
-            result_dicts.append(
-                {
-                    "id": r.id,
-                    "path": str(r.path),
-                    "content": r.content,
-                    "tags": r.tags,
-                    "created": r.created,
-                    "related_hop": True,
-                }
-            )
-
-    return tool_output(
-        "\n".join(lines),
-        ctx=ctx,
-        count=len(matches) + len(related_entries),
-        results=result_dicts,
-    )
+    related_entries = _collect_related_memories(matches, memory_dir)
+    return _format_recall_results(ctx, query, matches, related_entries)
 
 
 async def search_memories(

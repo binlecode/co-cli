@@ -35,6 +35,27 @@ class StatusResult:
     obsidian_vault_path: str | None = None
 
 
+def _resolve_llm_status(config: Settings) -> tuple[str, str]:
+    """Return (llm_provider_str, llm_status_str) for the configured LLM."""
+    provider = config.llm.provider.lower()
+    model = config.llm.model
+    if not model:
+        return f"{provider.title()} (no model configured)", "misconfigured"
+    if provider == "gemini":
+        provider_check = check_agent_llm(config)
+        return (
+            f"Gemini ({model})",
+            "configured" if provider_check.status == "ok" else "missing key",
+        )
+    provider_check = check_agent_llm(config)
+    if provider_check.status == "error":
+        return f"Ollama ({model})", "misconfigured"
+    if provider_check.status == "warn":
+        reason = provider_check.extra.get("reason")
+        return f"Ollama ({model})", "offline" if reason == "unreachable" else "online"
+    return f"Ollama ({model})", "online"
+
+
 def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
     """Gather system status into a plain dataclass (no display side-effects)."""
 
@@ -61,26 +82,7 @@ def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
     shell = "subprocess (approval-gated)"
 
     # -- llm --
-    provider = config.llm.provider.lower()
-    model = config.llm.model
-    if not model:
-        llm_provider = f"{provider.title()} (no model configured)"
-        llm_status = "misconfigured"
-    elif provider == "gemini":
-        llm_provider = f"Gemini ({model})"
-        provider_check = check_agent_llm(config)
-        llm_status = "configured" if provider_check.status == "ok" else "missing key"
-    else:
-        llm_provider = f"Ollama ({model})"
-        provider_check = check_agent_llm(config)
-        if provider_check.status == "error":
-            llm_status = "misconfigured"
-        elif provider_check.status == "warn":
-            llm_status = (
-                "offline" if provider_check.extra.get("reason") == "unreachable" else "online"
-            )
-        else:
-            llm_status = "online"
+    llm_provider, llm_status = _resolve_llm_status(config)
 
     # -- integrations via check_settings --
     doctor = check_settings(config)

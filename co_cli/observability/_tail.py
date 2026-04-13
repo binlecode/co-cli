@@ -88,77 +88,95 @@ def _vline(content: str, text_style: str = "white") -> Text:
     return t
 
 
+def _render_agent_detail(attrs: dict) -> list[Text]:
+    lines: list[Text] = []
+    final = attrs.get("final_result", "")
+    if final:
+        lines.append(_vline("[final]", text_style="dim"))
+        for tl in final.splitlines():
+            lines.append(_vline(f"  {tl}", text_style="green"))
+    return lines
+
+
+def _render_tool_detail(attrs: dict) -> list[Text]:
+    lines: list[Text] = []
+    raw_args = attrs.get("gen_ai.tool.call.arguments", "")
+    if raw_args:
+        arg_str = raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
+        try:
+            arg_str = json.dumps(json.loads(arg_str), indent=2)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        lines.append(_vline("args:", text_style="dim"))
+        for tl in arg_str.splitlines():
+            lines.append(_vline(f"  {tl}"))
+    result = attrs.get("gen_ai.tool.call.result", "")
+    if result:
+        result_str = result if isinstance(result, str) else json.dumps(result)
+        try:
+            result_str = json.dumps(json.loads(result_str), indent=2)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        lines.append(_vline("result:", text_style="dim"))
+        for tl in result_str.splitlines():
+            lines.append(_vline(f"  {tl}"))
+    return lines
+
+
+def _render_model_input_lines(input_msgs: list) -> list[Text]:
+    """Render system prompt first line + last user message from input messages."""
+    lines: list[Text] = []
+    # System prompt: first line only — identifies which persona/agent is active
+    for msg in input_msgs:
+        if msg.get("role") == "system":
+            for part in msg.get("parts", []):
+                if part.get("type") == "text":
+                    first_line = part.get("content", "").split("\n")[0][:120]
+                    lines.append(_vline(f"[system] {first_line}", text_style="dim"))
+            break
+    # Last user message — what triggered this model call
+    for msg in reversed(input_msgs):
+        if msg.get("role") == "user":
+            lines.append(_vline("[user]", text_style="dim"))
+            for part in msg.get("parts", []):
+                if part.get("type") == "text":
+                    for tl in part.get("content", "").splitlines():
+                        lines.append(_vline(f"  {tl}", text_style="cyan"))
+            break
+    return lines
+
+
+def _render_model_detail(attrs: dict) -> list[Text]:
+    lines: list[Text] = []
+    input_raw = attrs.get("gen_ai.input.messages", "")
+    if input_raw:
+        try:
+            input_msgs = json.loads(input_raw) if isinstance(input_raw, str) else input_raw
+            lines.extend(_render_model_input_lines(input_msgs))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    for ptype, content in _extract_output_messages(attrs):
+        if ptype == "thinking":
+            lines.append(_vline("[thinking]", text_style="dim italic"))
+            for tl in content.splitlines():
+                lines.append(_vline(f"  {tl}", text_style="dim italic"))
+            lines.append(_vline("", text_style="dim"))
+        else:
+            lines.append(_vline("[response]", text_style="dim"))
+            for tl in content.splitlines():
+                lines.append(_vline(f"  {tl}", text_style="white"))
+    return lines
+
+
 def _verbose_detail_lines(span_type: str, attrs: dict) -> list[Text]:
     """Indented detail block appended after the summary line in verbose mode."""
-    lines: list[Text] = []
-
     if span_type == "agent":
-        final = attrs.get("final_result", "")
-        if final:
-            lines.append(_vline("[final]", text_style="dim"))
-            for tl in final.splitlines():
-                lines.append(_vline(f"  {tl}", text_style="green"))
-
-    elif span_type == "tool":
-        raw_args = attrs.get("gen_ai.tool.call.arguments", "")
-        if raw_args:
-            arg_str = raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
-            try:
-                arg_str = json.dumps(json.loads(arg_str), indent=2)
-            except (json.JSONDecodeError, TypeError):
-                pass
-            lines.append(_vline("args:", text_style="dim"))
-            for tl in arg_str.splitlines():
-                lines.append(_vline(f"  {tl}"))
-
-        result = attrs.get("gen_ai.tool.call.result", "")
-        if result:
-            result_str = result if isinstance(result, str) else json.dumps(result)
-            try:
-                result_str = json.dumps(json.loads(result_str), indent=2)
-            except (json.JSONDecodeError, TypeError):
-                pass
-            lines.append(_vline("result:", text_style="dim"))
-            for tl in result_str.splitlines():
-                lines.append(_vline(f"  {tl}"))
-
-    elif span_type == "model":
-        input_raw = attrs.get("gen_ai.input.messages", "")
-        if input_raw:
-            try:
-                input_msgs = json.loads(input_raw) if isinstance(input_raw, str) else input_raw
-                # System prompt: first line only — identifies which persona/agent is active
-                for msg in input_msgs:
-                    if msg.get("role") == "system":
-                        for part in msg.get("parts", []):
-                            if part.get("type") == "text":
-                                first_line = part.get("content", "").split("\n")[0][:120]
-                                lines.append(_vline(f"[system] {first_line}", text_style="dim"))
-                        break
-                # Last user message — what triggered this model call
-                for msg in reversed(input_msgs):
-                    if msg.get("role") == "user":
-                        lines.append(_vline("[user]", text_style="dim"))
-                        for part in msg.get("parts", []):
-                            if part.get("type") == "text":
-                                for tl in part.get("content", "").splitlines():
-                                    lines.append(_vline(f"  {tl}", text_style="cyan"))
-                        break
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        for ptype, content in _extract_output_messages(attrs):
-            if ptype == "thinking":
-                lines.append(_vline("[thinking]", text_style="dim italic"))
-                for tl in content.splitlines():
-                    lines.append(_vline(f"  {tl}", text_style="dim italic"))
-                lines.append(_vline("", text_style="dim"))
-            else:
-                lines.append(_vline("[response]", text_style="dim"))
-                for tl in content.splitlines():
-                    lines.append(_vline(f"  {tl}", text_style="white"))
-
-    return lines
+        return _render_agent_detail(attrs)
+    if span_type == "tool":
+        return _render_tool_detail(attrs)
+    if span_type == "model":
+        return _render_model_detail(attrs)
+    return []
 
 
 def _format_span_line(row: sqlite3.Row, verbose: bool = False) -> list[Text]:

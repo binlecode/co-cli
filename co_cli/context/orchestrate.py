@@ -227,6 +227,70 @@ async def _collect_deferred_tool_approvals(
 # ---------------------------------------------------------------------------
 
 
+def _handle_tool_call_event(
+    event: FunctionToolCallEvent,
+    renderer: StreamRenderer,
+    deps: CoDeps,
+    frontend: Frontend,
+) -> None:
+    """Handle a FunctionToolCallEvent: flush renderer, start tool UI, install progress."""
+    renderer.flush_for_tool_output()
+    tool_id = event.tool_call_id
+    name = event.part.tool_name
+    # In summary mode annotations are suppressed — tool result panel is sufficient feedback
+    if deps.session.reasoning_display != REASONING_DISPLAY_SUMMARY:
+        frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
+    renderer.install_progress(deps, tool_id)
+
+
+def _handle_stream_event(
+    event: object,
+    renderer: StreamRenderer,
+    deps: CoDeps,
+    frontend: Frontend,
+) -> SessionRunResult | None:
+    """Process one stream event. Returns AgentRunResult when found, else None."""
+    if isinstance(event, PartStartEvent):
+        if isinstance(event.part, ThinkingPart):
+            renderer.append_thinking(event.part.content)
+        elif isinstance(event.part, TextPart):
+            renderer.append_text(event.part.content)
+        return None
+
+    if isinstance(event, PartDeltaEvent):
+        if isinstance(event.delta, ThinkingPartDelta):
+            renderer.append_thinking(event.delta.content_delta or "")
+        elif isinstance(event.delta, TextPartDelta):
+            renderer.append_text(event.delta.content_delta)
+        return None
+
+    # Readiness/meta events are intentionally side-effect free for
+    # rendering; text may continue after FinalResultEvent.
+    if isinstance(event, (FinalResultEvent, PartEndEvent)):
+        return None
+
+    if isinstance(event, FunctionToolCallEvent):
+        _handle_tool_call_event(event, renderer, deps, frontend)
+        return None
+
+    if isinstance(event, FunctionToolResultEvent):
+        renderer.flush_for_tool_output()
+        renderer.clear_progress(deps)
+        tool_id = event.tool_call_id
+        if not isinstance(event.result, ToolReturnPart):
+            # RetryPromptPart: tool raised ModelRetry or validation failed.
+            # Close the tool surface cleanly — no result to display.
+            frontend.on_tool_complete(tool_id, None)
+            return None
+        frontend.on_tool_complete(tool_id, format_for_display(event.result.content))
+        return None
+
+    if isinstance(event, AgentRunResultEvent):
+        return event.result
+
+    return None
+
+
 async def _execute_stream_segment(
     turn_state: _TurnState,
     agent: SessionAgent,
@@ -260,54 +324,9 @@ async def _execute_stream_segment(
                 deferred_tool_results=turn_state.tool_approval_decisions,
                 metadata={"session_id": deps.session.session_path.stem[-8:]},
             ):
-                if isinstance(event, PartStartEvent):
-                    if isinstance(event.part, ThinkingPart):
-                        renderer.append_thinking(event.part.content)
-                        continue
-                    if isinstance(event.part, TextPart):
-                        renderer.append_text(event.part.content)
-                        continue
-
-                if isinstance(event, PartDeltaEvent):
-                    if isinstance(event.delta, ThinkingPartDelta):
-                        renderer.append_thinking(event.delta.content_delta or "")
-                        continue
-                    if isinstance(event.delta, TextPartDelta):
-                        renderer.append_text(event.delta.content_delta)
-                        continue
-
-                # Readiness/meta events are intentionally side-effect free for
-                # rendering; text may continue after FinalResultEvent.
-                if isinstance(event, (FinalResultEvent, PartEndEvent)):
-                    continue
-
-                if isinstance(event, FunctionToolCallEvent):
-                    renderer.flush_for_tool_output()
-                    tool_id = event.tool_call_id
-                    name = event.part.tool_name
-                    # In summary mode annotations are suppressed — tool result panel is sufficient feedback
-                    if deps.session.reasoning_display != REASONING_DISPLAY_SUMMARY:
-                        frontend.on_tool_start(
-                            tool_id, name, get_tool_start_args_display(name, event.part)
-                        )
-                    renderer.install_progress(deps, tool_id)
-                    continue
-
-                if isinstance(event, FunctionToolResultEvent):
-                    renderer.flush_for_tool_output()
-                    renderer.clear_progress(deps)
-                    tool_id = event.tool_call_id
-                    if not isinstance(event.result, ToolReturnPart):
-                        # RetryPromptPart: tool raised ModelRetry or validation failed.
-                        # Close the tool surface cleanly — no result to display.
-                        frontend.on_tool_complete(tool_id, None)
-                        continue
-                    frontend.on_tool_complete(tool_id, format_for_display(event.result.content))
-                    continue
-
-                if isinstance(event, AgentRunResultEvent):
-                    result = event.result
-                    continue
+                event_result = _handle_stream_event(event, renderer, deps, frontend)
+                if event_result is not None:
+                    result = event_result
 
             # Normal completion — commit remaining buffers
             renderer.finish()

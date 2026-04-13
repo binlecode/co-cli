@@ -95,6 +95,96 @@ def strip_frontmatter(content: str) -> str:
     return body
 
 
+def _validate_id_field(fm: dict[str, Any]) -> None:
+    if "id" not in fm:
+        raise ValueError("memory frontmatter missing required field: id")
+    if isinstance(fm["id"], bool) or not isinstance(fm["id"], (int, str)):
+        raise ValueError("memory frontmatter field 'id' must be an integer or string")
+    if isinstance(fm["id"], str) and not fm["id"].strip():
+        raise ValueError("memory frontmatter field 'id' must not be empty")
+
+
+def _validate_created_field(fm: dict[str, Any]) -> None:
+    if "created" not in fm:
+        raise ValueError("memory frontmatter missing required field: created")
+    if not isinstance(fm["created"], str):
+        raise ValueError("memory frontmatter field 'created' must be a string")
+    if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["created"]):
+        raise ValueError(
+            "memory frontmatter field 'created' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
+        )
+
+
+def _validate_kind_fields(fm: dict[str, Any]) -> None:
+    if "kind" in fm and fm["kind"] not in (MemoryKindEnum.MEMORY, MemoryKindEnum.ARTICLE):
+        raise ValueError("memory frontmatter field 'kind' must be 'memory' or 'article'")
+    if (
+        "origin_url" in fm
+        and fm["origin_url"] is not None
+        and not isinstance(fm["origin_url"], str)
+    ):
+        raise ValueError("memory frontmatter field 'origin_url' must be a string or null")
+    if "tags" in fm:
+        if not isinstance(fm["tags"], list):
+            raise ValueError("memory frontmatter field 'tags' must be a list")
+        if not all(isinstance(tag, str) for tag in fm["tags"]):
+            raise ValueError("memory frontmatter field 'tags' must contain only strings")
+
+
+def _validate_type_and_desc(fm: dict[str, Any]) -> None:
+    if "type" in fm and fm["type"] is not None:
+        if not isinstance(fm["type"], str):
+            raise ValueError("memory frontmatter field 'type' must be a string or null")
+        valid_types = {e.value for e in MemoryTypeEnum}
+        if fm["type"] not in valid_types:
+            logger.warning(
+                "memory frontmatter field 'type' has unknown value %r — ignoring",
+                fm["type"],
+            )
+    if "description" in fm and fm["description"] is not None:
+        if not isinstance(fm["description"], str):
+            raise ValueError("memory frontmatter field 'description' must be a string or null")
+        if not fm["description"].strip():
+            raise ValueError("memory frontmatter field 'description' must not be empty")
+        if "\n" in fm["description"]:
+            raise ValueError("memory frontmatter field 'description' must not contain newlines")
+        if len(fm["description"]) > 200:
+            raise ValueError("memory frontmatter field 'description' must be ≤200 characters")
+
+
+def _validate_temporal_fields(fm: dict[str, Any]) -> None:
+    if "updated" in fm:
+        if not isinstance(fm["updated"], str):
+            raise ValueError("memory frontmatter field 'updated' must be a string")
+        if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["updated"]):
+            raise ValueError(
+                "memory frontmatter field 'updated' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
+            )
+    if "decay_protected" in fm and not isinstance(fm["decay_protected"], bool):
+        raise ValueError("memory frontmatter field 'decay_protected' must be a boolean")
+    if "title" in fm and fm["title"] is not None and not isinstance(fm["title"], str):
+        raise ValueError("memory frontmatter field 'title' must be a string or null")
+
+
+def _validate_relationship_fields(fm: dict[str, Any]) -> None:
+    if "related" in fm and fm["related"] is not None:
+        if not isinstance(fm["related"], list):
+            raise ValueError("memory frontmatter field 'related' must be a list or null")
+        if not all(isinstance(s, str) for s in fm["related"]):
+            raise ValueError("memory frontmatter field 'related' must contain only strings")
+    if "artifact_type" in fm and fm["artifact_type"] is not None:
+        if not isinstance(fm["artifact_type"], str):
+            raise ValueError("memory frontmatter field 'artifact_type' must be a string or null")
+        valid_artifact_types = {e.value for e in ArtifactTypeEnum}
+        if fm["artifact_type"] not in valid_artifact_types:
+            logger.warning(
+                "memory frontmatter field 'artifact_type' has unknown value %r — ignoring",
+                fm["artifact_type"],
+            )
+    if "always_on" in fm and not isinstance(fm["always_on"], bool):
+        raise ValueError("memory frontmatter field 'always_on' must be a boolean")
+
+
 def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     """Validate memory file frontmatter structure.
 
@@ -117,90 +207,9 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     Raises:
         ValueError: If frontmatter is invalid
     """
-    if "id" not in fm:
-        raise ValueError("memory frontmatter missing required field: id")
-    if isinstance(fm["id"], bool) or not isinstance(fm["id"], (int, str)):
-        raise ValueError("memory frontmatter field 'id' must be an integer or string")
-    if isinstance(fm["id"], str) and not fm["id"].strip():
-        raise ValueError("memory frontmatter field 'id' must not be empty")
-
-    if "created" not in fm:
-        raise ValueError("memory frontmatter missing required field: created")
-    if not isinstance(fm["created"], str):
-        raise ValueError("memory frontmatter field 'created' must be a string")
-    # Basic ISO8601 format check
-    if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["created"]):
-        raise ValueError(
-            "memory frontmatter field 'created' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
-        )
-
-    # Validate optional fields if present
-    if "kind" in fm and fm["kind"] not in (MemoryKindEnum.MEMORY, MemoryKindEnum.ARTICLE):
-        raise ValueError("memory frontmatter field 'kind' must be 'memory' or 'article'")
-
-    if (
-        "origin_url" in fm
-        and fm["origin_url"] is not None
-        and not isinstance(fm["origin_url"], str)
-    ):
-        raise ValueError("memory frontmatter field 'origin_url' must be a string or null")
-
-    if "tags" in fm:
-        if not isinstance(fm["tags"], list):
-            raise ValueError("memory frontmatter field 'tags' must be a list")
-        if not all(isinstance(tag, str) for tag in fm["tags"]):
-            raise ValueError("memory frontmatter field 'tags' must contain only strings")
-
-    if "type" in fm and fm["type"] is not None:
-        if not isinstance(fm["type"], str):
-            raise ValueError("memory frontmatter field 'type' must be a string or null")
-        valid_types = {e.value for e in MemoryTypeEnum}
-        if fm["type"] not in valid_types:
-            logger.warning(
-                "memory frontmatter field 'type' has unknown value %r — ignoring",
-                fm["type"],
-            )
-
-    if "description" in fm and fm["description"] is not None:
-        if not isinstance(fm["description"], str):
-            raise ValueError("memory frontmatter field 'description' must be a string or null")
-        if not fm["description"].strip():
-            raise ValueError("memory frontmatter field 'description' must not be empty")
-        if "\n" in fm["description"]:
-            raise ValueError("memory frontmatter field 'description' must not contain newlines")
-        if len(fm["description"]) > 200:
-            raise ValueError("memory frontmatter field 'description' must be ≤200 characters")
-
-    if "updated" in fm:
-        if not isinstance(fm["updated"], str):
-            raise ValueError("memory frontmatter field 'updated' must be a string")
-        # Basic ISO8601 format check
-        if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["updated"]):
-            raise ValueError(
-                "memory frontmatter field 'updated' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
-            )
-
-    if "decay_protected" in fm and not isinstance(fm["decay_protected"], bool):
-        raise ValueError("memory frontmatter field 'decay_protected' must be a boolean")
-
-    if "title" in fm and fm["title"] is not None and not isinstance(fm["title"], str):
-        raise ValueError("memory frontmatter field 'title' must be a string or null")
-
-    if "related" in fm and fm["related"] is not None:
-        if not isinstance(fm["related"], list):
-            raise ValueError("memory frontmatter field 'related' must be a list or null")
-        if not all(isinstance(s, str) for s in fm["related"]):
-            raise ValueError("memory frontmatter field 'related' must contain only strings")
-
-    if "artifact_type" in fm and fm["artifact_type"] is not None:
-        if not isinstance(fm["artifact_type"], str):
-            raise ValueError("memory frontmatter field 'artifact_type' must be a string or null")
-        valid_artifact_types = {e.value for e in ArtifactTypeEnum}
-        if fm["artifact_type"] not in valid_artifact_types:
-            logger.warning(
-                "memory frontmatter field 'artifact_type' has unknown value %r — ignoring",
-                fm["artifact_type"],
-            )
-
-    if "always_on" in fm and not isinstance(fm["always_on"], bool):
-        raise ValueError("memory frontmatter field 'always_on' must be a boolean")
+    _validate_id_field(fm)
+    _validate_created_field(fm)
+    _validate_kind_fields(fm)
+    _validate_type_and_desc(fm)
+    _validate_temporal_fields(fm)
+    _validate_relationship_fields(fm)

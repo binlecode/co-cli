@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 from pydantic_ai import RunContext
@@ -40,6 +41,7 @@ from co_cli.context.summarization import (
     resolve_compaction_budget,
     summarize_messages,
 )
+from co_cli.context.tool_categories import COMPACTABLE_TOOLS, FILE_TOOLS
 from co_cli.context.types import MemoryRecallState, SafetyState
 from co_cli.deps import CoDeps
 
@@ -189,28 +191,6 @@ def _compute_compaction_boundaries(
 
 OLDER_MSG_MAX_CHARS = 2_500
 
-FILE_TOOLS: frozenset[str] = frozenset(
-    {
-        "read_file",
-        "write_file",
-        "edit_file",
-        "find_in_files",
-        "list_directory",
-    }
-)
-
-COMPACTABLE_TOOLS: frozenset[str] = frozenset(
-    {
-        "read_file",
-        "run_shell_command",
-        "find_in_files",
-        "list_directory",
-        "web_search",
-        "web_fetch",
-        "read_article",
-        "read_note",
-    }
-)
 COMPACTABLE_KEEP_RECENT = 5
 _CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"
 
@@ -247,6 +227,25 @@ def _truncate_proportional(text: str, max_chars: int, head_ratio: float = 0.20) 
 # ---------------------------------------------------------------------------
 
 
+def _build_keep_ids(older: list[ModelMessage]) -> set[int]:
+    """Reverse scan: collect ids of the COMPACTABLE_KEEP_RECENT most recent parts per tool."""
+    keep_ids: set[int] = set()
+    seen_counts: dict[str, int] = {}
+    for msg in reversed(older):
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part in reversed(msg.parts):
+            if not isinstance(part, ToolReturnPart):
+                continue
+            if part.tool_name not in COMPACTABLE_TOOLS:
+                continue
+            count = seen_counts.get(part.tool_name, 0)
+            if count < COMPACTABLE_KEEP_RECENT:
+                keep_ids.add(id(part))
+            seen_counts[part.tool_name] = count + 1
+    return keep_ids
+
+
 def truncate_tool_results(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -265,24 +264,7 @@ def truncate_tool_results(
         return messages
 
     older = messages[:boundary]
-
-    # Reverse scan: build keep_set of part object ids for the 5 most
-    # recent per compactable tool type.
-    keep_ids: set[int] = set()
-    seen_counts: dict[str, int] = {}
-
-    for msg in reversed(older):
-        if not isinstance(msg, ModelRequest):
-            continue
-        for part in reversed(msg.parts):
-            if not isinstance(part, ToolReturnPart):
-                continue
-            if part.tool_name not in COMPACTABLE_TOOLS:
-                continue
-            count = seen_counts.get(part.tool_name, 0)
-            if count < COMPACTABLE_KEEP_RECENT:
-                keep_ids.add(id(part))
-            seen_counts[part.tool_name] = count + 1
+    keep_ids = _build_keep_ids(older)
 
     # Forward pass: content-clear compactable parts not in keep_ids
     for msg in older:
@@ -352,6 +334,58 @@ _CONTEXT_MAX_CHARS = 4_000
 _SUMMARY_MARKER_PREFIX = "[Summary of"
 
 
+def _gather_file_paths(messages: list[ModelMessage]) -> str | None:
+    """Extract file working set from ToolCallPart.args (never truncated by processor #1)."""
+    file_paths: set[str] = set()
+    for msg in messages:
+        if isinstance(msg, ModelResponse):
+            for part in msg.parts:
+                if isinstance(part, ToolCallPart) and part.tool_name in FILE_TOOLS:
+                    args = part.args_as_dict()
+                    path = args.get("path") or args.get("file_path")
+                    if path:
+                        file_paths.add(path)
+    return f"Files touched: {', '.join(sorted(file_paths)[:20])}" if file_paths else None
+
+
+def _gather_session_todos(todos: list) -> str | None:
+    """Format pending session todos for compaction context."""
+    if not todos:
+        return None
+    pending = [t for t in todos if t.get("status") not in ("completed", "cancelled")]
+    if not pending:
+        return None
+    todo_lines = [
+        f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in pending[:10]
+    ]
+    return "Active tasks:\n" + "\n".join(todo_lines)
+
+
+def _gather_always_on_memories(memory_dir: Path) -> str | None:
+    """Load always-on memories for compaction context."""
+    from co_cli.memory.recall import load_always_on_memories
+
+    memories = load_always_on_memories(memory_dir)
+    if not memories:
+        return None
+    return "Standing memories:\n" + "\n".join(m.content[:200] for m in memories[:5])
+
+
+def _gather_prior_summaries(dropped: list[ModelMessage]) -> str | None:
+    """Extract prior summary text from dropped messages."""
+    summaries: list[str] = []
+    for msg in dropped:
+        if isinstance(msg, ModelRequest):
+            for part in msg.parts:
+                if (
+                    isinstance(part, UserPromptPart)
+                    and isinstance(part.content, str)
+                    and part.content.startswith(_SUMMARY_MARKER_PREFIX)
+                ):
+                    summaries.append(f"Prior summary:\n{part.content}")
+    return "\n\n".join(summaries) if summaries else None
+
+
 def _gather_compaction_context(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -367,53 +401,18 @@ def _gather_compaction_context(
 
     Returns None when no context was gathered.
     """
-    context_parts: list[str] = []
-
-    # 1. File working set — extracted from ToolCallPart.args (never truncated)
-    file_paths: set[str] = set()
-    for msg in messages:
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, ToolCallPart) and part.tool_name in FILE_TOOLS:
-                    args = part.args_as_dict()
-                    path = args.get("path") or args.get("file_path")
-                    if path:
-                        file_paths.add(path)
-    if file_paths:
-        context_parts.append(f"Files touched: {', '.join(sorted(file_paths)[:20])}")
-
-    # 2. Session todos — in-memory, always current
-    todos = ctx.deps.session.session_todos
-    if todos:
-        pending = [t for t in todos if t.get("status") not in ("completed", "cancelled")]
-        if pending:
-            todo_lines = [
-                f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in pending[:10]
-            ]
-            context_parts.append("Active tasks:\n" + "\n".join(todo_lines))
-
-    # 3. Always-on memories — standing context the model always sees
-    from co_cli.memory.recall import load_always_on_memories
-
-    memories = load_always_on_memories(ctx.deps.memory_dir)
-    if memories:
-        mem_lines = [m.content[:200] for m in memories[:5]]
-        context_parts.append("Standing memories:\n" + "\n".join(mem_lines))
-
-    # 4. Prior-summary text from dropped messages
-    for msg in dropped:
-        if isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if (
-                    isinstance(part, UserPromptPart)
-                    and isinstance(part.content, str)
-                    and part.content.startswith(_SUMMARY_MARKER_PREFIX)
-                ):
-                    context_parts.append(f"Prior summary:\n{part.content}")
-
+    context_parts = [
+        p
+        for p in [
+            _gather_file_paths(messages),
+            _gather_session_todos(ctx.deps.session.session_todos),
+            _gather_always_on_memories(ctx.deps.memory_dir),
+            _gather_prior_summaries(dropped),
+        ]
+        if p is not None
+    ]
     if not context_parts:
         return None
-
     result = "\n\n".join(context_parts)
     return result[:_CONTEXT_MAX_CHARS] if len(result) > _CONTEXT_MAX_CHARS else result
 
@@ -619,7 +618,7 @@ async def inject_opening_context(
 
     # Inject as a system message at the end of the message list
     # _recall_for_context always returns a str via tool_output(); cast narrows ToolReturnContent
-    memory_content = cast(str, result.return_value)
+    memory_content = cast("str", result.return_value)
     max_chars = ctx.deps.config.memory.injection_max_chars
     if len(memory_content) > max_chars:
         memory_content = memory_content[:max_chars]
@@ -636,6 +635,75 @@ async def inject_opening_context(
 # ---------------------------------------------------------------------------
 # 3. detect_safety_issues (sync — doom loop + shell reflection cap)
 # ---------------------------------------------------------------------------
+
+
+def _count_consecutive_same_calls(messages: list[ModelMessage]) -> int:
+    """Count the most-recent contiguous streak of identical tool calls.
+
+    Scans in reverse; stops when a different call is seen or after 10 calls.
+    """
+    consecutive_same: int = 0
+    last_hash: str | None = None
+    for msg in reversed(messages):
+        if not isinstance(msg, ModelResponse):
+            continue
+        for part in msg.parts:
+            if not isinstance(part, ToolCallPart):
+                continue
+            args_str = json.dumps(
+                part.args.args_dict()  # type: ignore[union-attr]  # part.args is str|dict|None at type level; hasattr guard is correct at runtime
+                if hasattr(part.args, "args_dict")
+                else str(part.args),
+                sort_keys=True,
+            )
+            h = hashlib.md5(f"{part.tool_name}:{args_str}".encode()).hexdigest()
+            if last_hash is None:
+                consecutive_same = 1
+                last_hash = h
+            elif h == last_hash:
+                consecutive_same += 1
+            else:
+                return consecutive_same
+    return consecutive_same
+
+
+def _is_shell_error_return(part: ToolReturnPart) -> bool:
+    """Return True when the tool return represents a shell command error."""
+    content = part.content
+    if isinstance(content, str):
+        c = content.lower()
+        # Require "error" at the start or the pydantic-ai ModelRetry prefix.
+        # Substring match on the whole output caused false positives on text like
+        # "3 tests passed, 0 errors".
+        str_is_error = (
+            c.startswith("error")
+            or c.startswith("shell: command failed")
+            or c.startswith("shell: unexpected error")
+        )
+    else:
+        str_is_error = False
+    return (isinstance(part.metadata, dict) and bool(part.metadata.get("error"))) or (
+        isinstance(content, str) and part.tool_name == "run_shell_command" and str_is_error
+    )
+
+
+def _count_consecutive_shell_errors(messages: list[ModelMessage]) -> int:
+    """Count the most-recent contiguous streak of shell command errors.
+
+    Scans in reverse; stops at the first non-error return.
+    """
+    count: int = 0
+    for msg in reversed(messages):
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part in msg.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            if _is_shell_error_return(part) and part.tool_name == "run_shell_command":
+                count += 1
+            else:
+                return count
+    return count
 
 
 def detect_safety_issues(
@@ -666,75 +734,8 @@ def detect_safety_issues(
     doom_threshold = ctx.deps.config.doom_loop_threshold
     max_refl = ctx.deps.config.max_reflections
 
-    # Scan recent messages in reverse to measure the most-recent contiguous streak
-    # for each safety check.
-    #
-    # Key invariant: once a streak is broken (different call / non-error return),
-    # older messages cannot extend it — stop tracking that counter immediately.
-    # Without this early-exit, an older differing entry resets the counter and
-    # the final value reflects ancient history rather than the most-recent run.
-    consecutive_same: int = 0
-    last_hash: str | None = None
-    doom_streak_done: bool = False  # True after the first hash mismatch
-
-    consecutive_shell_errors: int = 0
-    shell_streak_done: bool = False  # True after the first non-shell-error return
-
-    calls_scanned: int = 0
-
-    for msg in reversed(messages):
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, ToolCallPart):
-                    if not doom_streak_done:
-                        args_str = json.dumps(
-                            part.args.args_dict()  # type: ignore[union-attr]  # part.args is str|dict|None at type level; hasattr guard is correct at runtime
-                            if hasattr(part.args, "args_dict")
-                            else str(part.args),
-                            sort_keys=True,
-                        )
-                        h = hashlib.md5(f"{part.tool_name}:{args_str}".encode()).hexdigest()
-                        if last_hash is None:
-                            consecutive_same = 1
-                            last_hash = h
-                        elif h == last_hash:
-                            consecutive_same += 1
-                        else:
-                            # Streak broken: consecutive_same holds the most-recent count
-                            doom_streak_done = True
-                    calls_scanned += 1
-        elif isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if isinstance(part, ToolReturnPart) and not shell_streak_done:
-                    content = part.content
-                    if isinstance(content, str):
-                        c = content.lower()
-                        # Require "error" at the start of the string, or the pydantic-ai
-                        # ModelRetry wrapper prefix ("Shell: command failed / unexpected error").
-                        # Substring match on the whole output caused false positives on
-                        # informational text like "3 tests passed, 0 errors".
-                        str_is_error = (
-                            c.startswith("error")
-                            or c.startswith("shell: command failed")
-                            or c.startswith("shell: unexpected error")
-                        )
-                    else:
-                        str_is_error = False
-                    is_error = (
-                        isinstance(part.metadata, dict) and part.metadata.get("error")
-                    ) or (
-                        isinstance(content, str)
-                        and part.tool_name == "run_shell_command"
-                        and str_is_error
-                    )
-                    if is_error and part.tool_name == "run_shell_command":
-                        consecutive_shell_errors += 1
-                    else:
-                        # Streak broken: consecutive_shell_errors holds the most-recent count
-                        shell_streak_done = True
-
-        if (doom_streak_done and shell_streak_done) or calls_scanned > 10:
-            break
+    consecutive_same = _count_consecutive_same_calls(messages)
+    consecutive_shell_errors = _count_consecutive_shell_errors(messages)
 
     injections: list[ModelMessage] = []
 

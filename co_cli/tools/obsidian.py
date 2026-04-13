@@ -7,6 +7,7 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
+from co_cli.knowledge._search_util import snippet_around
 from co_cli.tools.tool_output import tool_output
 
 
@@ -33,25 +34,118 @@ def _extract_frontmatter_tags(content: str) -> set[str]:
     return tags
 
 
-def _snippet_around(content: str, match: re.Match, radius: int = 60) -> str:
-    """Extract a snippet around a regex match, breaking at word boundaries."""
-    start = max(0, match.start() - radius)
-    end = min(len(content), match.end() + radius)
-    # Expand to word boundaries
-    if start > 0:
-        space = content.rfind(" ", start - 20, match.start())
-        if space != -1:
-            start = space + 1
-    if end < len(content):
-        space = content.find(" ", match.end(), end + 20)
-        if space != -1:
-            end = space
-    snippet = content[start:end].replace("\n", " ").strip()
-    if start > 0:
-        snippet = "..." + snippet
-    if end < len(content):
-        snippet = snippet + "..."
-    return snippet
+def _format_note_result(file_path: str, snippet: str | None) -> list[str]:
+    """Format one note search result into display lines."""
+    lines = [f"**{file_path}**"]
+    if snippet:
+        lines.append(f"  {snippet}")
+    lines.append("")
+    return lines
+
+
+def _fts_search_notes(
+    ctx: RunContext[CoDeps],
+    vault: Path,
+    search_root: Path,
+    query: str,
+    keywords: list[str],
+    tag: str | None,
+    limit: int,
+) -> ToolReturn | None:
+    """FTS5 search path. Returns ToolReturn on success, None to fall through to regex."""
+    try:
+        ctx.deps.knowledge_store.sync_dir("obsidian", search_root)
+        tag_filter = tag.lstrip("#") if tag else None
+        fts_results = ctx.deps.knowledge_store.search(
+            query,
+            source="obsidian",
+            tags=[tag_filter] if tag_filter else None,
+            limit=limit + 1,
+        )
+        if search_root != vault:
+            search_root_str = str(search_root)
+            fts_results = [
+                r
+                for r in fts_results
+                if r.path == search_root_str or r.path.startswith(search_root_str + "/")
+            ]
+        has_more = len(fts_results) > limit
+        fts_results = fts_results[:limit]
+        if not fts_results:
+            return tool_output(
+                f"No notes found matching: {' '.join(keywords)}",
+                ctx=ctx,
+                count=0,
+                has_more=False,
+            )
+        lines: list[str] = []
+        for r in fts_results:
+            rel_path = r.path
+            try:
+                rel_path = str(Path(r.path).relative_to(vault))
+            except ValueError:
+                pass
+            lines.extend(_format_note_result(rel_path, r.snippet or None))
+        return tool_output(
+            "\n".join(lines).rstrip(),
+            ctx=ctx,
+            count=len(fts_results),
+            has_more=has_more,
+        )
+    except Exception:
+        return None
+
+
+def _grep_search_notes(
+    ctx: RunContext[CoDeps],
+    vault: Path,
+    search_root: Path,
+    keywords: list[str],
+    tag: str | None,
+    limit: int,
+) -> ToolReturn:
+    """Regex fallback search path."""
+    patterns = [re.compile(rf"\b{re.escape(k)}\b", re.IGNORECASE) for k in keywords]
+    results: list[dict[str, str]] = []
+    for note in search_root.rglob("*.md"):
+        if len(results) >= limit + 1:
+            break
+        try:
+            content = note.read_text(encoding="utf-8")
+            if tag:
+                fm_tags = _extract_frontmatter_tags(content)
+                if tag not in fm_tags and tag not in content:
+                    continue
+            matches = [p.search(content) for p in patterns]
+            first_match = matches[0] if matches else None
+            if not all(matches) or first_match is None:
+                continue
+            results.append(
+                {
+                    "file": str(note.relative_to(vault)),
+                    "snippet": snippet_around(content, first_match),
+                }
+            )
+        except Exception:
+            continue
+    has_more = len(results) > limit
+    results = results[:limit]
+    if not results:
+        return tool_output(
+            f"No notes found matching: {' '.join(keywords)}",
+            ctx=ctx,
+            count=0,
+            has_more=False,
+        )
+    lines: list[str] = []
+    for r in results:
+        lines.extend(_format_note_result(r["file"], r["snippet"]))
+    return tool_output(
+        "\n".join(lines).rstrip(),
+        ctx=ctx,
+        count=len(results),
+        has_more=has_more,
+    )
 
 
 def search_notes(
@@ -96,127 +190,19 @@ def search_notes(
         raise ModelRetry(
             "Obsidian: vault not configured or not found. Set obsidian_vault_path in settings."
         )
-
-    # Parse keywords (split on whitespace, filter empty)
     keywords = [k.strip() for k in query.split() if k.strip()]
     if not keywords:
         raise ModelRetry("Obsidian: empty query. Provide keywords to search.")
-
-    # Normalize tag filter
     if tag and not tag.startswith("#"):
         tag = f"#{tag}"
-
-    # Determine search root
     search_root = vault / folder if folder else vault
 
-    # FTS path — sync on first use, then search the index
     if ctx.deps.knowledge_store is not None:
-        try:
-            ctx.deps.knowledge_store.sync_dir("obsidian", search_root)
-            tag_filter = tag.lstrip("#") if tag else None
-            fts_results = ctx.deps.knowledge_store.search(
-                query,
-                source="obsidian",
-                tags=[tag_filter] if tag_filter else None,
-                limit=limit + 1,
-            )
-            if folder:
-                search_root_str = str(search_root)
-                fts_results = [
-                    r
-                    for r in fts_results
-                    if r.path == search_root_str or r.path.startswith(search_root_str + "/")
-                ]
-            has_more = len(fts_results) > limit
-            fts_results = fts_results[:limit]
+        result = _fts_search_notes(ctx, vault, search_root, query, keywords, tag, limit)
+        if result is not None:
+            return result
 
-            if not fts_results:
-                return tool_output(
-                    f"No notes found matching: {' '.join(keywords)}",
-                    ctx=ctx,
-                    count=0,
-                    has_more=False,
-                )
-
-            lines = []
-            for r in fts_results:
-                rel_path = r.path
-                try:
-                    rel_path = str(Path(r.path).relative_to(vault))
-                except ValueError:
-                    pass
-                lines.append(f"**{rel_path}**")
-                if r.snippet:
-                    lines.append(f"  {r.snippet}")
-                lines.append("")
-
-            return tool_output(
-                "\n".join(lines).rstrip(),
-                ctx=ctx,
-                count=len(fts_results),
-                has_more=has_more,
-            )
-        except Exception:
-            pass  # Fall through to regex path
-
-    # Build word-boundary patterns for each keyword (regex fallback)
-    patterns = [re.compile(rf"\b{re.escape(k)}\b", re.IGNORECASE) for k in keywords]
-
-    results = []
-    has_more = False
-    for note in search_root.rglob("*.md"):
-        if len(results) >= limit + 1:
-            break
-
-        try:
-            content = note.read_text(encoding="utf-8")
-
-            # Tag filter — check frontmatter and inline tags
-            if tag:
-                fm_tags = _extract_frontmatter_tags(content)
-                if tag not in fm_tags and tag not in content:
-                    continue
-
-            # Check ALL keywords match (AND logic)
-            matches = [p.search(content) for p in patterns]
-            first_match = matches[0] if matches else None
-            if not all(matches) or first_match is None:
-                continue
-
-            results.append(
-                {
-                    "file": str(note.relative_to(vault)),
-                    "snippet": _snippet_around(content, first_match),
-                }
-            )
-        except Exception:
-            continue
-
-    # Check if there are more results beyond limit
-    if len(results) > limit:
-        has_more = True
-        results = results[:limit]
-
-    if not results:
-        return tool_output(
-            f"No notes found matching: {' '.join(keywords)}",
-            ctx=ctx,
-            count=0,
-            has_more=False,
-        )
-
-    lines = []
-    for r in results:
-        lines.append(f"**{r['file']}**")
-        lines.append(f"  {r['snippet']}")
-        lines.append("")
-
-    return tool_output(
-        "\n".join(lines).rstrip(),
-        ctx=ctx,
-        count=len(results),
-        has_more=has_more,
-    )
+    return _grep_search_notes(ctx, vault, search_root, keywords, tag, limit)
 
 
 def list_notes(

@@ -16,7 +16,6 @@ Use search_articles for summary-level lookup; use read_article for full body.
 """
 
 import logging
-import math
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,8 +27,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.knowledge._store import SearchResult
+from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
+from co_cli.knowledge._ranking import compute_confidence, detect_contradictions
 from co_cli.tools.memory import filter_memories, grep_recall, load_memories
 from co_cli.tools.tool_output import tool_output, tool_output_raw
 
@@ -41,138 +40,83 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50]
 
 
-_NEGATION_MARKERS: frozenset[str] = frozenset(
-    {
-        "not",
-        "no",
-        "never",
-        "don't",
-        "do not",
-        "stopped",
-        "changed",
-        "no longer",
-        "don't use",
-        "avoid",
-    }
-)
+def _grep_fallback_knowledge(
+    ctx: "RunContext[CoDeps]",
+    query: str,
+    source: str | None,
+    kind: str | None,
+    tags: list[str] | None,
+    tag_match_mode: "Literal['any', 'all']",
+    created_after: str | None,
+    created_before: str | None,
+    limit: int,
+) -> "ToolReturn":
+    """Grep-based fallback when FTS store is unavailable."""
+    if source not in (None, "library"):
+        return tool_output(
+            f"No results for '{query}' (source={source!r} requires FTS)",
+            ctx=ctx,
+            count=0,
+            results=[],
+        )
+    otel_trace.get_current_span().set_attribute("rag.backend", "grep")
+    effective_kind = kind if kind is not None else "article"
+    memories = load_memories(ctx.deps.library_dir, kind=effective_kind)
+    memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
+    matches = grep_recall(memories, query, limit)
+    if not matches:
+        return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
+    lines = [f"Found {len(matches)} result(s) for '{query}':\n"]
+    result_dicts = []
+    for m in matches:
+        result_source = "memory" if m.kind == "memory" else "library"
+        lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
+        result_dicts.append(
+            {
+                "source": result_source,
+                "kind": m.kind,
+                "title": m.path.stem,
+                "snippet": m.content[:100],
+                "score": 0.0,
+                "path": str(m.path),
+            }
+        )
+    return tool_output("\n".join(lines), ctx=ctx, count=len(matches), results=result_dicts)
 
 
-def _detect_contradictions(results: list[SearchResult]) -> set[str]:
-    """Detect contradicting result pairs within the same category.
-
-    Groups results by category, then for each pair checks if words in one
-    result's content appear in the other's content alongside a negation marker
-    within a 5-token window.
-
-    Returns a set of path strings for results involved in conflicts.
-
-    Limitation: heuristic window-based detection produces false positives on
-    complex sentences. LLM-based detection is a Phase 2 enhancement.
-
-    Note: path-keyed set means duplicate paths (degenerate case from hybrid
-    merge) are both flagged correctly — expected behavior, not a bug.
-    """
-    conflict_paths: set[str] = set()
-
-    # Group by category; skip results without category
-    by_category: dict[str, list[SearchResult]] = {}
+def _post_process_knowledge_results(
+    ctx: "RunContext[CoDeps]",
+    query: str,
+    results: list,
+) -> "ToolReturn":
+    """Compute confidence, detect contradictions, and format FTS results."""
+    half_life_days = ctx.deps.config.memory.recall_half_life_days or 0
     for r in results:
-        if r.category:
-            by_category.setdefault(r.category, []).append(r)
-
-    for category_results in by_category.values():
-        if len(category_results) < 2:
-            continue
-
-        for i in range(len(category_results)):
-            for j in range(i + 1, len(category_results)):
-                r_a = category_results[i]
-                r_b = category_results[j]
-
-                # Read content from file if available; skip on failure
-                content_a = _read_content_for_contradiction(r_a)
-                content_b = _read_content_for_contradiction(r_b)
-                if not content_a or not content_b:
-                    continue
-
-                if _has_negation_conflict(content_a, content_b):
-                    conflict_paths.add(r_a.path)
-                    conflict_paths.add(r_b.path)
-
-    return conflict_paths
-
-
-def _read_content_for_contradiction(r: SearchResult) -> str:
-    """Read file content for contradiction detection. Returns empty string on failure."""
-    if not r.path:
-        return ""
-    try:
-        raw = Path(r.path).read_text(encoding="utf-8")
-        _, body = parse_frontmatter(raw)
-        return body.strip().lower()
-    except Exception:
-        return ""
-
-
-def _has_negation_conflict(content_a: str, content_b: str) -> bool:
-    """Check if content_a and content_b form an opposing pair.
-
-    Tokenizes both contents. For each token in content_a that also appears in
-    content_b, checks if a negation marker appears within a 5-token window
-    around that token in either content.
-    """
-    tokens_a = content_a.split()
-    tokens_b = content_b.split()
-    shared_words = set(tokens_a) & set(tokens_b) - _NEGATION_MARKERS
-
-    if not shared_words:
-        return False
-
-    # Check if a negation marker appears near a shared word in either content
-    for tokens, other_tokens in [(tokens_a, tokens_b), (tokens_b, tokens_a)]:
-        for idx, token in enumerate(tokens):
-            if token in shared_words:
-                window_start = max(0, idx - 5)
-                window_end = min(len(tokens), idx + 6)
-                window = set(tokens[window_start:window_end])
-                if window & _NEGATION_MARKERS and token in other_tokens:
-                    return True
-
-    return False
-
-
-def _compute_confidence(r: SearchResult, half_life_days: int) -> float:
-    """Compute composite confidence score for a search result.
-
-    Formula: 0.5 * score + 0.3 * decay + 0.2 * (prov_weight * certainty_mult)
-    Decay uses exponential half-life on age in days from r.created.
-
-    Limitation: heuristic formula; LLM-based confidence is a Phase 2 enhancement.
-    """
-    if r.created and half_life_days > 0:
-        try:
-            age_days = (
-                datetime.now(UTC) - datetime.fromisoformat(r.created)
-            ).total_seconds() / 86400
-            decay = math.exp(-math.log(2) * max(0, age_days) / half_life_days)
-            decay = max(0.0, min(1.0, decay))
-        except Exception:
-            decay = 1.0
-    else:
-        decay = 1.0
-
-    provenance_weights = {
-        "user-told": 1.0,
-        "planted": 0.8,
-        "detected": 0.7,
-        "session": 0.6,
-        "web-fetch": 0.5,
-        "auto_decay": 0.3,
-    }
-    certainty_multipliers = {"high": 1.0, "medium": 0.8, "low": 0.6}
-    prov_w = provenance_weights.get(r.provenance or "", 0.5)
-    cert_m = certainty_multipliers.get(r.certainty or "", 0.8)
-    return 0.5 * r.score + 0.3 * decay + 0.2 * (prov_w * cert_m)
+        r.confidence = compute_confidence(
+            r.path, r.score, r.created, r.provenance, r.certainty, half_life_days
+        )
+    conflict_paths = detect_contradictions(results)
+    lines = [f"Found {len(results)} result(s) for '{query}':\n"]
+    result_dicts = []
+    for r in results:
+        kind_label = f"[{r.kind}]" if r.kind else ""
+        src_label = f"[{r.source}]" if r.source else ""
+        title_str = r.title or Path(r.path).stem if r.path else "unknown"
+        conf_str = f", conf: {r.confidence:.3f}" if r.confidence is not None else ""
+        display_title = (
+            f"⚠ Conflict: **{title_str}**" if r.path in conflict_paths else f"**{title_str}**"
+        )
+        lines.append(f"{display_title} {src_label}{kind_label} (score: {r.score:.3f}{conf_str})")
+        if r.snippet:
+            lines.append(f"  {r.snippet}")
+        lines.append("")
+        result_dicts.append(r.to_tool_output(conflict=r.path in conflict_paths))
+    return tool_output(
+        "\n".join(lines).rstrip(),
+        ctx=ctx,
+        count=len(results),
+        results=result_dicts,
+    )
 
 
 async def search_knowledge(
@@ -218,39 +162,10 @@ async def search_knowledge(
     """
     if ctx.deps.knowledge_store is None:
         # Fallback: grep knowledge files (articles); obsidian/drive require FTS
-        if source not in (None, "library"):
-            return tool_output(
-                f"No results for '{query}' (source={source!r} requires FTS)",
-                ctx=ctx,
-                count=0,
-                results=[],
-            )
-        otel_trace.get_current_span().set_attribute("rag.backend", "grep")
-        effective_kind = kind if kind is not None else "article"
-        memories = load_memories(ctx.deps.library_dir, kind=effective_kind)
-        memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
-        matches = grep_recall(memories, query, limit)
-        if not matches:
-            return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
-        lines = [f"Found {len(matches)} result(s) for '{query}':\n"]
-        result_dicts = []
-        for m in matches:
-            # Assign source matching the kind partition convention
-            result_source = "memory" if m.kind == "memory" else "library"
-            lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
-            result_dicts.append(
-                {
-                    "source": result_source,
-                    "kind": m.kind,
-                    "title": m.path.stem,
-                    "snippet": m.content[:100],
-                    "score": 0.0,
-                    "path": str(m.path),
-                }
-            )
-        return tool_output("\n".join(lines), ctx=ctx, count=len(matches), results=result_dicts)
+        return _grep_fallback_knowledge(
+            ctx, query, source, kind, tags, tag_match_mode, created_after, created_before, limit
+        )
 
-    # Sync Obsidian vault into index before searching
     if ctx.deps.obsidian_vault_path and source in (None, "obsidian"):
         try:
             ctx.deps.knowledge_store.sync_dir("obsidian", ctx.deps.obsidian_vault_path)
@@ -287,47 +202,7 @@ async def search_knowledge(
     if not results:
         return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
 
-    # Compute confidence for each result (post-retrieval, tool layer)
-    half_life_days = ctx.deps.config.memory.recall_half_life_days or 0
-    for r in results:
-        r.confidence = _compute_confidence(r, half_life_days)
-
-    # Detect contradictions within the result set
-    conflict_paths = _detect_contradictions(results)
-
-    lines = [f"Found {len(results)} result(s) for '{query}':\n"]
-    result_dicts = []
-    for r in results:
-        kind_label = f"[{r.kind}]" if r.kind else ""
-        src_label = f"[{r.source}]" if r.source else ""
-        title_str = r.title or Path(r.path).stem if r.path else "unknown"
-        conf_str = f", conf: {r.confidence:.3f}" if r.confidence is not None else ""
-        display_title = (
-            f"⚠ Conflict: **{title_str}**" if r.path in conflict_paths else f"**{title_str}**"
-        )
-        lines.append(f"{display_title} {src_label}{kind_label} (score: {r.score:.3f}{conf_str})")
-        if r.snippet:
-            lines.append(f"  {r.snippet}")
-        lines.append("")
-        result_dicts.append(
-            {
-                "source": r.source,
-                "kind": r.kind,
-                "title": r.title,
-                "snippet": r.snippet,
-                "score": r.score,
-                "path": r.path,
-                "confidence": r.confidence,
-                "conflict": r.path in conflict_paths,
-            }
-        )
-
-    return tool_output(
-        "\n".join(lines).rstrip(),
-        ctx=ctx,
-        count=len(results),
-        results=result_dicts,
-    )
+    return _post_process_knowledge_results(ctx, query, results)
 
 
 async def save_article(
@@ -422,6 +297,8 @@ async def save_article(
     if related:
         frontmatter["related"] = related
 
+    validate_memory_frontmatter(frontmatter)
+
     md_content = (
         f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{content.strip()}\n"
     )
@@ -459,6 +336,139 @@ async def save_article(
         ctx=ctx,
         article_id=article_id,
         action="saved",
+    )
+
+
+def _fts_search_articles(
+    ctx: "RunContext[CoDeps]",
+    library_dir: Path,
+    query: str,
+    tags: "list[str] | None",
+    tag_match_mode: "Literal['any', 'all']",
+    created_after: "str | None",
+    created_before: "str | None",
+    max_results: int,
+) -> "ToolReturn | None":
+    """FTS5 search path for articles. Returns ToolReturn on success, None to fall through."""
+    try:
+        fts_results = ctx.deps.knowledge_store.search(
+            query,
+            source="library",
+            kind="article",
+            tags=tags,
+            tag_match_mode=tag_match_mode,
+            created_after=created_after,
+            created_before=created_before,
+            limit=max_results,
+        )
+        if not fts_results:
+            return tool_output(
+                f"No articles found matching '{query}'",
+                ctx=ctx,
+                count=0,
+                results=[],
+            )
+        lines = [f"Found {len(fts_results)} article(s) matching '{query}':\n"]
+        result_dicts = []
+        for r in fts_results:
+            fm_data: dict = {}
+            if r.path:
+                try:
+                    raw = Path(r.path).read_text(encoding="utf-8")
+                    fm_data, _ = parse_frontmatter(raw)
+                except Exception:
+                    pass
+            article_id = fm_data.get("id")
+            origin_url = fm_data.get("origin_url")
+            title = r.title or fm_data.get("title", Path(r.path).stem if r.path else "")
+            lines.append(f"**{title}** (score: {r.score:.3f})")
+            if r.tags:
+                lines.append(f"Tags: {r.tags}")
+            if r.snippet:
+                lines.append(f"{r.snippet}\n")
+            # Normalize tags to list[str] for schema parity with grep path
+            tags_list = fm_data.get("tags", []) if fm_data else (r.tags.split() if r.tags else [])
+            result_dicts.append(
+                {
+                    "article_id": article_id,
+                    "title": title,
+                    "origin_url": origin_url,
+                    "tags": tags_list,
+                    "snippet": r.snippet,
+                    "slug": Path(r.path).stem if r.path else "",
+                }
+            )
+        return tool_output(
+            "\n".join(lines),
+            ctx=ctx,
+            count=len(fts_results),
+            results=result_dicts,
+        )
+    except Exception as e:
+        logger.warning(f"FTS search failed, falling back to grep: {e}")
+        return None
+
+
+def _grep_search_articles(
+    ctx: "RunContext[CoDeps]",
+    library_dir: Path,
+    query: str,
+    tags: "list[str] | None",
+    tag_match_mode: "Literal['any', 'all']",
+    created_after: "str | None",
+    created_before: "str | None",
+    max_results: int,
+) -> "ToolReturn":
+    """Grep fallback search path for articles."""
+    articles = load_memories(library_dir, kind="article")
+    query_lower = query.lower()
+    matches = [
+        a
+        for a in articles
+        if query_lower in a.content.lower() or any(query_lower in t.lower() for t in a.tags)
+    ]
+    matches = filter_memories(matches, tags, tag_match_mode, created_after, created_before)
+    matches.sort(key=lambda a: a.updated or a.created, reverse=True)
+    matches = matches[:max_results]
+    if not matches:
+        return tool_output(
+            f"No articles found matching '{query}'",
+            ctx=ctx,
+            count=0,
+            results=[],
+        )
+    lines = [f"Found {len(matches)} article(s) matching '{query}':\n"]
+    result_dicts = []
+    for a in matches:
+        raw = a.path.read_text(encoding="utf-8")
+        fm, _ = parse_frontmatter(raw)
+        title = fm.get("title", a.path.stem)
+        origin_url = fm.get("origin_url", "")
+        first_para = a.content.split("\n\n")[0] if a.content else ""
+        if len(first_para) > 200:
+            first_para = first_para[:197] + "..."
+        display_id = str(a.id)[:8] if isinstance(a.id, str) else str(a.id)
+        lines.append(f"**{title}** (id: {display_id})")
+        if origin_url:
+            lines.append(f"Source: {origin_url}")
+        if a.tags:
+            lines.append(f"Tags: {', '.join(a.tags)}")
+        lines.append(f"{first_para}\n")
+        result_dicts.append(
+            {
+                "article_id": a.id,
+                "title": title,
+                "origin_url": origin_url,
+                "tags": a.tags,
+                "snippet": first_para,
+                "slug": a.path.stem,
+            }
+        )
+    return tool_output(
+        "\n".join(lines),
+        ctx=ctx,
+        count=len(matches),
+        results=result_dicts,
     )
 
 
@@ -500,123 +510,21 @@ async def search_articles(
         ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid")
         and ctx.deps.knowledge_store is not None
     ):
-        try:
-            fts_results = ctx.deps.knowledge_store.search(
-                query,
-                source="library",
-                kind="article",
-                tags=tags,
-                tag_match_mode=tag_match_mode,
-                created_after=created_after,
-                created_before=created_before,
-                limit=max_results,
-            )
-            if not fts_results:
-                return tool_output(
-                    f"No articles found matching '{query}'",
-                    ctx=ctx,
-                    count=0,
-                    results=[],
-                )
-            result_dicts = []
-            lines = [f"Found {len(fts_results)} article(s) matching '{query}':\n"]
-            for r in fts_results:
-                fm_data: dict = {}
-                if r.path:
-                    try:
-                        raw = Path(r.path).read_text(encoding="utf-8")
-                        fm_data, _ = parse_frontmatter(raw)
-                    except Exception:
-                        pass
-                article_id = fm_data.get("id")
-                origin_url = fm_data.get("origin_url")
-                title = r.title or fm_data.get("title", Path(r.path).stem if r.path else "")
-                lines.append(f"**{title}** (score: {r.score:.3f})")
-                if r.tags:
-                    lines.append(f"Tags: {r.tags}")
-                if r.snippet:
-                    lines.append(f"{r.snippet}\n")
-                # Normalize tags to list[str] for schema parity with grep path
-                tags_list = (
-                    fm_data.get("tags", []) if fm_data else (r.tags.split() if r.tags else [])
-                )
-                result_dicts.append(
-                    {
-                        "article_id": article_id,
-                        "title": title,
-                        "origin_url": origin_url,
-                        "tags": tags_list,
-                        "snippet": r.snippet,
-                        "slug": Path(r.path).stem if r.path else "",
-                    }
-                )
-            return tool_output(
-                "\n".join(lines),
-                ctx=ctx,
-                count=len(fts_results),
-                results=result_dicts,
-            )
-        except Exception as e:
-            logger.warning(f"FTS search failed, falling back to grep: {e}")
-
-    # Grep fallback
-    articles = load_memories(library_dir, kind="article")
-    query_lower = query.lower()
-    matches = [
-        a
-        for a in articles
-        if query_lower in a.content.lower() or any(query_lower in t.lower() for t in a.tags)
-    ]
-    matches = filter_memories(matches, tags, tag_match_mode, created_after, created_before)
-    matches.sort(key=lambda a: a.updated or a.created, reverse=True)
-    matches = matches[:max_results]
-
-    if not matches:
-        return tool_output(
-            f"No articles found matching '{query}'",
-            ctx=ctx,
-            count=0,
-            results=[],
+        result = _fts_search_articles(
+            ctx,
+            library_dir,
+            query,
+            tags,
+            tag_match_mode,
+            created_after,
+            created_before,
+            max_results,
         )
+        if result is not None:
+            return result
 
-    lines = [f"Found {len(matches)} article(s) matching '{query}':\n"]
-    result_dicts = []
-    for a in matches:
-        # Load origin_url and title from frontmatter
-        raw = a.path.read_text(encoding="utf-8")
-        fm, _ = parse_frontmatter(raw)
-        title = fm.get("title", a.path.stem)
-        origin_url = fm.get("origin_url", "")
-
-        # Summary: first paragraph only
-        first_para = a.content.split("\n\n")[0] if a.content else ""
-        if len(first_para) > 200:
-            first_para = first_para[:197] + "..."
-
-        display_id = str(a.id)[:8] if isinstance(a.id, str) else str(a.id)
-        lines.append(f"**{title}** (id: {display_id})")
-        if origin_url:
-            lines.append(f"Source: {origin_url}")
-        if a.tags:
-            lines.append(f"Tags: {', '.join(a.tags)}")
-        lines.append(f"{first_para}\n")
-
-        result_dicts.append(
-            {
-                "article_id": a.id,
-                "title": title,
-                "origin_url": origin_url,
-                "tags": a.tags,
-                "snippet": first_para,
-                "slug": a.path.stem,
-            }
-        )
-
-    return tool_output(
-        "\n".join(lines),
-        ctx=ctx,
-        count=len(matches),
-        results=result_dicts,
+    return _grep_search_articles(
+        ctx, library_dir, query, tags, tag_match_mode, created_after, created_before, max_results
     )
 
 

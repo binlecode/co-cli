@@ -10,18 +10,10 @@ from pydantic_ai.capabilities import AbstractCapability, ValidatedToolArgs
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 
+from co_cli.context.tool_categories import PATH_NORMALIZATION_TOOLS
 from co_cli.deps import CoDeps
 
 logger = logging.getLogger(__name__)
-
-_FILE_TOOLS = frozenset(
-    {
-        "read_file",
-        "write_file",
-        "edit_file",
-        "list_directory",
-    }
-)
 
 
 @dataclass
@@ -59,7 +51,7 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         tool_def: ToolDefinition,
         args: ValidatedToolArgs,
     ) -> ValidatedToolArgs:
-        if call.tool_name in _FILE_TOOLS and "path" in args:
+        if call.tool_name in PATH_NORMALIZATION_TOOLS and "path" in args:
             workspace_root = ctx.deps.workspace_root
             args["path"] = str((workspace_root / args["path"]).resolve())
         return args

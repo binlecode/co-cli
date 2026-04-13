@@ -267,6 +267,19 @@ class SearchResult:
     type: str | None = None
     description: str | None = None
 
+    def to_tool_output(self, *, conflict: bool = False) -> dict:
+        """Return the standard tool output dict for this search result."""
+        return {
+            "source": self.source,
+            "kind": self.kind,
+            "title": self.title,
+            "snippet": self.snippet,
+            "score": self.score,
+            "path": self.path,
+            "confidence": self.confidence,
+            "conflict": conflict,
+        }
+
 
 # Type alias for the (path, chunk_index) key used in RRF merging.
 type _ChunkKey = tuple[str, int | None]

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -8,6 +8,98 @@ class Chunk:
     start_line: int
     # 0-based line index of last line (inclusive)
     end_line: int
+
+
+@dataclass
+class _ChunkCtx:
+    """Mutable state shared across chunk_text helpers."""
+
+    chunk_size: int
+    overlap_chars: int
+    chunks: list[Chunk] = field(default_factory=list)
+    overlap_prefix: str = ""
+    acc_paragraphs: list[tuple[int, list[str]]] = field(default_factory=list)
+    acc_tokens: float = 0.0
+    acc_start: int = 0
+
+
+def _build_paragraphs(lines: list[str]) -> list[tuple[int, list[str]]]:
+    """Group lines into paragraph blocks separated by blank lines."""
+    paragraphs: list[tuple[int, list[str]]] = []
+    current_start = 0
+    current_lines: list[str] = []
+    for idx, line in enumerate(lines):
+        if line.strip() == "":
+            if current_lines:
+                paragraphs.append((current_start, current_lines))
+                current_lines = []
+            current_start = idx + 1
+        else:
+            if not current_lines:
+                current_start = idx
+            current_lines.append(line)
+    if current_lines:
+        paragraphs.append((current_start, current_lines))
+    return paragraphs
+
+
+def _emit_chunk(ctx: _ChunkCtx, content: str, start_line: int, end_line: int) -> None:
+    ctx.chunks.append(
+        Chunk(index=len(ctx.chunks), content=content, start_line=start_line, end_line=end_line)
+    )
+    if ctx.overlap_chars <= 0:
+        ctx.overlap_prefix = ""
+    elif len(content) > ctx.overlap_chars:
+        ctx.overlap_prefix = content[-ctx.overlap_chars :]
+    else:
+        ctx.overlap_prefix = content
+
+
+def _split_para_into_chunks(ctx: _ChunkCtx, para_start: int, para_lines: list[str]) -> None:
+    """Split a paragraph at line boundaries (and char boundaries if needed)."""
+    buf_lines: list[str] = []
+    buf_start = para_start
+    for rel_idx, line in enumerate(para_lines):
+        abs_line = para_start + rel_idx
+        line_tokens = len(line) / 4
+        if line_tokens > ctx.chunk_size:
+            if buf_lines:
+                _emit_chunk(
+                    ctx, ctx.overlap_prefix + "\n".join(buf_lines), buf_start, abs_line - 1
+                )
+                buf_lines = []
+                buf_start = abs_line
+            step = ctx.chunk_size * 4
+            pos = 0
+            while pos < len(line):
+                _emit_chunk(ctx, ctx.overlap_prefix + line[pos : pos + step], abs_line, abs_line)
+                pos += step
+            buf_start = abs_line + 1
+            continue
+        buf_tokens = sum(len(ln) / 4 for ln in buf_lines)
+        if buf_tokens + line_tokens > ctx.chunk_size and buf_lines:
+            _emit_chunk(ctx, ctx.overlap_prefix + "\n".join(buf_lines), buf_start, abs_line - 1)
+            buf_lines = []
+            buf_start = abs_line
+        buf_lines.append(line)
+    if buf_lines:
+        _emit_chunk(
+            ctx,
+            ctx.overlap_prefix + "\n".join(buf_lines),
+            buf_start,
+            para_start + len(para_lines) - 1,
+        )
+
+
+def _flush_acc(ctx: _ChunkCtx) -> None:
+    if not ctx.acc_paragraphs:
+        return
+    parts = ["\n".join(para_lines) for _, para_lines in ctx.acc_paragraphs]
+    joined = "\n\n".join(parts)
+    end_line = ctx.acc_paragraphs[-1][0] + len(ctx.acc_paragraphs[-1][1]) - 1
+    _emit_chunk(ctx, ctx.overlap_prefix + joined, ctx.acc_start, end_line)
+    ctx.acc_paragraphs = []
+    ctx.acc_tokens = 0.0
 
 
 def chunk_text(
@@ -37,134 +129,28 @@ def chunk_text(
     if len(text) / 4 <= chunk_size:
         return [Chunk(index=0, content=text, start_line=0, end_line=max(0, len(lines) - 1))]
 
-    overlap_chars = overlap * 4
-
-    # Build paragraph blocks (groups of lines separated by blank lines)
-    # Each paragraph is (start_line_index, list_of_lines)
-    paragraphs: list[tuple[int, list[str]]] = []
-    current_start = 0
-    current_lines: list[str] = []
-
-    for i, line in enumerate(lines):
-        if line.strip() == "":
-            if current_lines:
-                paragraphs.append((current_start, current_lines))
-                current_lines = []
-            current_start = i + 1
-        else:
-            if not current_lines:
-                current_start = i
-            current_lines.append(line)
-
-    if current_lines:
-        paragraphs.append((current_start, current_lines))
-
-    chunks: list[Chunk] = []
-    overlap_prefix = ""
-
-    def emit_chunk(content: str, start_line: int, end_line: int) -> None:
-        nonlocal overlap_prefix
-        chunks.append(
-            Chunk(
-                index=len(chunks),
-                content=content,
-                start_line=start_line,
-                end_line=end_line,
-            )
-        )
-        # Compute overlap prefix from this chunk's content; empty when overlap_chars is zero
-        if overlap_chars <= 0:
-            overlap_prefix = ""
-        elif len(content) > overlap_chars:
-            overlap_prefix = content[-overlap_chars:]
-        else:
-            overlap_prefix = content
-
-    def split_lines_into_chunks(para_start: int, para_lines: list[str]) -> None:
-        """Split a paragraph at line boundaries (and char boundaries if needed)."""
-        nonlocal overlap_prefix
-        buf_lines: list[str] = []
-        buf_start = para_start
-
-        for rel_i, line in enumerate(para_lines):
-            abs_line = para_start + rel_i
-            line_tokens = len(line) / 4
-
-            if line_tokens > chunk_size:
-                # Hard-split this single line at character boundaries
-                if buf_lines:
-                    full = overlap_prefix + "\n".join(buf_lines)
-                    emit_chunk(full, buf_start, abs_line - 1)
-                    buf_lines = []
-                    buf_start = abs_line
-
-                step = chunk_size * 4
-                pos = 0
-                while pos < len(line):
-                    seg = line[pos : pos + step]
-                    full = overlap_prefix + seg
-                    emit_chunk(full, abs_line, abs_line)
-                    pos += step
-                buf_start = abs_line + 1
-                continue
-
-            buf_tokens = sum(len(l) / 4 for l in buf_lines)
-            if buf_tokens + line_tokens > chunk_size and buf_lines:
-                full = overlap_prefix + "\n".join(buf_lines)
-                emit_chunk(full, buf_start, abs_line - 1)
-                buf_lines = []
-                buf_start = abs_line
-
-            buf_lines.append(line)
-
-        if buf_lines:
-            full = overlap_prefix + "\n".join(buf_lines)
-            emit_chunk(full, buf_start, para_start + len(para_lines) - 1)
-            buf_lines = []
-
-    # Accumulate paragraphs into chunks
-    acc_paragraphs: list[tuple[int, list[str]]] = []
-    acc_tokens: float = 0.0
-    acc_start: int = 0
-
-    def flush_acc() -> None:
-        nonlocal acc_paragraphs, acc_tokens, acc_start, overlap_prefix
-        if not acc_paragraphs:
-            return
-        # Join accumulated paragraphs with blank line separator
-        parts: list[str] = []
-        for _, para_lines in acc_paragraphs:
-            parts.append("\n".join(para_lines))
-        joined = "\n\n".join(parts)
-        end_line = acc_paragraphs[-1][0] + len(acc_paragraphs[-1][1]) - 1
-        full = overlap_prefix + joined
-        emit_chunk(full, acc_start, end_line)
-        acc_paragraphs = []
-        acc_tokens = 0.0
+    ctx = _ChunkCtx(chunk_size=chunk_size, overlap_chars=overlap * 4)
+    paragraphs = _build_paragraphs(lines)
 
     for para_start, para_lines in paragraphs:
         para_text = "\n".join(para_lines)
         para_tokens = len(para_text) / 4
 
         if para_tokens > chunk_size:
-            # Flush any accumulated paragraphs first
-            flush_acc()
-            acc_start = para_start
-            # Split this oversized paragraph at line/char level
-            split_lines_into_chunks(para_start, para_lines)
-            # overlap_prefix is updated inside split_lines_into_chunks via emit_chunk
+            _flush_acc(ctx)
+            ctx.acc_start = para_start
+            _split_para_into_chunks(ctx, para_start, para_lines)
             continue
 
-        if acc_tokens + para_tokens > chunk_size and acc_paragraphs:
-            flush_acc()
-            acc_start = para_start
-            acc_tokens = 0.0
+        if ctx.acc_tokens + para_tokens > chunk_size and ctx.acc_paragraphs:
+            _flush_acc(ctx)
+            ctx.acc_start = para_start
+            ctx.acc_tokens = 0.0
 
-        if not acc_paragraphs:
-            acc_start = para_start
-        acc_paragraphs.append((para_start, para_lines))
-        acc_tokens += para_tokens
+        if not ctx.acc_paragraphs:
+            ctx.acc_start = para_start
+        ctx.acc_paragraphs.append((para_start, para_lines))
+        ctx.acc_tokens += para_tokens
 
-    flush_acc()
-
-    return chunks
+    _flush_acc(ctx)
+    return ctx.chunks

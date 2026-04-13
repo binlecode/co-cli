@@ -437,123 +437,127 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     return []
 
 
-async def _cmd_skills(ctx: CommandContext, args: str) -> None:
-    """List and inspect loaded skills, or install a new one."""
+def _cmd_skills_list(ctx: CommandContext) -> None:
     from rich.table import Table
 
+    if not ctx.deps.skill_commands:
+        console.print("[dim]No skills loaded.[/dim]")
+        return
+    table = Table(title="Loaded Skills", border_style="accent", expand=False)
+    table.add_column("Name", style="accent")
+    table.add_column("Description")
+    table.add_column("Requires")
+    table.add_column("User-Invocable")
+    for skill in ctx.deps.skill_commands.values():
+        req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
+        table.add_row(
+            skill.name,
+            skill.description or "",
+            req_keys,
+            "✓" if skill.user_invocable else "✗",
+        )
+    console.print(table)
+
+
+def _cmd_skills_check(ctx: CommandContext) -> None:
+    from rich.table import Table
+
+    from co_cli.config._core import settings as _settings
+
+    default_dir = Path(__file__).parent.parent / "skills"
+    user_dir = ctx.deps.user_skills_dir
+    project_dir = ctx.deps.skills_dir
+
+    all_paths: list[Path] = []
+    if default_dir.exists():
+        all_paths.extend(sorted(default_dir.glob("*.md")))
+    if user_dir.exists():
+        all_paths.extend(sorted(user_dir.glob("*.md")))
+    if project_dir.exists():
+        all_paths.extend(sorted(project_dir.glob("*.md")))
+
+    if not all_paths:
+        console.print("[dim]No skill files found.[/dim]")
+        return
+
+    table = Table(title="Skills Check", border_style="accent", expand=False)
+    table.add_column("File", style="accent")
+    table.add_column("Status")
+    table.add_column("Reason")
+
+    for path in all_paths:
+        name = path.stem
+        if name in ctx.deps.skill_commands:
+            table.add_row(path.name, "[success]✓ Loaded[/success]", "")
+        else:
+            try:
+                text = path.read_text(encoding="utf-8")
+                meta, _ = parse_frontmatter(text)
+                requires = (
+                    meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
+                )
+                failures = _diagnose_requires_failures(requires, _settings)
+                reason = "; ".join(failures) if failures else "name conflict with built-in"
+                table.add_row(path.name, "[bold red]✗ Skipped[/bold red]", reason)
+            except Exception as e:
+                table.add_row(path.name, "[bold red]✗ Error[/bold red]", str(e))
+
+    console.print(table)
+
+
+def _cmd_skills_reload(ctx: CommandContext) -> None:
+    from co_cli.config._core import settings as _settings
+
+    # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
+    user_skills_dir = ctx.deps.user_skills_dir
+    new_skills = _load_skills(ctx.deps.skills_dir, _settings, user_skills_dir=user_skills_dir)
+    project_dir = ctx.deps.skills_dir
+    all_paths = (sorted(user_skills_dir.glob("*.md")) if user_skills_dir.exists() else []) + (
+        sorted(project_dir.glob("*.md")) if project_dir.exists() else []
+    )
+    for p in all_paths:
+        if p.stem in new_skills:
+            try:
+                for w in _scan_skill_content(p.read_text(encoding="utf-8")):
+                    console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
+            except Exception:
+                pass
+    old_names = set(ctx.deps.skill_commands.keys())
+    set_skill_commands(new_skills, ctx.deps)
+    _refresh_completer(ctx)
+    added = set(new_skills.keys()) - old_names
+    removed = old_names - set(new_skills.keys())
+    if added:
+        if len(added) <= 5:
+            console.print(f"[success]+ Added ({len(added)}): {', '.join(sorted(added))}[/success]")
+        else:
+            console.print(f"[success]+ Added: {len(added)} skill(s)[/success]")
+    if removed:
+        if len(removed) <= 5:
+            console.print(f"[dim]- Removed ({len(removed)}): {', '.join(sorted(removed))}[/dim]")
+        else:
+            console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
+    if not added and not removed:
+        console.print("[dim]No skill changes.[/dim]")
+    console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_commands)} skill(s)[/success]")
+
+
+async def _cmd_skills(ctx: CommandContext, args: str) -> None:
+    """List and inspect loaded skills, or install a new one."""
     sub = args.strip().split(maxsplit=1)
     subcmd = sub[0].lower() if sub else "list"
     subargs = sub[1] if len(sub) > 1 else ""
 
     if subcmd in ("", "list"):
-        if not ctx.deps.skill_commands:
-            console.print("[dim]No skills loaded.[/dim]")
-            return None
-        table = Table(title="Loaded Skills", border_style="accent", expand=False)
-        table.add_column("Name", style="accent")
-        table.add_column("Description")
-        table.add_column("Requires")
-        table.add_column("User-Invocable")
-        for skill in ctx.deps.skill_commands.values():
-            req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
-            table.add_row(
-                skill.name,
-                skill.description or "",
-                req_keys,
-                "✓" if skill.user_invocable else "✗",
-            )
-        console.print(table)
-
+        _cmd_skills_list(ctx)
     elif subcmd == "check":
-        from co_cli.config._core import settings as _settings
-
-        default_dir = Path(__file__).parent.parent / "skills"
-        user_dir = ctx.deps.user_skills_dir
-        project_dir = ctx.deps.skills_dir
-
-        all_paths: list[Path] = []
-        if default_dir.exists():
-            all_paths.extend(sorted(default_dir.glob("*.md")))
-        if user_dir.exists():
-            all_paths.extend(sorted(user_dir.glob("*.md")))
-        if project_dir.exists():
-            all_paths.extend(sorted(project_dir.glob("*.md")))
-
-        if not all_paths:
-            console.print("[dim]No skill files found.[/dim]")
-            return None
-
-        table = Table(title="Skills Check", border_style="accent", expand=False)
-        table.add_column("File", style="accent")
-        table.add_column("Status")
-        table.add_column("Reason")
-
-        for path in all_paths:
-            name = path.stem
-            if name in ctx.deps.skill_commands:
-                table.add_row(path.name, "[success]✓ Loaded[/success]", "")
-            else:
-                try:
-                    text = path.read_text(encoding="utf-8")
-                    meta, _ = parse_frontmatter(text)
-                    requires = (
-                        meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
-                    )
-                    failures = _diagnose_requires_failures(requires, _settings)
-                    reason = "; ".join(failures) if failures else "name conflict with built-in"
-                    table.add_row(path.name, "[bold red]✗ Skipped[/bold red]", reason)
-                except Exception as e:
-                    table.add_row(path.name, "[bold red]✗ Error[/bold red]", str(e))
-
-        console.print(table)
-
+        _cmd_skills_check(ctx)
     elif subcmd == "install":
         await _install_skill(ctx, subargs)
-
     elif subcmd == "reload":
-        from co_cli.config._core import settings as _settings
-
-        # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
-        user_skills_dir = ctx.deps.user_skills_dir
-        new_skills = _load_skills(ctx.deps.skills_dir, _settings, user_skills_dir=user_skills_dir)
-        # Scan user-global and project-local files only — bundled skills are version-controlled
-        project_dir = ctx.deps.skills_dir
-        all_paths = (sorted(user_skills_dir.glob("*.md")) if user_skills_dir.exists() else []) + (
-            sorted(project_dir.glob("*.md")) if project_dir.exists() else []
-        )
-        for p in all_paths:
-            if p.stem in new_skills:
-                try:
-                    for w in _scan_skill_content(p.read_text(encoding="utf-8")):
-                        console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
-                except Exception:
-                    pass
-        old_names = set(ctx.deps.skill_commands.keys())
-        set_skill_commands(new_skills, ctx.deps)
-        _refresh_completer(ctx)
-        added = set(new_skills.keys()) - old_names
-        removed = old_names - set(new_skills.keys())
-        if added:
-            if len(added) <= 5:
-                console.print(
-                    f"[success]+ Added ({len(added)}): {', '.join(sorted(added))}[/success]"
-                )
-            else:
-                console.print(f"[success]+ Added: {len(added)} skill(s)[/success]")
-        if removed:
-            if len(removed) <= 5:
-                console.print(
-                    f"[dim]- Removed ({len(removed)}): {', '.join(sorted(removed))}[/dim]"
-                )
-            else:
-                console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
-        if not added and not removed:
-            console.print("[dim]No skill changes.[/dim]")
-        console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_commands)} skill(s)[/success]")
-
+        _cmd_skills_reload(ctx)
     elif subcmd == "upgrade":
         await _upgrade_skill(ctx, subargs)
-
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
         console.print(

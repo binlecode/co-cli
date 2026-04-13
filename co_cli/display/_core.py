@@ -85,6 +85,38 @@ def display_info(message: str) -> None:
     console.print(f"[info]{INFO} {message}[/info]")
 
 
+def _render_selection(items: list[str], selected: int, current: str | None) -> None:
+    """Re-render the selection menu in-place, moving cursor up to overwrite."""
+    import sys
+
+    sys.stdout.write(f"\x1b[{len(items)}A")
+    for idx, name in enumerate(items):
+        marker = " *" if name == current else ""
+        if idx == selected:
+            sys.stdout.write(f"\x1b[2K  \x1b[1;36m❯ {name}{marker}\x1b[0m\n")
+        else:
+            sys.stdout.write(f"\x1b[2K    {name}{marker}\n")
+    sys.stdout.flush()
+
+
+def _read_key() -> str:
+    """Read a single keypress from stdin, including escape sequences."""
+    import sys
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\x1b":
+            ch += sys.stdin.read(2)
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def prompt_selection(
     items: list[str],
     *,
@@ -97,41 +129,15 @@ def prompt_selection(
     Returns the selected item string, or None if cancelled.
     """
     import sys
-    import termios
-    import tty
 
     if not items:
         return None
 
-    # Start with current item highlighted, or first item
     idx = 0
     if current and current in items:
         idx = items.index(current)
 
-    def _read_key() -> str:
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-            if ch == "\x1b":
-                ch += sys.stdin.read(2)
-            return ch
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-    def _render(selected: int) -> None:
-        # Move cursor up to overwrite previous render (except first time)
-        sys.stdout.write(f"\x1b[{len(items)}A")
-        for i, name in enumerate(items):
-            marker = " *" if name == current else ""
-            if i == selected:
-                sys.stdout.write(f"\x1b[2K  \x1b[1;36m❯ {name}{marker}\x1b[0m\n")
-            else:
-                sys.stdout.write(f"\x1b[2K    {name}{marker}\n")
-        sys.stdout.flush()
-
-    # Initial render
+    # Initial render — write items to establish screen lines
     console.print(f"[dim]{title} — ↑↓ navigate, Enter select, q cancel[/dim]")
     for i, name in enumerate(items):
         marker = " *" if name == current else ""
@@ -146,10 +152,10 @@ def prompt_selection(
             key = _read_key()
             if key == "\x1b[A":  # Up
                 idx = (idx - 1) % len(items)
-                _render(idx)
+                _render_selection(items, idx, current)
             elif key == "\x1b[B":  # Down
                 idx = (idx + 1) % len(items)
-                _render(idx)
+                _render_selection(items, idx, current)
             elif key in ("\r", "\n"):  # Enter
                 return items[idx]
             elif key in ("q", "\x1b", "\x03"):  # q, Esc, Ctrl-C
