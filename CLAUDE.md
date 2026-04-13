@@ -151,22 +151,36 @@ git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/comple
 
 ### Spec Conventions
 
-Specs in `docs/specs/` are **post-implementation documentation** — they always stay in sync with the latest code and are the authoritative reference during planning. They must never appear as tasks in an exec-plan: spec updates are outputs of delivery, not inputs to it. All updates happen automatically through `/sync-doc` (auto-invoked by `orchestrate-dev` after delivery). Any task whose `files:` list includes a `docs/specs/` path is invalid and must be removed.
+Specs in `docs/specs/` are **living requirements and progress-tracking documents** — they define intent, track development milestones, and stay in sync with the latest code. Every spec has a human-maintained `## Product Intent` section (Goal, Functional areas, Non-goals, Success criteria, Status, Known gaps) followed by four implementation sections. `/sync-doc` keeps sections 1–4 accurate against code but never touches `## Product Intent`. Specs must never appear as tasks in an exec-plan: spec updates are outputs of delivery, not inputs to it. Any task whose `files:` list includes a `docs/specs/` path is invalid and must be removed.
 
-Every component spec follows this four-section template:
+Every spec follows this structure:
 
-1. **What & How** — one paragraph + architecture diagram
-2. **Core Logic** — processing flows, key functions, design decisions, error handling, security
-3. **Config** — settings table (`Setting | Env Var | Default | Description`); skip if no configuration
-4. **Files** — file table (`File | Purpose`)
+```
+## Product Intent     ← human-maintained; sync-doc never touches this
+## 1. What & How      ← one paragraph + architecture diagram
+## 2. Core Logic      ← processing flows, key functions, design decisions, error handling, security
+## 3. Config          ← settings table (Setting | Env Var | Default | Description); skip if no config
+## 4. Files           ← file table (File | Purpose)
+```
 
 Never paste source code into specs. Use pseudocode to explain processing logic. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
 
-Start at `docs/specs/system.md` for top-level system architecture, `CoDeps`, capability surface, and security boundaries. `docs/specs/core-loop.md` covers the agent loop, orchestration, and approval flow. All component specs live in `docs/specs/` and are named `<component>.md` and `flow-<component>.md`.
+Specs index:
+- `docs/specs/mission.md` — product mission, strategic thesis, stage roadmap, non-goals
+- `docs/specs/system.md` — top-level runtime architecture, `CoDeps`, subsystem boundaries
+- `docs/specs/core-loop.md` — agent loop, turn orchestration, approval flow
+- `docs/specs/flow-bootstrap.md` — startup sequence from settings load to REPL entry
+- `docs/specs/context.md` — prompt context assembly, history governance, session persistence
+- `docs/specs/tools.md` — tool registration, visibility tiers, approval model, tool catalog
+- `docs/specs/skills.md` — skill system, load order, dispatch, argument expansion
+- `docs/specs/llm-models.md` — single-model architecture, provider abstraction, model quirks
+- `docs/specs/observability.md` — OTel tracing, SQLite exporter, three viewer modes
+- `docs/specs/tui.md` — REPL loop, tab completion, slash command dispatch, reasoning display
+- `docs/specs/personality.md` — soul file layout, static prompt assembly, per-turn injection
 
 `flow-*.md` specs are sequence-owning documents. Their `Core Logic` section must follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
 
-`docs/reference/` is for research, proposals, and background material (`RESEARCH-*`, `ROADMAP-*`) and is not linked from specs.
+`docs/reference/` is for research and background material (`RESEARCH-*`) and is not linked from specs.
 
 ### Artifact Lifecycle
 
