@@ -9,7 +9,7 @@ Solo implementation skill. No subagents. Same quality bar as orchestrate-dev, no
 
 **Invocation:** `/deliver <slug>` or `/deliver` (ad-hoc, without a TODO doc)
 
-- With slug: reads `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` as the task list.
+- With slug: reads `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` as the task list.
 - Without slug: implements the task described inline in the prompt.
 
 ---
@@ -109,7 +109,7 @@ Mark completed tasks `✓ DONE` in the plan file (if a slug was used).
 
 **Archive plan** — if a slug was used and review-impl returns PASS, move the plan to completed:
 ```
-git mv docs/exec-plans/active/YYYY-MM-DD-<slug>.md docs/exec-plans/completed/
+git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/completed/
 ```
 
 **Commit** — stage only delivery files + `pyproject.toml` + the plan archive move (if applicable). Never include unrelated files. If anything is ambiguous, ask before staging.

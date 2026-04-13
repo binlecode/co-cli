@@ -9,9 +9,9 @@ description: Execute a reviewed plan as a dev team — TL leads and codes alongs
 
 **Invocation:** `/orchestrate-dev <slug>`
 
-Reads `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` — never deletes mid-delivery. Appends delivery summary to plan. Plan moved to `completed/` after Gate 2 PASS.
+Reads `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` — never deletes mid-delivery. Appends delivery summary to plan. Plan moved to `completed/` after Gate 2 PASS.
 
-**Consumes:** docs/exec-plans/active/YYYY-MM-DD-<slug>.md. **Produces:** ✓ DONE marks + delivery summary appended to plan.
+**Consumes:** docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md. **Produces:** ✓ DONE marks + delivery summary appended to plan.
 
 ---
 
@@ -253,7 +253,7 @@ The reviewer has no access to the implementation conversation — cold read only
 - Test policy: no mocks or fakes — blocking regardless of other quality
 - Security: command injection, path traversal, SQL injection, missing input validation
 
-**Reviewer output** (append to `docs/exec-plans/active/YYYY-MM-DD-<slug>.md` under `## Independent Review`):
+**Reviewer output** (append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` under `## Independent Review`):
 
 ```markdown
 ## Independent Review
@@ -302,7 +302,7 @@ Mark a completed task by prepending `✓ DONE` to its heading, e.g.:
 
 Fix any test failures or doc sync inaccuracies before appending this summary — it reflects final state after fixes, not intermediate state.
 
-Append to `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`:
+Append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`:
 
 ```markdown
 ## Delivery Summary — <date>
@@ -335,7 +335,7 @@ Run only after `/review-impl` returns PASS. Do not ship a DELIVERED-only deliver
 Locate the plan file (glob `docs/exec-plans/active/*-<slug>.md`) then move it to completed:
 
 ```
-git mv docs/exec-plans/active/YYYY-MM-DD-<slug>.md docs/exec-plans/completed/
+git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/completed/
 ```
 
 Grep the repo for the slug to confirm no stale references remain in source code (DESIGN docs referencing this plan by name are expected — only source code references are stale).
