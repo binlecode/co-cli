@@ -150,34 +150,27 @@ Acceptance criteria:
 
 ## Phase 4 — Polish (as time allows)
 
-### 10. `docs/product-specs/`
+### ✓ DONE — 10. `docs/product-specs/`
 
-Product intent is split across README (user-facing) and DESIGN files (implementation-facing).
-No single document captures what co-cli is, is not, and what success looks like.
-
-Tasks:
-- [ ] add `docs/product-specs/assistant-core.md` with goal, functional areas, non-goals, success criteria
-- [ ] source content from README product description + DESIGN-system.md overview
+Superseded — `## Product Intent` sections added to all 11 specs (Goal, Functional areas,
+Non-goals, Success criteria, Status, Known gaps). `docs/specs/mission.md` serves as the
+product-level spec. No separate `product-specs/` folder needed.
 
 ---
 
-### 11. Move ROADMAP to `docs/` root
+### ✓ DONE — 11. Move ROADMAP to `docs/` root
 
-`docs/reference/ROADMAP-co-evolution.md` is a roadmap, not reference material. Wrong location.
-
-Tasks:
-- [ ] move to `docs/ROADMAP.md`
-- [ ] add status fields and phase dependency chain
+Superseded — `docs/reference/ROADMAP-co-evolution.md` removed entirely. Strategic content
+(mission, ultimate goal, strategic thesis, stage roadmap, non-goals) captured in
+`docs/specs/mission.md`.
 
 ---
 
-### 12. `docs/PLANS.md`
+### ✓ DONE — 12. `docs/PLANS.md`
 
-Planning policy is implicit in CLAUDE.md workflow section. Not explicitly documented as a
-standing rule.
-
-Tasks:
-- [ ] add `docs/PLANS.md` covering exec-plan lifecycle, when to write a plan, changelog policy, release notes policy
+Superseded — exec-plan lifecycle, when to write a plan, changelog policy, and release notes
+policy are all documented in CLAUDE.md (Artifact Lifecycle + Dev Workflow + versioning
+sections). A standalone file would duplicate it.
 
 ---
 
