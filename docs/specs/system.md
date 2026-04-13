@@ -19,7 +19,7 @@
 
 ---
 
-This doc defines the top-level runtime architecture of `co-cli`: the major subsystems, their boundaries, and how control moves through the system. It does not own component internals. Startup sequencing lives in [flow-bootstrap.md](flow-bootstrap.md), turn orchestration in [core-loop.md](core-loop.md), context and persistence in [context.md](context.md), tools in [tools.md](tools.md), skills in [skills.md](skills.md), model/provider rules in [llm-models.md](llm-models.md), and telemetry in [observability.md](observability.md).
+This doc defines the top-level runtime architecture of `co-cli`: the major subsystems, their boundaries, and how control moves through the system. It does not own component internals. Startup sequencing lives in [flow-bootstrap.md](flow-bootstrap.md), turn orchestration in [core-loop.md](core-loop.md), context and persistence in [context.md](context.md), tools in [tools.md](tools.md), skills in [skills.md](skills.md), model/provider rules in [llm-models.md](llm-models.md), telemetry in [observability.md](observability.md), and personality construction in [personality.md](personality.md).
 
 ## 1. What & How
 
