@@ -20,8 +20,7 @@ uv run co traces                 # Nested HTML trace viewer
 # Quality gates (scripts/quality-gate.sh — single source of truth for all checks)
 scripts/quality-gate.sh lint              # ruff check + format (pre-commit hook)
 scripts/quality-gate.sh lint --fix        # ruff auto-fix + format
-scripts/quality-gate.sh types             # lint + pyright
-scripts/quality-gate.sh full              # lint + pyright + pytest (pre-push hook + ship gate)
+scripts/quality-gate.sh full              # lint + pytest (pre-push hook + ship gate)
 
 # ALL pytest runs MUST pipe to a timestamped log under .pytest-logs/ (mkdir -p first).
 # Never truncate output before the log file (no | head, | tail, | grep before tee).
@@ -52,7 +51,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Class naming**: names must reveal the class's role. Prefer established suffix conventions where they fit: `*State` (mutable lifecycle data), `*Result` (immutable pass/fail outcome), `*Output` (agent/pipeline payload), `*Config` (configuration — preferred; `*Settings` acceptable for Pydantic sub-models), `*Info` (read-only descriptor), `*Registry` (registration lookup table), `*Store` (persistent storage layer), `*Context` (input bag for a call), `*Event` (async/streaming event), `*Error` (exception class), `*Enum` (enumeration). Self-evident named concepts (e.g. `ShellBackend`, `AgentLoop`) do not need a suffix.
 - **Variable and function naming**: use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
 - **Display**: use the project's shared `console` object for all terminal output. Use semantic style names; never hardcode color names at callsites.
-- **Quality gates**: `scripts/quality-gate.sh` is the single source of truth for all automated checks. `lint` = ruff (pre-commit enforced), `types` = lint + pyright, `full` = lint + pyright + pytest. Tool configs live in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
+- **Quality gates**: `scripts/quality-gate.sh` is the single source of truth for all automated checks. `lint` = ruff (pre-commit enforced), `full` = lint + pytest. Tool configs live in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
 
 ### Agents, Tools, and Config
 

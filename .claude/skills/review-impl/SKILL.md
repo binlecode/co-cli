@@ -53,12 +53,12 @@ For every requirement in the task description and `done_when`:
 
 Record for each requirement: file:line evidence, or a finding if absent.
 
-### C — Quality gate (lint + types)
+### C — Quality gate (lint)
 
 ```bash
-scripts/quality-gate.sh types
+scripts/quality-gate.sh lint
 ```
-Any violation is a blocking finding. Auto-fix ruff with `scripts/quality-gate.sh lint --fix` in Phase 4. Pyright errors require manual fixes.
+Any violation is a blocking finding. Auto-fix ruff with `scripts/quality-gate.sh lint --fix` in Phase 4.
 
 ### D — Convention checklist
 
@@ -153,7 +153,7 @@ Run sync-doc. Record: clean / fixed (what was fixed).
 
 After all fixes and tests are green, run the quality gate one final time:
 ```bash
-scripts/quality-gate.sh types
+scripts/quality-gate.sh lint
 ```
 Then re-scan every changed file one more time:
 

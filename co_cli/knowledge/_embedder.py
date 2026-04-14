@@ -36,7 +36,7 @@ def build_embedder(
 
             if provider == "gemini":
                 from google import (
-                    genai,  # type: ignore[attr-defined]  # google-generativeai lacks pyright stubs
+                    genai,  # type: ignore[attr-defined]  # google-generativeai lacks type stubs
                 )
 
                 client = genai.Client(api_key=api_key)

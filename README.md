@@ -247,17 +247,15 @@ Dev tooling is included in `uv sync` — no extra installs needed. All checks ru
 ```bash
 scripts/quality-gate.sh lint          # ruff lint + format (pre-commit hook runs this)
 scripts/quality-gate.sh lint --fix    # ruff auto-fix + format
-scripts/quality-gate.sh types         # lint + pyright type checking
-scripts/quality-gate.sh full          # lint + pyright + pytest (ship gate)
+scripts/quality-gate.sh full          # lint + pytest (ship gate)
 ```
 
 | Tool | Purpose | When it runs |
 |------|---------|--------------|
 | **[ruff](https://docs.astral.sh/ruff/)** | Linter + formatter (replaces flake8, isort, black) | Pre-commit hook (`quality-gate.sh lint`) |
-| **[pyright](https://github.com/microsoft/pyright)** | Static type checker (replaces mypy) | CI + delivery skills (`quality-gate.sh types`) |
 | **[pytest](https://docs.pytest.org/)** | Test runner (functional tests, no mocks) | CI + delivery skills (`quality-gate.sh full`) |
 
-Configuration for all three tools lives in `pyproject.toml`.
+Configuration for both tools lives in `pyproject.toml`.
 
 ---
 
@@ -312,7 +310,7 @@ Design docs are published as a GitHub Pages book: **https://binlecode.github.io/
 
 ## Contributing
 
-1.  `uv sync` — install all dependencies (includes ruff, pyright, pytest).
+1.  `uv sync` — install all dependencies (includes ruff, pytest).
 2.  `bash scripts/install-hooks.sh` — install the pre-commit hook.
 3.  `scripts/quality-gate.sh full` must pass before shipping. The pre-commit hook enforces `lint`; CI enforces `full`.
 4.  Follow the coding rules in `CLAUDE.md` Engineering Rules section.

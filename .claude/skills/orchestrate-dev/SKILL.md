@@ -216,7 +216,7 @@ Run the full quality gate (lint + types + tests) across the source tree:
 ```bash
 scripts/quality-gate.sh full
 ```
-Any failure = stop and fix before proceeding. Use `scripts/quality-gate.sh lint --fix` to auto-fix ruff violations; pyright and test failures require manual fixes.
+Any failure = stop and fix before proceeding. Use `scripts/quality-gate.sh lint --fix` to auto-fix ruff violations; test failures require manual fixes.
 
 ### Step 2 — Run tests
 

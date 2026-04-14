@@ -63,7 +63,7 @@ class _RerankerCallable:
 
     def _call_gemini(self, prompt: str, n: int) -> list[int]:
         from google import (
-            genai,  # type: ignore[attr-defined]  # google-generativeai lacks pyright stubs
+            genai,  # type: ignore[attr-defined]  # google-generativeai lacks type stubs
         )
         from google.genai import types
 
