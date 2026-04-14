@@ -14,10 +14,6 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-class ArtifactTypeEnum(StrEnum):
-    SESSION_SUMMARY = "session_summary"
-
-
 class MemoryKindEnum(StrEnum):
     MEMORY = "memory"
     ARTICLE = "article"
@@ -172,17 +168,13 @@ def _validate_relationship_fields(fm: dict[str, Any]) -> None:
             raise ValueError("memory frontmatter field 'related' must be a list or null")
         if not all(isinstance(s, str) for s in fm["related"]):
             raise ValueError("memory frontmatter field 'related' must contain only strings")
-    if "artifact_type" in fm and fm["artifact_type"] is not None:
-        if not isinstance(fm["artifact_type"], str):
-            raise ValueError("memory frontmatter field 'artifact_type' must be a string or null")
-        valid_artifact_types = {e.value for e in ArtifactTypeEnum}
-        if fm["artifact_type"] not in valid_artifact_types:
-            logger.warning(
-                "memory frontmatter field 'artifact_type' has unknown value %r — ignoring",
-                fm["artifact_type"],
-            )
     if "always_on" in fm and not isinstance(fm["always_on"], bool):
         raise ValueError("memory frontmatter field 'always_on' must be a boolean")
+
+
+def render_memory_file(fm: dict[str, Any], body: str) -> str:
+    """Render a memory file content string from frontmatter dict and body text."""
+    return f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body.strip()}\n"
 
 
 def validate_memory_frontmatter(fm: dict[str, Any]) -> None:

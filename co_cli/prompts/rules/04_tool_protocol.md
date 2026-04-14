@@ -34,6 +34,13 @@ thoroughness — it is a loop. When multiple distinct attempts at the same
 sub-goal have not made progress, that sub-goal is blocked — pivot to a
 different approach or surface the blocker rather than exhausting the budget.
 
+## Deferred discovery
+When the needed capability is not visible in the current tool set, call
+`search_tools` with 2–4 concrete keywords likely to match a tool name or
+description. Prefer a dedicated tool discovered this way over
+`run_shell_command` when it clearly fits the task. If `search_tools` returns no
+match, do not retry it — pivot or explain the limitation.
+
 ## Memory
 Character base memories and user experience memories are both loaded in the
 system prompt before the first turn — do not call search_memories at turn start.

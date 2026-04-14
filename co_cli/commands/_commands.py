@@ -385,55 +385,17 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
-    """Checkpoint current session to knowledge and start fresh."""
-    import re
-    import uuid
-    from datetime import UTC, datetime
-
-    import yaml
-
-    from co_cli.context.summarization import index_session_summary
-    from co_cli.knowledge._frontmatter import ArtifactTypeEnum
+    """Start a fresh session."""
+    from co_cli.context.session import new_session_path
 
     if not ctx.message_history:
-        console.print("[dim]Nothing to checkpoint — history is empty.[/dim]")
+        console.print("[dim]Nothing to rotate — history is empty.[/dim]")
         return None
-
-    _model = ctx.deps.model.model if ctx.deps.model else None
-    summary = await index_session_summary(
-        ctx.message_history,
-        _model,
-        NOREASON_SETTINGS,
-        personality_active=bool(ctx.deps.config.personality),
-    )
-
-    if summary is None:
-        console.print("[yellow]Could not summarize session — history not cleared.[/yellow]")
-        return None
-
-    memory_dir = ctx.deps.memory_dir
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    memory_id = str(uuid.uuid4())
-    slug = re.sub(r"[^a-z0-9]+", "-", summary[:50].lower()).strip("-")[:50]
-    frontmatter: dict = {
-        "id": memory_id,
-        "kind": "memory",
-        "created": datetime.now(UTC).isoformat(),
-        "tags": [],
-        "artifact_type": ArtifactTypeEnum.SESSION_SUMMARY.value,
-    }
-    md_content = (
-        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{summary.strip()}\n"
-    )
-    (memory_dir / f"{slug}.md").write_text(md_content, encoding="utf-8")
 
     # Rotate session path — transcript writer derives path from deps.session.session_path,
     # so assigning a new path ensures the next write goes to a new file.
-    from co_cli.context.session import new_session_path
-
     ctx.deps.session.session_path = new_session_path(ctx.deps.sessions_dir)
-
-    console.print("[dim]Session checkpointed. Starting fresh.[/dim]")
+    console.print("[dim]Session rotated.[/dim]")
     return []
 
 
@@ -1258,7 +1220,7 @@ async def _cmd_reasoning(ctx: CommandContext, args: str) -> None:
 BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "help": SlashCommand("help", "List available slash commands", _cmd_help),
     "clear": SlashCommand("clear", "Clear conversation history", _cmd_clear),
-    "new": SlashCommand("new", "Checkpoint session to memory and start fresh", _cmd_new),
+    "new": SlashCommand("new", "Start a fresh session", _cmd_new),
     "status": SlashCommand("status", "Show system health or /status <task-id>", _cmd_status),
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
     "history": SlashCommand(

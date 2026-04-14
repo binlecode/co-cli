@@ -104,6 +104,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 
 - **Evals are separate from tests**: evals run as standalone programs (`uv run python evals/eval_<name>.py`), not pytest. Pass/fail gates live inside the runner. Shared helpers belong in `evals/_*.py`, not in `co_cli/`.
 - **Evals run against the real configured system**: never override config with `_ENV_DEFAULTS`, `os.environ`, or fallback defaults. If a prerequisite is missing, skip gracefully.
+- **Evals never create their own model or agent settings**: all LLM call parameters (model, temperature, context window, reasoning mode) must come from the project's config and factory functions — never hardcoded inline. Use the production code paths as-is; do not substitute simplified settings to "speed up" or "simplify" the eval.
 - **Evals must seek corners**: every eval must include at least one failure mode, degradation path, or boundary condition.
 
 #### Tests (`tests/`)

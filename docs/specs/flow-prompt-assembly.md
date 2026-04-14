@@ -52,7 +52,7 @@ flowchart TD
     Q -->|no| S["final result"]
 
     S --> T["_finalize_turn()"]
-    T --> U["memory extraction + transcript append"]
+    T --> U["memory extraction + transcript append or child-session branch after history replacement"]
     U --> E
     U --> F
 ```
@@ -198,7 +198,7 @@ Important boundaries:
 - soul-defined personality lives only under `souls/{role}/...`
 - the role-specific `souls/{role}/memories/*.md` files are the base personality memory layer and occupy step 2 after the seed
 - counter-steering is not loaded from the soul tree; it is model-specific guidance from `model_quirks/`
-- `.co-cli/memory/` is the runtime insights store populated by `save_insight`; it is not the base personality store
+- `.co-cli/memory/` is the runtime memory store populated by `save_memory`; it is not the base personality store
 - rule filename validation is fail-fast: invalid or non-contiguous rule numbering raises `ValueError`
 - the assembled static string must be non-empty
 
@@ -299,7 +299,7 @@ What each processor contributes to prompt shape:
 - `compact_assistant_responses`: shortens old assistant text/thinking parts without touching tool-call args
 - `detect_safety_issues`: injects warning text when repeated-tool or repeated-shell-failure patterns are detected
 - `inject_opening_context`: looks at the current user message, recalls up to 3 relevant memories, caps the block by `memory.injection_max_chars`, and appends `Relevant memories:` as a trailing `SystemPromptPart`
-- `summarize_history_window`: when the request exceeds 85% of the resolved budget, replaces the dropped middle region with a summary marker or static marker and preserves `search_tools` discovery breadcrumbs
+- `summarize_history_window`: when the request exceeds 85% of the resolved budget, replaces the dropped middle region with a summary marker or static marker, preserves `search_tools` discovery breadcrumbs, and marks the turn as having replaced history for persistence
 
 Two details make the current-turn query visible to recall and compaction:
 
@@ -349,7 +349,8 @@ Pseudocode:
 if clean turn:
   fire_and_forget_extraction(delta_messages)
 
-append new messages to transcript
+append only the new tail when history grew monotonically
+or branch to a new child transcript and write the full compacted history when the turn replaced history
 show generic error banner on failed turns
 ```
 

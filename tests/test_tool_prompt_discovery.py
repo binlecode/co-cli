@@ -10,6 +10,8 @@ accidentally removes a keyword the SDK needs for discovery.
 from co_cli.agent._native_toolset import _build_native_toolset
 from co_cli.config._core import settings
 from co_cli.deps import VisibilityPolicyEnum
+from co_cli.prompts._assembly import build_static_instructions
+from co_cli.tools.shell import run_shell_command
 
 _NATIVE_TOOLSET, _NATIVE_INDEX = _build_native_toolset(settings)
 
@@ -68,9 +70,9 @@ def test_memory_write_tools_not_in_agent() -> None:
     assert "save_memory" not in descs, "save_memory must not be registered in agent"
     assert "update_memory" not in descs, "update_memory must not be registered in agent"
     assert "append_memory" not in descs, "append_memory must not be registered in agent"
-    # save_insight is extractor-only — must never appear in the main agent tool_index
-    assert "save_insight" not in _NATIVE_INDEX, (
-        "save_insight must not be registered in main agent — extractor-only tool"
+    # save_memory is extractor-only — must never appear in the main agent tool_index
+    assert "save_memory" not in _NATIVE_INDEX, (
+        "save_memory must not be registered in main agent — extractor-only tool"
     )
     # Read tools are always-visible (not deferred), so present in tool_index but not deferred
     assert "search_memories" in _NATIVE_INDEX
@@ -89,3 +91,44 @@ def test_all_deferred_tools_have_nonempty_descriptions() -> None:
     descs = _deferred_descriptions()
     for name, desc in descs.items():
         assert desc.strip(), f"Deferred tool {name!r} has empty description"
+
+
+# ---------------------------------------------------------------------------
+# Assembled static instructions: search_tools guidance present
+# ---------------------------------------------------------------------------
+
+
+def test_static_instructions_contain_search_tools_guidance() -> None:
+    """Assembled static instructions must reference search_tools for deferred discovery.
+
+    Regression: if 04_tool_protocol.md loses its Deferred discovery section,
+    the model gets no instruction to call search_tools and reverts to shell.
+    """
+    text = build_static_instructions(settings.llm.provider, settings.llm.model, settings)
+    assert "search_tools" in text
+
+
+# ---------------------------------------------------------------------------
+# Shell tool description: explicit redirects for write/edit and background tasks
+# ---------------------------------------------------------------------------
+
+
+def test_shell_tool_description_redirects_file_operations() -> None:
+    """Shell tool docstring must redirect file creation/editing to write_file / edit_file.
+
+    Regression: if these redirects are dropped, the model uses shell redirection
+    (echo >>, cat <<EOF) instead of the dedicated write/edit tools.
+    """
+    doc = (run_shell_command.__doc__ or "").lower()
+    assert "write_file" in doc
+    assert "edit_file" in doc
+
+
+def test_shell_tool_description_redirects_background_tasks() -> None:
+    """Shell tool docstring must redirect detached long-running work to start_background_task.
+
+    Regression: if this redirect is dropped, the model backgrounds processes with
+    & or nohup via shell instead of using the managed background task tool.
+    """
+    doc = run_shell_command.__doc__ or ""
+    assert "start_background_task" in doc

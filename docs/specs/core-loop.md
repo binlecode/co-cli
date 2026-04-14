@@ -37,7 +37,7 @@ flowchart TD
     C -->|no| H["_run_foreground_turn()"]
 
     D -->|LocalOnly| A
-    D -->|ReplaceTranscript| E["adopt new history; persist compaction boundary when applied"]
+    D -->|ReplaceTranscript| E["adopt new history; if compaction replaced history, branch transcript to a child session and persist full compacted state"]
     E --> A
     D -->|DelegateToAgent| F["set active_skill_name; snapshot/apply skill_env; delegated_input becomes user_input"]
 
@@ -53,7 +53,7 @@ flowchart TD
     K -->|final result| N["adopt latest_result.all_messages(); fallback render if no text streamed; run _check_output_limits()"]
     N --> O["return TurnResult(outcome='continue')"]
 
-    K -->|first context overflow 400/413 + compactable history| P["emergency_compact(current_history); current_input=None; status banner; retry"]
+    K -->|first context overflow 400/413 + compactable history| P["materialize pending user input into history; recover_overflow_history(...); current_input=None; status banner; retry"]
     P --> J
     K -->|second overflow or no compaction boundary| R
     K -->|HTTP 400 with reformulation budget| Q["append provider-error reflection request; current_input=None; sleep 0.5s; retry"]
@@ -64,7 +64,7 @@ flowchart TD
     O --> T["cleanup_skill_run_state() in finally"]
     R --> T
     S --> T
-    T --> U["_finalize_turn(): fire-and-forget memory extraction on clean turns; append transcript tail; optional error banner"]
+    T --> U["_finalize_turn(): fire-and-forget memory extraction on clean turns; append transcript tail or branch child transcript after compaction; optional error banner"]
     U --> A
 ```
 
@@ -77,12 +77,13 @@ Execution owners:
 | `run_turn()` | one orchestrated LLM turn, including status updates, retries, approval resumes, output checks, and interrupt handling |
 | `_execute_stream_segment()` | one `agent.run_stream_events(...)` segment plus frontend event delivery and usage merge |
 | `_run_approval_loop()` | same-turn approval-resume cycle until output is no longer `DeferredToolRequests` |
-| `_finalize_turn()` | clean-turn memory extraction, transcript append, and generic error banner |
+| `_finalize_turn()` | clean-turn memory extraction, transcript persistence/branching, and generic error banner |
 
 Two boundary rules keep the loop legible:
 
 - REPL-owned transcript state lives in `message_history` inside `main.py`
 - orchestration never mutates REPL history in place; it returns a `TurnResult` with the next transcript snapshot
+- transcript durability is tracked separately via `persisted_message_count` and `history_compaction_applied`
 
 ## 2. Core Logic
 
@@ -246,7 +247,7 @@ Processor roles:
 
 Ordering rationale:
 
-- **#1–2 before #5**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos, always-on memories) to compensate. This avoids architectural complexity (persistent history, non-destructive processors) while matching fork-cc's proven strategy.
+- **#1–2 before #5**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos, always-on memories) to compensate. This keeps the working path simple while preserving a useful handoff summary.
 - **#3 before #5**: `detect_safety_issues` scans recent tool calls for doom loops and shell error streaks. Running it before summarization ensures it scans the full un-compacted history — if summarization drops the middle first, streak evidence in the dropped slice would be missed.
 - **#4 before #5**: `inject_opening_context` appends recalled memories at the tail, outside the summarizer's dropped slice. Placed before summarization to keep the costliest processor (LLM call) last.
 - **All sync processors (#1–3) before async (#4–5)**: sync processors run inline with zero overhead. Async processors are awaited directly on the event loop.
@@ -260,6 +261,7 @@ Compaction behavior:
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_failure_count`) skips the LLM call after 3 consecutive failures; on success the counter resets to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
+- successful history replacement sets `deps.runtime.history_compaction_applied`, which later tells `_finalize_turn()` to persist into a child transcript instead of appending into the parent transcript
 
 Memory recall is also per-turn, not sticky:
 
@@ -276,7 +278,7 @@ Error matrix:
 
 | Condition | Behavior |
 | --- | --- |
-| HTTP 400/413 with context-length body pattern (`_is_context_overflow`) | one-shot `emergency_compact()` — keeps first + last turn group with static marker. Retry on success; terminal if ≤2 groups or second overflow. Never falls through to 400 reformulation. |
+| HTTP 400/413 with context-length body pattern (`_is_context_overflow`) | one-shot `recover_overflow_history()` — first materializes the pending user input into history, then keeps first + last turn groups with an LLM summary when available or a static marker otherwise. Retry on success; terminal if ≤2 groups or second overflow. Never falls through to 400 reformulation. |
 | HTTP 400 with reformat budget left (not context overflow) | append a reflection request describing the rejected tool call, set `current_input=None`, retry (app-level reformulation, not transport retry) |
 | HTTP 400 with budget exhausted, or other terminal HTTP errors | set `outcome='error'` and return `_build_error_turn_result()` |
 | `ModelAPIError` (network errors exhausted by SDK) | set `outcome='error'` and return `_build_error_turn_result()` |

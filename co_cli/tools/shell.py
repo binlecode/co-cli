@@ -12,13 +12,15 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
 
     Use for git commands, package managers, builds, scripts, and system info.
 
-    Do not use shell for file reads or content search — use the dedicated tools:
+    Do not use shell for file reads, content search, or tasks with dedicated tools:
     - read_file instead of cat/head/tail
     - find_in_files instead of grep/rg
     - list_directory instead of ls/find
     - web_fetch instead of curl for web pages
     - search_notes / read_note instead of grep/cat on the Obsidian vault
     - search_drive_files / read_drive_file instead of manual API calls
+    - write_file / edit_file instead of shell redirection for workspace file creation or editing
+    - start_background_task instead of shell for detached long-running work
 
     Commands run in the project working directory. DENY-pattern commands are
     blocked. Safe-prefix commands execute directly. All others require user

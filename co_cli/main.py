@@ -48,8 +48,7 @@ from co_cli.config._core import (
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.context.skill_env import cleanup_skill_run_state
-from co_cli.context.transcript import append_messages as append_transcript
-from co_cli.context.transcript import write_compact_boundary
+from co_cli.context.transcript import persist_session_history
 from co_cli.deps import CoDeps
 from co_cli.display._core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
 from co_cli.observability._file_logging import setup_file_logging
@@ -118,15 +117,30 @@ async def _finalize_turn(
 
     next_history = turn_result.messages
 
-    # Memory extraction — fire-and-forget on clean (non-interrupted, non-error) turns
+    # Memory extraction — cadence-gated, fire-and-forget on clean turns
     if not turn_result.interrupted and turn_result.outcome != "error":
-        cursor = deps.session.last_extracted_message_idx
-        delta = next_history[cursor:] if 0 <= cursor <= len(next_history) else next_history[-20:]
-        fire_and_forget_extraction(delta, deps=deps, frontend=frontend, cursor_start=cursor)
+        n = deps.config.memory.extract_every_n_turns
+        if n > 0:
+            deps.session.last_extracted_turn_idx += 1
+            if deps.session.last_extracted_turn_idx % n == 0:
+                cursor = deps.session.last_extracted_message_idx
+                delta = (
+                    next_history[cursor:]
+                    if 0 <= cursor <= len(next_history)
+                    else next_history[-20:]
+                )
+                fire_and_forget_extraction(
+                    delta, deps=deps, frontend=frontend, cursor_start=cursor
+                )
 
-    # Append new messages to transcript (positional tail slice)
-    new_messages = turn_result.messages[len(message_history) :]
-    append_transcript(deps.session.session_path, new_messages)
+    deps.session.session_path = persist_session_history(
+        session_path=deps.session.session_path,
+        sessions_dir=deps.sessions_dir,
+        messages=turn_result.messages,
+        persisted_message_count=deps.session.persisted_message_count,
+        history_compacted=deps.runtime.history_compaction_applied,
+    )
+    deps.session.persisted_message_count = len(turn_result.messages)
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":
@@ -192,7 +206,16 @@ def _apply_command_outcome(
     """
     if isinstance(outcome, ReplaceTranscript):
         if outcome.compaction_applied:
-            write_compact_boundary(deps.session.session_path)
+            deps.session.session_path = persist_session_history(
+                session_path=deps.session.session_path,
+                sessions_dir=deps.sessions_dir,
+                messages=outcome.history,
+                persisted_message_count=deps.session.persisted_message_count,
+                history_compacted=True,
+            )
+            deps.session.persisted_message_count = len(outcome.history)
+        else:
+            deps.session.persisted_message_count = len(outcome.history)
         return True, outcome.history, "", {}
     if isinstance(outcome, DelegateToAgent):
         saved_env: dict[str, str | None] = {k: os.environ.get(k) for k in outcome.skill_env}

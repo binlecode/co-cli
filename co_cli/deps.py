@@ -100,6 +100,10 @@ class CoSessionState:
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
     # Cursor for delta-based memory extraction — index of first unextracted message in history.
     last_extracted_message_idx: int = 0
+    # Turn counter for cadence-gated extraction.
+    last_extracted_turn_idx: int = 0
+    # Count of messages durably persisted to session_path.
+    persisted_message_count: int = 0
 
 
 @dataclass
@@ -123,6 +127,7 @@ class CoRuntimeState:
     safety_state: SafetyState | None = field(default=None, repr=False)
     active_skill_name: str | None = None
     resume_tool_names: frozenset[str] | None = None
+    history_compaction_applied: bool = False
     # Delegation depth — incremented by fork_deps(); guards against recursive delegation.
     agent_depth: int = 0
 
@@ -132,6 +137,7 @@ class CoRuntimeState:
         self.safety_state = SafetyState()
         self.tool_progress_callback = None
         self.resume_tool_names = None
+        self.history_compaction_applied = False
 
 
 # Path defaults (relative to cwd; resolved at runtime in create_deps)

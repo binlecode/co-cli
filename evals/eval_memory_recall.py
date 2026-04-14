@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Eval: memory recall injection — verify inject_opening_context fires per turn.
+"""Eval: memory recall injection — verify inject_opening_context fires per turn via FTS5 DB.
 
-Pre-seeds memory files on disk, runs run_turn(), checks for SystemPromptPart
-injection from inject_opening_context. This is a history processor (not a
-tool), so recall is NOT visible as a ToolCallPart — the eval scans for
-SystemPromptPart containing "Relevant memories:".
+Pre-seeds memory files on disk, syncs them into a real KnowledgeStore, runs run_turn(),
+and checks for SystemPromptPart injection from inject_opening_context. Recall is NOT
+visible as a ToolCallPart — the eval scans for SystemPromptPart containing
+"Relevant memories:".
 
-Target flow: _history.py:inject_opening_context() → _recall_for_context() →
-             SystemPromptPart injection
+Target flow:
+    seed_memory (disk) → KnowledgeStore.sync_dir (DB index)
+    → run_turn → inject_opening_context → _recall_for_context (FTS5 DB search)
+    → SystemPromptPart("Relevant memories: ...")
+
+Also tests the degraded path: when knowledge_store=None, no injection occurs and no
+exception is raised.
 
 Writes: docs/REPORT-eval-memory-recall.md (prepends dated section each run).
 
@@ -27,15 +32,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from evals._deps import make_eval_deps, make_eval_settings
+from evals._deps import make_eval_deps
 from evals._fixtures import seed_memory
 from evals._frontend import SilentFrontend
-from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
+from evals._timeouts import EVAL_TURN_TIMEOUT_SECS as _EVAL_TURN_TIMEOUT_SECS
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
+from co_cli.knowledge._store import KnowledgeStore
+
+_TURN_TIMEOUT_SECS = _EVAL_TURN_TIMEOUT_SECS
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-memory-recall.md"
 
@@ -53,6 +61,8 @@ class RecallCase:
     expect_injection: bool
     expect_keyword: str | None
     desc: str
+    # When True, knowledge_store is None (degraded path test)
+    degraded_path: bool = False
 
 
 CASES: list[RecallCase] = [
@@ -69,7 +79,7 @@ CASES: list[RecallCase] = [
         prompt="Set up testing for my Python project",
         expect_injection=True,
         expect_keyword="pytest",
-        desc="Topic match → injection with keyword",
+        desc="Topic match → FTS5 injection with keyword",
     ),
     RecallCase(
         id="recall-partial-kw",
@@ -83,7 +93,7 @@ CASES: list[RecallCase] = [
         prompt="Configure my editor settings",
         expect_injection=True,
         expect_keyword="vim",
-        desc="Partial keyword match → injection",
+        desc="Keyword match → FTS5 injection",
     ),
     RecallCase(
         id="recall-no-match",
@@ -97,7 +107,7 @@ CASES: list[RecallCase] = [
         prompt="Review this PR and flag any security issues",
         expect_injection=False,
         expect_keyword=None,
-        desc="No topic match → no injection",
+        desc="No keyword overlap → no FTS5 match → no injection",
     ),
     RecallCase(
         id="recall-empty-store",
@@ -105,7 +115,18 @@ CASES: list[RecallCase] = [
         prompt="Explain what async/await does in Python",
         expect_injection=False,
         expect_keyword=None,
-        desc="Empty store → no injection",
+        desc="Empty DB → no injection",
+    ),
+    RecallCase(
+        id="recall-degraded-path",
+        memories=[
+            {"content": "User prefers pytest for testing", "tags": ["preference"], "days_ago": 1},
+        ],
+        prompt="Set up testing for my Python project",
+        expect_injection=False,
+        expect_keyword=None,
+        desc="knowledge_store=None degraded path → no injection, no crash",
+        degraded_path=True,
     ),
 ]
 
@@ -151,6 +172,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
         try:
             os.chdir(tmpdir)
             memory_dir = Path(tmpdir) / ".co-cli" / "memory"
+            db_path = Path(tmpdir) / "search.db"
 
             t = time.monotonic()
             for idx, mem in enumerate(case.memories, 1):
@@ -174,19 +196,43 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
                 }
             )
 
+            if case.degraded_path:
+                # No KnowledgeStore — degraded path: recall returns empty, no crash
+                deps = make_eval_deps()
+                ks_label = "None (degraded)"
+            else:
+                # Wire real KnowledgeStore with indexed content
+                knowledge_store = KnowledgeStore(config=settings, knowledge_db_path=db_path)
+                n_indexed = (
+                    knowledge_store.sync_dir("memory", memory_dir) if memory_dir.exists() else 0
+                )
+                ks_label = f"KnowledgeStore({n_indexed} docs indexed)"
+                deps = make_eval_deps(knowledge_store=knowledge_store, memory_dir=memory_dir)
+
+            steps.append(
+                {
+                    "name": "knowledge_store setup",
+                    "ms": 0,
+                    "detail": ks_label,
+                }
+            )
+
             agent = build_agent(config=settings)
-            deps = make_eval_deps()
 
             t = time.monotonic()
-            async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-                result = await run_turn(
-                    agent=agent,
-                    user_input=case.prompt,
-                    deps=deps,
-                    message_history=[],
-                    model_settings=make_eval_settings(),
-                    frontend=SilentFrontend(),
-                )
+            try:
+                async with asyncio.timeout(_TURN_TIMEOUT_SECS):
+                    result = await run_turn(
+                        agent=agent,
+                        user_input=case.prompt,
+                        deps=deps,
+                        message_history=[],
+                        frontend=SilentFrontend(),
+                    )
+            finally:
+                if not case.degraded_path:
+                    knowledge_store.close()
+
             steps.append(
                 {
                     "name": "run_turn",
@@ -296,7 +342,7 @@ def _write_report(cases: list[dict[str, Any]], total_ms: float) -> None:
 
 async def main() -> int:
     print("=" * 60)
-    print("  Eval: Memory Recall Injection")
+    print("  Eval: Memory Recall Injection (FTS5 DB-backed)")
     print("=" * 60)
 
     all_cases: list[dict[str, Any]] = []

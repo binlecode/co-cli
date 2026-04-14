@@ -2473,7 +2473,7 @@ async def step_12_prompt_composition() -> bool:
     else:
         print("  PASS: 12d — cleared placeholder not in user prompt (only in message_history)")
 
-    # --- 12e: No-context case (index_session_summary / /compact path) ---
+    # --- 12e: No-context case (/compact path) ---
     prompt_no_ctx = _build_summarizer_prompt(_SUMMARIZE_PROMPT, None, personality_active=False)
     if "## Additional Context" in prompt_no_ctx:
         print("  FAIL: 12e — context addendum present when context=None")

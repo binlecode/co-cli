@@ -73,6 +73,21 @@ def test_category_awareness_prompt_includes_native_categories() -> None:
     assert "sub-agents" in prompt
 
 
+def test_category_awareness_prompt_includes_representative_tool_names() -> None:
+    """Category awareness prompt includes representative tool names for native deferred categories.
+
+    Regression: if build_category_awareness_prompt stops emitting inline tool names,
+    local models lack concrete keywords to form effective search_tools queries,
+    reverting to shell over dedicated tools.
+    """
+    result = build_tool_registry(_CONFIG)
+    prompt = build_category_awareness_prompt(result.tool_index)
+    assert "write_file" in prompt
+    assert "edit_file" in prompt
+    assert "start_background_task" in prompt
+    assert "delegate_coder" in prompt
+
+
 def test_category_awareness_prompt_includes_integration_categories() -> None:
     """Category awareness prompt lists integration categories when config is present."""
     result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)

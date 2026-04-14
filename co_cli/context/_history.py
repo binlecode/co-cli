@@ -156,6 +156,22 @@ def _static_marker(dropped_count: int) -> ModelRequest:
     )
 
 
+def _summary_marker(dropped_count: int, summary_text: str) -> ModelRequest:
+    """Build a structurally valid summary marker for compacted messages."""
+    return ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    "This session is being continued from a previous conversation "
+                    "that ran out of context. The summary below covers the earlier "
+                    f"portion ({dropped_count} messages).\n\n{summary_text}\n\n"
+                    "Recent messages are preserved verbatim."
+                ),
+            ),
+        ]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared boundary helper
 # ---------------------------------------------------------------------------
@@ -439,6 +455,90 @@ def emergency_compact(messages: list[ModelMessage]) -> list[ModelMessage] | None
     ]
 
 
+async def _summarize_dropped_messages(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+    dropped: list[ModelMessage],
+    *,
+    announce: bool,
+) -> str | None:
+    """Summarize dropped messages when the model and circuit breaker allow it."""
+    if not ctx.deps.model:
+        log.info("Compaction: model absent, using static marker")
+        return None
+    if ctx.deps.runtime.compaction_failure_count >= 3:
+        log.warning(
+            "Compaction: circuit breaker active (>= 3 consecutive failures), using static marker"
+        )
+        return None
+
+    if announce:
+        from co_cli.display._core import console
+
+        console.print("[dim]Compacting conversation...[/dim]")
+
+    enrichment = _gather_compaction_context(ctx, messages, dropped)
+    try:
+        summary_text = await summarize_messages(
+            dropped,
+            model=ctx.deps.model.model,
+            model_settings=NOREASON_SETTINGS,
+            personality_active=bool(ctx.deps.config.personality),
+            context=enrichment,
+        )
+        ctx.deps.runtime.compaction_failure_count = 0
+        return summary_text
+    except (ModelHTTPError, ModelAPIError) as e:
+        log.warning("Compaction summarization failed: %s", e)
+        ctx.deps.runtime.compaction_failure_count += 1
+        return None
+
+
+def _preserve_search_tool_breadcrumbs(dropped: list[ModelMessage]) -> list[ModelMessage]:
+    """Keep SDK search-tools discovery state across compaction boundaries."""
+    return [
+        msg
+        for msg in dropped
+        if isinstance(msg, ModelRequest)
+        and any(isinstance(p, ToolReturnPart) and p.tool_name == "search_tools" for p in msg.parts)
+    ]
+
+
+async def recover_overflow_history(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage] | None:
+    """Recover from provider context overflow with LLM summary or static fallback.
+
+    Keeps the first turn group and last turn group, summarizing the middle when
+    possible. Returns None when there is no safe middle region to drop.
+    """
+    groups = group_by_turn(messages)
+    if len(groups) <= 2:
+        return None
+
+    dropped = groups_to_messages(groups[1:-1])
+    dropped_count = len(dropped)
+    summary_text = await _summarize_dropped_messages(
+        ctx,
+        messages,
+        dropped,
+        announce=False,
+    )
+    marker = (
+        _summary_marker(dropped_count, summary_text)
+        if summary_text is not None
+        else _static_marker(dropped_count)
+    )
+    ctx.deps.runtime.history_compaction_applied = True
+    return [
+        *groups_to_messages([groups[0]]),
+        marker,
+        *_preserve_search_tool_breadcrumbs(dropped),
+        *groups_to_messages([groups[-1]]),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 5. summarize_history_window (async — LLM call)
 # ---------------------------------------------------------------------------
@@ -483,65 +583,20 @@ async def summarize_history_window(
     head_end, tail_start, dropped_count = bounds
     dropped = messages[head_end:tail_start]
 
-    # Inline summarisation — single code path, no pre-computation
-    summary_text: str | None = None
-
-    if not ctx.deps.model:
-        # No model available (sub-agents, tests, minimal bootstrap) —
-        # not a transient failure, do not increment compaction_failure_count.
-        log.info("Sliding window: model absent, using static marker")
-    elif ctx.deps.runtime.compaction_failure_count >= 3:
-        log.warning(
-            "Sliding window: circuit breaker active (>= 3 consecutive failures), using static marker"
-        )
-    else:
-        from co_cli.display._core import console
-
-        console.print("[dim]Compacting conversation...[/dim]")
-        # Context enrichment — gather side-channel context only when the LLM
-        # summarizer will actually run. Skipped on static-marker fallback paths
-        # (no model, circuit breaker) to avoid wasted I/O.
-        enrichment = _gather_compaction_context(ctx, messages, dropped)
-        try:
-            summary_text = await summarize_messages(
-                dropped,
-                model=ctx.deps.model.model,
-                model_settings=NOREASON_SETTINGS,
-                personality_active=bool(ctx.deps.config.personality),
-                context=enrichment,
-            )
-            ctx.deps.runtime.compaction_failure_count = 0
-        except (ModelHTTPError, ModelAPIError) as e:
-            log.warning("Inline compaction summarization failed: %s", e)
-            ctx.deps.runtime.compaction_failure_count += 1
-
+    summary_text = await _summarize_dropped_messages(
+        ctx,
+        messages,
+        dropped,
+        announce=True,
+    )
     if summary_text is not None:
-        summary_marker = ModelRequest(
-            parts=[
-                UserPromptPart(
-                    content=(
-                        "This session is being continued from a previous conversation "
-                        "that ran out of context. The summary below covers the earlier "
-                        f"portion ({dropped_count} messages).\n\n{summary_text}\n\n"
-                        "Recent messages are preserved verbatim."
-                    ),
-                ),
-            ]
-        )
+        summary_marker = _summary_marker(dropped_count, summary_text)
         log.info("Sliding window: summarised %d messages inline", dropped_count)
     else:
         summary_marker = _static_marker(dropped_count)
 
-    # Preserve SDK discovery breadcrumbs: ModelRequest messages containing
-    # search_tools ToolReturnParts must survive compaction so the SDK's
-    # ToolSearchToolset can reconstruct discovery state from message history.
-    preserved_discovery = [
-        msg
-        for msg in dropped
-        if isinstance(msg, ModelRequest)
-        and any(isinstance(p, ToolReturnPart) and p.tool_name == "search_tools" for p in msg.parts)
-    ]
-
+    ctx.deps.runtime.history_compaction_applied = True
+    preserved_discovery = _preserve_search_tool_breadcrumbs(dropped)
     return [*messages[:head_end], summary_marker, *preserved_discovery, *messages[tail_start:]]
 
 

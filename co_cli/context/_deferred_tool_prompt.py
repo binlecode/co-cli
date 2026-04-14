@@ -1,9 +1,10 @@
 """Build a category-level awareness prompt for deferred tool discovery.
 
 The SDK's ToolSearchToolset handles per-tool deferred visibility. This module
-provides a lightweight category-level prompt (~100 tokens) so the model knows
-which capability domains are available via search_tools without listing every
-individual tool name.
+provides a category-level prompt so the model knows which capability domains
+are available via search_tools. Native categories include representative tool
+names (e.g. "file editing (write_file, edit_file)") to reduce keyword-formation
+burden for local models; integration categories are listed by label only.
 """
 
 from co_cli.deps import ToolInfo, VisibilityPolicyEnum
@@ -23,6 +24,19 @@ _NATIVE_CATEGORIES: dict[str, str] = {
     "delegate_reasoner": "sub-agents",
 }
 
+# Representative tool names for each native category (for keyword-formation hints)
+_NATIVE_CATEGORY_REPS: dict[str, list[str]] = {
+    "file editing": ["write_file", "edit_file"],
+    "background tasks": ["start_background_task"],
+    "memory management": ["save_article"],
+    "sub-agents": [
+        "delegate_coder",
+        "delegate_researcher",
+        "delegate_analyst",
+        "delegate_reasoner",
+    ],
+}
+
 # Integration field → display label
 _INTEGRATION_CATEGORIES: dict[str, str] = {
     "obsidian": "Obsidian notes",
@@ -37,21 +51,31 @@ def build_category_awareness_prompt(
 ) -> str:
     """Return a category-level prompt listing available deferred tool categories.
 
-    Config-gated tools only appear when their integration is registered in tool_index.
-    MCP tools use their integration (server prefix) as the category name.
-    Returns empty string when no deferred tools exist.
+    Native categories include representative tool names to reduce keyword-formation
+    burden for local models. Config-gated tools only appear when their integration
+    is registered in tool_index. MCP tools use their integration (server prefix)
+    as the category name. Returns empty string when no deferred tools exist.
     """
-    categories: set[str] = set()
+    native_categories: set[str] = set()
+    integration_categories: set[str] = set()
     for info in tool_index.values():
         if info.visibility != VisibilityPolicyEnum.DEFERRED:
             continue
         if info.integration and info.integration in _INTEGRATION_CATEGORIES:
-            categories.add(_INTEGRATION_CATEGORIES[info.integration])
+            integration_categories.add(_INTEGRATION_CATEGORIES[info.integration])
         elif info.name in _NATIVE_CATEGORIES:
-            categories.add(_NATIVE_CATEGORIES[info.name])
+            native_categories.add(_NATIVE_CATEGORIES[info.name])
         elif info.integration:
             # MCP/domain tools: use integration name as category
-            categories.add(info.integration)
-    if not categories:
+            integration_categories.add(info.integration)
+    if not native_categories and not integration_categories:
         return ""
-    return f"Additional capabilities available via search_tools: {', '.join(sorted(categories))}."
+    parts: list[str] = []
+    for cat in sorted(native_categories):
+        reps = _NATIVE_CATEGORY_REPS.get(cat)
+        if reps:
+            parts.append(f"{cat} ({', '.join(reps)})")
+        else:
+            parts.append(cat)
+    parts.extend(sorted(integration_categories))
+    return f"Additional capabilities available via search_tools: {', '.join(parts)}."

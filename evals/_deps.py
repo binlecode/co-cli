@@ -34,17 +34,21 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     shell = overrides.pop("shell", ShellBackend())
     knowledge_store = overrides.pop("knowledge_store", None)
     model = overrides.pop("model", None)
+    memory_dir = overrides.pop("memory_dir", None)
     # Discard legacy overrides that no longer map to current fields
     overrides.pop("session_id", None)
     overrides.pop("mcp_servers", None)
 
-    return CoDeps(
+    deps = CoDeps(
         shell=shell,
         knowledge_store=knowledge_store,
         model=model,
         config=s,
         session=CoSessionState(),
     )
+    if memory_dir is not None:
+        deps.memory_dir = memory_dir
+    return deps
 
 
 def make_eval_settings(

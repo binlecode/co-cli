@@ -237,13 +237,13 @@ def _uses_chunks_leg(source: str | list[str] | None) -> bool:
     return any(s != "memory" for s in source)
 
 
-def _nonmemory_sources(source: str | list[str] | None) -> list[str] | None:
-    """Return non-memory sources for the chunks leg, or None for all non-memory."""
+def _coerce_sources(source: str | list[str] | None) -> list[str] | None:
+    """Normalize source arg to list[str], or None meaning all sources."""
     if source is None:
         return None
     if isinstance(source, str):
-        return [source] if source != "memory" else []
-    return [s for s in source if s != "memory"]
+        return [source]
+    return list(source)
 
 
 @dataclass
@@ -602,7 +602,7 @@ class KnowledgeStore:
           source="library"  → library articles only
           source="obsidian" → Obsidian vault notes only
           source=["library", "obsidian", "drive"] → multiple sources via IN-clause
-          source="memory"   → not supported; returns [] (use search_memories() instead)
+          source="memory"   → memory files (docs_fts leg; no chunks required)
         """
         if self._build_fts_query(query) is None:
             return []
@@ -646,6 +646,19 @@ class KnowledgeStore:
         limit: int,
     ) -> list[SearchResult]:
         """Hybrid BM25 + vector search with chunk-level RRF. Falls back to FTS5."""
+        # Memory source: no vector leg — use FTS docs-leg only
+        if not _uses_chunks_leg(source):
+            return self._fts_search(
+                query,
+                source=source,
+                kind=kind,
+                tags=tags,
+                tag_match_mode=tag_match_mode,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit,
+            )
+
         fts_chunks = self._fts_chunks_raw(
             query,
             source=source,
@@ -682,6 +695,71 @@ class KnowledgeStore:
         fts_results = sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)
         return self._rerank_results(query, fts_results, limit)
 
+    def _run_memory_fts(
+        self,
+        fts_query: str,
+        *,
+        kind: str | None,
+        tags: list[str] | None,
+        tag_match_mode: Literal["any", "all"],
+        created_after: str | None,
+        created_before: str | None,
+        limit: int,
+    ) -> list[SearchResult]:
+        """Execute docs_fts (memory source) leg. Returns SearchResult list sorted by score."""
+        sql = _MEMORY_FTS_SQL
+        params: list[Any] = [fts_query]
+        if kind is not None:
+            sql += " AND d.kind = ?"
+            params.append(kind)
+        if created_after is not None:
+            sql += " AND d.created >= ?"
+            params.append(created_after)
+        if created_before is not None:
+            sql += " AND d.created <= ?"
+            params.append(created_before)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit * 4)
+        try:
+            rows = self._conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as e:  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
+            logger.warning(f"Memory FTS search error: {e}")
+            return []
+
+        if tags:
+            tag_set = set(tags)
+            if tag_match_mode == "all":
+                rows = [r for r in rows if tag_set <= {t for t in (r["tags"] or "").split() if t}]
+            else:
+                rows = [r for r in rows if tag_set & {t for t in (r["tags"] or "").split() if t}]
+
+        results: list[SearchResult] = []
+        for row in rows:
+            rank = row["rank"]
+            score = 1.0 / (1.0 + abs(rank))
+            results.append(
+                SearchResult(
+                    source=row["source"],
+                    kind=row["kind"],
+                    path=row["path"],
+                    title=row["title"],
+                    snippet=row["snippet"],
+                    score=score,
+                    tags=row["tags"],
+                    category=row["category"],
+                    created=row["created"],
+                    updated=row["updated"],
+                    provenance=row["provenance"],
+                    certainty=row["certainty"],
+                    chunk_index=None,
+                    start_line=None,
+                    end_line=None,
+                    type=row["type"],
+                    description=row["description"],
+                )
+            )
+        return sorted(results, key=lambda r: r.score, reverse=True)[:limit]
+
     def _fts_search(
         self,
         query: str,
@@ -694,10 +772,22 @@ class KnowledgeStore:
         created_before: str | None,
         limit: int,
     ) -> list[SearchResult]:
-        """BM25 FTS5 search via chunks_fts (library, obsidian, drive). Deduplicates to doc level."""
+        """BM25 FTS5 search. Uses docs_fts leg for memory, chunks_fts for all other sources."""
         fts_query = self._build_fts_query(query)
         if fts_query is None:
             return []
+
+        # Memory path: docs_fts leg (memories are whole-doc, no chunks)
+        if not _uses_chunks_leg(source):
+            return self._run_memory_fts(
+                fts_query,
+                kind=kind,
+                tags=list(dict.fromkeys(tags)) if tags else tags,
+                tag_match_mode=tag_match_mode,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit,
+            )
 
         tags = list(dict.fromkeys(tags)) if tags else tags
         # Chunks leg always uses a larger pool: one document produces N chunk rows,
@@ -705,7 +795,7 @@ class KnowledgeStore:
         # other matching documents before Python-side doc-level dedup can run.
         chunks_fetch_limit = limit * 20
 
-        nonmem = _nonmemory_sources(source)
+        nonmem = _coerce_sources(source)
         all_rows: list[tuple[Any, str]] = self._run_chunks_fts(
             fts_query,
             sources=nonmem,
@@ -775,7 +865,7 @@ class KnowledgeStore:
         limit: int,
     ) -> list[tuple[Any, str]]:
         """Execute chunks_fts (non-memory) leg. Returns (row, 'chunks') tuples."""
-        # Empty explicit source list (e.g. from _nonmemory_sources("memory")) → no results.
+        # Empty explicit source list → no results.
         if sources is not None and not sources:
             return []
         sql = _CHUNKS_FTS_SQL
@@ -825,7 +915,7 @@ class KnowledgeStore:
         tags = list(dict.fromkeys(tags)) if tags else tags
         chunks_fetch_limit = limit * 20
 
-        nonmem = _nonmemory_sources(source)
+        nonmem = _coerce_sources(source)
         chunk_rows = self._run_chunks_fts(
             fts_query,
             sources=nonmem,
@@ -883,7 +973,7 @@ class KnowledgeStore:
     ) -> list[SearchResult]:
         """Vector search against chunks_vec (non-memory sources only)."""
         blob = struct.pack(f"{len(embedding)}f", *embedding)
-        nonmem = _nonmemory_sources(source)
+        nonmem = _coerce_sources(source)
         return self._vec_chunks_search(
             blob,
             sources=nonmem,

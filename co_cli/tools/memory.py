@@ -3,10 +3,10 @@
 This module provides tools for recalling and listing memories from the
 internal knowledge system. Memories are stored as markdown files with YAML
 frontmatter in .co-cli/memory/ (project-local). Write path is owned
-exclusively by the extractor (co_cli/memory/_extractor.py via save_insight).
+exclusively by the extractor (co_cli/memory/_extractor.py via save_memory).
 
-Retrieval uses grep-based search across all memory files. Results are sorted by
-recency. FTS5/BM25 is not used for memories — only for articles and external sources.
+Retrieval uses FTS5/BM25 via knowledge_store (DB-backed). Degrades to empty
+when knowledge_store is None.
 """
 
 import logging
@@ -24,14 +24,12 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._frontmatter import (
-    ArtifactTypeEnum,
-    parse_frontmatter,
-)
+from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.memory.recall import (
     MemoryEntry,
     load_memories,
 )
+from co_cli.tools.tool_errors import tool_error
 from co_cli.tools.tool_output import tool_output
 
 _TRACER = otel_trace.get_tracer("co.memory")
@@ -91,90 +89,6 @@ def filter_memories(
 
 
 # ---------------------------------------------------------------------------
-# Private helpers for _recall_for_context
-# ---------------------------------------------------------------------------
-
-
-def _collect_related_memories(
-    matches: list[MemoryEntry],
-    memory_dir: Any,
-) -> list[MemoryEntry]:
-    """One-hop traversal: surface related memories linked from matched entries."""
-    match_ids = {str(m.id) for m in matches}
-    has_related = any(m.related for m in matches)
-    if has_related:
-        all_by_slug: dict[str, MemoryEntry] = {m.path.stem: m for m in load_memories(memory_dir)}
-    else:
-        all_by_slug = {}
-    related_entries: list[MemoryEntry] = []
-    for m in matches:
-        if not m.related:
-            continue
-        for slug in m.related:
-            linked = all_by_slug.get(slug)
-            if linked and str(linked.id) not in match_ids:
-                related_entries.append(linked)
-                match_ids.add(str(linked.id))
-            if len(related_entries) >= 5:
-                break
-        if len(related_entries) >= 5:
-            break
-    return related_entries
-
-
-def _format_recall_results(
-    ctx: RunContext[CoDeps],
-    query: str,
-    matches: list[MemoryEntry],
-    related_entries: list[MemoryEntry],
-) -> ToolReturn:
-    """Format matched and related memories into a tool_output."""
-    lines = [
-        f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"
-    ]
-    result_dicts: list[dict[str, Any]] = []
-    for r in matches:
-        display_id = str(r.id)[:8] if isinstance(r.id, str) else str(r.id)
-        lines.append(f"**Memory {display_id}** (created {r.created[:10]})")
-        if r.tags:
-            lines.append(f"Tags: {', '.join(r.tags)}")
-        lines.append(f"{r.content}\n")
-        result_dicts.append(
-            {
-                "id": r.id,
-                "path": str(r.path),
-                "content": r.content,
-                "tags": r.tags,
-                "created": r.created,
-            }
-        )
-    if related_entries:
-        lines.append("**Related memories:**\n")
-        for r in related_entries:
-            display_id = str(r.id)[:8] if isinstance(r.id, str) else str(r.id)
-            lines.append(f"**Memory {display_id}** (created {r.created[:10]})")
-            if r.tags:
-                lines.append(f"Tags: {', '.join(r.tags)}")
-            lines.append(f"{r.content}\n")
-            result_dicts.append(
-                {
-                    "id": r.id,
-                    "path": str(r.path),
-                    "content": r.content,
-                    "tags": r.tags,
-                    "created": r.created,
-                    "related_hop": True,
-                }
-            )
-    return tool_output(
-        "\n".join(lines),
-        ctx=ctx,
-        count=len(matches) + len(related_entries),
-        results=result_dicts,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Public tools
 # ---------------------------------------------------------------------------
 
@@ -190,31 +104,37 @@ async def _recall_for_context(
 ) -> ToolReturn:
     """Used by inject_opening_context to surface relevant memories before each model request.
 
-    Matches against memory content and tags (case-insensitive substring).
-    Results are sorted by recency (most recently updated first).
-    Results include one-hop related memories — connected knowledge surfaces automatically.
+    Uses FTS5/BM25 DB search via knowledge_store. Returns empty when knowledge_store
+    is None (degraded mode — no crash).
 
     Returns a dict with:
     - display: formatted memory list — show directly to the user
-    - count: number of memories found (including related hops)
-    - results: list of {id, content, tags, created} dicts
+    - count: number of memories found
+    - results: list of {path, title, snippet, tags, created, score} dicts
 
     Args:
         query: Keywords to search (e.g. "python testing", "database", "preference").
-        max_results: Max direct matches to return (default 5). Related memories
-                     are appended beyond this limit.
+        max_results: Max results to return (default 5).
         tags: Exact tag filter list. None = no filter.
         tag_match_mode: 'any' (OR — at least one tag matches) or 'all' (AND — all tags match).
         created_after: ISO8601 date string; only return memories created on or after this date.
         created_before: ISO8601 date string; only return memories created on or before this date.
     """
-    memory_dir = ctx.deps.memory_dir
-    memories = load_memories(memory_dir)
-    memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
-    memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
-    matches = grep_recall(memories, query, max_results)
+    if ctx.deps.knowledge_store is None:
+        return tool_output("", ctx=ctx, count=0, results=[])
 
-    if not matches:
+    results = ctx.deps.knowledge_store.search(
+        query,
+        source="memory",
+        kind="memory",
+        tags=tags,
+        tag_match_mode=tag_match_mode,
+        created_after=created_after,
+        created_before=created_before,
+        limit=max_results,
+    )
+
+    if not results:
         return tool_output(
             f"No memories found matching '{query}'",
             ctx=ctx,
@@ -222,8 +142,32 @@ async def _recall_for_context(
             results=[],
         )
 
-    related_entries = _collect_related_memories(matches, memory_dir)
-    return _format_recall_results(ctx, query, matches, related_entries)
+    lines = [
+        f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"
+    ]
+    result_dicts: list[dict[str, Any]] = []
+    for r in results:
+        created_short = (r.created or "")[:10]
+        lines.append(f"**{r.title or r.path}** (created {created_short})")
+        if r.tags:
+            lines.append(f"Tags: {r.tags}")
+        lines.append(f"{r.snippet or ''}\n")
+        result_dicts.append(
+            {
+                "path": r.path,
+                "title": r.title,
+                "snippet": r.snippet,
+                "tags": r.tags,
+                "created": r.created,
+                "score": r.score,
+            }
+        )
+    return tool_output(
+        "\n".join(lines),
+        ctx=ctx,
+        count=len(results),
+        results=result_dicts,
+    )
 
 
 async def search_memories(
@@ -259,34 +203,41 @@ async def search_memories(
     if limit < 1:
         return tool_output("limit must be >= 1.", ctx=ctx, count=0, results=[])
 
-    memory_dir = ctx.deps.memory_dir
+    if ctx.deps.knowledge_store is None:
+        return tool_error("Knowledge store unavailable — memory search requires DB index")
 
-    otel_trace.get_current_span().set_attribute("rag.backend", "grep")
-    memories = load_memories(memory_dir, kind="memory")
-    memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
-    memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
+    otel_trace.get_current_span().set_attribute("rag.backend", "fts5")
+    results = ctx.deps.knowledge_store.search(
+        query,
+        source="memory",
+        kind="memory",
+        tags=tags,
+        tag_match_mode=tag_match_mode,
+        created_after=created_after,
+        created_before=created_before,
+        limit=limit,
+    )
 
-    matches = grep_recall(memories, query, limit)
-    if not matches:
+    if not results:
         return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
 
     lines = [
-        f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"
+        f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"
     ]
     result_dicts = []
-    for m in matches:
-        lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
+    for r in results:
+        lines.append(f"**{r.title or r.path}** [{r.kind or 'memory'}]: {r.snippet or ''}")
         result_dicts.append(
             {
-                "source": "memory",
-                "kind": m.kind,
-                "title": m.path.stem,
-                "snippet": m.content[:100],
-                "score": 0.0,
-                "path": str(m.path),
+                "source": r.source,
+                "kind": r.kind,
+                "title": r.title,
+                "snippet": r.snippet,
+                "score": r.score,
+                "path": r.path,
             }
         )
-    return tool_output("\n".join(lines), ctx=ctx, count=len(matches), results=result_dicts)
+    return tool_output("\n".join(lines), ctx=ctx, count=len(results), results=result_dicts)
 
 
 async def list_memories(

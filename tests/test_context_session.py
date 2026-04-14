@@ -10,7 +10,7 @@ from co_cli.context.session import (
 )
 
 
-def test_session_filename_format(tmp_path: Path) -> None:
+def test_session_filename_format() -> None:
     """session_filename output matches YYYY-MM-DD-THHMMSSz-{8chars}.jsonl format."""
     created_at = datetime(2026, 4, 11, 14, 23, 5, tzinfo=UTC)
     session_id = "550e8400-e29b-41d4-a716-446655440000"

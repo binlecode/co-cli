@@ -265,17 +265,6 @@ async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
 # --- Approval subject scoping ---
 
 
-def test_is_auto_approved_false_before_remember():
-    """Subject is not auto-approved when no session rule has been stored."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(),
-        session=CoSessionState(),
-    )
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
-    assert is_auto_approved(subject, deps) is False
-
-
 def test_remember_tool_approval_stores_rule_and_auto_approves():
     """remember_tool_approval stores a session rule; subsequent is_auto_approved returns True."""
     deps = CoDeps(

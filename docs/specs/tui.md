@@ -149,7 +149,7 @@ All built-in commands are registered in `BUILTIN_COMMANDS: dict[str, SlashComman
 |---|---|---|---|
 | `/help` | — | List all slash commands with descriptions | `None` → `LocalOnly` |
 | `/clear` | — | Clear conversation history | `list[]` → `ReplaceTranscript` |
-| `/new` | — | Checkpoint session to memory, rotate session ID | `list[]` → `ReplaceTranscript` |
+| `/new` | — | Rotate session ID, start fresh | `list[]` → `ReplaceTranscript` |
 | `/compact` | — | Summarise conversation via LLM to reduce context | `ReplaceTranscript` or `None` |
 | `/resume` | `[session-id]` | Resume a past session by ID or via picker | `ReplaceTranscript` or `None` |
 | `/sessions` | — | List past sessions with timestamps | `None` |

@@ -398,7 +398,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 |------|---------------|---------|
 | `check_capabilities` | — | Runs `check_runtime(deps)`; returns integration health, tool count, MCP server probes, reasoning model status. Emits staged progress via `tool_progress_callback`. Backing tool for `/doctor`. |
 
-`search_tools` is the SDK's built-in `ToolSearchToolset` (auto-added by Agent). It uses tool name + description keyword matching to discover deferred tools. A category-level awareness prompt (~100 tokens, rebuilt per turn) tells the model which capability domains are available via `search_tools`: file editing, memory management, background tasks, sub-agents, plus any configured integrations (Gmail, Drive, Calendar, Obsidian). Discovery state is reconstructed from message history by the SDK — no session-level cache.
+`search_tools` is the SDK's built-in `ToolSearchToolset` (auto-added by Agent). It uses tool name + description keyword matching to discover deferred tools. A category-level awareness prompt (rebuilt per turn) tells the model which capability domains are available via `search_tools`, with representative tool names included for native categories to reduce keyword-formation burden: e.g. `file editing (write_file, edit_file)`, `background tasks (start_background_task)`, `sub-agents (delegate_coder, ...)`. Configured integrations (Gmail, Drive, Calendar, Obsidian) are listed by label when active. Discovery state is reconstructed from message history by the SDK — no session-level cache.
 
 ---
 

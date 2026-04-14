@@ -17,6 +17,7 @@ from co_cli.context.transcript import (
     SKIP_PRECOMPACT_THRESHOLD,
     append_messages,
     load_transcript,
+    persist_session_history,
     write_compact_boundary,
 )
 
@@ -216,6 +217,37 @@ def test_compact_boundary_ignored_for_small_files(tmp_path: Path) -> None:
     assert len(loaded) == 2
     assert loaded[0].parts[0].content == "before"
     assert loaded[1].parts[0].content == "after"
+
+
+def test_persist_session_history_branches_child_session_on_compaction(tmp_path: Path) -> None:
+    """Compacted history is persisted in a fresh child transcript linked to the parent."""
+    sessions_dir = tmp_path / "sessions"
+    parent = sessions_dir / "2026-04-11-T080000Z-parent001.jsonl"
+    original = [ModelRequest(parts=[UserPromptPart(content="original turn")])]
+    append_messages(parent, original)
+
+    compacted = [
+        ModelRequest(parts=[UserPromptPart(content="[Compacted conversation summary]\nSummary")]),
+        ModelResponse(parts=[TextPart(content="Understood.")], model_name="m"),
+    ]
+    child = persist_session_history(
+        session_path=parent,
+        sessions_dir=sessions_dir,
+        messages=compacted,
+        persisted_message_count=len(original),
+        history_compacted=True,
+    )
+
+    assert child != parent
+    raw_lines = child.read_text(encoding="utf-8").splitlines()
+    assert raw_lines[0].startswith('{"type":"session_meta"')
+    assert parent.name in raw_lines[0]
+
+    loaded_child = load_transcript(child)
+    assert len(loaded_child) == 2
+    assert loaded_child[0].parts[0].content == "[Compacted conversation summary]\nSummary"
+    assert loaded_child[1].parts[0].content == "Understood."
+    assert load_transcript(parent)[0].parts[0].content == "original turn"
 
 
 def test_load_transcript_rejects_oversized_file(tmp_path: Path) -> None:

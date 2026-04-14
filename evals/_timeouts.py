@@ -22,6 +22,16 @@ Slightly relaxed compared to tests/ to handle heavy context loads.
 Calculated as: 1 non-reasoning LLM call (~10s) + 1 local DB injection (5s) + 5s buffer.
 """
 
+EVAL_MEMORY_EXTRACTION_TIMEOUT_SECS: int = 15
+"""Upper bound for one memory-extractor LLM call in evals.
+
+The extractor uses NOREASON settings and a single write tool with a short delta
+window, so it should complete materially faster than a full foreground turn.
+15s leaves room for one local-model call plus file/DB writes while still
+failing fast on regressions that would otherwise hide behind 60-120s turn
+timeouts.
+"""
+
 EVAL_PROBE_TIMEOUT_SECS: int = 5
 """Reachability probe timeout (e.g. checking if Ollama/MCP is alive before eval).
 Strictly bounds pre-flight checks so broken test infrastructure fails instantly.

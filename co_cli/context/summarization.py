@@ -4,9 +4,9 @@ Shared by both the sliding-window history processor (``_history.py``) and the
 ``/compact`` slash command (``_commands.py``).
 
 Public API:
-    summarize_messages       — async, LLM-based conversation summarization
+    summarize_messages        — async, LLM-based conversation summarization
     resolve_compaction_budget — sync, resolves token budget from model spec + config
-    estimate_message_tokens  — sync, rough char-based token estimate
+    estimate_message_tokens   — sync, rough char-based token estimate
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ import logging
 from typing import Any
 
 from pydantic_ai import Agent
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -187,27 +186,3 @@ async def summarize_messages(
         model_settings=model_settings,
     )
     return result.output
-
-
-async def index_session_summary(
-    messages: list[ModelMessage],
-    model: Any,
-    model_settings: ModelSettings | None = None,
-    *,
-    personality_active: bool = False,
-) -> str | None:
-    """Summarise recent session messages for checkpointing via /new.
-
-    Returns None on any provider error — SDK handles transport retries internally.
-    """
-    last_n = min(15, len(messages))
-    try:
-        return await summarize_messages(
-            messages[-last_n:],
-            model,
-            model_settings=model_settings,
-            personality_active=personality_active,
-        )
-    except (ModelHTTPError, ModelAPIError) as e:
-        log.warning("Session summarization failed: %s", e)
-        return None

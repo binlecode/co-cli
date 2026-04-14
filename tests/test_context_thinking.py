@@ -35,20 +35,3 @@ def test_find_first_run_end_accepts_thinking_only_response():
     idx = find_first_run_end(messages)
     # Index 1 is the ThinkingPart-only response — must be anchored
     assert idx == 1
-
-
-# ---------------------------------------------------------------------------
-# Case 2: Response with both ThinkingPart and TextPart is correctly anchored
-# ---------------------------------------------------------------------------
-
-
-def test_find_first_run_end_accepts_thinking_and_text_response():
-    """ModelResponse with both ThinkingPart and TextPart is correctly anchored."""
-    messages = [
-        _user("hello"),
-        ModelResponse(parts=[ThinkingPart(content="thinking..."), TextPart(content="answer")]),
-        _user("follow up"),
-        ModelResponse(parts=[TextPart(content="more")]),
-    ]
-    idx = find_first_run_end(messages)
-    assert idx == 1

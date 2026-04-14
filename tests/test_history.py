@@ -35,10 +35,11 @@ from co_cli.context._history import (
     emergency_compact,
     group_by_turn,
     groups_to_messages,
+    recover_overflow_history,
     summarize_history_window,
     truncate_tool_results,
 )
-from co_cli.context.orchestrate import _is_context_overflow
+from co_cli.context.orchestrate import _history_with_pending_user_input, _is_context_overflow
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -602,6 +603,38 @@ def test_emergency_compact_two_groups_returns_none():
     assert len(groups) == 2
     result = emergency_compact(msgs)
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_recover_overflow_history_preserves_pending_user_turn():
+    """Overflow recovery materializes the in-flight prompt into the kept tail group."""
+    ctx = _make_processor_ctx()
+    turn_state = type(
+        "_TurnStateStub",
+        (),
+        {
+            "current_input": "current request",
+            "current_history": [
+                _user("turn 1"),
+                _assistant("response 1"),
+                _user("turn 2"),
+                _assistant("response 2"),
+            ],
+        },
+    )()
+    recovery_history = _history_with_pending_user_input(turn_state)
+    result = await recover_overflow_history(ctx, recovery_history)
+
+    assert result is not None
+    user_texts = [
+        part.content
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+        if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+    ]
+    assert "current request" in user_texts
+    assert ctx.deps.runtime.history_compaction_applied is True
 
 
 # ---------------------------------------------------------------------------

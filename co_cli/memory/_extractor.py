@@ -1,8 +1,8 @@
-"""Post-turn insights extractor — extracts durable signals from conversation windows.
+"""Post-turn memory extractor — extracts durable signals from conversation windows.
 
 Scans the post-turn message history (including tool calls and results) for
-insight-worthy signals across all 4 types (user, feedback, project, reference).
-Calls save_insight for each detected signal. Cursor-based delta prevents
+memory-worthy signals across all 4 types (user, feedback, project, reference).
+Calls save_memory for each detected signal. Cursor-based delta prevents
 re-scanning already-extracted turns.
 """
 
@@ -26,7 +26,7 @@ from pydantic_ai.messages import (
 )
 
 from co_cli._model_settings import NOREASON_SETTINGS
-from co_cli.tools.insights import save_insight
+from co_cli.tools.memory_write import save_memory
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +96,11 @@ def _build_window(messages: list) -> str:
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "memory_extractor.md"
 
-# Module-level insights extractor agent — tool-calling pattern.
+# Module-level memory extractor agent — tool-calling pattern.
 # No model at init; model passed at .run() time (same as prior _extraction_agent pattern).
-_insights_extractor_agent: Agent["CoDeps", str] = Agent(
+_memory_extractor_agent: Agent["CoDeps", str] = Agent(
     instructions=_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-    tools=[save_insight],
+    tools=[save_memory],
 )
 
 
@@ -118,7 +118,7 @@ async def _run_extraction_async(
     *,
     cursor_start: int,
 ) -> None:
-    """Background extraction: run _insights_extractor_agent on the delta window.
+    """Background extraction: run _memory_extractor_agent on the delta window.
 
     Advances deps.session.last_extracted_message_idx on success only.
     Handles CancelledError for clean shutdown.
@@ -133,8 +133,8 @@ async def _run_extraction_async(
             deps.session.last_extracted_message_idx = cursor_start + len(delta)
             return
         _model = deps.model.model if deps.model else None
-        with tracer.start_as_current_span("co.insight.extraction"):
-            await _insights_extractor_agent.run(
+        with tracer.start_as_current_span("co.memory.extraction"):
+            await _memory_extractor_agent.run(
                 window, deps=deps, model=_model, model_settings=NOREASON_SETTINGS
             )
         deps.session.last_extracted_message_idx = cursor_start + len(delta)

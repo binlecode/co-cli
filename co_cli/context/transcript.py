@@ -7,15 +7,18 @@ containing one ModelMessage (request or response).
 Transcript files are append-only — never rewritten, never truncated.
 No TTL on transcripts — permanent until user deletes manually.
 
-Compact boundary markers are written when compaction occurs. On resume,
-messages before the last boundary are skipped for files above the
-precompact threshold (5 MB), matching fork-claude-code's pattern.
+Compact boundary markers and session metadata are written as JSONL control
+lines. On resume, messages before the last boundary are skipped for files
+above the precompact threshold (5 MB), matching fork-claude-code's pattern.
 """
 
+import json
 import logging
 from pathlib import Path
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+
+from co_cli.context.session import new_session_path
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,7 @@ MAX_TRANSCRIPT_READ_BYTES = 50 * 1024 * 1024  # 50 MB
 # Marker line written to JSONL when compaction replaces in-memory history.
 # On resume, everything before the last occurrence is skipped (for large files).
 COMPACT_BOUNDARY_MARKER = '{"type":"compact_boundary"}'
+_SESSION_META_TYPE = "session_meta"
 
 
 def append_messages(path: Path, messages: list[ModelMessage]) -> None:
@@ -68,6 +72,55 @@ def write_compact_boundary(path: Path) -> None:
         path.chmod(0o600)
     except OSError as e:
         logger.warning("Compact boundary write failed for session %s: %s", short_id, e)
+
+
+def write_session_meta(
+    path: Path,
+    *,
+    parent_session_path: Path | None = None,
+    reason: str | None = None,
+) -> None:
+    """Write a metadata control line for a newly branched session transcript."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    short_id = path.stem[-8:]
+    payload = {"type": _SESSION_META_TYPE}
+    if parent_session_path is not None:
+        payload["parent_session"] = parent_session_path.name
+    if reason:
+        payload["reason"] = reason
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        path.chmod(0o600)
+    except OSError as e:
+        logger.warning("Session metadata write failed for session %s: %s", short_id, e)
+
+
+def persist_session_history(
+    *,
+    session_path: Path,
+    sessions_dir: Path,
+    messages: list[ModelMessage],
+    persisted_message_count: int,
+    history_compacted: bool,
+    reason: str = "compaction",
+) -> Path:
+    """Persist history, branching to a child session when history was replaced.
+
+    Normal turns append the positional tail after ``persisted_message_count``.
+    When compaction replaced the in-memory transcript, a fresh child session is
+    created, linked to the parent via a metadata control line, and the entire
+    compacted history is written there. This preserves the full pre-compaction
+    transcript while making the compacted continuation durable.
+    """
+    if history_compacted or len(messages) < persisted_message_count:
+        new_path = new_session_path(sessions_dir)
+        write_session_meta(new_path, parent_session_path=session_path, reason=reason)
+        append_messages(new_path, messages)
+        return new_path
+
+    append_messages(session_path, messages[persisted_message_count:])
+    return session_path
 
 
 def load_transcript(path: Path) -> list[ModelMessage]:
@@ -114,6 +167,8 @@ def load_transcript(path: Path) -> list[ModelMessage]:
                     if skip_precompact:
                         all_messages.clear()
                         boundary_found = True
+                    continue
+                if line.startswith('{"type":"session_meta"'):
                     continue
                 try:
                     parsed = ModelMessagesTypeAdapter.validate_json(line)

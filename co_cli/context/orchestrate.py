@@ -18,6 +18,7 @@ from pydantic_ai import (
     AgentRunResultEvent,
     DeferredToolRequests,
     DeferredToolResults,
+    RunContext,
 )
 from pydantic_ai.settings import ModelSettings
 
@@ -44,6 +45,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.usage import RunUsage
 
 # Typed return value from run_turn() to chat loop
 TurnOutcome = Literal["continue", "error"]
@@ -495,6 +497,16 @@ def _is_context_overflow(e: ModelHTTPError) -> bool:
     return any(pat in body_lower for pat in _CONTEXT_OVERFLOW_PATTERNS)
 
 
+def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessage]:
+    """Materialize the in-flight user prompt into history for retryable recovery paths."""
+    if turn_state.current_input is None:
+        return list(turn_state.current_history)
+    return [
+        *turn_state.current_history,
+        ModelRequest(parts=[UserPromptPart(content=turn_state.current_input)]),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
@@ -564,9 +576,17 @@ async def run_turn(
                     if _is_context_overflow(e):
                         if not turn_state.overflow_recovery_attempted:
                             turn_state.overflow_recovery_attempted = True
-                            from co_cli.context._history import emergency_compact
+                            from co_cli.context._history import recover_overflow_history
 
-                            compacted = emergency_compact(turn_state.current_history)
+                            recovery_history = _history_with_pending_user_input(turn_state)
+                            compacted = await recover_overflow_history(
+                                RunContext(
+                                    deps=deps,
+                                    model=agent.model,
+                                    usage=turn_state.latest_usage or RunUsage(),
+                                ),
+                                recovery_history,
+                            )
                             if compacted is not None:
                                 turn_state.current_history = compacted
                                 turn_state.current_input = None
