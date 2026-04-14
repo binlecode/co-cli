@@ -33,7 +33,7 @@ from evals._frontend import SilentFrontend
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
 

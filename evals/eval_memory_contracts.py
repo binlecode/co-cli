@@ -128,7 +128,7 @@ def _system_prompt_preview(messages: list[Any]) -> str:
 
 
 async def _run_turn(prompt: str) -> list[Any]:
-    from co_cli.agent import build_agent
+    from co_cli.agent._core import build_agent
     from co_cli.context.orchestrate import run_turn
 
     agent = build_agent(config=settings)

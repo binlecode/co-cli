@@ -20,7 +20,7 @@ from pathlib import Path
 
 from evals._frontend import CapturingFrontend
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.bootstrap.core import create_deps, restore_session
 from co_cli.config._core import settings
 

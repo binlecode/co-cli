@@ -64,7 +64,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli._model_factory import LlmModel, build_model
 from co_cli._model_settings import NOREASON_SETTINGS
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings, settings
 from co_cli.config._llm import LlmSettings
 from co_cli.context._history import (

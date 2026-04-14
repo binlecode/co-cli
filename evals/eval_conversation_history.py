@@ -44,8 +44,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-from co_cli.agent import CoDeps, build_agent
+from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
+from co_cli.deps import CoDeps
 
 # ---------------------------------------------------------------------------
 # Case definitions

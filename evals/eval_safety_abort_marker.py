@@ -24,7 +24,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.types import SafetyState

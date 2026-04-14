@@ -32,7 +32,7 @@ from evals._common import make_eval_deps, make_eval_settings
 from evals._frontend import SilentFrontend
 from evals._tools import is_ordered_subsequence, tool_names
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.types import SafetyState
