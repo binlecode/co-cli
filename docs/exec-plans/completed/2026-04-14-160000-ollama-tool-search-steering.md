@@ -489,3 +489,42 @@ Plan ready for Gate 1 review.
 **Overall: DELIVERED**
 
 Behavioral note: the model now calls `write_file` and `start_background_task` directly by name (bypassing `search_tools`) because category-awareness + counter-steering now provide explicit tool names. This achieves the behavioral goal (specialist tool over shell) by a more direct path than the plan assumed. Eval criteria for `background_task_positive` and `file_create_competition` were updated accordingly to test the actual goal — specialist tool used, not shell-only — rather than the specific discovery mechanism.
+
+---
+
+## Implementation Review — 2026-04-14
+
+### Evidence
+
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | static instructions contain `search_tools` + `dedicated tool`; category-awareness has 4 representative names; ≤300 chars | ✓ pass | `04_tool_protocol.md:37-42` — `## Deferred discovery` section with `search_tools` (line 39,41) and `dedicated tool` (line 40); `_deferred_tool_prompt.py:28-37` — `_NATIVE_CATEGORY_REPS` dict; `build_category_awareness_prompt:73-81` — renders `"cat (tool1, tool2)"` format; 252 chars confirmed |
+| TASK-2 | `get_counter_steering` non-empty for both Qwen models; shell docstring has 3 keywords | ✓ pass | `qwen3.md:13-24` and `qwen3.5.md:17-28` — counter-steering prose body present; `shell.py:22-23` — `write_file / edit_file` (line 22), `start_background_task` (line 23) |
+| TASK-3 | 22 tests pass; 4 new assertions cover search_tools in static instructions, representative names in category-awareness, shell docstring redirects | ✓ pass | `test_tool_prompt_discovery.py:101-134` — 3 new tests; `test_tool_registry.py:76-88` — 1 new test; all 22 pass |
+| TASK-4 | eval prints all 4 cases; exits non-zero when model uses shell-only for file creation | ✓ pass | `eval_ollama_tool_search.py:260-264` — 4 cases in list; `main():290-297` — returns 1 iff any case fails; `run_file_create_competition():143-148` — `shell_only = has_shell and not has_write_file` correctly gates pass |
+
+### Issues Found & Fixed
+
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Untracked scratch file `test_loophole.py` at repo root — module-level `print()` calls failing lint; not in `tests/`, no test functions | `test_loophole.py:1-29` | blocking | Deleted (untracked, never committed, debug remnant) |
+
+### Tests
+- Command: `uv run pytest -x`
+- Result: 406 passed, 0 failed
+- Log: `.pytest-logs/<timestamp>-review-impl.log`
+
+### Doc Sync
+- Scope: narrow — all tasks confined to prompts/rules, context, model_quirks, tools/shell; no public API changes
+- Result: already fixed during delivery (tools.md + _deferred_tool_prompt.py docstring); re-scan found no further inaccuracies
+
+### Behavioral Verification
+- `uv run co config`: ✓ system healthy — LLM online (ollama-openai/qwen3.5:35b-a3b-think), Shell active, Google/Brave configured, MCP ready
+- `success_signal` TASK-1 verified: model infers tool names directly from category-awareness prompt (write_file, start_background_task called by name in live eval)
+- `success_signal` TASK-2 verified: model used write_file for file creation instead of shell in live eval run
+- `success_signal` TASK-3 verified: 4 new regression tests catch prompt/discovery degradations in CI
+- `success_signal` TASK-4 verified: eval ran live, 4/4 cases passing with real qwen3.5 model
+
+### Overall: PASS
+
+All four tasks implemented as specified. Lint clean. 406 tests passing. One blocking finding fixed (scratch file causing lint failure). Behavioral goals confirmed via live eval: model now uses specialist deferred tools (`write_file`, `start_background_task`) directly instead of falling back to shell.
