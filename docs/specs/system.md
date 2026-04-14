@@ -165,6 +165,7 @@ These settings most directly affect top-level system assembly.
 | `co_cli/deps.py` | Shared runtime contract and workspace path resolution |
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
 | `co_cli/observability/_telemetry.py` | SQLite-backed telemetry exporter used by the session runtime |
+| `co_cli/observability/_file_logging.py` | Rotating file log handlers — dual-write alongside the SQLite OTel DB |
 | `docs/flow-bootstrap.md` | Startup sequencing and degradation details |
 | `docs/core-loop.md` | Foreground-turn behavior and approval resumes |
 | `docs/tui.md` | REPL loop, completer, slash command registry and dispatch |
