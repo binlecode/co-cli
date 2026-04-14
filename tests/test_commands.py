@@ -15,8 +15,6 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli._model_factory import build_model
-from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.commands._commands import (
     CommandContext,
     DelegateToAgent,
@@ -26,6 +24,7 @@ from co_cli.commands._commands import (
     dispatch,
 )
 from co_cli.config._core import settings
+from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.context.orchestrate import _build_interrupted_turn_result, _TurnState, run_turn
 from co_cli.context.skill_env import cleanup_skill_run_state
 from co_cli.context.tool_approvals import (
@@ -36,6 +35,7 @@ from co_cli.context.tool_approvals import (
 )
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
 from co_cli.display._core import console
+from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = settings

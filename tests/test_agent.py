@@ -2,11 +2,11 @@
 
 from tests._settings import make_settings
 
-from co_cli._model_factory import build_model
 from co_cli.agent._core import build_agent, build_tool_registry
 from co_cli.config._core import settings
 from co_cli.context._tool_lifecycle import CoToolLifecycle
 from co_cli.deps import ToolSourceEnum, VisibilityPolicyEnum
+from co_cli.llm._factory import build_model
 
 # Config with fake integration paths so domain tools are always registered in tests,
 # regardless of whether the developer's local settings have these paths configured.

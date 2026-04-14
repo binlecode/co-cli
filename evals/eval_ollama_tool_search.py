@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Eval: Ollama deferred tool discovery via search_tools steering.
+"""Eval: Ollama deferred tool discovery via search_tools guidance.
 
-Verifies that counter-steering prose in qwen3.md / qwen3.5.md and the
-04_tool_protocol.md deferred-discovery section cause the model to prefer
-specialist deferred tools over generic shell.
+Verifies that the static prompt rules, especially the 04_tool_protocol.md
+deferred-discovery section, cause the model to prefer specialist deferred
+tools over generic shell.
 
 The model may reach specialist tools via search_tools (discovery path) or
 directly by name (when named in the category-awareness prompt). Both are

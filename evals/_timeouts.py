@@ -32,6 +32,16 @@ failing fast on regressions that would otherwise hide behind 60-120s turn
 timeouts.
 """
 
+EVAL_BOOTSTRAP_TIMEOUT_SECS: int = 30
+"""Upper bound for create_deps() during bootstrap-flow evals.
+
+Bootstrap does not execute foreground LLM turns, but it can perform MCP
+connection, local database setup, knowledge-store initialization, and startup
+probes. 30s is enough to allow those real startup checks to complete while
+still surfacing hangs in MCP connect, SQLite initialization, or local service
+reachability quickly.
+"""
+
 EVAL_PROBE_TIMEOUT_SECS: int = 5
 """Reachability probe timeout (e.g. checking if Ollama/MCP is alive before eval).
 Strictly bounds pre-flight checks so broken test infrastructure fails instantly.

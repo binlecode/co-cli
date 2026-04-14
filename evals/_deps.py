@@ -58,12 +58,12 @@ def make_eval_settings(
 ) -> ModelSettings:
     """Build eval settings from real model configuration.
 
-    All values are passed through as-is from the quirks database so evals run
+    All values are passed through as-is from resolved model settings so evals run
     against the same parameters as live sessions. Both providers now supply
     model_settings via build_agent():
-      - Ollama: temperature from quirks (e.g. 0.6 for qwen3). Never override
+      - Ollama: temperature from model defaults (e.g. 0.6 for qwen3). Never override
         to 0 — thinking models produce degenerate loops at temperature=0.
-      - Gemini: temperature from quirks (typically 1.0 for thinking models).
+      - Gemini: temperature from model defaults (typically 1.0 for thinking models).
         Google's guidance: setting below 1.0 causes looping in thinking models.
 
     Falls back to temperature=0 only when no model settings exist at all
@@ -71,7 +71,7 @@ def make_eval_settings(
 
     Args:
         model_settings: Settings from build_agent(), or None for fallback.
-        max_tokens: Optional override for max_tokens. Omit to use the quirks default.
+        max_tokens: Optional override for max_tokens. Omit to use the resolved default.
     """
     if model_settings is None:
         base: dict[str, Any] = {"temperature": 0}

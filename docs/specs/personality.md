@@ -5,9 +5,8 @@
 **Goal:** Define how co-cli constructs and maintains a consistent, configurable character across sessions.
 **Functional areas:**
 - Soul file format and directory layout (`souls/{role}/`)
-- Static prompt assembly — seven-section ordered construction
+- Static prompt assembly — six-section ordered construction
 - Per-turn personality-context memory injection
-- Model-specific counter-steering and inference parameter overrides
 - Personality discovery, validation, and configuration
 
 **Non-goals:**
@@ -15,7 +14,7 @@
 - Automatic personality selection based on context
 - Cross-personality memory sharing
 
-**Success criteria:** Personality is fully reconstructed from files each session; soul seed is placed first in static instructions; per-turn personality-context memories inject top-5 recent entries; model-specific counter-steering fires only when a quirk file exists.
+**Success criteria:** Personality is fully reconstructed from files each session; soul seed is placed first in static instructions; per-turn personality-context memories inject top-5 recent entries.
 **Status:** Stable
 
 ---
@@ -32,7 +31,7 @@ Three personalities ship: `finch` (preparation-first mentor), `jeff` (warm colla
 
 Personality enters the agent via two paths:
 
-1. **Static** — `build_static_instructions()` assembles a seven-section prompt at agent
+1. **Static** — `build_static_instructions()` assembles a six-section prompt at agent
    construction. This is set once as `Agent(instructions=...)` and does not change
    within a session.
 
@@ -44,15 +43,14 @@ Personality enters the agent via two paths:
 ```
 Session start
     ↓
-build_static_instructions(provider, model_name, config)
+build_static_instructions(config)
     ↓
     [1] soul seed          — identity anchor, constraints, never-list
     [2] character memories — planted narrative backstory
     [3] mindsets           — 6 task-type behavioral guides
     [4] behavioral rules   — 5 universal rule files (01–05)
     [5] soul examples      — concrete trigger→response patterns
-    [6] counter-steering   — model-specific correction prose
-    [7] review lens        — self-assessment frame
+    [6] review lens        — self-assessment frame
     → set as Agent.instructions (static, once per session)
 
 Each turn
@@ -91,7 +89,7 @@ for human reference — they are not loaded into the agent.
 
 ### Static Prompt Assembly
 
-`build_static_instructions(provider, model_name, config)` in `_assembly.py`:
+`build_static_instructions(config)` in `_assembly.py`:
 
 ```
 section_1 = load_soul_seed(role)               # Required — placed first; identity anchor
@@ -99,8 +97,7 @@ section_2 = load_character_memories(role)       # Optional — ## Character bloc
 section_3 = load_soul_mindsets(role)            # Optional — ## Mindsets block, all 6 files
 section_4 = _collect_rule_files()               # Rules from prompts/rules/NN_rule_id.md (01–05)
 section_5 = load_soul_examples(role)            # Optional — trigger→response patterns
-section_6 = get_counter_steering(provider, model) # Optional — ## Model-Specific Guidance
-section_7 = load_soul_critique(role)            # Optional — ## Review lens, placed last
+section_6 = load_soul_critique(role)            # Optional — ## Review lens, placed last
 
 return "\n\n".join(non_empty_sections)
 ```
@@ -128,33 +125,6 @@ This layer allows user-specific working-style observations to accumulate across 
 without editing soul files. The memory extraction pipeline (in context.md) is responsible
 for tagging relevant observations as `personality-context`.
 
-### Model Quirks and Counter-Steering
-
-`model_quirks/_loader.py` resolves behavior adjustments per `(provider, model_name)` pair:
-
-```
-quirk file: co_cli/prompts/model_quirks/{provider}/{model_name}.md
-
-frontmatter:
-  flags: [lazy, verbose, overeager, hesitant]
-  inference:
-    temperature: float
-    top_p: float
-    max_tokens: int
-    num_ctx: int          # Ollama context window
-    context_window: int
-    extra_body: dict
-
-body: counter-steering prose (injected as section 6)
-```
-
-`normalize_model_name()` strips quantization suffixes (e.g. `:q4_k_m`) before lookup.
-`_load_quirk()` is LRU-cached (maxsize=64). If no quirk file exists, defaults apply:
-`temperature=0.7`, `top_p=1.0`, `max_tokens=16384`.
-
-`get_model_inference()` returns inference params used to build `ModelSettings` at agent
-construction. `get_counter_steering()` returns the body prose for static section 6.
-
 ### Personality Discovery and Validation
 
 `_discover_valid_personalities()` scans `souls/` for subdirectories containing `seed.md`.
@@ -181,14 +151,12 @@ for missing mindset files.
 
 | File | Purpose |
 |---|---|
-| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — seven-section static prompt assembly |
+| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — six-section static prompt assembly |
 | `co_cli/prompts/personalities/_loader.py` | `load_soul_seed`, `load_soul_examples`, `load_soul_critique`, `load_character_memories`, `load_soul_mindsets` |
 | `co_cli/prompts/personalities/_injector.py` | `_load_personality_memories()` — per-turn personality-context injection |
 | `co_cli/prompts/personalities/_validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/prompts/personalities/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
 | `co_cli/prompts/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
-| `co_cli/prompts/model_quirks/_loader.py` | `_load_quirk()`, `get_counter_steering()`, `get_model_inference()`, `normalize_model_name()` |
-| `co_cli/prompts/model_quirks/` | Per-provider/model quirk files (`gemini/`, `ollama-openai/`) |
 | `co_cli/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/_core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agent/_core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |

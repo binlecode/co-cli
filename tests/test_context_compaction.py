@@ -153,7 +153,7 @@ def test_budget_ollama_llm_num_ctx_overrides_spec():
 
 
 def test_budget_ollama_no_spec_falls_back_to_llm_num_ctx():
-    """Ollama with no context_window in quirks → falls back to llm_num_ctx."""
+    """Ollama with no resolved context_window → falls back to llm_num_ctx."""
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
     )

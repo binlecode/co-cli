@@ -86,8 +86,7 @@ flowchart TD
 3. Mindsets from `co_cli/prompts/personalities/souls/{role}/mindsets/{task_type}.md`
 4. Numbered rules from `co_cli/prompts/rules/NN_rule_id.md` (contiguous from 01, unique prefixes)
 5. Examples from `souls/{role}/examples.md` (optional)
-6. Model-specific counter-steering
-7. Critique appended as `## Review lens` (optional)
+6. Critique appended as `## Review lens` (optional)
 
 Each personality role is fully self-contained under `souls/{role}/`. Adding a role requires only a new directory — no Python changes.
 

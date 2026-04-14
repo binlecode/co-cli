@@ -4,8 +4,8 @@
 
 **Goal:** Define the end-to-end request assembly flow from startup inputs to the final model request used by the foreground agent.
 **Functional areas:**
-- Build-time model normalization and quirks-derived `ModelSettings`
-- Static instruction assembly from soul files, universal rules, and model-quirk guidance
+- Build-time model settings resolution
+- Static instruction assembly from soul files and universal rules
 - Turn-entry input rewriting through skills
 - Per-request dynamic instruction layers
 - History-processor transforms, memory recall injection, and inline compaction
@@ -17,7 +17,7 @@
 - Provider-specific wire format after the SDK has accepted the processed request
 - Memory/article schema internals (owned by `memory.md` and `library.md`)
 
-**Success criteria:** A reader can reconstruct which local files, config fields, runtime registries, and prior-turn artifacts shape the next model request, in what order, and can distinguish soul-defined personality from model-specific counter-steering and from runtime insights stored in `.co-cli/memory/`.
+**Success criteria:** A reader can reconstruct which local files, config fields, runtime registries, and prior-turn artifacts shape the next model request, in what order, and can distinguish soul-defined personality from runtime insights stored in `.co-cli/memory/`.
 **Status:** Stable
 **Known gaps:** Exact provider payload serialization and any SDK-owned toolset instruction text are outside co-cli's source tree. This doc owns the co-cli sequence up to the SDK boundary and the co-cli-managed transforms applied before send.
 
@@ -96,15 +96,14 @@ Failure and degradation behavior is input-shaping, not prompt-shaping:
 - skipped or invalid skill files reduce the set of slash commands that can rewrite input
 - knowledge backend degradation does not alter the prompt scaffold directly
 
-### 2.2 Model construction applies quirks before any prompt text is assembled
+### 2.2 Model construction resolves settings before any prompt text is assembled
 
-`build_model()` normalizes `config.llm.model`, looks up `prompts/model_quirks/{provider}/{model}.md`, and converts the quirk frontmatter into base `ModelSettings` plus optional `context_window`.
+`build_model()` resolves provider/model defaults from `config.llm`, builds provider-specific `ModelSettings`, and carries optional `context_window` metadata into runtime budgeting.
 
 Pseudocode:
 
 ```text
-normalized_model = normalize_model_name(config.llm.model)
-inference = get_model_inference(provider, normalized_model)
+inference = resolve_reasoning_inference(config.llm)
 
 if provider == ollama-openai:
   ModelSettings(
@@ -119,13 +118,12 @@ elif provider == gemini:
 
 This step is deliberately separate from prompt text:
 
-- quirk frontmatter changes sampling and context budgeting
-- quirk markdown body becomes counter-steering prose later during static instruction assembly
-- both come from the same quirk file, but only the body is part of the prompt
+- resolved settings change sampling and context budgeting
+- prompt assembly is model-agnostic
 
 ### 2.3 Agent construction freezes the static scaffold and registers request-time hooks
 
-`build_agent()` is the point where prompt assembly becomes concrete. It normalizes the model name again for prompt lookup, builds the static instruction string once, and constructs the main `Agent` with:
+`build_agent()` is the point where prompt assembly becomes concrete. It builds the static instruction string once and constructs the main `Agent` with:
 
 - `instructions=static_instructions`
 - `model_settings=llm_model.settings`
@@ -137,8 +135,7 @@ The SDK later auto-adds its outer `ToolSearchToolset`, but co-cli's own build-ti
 Pseudocode:
 
 ```text
-normalized_model = normalize_model_name(config.llm.model)
-static = build_static_instructions(config.llm.provider, normalized_model, config)
+static = build_static_instructions(config)
 
 Agent(
   instructions = static,
@@ -155,9 +152,9 @@ Two invariants are fixed here:
 - the static scaffold never changes during the session
 - dynamic instruction callbacks and history processors re-run on every segment that reaches request preparation
 
-### 2.4 Static instruction assembly mixes role assets, rules, and model-specific guidance
+### 2.4 Static instruction assembly mixes role assets and rules
 
-`build_static_instructions()` assembles one literal string. If `config.personality` is set, it loads role assets from `co_cli/prompts/personalities/souls/{role}/`. It always validates and loads numbered rule files from `co_cli/prompts/rules/`. It separately loads counter-steering text from `co_cli/prompts/model_quirks/{provider}/{model}.md`.
+`build_static_instructions()` assembles one literal string. If `config.personality` is set, it loads role assets from `co_cli/prompts/personalities/souls/{role}/`. It always validates and loads numbered rule files from `co_cli/prompts/rules/`.
 
 Pseudocode:
 
@@ -176,9 +173,6 @@ parts += numbered rule files in strict order
 if examples:
   parts += [examples]
 
-if quirk markdown body exists:
-  parts += ["## Model-Specific Guidance\n\n" + counter_steering]
-
 if critique:
   parts += ["## Review lens\n\n" + critique]
 ```
@@ -190,14 +184,12 @@ The exact static order is:
 3. mindsets
 4. numbered rules
 5. examples
-6. counter-steering
-7. critique
+6. critique
 
 Important boundaries:
 
 - soul-defined personality lives only under `souls/{role}/...`
 - the role-specific `souls/{role}/memories/*.md` files are the base personality memory layer and occupy step 2 after the seed
-- counter-steering is not loaded from the soul tree; it is model-specific guidance from `model_quirks/`
 - `.co-cli/memory/` is the runtime memory store populated by `save_memory`; it is not the base personality store
 - rule filename validation is fail-fast: invalid or non-contiguous rule numbering raises `ValueError`
 - the assembled static string must be non-empty
@@ -369,8 +361,9 @@ The important invariant is that co-cli never stores prompt state in model weight
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `llm.provider` | `LLM_PROVIDER` | `ollama-openai` | Selects the provider namespace used by the model factory and model-quirk lookup |
-| `llm.model` | `CO_LLM_MODEL` | provider default | Selects the model name; normalized before quirk lookup for both inference defaults and counter-steering |
+| `llm.provider` | `LLM_PROVIDER` | `ollama-openai` | Selects the provider namespace used by the model factory |
+| `llm.model` | `CO_LLM_MODEL` | provider default | Selects the model name used for runtime settings resolution |
+| `llm.reasoning.*` | — | unset | Optional explicit overrides layered onto provider/model defaults before `build_model()` constructs the main agent's base `ModelSettings` |
 | `llm.num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama context budget input; runtime probe may override it before agent construction |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled defaults | MCP discovery extends `tool_index`, which changes deferred-tool awareness text |
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | Selects the soul tree for static assembly and enables `personality-context` dynamic injection |
@@ -383,7 +376,7 @@ The important invariant is that co-cli never stores prompt state in model weight
 | File | Purpose |
 |---|---|
 | `co_cli/bootstrap/core.py` | Startup assembly of `CoDeps`, skill registry, tool inventory, and `LlmModel` inputs |
-| `co_cli/_model_factory.py` | Quirk-aware `LlmModel` construction and base `ModelSettings` derivation |
+| `co_cli/llm/_factory.py` | `LlmModel` construction and base `ModelSettings` derivation |
 | `co_cli/agent/_core.py` | Main `Agent` construction, history processor registration, and tool registry wiring |
 | `co_cli/agent/_instructions.py` | Dynamic instruction callbacks and personality injection |
 | `co_cli/agent/_native_toolset.py` | Native toolset construction and tool registry wiring |
@@ -391,7 +384,6 @@ The important invariant is that co-cli never stores prompt state in model weight
 | `co_cli/prompts/_assembly.py` | Static instruction assembly and rule-file validation |
 | `co_cli/prompts/personalities/_loader.py` | Soul-file loading for seed, memories, mindsets, examples, and critique |
 | `co_cli/prompts/personalities/_injector.py` | Per-request `personality-context` memory injection |
-| `co_cli/prompts/model_quirks/_loader.py` | Model-quirk loading for counter-steering text and inference overrides |
 | `co_cli/commands/_commands.py` | Skill loading, slash dispatch, and `DelegateToAgent` input rewriting |
 | `co_cli/main.py` | REPL loop, command-outcome handling, and post-turn finalization |
 | `co_cli/context/orchestrate.py` | Segment execution, approval resumes, and `agent.run_stream_events(...)` orchestration |

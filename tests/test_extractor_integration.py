@@ -13,9 +13,9 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 from tests._settings import make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli._model_factory import build_model
 from co_cli.deps import CoDeps
 from co_cli.knowledge._store import KnowledgeStore
+from co_cli.llm._factory import build_model
 from co_cli.memory._extractor import _run_extraction_async
 from co_cli.tools.shell_backend import ShellBackend
 

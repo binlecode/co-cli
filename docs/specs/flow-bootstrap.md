@@ -21,20 +21,13 @@
 
 ## 1. What & How
 
-Canonical startup flow for co-cli. This doc is the sole owner for the sequence from settings loading through `display_welcome_banner()`: layered config load, deps initialization (`create_deps()`), model and tool registry construction, MCP connection, skill loading, knowledge backend resolution and sync, session restore, startup status reporting, and the final boundary into the REPL. Skill file format, load gates, and dispatch semantics live in [skills.md](skills.md).
-
-Bootstrap owns sequencing. Integration health checks (`check_runtime()` in `co_cli/bootstrap/check.py`) are not called during bootstrap; they are invoked on-demand by the `/status` tool in `co_cli/tools/capabilities.py`.
+Canonical startup flow for `co-cli`, from settings resolution to the point where the REPL prompt is ready. Bootstrap owns sequencing, degradation, and the runtime object handed to the agent. It does not own runtime health checks; `check_runtime()` is invoked later by `/status`, not during startup.
 
 ```
-co_cli.main  (module load)
+co_cli.main  (module import)
 │
-├─ co_cli.display._core → co_cli.config.settings (lazy init)
-│      _ensure_dirs() → load_config()
-│          Layer 1: ~/.co-cli/settings.json
-│          Layer 2: <cwd>/.co-cli/settings.json → _deep_merge_settings()
-│          Layer 3: fill_from_env (CO_CLI_* env vars)
-│          → Settings singleton cached (nested sub-models: llm, knowledge, web, memory, subagent, shell)
-│
+├─ settings resolved via config/display imports
+├─ setup_file_logging(...settings.observability...)
 ├─ SQLiteSpanExporter() → TracerProvider → Agent.instrument_all()
 │
 co_cli.main.chat() → asyncio.run(_chat_loop())
@@ -45,94 +38,61 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ AsyncExitStack()
 │
 ├─ create_deps(frontend, stack)
-│  ├─ settings singleton used directly; resolve_workspace_paths(settings, cwd)
-│  ├─ config.llm.validate_config() → error: raise ValueError (config shape only)
-│  ├─ build_model(config.llm) → LlmModel
-│  ├─ build_tool_registry(config) → ToolRegistry(toolset, mcp_toolsets, tool_index)
-│  ├─ [if mcp_toolsets]
-│  │      enter each MCP server on stack (stays alive for session)
-│  │      on fail → warning per server
-│  │      discover_mcp_tools(mcp_toolsets, exclude=native_tools) → mcp_index
-│  │      tool_index.update(mcp_index)
-│  ├─ _load_skills(skills_dir, settings, user_skills_dir) → skill_commands
-│  ├─ _discover_knowledge_backend(config, frontend, degradations) → KnowledgeStore | None
-│  │      grep → return None
-│  │      _resolve_reranker() → probe embedder → resolve backend
-│  │      config fields mutated directly to reflect runtime backend
-│  │      degradation recorded in degradations dict
-│  │      construct KnowledgeStore with resolved config
-│  │      on fail → hybrid falls back to fts5, then grep (returns None)
+│  ├─ config = settings; paths = resolve_workspace_paths(config, cwd)
+│  ├─ config.llm.validate_config()
+│  ├─ [if ollama-openai] probe_ollama_context() → maybe overwrite llm.num_ctx
+│  ├─ config.mcp_servers = _resolve_mcp_env_tokens(config)
+│  ├─ build_model(config.llm)
+│  ├─ build_tool_registry(config)
+│  ├─ enter MCP toolsets on stack; discover_mcp_tools(); merge MCP tool_index
+│  ├─ _load_skills(skills_dir, settings=config, user_skills_dir=...)
+│  ├─ _discover_knowledge_backend(config, frontend, degradations)
 │  ├─ _sync_knowledge_store(store, config, frontend, memory_dir, library_dir)
-│  │      reconcile store with memory + library files on disk
-│  │      hash-based — skips unchanged files
-│  │      on fail → store closed, returns None
-│  └─ → CoDeps(shell, config=settings, paths, model, knowledge_store, tool_index, skill_commands, runtime, degradations)
+│  │      syncs library articles only; on failure closes store and falls back to grep
+│  └─ return CoDeps(...)
 │
-├─ completer.words updated with skills
-├─ build_agent(config=deps.config, model=deps.model) → Agent
+├─ deps.session.reasoning_display = CLI-selected mode
+├─ completer.words = _build_completer_words(deps.skill_commands)
+├─ build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 │
 ├─ restore_session(deps, frontend) → current_session_path
-│      found → deps.session.session_path = existing path; none found → new_session_path()
-│
 ├─ _init_session_index(deps, current_session_path, frontend)
-│      SessionIndex(db_path=sessions_dir.parent / "session-index.db")
-│      sync_sessions(sessions_dir, exclude=current_session_path)
-│      deps.session_index = store
-│      on failure → log warning; deps.session_index = None (graceful degradation)
-│
 ├─ frontend.on_status("  {skill_count} skill(s) loaded")
-│
-├─ [if transcript exists] console.print("Previous session available — /resume to continue")
-│
+├─ [if restored path exists] console.print("Previous session available — /resume to continue")
 ├─ display_welcome_banner(deps)
+├─ frontend.clear_status()
+│
 ▼
 REPL loop begins
 ```
 
 ## 2. Core Logic
 
-Bootstrap is easiest to understand as one ordered startup path. The sequence diagram above is canonical; the sections below follow that same order.
+Bootstrap is one ordered path. The sections below follow the same order as the diagram above.
 
 ### Step 1. Load `Settings`
 
-First access to `co_cli.config.settings` creates `~/.co-cli/` if needed, loads config files, applies env overrides, validates the merged result, and caches a singleton `Settings` instance for the rest of the session.
+The first access to `co_cli.config.settings` creates `~/.co-cli/` if needed, loads user config, deep-merges project config, applies env overrides, validates the result, and caches the singleton `Settings` instance. In practice this happens during module import because the display layer and logging setup both read settings before `chat()` starts.
 
-```text
-load_config():
-    read ~/.co-cli/settings.json
-    deep-merge <cwd>/.co-cli/settings.json
-    apply env vars before validation
-    validate as Settings
-```
-
-The three config layers are:
+Config precedence is:
 
 ```text
 1. ~/.co-cli/settings.json
 2. <cwd>/.co-cli/settings.json
-3. env vars via fill_from_env()
+3. env vars
 ```
-
-This is the only startup config object. Bootstrap passes `Settings` directly into later steps; there is no separate bootstrap-only config wrapper.
 
 ### Step 2. Enter `chat_loop()` and construct shell-local UI objects
 
-`chat_loop()` creates the terminal frontend, a `PromptSession`, and an `AsyncExitStack`. The completer starts with built-in slash commands only. Skill names are not added until after `create_deps()` loads them.
+`_chat_loop()` creates the terminal frontend, the prompt session, and the async exit stack. The completer starts with built-in slash commands only; skill commands are added later after bootstrap has loaded them.
 
 ### Step 3. Start `create_deps()` and resolve paths
 
-`create_deps()` assembles the runtime contract used by the agent and tools. This function owns the entire sequence from Step 3 through Step 10. It resolves workspace-relative paths first, then performs the rest of bootstrap against the shared `Settings` instance.
-
-```text
-config = settings
-paths = resolve_workspace_paths(config, cwd)
-```
-
-Those resolved paths become `CoDeps` fields such as `memory_dir`, `library_dir`, `skills_dir`, `sessions_dir`, and `tool_results_dir`. Config stays on `deps.config`; paths and degradation state do not live on `Settings`.
+`create_deps()` owns the rest of bootstrap assembly until `CoDeps` exists. It reads the shared `Settings` singleton, resolves workspace-relative paths, and keeps those resolved paths on `CoDeps`, not on `Settings`.
 
 ### Step 4. Fail fast on invalid model configuration
 
-Bootstrap calls `config.llm.validate_config()` as a shape check only. It rejects missing required configuration before any long-lived runtime is built.
+Bootstrap calls `config.llm.validate_config()` before building long-lived runtime objects.
 
 | Condition | Behavior |
 | --- | --- |
@@ -140,28 +100,19 @@ Bootstrap calls `config.llm.validate_config()` as a shape check only. It rejects
 | Gemini provider with missing API key | raise `ValueError`; session never starts |
 | Provider connectivity problem | startup continues; first runtime model call surfaces the error |
 
-If the provider is `ollama-openai`, bootstrap also probes the model's runtime `num_ctx` from `/api/show`. When the probe returns a positive value different from config, bootstrap overwrites `config.llm.num_ctx` so runtime state reflects the actual Modelfile allocation. If the probed value is below `MIN_AGENTIC_CONTEXT`, startup fails immediately.
+If the provider is `ollama-openai`, bootstrap also probes the model's runtime `num_ctx`. When the runtime value differs from config, bootstrap overwrites `config.llm.num_ctx` so runtime state reflects the actual allocation. If the probed value is below the minimum supported agentic context, startup fails immediately.
 
 ### Step 5. Resolve MCP env tokens and build the local registry
 
-Bootstrap resolves env-derived MCP credentials, builds the foreground `LlmModel`, and constructs the native tool registry. At this point there is still no `CoDeps`; bootstrap is still gathering the pieces that will go into it.
+Bootstrap resolves env-derived MCP credentials, builds the foreground `LlmModel`, and constructs the tool registry. At this point there is still no `CoDeps`; bootstrap is still gathering the pieces that will go into it.
 
 ### Step 6. Connect MCP servers and discover their tools
 
-Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it stays alive for the session. Failures are isolated per server: a bad MCP server produces a status warning and is skipped, while successful servers still contribute tools.
-
-```text
-for each mcp toolset:
-    enter async context
-    on failure: warn and skip
-
-discover tools on connected servers
-merge discovered tools into tool_index
-```
+Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it stays alive for the session. Failures are isolated per server: a bad server produces a status warning and is skipped, while successful servers still contribute discovered tools to the merged `tool_index`.
 
 ### Step 7. Load skills with three-pass precedence
 
-Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_commands` map can be stored directly on `deps`.
+Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_commands` map can be stored directly on the runtime object.
 
 ```text
 pass 1: built-in skills
@@ -169,11 +120,11 @@ pass 2: user-global skills
 pass 3: project-local skills
 ```
 
-Later passes override earlier ones. After `create_deps()` returns, `chat_loop()` updates `completer.words` in place so prompt completion expands from built-in commands to built-in commands plus loaded skills.
+Later passes override earlier ones. After `create_deps()` returns, `_chat_loop()` updates `completer.words` so prompt completion expands from built-ins to built-ins plus loaded skills.
 
 ### Step 8. Resolve the knowledge backend
 
-Bootstrap then decides whether the session can use `hybrid`, `fts5`, or only `grep`. This step is intentionally mutating: it updates `config.knowledge.search_backend` to the backend that is actually available, not the backend the user originally requested.
+Bootstrap decides whether the session can use `hybrid`, `fts5`, or only `grep`. This step intentionally mutates `config.knowledge.search_backend` to runtime truth, not requested intent.
 
 ```text
 if configured backend is grep:
@@ -186,11 +137,11 @@ else:
     on failure: degrade to fts5, then grep
 ```
 
-When degradation happens, bootstrap records the reason in `deps.degradations`. The important invariant is that downstream code reads runtime truth from `deps.config` and explanation text from `deps.degradations`.
+When degradation happens, bootstrap records the reason in `deps.degradations`. Downstream code reads runtime truth from `deps.config` and explanation text from `deps.degradations`.
 
 ### Step 9. Sync the knowledge store
 
-If a `KnowledgeStore` exists, bootstrap reconciles it with the current memory and library trees on disk. Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and disables indexed retrieval for the session; the CLI continues with grep fallback instead of aborting startup.
+If a `KnowledgeStore` exists, bootstrap syncs library articles from disk into the index. Memory files are not indexed during bootstrap. Sync is hash-based, so unchanged library files are skipped. A sync failure closes the store and disables indexed retrieval for the session; the CLI continues without aborting startup.
 
 ### Step 10. Assemble `CoDeps`
 
@@ -200,20 +151,20 @@ After model setup, MCP discovery, skill loading, backend resolution, and sync, b
 
 - `config`: the session `Settings` instance
 - `model`, `knowledge_store`, and `shell`: service handles
-- `tool_index` and `skill_commands`: bootstrap-built registries
+- `tool_registry`, `tool_index`, and `skill_commands`: bootstrap-built registries
 - resolved workspace paths
 - `degradations`: runtime downgrade reasons
 - mutable `session` and `runtime` state groups
 
-After bootstrap completes, `deps.config` is treated as read-only by convention even though some fields were deliberately mutated during startup to reflect runtime reality.
+After bootstrap completes, `deps.config` is treated as read-only by convention even though a few fields were deliberately rewritten during startup to reflect runtime reality.
 
 ### Step 11. Build the foreground agent
 
-Once `create_deps()` returns, `chat_loop()` updates completion words with loaded skill names and calls `build_agent(config=deps.config, model=deps.model)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
+Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, and calls `build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
 
 ### Step 12. Restore or create the session
 
-Bootstrap scans `*.jsonl` by filename (lexicographic sort = chronological sort) and sets `deps.session.session_path` to the most recent file.
+Bootstrap scans `*.jsonl` by filename and sets `deps.session.session_path` to the most recent file.
 
 ```text
 path = find_latest_session(deps.sessions_dir)
@@ -227,7 +178,7 @@ No session file is written at startup — the file is created on the first `appe
 
 ### Step 12b. Initialise the session index
 
-After `restore_session` returns, `_init_session_index()` opens (or creates) the project-local FTS5 index at `.co-cli/session-index.db` and syncs all past sessions into it. The current session path is excluded from sync.
+After `restore_session()` returns, `_init_session_index()` opens or creates the project-local FTS5 session index at `.co-cli/session-index.db` and syncs past sessions into it. The current session path is excluded from sync.
 
 ```text
 store = SessionIndex(db_path=sessions_dir.parent / "session-index.db")
@@ -243,9 +194,9 @@ The index is derived and rebuildable: deleting `.co-cli/session-index.db` and re
 
 ### Step 13. Print startup status and enter the REPL boundary
 
-After session restore, `chat_loop()` reports the loaded skill count, optionally shows the resume hint when a transcript exists, then calls `display_welcome_banner(deps)`. The banner is the boundary between bootstrap and normal interactive operation.
+After session restore, `_chat_loop()` reports loaded skill count, optionally shows the resume hint when a transcript exists, calls `display_welcome_banner(deps)`, then clears the transient status line. The banner is the boundary between bootstrap and normal interactive operation.
 
-Everything from `create_deps()` through banner display runs inside `chat_loop()` cleanup guards. If startup exits early, the shell backend and MCP stack still unwind.
+Everything from `create_deps()` through banner display runs inside `_chat_loop()` cleanup guards. If startup exits early, the shell backend, background tasks, pending extraction work, and MCP stack still unwind.
 
 ### Failure And Degradation Behavior
 
@@ -275,14 +226,14 @@ These settings most directly affect bootstrap behavior.
 | `library_path` | `CO_LIBRARY_PATH` | `~/.co-cli/library` | User-global article directory used during knowledge sync |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled defaults | MCP server definitions connected during startup |
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | Personality selected before agent instruction assembly |
-| `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Interactive thinking display mode used by the frontend |
+| `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Default reasoning-display mode at startup; CLI flags can override it before REPL entry |
 
 ## 4. Files
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/main.py` | Owns `_chat_loop()` startup orchestration and the REPL boundary |
-| `co_cli/bootstrap/core.py` | Owns `create_deps()` and `restore_session()` |
+| `co_cli/main.py` | Owns module-load logging and telemetry setup, `_chat_loop()` startup orchestration, and the REPL boundary |
+| `co_cli/bootstrap/core.py` | Owns `create_deps()`, `restore_session()`, and `_init_session_index()` |
 | `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama `num_ctx` checks |
 | `co_cli/bootstrap/banner.py` | Renders the welcome banner that marks bootstrap completion |
 | `co_cli/bootstrap/render_status.py` | On-demand status and security reporting, not inline bootstrap |

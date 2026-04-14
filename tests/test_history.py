@@ -18,7 +18,6 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
-from co_cli._model_factory import build_model
 from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
 from co_cli.config._core import settings
@@ -41,6 +40,7 @@ from co_cli.context._history import (
 )
 from co_cli.context.orchestrate import _history_with_pending_user_input, _is_context_overflow
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = settings

@@ -467,8 +467,8 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/tool_errors.py` | `tool_error()`, `handle_google_api_error()`, `http_status_code()` |
 | `co_cli/tools/_google_auth.py` | Google credential resolution |
 | `co_cli/tools/_agent_outputs.py` | `CodingOutput`, `ResearchOutput`, `AnalysisOutput`, `ReasoningOutput` — structured output models for delegation agents |
-| `co_cli/_model_factory.py` | `LlmModel`, `build_model()` — single-model factory |
-| `co_cli/_model_settings.py` | `NOREASON_SETTINGS` — static `ModelSettings` for non-reasoning calls |
+| `co_cli/llm/_factory.py` | `LlmModel`, `build_model()` — single-model factory |
+| `co_cli/config/_llm.py` | `NOREASON_SETTINGS` — static `ModelSettings` for non-reasoning calls |
 | `co_cli/agent/_core.py` | `build_agent()` — foreground and delegation agent factory |
 | `co_cli/agent/_native_toolset.py` | `_build_native_toolset()`, `_register_tool()`, `_approval_resume_filter()` |
 | `co_cli/agent/_mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |

@@ -104,7 +104,7 @@ def test_static_instructions_contain_search_tools_guidance() -> None:
     Regression: if 04_tool_protocol.md loses its Deferred discovery section,
     the model gets no instruction to call search_tools and reverts to shell.
     """
-    text = build_static_instructions(settings.llm.provider, settings.llm.model, settings)
+    text = build_static_instructions(settings)
     assert "search_tools" in text
 
 
