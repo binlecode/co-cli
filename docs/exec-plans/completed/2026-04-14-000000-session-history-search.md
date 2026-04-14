@@ -180,7 +180,7 @@ returns top-N sessions sorted by score descending.
 
 ## Implementation Plan
 
-### TASK-1 — Session index module
+### ✓ DONE — TASK-1 — Session index module
 
 **files:**
 - `co_cli/session_index/__init__.py` (docstring only)
@@ -205,7 +205,7 @@ returns top-N sessions sorted by score descending.
 
 ---
 
-### TASK-2 — Bootstrap wiring
+### ✓ DONE — TASK-2 — Bootstrap wiring
 
 **files:**
 - `co_cli/deps.py` — add `session_index: SessionIndex | None = None` field; add
@@ -228,7 +228,7 @@ returns top-N sessions sorted by score descending.
 
 ---
 
-### TASK-3 — `session_search` tool + agent registration
+### ✓ DONE — TASK-3 — `session_search` tool + agent registration
 
 **files:**
 - `co_cli/tools/session_search.py`
@@ -263,3 +263,52 @@ Plan approved.
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev session-history-search`
+
+---
+
+## Delivery Summary — 2026-04-14
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | `uv run pytest tests/test_session_index.py -x` passes (8/8) | ✓ pass |
+| TASK-2 | `uv run pytest tests/test_bootstrap.py -x` passes (18/18) including `test_init_session_index_indexes_past_sessions` | ✓ pass |
+| TASK-3 | `uv run pytest tests/test_session_search_tool.py -x` passes (3/3) | ✓ pass |
+
+**Tests:** full suite — 417 passed, 0 failed
+**Independent Review:** clean / 0 blocking / 6 minor (all addressed: `close()` now logs on error; redundant `sessions_dir` assignment removed)
+**Doc Sync:** fixed — `tools.md` (session_search added, counts updated), `flow-bootstrap.md` (Step 12b + degradation row + files), `system.md` (CoDeps service handles + control flow)
+
+**Overall: DELIVERED**
+Session FTS search shipped: `co_cli/session_index/` module (extractor + FTS5 store), bootstrap wiring (`_init_session_index` in `core.py`, `session_index` field on `CoDeps`, `fork_deps` propagation), and `session_search` tool registered DEFERRED. Agent can now recall past conversations via keyword search.
+
+---
+
+## Implementation Review — 2026-04-14
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | `uv run pytest tests/test_session_index.py -x` passes (8/8) | ✓ pass | `_extractor.py:29` — `extract_messages` returns only user+assistant; `_store.py:44-64` — FTS5 schema with porter unicode61 + 3 triggers; `_store.py:102` — `index_session` deletes then re-inserts; `_store.py:153` — size-based change detection; `_store.py:170-173` — exclude path resolved before compare |
+| TASK-2 | `uv run pytest tests/test_bootstrap.py -x` passes (18/18) | ✓ pass | `bootstrap/core.py:307-329` — `_init_session_index` with lazy import, try/except graceful degradation; `main.py:23` — import; `main.py:251-252` — called after `restore_session`, return captured; `deps.py:172` — `session_index` field; `deps.py:244` — `fork_deps` propagation; `test_bootstrap.py:467-522` — new test calls `_init_session_index` directly, asserts `isinstance(deps.session_index, SessionIndex)` and searches "Fibonacci sequence" |
+| TASK-3 | `uv run pytest tests/test_session_search_tool.py -x` passes (3/3) | ✓ pass | `tools/session_search.py:12` — correct signature, `ctx.deps.session_index`; `session_search.py:22-27` — graceful None path; `_native_toolset.py:25,157` — import + `_register_tool(session_search, visibility=_deferred_visible)` |
+
+### Issues Found & Fixed
+
+No issues found. All spec requirements confirmed at file:line level. Lint clean (0 violations). No dead code, stale imports, mocks, or over-engineering in any changed file.
+
+### Tests
+- Command: `uv run pytest -x -v`
+- Result: 417 passed, 0 failed
+- Log: `.pytest-logs/20260414-*-review-impl.log`
+
+### Doc Sync
+- Scope: full (delivery touched shared modules: `deps.py`, `bootstrap/core.py`, `main.py`, `_native_toolset.py`)
+- Result: clean (already fixed during delivery: `tools.md`, `flow-bootstrap.md`, `system.md`)
+
+### Behavioral Verification
+- `uv run co config`: ✓ system starts without error, all components healthy (LLM Online, Shell Active, MCP 1 ready)
+- DB creation (`session-index.db`): not yet present — correct, created on first `co chat` startup via `_init_session_index` wired at `main.py:252`
+- `success_signal` (TASK-3): tool registration confirmed DEFERRED by test 3; functional result confirmed by test 1 with real FTS5 data; interactive chat session not run (requires live model response; underlying components fully verified by tests and code inspection)
+
+### Overall: PASS
+All three tasks deliver exactly what the spec requires. Schema, FTS5 triggers, change detection, graceful degradation, DEFERRED visibility, and bootstrap wiring all confirmed at file:line. Full suite green (417/417). No blocking issues found or escalated.

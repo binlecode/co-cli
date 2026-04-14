@@ -22,6 +22,7 @@ from co_cli.tools.google_drive import read_drive_file, search_drive_files
 from co_cli.tools.google_gmail import create_gmail_draft, list_gmail_emails, search_gmail_emails
 from co_cli.tools.memory import list_memories, search_memories
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
+from co_cli.tools.session_search import session_search
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.task_control import (
     cancel_background_task,
@@ -151,6 +152,9 @@ def _build_native_toolset(
     _register_tool(delegate_researcher, visibility=_deferred_visible)
     _register_tool(delegate_analyst, visibility=_deferred_visible)
     _register_tool(delegate_reasoner, visibility=_deferred_visible)
+
+    # Session history search
+    _register_tool(session_search, visibility=_deferred_visible)
 
     # Domain tools — conditional on config presence; excluded when integration absent
     if config.obsidian_vault_path:

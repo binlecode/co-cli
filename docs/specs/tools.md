@@ -8,7 +8,7 @@
 - Visibility tiers (always-registered vs deferred/discoverable)
 - Three approval classes (auto-approve, requires-approval, deferred)
 - Shell policy and resource locks
-- MCP integration and tool catalog (35 tools)
+- MCP integration and tool catalog (36 tools)
 
 **Non-goals:**
 - Parallel MCP execution across servers
@@ -41,6 +41,7 @@ tools/
   capabilities.py    — integration health introspection
   agents.py          — delegation tools: delegate_coder, delegate_researcher, delegate_analyst, delegate_reasoner
   _agent_outputs.py  — output types: CodingOutput, ResearchOutput, AnalysisOutput, ReasoningOutput
+  session_search.py  — session history FTS5 keyword search over past session transcripts
 ```
 
 ## 2. Core Logic
@@ -279,6 +280,7 @@ Conditional tools excluded when gate is absent.
 | `delegate_researcher` | deferred | auto | — |
 | `delegate_analyst` | deferred | auto | — |
 | `delegate_reasoner` | deferred | auto | — |
+| `session_search` | deferred | auto | — |
 | `list_notes` | deferred | auto | `obsidian_vault_path` |
 | `search_notes` | deferred | auto | `obsidian_vault_path` |
 | `read_note` | deferred | auto | `obsidian_vault_path` |
@@ -290,8 +292,8 @@ Conditional tools excluded when gate is absent.
 | `list_calendar_events` | deferred | auto | `google_credentials_path` |
 | `search_calendar_events` | deferred | auto | `google_credentials_path` |
 
-**Unconditional pool (no integration gates):** 25 tools (14 always-visible, 11 deferred). `search_tools` is the SDK's built-in `ToolSearchToolset` — not registered in co-cli's `tool_index`.
-**Full pool (all gates active):** 35 tools (14 always-visible, 21 deferred).
+**Unconditional pool (no integration gates):** 26 tools (14 always-visible, 12 deferred). `search_tools` is the SDK's built-in `ToolSearchToolset` — not registered in co-cli's `tool_index`.
+**Full pool (all gates active):** 36 tools (14 always-visible, 22 deferred).
 
 ¹ `run_shell_command` registered `auto`; DENY / ALLOW / REQUIRE_APPROVAL classification runs inside the tool body.
 
@@ -398,6 +400,16 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 |------|---------------|---------|
 | `check_capabilities` | — | Runs `check_runtime(deps)`; returns integration health, tool count, MCP server probes, reasoning model status. Emits staged progress via `tool_progress_callback`. Backing tool for `/doctor`. |
 
+#### Session History (`tools/session_search.py`)
+
+| Tool | Key Parameters | Behavior |
+|------|---------------|---------|
+| `session_search` | `query`, `limit=3` | FTS5/BM25 keyword search over past session transcripts in `.co-cli/session-index.db`; returns one deduplicated result per session (highest-scoring message); graceful empty result when `deps.session_index is None` |
+
+`session_search` is the read side of the session index. The index is built by `_init_session_index()` at startup (after `restore_session`) and synced incrementally by `SessionIndex.sync_sessions()`. The active session is excluded from sync so in-progress content is never indexed mid-session.
+
+---
+
 `search_tools` is the SDK's built-in `ToolSearchToolset` (auto-added by Agent). It uses tool name + description keyword matching to discover deferred tools. A category-level awareness prompt (rebuilt per turn) tells the model which capability domains are available via `search_tools`, with representative tool names included for native categories to reduce keyword-formation burden: e.g. `file editing (write_file, edit_file)`, `background tasks (start_background_task)`, `sub-agents (delegate_coder, ...)`. Configured integrations (Gmail, Drive, Calendar, Obsidian) are listed by label when active. Discovery state is reconstructed from message history by the SDK — no session-level cache.
 
 ---
@@ -442,6 +454,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/web.py` | `web_search`, `web_fetch` |
 | `co_cli/tools/task_control.py` | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` |
 | `co_cli/tools/todo.py` | `write_todos`, `read_todos` |
+| `co_cli/tools/session_search.py` | `session_search` — keyword search over past session transcripts via `SessionIndex` |
 | `co_cli/tools/capabilities.py` | `check_capabilities` |
 | `co_cli/tools/agents.py` | `delegate_coder`, `delegate_researcher`, `delegate_analyst`, `delegate_reasoner`, `_format_output()`, `_run_agent_attempt()`, per-role instruction builders |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()`, `_is_safe_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |

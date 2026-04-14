@@ -462,3 +462,61 @@ def test_restore_session_readonly_dir_does_not_raise(tmp_path: Path) -> None:
         assert deps.session.session_path == result
     finally:
         os.chmod(readonly_dir, 0o755)
+
+
+def test_init_session_index_indexes_past_sessions(tmp_path: Path) -> None:
+    """_init_session_index opens the DB and syncs past sessions; deps.session_index is set."""
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+    from co_cli.bootstrap.core import _init_session_index
+    from co_cli.context.transcript import append_messages
+    from co_cli.session_index._store import SessionIndex
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True)
+
+    # Write a past session with searchable content
+    from datetime import UTC, datetime
+
+    from co_cli.context.session import session_filename
+
+    past_name = session_filename(
+        datetime(2026, 4, 14, 10, 0, 0, tzinfo=UTC),
+        "past0001-0000-0000-0000-000000000000",
+    )
+    past_path = sessions_dir / past_name
+    append_messages(
+        past_path,
+        [
+            ModelRequest(
+                parts=[UserPromptPart(content="Explain the Fibonacci sequence in Python")]
+            ),
+            ModelResponse(
+                parts=[
+                    TextPart(
+                        content="Fibonacci is a sequence where each number is the sum of the two preceding ones."
+                    )
+                ]
+            ),
+        ],
+    )
+
+    # Current session path (excluded from sync)
+    current_name = session_filename(
+        datetime(2026, 4, 14, 12, 0, 0, tzinfo=UTC),
+        "curr0001-0000-0000-0000-000000000000",
+    )
+    current_path = sessions_dir / current_name
+
+    deps = _make_deps(tmp_path)
+
+    _init_session_index(deps, current_path, TerminalFrontend())
+
+    assert isinstance(deps.session_index, SessionIndex), (
+        "deps.session_index must be a SessionIndex after _init_session_index"
+    )
+    results = deps.session_index.search("Fibonacci sequence")
+    assert len(results) >= 1, "Indexed past session must be searchable by keyword"
+    assert results[0].session_id == "past0001", (
+        f"Result must reference the past session, got {results[0].session_id!r}"
+    )

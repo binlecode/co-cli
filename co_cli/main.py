@@ -20,7 +20,7 @@ from pydantic_ai.messages import ModelMessage
 
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import create_deps, restore_session
+from co_cli.bootstrap.core import _init_session_index, create_deps, restore_session
 from co_cli.bootstrap.render_status import (
     check_security,
     get_status,
@@ -248,7 +248,8 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         completer.words = _build_completer_words(deps.skill_commands)
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
-        restore_session(deps, frontend)
+        current_session_path = restore_session(deps, frontend)
+        _init_session_index(deps, current_session_path, frontend)
         from co_cli.commands._commands import get_skill_registry
 
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")

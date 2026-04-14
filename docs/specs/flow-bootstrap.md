@@ -71,8 +71,14 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ completer.words updated with skills
 ├─ build_agent(config=deps.config, model=deps.model) → Agent
 │
-├─ restore_session(deps, frontend)
+├─ restore_session(deps, frontend) → current_session_path
 │      found → deps.session.session_path = existing path; none found → new_session_path()
+│
+├─ _init_session_index(deps, current_session_path, frontend)
+│      SessionIndex(db_path=sessions_dir.parent / "session-index.db")
+│      sync_sessions(sessions_dir, exclude=current_session_path)
+│      deps.session_index = store
+│      on failure → log warning; deps.session_index = None (graceful degradation)
 │
 ├─ frontend.on_status("  {skill_count} skill(s) loaded")
 │
@@ -219,6 +225,22 @@ else:
 
 No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing lifecycle are owned by [context.md](context.md).
 
+### Step 12b. Initialise the session index
+
+After `restore_session` returns, `_init_session_index()` opens (or creates) the project-local FTS5 index at `.co-cli/session-index.db` and syncs all past sessions into it. The current session path is excluded from sync.
+
+```text
+store = SessionIndex(db_path=sessions_dir.parent / "session-index.db")
+store.sync_sessions(sessions_dir, exclude=current_session_path)
+deps.session_index = store
+
+on failure:
+    log warning
+    deps.session_index = None  # graceful degradation; session_search returns empty
+```
+
+The index is derived and rebuildable: deleting `.co-cli/session-index.db` and restarting rebuilds cleanly from `*.jsonl` files. Change detection is size-based (append-only transcripts).
+
 ### Step 13. Print startup status and enter the REPL boundary
 
 After session restore, `chat_loop()` reports the loaded skill count, optionally shows the resume hint when a transcript exists, then calls `display_welcome_banner(deps)`. The banner is the boundary between bootstrap and normal interactive operation.
@@ -235,6 +257,7 @@ Everything from `create_deps()` through banner display runs inside `chat_loop()`
 | Knowledge backend construction fails | degrade `hybrid → fts5 → grep` |
 | Knowledge sync fails | close the store and continue without indexed retrieval |
 | Session restore fails to find usable state | create a new session |
+| Session index fails to open or sync | `deps.session_index = None`; `session_search` returns empty; startup continues |
 | One skill file fails to load | skip that file and continue loading others |
 
 ## 3. Config
@@ -268,3 +291,5 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/commands/_commands.py` | Loads skills during bootstrap and later refreshes them in the REPL |
 | `co_cli/context/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/knowledge/_store.py` | Implements the indexed knowledge store used when bootstrap enables it |
+| `co_cli/session_index/_store.py` | `SessionIndex` — FTS5 session index opened and synced during bootstrap |
+| `co_cli/session_index/_extractor.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |

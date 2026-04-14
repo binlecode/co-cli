@@ -93,6 +93,7 @@ CLI start
   -> create_deps
   -> build_agent
   -> restore_session
+  -> _init_session_index
   -> enter REPL
       -> local command or agent turn
       -> approvals / tools / persistence / post-turn writes as needed
@@ -104,7 +105,7 @@ CLI start
 `CoDeps` is the shared runtime contract passed into tools and agent-side helpers. It carries:
 
 - configuration, treated as read-only after bootstrap
-- service handles such as shell, model, knowledge store, and resource locks
+- service handles such as shell, model, knowledge store, session index, and resource locks
 - bootstrap-built registries such as discovered tools and loaded skills
 - session state that persists across turns
 - runtime state that is reset or managed by orchestration
