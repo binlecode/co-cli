@@ -169,11 +169,16 @@ These settings most directly affect top-level system assembly.
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
 | `co_cli/observability/_telemetry.py` | SQLite-backed telemetry exporter used by the session runtime |
 | `co_cli/observability/_file_logging.py` | Rotating file log handlers — dual-write alongside the SQLite OTel DB |
-| `docs/flow-bootstrap.md` | Startup sequencing and degradation details |
-| `docs/core-loop.md` | Foreground-turn behavior and approval resumes |
-| `docs/tui.md` | REPL loop, completer, slash command registry and dispatch |
-| `docs/context.md` | Prompt context, persistence, and knowledge retrieval |
-| `docs/tools.md` | Tool surface, approval classes, and visibility |
-| `docs/skills.md` | Skill loading and slash-command delegation |
-| `docs/llm-models.md` | Provider and model selection rules |
-| `docs/observability.md` | Telemetry pipeline and trace viewers |
+| `docs/specs/mission.md` | Product mission, strategic thesis, and stage roadmap |
+| `docs/specs/flow-bootstrap.md` | Startup sequencing and degradation details |
+| `docs/specs/flow-prompt-assembly.md` | End-to-end prompt assembly from startup inputs to model request |
+| `docs/specs/core-loop.md` | Foreground-turn behavior and approval resumes |
+| `docs/specs/tui.md` | REPL loop, completer, slash command registry and dispatch |
+| `docs/specs/context.md` | Prompt context, persistence, and knowledge retrieval |
+| `docs/specs/memory.md` | Memory storage, extraction, recall, and REPL management |
+| `docs/specs/library.md` | Library article indexing and KnowledgeStore FTS5/hybrid search |
+| `docs/specs/tools.md` | Tool surface, approval classes, and visibility |
+| `docs/specs/skills.md` | Skill loading and slash-command delegation |
+| `docs/specs/llm-models.md` | Provider and model selection rules |
+| `docs/specs/observability.md` | Telemetry pipeline and trace viewers |
+| `docs/specs/personality.md` | Soul file layout, static prompt assembly, and per-turn injection |

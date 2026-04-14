@@ -335,3 +335,51 @@ Delivers: `co_cli/agent/` package + unified `build_agent()` + delegation tools o
 **Overall: DELIVERED**
 All 9 tasks passed. `co_cli/agent/` package ships with unified `build_agent()`, delegation tools own inline config, adaptive deps scoping, progress relay, depth guard, and OTel span linkage. Full test suite green.
 
+## Implementation Review — 2026-04-14
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | `build_agent` imports cleanly; delegation guard; lint | ✓ pass | `agent/_core.py:94` — `is_delegation` flag; `:155` — `output_type is None` guard; `:145` — `instructions=static_instructions` |
+| TASK-2 | zero `from co_cli.agent import` references; 4 tests pass | ✓ pass | `grep` confirmed zero flat imports; `bootstrap/core.py`, `main.py`, `deps.py` all use `co_cli.agent._core` / `._mcp` paths |
+| TASK-3 | 4 output models import cleanly | ✓ pass | `tools/_agent_outputs.py` exists with `CodingOutput`, `ResearchOutput`, `AnalysisOutput`, `ReasoningOutput` (renamed from delivery — see Issues) |
+| TASK-4 | zero `subagent` code refs; `delegate_coder` imports; tests pass | ✓ pass | `tools/agents.py` has 4 delegation tools; `subagent.py` and `_subagent_builders.py` deleted; `deps.py` has `fork_deps()` |
+| TASK-5 | `workspace_root` injection confirmed; lint passes | ✓ pass | `agents.py:_coder_instructions()` injects `workspace_root`; `_analyst_instructions()` injects active knowledge sources |
+| TASK-6 | `tool_progress_callback` forwarding present in all 4 tools | ✓ pass | `agents.py` — all 4 `delegate_*` functions set `child_deps.runtime.tool_progress_callback = ctx.deps.runtime.tool_progress_callback` |
+| TASK-7 | `MAX_AGENT_DEPTH` constant; `agent_depth` in deps; `retry_on_empty` inline | ✓ pass | `agents.py:MAX_AGENT_DEPTH=2`; `deps.py:CoRuntimeState.agent_depth=0`; `fork_deps()` increments; `delegate_researcher` retries on empty |
+| TASK-8 | OTel span wrapping all 4 delegation runs; lint passes | ✓ pass | `agents.py` — each delegation tool wraps `agent.run()` in `tracer.start_as_current_span()` |
+| TASK-9 | full suite passes | ✓ pass | 406 passed, 0 failed |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Stale output class names: `CoderOutput`, `ThinkingOutput` never renamed in delivery | `tools/_agent_outputs.py`, `tools/agents.py` | blocking | Renamed: `CoderOutput→CodingOutput`, `ThinkingOutput→ReasoningOutput`; updated all imports and usages |
+| `make_agent_deps` renamed inconsistently with `_agent_` pattern | `deps.py`, `tools/agents.py`, `tests/test_agents.py` | blocking | Renamed to `fork_deps()`; updated all 4 call sites and test |
+| Stale `"save_memory"` key in `tool_display.py` — tool no longer exists | `context/tool_display.py:24` | blocking | Changed to `"save_article": "content"` |
+| `ObservabilityConfig` should be `ObservabilitySettings` per naming convention | `config/_observability.py`, `config/_core.py` | blocking | Renamed to `ObservabilitySettings` throughout |
+| `MCPServerConfig` should be `MCPServerSettings` | `config/_core.py`, `bootstrap/core.py` | blocking | Renamed to `MCPServerSettings` throughout |
+| `ModelConfig` should be `LlmModelSettings` (runtime descriptor, not persisted) | `config/_knowledge.py`, tests, evals | blocking | Renamed to `LlmModelSettings` throughout |
+| TASK-3 done_when referenced pre-rename class names (`CoderOutput`, `ThinkingOutput`) | Plan TASK-3 | minor | Evidence confirmed via post-rename import check |
+| TASK-5 section A gap: `include` parameter on `fork_deps()` specified in plan but not implemented; scoping is full CoDeps | `deps.py` | minor | Not blocking — done_when passed; scoping enhancement deferred; no correctness issue |
+| Doc: `tools.md` — output class names stale; `build_tool_registry` misattributed | `docs/specs/tools.md` | blocking | Fixed: output types updated; `build_tool_registry` moved to correct file entry |
+| Doc: `context.md` — phantom `migrate_session_files()` call in restore sequence | `docs/specs/context.md` | blocking | Removed phantom description; session.py entry updated |
+| Doc: `flow-bootstrap.md` — phantom migration call in Step 12; stale Files entry | `docs/specs/flow-bootstrap.md` | blocking | Removed phantom call; Files entry updated |
+| Doc: `system.md` — 8 spec cross-refs used wrong paths (`docs/` vs `docs/specs/`) | `docs/specs/system.md` | blocking | Corrected to `docs/specs/` prefix; added 5 missing spec entries to Files table |
+| Doc: `skills.md` — 3 cross-doc links with wrong `docs/` prefix | `docs/specs/skills.md` | blocking | Corrected to `docs/specs/` prefix |
+
+### Tests
+- Command: `uv run pytest -v`
+- Result: 406 passed, 0 failed
+- Log: `.pytest-logs/20260414-*-review-impl.log`
+
+### Doc Sync
+- Scope: full — delivery renamed public APIs, eliminated modules, and touched cross-cutting deps
+- Result: fixed: tools.md (output types, build_tool_registry attribution), context.md (phantom migrate_session_files), flow-bootstrap.md (same phantom + Files entry), system.md (8 stale cross-doc paths + 5 missing spec entries), skills.md (3 stale cross-doc paths), observability.md (already had ObservabilitySettings — clean)
+
+### Behavioral Verification
+- `uv run co config`: LLM online, MCP ready (1 server), shell active, DB active — system healthy
+- No chat loop changes in this delivery — `co chat` behavioral verification skipped
+
+### Overall: PASS
+All blocking findings resolved, test suite green (406/406), doc sync complete, behavioral verification passed. Ship-ready.
+

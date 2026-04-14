@@ -224,6 +224,6 @@ There is no separate skills config object today.
 | `co_cli/knowledge/_frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/skills/` | package-default shipped skills |
 | `<cwd>/.co-cli/skills/` | project-local skill files and overrides |
-| `docs/flow-bootstrap.md` | when skills load during startup |
-| `docs/core-loop.md` | how dispatched skill bodies flow through a normal turn |
-| `docs/tools.md` | callable tool capabilities used by skills after dispatch |
+| `docs/specs/flow-bootstrap.md` | when skills load during startup |
+| `docs/specs/core-loop.md` | how dispatched skill bodies flow through a normal turn |
+| `docs/specs/tools.md` | callable tool capabilities used by skills after dispatch |

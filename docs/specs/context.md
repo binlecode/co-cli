@@ -135,7 +135,7 @@ Each session is a single JSONL file under `.co-cli/sessions/` using a lexicograp
 
 Example: `2026-04-11-T142305Z-550e8400.jsonl`. The timestamp prefix makes lexicographic sort == chronological sort. The 8-char UUID suffix is the short display ID.
 
-**Startup** — `restore_session()` runs `migrate_session_files()` first (renames legacy `{uuid}.jsonl` files, removes any `{uuid}.json` sidecars), then scans `*.jsonl` by filename (lexicographic sort — no `stat()`), and sets `deps.session.session_path` to the most recent file path. If none found, `new_session_path()` builds a path for the new session but does not write the file — the file is created on the first `append_messages` call.
+**Startup** — `restore_session()` scans `*.jsonl` by filename (lexicographic sort — no `stat()`), and sets `deps.session.session_path` to the most recent file path. If none found, `new_session_path()` builds a path for the new session but does not write the file — the file is created on the first `append_messages` call.
 
 **Per-turn persistence** — `_finalize_turn()` is the single write point:
 
@@ -382,7 +382,7 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
 | `co_cli/context/_history.py` | history processors, compaction boundaries, emergency compaction, context enrichment |
 | `co_cli/context/summarization.py` | summarizer agent, compaction budget, token estimation |
-| `co_cli/context/session.py` | session filename generation, latest-session discovery, migration from legacy format, new-path factory |
+| `co_cli/context/session.py` | session filename generation, latest-session discovery, new-path factory |
 | `co_cli/context/transcript.py` | JSONL transcript: append, load, compact boundary |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |

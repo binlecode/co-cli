@@ -207,10 +207,9 @@ Once `create_deps()` returns, `chat_loop()` updates completion words with loaded
 
 ### Step 12. Restore or create the session
 
-Bootstrap runs `migrate_session_files()` to convert any legacy `{uuid}.jsonl` files to the new `YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl` format and removes stale `.json` sidecars. It then scans `*.jsonl` by filename (lexicographic sort = chronological sort) and sets `deps.session.session_path` to the most recent file.
+Bootstrap scans `*.jsonl` by filename (lexicographic sort = chronological sort) and sets `deps.session.session_path` to the most recent file.
 
 ```text
-migrate_session_files(deps.sessions_dir)   # rename legacy files, drop .json sidecars
 path = find_latest_session(deps.sessions_dir)
 if found:
     deps.session.session_path = path
@@ -267,5 +266,5 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/deps.py` | Defines `CoDeps`, path resolution, and sub-agent inheritance rules |
 | `co_cli/config/_core.py` | Defines `Settings`, layered config loading, and env override mapping |
 | `co_cli/commands/_commands.py` | Loads skills during bootstrap and later refreshes them in the REPL |
-| `co_cli/context/session.py` | Session filename generation, latest-session discovery, migration from legacy format, new-path factory |
+| `co_cli/context/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/knowledge/_store.py` | Implements the indexed knowledge store used when bootstrap enables it |
