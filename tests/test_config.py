@@ -176,6 +176,20 @@ def test_default_provider_is_ollama_openai(tmp_path):
     assert settings.llm.provider == "ollama-openai"
 
 
+def test_llm_model_loaded_from_project_config(tmp_path):
+    """llm.model set in project config is reflected in settings — replaces old role_models.reasoning path."""
+    project_dir = tmp_path
+    (project_dir / ".co-cli").mkdir()
+    (project_dir / ".co-cli" / "settings.json").write_text(
+        json.dumps({"llm": {"model": "my-custom-model"}})
+    )
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _project_dir=project_dir,
+    )
+    assert settings.llm.model == "my-custom-model"
+
+
 def test_ollama_native_provider_rejected(tmp_path):
     """'ollama-native' is no longer a supported provider."""
     project_dir = tmp_path
