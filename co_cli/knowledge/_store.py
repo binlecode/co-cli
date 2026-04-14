@@ -116,20 +116,22 @@ STOPWORDS: frozenset[str] = frozenset(
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS docs (
-    source     TEXT NOT NULL,
-    kind       TEXT,
-    path       TEXT NOT NULL,
-    title      TEXT,
-    content    TEXT,
-    mtime      REAL,
-    hash       TEXT,
-    tags       TEXT,
-    category   TEXT,
-    created    TEXT,
-    updated    TEXT,
-    provenance TEXT,
-    certainty  TEXT,
-    chunk_id   INTEGER DEFAULT 0,
+    source      TEXT NOT NULL,
+    kind        TEXT,
+    path        TEXT NOT NULL,
+    title       TEXT,
+    content     TEXT,
+    mtime       REAL,
+    hash        TEXT,
+    tags        TEXT,
+    category    TEXT,
+    created     TEXT,
+    updated     TEXT,
+    provenance  TEXT,
+    certainty   TEXT,
+    chunk_id    INTEGER DEFAULT 0,
+    type        TEXT,
+    description TEXT,
     UNIQUE(source, path, chunk_id)
 );
 
@@ -303,8 +305,14 @@ class KnowledgeStore:
         db_path = knowledge_db_path if knowledge_db_path is not None else SEARCH_DB
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
-        self._backend = config.knowledge.search_backend
         self._embedding_provider = config.knowledge.embedding_provider
+        # hybrid requires a real embedding provider; degrade to fts5 when none is configured.
+        _requested_backend = config.knowledge.search_backend
+        self._backend = (
+            "fts5"
+            if _requested_backend == "hybrid" and self._embedding_provider == "none"
+            else _requested_backend
+        )
         self._embedding_model = config.knowledge.embedding_model
         self._embedding_dims = config.knowledge.embedding_dims
         self._docs_vec_table = f"docs_vec_{self._embedding_dims}"
@@ -369,25 +377,6 @@ class KnowledgeStore:
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
 
-        # Safe migration: add provenance and certainty columns to existing databases.
-        # SQLite does not support ADD COLUMN IF NOT EXISTS; catch OperationalError on duplicate.
-        for col in ("provenance TEXT", "certainty TEXT"):
-            try:
-                self._conn.execute(f"ALTER TABLE docs ADD COLUMN {col}")
-                self._conn.commit()
-            except sqlite3.OperationalError:  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
-                pass  # column already exists
-
-        # Migration: add type and description columns.
-        for col in ("type TEXT", "description TEXT"):
-            try:
-                self._conn.execute(f"ALTER TABLE docs ADD COLUMN {col}")
-                self._conn.commit()
-            except sqlite3.OperationalError:  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
-                pass  # column already exists
-
-        self._migrate_chunk_id()
-
         if self._backend == "hybrid":
             try:
                 self._load_sqlite_vec()
@@ -427,51 +416,6 @@ class KnowledgeStore:
             return None
         m = re.search(r"float\[(\d+)\]", row[0] or "")
         return int(m.group(1)) if m else None
-
-    def _migrate_chunk_id(self) -> None:
-        """Rebuild docs table to add chunk_id + new UNIQUE(source, path, chunk_id) if absent."""
-        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(docs)").fetchall()}
-        if "chunk_id" in cols:
-            return
-
-        self._conn.executescript("""
-            DROP TRIGGER IF EXISTS docs_ai;
-            DROP TRIGGER IF EXISTS docs_ad;
-            DROP TRIGGER IF EXISTS docs_au;
-            DROP TABLE IF EXISTS docs_fts;
-            ALTER TABLE docs RENAME TO docs_old;
-            CREATE TABLE docs (
-                source TEXT NOT NULL, kind TEXT, path TEXT NOT NULL,
-                title TEXT, content TEXT, mtime REAL, hash TEXT,
-                tags TEXT, category TEXT, created TEXT, updated TEXT,
-                provenance TEXT, certainty TEXT, chunk_id INTEGER DEFAULT 0,
-                UNIQUE(source, path, chunk_id)
-            );
-            CREATE VIRTUAL TABLE docs_fts USING fts5(
-                title, content, tags,
-                tokenize='porter unicode61', content='docs', content_rowid='rowid'
-            );
-            CREATE TRIGGER docs_ai AFTER INSERT ON docs BEGIN
-                INSERT INTO docs_fts(rowid, title, content, tags)
-                VALUES (new.rowid, new.title, new.content, new.tags);
-            END;
-            CREATE TRIGGER docs_ad AFTER DELETE ON docs BEGIN
-                INSERT INTO docs_fts(docs_fts, rowid, title, content, tags)
-                VALUES ('delete', old.rowid, old.title, old.content, old.tags);
-            END;
-            CREATE TRIGGER docs_au AFTER UPDATE ON docs BEGIN
-                INSERT INTO docs_fts(docs_fts, rowid, title, content, tags)
-                VALUES ('delete', old.rowid, old.title, old.content, old.tags);
-                INSERT INTO docs_fts(rowid, title, content, tags)
-                VALUES (new.rowid, new.title, new.content, new.tags);
-            END;
-            INSERT INTO docs (source, kind, path, title, content, mtime, hash,
-                              tags, category, created, updated, provenance, certainty, chunk_id)
-                SELECT source, kind, path, title, content, mtime, hash,
-                       tags, category, created, updated, provenance, certainty, 0
-                FROM docs_old;
-            DROP TABLE docs_old;
-        """)
 
     def index(
         self,
@@ -735,7 +679,8 @@ class KnowledgeStore:
         for r in fts_chunks:
             if r.path not in fallback_seen or r.score > fallback_seen[r.path].score:
                 fallback_seen[r.path] = r
-        return sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)[:limit]
+        fts_results = sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)
+        return self._rerank_results(query, fts_results, limit)
 
     def _fts_search(
         self,

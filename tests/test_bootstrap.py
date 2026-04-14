@@ -161,6 +161,28 @@ def test_discover_knowledge_backend_fts5_no_degradation(tmp_path: Path) -> None:
             store.close()
 
 
+def test_knowledge_store_direct_construction_hybrid_with_provider_none_uses_fts5(
+    tmp_path: Path,
+) -> None:
+    """KnowledgeStore constructed directly with hybrid + provider=none must silently use fts5."""
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
+            update={
+                "search_backend": "hybrid",
+                "embedding_provider": "none",
+                "cross_encoder_reranker_url": None,
+            }
+        ),
+    )
+    store = KnowledgeStore(config=config, knowledge_db_path=tmp_path / "search.db")
+    try:
+        assert store._backend == "fts5", (
+            "KnowledgeStore must degrade to fts5 when embedding_provider is none"
+        )
+    finally:
+        store.close()
+
+
 def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavailable(
     tmp_path: Path,
 ) -> None:
