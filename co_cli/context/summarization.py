@@ -76,7 +76,7 @@ def resolve_compaction_budget(
     """Resolve the token budget used as the compaction trigger baseline.
 
     Resolution order (first match wins):
-    1. context_window (from LlmModel quirks) minus estimated output reserve.
+    1. context_window (from LlmModel settings) minus estimated output reserve.
        For Ollama, config.llm.num_ctx overrides the spec (user's Modelfile is truth).
     2. Ollama config: config.llm.num_ctx when provider is ollama-openai.
     3. Fallback: _DEFAULT_TOKEN_BUDGET (100K).

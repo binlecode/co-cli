@@ -102,12 +102,12 @@ def build_agent(
     # Normalize model: accept LlmModel or raw pydantic-ai model.
     # Orchestrator path: model=None → build from config.
     # Delegation path: model is expected to be a raw pydantic-ai model.
-    from co_cli._model_factory import LlmModel as _LlmModel
+    from co_cli.llm._factory import LlmModel as _LlmModel
 
     raw_model = model
     llm_settings = None
     if model is None:
-        from co_cli._model_factory import build_model
+        from co_cli.llm._factory import build_model
 
         _llm = build_model(config.llm)
         raw_model = _llm.model
@@ -130,12 +130,8 @@ def build_agent(
             add_shell_guidance,
         )
         from co_cli.prompts._assembly import build_static_instructions
-        from co_cli.prompts.model_quirks._loader import normalize_model_name
 
-        normalized_model = normalize_model_name(config.llm.model)
-        static_instructions = build_static_instructions(
-            config.llm.provider, normalized_model, config
-        )
+        static_instructions = build_static_instructions(config)
 
         # Static layer — set once at agent construction; does not change between turns.
         # Single filtered toolset (native + MCP combined); SDK adds ToolSearchToolset automatically.

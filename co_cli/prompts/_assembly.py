@@ -1,9 +1,9 @@
 """Prompt assembly for the Co CLI agent.
 
-Static instruction scaffold assembly lives here: soul scaffold, rules, examples,
-and model counter-steering. Runtime-only layers such as date, project
-instructions, always-on memories, and personality continuity memories are
-added later via ``@agent.instructions`` in ``agent.py``.
+Static instruction scaffold assembly lives here: soul scaffold, rules, and
+examples. Runtime-only layers such as date, project instructions, always-on
+memories, and personality continuity memories are added later via
+``@agent.instructions`` in ``agent.py``.
 """
 
 from __future__ import annotations
@@ -65,21 +65,16 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
     return parsed
 
 
-def build_static_instructions(
-    provider: str,
-    model_name: str,
-    config: Settings,
-) -> str:
+def build_static_instructions(config: Settings) -> str:
     """Build the static instructions string for the given model and personality.
 
-    Assembles all seven sections in explicit order:
+    Assembles all six sections in explicit order:
     1. Soul seed (identity anchor)
     2. Character memories
     3. Mindsets
     4. Behavioral rules (numbered, strict order)
     5. Soul examples
-    6. Counter-steering (model-specific quirks)
-    7. Critique (self-assessment lens)
+    6. Critique (self-assessment lens)
 
     Returns the fully assembled static instructions string.
     """
@@ -128,15 +123,7 @@ def build_static_instructions(
     if examples:
         parts.append(examples)
 
-    # 6. Counter-steering (model-specific quirks)
-    if model_name:
-        from co_cli.prompts.model_quirks._loader import get_counter_steering
-
-        counter_steering = get_counter_steering(provider, model_name)
-        if counter_steering:
-            parts.append(f"## Model-Specific Guidance\n\n{counter_steering}")
-
-    # 7. Critique — self-assessment lens, always last
+    # 6. Critique — self-assessment lens, always last
     if critique:
         parts.append(f"## Review lens\n\n{critique}")
 

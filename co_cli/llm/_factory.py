@@ -12,8 +12,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config._llm import LlmSettings
-from co_cli.prompts.model_quirks._loader import get_model_inference, normalize_model_name
+from co_cli.config._llm import LlmSettings, resolve_reasoning_inference
 
 logger = logging.getLogger(__name__)
 
@@ -39,32 +38,21 @@ class LlmModel:
 def build_model(llm: LlmSettings) -> LlmModel:
     """Build a pydantic-ai model object from LlmSettings.
 
-    Reads model quirks for provider-specific inference defaults.
+    Resolves provider/model-specific inference defaults from config/runtime code.
 
     ollama-openai  → OpenAIChatModel wrapping the Ollama OpenAI-compatible API
     gemini         → GoogleModel with GoogleProvider (api_key injected via constructor)
 
-    Returns an LlmModel with the model object, base ModelSettings from quirks,
-    and context_window from model quirks (None when not declared).
+    Returns an LlmModel with the model object, base ModelSettings from llm settings,
+    and context_window from resolved model defaults (None when not declared).
 
     Raises ValueError for unsupported providers.
     """
     model_name = llm.model
-    normalized = normalize_model_name(model_name)
+    inference = resolve_reasoning_inference(llm)
 
     if llm.uses_ollama_openai():
-        inf = get_model_inference("ollama-openai", normalized)
-        extra: dict[str, Any] = {}
-        num_ctx = inf.get("num_ctx")
-        if num_ctx is not None:
-            extra["num_ctx"] = num_ctx
-        extra.update(inf.get("extra_body", {}))
-        model_settings = ModelSettings(
-            temperature=inf.get("temperature", 0.7),
-            top_p=inf.get("top_p", 1.0),
-            max_tokens=inf.get("max_tokens", 16384),
-            extra_body=extra,
-        )
+        model_settings = llm.reasoning_model_settings()
         _http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(
                 connect=_HTTP_CONNECT_TIMEOUT,
@@ -83,19 +71,18 @@ def build_model(llm: LlmSettings) -> LlmModel:
             provider=OpenAIProvider(openai_client=_openai_client),
         )
         return LlmModel(
-            model=model, settings=model_settings, context_window=inf.get("context_window")
+            model=model,
+            settings=model_settings,
+            context_window=inference.get("context_window"),
         )
 
     if llm.uses_gemini():
-        inf = get_model_inference("gemini", normalized)
-        model_settings = ModelSettings(
-            temperature=inf.get("temperature", 1.0),
-            top_p=inf.get("top_p", 0.95),
-            max_tokens=inf.get("max_tokens", 65536),
-        )
+        model_settings = llm.reasoning_model_settings()
         google_model = GoogleModel(model_name, provider=GoogleProvider(api_key=llm.api_key))
         return LlmModel(
-            model=google_model, settings=model_settings, context_window=inf.get("context_window")
+            model=google_model,
+            settings=model_settings,
+            context_window=inference.get("context_window"),
         )
 
     raise ValueError(f"Unsupported provider: {llm.provider!r}")

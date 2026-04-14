@@ -214,9 +214,9 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 
     Raises ValueError on provider/model hard errors.
     """
-    from co_cli._model_factory import build_model
     from co_cli.agent._core import build_tool_registry
     from co_cli.agent._mcp import discover_mcp_tools
+    from co_cli.llm._factory import build_model
 
     config = settings
     cwd = Path.cwd()

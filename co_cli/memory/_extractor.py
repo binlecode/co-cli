@@ -25,7 +25,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli._model_settings import NOREASON_SETTINGS
+from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.tools.memory_write import save_memory
 
 logger = logging.getLogger(__name__)

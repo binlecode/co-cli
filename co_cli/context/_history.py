@@ -34,7 +34,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli._model_settings import NOREASON_SETTINGS
+from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,

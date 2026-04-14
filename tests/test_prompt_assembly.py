@@ -13,10 +13,9 @@ def test_section_order_finch(tmp_path: Path) -> None:
     """All static instruction sections appear in the required order for finch personality.
 
     Required order: soul seed < first rule < soul examples < critique.
-    Counter-steering is verified when present (no current model quirk file defines it).
     """
     config = _BASE_CONFIG.model_copy(update={"personality": "finch"})
-    prompt = build_static_instructions(provider="gemini", model_name="", config=config)
+    prompt = build_static_instructions(config=config)
 
     # Anchor texts from the finch personality assets and rule files
     seed_anchor = "You are Finch"
@@ -39,21 +38,11 @@ def test_section_order_finch(tmp_path: Path) -> None:
         "Soul examples must appear before critique"
     )
 
-    # Counter-steering: verify ordering when present
-    counter_steering_anchor = "## Model-Specific Guidance"
-    if counter_steering_anchor in prompt:
-        assert prompt.index(examples_anchor) < prompt.index(counter_steering_anchor), (
-            "Soul examples must appear before counter-steering"
-        )
-        assert prompt.index(counter_steering_anchor) < prompt.index(critique_anchor), (
-            "Counter-steering must appear before critique"
-        )
-
 
 def test_section_order_no_personality(tmp_path: Path) -> None:
     """Assembly without personality still produces a non-empty prompt (rules only)."""
     config = _BASE_CONFIG.model_copy(update={"personality": None})
-    prompt = build_static_instructions(provider="gemini", model_name="", config=config)
+    prompt = build_static_instructions(config=config)
 
     rule_anchor = "## Relationship"
     assert rule_anchor in prompt, "Rule content missing when personality is None"

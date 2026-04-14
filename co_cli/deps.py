@@ -17,10 +17,10 @@ from co_cli.config._core import (
 from co_cli.context.types import MemoryRecallState, SafetyState
 
 if TYPE_CHECKING:
-    from co_cli._model_factory import LlmModel
     from co_cli.agent._core import ToolRegistry
     from co_cli.commands._skill_types import SkillConfig
     from co_cli.knowledge._store import KnowledgeStore
+    from co_cli.llm._factory import LlmModel
     from co_cli.session_index._store import SessionIndex
     from co_cli.tools.background import BackgroundTaskState
     from co_cli.tools.resource_lock import ResourceLockStore

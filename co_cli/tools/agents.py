@@ -9,7 +9,7 @@ from pydantic_ai.messages import ToolReturn
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage, UsageLimits
 
-from co_cli._model_settings import NOREASON_SETTINGS
+from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.deps import CoDeps, fork_deps
 from co_cli.tools._agent_outputs import (
     AnalysisOutput,
@@ -28,7 +28,7 @@ MAX_AGENT_DEPTH: int = 2
 def _get_task_settings(role_key: str, deps: CoDeps) -> ModelSettings | None:
     """Return the ModelSettings for a delegation agent role.
 
-    Reasoning delegation uses the main model's base settings (quirks-derived).
+    Reasoning delegation uses the main model's base settings (config-derived).
     All other delegation agents use NOREASON_SETTINGS.
     """
     if role_key == "reasoning":
@@ -488,7 +488,7 @@ async def delegate_reasoner(
     budget = max_requests or ctx.deps.config.subagent.max_requests_thinking
     model_obj = ctx.deps.model.model
     model_name = str(model_obj)
-    # Reasoning agent uses the main model's base settings (quirks-derived, may include thinking tokens)
+    # Reasoning agent uses the main model's base settings (config-derived, may include thinking tokens)
     task_settings = ctx.deps.model.settings
 
     agent = build_agent(

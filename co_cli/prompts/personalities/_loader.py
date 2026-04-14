@@ -58,7 +58,7 @@ def load_soul_examples(role: str) -> str:
     """Load concrete response pattern examples for a role (optional).
 
     Examples trail the behavioral rules in the static system prompt — they are
-    the last identity-level content the model reads before model-specific quirks.
+    the last identity-level content the model reads before the critique lens.
     This placement follows common few-shot practice: show the pattern closest to
     the task so the model pattern-matches from the most recently seen examples.
 
