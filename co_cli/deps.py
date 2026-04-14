@@ -85,7 +85,7 @@ class CoSessionState:
     """Mutable tool-visible session state.
 
     State here is readable and writable by tools and slash commands during the
-    session. Delegation agents receive a partially-inherited instance — see make_agent_deps.
+    session. Delegation agents receive a partially-inherited instance — see fork_deps.
     """
 
     google_creds: Any | None = field(default=None, repr=False)
@@ -123,7 +123,7 @@ class CoRuntimeState:
     safety_state: SafetyState | None = field(default=None, repr=False)
     active_skill_name: str | None = None
     resume_tool_names: frozenset[str] | None = None
-    # Delegation depth — incremented by make_agent_deps(); guards against recursive delegation.
+    # Delegation depth — incremented by fork_deps(); guards against recursive delegation.
     agent_depth: int = 0
 
     def reset_for_turn(self) -> None:
@@ -208,7 +208,7 @@ def resolve_workspace_paths(config: Settings, cwd: Path) -> dict[str, Any]:
     }
 
 
-def make_agent_deps(base: CoDeps) -> CoDeps:
+def fork_deps(base: CoDeps) -> CoDeps:
     """Create an isolated CoDeps copy for a delegation tool agent.
 
     Shares handles, registries, config, and paths by reference.

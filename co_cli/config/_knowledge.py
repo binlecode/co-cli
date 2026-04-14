@@ -15,7 +15,7 @@ DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
 
 
-class ModelConfig(BaseModel):
+class LlmModelSettings(BaseModel):
     """A model+provider bundle for auxiliary model references (e.g. LLM reranker)."""
 
     model: str
@@ -40,7 +40,7 @@ class KnowledgeSettings(BaseModel):
         default=DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL
     )
     tei_rerank_batch_size: int = Field(default=DEFAULT_TEI_RERANK_BATCH_SIZE)
-    llm_reranker: ModelConfig | None = Field(default=None)
+    llm_reranker: LlmModelSettings | None = Field(default=None)
     embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
     chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)
     chunk_overlap: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, ge=0)

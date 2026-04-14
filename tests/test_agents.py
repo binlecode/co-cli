@@ -10,7 +10,7 @@ from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
-from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, make_agent_deps
+from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, fork_deps
 from co_cli.tools.agents import _merge_turn_usage, delegate_coder
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -42,8 +42,8 @@ async def test_delegate_coder_no_model() -> None:
         await delegate_coder(ctx, "analyze foo")
 
 
-def test_make_agent_deps_resets_session_state() -> None:
-    """make_agent_deps() shares handles by reference, inherits session fields, resets isolated fields."""
+def test_fork_deps_resets_session_state() -> None:
+    """fork_deps() shares handles by reference, inherits session fields, resets isolated fields."""
     from co_cli.commands._skill_types import SkillConfig
     from co_cli.deps import ApprovalKindEnum, SessionApprovalRule
 
@@ -65,7 +65,7 @@ def test_make_agent_deps_resets_session_state() -> None:
         runtime=CoRuntimeState(),
     )
 
-    isolated = make_agent_deps(base)
+    isolated = fork_deps(base)
 
     # service handles shared by reference
     assert isolated.shell is base.shell

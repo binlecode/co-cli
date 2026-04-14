@@ -12,7 +12,7 @@ from co_cli.bootstrap.core import (
     _sync_knowledge_store,
     restore_session,
 )
-from co_cli.config._knowledge import ModelConfig
+from co_cli.config._knowledge import LlmModelSettings
 from co_cli.context.session import session_filename
 from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
@@ -352,7 +352,7 @@ def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
         knowledge=make_settings().knowledge.model_copy(
             update={
                 "cross_encoder_reranker_url": None,
-                "llm_reranker": ModelConfig(provider="gemini", model="gemini-2.0-flash"),
+                "llm_reranker": LlmModelSettings(provider="gemini", model="gemini-2.0-flash"),
             }
         ),
         llm=make_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
@@ -369,7 +369,7 @@ def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
         knowledge=make_settings().knowledge.model_copy(
             update={
                 "cross_encoder_reranker_url": None,
-                "llm_reranker": ModelConfig(provider="ollama-openai", model="reranker-model"),
+                "llm_reranker": LlmModelSettings(provider="ollama-openai", model="reranker-model"),
             }
         ),
         llm=make_settings().llm.model_copy(
@@ -388,7 +388,7 @@ def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
         knowledge=make_settings().knowledge.model_copy(
             update={
                 "cross_encoder_reranker_url": "http://127.0.0.1:19999",
-                "llm_reranker": ModelConfig(provider="gemini", model="gemini-2.0-flash"),
+                "llm_reranker": LlmModelSettings(provider="gemini", model="gemini-2.0-flash"),
             }
         ),
         llm=make_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),

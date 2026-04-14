@@ -366,7 +366,7 @@ Requires `google_credentials_path`. Credentials resolved via `tools/_google_auth
 
 #### Delegation (`tools/agents.py`)
 
-Delegation tools build focused sub-agents inline via `build_agent()` from `co_cli/agent/_core.py`. Each tool constructs an agent with a role-specific instruction string, an explicit tool list, and a structured output type from `_agent_outputs.py`. Agents are spawned with isolated deps via `make_agent_deps(base)` — shared `services` + `config`, fresh `session` + `runtime`, explicit `UsageLimits`. `make_agent_deps()` increments `agent_depth` by 1; `MAX_AGENT_DEPTH = 2` guards against recursive delegation. Child `RunUsage` merges back into the parent accumulator via `_merge_turn_usage()`. Per-role display formatting lives in `_format_output()` via `match/case`.
+Delegation tools build focused sub-agents inline via `build_agent()` from `co_cli/agent/_core.py`. Each tool constructs an agent with a role-specific instruction string, an explicit tool list, and a structured output type from `_agent_outputs.py`. Agents are spawned with isolated deps via `fork_deps(base)` — shared `services` + `config`, fresh `session` + `runtime`, explicit `UsageLimits`. `fork_deps()` increments `agent_depth` by 1; `MAX_AGENT_DEPTH = 2` guards against recursive delegation. Child `RunUsage` merges back into the parent accumulator via `_merge_turn_usage()`. Per-role display formatting lives in `_format_output()` via `match/case`.
 
 Role-specific behavioral flags: `retry_on_empty` (researcher only — retries with rephrased query when budget remains and result is empty), `input_prepend` (analyst only — prepends `inputs` as context to the question).
 

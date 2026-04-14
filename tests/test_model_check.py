@@ -8,7 +8,7 @@ from co_cli.bootstrap.check import (
     check_reranker_llm,
 )
 from co_cli.config._core import Settings
-from co_cli.config._knowledge import KnowledgeSettings, ModelConfig
+from co_cli.config._knowledge import KnowledgeSettings, LlmModelSettings
 from co_cli.config._llm import LlmSettings
 
 # --- LlmSettings.validate_config() (config-shape gate, no IO) ---
@@ -113,7 +113,7 @@ def test_check_reranker_llm_not_configured_returns_skipped() -> None:
 def test_check_reranker_llm_gemini_no_key_returns_error() -> None:
     config = Settings.model_construct(
         knowledge=KnowledgeSettings.model_construct(
-            llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
+            llm_reranker=LlmModelSettings(provider="gemini", model="gemini-2.0-flash"),
         ),
         llm=LlmSettings.model_construct(provider="gemini", api_key=None),
     )
@@ -125,7 +125,7 @@ def test_check_reranker_llm_gemini_no_key_returns_error() -> None:
 def test_check_reranker_llm_gemini_with_key_returns_ok() -> None:
     config = Settings.model_construct(
         knowledge=KnowledgeSettings.model_construct(
-            llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
+            llm_reranker=LlmModelSettings(provider="gemini", model="gemini-2.0-flash"),
         ),
         llm=LlmSettings.model_construct(provider="gemini", api_key="test-key"),
     )
@@ -137,7 +137,7 @@ def test_check_reranker_llm_gemini_with_key_returns_ok() -> None:
 def test_check_reranker_llm_ollama_unreachable_returns_warn() -> None:
     config = Settings.model_construct(
         knowledge=KnowledgeSettings.model_construct(
-            llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
+            llm_reranker=LlmModelSettings(provider="ollama-openai", model="reranker-model"),
         ),
         llm=LlmSettings.model_construct(provider="ollama-openai", host="http://localhost:1"),
     )

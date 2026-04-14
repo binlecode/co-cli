@@ -20,7 +20,7 @@ from pydantic import (
 from co_cli.config._knowledge import KnowledgeSettings
 from co_cli.config._llm import LlmSettings
 from co_cli.config._memory import MemorySettings
-from co_cli.config._observability import ObservabilityConfig
+from co_cli.config._observability import ObservabilitySettings
 from co_cli.config._shell import ShellSettings
 from co_cli.config._subagent import SubagentSettings
 from co_cli.config._web import WebSettings
@@ -84,7 +84,7 @@ def _validate_personality(personality: str) -> list[str]:
     return validate_personality_files(personality)
 
 
-class MCPServerConfig(BaseModel):
+class MCPServerSettings(BaseModel):
     """Configuration for a single MCP server (stdio or HTTP transport).
 
     Stdio: set ``command`` (required). Subprocess launched by pydantic-ai.
@@ -112,17 +112,17 @@ class MCPServerConfig(BaseModel):
     prefix: str | None = Field(default=None)
 
     @model_validator(mode="after")
-    def _require_command_or_url(self) -> "MCPServerConfig":
+    def _require_command_or_url(self) -> "MCPServerSettings":
         if self.url and self.command:
-            raise ValueError("MCPServerConfig: 'url' and 'command' are mutually exclusive")
+            raise ValueError("MCPServerSettings: 'url' and 'command' are mutually exclusive")
         if not self.url and not self.command:
-            raise ValueError("MCPServerConfig requires either 'command' or 'url'")
+            raise ValueError("MCPServerSettings requires either 'command' or 'url'")
         return self
 
 
 # Default MCP servers — shipped out-of-the-box, skip gracefully when npx absent.
-_DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
-    "context7": MCPServerConfig(
+_DEFAULT_MCP_SERVERS: dict[str, MCPServerSettings] = {
+    "context7": MCPServerSettings(
         command="npx",
         args=["-y", "@upstash/context7-mcp@latest"],
         approval="auto",
@@ -140,7 +140,7 @@ class Settings(BaseModel):
     subagent: SubagentSettings = Field(default_factory=SubagentSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     shell: ShellSettings = Field(default_factory=ShellSettings)
-    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
     # Flat — integration paths
     obsidian_vault_path: str | None = Field(default=None)
@@ -159,7 +159,7 @@ class Settings(BaseModel):
     max_reflections: int = Field(default=DEFAULT_MAX_REFLECTIONS, ge=1, le=10)
 
     # Flat — single-field group
-    mcp_servers: dict[str, MCPServerConfig] = Field(
+    mcp_servers: dict[str, MCPServerSettings] = Field(
         default_factory=lambda: _DEFAULT_MCP_SERVERS.copy()
     )
 

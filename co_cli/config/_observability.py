@@ -3,7 +3,7 @@
 from pydantic import BaseModel, Field
 
 
-class ObservabilityConfig(BaseModel):
+class ObservabilitySettings(BaseModel):
     """Controls file logging behaviour (dual-write alongside the SQLite OTel DB)."""
 
     log_level: str = Field(

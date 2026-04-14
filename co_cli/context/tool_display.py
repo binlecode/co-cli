@@ -21,7 +21,7 @@ TOOL_START_DISPLAY_ARG: dict[str, str] = {
     "edit_file": "path",
     "find_in_files": "pattern",
     "list_directory": "path",
-    "save_memory": "content",
+    "save_article": "content",
     "search_articles": "query",
     "search_knowledge": "query",
     "search_memories": "query",

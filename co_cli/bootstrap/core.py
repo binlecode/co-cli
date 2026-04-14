@@ -11,7 +11,7 @@ from opentelemetry import trace
 if TYPE_CHECKING:
     from co_cli.knowledge._store import KnowledgeStore
 
-from co_cli.config._core import MCPServerConfig, Settings, settings
+from co_cli.config._core import MCPServerSettings, Settings, settings
 from co_cli.context.session import find_latest_session, new_session_path
 from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
@@ -28,9 +28,9 @@ def _summarize_backend_error(exc: Exception) -> str:
     return detail.splitlines()[0]
 
 
-def _resolve_mcp_env_tokens(config: Settings) -> dict[str, MCPServerConfig]:
+def _resolve_mcp_env_tokens(config: Settings) -> dict[str, MCPServerSettings]:
     """Resolve env-based tokens for MCP servers. Returns resolved server dict."""
-    resolved_servers: dict[str, MCPServerConfig] = {}
+    resolved_servers: dict[str, MCPServerSettings] = {}
     for name, srv_cfg in (config.mcp_servers or {}).items():
         if name == "github":
             env = dict(srv_cfg.env) if srv_cfg.env else {}

@@ -3,7 +3,7 @@
 from pydantic import BaseModel, Field
 
 
-class CoderOutput(BaseModel):
+class CodingOutput(BaseModel):
     """Structured output from the coder delegation agent."""
 
     summary: str
@@ -28,7 +28,7 @@ class AnalysisOutput(BaseModel):
     reasoning: str
 
 
-class ThinkingOutput(BaseModel):
+class ReasoningOutput(BaseModel):
     """Structured output from the reasoning delegation agent."""
 
     plan: str

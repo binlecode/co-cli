@@ -294,7 +294,7 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/datasette_metadata.json` | Datasette UI config for `co logs` |
 | `co_cli/main.py` | `@app.command()` wrappers for `logs`, `traces`, `tail`; module-level OTel + file logging bootstrap |
 | `co_cli/config/_core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
-| `co_cli/config/_observability.py` | `ObservabilityConfig` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) |
+| `co_cli/config/_observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) |
 | `~/.co-cli/co-cli-logs.db` | SQLite span storage |
 | `~/.co-cli/logs/co-cli.log` | Rotating operational log — INFO+ (all `logging.*` calls) |
 | `~/.co-cli/logs/errors.log` | Rotating error log — WARNING+ (quick triage) |

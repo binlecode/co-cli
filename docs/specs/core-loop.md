@@ -328,7 +328,7 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
 | error handling and interrupts owned by the loop | `run_turn()` | aligned |
 | compaction as an inline concern with circuit breaker | `summarize_history_window()` with `compaction_failure_count` | aligned |
-| isolated specialist contexts | delegation agents use `make_agent_deps()` and stay outside the foreground loop | aligned |
+| isolated specialist contexts | delegation agents use `fork_deps()` and stay outside the foreground loop | aligned |
 
 The intentional simplification remains:
 

@@ -10,12 +10,12 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli._model_settings import NOREASON_SETTINGS
-from co_cli.deps import CoDeps, make_agent_deps
+from co_cli.deps import CoDeps, fork_deps
 from co_cli.tools._agent_outputs import (
     AnalysisOutput,
-    CoderOutput,
+    CodingOutput,
+    ReasoningOutput,
     ResearchOutput,
-    ThinkingOutput,
 )
 from co_cli.tools.tool_output import tool_output
 
@@ -159,7 +159,7 @@ def _reasoner_instructions(deps: CoDeps) -> str:
     return (
         "You are a reasoning agent. "
         "Decompose the problem, reason step-by-step, and return a structured result. "
-        "Return a ThinkingOutput with: "
+        "Return a ReasoningOutput with: "
         "plan (1–3 sentence high-level approach), "
         "steps (ordered action steps), "
         "and conclusion (synthesized answer or recommendation)."
@@ -184,7 +184,7 @@ async def delegate_coder(
     When NOT to use: reading a single file, listing a directory, or grepping
     for a pattern — use the primitive file tools directly instead.
 
-    Returns a CoderOutput with summary, diff_preview, files_touched, and
+    Returns a CodingOutput with summary, diff_preview, files_touched, and
     confidence (0.0-1.0). Trust the result unless the confidence is low.
 
     Args:
@@ -211,10 +211,10 @@ async def delegate_coder(
         model=model_obj,
         instructions=_coder_instructions(ctx.deps),
         tool_fns=[list_directory, read_file, find_in_files],
-        output_type=CoderOutput,
+        output_type=CodingOutput,
     )
 
-    child_deps = make_agent_deps(ctx.deps)
+    child_deps = fork_deps(ctx.deps)
     child_deps.runtime.tool_progress_callback = ctx.deps.runtime.tool_progress_callback
 
     with _TRACER.start_as_current_span("delegate_coder") as span:
@@ -303,7 +303,7 @@ async def delegate_researcher(
         output_type=ResearchOutput,
     )
 
-    child_deps = make_agent_deps(ctx.deps)
+    child_deps = fork_deps(ctx.deps)
     child_deps.runtime.tool_progress_callback = ctx.deps.runtime.tool_progress_callback
 
     with _TRACER.start_as_current_span("delegate_researcher") as span:
@@ -418,7 +418,7 @@ async def delegate_analyst(
         output_type=AnalysisOutput,
     )
 
-    child_deps = make_agent_deps(ctx.deps)
+    child_deps = fork_deps(ctx.deps)
     child_deps.runtime.tool_progress_callback = ctx.deps.runtime.tool_progress_callback
 
     with _TRACER.start_as_current_span("delegate_analyst") as span:
@@ -469,7 +469,7 @@ async def delegate_reasoner(
     querying the knowledge base — those need the coder, researcher, or analyst
     agents respectively.
 
-    Returns a ThinkingOutput with plan (high-level approach), steps (ordered
+    Returns a ReasoningOutput with plan (high-level approach), steps (ordered
     action items), and conclusion (synthesized answer or recommendation).
 
     Args:
@@ -496,10 +496,10 @@ async def delegate_reasoner(
         model=model_obj,
         instructions=_reasoner_instructions(ctx.deps),
         tool_fns=None,
-        output_type=ThinkingOutput,
+        output_type=ReasoningOutput,
     )
 
-    child_deps = make_agent_deps(ctx.deps)
+    child_deps = fork_deps(ctx.deps)
     child_deps.runtime.tool_progress_callback = ctx.deps.runtime.tool_progress_callback
 
     with _TRACER.start_as_current_span("delegate_reasoner") as span:
