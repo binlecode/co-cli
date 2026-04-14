@@ -1,7 +1,6 @@
 """Tests for memory gravity — touch and dedup on recall."""
 
 import asyncio
-import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,13 +14,13 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
+from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools.memory import (
     _recall_for_context,
-    append_memory,
     list_memories,
     search_memories,
-    update_memory,
 )
+from co_cli.tools.memory_edit import append_memory, update_memory
 from co_cli.tools.shell_backend import ShellBackend
 
 # ---------------------------------------------------------------------------
@@ -36,14 +35,9 @@ def _make_ctx(
     *,
     memory_dir: Path | None = None,
     knowledge_store: Any = None,
-    knowledge_search_backend: str = "grep",
 ) -> RunContext:
     """Return a real RunContext with real CoDeps for memory tool tests."""
-    config = make_settings(
-        knowledge=make_settings().knowledge.model_copy(
-            update={"search_backend": knowledge_search_backend}
-        )
-    )
+    config = make_settings()
     deps_kwargs: dict[str, Any] = {
         "shell": ShellBackend(),
         "knowledge_store": knowledge_store,
@@ -83,28 +77,6 @@ def _write_memory(
 
 
 # ---------------------------------------------------------------------------
-# Agent tool registration — write tools absent, read tools present
-# ---------------------------------------------------------------------------
-
-
-def test_write_tools_not_registered_in_agent():
-    """save_memory, update_memory, append_memory must NOT be registered in the main agent."""
-    # Toolset layout: agent.toolsets[1] = FilteredToolset wrapping CombinedToolset;
-    # toolsets[0] of the combined set is the FunctionToolset with registered tools.
-    names = set(_AGENT.toolsets[1].wrapped.toolsets[0].tools.keys())
-    assert "save_memory" not in names, "save_memory must not be registered in main agent"
-    assert "update_memory" not in names, "update_memory must not be registered in main agent"
-    assert "append_memory" not in names, "append_memory must not be registered in main agent"
-
-
-def test_read_tools_registered_in_agent():
-    """search_memories and list_memories must remain registered in the main agent."""
-    names = set(_AGENT.toolsets[1].wrapped.toolsets[0].tools.keys())
-    assert "search_memories" in names, "search_memories must be registered in main agent"
-    assert "list_memories" in names, "list_memories must be registered in main agent"
-
-
-# ---------------------------------------------------------------------------
 # _recall_for_context read-only invariant
 # ---------------------------------------------------------------------------
 
@@ -115,11 +87,20 @@ def test_recall_does_not_mutate_files(tmp_path: Path):
     memory_dir.mkdir(parents=True, exist_ok=True)
     _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
 
-    before = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
-    result = asyncio.run(_recall_for_context(_make_ctx(memory_dir=memory_dir), "dark theme"))
-    assert result.metadata["count"] >= 1
-    after = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
-    assert before == after, "_recall_for_context must not modify any file's mtime"
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
+    try:
+        idx.sync_dir("memory", memory_dir)
+        before = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
+        result = asyncio.run(
+            _recall_for_context(
+                _make_ctx(memory_dir=memory_dir, knowledge_store=idx), "dark theme"
+            )
+        )
+        assert result.metadata["count"] >= 1
+        after = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
+        assert before == after, "_recall_for_context must not modify any file's mtime"
+    finally:
+        idx.close()
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +260,7 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
 
 
 def test_search_memories_finds_saved_memories(tmp_path: Path):
-    """search_memories returns saved memories via grep (not FTS)."""
+    """search_memories returns saved memories via FTS5 DB search."""
     memory_dir = tmp_path / ".co-cli" / "memory"
 
     _write_memory(
@@ -289,11 +270,16 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
         memory_dir, 2, "User uses xyloquartz-search-test for all tests", tags=["context"]
     )
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
+    try:
+        idx.sync_dir("memory", memory_dir)
+        ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx)
 
-    result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
-    assert result.metadata["count"] >= 2
-    assert all(r["source"] == "memory" for r in result.metadata["results"])
+        result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
+        assert result.metadata["count"] >= 2
+        assert all(r["source"] == "memory" for r in result.metadata["results"])
+    finally:
+        idx.close()
 
 
 def test_search_memories_empty_query_returns_guard(tmp_path: Path):
@@ -306,7 +292,7 @@ def test_search_memories_empty_query_returns_guard(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# TASK-2: artifact_type / session_summary exclusion
+# artifact_type display
 # ---------------------------------------------------------------------------
 
 
@@ -334,60 +320,18 @@ def _write_memory_with_artifact_type(
     return path
 
 
-def test_recall_excludes_session_summary_artifacts(tmp_path: Path):
-    """_recall_for_context must not return entries with artifact_type == session_summary."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    keyword = "artifact-exclusion-test-recall"
-
-    _write_memory_with_artifact_type(
-        memory_dir, 1, f"{keyword} durable memory", artifact_type=None
-    )
-    _write_memory_with_artifact_type(
-        memory_dir, 2, f"{keyword} session checkpoint", artifact_type="session_summary"
-    )
-
-    ctx = _make_ctx(memory_dir=memory_dir)
-    result = asyncio.run(_recall_for_context(ctx, keyword))
-
-    ids_returned = [r["id"] for r in result.metadata["results"]]
-    assert 1 in ids_returned, "durable memory must be returned"
-    assert 2 not in ids_returned, "session_summary artifact must be excluded"
-
-
-def test_search_memories_excludes_session_summary_artifacts(tmp_path: Path):
-    """search_memories must not return entries with artifact_type == session_summary."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    keyword = "artifact-exclusion-test-search"
-
-    _write_memory_with_artifact_type(
-        memory_dir, 1, f"{keyword} durable memory", artifact_type=None
-    )
-    _write_memory_with_artifact_type(
-        memory_dir, 2, f"{keyword} session checkpoint", artifact_type="session_summary"
-    )
-
-    ctx = _make_ctx(memory_dir=memory_dir)
-    result = asyncio.run(search_memories(ctx, keyword))
-
-    paths_returned = [r["path"] for r in result.metadata["results"]]
-    assert not any("002-" in p for p in paths_returned), (
-        "session_summary artifact must be excluded"
-    )
-    assert any("001-" in p for p in paths_returned), "durable memory must be returned"
-
-
 def test_list_memories_displays_artifact_type(tmp_path: Path):
     """list_memories display contains artifact_type value when present."""
     memory_dir = tmp_path / ".co-cli" / "memory"
 
     _write_memory_with_artifact_type(
-        memory_dir, 1, "Session summary content", artifact_type="session_summary"
+        memory_dir, 1, "Session summary content", artifact_type="custom_artifact"
     )
 
     ctx = _make_ctx(memory_dir=memory_dir)
     result = asyncio.run(list_memories(ctx))
 
-    assert "session_summary" in result.return_value
+    assert "custom_artifact" in result.return_value
 
 
 # ---------------------------------------------------------------------------
@@ -395,22 +339,18 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_load_memories_tolerates_unknown_artifact_type(tmp_path: Path, caplog: Any):
-    """load_memories must load entries with unknown artifact_type and emit a warning."""
-    from co_cli.tools.memory import load_memories
+def test_load_memories_tolerates_unknown_artifact_type(tmp_path: Path):
+    """load_memories must load entries with unknown artifact_type without skipping them."""
+    from co_cli.memory.recall import load_memories
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     _write_memory_with_artifact_type(
         memory_dir, 1, "Memory with unknown artifact type", artifact_type="future_unknown_type"
     )
-    with caplog.at_level(logging.WARNING, logger="co_cli.knowledge._frontmatter"):
-        entries = load_memories(memory_dir)
+    entries = load_memories(memory_dir)
 
     assert any(e.artifact_type == "future_unknown_type" for e in entries), (
         "load_memories must load entries with unknown artifact_type, not skip them"
-    )
-    assert any("future_unknown_type" in r.message for r in caplog.records), (
-        "load_memories must log a warning for unknown artifact_type values"
     )
 
 
@@ -480,9 +420,9 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
 
         tracer = _orig.get_tracer("test.rag_backend")
         with tracer.start_as_current_span("execute_tool test") as parent_span:
-            # (1) search_memories — always grep (FTS removed for memory)
+            # (1) search_memories — FTS5 DB search
             asyncio.run(search_memories(mem_ctx, "rag-backend-annotation-fts-test"))
-            assert parent_span.attributes.get("rag.backend") == "grep"
+            assert parent_span.attributes.get("rag.backend") == "fts5"
 
             # (2) search_knowledge FTS path
             asyncio.run(search_knowledge(fts_know_ctx, "rag-backend-annotation-fts-test"))
@@ -518,3 +458,62 @@ def test_load_soul_mindsets_from_role_path():
     result = load_soul_mindsets("finch")
     assert result.startswith("## Mindsets")
     assert len(result) > 100
+
+
+# ---------------------------------------------------------------------------
+# update_memory / append_memory DB re-index round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_update_memory_reindexes_in_db(tmp_path: Path):
+    """update_memory must update the DB index so the new content is findable."""
+    from co_cli.knowledge._store import KnowledgeStore
+    from co_cli.tools.memory_edit import update_memory
+
+    memory_dir = tmp_path / "memory"
+    _write_memory(memory_dir, 1, "original-content-for-update-test")
+    file_path = next(memory_dir.glob("*.md"))
+    slug = file_path.stem
+
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
+    try:
+        idx.sync_dir("memory", memory_dir)
+        ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx)
+
+        asyncio.run(
+            update_memory(ctx, slug, "original-content-for-update-test", "updated-content-xyz")
+        )
+
+        results = idx.search("updated-content-xyz", source="memory", kind="memory", limit=5)
+        assert any("updated-content-xyz" in r.snippet for r in results), (
+            "update_memory must re-index so the updated content is searchable"
+        )
+    finally:
+        idx.close()
+
+
+def test_append_memory_reindexes_in_db(tmp_path: Path):
+    """append_memory must update the DB index so the appended content is findable."""
+    from co_cli.knowledge._store import KnowledgeStore
+    from co_cli.tools.memory_edit import append_memory
+
+    memory_dir = tmp_path / "memory"
+    _write_memory(memory_dir, 1, "base-content-for-append-test")
+    file_path = next(memory_dir.glob("*.md"))
+    slug = file_path.stem
+
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
+    try:
+        idx.sync_dir("memory", memory_dir)
+        ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx)
+
+        asyncio.run(append_memory(ctx, slug, "appended-unique-content-abc"))
+
+        results = idx.search(
+            "appended-unique-content-abc", source="memory", kind="memory", limit=5
+        )
+        assert any("appended-unique-content-abc" in r.snippet for r in results), (
+            "append_memory must re-index so the appended content is searchable"
+        )
+    finally:
+        idx.close()

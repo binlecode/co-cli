@@ -71,6 +71,7 @@ def _build_native_toolset(
         fn: Any,
         *,
         approval: bool = False,
+        sequential: bool = False,
         visibility: VisibilityPolicyEnum,
         integration: str | None = None,
         retries: int | None = None,
@@ -80,6 +81,7 @@ def _build_native_toolset(
         description = fn.__doc__.split("\n")[0].strip() if fn.__doc__ else fn.__name__
         kwargs: dict[str, Any] = {
             "requires_approval": approval,
+            "sequential": sequential,
             "defer_loading": visibility == VisibilityPolicyEnum.DEFERRED,
         }
         if retries is not None:
@@ -128,8 +130,12 @@ def _build_native_toolset(
     _deferred_visible = VisibilityPolicyEnum.DEFERRED
 
     # File write tools
-    _register_tool(write_file, approval=True, visibility=_deferred_visible, retries=1)
-    _register_tool(edit_file, approval=True, visibility=_deferred_visible, retries=1)
+    _register_tool(
+        write_file, approval=True, sequential=True, visibility=_deferred_visible, retries=1
+    )
+    _register_tool(
+        edit_file, approval=True, sequential=True, visibility=_deferred_visible, retries=1
+    )
 
     # Knowledge write tools
     _register_tool(save_article, approval=True, visibility=_deferred_visible, retries=1)

@@ -196,6 +196,44 @@ def test_approval_resume_filter_applies_to_mcp_tools() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Sequential flag: write_file and edit_file
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_tools_are_sequential() -> None:
+    """write_file and edit_file must carry sequential=True; read_file must not."""
+    from co_cli.agent._native_toolset import _build_native_toolset
+
+    toolset, _ = _build_native_toolset(_CONFIG)
+    ctx = _make_ctx(_make_deps())
+    tools = await toolset.get_tools(ctx)
+    assert tools["write_file"].tool_def.sequential is True
+    assert tools["edit_file"].tool_def.sequential is True
+    assert tools["read_file"].tool_def.sequential is False
+
+
+@pytest.mark.asyncio
+async def test_excluded_tools_are_not_sequential() -> None:
+    """Tools explicitly excluded from sequential=True in the plan must not be marked sequential.
+
+    These tools (save_article, run_shell_command, write_todos) were excluded because:
+    - save_article: UUID keys — no shared-path conflict possible
+    - run_shell_command: each call spawns an independent subprocess; serializing would
+      unnecessarily block shell+read batches
+    - write_todos: writes session-scoped in-memory state, not filesystem paths
+    """
+    from co_cli.agent._native_toolset import _build_native_toolset
+
+    toolset, _ = _build_native_toolset(_CONFIG)
+    ctx = _make_ctx(_make_deps())
+    tools = await toolset.get_tools(ctx)
+    assert tools["save_article"].tool_def.sequential is False
+    assert tools["run_shell_command"].tool_def.sequential is False
+    assert tools["write_todos"].tool_def.sequential is False
+
+
 def test_approval_resume_filter_hides_previously_discovered_deferred() -> None:
     """During resume, deferred tools not in resume_tool_names are hidden even if previously discovered."""
     # This validates BC-4: discovery state doesn't grant resume visibility

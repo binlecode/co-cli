@@ -217,11 +217,13 @@ User responds `y` (once) / `n` (deny) / `a` (always for this scope this session)
 
 ---
 
-### Concurrency Safety — Resource Locks
+### Concurrency Safety — Resource Locks and Sequential Dispatch
 
-Approval controls permission; resource locks control correctness. When pydantic-ai dispatches multiple tool calls in parallel (or parent + subagent touch the same resource), read-modify-write tools must not corrupt data.
+Approval controls permission; resource locks and sequential dispatch control correctness. When pydantic-ai dispatches multiple tool calls in parallel (or parent + subagent touch the same resource), read-modify-write tools must not corrupt data.
 
-`ResourceLockStore` (`co_cli/tools/resource_lock.py`) is an in-process `asyncio.Lock` store keyed by resource identifier. Shared by reference across parent and subagents via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately — no blocking, no silent overwrite.
+**Within-turn serialization:** `write_file` and `edit_file` are registered with `sequential=True` via `_register_tool()`. pydantic-ai's `ToolManager.get_parallel_execution_mode()` serializes the entire batch if any tool in it is marked sequential — the batch runs in model-return order (the order the model listed the calls). A `read_file + write_file` batch still runs sequentially in the order the model returned them, which is typically read-then-write.
+
+**Cross-agent locking:** `ResourceLockStore` (`co_cli/tools/resource_lock.py`) is an in-process `asyncio.Lock` store keyed by resource identifier. Shared by reference across parent and subagents via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately — no blocking, no silent overwrite. ResourceLockStore remains necessary because the `sequential=True` flag only controls within-turn batch dispatch, not cross-agent concurrent calls.
 
 | Tool | Lock key | Why |
 |------|----------|-----|
@@ -311,7 +313,7 @@ All paths pre-resolved by `CoToolLifecycle.before_tool_execute` and verified aga
 
 #### Knowledge — Memory (`tools/memory.py`)
 
-YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses grep-only recall (`load_memories` + `grep_recall`) — memories are not indexed in FTS. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`. Memory writes are handled exclusively by the extractor agent via `save_insight` — the main agent has read-only access.
+YAML-frontmatter markdown files in `.co-cli/memory/`. Memories are indexed in FTS via `docs_fts` in `search.db`; `search_memories` and `_recall_for_context` use `KnowledgeStore.search(source="memory")` when a store is available, falling back to `grep_recall` otherwise. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`. Memory writes are handled exclusively by the extractor agent via `save_memory` — the main agent has read-only access.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
@@ -431,7 +433,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/files.py` | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` |
 | `co_cli/tools/shell.py` | `run_shell_command` — conditionally approved subprocess execution |
 | `co_cli/tools/memory.py` | `list_memories`, `search_memories` (read-only; write path owned by extractor) |
-| `co_cli/tools/insights.py` | `save_insight` — extractor-only write tool; always creates a new UUID-suffixed memory file |
+| `co_cli/tools/memory_write.py` | `save_memory` — extractor-only write tool; always creates a new UUID-suffixed memory file; re-indexes into `KnowledgeStore` after write |
 | `co_cli/tools/articles.py` | `save_article`, `search_articles`, `read_article`, `search_knowledge` |
 | `co_cli/tools/obsidian.py` | `list_notes`, `search_notes`, `read_note` |
 | `co_cli/tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
