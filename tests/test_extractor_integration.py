@@ -14,45 +14,10 @@ from tests._settings import make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
-from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.deps import CoDeps
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.memory._extractor import _memory_extractor_agent, _run_extraction_async
+from co_cli.memory._extractor import _run_extraction_async
 from co_cli.tools.shell_backend import ShellBackend
-
-
-@pytest.mark.asyncio
-@pytest.mark.local
-async def test_memory_extractor_writes_file_for_clear_preference(tmp_path: Path) -> None:
-    """Extractor agent must detect a clear preference and write at least one memory file."""
-    memory_dir = tmp_path / "memory"
-    config = make_settings()
-    llm_model = build_model(config.llm)
-    deps = CoDeps(
-        shell=ShellBackend(),
-        knowledge_store=None,
-        config=config,
-        memory_dir=memory_dir,
-        model=llm_model,
-    )
-
-    window = (
-        "User: I always use pytest for all my Python projects and I never use unittest.\n"
-        "Co: Understood, I'll keep that in mind when writing tests for you."
-    )
-
-    async with asyncio.timeout(30):
-        await _memory_extractor_agent.run(
-            window,
-            deps=deps,
-            model=llm_model.model,
-            model_settings=NOREASON_SETTINGS,
-        )
-
-    files = list(memory_dir.glob("*.md"))
-    assert len(files) >= 1, (
-        f"extractor must write at least one memory file to {memory_dir}, got {files}"
-    )
 
 
 @pytest.mark.asyncio

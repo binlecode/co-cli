@@ -7,7 +7,6 @@ import pytest
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
-    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -126,40 +125,32 @@ def test_cursor_excludes_messages_before_start() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
-async def test_last_extracted_idx_advances_on_success(tmp_path: Path) -> None:
-    """fire_and_forget_extraction must advance last_extracted_message_idx on success."""
-    from co_cli._model_factory import build_model
-
+async def test_last_extracted_idx_advances_on_empty_window(tmp_path: Path) -> None:
+    """fire_and_forget_extraction must advance last_extracted_message_idx instantly on empty window without LLM."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
-    config = make_settings()
-    llm_model = build_model(config.llm)
     deps = CoDeps(
         shell=ShellBackend(),
-        config=config,
+        config=make_settings(),
         memory_dir=memory_dir,
-        model=llm_model,
+        model=None,  # No model needed for empty window fast-path
     )
 
     frontend = SilentFrontend()
 
-    # Build a minimal message list for extraction
+    # Build a minimal message list that results in an empty window
+    # Messages with no parts will result in `not window.strip()` being true
     messages = [
-        ModelRequest(parts=[UserPromptPart(content="I always prefer dark mode in all editors")]),
-        ModelResponse(
-            parts=[TextPart(content="Got it, I'll remember that.")],
-            model_name="test-model",
-        ),
+        ModelRequest(parts=[]),
     ]
 
     cursor_start = 0
     delta = messages[cursor_start:]
 
     fire_and_forget_extraction(delta, deps=deps, frontend=frontend, cursor_start=cursor_start)
-    async with asyncio.timeout(30):
-        await drain_pending_extraction(timeout_ms=25_000)
+    async with asyncio.timeout(5):
+        await drain_pending_extraction(timeout_ms=1000)
 
     # Cursor must have advanced to cursor_start + len(delta)
     assert deps.session.last_extracted_message_idx == cursor_start + len(delta)

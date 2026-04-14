@@ -80,6 +80,6 @@ These exclusions apply even when the user explicitly asks to save something that
 1. Read the window carefully. It contains `User:` lines, `Co:` lines, and `Tool(...):`/`Tool result (...):` lines from tool calls.
 2. For each durable signal you detect, call `save_memory(content=..., type_=..., name=..., description=...)`.
 3. Do not investigate — only analyze what is present in the window.
-4. Do not output explanatory text. Only call `save_memory` for each signal, then stop.
-5. If no signals are found, stop without calling any tool.
+4. Do not output explanatory text. Call `save_memory` for each signal. When finished, output exactly the word "Done" and nothing else.
+5. If no signals are found, output exactly the word "Done" without calling any tool.
 6. Do not save the same fact twice. Max 3 calls per window.
