@@ -364,5 +364,5 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
 | `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, and approval prompts |
-| `co_cli/context/session.py` | session filename generation, latest-session discovery, migration from legacy format |
+| `co_cli/context/session.py` | session filename generation and latest-session discovery |
 | `co_cli/context/skill_env.py` | skill-run environment save/restore and active-skill-name cleanup |

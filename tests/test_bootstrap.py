@@ -429,7 +429,7 @@ def test_restore_session_stale_json_no_jsonl_creates_new_session(tmp_path: Path)
     """restore_session() with only stale .json files (no paired .jsonl) creates a new session."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(parents=True)
-    # Stale JSON sidecar with no paired .jsonl — migration skips it; find_latest_session finds nothing
+    # Stale JSON sidecar with no paired .jsonl — find_latest_session finds nothing
     (sessions_dir / "bad-session.json").write_text("not valid json{{{", encoding="utf-8")
 
     deps = _make_deps(tmp_path)

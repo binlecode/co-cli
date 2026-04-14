@@ -1,4 +1,4 @@
-"""Functional tests for session filename helpers, find_latest_session, and migration."""
+"""Functional tests for session filename helpers and find_latest_session."""
 
 from datetime import UTC, datetime
 from pathlib import Path
