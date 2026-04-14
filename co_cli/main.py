@@ -40,6 +40,7 @@ from co_cli.commands._commands import (
 from co_cli.config._core import (
     DEFAULT_REASONING_DISPLAY,
     LOGS_DB,
+    LOGS_DIR,
     REASONING_DISPLAY_FULL,
     USER_DIR,
     VALID_REASONING_DISPLAY_MODES,
@@ -51,7 +52,16 @@ from co_cli.context.transcript import append_messages as append_transcript
 from co_cli.context.transcript import write_compact_boundary
 from co_cli.deps import CoDeps
 from co_cli.display._core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
+from co_cli.observability._file_logging import setup_file_logging
 from co_cli.observability._telemetry import SQLiteSpanExporter
+
+# Dual-write: file logs (rotating) + SQLite OTel spans
+setup_file_logging(
+    log_dir=LOGS_DIR,
+    level=settings.observability.log_level,
+    max_size_mb=settings.observability.log_max_size_mb,
+    backup_count=settings.observability.log_backup_count,
+)
 
 exporter = SQLiteSpanExporter()
 

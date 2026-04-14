@@ -20,6 +20,7 @@ from pydantic import (
 from co_cli.config._knowledge import KnowledgeSettings
 from co_cli.config._llm import LlmSettings
 from co_cli.config._memory import MemorySettings
+from co_cli.config._observability import ObservabilityConfig
 from co_cli.config._shell import ShellSettings
 from co_cli.config._subagent import SubagentSettings
 from co_cli.config._web import WebSettings
@@ -33,6 +34,7 @@ ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials
 SETTINGS_FILE = USER_DIR / "settings.json"
 SEARCH_DB = USER_DIR / "co-cli-search.db"
 LOGS_DB = USER_DIR / "co-cli-logs.db"
+LOGS_DIR = USER_DIR / "logs"
 
 # Flat defaults (Settings-level, not grouped)
 DEFAULT_THEME = "light"
@@ -54,8 +56,9 @@ VALID_REASONING_DISPLAY_MODES: frozenset[str] = frozenset(
 
 
 def _ensure_dirs() -> None:
-    """Create the canonical user-global directory (idempotent)."""
+    """Create the canonical user-global directory and subdirectories (idempotent)."""
     USER_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _deep_merge_settings(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -137,6 +140,7 @@ class Settings(BaseModel):
     subagent: SubagentSettings = Field(default_factory=SubagentSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     shell: ShellSettings = Field(default_factory=ShellSettings)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
     # Flat — integration paths
     obsidian_vault_path: str | None = Field(default=None)
@@ -240,6 +244,11 @@ class Settings(BaseModel):
                 "http_backoff_base_seconds": "CO_CLI_WEB_HTTP_BACKOFF_BASE_SECONDS",
                 "http_backoff_max_seconds": "CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS",
                 "http_jitter_ratio": "CO_CLI_WEB_HTTP_JITTER_RATIO",
+            },
+            "observability": {
+                "log_level": "CO_CLI_LOG_LEVEL",
+                "log_max_size_mb": "CO_CLI_LOG_MAX_SIZE_MB",
+                "log_backup_count": "CO_CLI_LOG_BACKUP_COUNT",
             },
         }
         for group, fields in nested_env_map.items():
