@@ -94,7 +94,7 @@ CASES: list[RecallCase] = [
                 "days_ago": 1,
             },
         ],
-        prompt="What is 2 + 2?",
+        prompt="Review this PR and flag any security issues",
         expect_injection=False,
         expect_keyword=None,
         desc="No topic match → no injection",
@@ -102,7 +102,7 @@ CASES: list[RecallCase] = [
     RecallCase(
         id="recall-empty-store",
         memories=[],
-        prompt="Set up testing for my Python project",
+        prompt="Explain what async/await does in Python",
         expect_injection=False,
         expect_keyword=None,
         desc="Empty store → no injection",

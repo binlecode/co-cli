@@ -328,7 +328,7 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
 | error handling and interrupts owned by the loop | `run_turn()` | aligned |
 | compaction as an inline concern with circuit breaker | `summarize_history_window()` with `compaction_failure_count` | aligned |
-| isolated specialist contexts | sub-agents use `make_subagent_deps()` and stay outside the foreground loop | aligned |
+| isolated specialist contexts | delegation agents use `make_agent_deps()` and stay outside the foreground loop | aligned |
 
 The intentional simplification remains:
 
@@ -358,7 +358,8 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
-| `co_cli/agent.py` | main agent factory and native filtered toolset construction with per-tool loading policy |
+| `co_cli/agent/_core.py` | main agent factory |
+| `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
 | `co_cli/context/tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |

@@ -1,4 +1,4 @@
-"""Functional tests for subagent tool wiring and deps isolation."""
+"""Functional tests for delegation tool wiring and deps isolation."""
 
 from copy import copy
 from pathlib import Path
@@ -8,11 +8,11 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
-from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, make_subagent_deps
+from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, make_agent_deps
+from co_cli.tools.agents import _merge_turn_usage, delegate_coder
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.subagent import _merge_turn_usage, run_coding_subagent
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=settings)
@@ -29,21 +29,21 @@ def _make_ctx() -> RunContext:
 
 
 @pytest.mark.asyncio
-async def test_run_coding_subagent_no_model() -> None:
+async def test_delegate_coder_no_model() -> None:
     """Raises ModelRetry when model is None (no model configured).
 
-    All four subagent tools share the same guard pattern: ``if not deps.model``.
-    This test exercises the pattern via the coding tool; the others are identical.
+    All four delegation tools share the same guard pattern: ``if not deps.model``.
+    This test exercises the pattern via the coder tool; the others are identical.
     """
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
-        await run_coding_subagent(ctx, "analyze foo")
+        await delegate_coder(ctx, "analyze foo")
 
 
-def test_make_subagent_deps_resets_session_state() -> None:
-    """make_subagent_deps() shares tools by reference, inherits session fields, resets isolated fields."""
+def test_make_agent_deps_resets_session_state() -> None:
+    """make_agent_deps() shares handles by reference, inherits session fields, resets isolated fields."""
     from co_cli.commands._skill_types import SkillConfig
     from co_cli.deps import ApprovalKindEnum, SessionApprovalRule
 
@@ -65,7 +65,7 @@ def test_make_subagent_deps_resets_session_state() -> None:
         runtime=CoRuntimeState(),
     )
 
-    isolated = make_subagent_deps(base)
+    isolated = make_agent_deps(base)
 
     # service handles shared by reference
     assert isolated.shell is base.shell
@@ -80,7 +80,7 @@ def test_make_subagent_deps_resets_session_state() -> None:
     # CoSessionState no longer carries skill fields — they are on capabilities
     assert not hasattr(CoSessionState(), "skill_commands")
 
-    # Approval rules are a copy, not the same list (sub-agent grants must not leak to parent)
+    # Approval rules are a copy, not the same list (delegation grants must not leak to parent)
     assert isolated.session.session_approval_rules is not base.session.session_approval_rules
 
     # Session: isolated fields reset to clean defaults
@@ -88,8 +88,9 @@ def test_make_subagent_deps_resets_session_state() -> None:
     assert isolated.session.session_todos == []
     assert isolated.session.session_path == Path()
 
-    # Runtime resets to clean defaults
+    # Runtime resets to clean defaults (agent_depth incremented)
     assert isolated.runtime.turn_usage is None
+    assert isolated.runtime.agent_depth == base.runtime.agent_depth + 1
 
     # Config inherited from parent
     assert isolated.config.brave_search_api_key == "test-key"
@@ -121,5 +122,5 @@ def test_merge_turn_usage_alias_then_accumulate() -> None:
     _merge_turn_usage(ctx, u2)
     assert ctx.deps.runtime.turn_usage.input_tokens == 15
 
-    # Snapshot is not mutated — confirms copy() in _run_subagent_attempt decouples usage
+    # Snapshot is not mutated — confirms copy() in _run_agent_attempt decouples usage
     assert snapshot.input_tokens == 10

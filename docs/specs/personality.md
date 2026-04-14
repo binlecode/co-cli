@@ -52,7 +52,7 @@ build_static_instructions(provider, model_name, config)
     [4] behavioral rules   — 5 universal rule files (01–05)
     [5] soul examples      — concrete trigger→response patterns
     [6] counter-steering   — model-specific correction prose
-    [7] critique lens      — self-assessment frame
+    [7] review lens        — self-assessment frame
     → set as Agent.instructions (static, once per session)
 
 Each turn
@@ -100,13 +100,13 @@ section_3 = load_soul_mindsets(role)            # Optional — ## Mindsets block
 section_4 = _collect_rule_files()               # Rules from prompts/rules/NN_rule_id.md (01–05)
 section_5 = load_soul_examples(role)            # Optional — trigger→response patterns
 section_6 = get_counter_steering(provider, model) # Optional — ## Model-Specific Guidance
-section_7 = load_soul_critique(role)            # Optional — ## Review Lens, placed last
+section_7 = load_soul_critique(role)            # Optional — ## Review lens, placed last
 
 return "\n\n".join(non_empty_sections)
 ```
 
 **Placement rationale:** Soul seed is first because early context has the strongest influence
-on the model's operating space. Critique lens is last so it frames all prior content as
+on the model's operating space. Review lens is last so it frames all prior content as
 subject to self-review.
 
 **Rule files** (`prompts/rules/`) are personality-independent universal policies. Files must
@@ -188,7 +188,8 @@ for missing mindset files.
 | `co_cli/prompts/personalities/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
 | `co_cli/prompts/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
 | `co_cli/prompts/model_quirks/_loader.py` | `_load_quirk()`, `get_counter_steering()`, `get_model_inference()`, `normalize_model_name()` |
-| `co_cli/prompts/model_quirks/` | Per-provider/model quirk files (`gemini/`, `ollama-openai/`, `ollama-native/`) |
+| `co_cli/prompts/model_quirks/` | Per-provider/model quirk files (`gemini/`, `ollama-openai/`) |
 | `co_cli/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/_core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
-| `co_cli/agent.py` | `build_agent()` — calls `build_static_instructions()` and registers `add_personality_memories()` |
+| `co_cli/agent/_core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
+| `co_cli/agent/_instructions.py` | `add_personality_memories()` dynamic instruction callback |

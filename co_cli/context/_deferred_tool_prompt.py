@@ -17,10 +17,10 @@ _NATIVE_CATEGORIES: dict[str, str] = {
     "check_task_status": "background tasks",
     "cancel_background_task": "background tasks",
     "list_background_tasks": "background tasks",
-    "run_coding_subagent": "sub-agents",
-    "run_research_subagent": "sub-agents",
-    "run_analysis_subagent": "sub-agents",
-    "run_reasoning_subagent": "sub-agents",
+    "delegate_coder": "sub-agents",
+    "delegate_researcher": "sub-agents",
+    "delegate_analyst": "sub-agents",
+    "delegate_reasoner": "sub-agents",
 }
 
 # Integration field → display label

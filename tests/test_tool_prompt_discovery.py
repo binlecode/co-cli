@@ -7,7 +7,7 @@ We test the description side to catch regressions where a docstring update
 accidentally removes a keyword the SDK needs for discovery.
 """
 
-from co_cli.agent import _build_native_toolset
+from co_cli.agent._native_toolset import _build_native_toolset
 from co_cli.config._core import settings
 from co_cli.deps import VisibilityPolicyEnum
 
@@ -50,21 +50,15 @@ def test_background_task_tools_discoverable_by_keywords() -> None:
     assert "background" in descs["list_background_tasks"]
 
 
-def test_subagent_tools_discoverable_by_keywords() -> None:
-    """Subagent tools surface for delegation/analysis/research queries."""
+def test_delegation_tools_discoverable_by_keywords() -> None:
+    """Delegation tools surface for delegation/analysis/research queries."""
     descs = _deferred_descriptions()
-    assert "coder" in descs["run_coding_subagent"] or "coding" in descs["run_coding_subagent"]
-    assert "analysis" in descs["run_coding_subagent"] or "codebase" in descs["run_coding_subagent"]
-    assert "research" in descs["run_research_subagent"]
-    assert "web" in descs["run_research_subagent"]
-    assert (
-        "analysis" in descs["run_analysis_subagent"]
-        or "knowledge" in descs["run_analysis_subagent"]
-    )
-    assert (
-        "reasoning" in descs["run_reasoning_subagent"]
-        or "thinking" in descs["run_reasoning_subagent"]
-    )
+    assert "coder" in descs["delegate_coder"] or "coding" in descs["delegate_coder"]
+    assert "analysis" in descs["delegate_coder"] or "codebase" in descs["delegate_coder"]
+    assert "research" in descs["delegate_researcher"]
+    assert "web" in descs["delegate_researcher"]
+    assert "analysis" in descs["delegate_analyst"] or "knowledge" in descs["delegate_analyst"]
+    assert "reasoning" in descs["delegate_reasoner"] or "thinking" in descs["delegate_reasoner"]
 
 
 def test_memory_write_tools_not_in_agent() -> None:

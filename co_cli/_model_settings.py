@@ -1,7 +1,7 @@
 """Per-task ModelSettings for non-reasoning LLM calls.
 
 NOREASON_SETTINGS is a complete, self-contained ModelSettings used for all
-non-reasoning calls (subagents, compaction, memory extraction). Includes
+non-reasoning calls (delegation agents, compaction, memory extraction). Includes
 all extra_body keys needed by Ollama's OpenAI API. Provider-specific keys
 are silently ignored by Gemini's GoogleProvider.
 

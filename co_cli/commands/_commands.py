@@ -281,10 +281,10 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
 
     _DELEGATION_TOOLS = frozenset(
         {
-            "run_coding_subagent",
-            "run_research_subagent",
-            "run_analysis_subagent",
-            "run_reasoning_subagent",
+            "delegate_coder",
+            "delegate_researcher",
+            "delegate_analyst",
+            "delegate_reasoner",
             "start_background_task",
         }
     )
@@ -1262,7 +1262,7 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "status": SlashCommand("status", "Show system health or /status <task-id>", _cmd_status),
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
     "history": SlashCommand(
-        "history", "Show delegation history (subagents + background tasks)", _cmd_history
+        "history", "Show delegation history (delegation agents + background tasks)", _cmd_history
     ),
     "compact": SlashCommand(
         "compact", "Summarize conversation via LLM to reduce context", _cmd_compact

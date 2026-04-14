@@ -143,7 +143,7 @@ Example: `2026-04-11-T142305Z-550e8400.jsonl`. The timestamp prefix makes lexico
 2. `append_messages()` appends new messages (positional tail slice) to `deps.session.session_path`; creates parent dirs on first call
 3. Error banner printed when `turn_result.outcome == "error"`
 
-**Transcript format** — JSONL, each line is a single-element list serialized via pydantic-ai's `ModelMessagesTypeAdapter`. Preserves all discriminated union part types across round-trip.
+**Transcript format** — JSONL, each line is a single-element list serialized via pydantic-ai's `ModelMessagesTypeAdapter`. Preserves all discriminated union part types across round-trip. Tool results that exceeded the 50,000-char threshold are stored as `<persisted-output>` placeholders in the transcript (the full content lives in `.co-cli/tool-results/`; see §2.6).
 
 **Transcript loading** (`/resume`) — `load_transcript()` reads the full `.jsonl`, skips malformed lines with a warning.
 
@@ -319,7 +319,7 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 
 **Background tasks** — `start_background_task` stores state in `deps.session.background_tasks`. Each `BackgroundTaskState` tracks task ID, command, status, timestamps, exit code, and output ring buffer (`deque(maxlen=500)`). Session-scoped in memory only.
 
-**Oversized tool output** — when display text exceeds 50,000 chars, `persist_if_oversized()` writes to `.co-cli/tool-results/` and returns a placeholder with path, length, and 2K preview.
+**Oversized tool output** — when a tool result's display text exceeds 50,000 chars, `persist_if_oversized()` in `tool_result_storage.py` writes the full content to `.co-cli/tool-results/{sha256[:16]}.txt` (content-addressed; same content → same file, idempotent). The model receives a `<persisted-output>` XML placeholder containing the tool name, file path, total size in chars, and a 2,000-char preview — never the full content. The file persists on disk across sessions; no TTL or pruning policy. See §2.3 for the parallel session/transcript layout.
 
 ## 3. Config
 
@@ -375,7 +375,7 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/agent.py` | main-agent and task-agent construction; instruction registration |
+| `co_cli/agent/_core.py` | main-agent and delegation-agent construction; instruction registration |
 | `co_cli/prompts/_assembly.py` | static instruction assembly and rule validation |
 | `co_cli/prompts/personalities/_loader.py` | soul seed, mindset, character memory, examples, critique loading |
 | `co_cli/prompts/personalities/_injector.py` | per-turn `personality-context` memory injection |
@@ -395,7 +395,7 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/tools/memory.py` | `grep_recall`, `_recall_for_context` (internal), agent tools: `search_memories`, `list_memories` |
 | `co_cli/tools/articles.py` | article save/search/read plus cross-source `search_knowledge()` |
 | `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
-| `co_cli/tools/subagent.py` | inline sub-agent tools and result metadata |
+| `co_cli/tools/agents.py` | delegation tools and result metadata |
 | `co_cli/tools/background.py` | session-scoped background task state and subprocess monitor |
 | `co_cli/tools/tool_output.py` | `ToolReturn` construction and optional oversized-result persistence |
 | `co_cli/commands/_commands.py` | slash-command dispatch; `/memory`, `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |

@@ -1,13 +1,10 @@
-"""Session filename helpers and migration for co-cli chat sessions.
+"""Session filename helpers for co-cli chat sessions.
 
 Session files follow the naming format YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl —
 lexicographically sortable, human-readable, and self-describing. The display
 short ID is the 8-char UUID suffix embedded in the filename stem.
-
-Migration converts old {uuid}.jsonl + {uuid}.json pairs to the new format.
 """
 
-import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -71,43 +68,3 @@ def new_session_path(sessions_dir: Path) -> Path:
     session_id = str(uuid.uuid4())
     name = session_filename(now, session_id)
     return sessions_dir / name
-
-
-def _is_valid_uuid(value: str) -> bool:
-    """Return True if value is a well-formed UUID string (path-traversal guard)."""
-    try:
-        uuid.UUID(value)
-        return True
-    except (ValueError, AttributeError):
-        return False
-
-
-def migrate_session_files(sessions_dir: Path) -> None:
-    """Rename old {uuid}.jsonl + {uuid}.json pairs to new timestamp-prefixed format.
-
-    For each .json sidecar with a UUID stem:
-      - Reads created_at from the JSON
-      - Renames the paired .jsonl to YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl
-      - Deletes the .json sidecar
-
-    Skips pairs where the .jsonl is already missing (partial migration safe).
-    Non-destructive: uses rename, not rewrite. Safe to call multiple times.
-    """
-    if not sessions_dir.exists():
-        return
-    for json_path in sessions_dir.glob("*.json"):
-        uuid_stem = json_path.stem
-        if not _is_valid_uuid(uuid_stem):
-            continue
-        jsonl_path = sessions_dir / f"{uuid_stem}.jsonl"
-        if not jsonl_path.exists():
-            continue
-        try:
-            session_data = json.loads(json_path.read_text(encoding="utf-8"))
-            created_at = datetime.fromisoformat(session_data["created_at"])
-            new_name = session_filename(created_at, uuid_stem)
-            jsonl_path.rename(sessions_dir / new_name)
-            json_path.unlink()
-            logger.info("Migrated session %s → %s", uuid_stem[:8], new_name)
-        except Exception as exc:
-            logger.warning("Migration failed for %s: %s", json_path.name, exc)

@@ -8,7 +8,7 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend

@@ -184,8 +184,8 @@ The mode is stored on `deps.session.reasoning_display` (a `CoSessionState` field
 `StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)`. Changes take
 effect on the next turn; any in-flight stream uses the mode it started with.
 
-Sub-agent turns inherit the mode via `make_subagent_deps()`, which copies
-`base.session.reasoning_display` into the sub-agent's `CoSessionState`.
+Delegation agent turns inherit the mode via `make_agent_deps()`, which copies
+`base.session.reasoning_display` into the child agent's `CoSessionState`.
 
 ## 4. Config
 

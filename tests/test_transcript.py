@@ -115,22 +115,35 @@ def test_append_empty_list_is_noop(tmp_path: Path) -> None:
 
 def test_list_sessions_sorted_by_filename(tmp_path: Path) -> None:
     """list_sessions returns entries sorted by filename descending with titles and file sizes."""
+    from datetime import UTC, datetime
+
+    from co_cli.context.session import session_filename
+
     sessions_dir = tmp_path / "sessions"
 
+    # Older session
+    older_dt = datetime(2026, 4, 10, 8, 0, 0, tzinfo=UTC)
+    older_id = "aaaaaaaa-0000-0000-0000-000000000000"
+    older_name = session_filename(older_dt, older_id)
     msgs_a = [ModelRequest(parts=[UserPromptPart(content="fix the auth bug")])]
-    append_messages(sessions_dir / "test-session-a.jsonl", msgs_a)
+    append_messages(sessions_dir / older_name, msgs_a)
+
+    # Newer session — more messages = larger file
+    newer_dt = datetime(2026, 4, 11, 8, 0, 0, tzinfo=UTC)
+    newer_id = "bbbbbbbb-0000-0000-0000-000000000000"
+    newer_name = session_filename(newer_dt, newer_id)
     msgs_b = [
         ModelRequest(parts=[UserPromptPart(content="refactor the database layer")]),
         ModelResponse(parts=[TextPart(content="Sure, I'll refactor.")], model_name="m"),
     ]
-    append_messages(sessions_dir / "test-session-b.jsonl", msgs_b)
+    append_messages(sessions_dir / newer_name, msgs_b)
 
     summaries = list_sessions(sessions_dir)
 
     assert len(summaries) == 2
-    # Most recent first
-    assert summaries[0].session_id == "test-session-b"
-    assert summaries[1].session_id == "test-session-a"
+    # Most recent first (lexicographic descending = chronological descending)
+    assert summaries[0].session_id == "bbbbbbbb"
+    assert summaries[1].session_id == "aaaaaaaa"
     # Title extraction
     assert "refactor the database layer" in summaries[0].title
     assert "fix the auth bug" in summaries[1].title
@@ -148,10 +161,17 @@ def test_list_sessions_empty_dir(tmp_path: Path) -> None:
 
 def test_list_sessions_title_truncation(tmp_path: Path) -> None:
     """Titles longer than 80 chars are truncated with ellipsis."""
+    from datetime import UTC, datetime
+
+    from co_cli.context.session import session_filename
+
     sessions_dir = tmp_path / "sessions"
     long_prompt = "x" * 120
     msgs = [ModelRequest(parts=[UserPromptPart(content=long_prompt)])]
-    append_messages(sessions_dir / "test-long-title.jsonl", msgs)
+    name = session_filename(
+        datetime(2026, 4, 11, 8, 0, 0, tzinfo=UTC), "cccccccc-0000-0000-0000-000000000000"
+    )
+    append_messages(sessions_dir / name, msgs)
 
     summaries = list_sessions(sessions_dir)
     assert len(summaries) == 1

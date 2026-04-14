@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from prompt_toolkit.completion import WordCompleter
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.commands._commands import (
     CommandContext,
     DelegateToAgent,

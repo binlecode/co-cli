@@ -18,7 +18,7 @@ from co_cli.context.types import MemoryRecallState, SafetyState
 
 if TYPE_CHECKING:
     from co_cli._model_factory import LlmModel
-    from co_cli.agent import ToolRegistry
+    from co_cli.agent._core import ToolRegistry
     from co_cli.commands._skill_types import SkillConfig
     from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.background import BackgroundTaskState
@@ -85,7 +85,7 @@ class CoSessionState:
     """Mutable tool-visible session state.
 
     State here is readable and writable by tools and slash commands during the
-    session. Sub-agents receive a partially-inherited instance — see make_subagent_deps.
+    session. Delegation agents receive a partially-inherited instance — see make_agent_deps.
     """
 
     google_creds: Any | None = field(default=None, repr=False)
@@ -123,6 +123,8 @@ class CoRuntimeState:
     safety_state: SafetyState | None = field(default=None, repr=False)
     active_skill_name: str | None = None
     resume_tool_names: frozenset[str] | None = None
+    # Delegation depth — incremented by make_agent_deps(); guards against recursive delegation.
+    agent_depth: int = 0
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""
@@ -154,9 +156,9 @@ class CoDeps:
     shell: ShellBackend
     # Config — the Settings instance, read-only after bootstrap
     config: Settings
-    # Resource lock store (shared across parent + subagents)
+    # Resource lock store (shared across parent and delegation agents)
     resource_locks: ResourceLockStore = field(default=None, repr=False)  # type: ignore[assignment]  # __post_init__ always initializes from None
-    # File mtime registry — shared across parent + subagents by reference for staleness detection
+    # File mtime registry — shared across parent and delegation agents by reference for staleness detection
     file_read_mtimes: dict[str, float] = field(default_factory=dict, repr=False)
     # Service handles (optional, set during bootstrap)
     knowledge_store: KnowledgeStore | None = field(default=None, repr=False)
@@ -206,12 +208,18 @@ def resolve_workspace_paths(config: Settings, cwd: Path) -> dict[str, Any]:
     }
 
 
-def make_subagent_deps(base: CoDeps) -> CoDeps:
-    """Create an isolated CoDeps copy for a sub-agent.
+def make_agent_deps(base: CoDeps) -> CoDeps:
+    """Create an isolated CoDeps copy for a delegation tool agent.
 
     Shares handles, registries, config, and paths by reference.
     Session: inherits credentials, approval rules, and reasoning_display; resets per-session fields.
     Runtime: reset to clean defaults.
+
+    Intentionally shared fields (by reference, not copied):
+      file_read_mtimes — cross-agent staleness detection
+      resource_locks   — cross-agent lock coordination
+      degradations     — read-only after bootstrap
+    These are safe to share because per-turn mutable state (CoRuntimeState) is always fresh.
     """
     inherited_session = CoSessionState(
         google_creds=base.session.google_creds,
@@ -229,7 +237,7 @@ def make_subagent_deps(base: CoDeps) -> CoDeps:
         tool_index=base.tool_index,
         skill_commands=base.skill_commands,
         session=inherited_session,
-        runtime=CoRuntimeState(),
+        runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
         workspace_root=base.workspace_root,
         obsidian_vault_path=base.obsidian_vault_path,
         memory_dir=base.memory_dir,

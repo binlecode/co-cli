@@ -243,7 +243,7 @@ def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
             "-c",
             (
                 "from pathlib import Path; "
-                "from co_cli.agent import build_agent; "
+                "from co_cli.agent._core import build_agent; "
                 "from co_cli.config._core import load_config; "
                 "import os; "
                 "loaded = load_config(_user_config_path=Path('missing.json'), _project_dir=Path.cwd()); "

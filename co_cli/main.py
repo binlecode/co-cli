@@ -18,7 +18,7 @@ from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.agent import InstrumentationSettings
 from pydantic_ai.messages import ModelMessage
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, restore_session
 from co_cli.bootstrap.render_status import (

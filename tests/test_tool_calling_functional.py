@@ -21,7 +21,7 @@ from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
 from co_cli._model_settings import NOREASON_SETTINGS
-from co_cli.agent import build_tool_registry
+from co_cli.agent._core import build_tool_registry
 from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState

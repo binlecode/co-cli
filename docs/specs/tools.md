@@ -39,8 +39,8 @@ tools/
   task_control.py    — background task lifecycle
   todo.py            — session-scoped task list
   capabilities.py    — integration health introspection
-  subagent.py        — sub-agent delegation tools
-  _subagent_builders.py — output types + agent factories for delegation
+  agents.py          — delegation tools: delegate_coder, delegate_researcher, delegate_analyst, delegate_reasoner
+  _agent_outputs.py  — output types: CoderOutput, ResearchOutput, AnalysisOutput, ThinkingOutput
 ```
 
 ## 2. Core Logic
@@ -200,7 +200,7 @@ Three approval classes:
 |-------|-----------|---------|
 | Always deferred | `requires_approval=True` | `write_file`, `edit_file`, `save_article`, `start_background_task`, `create_gmail_draft` |
 | Shell inline | Registered `auto`; classified inside tool body | `run_shell_command` |
-| Always auto | `requires_approval=False` | reads, web, system, subagents, all read-only connector tools |
+| Always auto | `requires_approval=False` | reads, web, system, delegation agents, all read-only connector tools |
 
 Approval subject scopes:
 
@@ -273,10 +273,10 @@ Conditional tools excluded when gate is absent.
 | `check_task_status` | deferred | auto | — |
 | `cancel_background_task` | deferred | auto | — |
 | `list_background_tasks` | deferred | auto | — |
-| `run_coding_subagent` | deferred | auto | — |
-| `run_research_subagent` | deferred | auto | — |
-| `run_analysis_subagent` | deferred | auto | — |
-| `run_reasoning_subagent` | deferred | auto | — |
+| `delegate_coder` | deferred | auto | — |
+| `delegate_researcher` | deferred | auto | — |
+| `delegate_analyst` | deferred | auto | — |
+| `delegate_reasoner` | deferred | auto | — |
 | `list_notes` | deferred | auto | `obsidian_vault_path` |
 | `search_notes` | deferred | auto | `obsidian_vault_path` |
 | `read_note` | deferred | auto | `obsidian_vault_path` |
@@ -364,18 +364,18 @@ Requires `google_credentials_path`. Credentials resolved via `tools/_google_auth
 | `web_search` | `query`, `max_results=5`, `domains?` | Brave Search API; requires `BRAVE_SEARCH_API_KEY`; caps at 8 results; optional `site:` rewrite |
 | `web_fetch` | `url` | HTTP GET; redirect following; 1 MB pre-decode limit; 100K char display cap; exponential backoff; Cloudflare fallback headers |
 
-#### Delegation (`tools/subagent.py`)
+#### Delegation (`tools/agents.py`)
 
-Sub-agent tools use a dispatch-table architecture: `SUBAGENT_ROLES` maps role keys to `SubagentRoleConfig` (role constant, factory callable, config key, error/guard messages, behavioral flags). A single `_run_subagent()` function handles registry guard, model resolution, prompt scoping, tracing, attempt execution, and `tool_output()` formatting for all roles. Per-role display formatting lives in `_format_output()` via `match/case`. The 4 tool functions are thin wrappers (signature + docstring + one `return await _run_subagent(...)` call). Agents are spawned with isolated deps via `make_subagent_deps(base)` — shared `services` + `config`, fresh `session` + `runtime`, explicit `UsageLimits`. Child `RunUsage` merges back into the parent accumulator.
+Delegation tools build focused sub-agents inline via `build_agent()` from `co_cli/agent/_core.py`. Each tool constructs an agent with a role-specific instruction string, an explicit tool list, and a structured output type from `_agent_outputs.py`. Agents are spawned with isolated deps via `make_agent_deps(base)` — shared `services` + `config`, fresh `session` + `runtime`, explicit `UsageLimits`. `make_agent_deps()` increments `agent_depth` by 1; `MAX_AGENT_DEPTH = 2` guards against recursive delegation. Child `RunUsage` merges back into the parent accumulator via `_merge_turn_usage()`. Per-role display formatting lives in `_format_output()` via `match/case`.
 
-Role-specific behavioral flags: `retry_on_empty` (research only — retries with rephrased query when budget remains and result is empty), `input_prepend` (analysis only — prepends `inputs` as context to the question).
+Role-specific behavioral flags: `retry_on_empty` (researcher only — retries with rephrased query when budget remains and result is empty), `input_prepend` (analyst only — prepends `inputs` as context to the question).
 
-| Tool | Sub-agent surface | Behavior |
-|------|------------------|---------|
-| `run_coding_subagent` | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; returns `summary`, `diff_preview`, `files_touched`, `confidence` |
-| `run_research_subagent` | `web_search`, `web_fetch` | Web-only research; retries once with rephrased query (`retry_on_empty`) |
-| `run_analysis_subagent` | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; prepends `inputs` as context (`input_prepend`); returns `conclusion`, `evidence`, `reasoning` |
-| `run_reasoning_subagent` | none | Structured decomposition via reasoning model; returns `plan`, `steps`, `conclusion` |
+| Tool | Agent surface | Behavior |
+|------|--------------|---------|
+| `delegate_coder` | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; returns `summary`, `diff_preview`, `files_touched`, `confidence` |
+| `delegate_researcher` | `web_search`, `web_fetch` | Web-only research; retries once with rephrased query (`retry_on_empty`) |
+| `delegate_analyst` | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; prepends `inputs` as context (`input_prepend`); returns `conclusion`, `evidence`, `reasoning` |
+| `delegate_reasoner` | none | Structured decomposition via reasoning model; returns `plan`, `steps`, `conclusion` |
 
 #### Workflow (`tools/task_control.py`, `tools/todo.py`)
 
@@ -441,7 +441,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/task_control.py` | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` |
 | `co_cli/tools/todo.py` | `write_todos`, `read_todos` |
 | `co_cli/tools/capabilities.py` | `check_capabilities` |
-| `co_cli/tools/subagent.py` | `SubagentRoleConfig`, `SUBAGENT_ROLES`, `_run_subagent()`, `_format_output()`, thin wrappers: `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` |
+| `co_cli/tools/agents.py` | `delegate_coder`, `delegate_researcher`, `delegate_analyst`, `delegate_reasoner`, `_format_output()`, `_run_agent_attempt()`, per-role instruction builders |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()`, `_is_safe_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` |
@@ -451,8 +451,12 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/tool_output.py` | `ToolResult`, `tool_output()`, `ToolResultPayload` |
 | `co_cli/tools/tool_errors.py` | `tool_error()`, `handle_google_api_error()`, `http_status_code()` |
 | `co_cli/tools/_google_auth.py` | Google credential resolution |
-| `co_cli/tools/_subagent_builders.py` | `CoderOutput`, `make_coder_agent()`, `ResearchOutput`, `make_research_agent()`, `AnalysisOutput`, `make_analysis_agent()`, `ThinkingOutput`, `make_thinking_agent()` |
+| `co_cli/tools/_agent_outputs.py` | `CoderOutput`, `ResearchOutput`, `AnalysisOutput`, `ThinkingOutput` — structured output models for delegation agents |
 | `co_cli/_model_factory.py` | `LlmModel`, `build_model()` — single-model factory |
 | `co_cli/_model_settings.py` | `NOREASON_SETTINGS` — static `ModelSettings` for non-reasoning calls |
-| `co_cli/agent.py` | `build_agent()`, `_build_native_toolset()`, `_build_mcp_toolsets()`, `build_tool_registry()`, `_approval_resume_filter()`, `discover_mcp_tools()` |
+| `co_cli/agent/_core.py` | `build_agent()` — foreground and delegation agent factory |
+| `co_cli/agent/_native_toolset.py` | `_build_native_toolset()`, `_register_tool()`, `build_tool_registry()`, `_approval_resume_filter()` |
+| `co_cli/agent/_mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |
+| `co_cli/agent/_instructions.py` | dynamic instruction callbacks: `add_always_on_memories`, `add_personality_memories`, `build_category_awareness_prompt` wiring |
+| `co_cli/agent/__init__.py` | package docstring only |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — dynamic category-level prompt for deferred tool discovery |

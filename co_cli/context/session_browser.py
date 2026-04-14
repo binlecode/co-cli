@@ -30,7 +30,7 @@ class SessionSummary:
     title: str
     last_modified: datetime
     file_size: int
-    created_at: datetime | None = None
+    created_at: datetime
 
 
 def _extract_title(path: Path, max_bytes: int = 4096) -> str:
@@ -74,9 +74,9 @@ def format_file_size(size: int) -> str:
 def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
     """List past sessions sorted by filename descending (= most recent first).
 
-    For new-format files (YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl), session_id is
-    the 8-char UUID suffix and created_at is parsed from the filename prefix.
-    For legacy filenames, session_id is the full stem and created_at is None.
+    Session files use the format YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl.
+    session_id is the 8-char UUID suffix; created_at is parsed from the filename prefix.
+    Files that do not match this format are skipped.
 
     Title is extracted from the first 4KB of the JSONL file (head read only).
     File size and last_modified come from stat — no full file scan.
@@ -87,17 +87,15 @@ def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
     if not jsonl_files:
         return []
 
-    # Lexicographic sort descending (new-format filenames = chronological order)
+    # Lexicographic sort descending (filename format = chronological order)
     jsonl_files.sort(key=lambda p: p.name, reverse=True)
 
     summaries: list[SessionSummary] = []
     for path in jsonl_files:
         parsed = parse_session_filename(path.name)
-        if parsed is not None:
-            session_id, created_at = parsed[0], parsed[1]
-        else:
-            session_id = path.stem
-            created_at = None
+        if parsed is None:
+            continue
+        session_id, created_at = parsed[0], parsed[1]
         title = _extract_title(path)
         try:
             st = path.stat()

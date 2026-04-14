@@ -1,7 +1,7 @@
 """Per-resource fail-fast locking for mutation tools.
 
 Prevents concurrent read-modify-write corruption when pydantic-ai dispatches
-multiple tool calls in parallel or when parent + subagent touch the same resource.
+multiple tool calls in parallel or when parent + delegation agents touch the same resource.
 
 Usage in tools:
     async with ctx.deps.resource_locks.try_acquire(str(resolved_path)):
@@ -24,7 +24,7 @@ class ResourceLockStore:
     Locks are lazily created per key and never cleaned up — keys are bounded
     by file count + memory count in a single session, so no leak risk.
 
-    Shared by reference between parent agent and subagents via CoDeps.
+    Shared by reference between parent and delegation agents via CoDeps.
     """
 
     def __init__(self) -> None:

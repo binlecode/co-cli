@@ -19,7 +19,7 @@ from tests._settings import make_settings
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
 from co_cli.config._core import settings
 from co_cli.context._history import (

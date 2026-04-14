@@ -5,7 +5,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent import _approval_resume_filter, build_agent, build_tool_registry
+from co_cli.agent._core import build_agent, build_tool_registry
+from co_cli.agent._native_toolset import _approval_resume_filter
 from co_cli.config._core import settings
 from co_cli.context._deferred_tool_prompt import build_category_awareness_prompt
 from co_cli.deps import CoDeps, CoRuntimeState, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum

@@ -46,7 +46,7 @@ _SUMM_MODEL = _CONFIG_NO_MCP.llm.model
 
 # Tool registry and agent built once at module level.
 # Uses noreason settings for fast, non-reasoning tool-calling tests.
-from co_cli.agent import build_tool_registry
+from co_cli.agent._core import build_tool_registry
 
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 _AGENT = Agent(

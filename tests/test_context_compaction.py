@@ -11,7 +11,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._settings import make_settings
 
-from co_cli.agent import build_agent
+from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings, settings
 from co_cli.context._history import summarize_history_window
 from co_cli.context.summarization import (

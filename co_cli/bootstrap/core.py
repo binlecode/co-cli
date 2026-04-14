@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from co_cli.knowledge._store import KnowledgeStore
 
 from co_cli.config._core import MCPServerConfig, Settings, settings
-from co_cli.context.session import find_latest_session, migrate_session_files, new_session_path
+from co_cli.context.session import find_latest_session, new_session_path
 from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display._core import TerminalFrontend
@@ -215,7 +215,8 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     Raises ValueError on provider/model hard errors.
     """
     from co_cli._model_factory import build_model
-    from co_cli.agent import build_tool_registry, discover_mcp_tools
+    from co_cli.agent._core import build_tool_registry
+    from co_cli.agent._mcp import discover_mcp_tools
 
     config = settings
     cwd = Path.cwd()
@@ -306,12 +307,10 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> Path:
     """Restore the most recent session from sessions/ dir, or create a new session path.
 
-    Runs migration of old-format session pairs before loading.
     Returns the session Path (existing or newly constructed — file not created until
     first append_transcript call).
     """
     with _TRACER.start_as_current_span("restore_session") as span:
-        migrate_session_files(deps.sessions_dir)
         session_path = find_latest_session(deps.sessions_dir)
         if session_path is not None:
             deps.session.session_path = session_path

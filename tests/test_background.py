@@ -502,7 +502,7 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     """check_task_status result includes description and started_at from task metadata."""
     from tests._settings import make_settings
 
-    from co_cli.agent import build_agent
+    from co_cli.agent._core import build_agent
     from co_cli.config._core import settings
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
@@ -537,7 +537,7 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
     """list_background_tasks includes task descriptions in both metadata and display output."""
     from tests._settings import make_settings
 
-    from co_cli.agent import build_agent
+    from co_cli.agent._core import build_agent
     from co_cli.config._core import settings
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend

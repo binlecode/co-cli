@@ -65,7 +65,7 @@ The runtime is split into a small set of top-level owners:
 | --- | --- |
 | `co_cli/main.py` | CLI entrypoints, REPL loop, top-level lifecycle, and teardown |
 | `co_cli/bootstrap/` | session startup, runtime assembly, and capability discovery |
-| `co_cli/agent.py` | agent construction, instruction layers, and toolset assembly |
+| `co_cli/agent/` | agent construction, instruction layers, and toolset assembly |
 | `co_cli/commands/` | slash-command dispatch and skill delegation entrypoints |
 | `co_cli/context/` | foreground-turn orchestration, history management, sessions, and transcripts |
 | `co_cli/display/` | terminal rendering, prompt UX, and approval interaction |
@@ -160,7 +160,10 @@ These settings most directly affect top-level system assembly.
 | --- | --- |
 | `co_cli/main.py` | Top-level CLI lifecycle, REPL loop, and teardown |
 | `co_cli/bootstrap/core.py` | Runtime assembly and startup flow |
-| `co_cli/agent.py` | Foreground agent, instruction layers, and tool registry construction |
+| `co_cli/agent/_core.py` | Foreground agent factory (`build_agent()`) |
+| `co_cli/agent/_native_toolset.py` | Native toolset construction and tool registry |
+| `co_cli/agent/_mcp.py` | MCP toolset wiring and discovery |
+| `co_cli/agent/_instructions.py` | Dynamic instruction callbacks and prompt assembly |
 | `co_cli/commands/_commands.py` | Slash-command dispatch and skill handoff into the REPL loop |
 | `co_cli/deps.py` | Shared runtime contract and workspace path resolution |
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
