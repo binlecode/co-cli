@@ -283,6 +283,19 @@ async def test_sequential_tool_count() -> None:
     assert sequential_names == {"write_file", "patch"}
 
 
+def test_toolinfo_retries() -> None:
+    """retries field in ToolInfo mirrors the value passed to _register_tool()."""
+    from co_cli.agent._native_toolset import _build_native_toolset
+
+    _, native_index = _build_native_toolset(_CONFIG)
+    assert native_index["web_search"].retries == 3
+    assert native_index["web_fetch"].retries == 3
+    assert native_index["write_file"].retries == 1
+    assert native_index["patch"].retries == 1
+    assert native_index["save_article"].retries == 1
+    assert native_index["check_capabilities"].retries is None
+
+
 def test_approval_resume_filter_hides_previously_discovered_deferred() -> None:
     """During resume, deferred tools not in resume_tool_names are hidden even if previously discovered."""
     # This validates BC-4: discovery state doesn't grant resume visibility

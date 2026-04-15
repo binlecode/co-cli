@@ -84,16 +84,7 @@ def _build_native_toolset(
         )
         name = fn.__name__
         description = fn.__doc__.split("\n")[0].strip() if fn.__doc__ else fn.__name__
-        sequential = not is_concurrent_safe
-        kwargs: dict[str, Any] = {
-            "requires_approval": approval,
-            "sequential": sequential,
-            "defer_loading": visibility == VisibilityPolicyEnum.DEFERRED,
-        }
-        if retries is not None:
-            kwargs["retries"] = retries
-        native_toolset.add_function(fn, **kwargs)
-        native_index[name] = ToolInfo(
+        tool_info = ToolInfo(
             name=name,
             description=description,
             approval=approval,
@@ -103,7 +94,17 @@ def _build_native_toolset(
             max_result_size=max_result_size,
             is_read_only=is_read_only,
             is_concurrent_safe=is_concurrent_safe,
+            retries=retries,
         )
+        kwargs: dict[str, Any] = {
+            "requires_approval": tool_info.approval,
+            "sequential": not tool_info.is_concurrent_safe,
+            "defer_loading": tool_info.visibility == VisibilityPolicyEnum.DEFERRED,
+        }
+        if tool_info.retries is not None:
+            kwargs["retries"] = tool_info.retries
+        native_toolset.add_function(fn, **kwargs)
+        native_index[name] = tool_info
 
     # --- Always-visible tools (defer_loading=False) ---
     _always_visible = VisibilityPolicyEnum.ALWAYS

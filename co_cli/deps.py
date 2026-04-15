@@ -85,6 +85,7 @@ class ToolInfo:
     max_result_size: int = 50_000
     is_read_only: bool = False
     is_concurrent_safe: bool = False
+    retries: int | None = None
 
 
 @dataclass
