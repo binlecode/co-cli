@@ -1,6 +1,6 @@
 """SQLite FTS5 session index — storage, sync, and search.
 
-Manages a project-local SQLite database (.co-cli/session-index.db) that indexes
+Manages a user-global SQLite database (~/.co-cli/co-cli-search.db) that indexes
 user-prompt and assistant-text content from past session JSONL transcripts.
 Supports keyword search via FTS5 BM25 ranking with porter unicode61 tokeniser.
 

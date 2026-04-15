@@ -1,7 +1,6 @@
 """Per-turn instruction builder functions for the orchestrator agent."""
 
 from datetime import date
-from pathlib import Path
 
 from pydantic_ai import RunContext
 
@@ -20,14 +19,6 @@ def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
         "Shell runs as subprocess. DENY-pattern commands are blocked before deferral. "
         "Safe-prefix commands execute directly. All others require user approval."
     )
-
-
-def add_project_instructions(ctx: RunContext[CoDeps]) -> str:
-    """Inject project-level instructions from .co-cli/instructions.md."""
-    instructions_path = Path.cwd() / ".co-cli" / "instructions.md"
-    if instructions_path.is_file():
-        return instructions_path.read_text(encoding="utf-8").strip()
-    return ""
 
 
 def add_always_on_memories(ctx: RunContext[CoDeps]) -> str:

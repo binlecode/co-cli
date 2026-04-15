@@ -72,14 +72,13 @@ Bootstrap is one ordered path. The sections below follow the same order as the d
 
 ### Step 1. Load `Settings`
 
-The first access to `co_cli.config.settings` creates `~/.co-cli/` if needed, loads user config, deep-merges project config, applies env overrides, validates the result, and caches the singleton `Settings` instance. In practice this happens during module import because the display layer and logging setup both read settings before `chat()` starts.
+The first access to `co_cli.config.settings` creates `~/.co-cli/` if needed, loads user settings, applies env overrides, validates the result, and caches the singleton `Settings` instance. In practice this happens during module import because the display layer and logging setup both read settings before `chat()` starts.
 
 Config precedence is:
 
 ```text
 1. ~/.co-cli/settings.json
-2. <cwd>/.co-cli/settings.json
-3. env vars
+2. env vars
 ```
 
 ### Step 2. Enter `chat_loop()` and construct shell-local UI objects
@@ -110,17 +109,16 @@ Bootstrap resolves env-derived MCP credentials, builds the foreground `LlmModel`
 
 Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it stays alive for the session. Failures are isolated per server: a bad server produces a status warning, records a `"mcp.<prefix>"` entry in `degradations`, and is skipped, while successful servers still contribute discovered tools to the merged `tool_index`.
 
-### Step 7. Load skills with three-pass precedence
+### Step 7. Load skills with two-pass precedence
 
 Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_commands` map can be stored directly on the runtime object.
 
 ```text
-pass 1: built-in skills
-pass 2: user-global skills
-pass 3: project-local skills
+pass 1: bundled skills (co_cli/skills/)
+pass 2: user-global skills (~/.co-cli/skills/)
 ```
 
-Later passes override earlier ones. After `create_deps()` returns, `_chat_loop()` updates `completer.words` so prompt completion expands from built-ins to built-ins plus loaded skills.
+User-global skills override bundled skills on name collision. After `create_deps()` returns, `_chat_loop()` updates `completer.words` so prompt completion expands from built-ins to built-ins plus loaded skills.
 
 ### Step 8. Resolve the knowledge backend
 
@@ -178,10 +176,10 @@ No session file is written at startup — the file is created on the first `appe
 
 ### Step 12b. Initialise the session index
 
-After `restore_session()` returns, `_init_session_index()` opens or creates the project-local FTS5 session index at `.co-cli/session-index.db` and syncs past sessions into it. The current session path is excluded from sync.
+After `restore_session()` returns, `_init_session_index()` opens or creates the user-global FTS5 session index (`~/.co-cli/co-cli-search.db`) and syncs past sessions into it. The current session path is excluded from sync.
 
 ```text
-store = SessionIndex(db_path=sessions_dir.parent / "session-index.db")
+store = SessionIndex(db_path=sessions_dir.parent / "co-cli-search.db")
 store.sync_sessions(sessions_dir, exclude=current_session_path)
 deps.session_index = store
 
@@ -190,7 +188,7 @@ on failure:
     deps.session_index = None  # graceful degradation; session_search returns empty
 ```
 
-The index is derived and rebuildable: deleting `.co-cli/session-index.db` and restarting rebuilds cleanly from `*.jsonl` files. Change detection is size-based (append-only transcripts).
+The index is derived and rebuildable: deleting `~/.co-cli/co-cli-search.db` and restarting rebuilds cleanly from `*.jsonl` files. Change detection is size-based (append-only transcripts).
 
 ### Step 13. Print startup status and enter the REPL boundary
 

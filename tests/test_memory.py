@@ -83,7 +83,7 @@ def _write_memory(
 
 def test_recall_does_not_mutate_files(tmp_path: Path):
     """_recall_for_context must not change any file's mtime (read-only path)."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
     _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
 
@@ -110,7 +110,7 @@ def test_recall_does_not_mutate_files(tmp_path: Path):
 
 def test_list_memories_pagination(tmp_path: Path):
     """list_memories returns correct pages with offset/limit."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     for i in range(1, 6):
         _write_memory(memory_dir, i, f"Memory content number {i}", tags=["test"])
 
@@ -146,7 +146,7 @@ def test_list_memories_pagination(tmp_path: Path):
 
 def test_update_memory_replaces_exact_match(tmp_path: Path):
     """update_memory replaces old_content with new_content in the body."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest over unittest", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
@@ -160,7 +160,7 @@ def test_update_memory_replaces_exact_match(tmp_path: Path):
 
 def test_update_memory_raises_not_found(tmp_path: Path):
     """update_memory raises FileNotFoundError for an unknown slug."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
     ctx = _make_ctx(memory_dir=memory_dir)
 
@@ -170,7 +170,7 @@ def test_update_memory_raises_not_found(tmp_path: Path):
 
 def test_update_memory_raises_zero_occurrences(tmp_path: Path):
     """update_memory raises ValueError when old_content is not in the body."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
@@ -182,7 +182,7 @@ def test_update_memory_raises_zero_occurrences(tmp_path: Path):
 
 def test_update_memory_raises_ambiguous(tmp_path: Path):
     """update_memory raises ValueError when old_content appears more than once."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User uses pytest. Also uses pytest.", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
@@ -194,7 +194,7 @@ def test_update_memory_raises_ambiguous(tmp_path: Path):
 
 def test_update_memory_rejects_line_prefix(tmp_path: Path):
     """update_memory raises ValueError when old_content contains Read-tool line prefixes."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
@@ -213,7 +213,7 @@ def test_update_memory_tab_normalization(tmp_path: Path):
     Body is written with those literal spaces; old_content uses the raw tab — they
     compare equal after normalisation.
     """
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     # 5 spaces at column 3: what expandtabs() produces for "foo\tbar"
     path = _write_memory(memory_dir, 1, "foo     bar", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
@@ -232,7 +232,7 @@ def test_update_memory_tab_normalization(tmp_path: Path):
 
 def test_append_memory_adds_to_end(tmp_path: Path):
     """append_memory appends content as a new line at the end of the body."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
@@ -246,7 +246,7 @@ def test_append_memory_adds_to_end(tmp_path: Path):
 
 def test_append_memory_missing_slug_raises(tmp_path: Path):
     """append_memory raises FileNotFoundError for an unknown slug."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
     ctx = _make_ctx(memory_dir=memory_dir)
 
@@ -261,7 +261,7 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
 
 def test_search_memories_finds_saved_memories(tmp_path: Path):
     """search_memories returns saved memories via FTS5 DB search."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
 
     _write_memory(
         memory_dir, 1, "User prefers xyloquartz-search-test framework", tags=["preference"]
@@ -284,7 +284,7 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
 
 def test_search_memories_empty_query_returns_guard(tmp_path: Path):
     """search_memories with empty query returns guard message."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
     result = asyncio.run(search_memories(_make_ctx(memory_dir=memory_dir), "   "))
     assert result.metadata["count"] == 0
@@ -322,7 +322,7 @@ def _write_memory_with_artifact_type(
 
 def test_list_memories_displays_artifact_type(tmp_path: Path):
     """list_memories display contains artifact_type value when present."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
 
     _write_memory_with_artifact_type(
         memory_dir, 1, "Session summary content", artifact_type="custom_artifact"
@@ -343,7 +343,7 @@ def test_load_memories_tolerates_unknown_artifact_type(tmp_path: Path):
     """load_memories must load entries with unknown artifact_type without skipping them."""
     from co_cli.memory.recall import load_memories
 
-    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir = tmp_path / "memory"
     _write_memory_with_artifact_type(
         memory_dir, 1, "Memory with unknown artifact type", artifact_type="future_unknown_type"
     )

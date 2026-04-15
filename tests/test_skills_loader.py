@@ -35,7 +35,7 @@ def _make_ctx(
     deps = CoDeps(
         shell=ShellBackend(),
         config=settings,
-        skills_dir=skills_dir or (tmp_path / ".co-cli" / "skills"),
+        skills_dir=skills_dir or (tmp_path / "bundled-skills"),
         user_skills_dir=user_skills_dir or (tmp_path / "user-skills"),
         session=CoSessionState(),
     )
@@ -49,7 +49,7 @@ def _make_ctx(
 @pytest.mark.asyncio
 async def test_skills_reload_then_dispatch_substitutes_arguments(tmp_path: Path):
     """Reloaded project skills delegate through dispatch with argument substitution."""
-    skills_dir = tmp_path / ".co-cli" / "skills"
+    skills_dir = tmp_path / "bundled-skills"
     _write_skill(skills_dir, "search", "Search for: $ARGUMENTS")
 
     ctx = _make_ctx(tmp_path, skills_dir=skills_dir)
@@ -64,7 +64,7 @@ async def test_skills_reload_then_dispatch_substitutes_arguments(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_skills_reload_updates_registry_and_completer(tmp_path: Path):
     """Reload refreshes both the session skill registry and the live completer words."""
-    skills_dir = tmp_path / ".co-cli" / "skills"
+    skills_dir = tmp_path / "bundled-skills"
     _write_skill(
         skills_dir,
         "reload-completer-skill",
@@ -84,7 +84,7 @@ async def test_skills_reload_updates_registry_and_completer(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_skills_check_reports_missing_env_requirement(tmp_path: Path):
     """/skills check explains why a skill was skipped instead of failing silently."""
-    skills_dir = tmp_path / ".co-cli" / "skills"
+    skills_dir = tmp_path / "bundled-skills"
     _write_skill(
         skills_dir,
         "needs-env",

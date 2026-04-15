@@ -137,8 +137,7 @@ The system is deliberately local-first:
 
 Persistent state is also intentionally small in surface area:
 
-- project-local state lives under `.co-cli/`
-- user-global state lives under `~/.co-cli/`
+- all user/session state lives under `~/.co-cli/` (memories, sessions, library, skills, settings)
 - model context is rebuilt from files, settings, and history instead of being treated as hidden process state
 
 The specialized DESIGN docs own the detailed behavior inside each boundary:

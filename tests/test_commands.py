@@ -21,6 +21,7 @@ from co_cli.commands._commands import (
     LocalOnly,
     ReplaceTranscript,
     SkillConfig,
+    _load_skills,
     dispatch,
 )
 from co_cli.config._core import settings
@@ -111,7 +112,7 @@ async def test_cmd_clear():
 async def test_skills_install_url_error(tmp_path):
     """/skills install with unreachable URL returns None (graceful failure)."""
     ctx = _make_ctx()
-    ctx.deps.skills_dir = tmp_path / ".co-cli" / "skills"
+    ctx.deps.skills_dir = tmp_path / "bundled-skills"
     result = await dispatch("/skills install http://127.0.0.1:1/skill.md", ctx)
     assert isinstance(result, LocalOnly)
 
@@ -656,3 +657,24 @@ async def test_cmd_memory_registered(tmp_path):
     ctx = _make_ctx(memory_dir=tmp_path)
     result = await dispatch("/memory list", ctx)
     assert isinstance(result, LocalOnly)
+
+
+# ---------------------------------------------------------------------------
+# _load_skills diagnostics
+# ---------------------------------------------------------------------------
+
+
+def test_load_skills_collects_errors_for_malformed_skill_file(tmp_path):
+    """Malformed skill file is reported via errors accumulator with file name."""
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    # Write a skill file with invalid UTF-8 bytes — triggers UnicodeDecodeError on read
+    bad_skill = skills_dir / "broken.md"
+    bad_skill.write_bytes(b"---\ndescription: test\n---\n\xff\xfe bad bytes")
+
+    errors: list[str] = []
+    result = _load_skills(skills_dir, errors=errors)
+
+    assert isinstance(result, dict)
+    assert len(errors) == 1
+    assert "broken.md" in errors[0]

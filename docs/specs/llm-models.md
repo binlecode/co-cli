@@ -90,7 +90,7 @@ The main agent uses the config-derived base `ModelSettings` from `deps.model.set
 
 ## 3. Config
 
-Settings load order is `env > .co-cli/settings.json > ~/.co-cli/settings.json > defaults`.
+Settings load order is `env > ~/.co-cli/settings.json > defaults`.
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|

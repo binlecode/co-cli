@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class SkillConfig:
-    """A dynamically-loaded skill command (from .co-cli/skills/*.md).
+    """A dynamically-loaded skill command (from bundled co_cli/skills/ or user ~/.co-cli/skills/).
 
     # source_url is not a field — it is read from frontmatter in command handlers
     """

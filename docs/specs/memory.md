@@ -25,7 +25,7 @@ Covers memory storage, extraction, recall, and REPL management. Library articles
 
 ## 1. What & How
 
-Memory is flat `.md` files with YAML frontmatter stored in `.co-cli/memory/`. They are indexed in FTS via `docs_fts` in `search.db` — `search_memories` and `_recall_for_context` use `KnowledgeStore.search(source="memory")` when a store is available. Two kinds coexist in the store: `memory` (extracted observations) and `article` (saved external references — storage path lives here, but FTS indexing of articles is handled by the library subsystem).
+Memory is flat `.md` files with YAML frontmatter stored in `~/.co-cli/memory/`. They are indexed in FTS via `docs_fts` in `search.db` — `search_memories` and `_recall_for_context` use `KnowledgeStore.search(source="memory")` when a store is available. Two kinds coexist in the store: `memory` (extracted observations) and `article` (saved external references — storage path lives here, but FTS indexing of articles is handled by the library subsystem).
 
 The extraction pipeline fires after each clean non-compaction turn as a background asyncio task, scanning a delta window of new messages and calling `save_memory` for each signal. A cursor in `CoSessionState` tracks which messages have been processed; a failed extraction leaves the cursor unchanged so the delta is retried next turn. When a turn applies inline compaction, extraction is skipped for that turn and the cursor is reset to the end of the compacted history — the summarizer has already processed the replaced content.
 
@@ -42,7 +42,7 @@ flowchart TD
         Cursor["advance cursor on success"]
     end
 
-    subgraph Store[".co-cli/memory/*.md"]
+    subgraph Store["~/.co-cli/memory/*.md"]
         Files["MemoryEntry (YAML frontmatter + body)"]
     end
 

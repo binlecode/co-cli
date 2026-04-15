@@ -32,10 +32,10 @@ The agent has no persistent state in model weights. Context is split across thre
 
 Persistent context lives outside the model:
 
-- workspace-local memories in `.co-cli/memory/`
+- user-global memories in `~/.co-cli/memory/`
 - character memories and mindsets in `co_cli/prompts/personalities/souls/{role}/` (read-only system assets)
 - user-global articles in `library_dir`
-- session metadata and append-only transcripts in `.co-cli/sessions/`
+- session metadata and append-only transcripts in `~/.co-cli/sessions/`
 - a rebuildable `KnowledgeStore` at `knowledge_db_path`
 
 ```mermaid
@@ -60,9 +60,9 @@ flowchart TD
     Finalize[_finalize_turn]
 
     subgraph Storage["persistent stores"]
-        Memories[".co-cli/memory/*.md"]
+        Memories["~/.co-cli/memory/*.md"]
         Library["library_dir/*.md"]
-        Sessions[".co-cli/sessions/YYYY-MM-DD-T...Z-{uuid8}.jsonl"]
+        Sessions["~/.co-cli/sessions/YYYY-MM-DD-T...Z-{uuid8}.jsonl"]
         Index["KnowledgeStore / co-cli-search.db"]
     end
 
@@ -96,7 +96,6 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 | --- | --- | --- |
 | `add_current_date` | always | `Today is YYYY-MM-DD.` |
 | `add_shell_guidance` | always | shell approval/reminder text |
-| `add_project_instructions` | `.co-cli/instructions.md` exists | full file contents |
 | `add_always_on_memories` | `always_on=True` entries exist | `Standing context:` block, capped by `memory_injection_max_chars` |
 | `add_personality_memories` | `config.personality` is set | top 5 `personality-context` memories as `## Learned Context` |
 | `add_category_awareness_prompt` | deferred tools registered in tool_index | category-level prompt listing available capabilities via `search_tools` (~100 tokens) |
@@ -125,10 +124,10 @@ LLM summarization falls back to a static marker when model registry is absent, f
 
 ### 2.3 Session & Transcript Persistence
 
-Sessions are stored as JSONL transcripts under `.co-cli/sessions/` using lexicographically sortable names:
+Sessions are stored as JSONL transcripts under `~/.co-cli/sessions/` using lexicographically sortable names:
 
 ```text
-.co-cli/sessions/
+~/.co-cli/sessions/
 ├── YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl
 └── YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl   ← compacted continuation may branch here
 ```
@@ -171,7 +170,7 @@ Persistent knowledge is flat Markdown files with YAML frontmatter stored in two 
 
 | Store | Path | Contents |
 | --- | --- | --- |
-| memory | `deps.memory_dir` (`.co-cli/memory/`) | conversation-derived memories |
+| memory | `deps.memory_dir` (`~/.co-cli/memory/`) | conversation-derived memories |
 | articles | `deps.library_dir` | saved external references and fetched docs |
 
 #### 2.4.1 Data Model
@@ -321,7 +320,7 @@ Memory is never chunked — it is indexed at document level in `docs_fts`. Boots
 
 **Background tasks** — `start_background_task` stores state in `deps.session.background_tasks`. Each `BackgroundTaskState` tracks task ID, command, status, timestamps, exit code, and output ring buffer (`deque(maxlen=500)`). Session-scoped in memory only.
 
-**Oversized tool output** — when a tool result's display text exceeds 50,000 chars, `persist_if_oversized()` in `tool_result_storage.py` writes the full content to `.co-cli/tool-results/{sha256[:16]}.txt` (content-addressed; same content → same file, idempotent). The model receives a `<persisted-output>` XML placeholder containing the tool name, file path, total size in chars, and a 2,000-char preview — never the full content. The file persists on disk across sessions; no TTL or pruning policy. See §2.3 for the parallel session/transcript layout.
+**Oversized tool output** — when a tool result's display text exceeds 50,000 chars, `persist_if_oversized()` in `tool_result_storage.py` writes the full content to `~/.co-cli/tool-results/{sha256[:16]}.txt` (content-addressed; same content → same file, idempotent). The model receives a `<persisted-output>` XML placeholder containing the tool name, file path, total size in chars, and a 2,000-char preview — never the full content. The file persists on disk across sessions; no TTL or pruning policy. See §2.3 for the parallel session/transcript layout.
 
 ## 3. Config
 
@@ -338,7 +337,7 @@ Memory is never chunked — it is indexed at document level in `docs_fts`. Boots
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `deps.sessions_dir` | n/a | `<cwd>/.co-cli/sessions` | workspace-relative; resolved onto `CoDeps`, not configurable via settings |
+| `deps.sessions_dir` | n/a | `~/.co-cli/sessions` | user-global; resolved onto `CoDeps`, not configurable via settings |
 
 ### Memory
 

@@ -4,7 +4,7 @@
 
 **Goal:** Define the skill system — markdown prompt overlays dispatched via slash commands.
 **Functional areas:**
-- Three-tier load order (builtin → project → user)
+- Two-tier load order (bundled → user-global)
 - Frontmatter parsing and load gating
 - Containment check and security scan
 - Skill registry, dispatch, and argument expansion (`$ARGUMENTS`, `$N`, `$0`)
@@ -73,19 +73,18 @@ The skill name is always the filename stem. Built-in slash commands are reserved
 
 ### Load Order
 
-Skills are loaded in three passes, lowest-priority first:
+Skills are loaded in two passes, lowest-priority first:
 
 1. **bundled** — package defaults from `co_cli/skills/*.md` (version-controlled; no runtime security scan)
 2. **user-global** — `~/.co-cli/skills/*.md` (from `deps.user_skills_dir`; security scan applied)
-3. **project-local** — `<cwd>/.co-cli/skills/*.md` (highest priority; security scan applied)
 
-Later passes win on name collision, so project-local overrides user-global, which overrides bundled.
+User-global skills override bundled skills on name collision.
 
-`_load_skill_file(path, root, scan)` is the per-file loader. The `root` parameter is the load root used for containment checking. `scan=False` is passed for the bundled pass (version-controlled, no runtime scan needed); `scan=True` is passed for user-global and project-local passes.
+`_load_skill_file(path, root, scan)` is the per-file loader. The `root` parameter is the load root used for containment checking. `scan=False` is passed for the bundled pass (version-controlled, no runtime scan needed); `scan=True` is passed for the user-global pass.
 
 Loading happens at startup inside `create_deps()` (in `bootstrap/core.py`) as part of deps assembly:
 
-1. load bundled, then user-global, then project-local skills
+1. load bundled, then user-global skills
 2. `skill_commands` passed into `CoDeps` constructor
 3. `completer.words = _build_completer_words(deps.skill_commands)` — called in `main.py` immediately after `create_deps()` returns
 
@@ -107,7 +106,7 @@ Skills that fail a gate are skipped, not loaded in a degraded state.
 
 ### Containment Check
 
-`_is_safe_skill_path(path, root)` is called for every file before it is loaded during user-global and project-local passes. It resolves symlinks and verifies the resolved path is still inside `root`. If a symlink points outside the load root, the file is skipped and a `logger.warning` is emitted. Bundled skills are version-controlled and not subject to this check.
+`_is_safe_skill_path(path, root)` is called for every file before it is loaded during the user-global pass. It resolves symlinks and verifies the resolved path is still inside `root`. If a symlink points outside the load root, the file is skipped and a `logger.warning` is emitted. Bundled skills are version-controlled and not subject to this check.
 
 ### Security Scan
 
@@ -191,14 +190,14 @@ The built-in `/skills` command family is implemented in `_cmd_skills()` and rela
 | Command | Purpose |
 | --- | --- |
 | `/skills list` | show loaded skills |
-| `/skills check` | compare available files vs actually loaded skills across all three tiers and report skip reasons |
-| `/skills install <path|url>` | copy skill into project skills dir and reload |
-| `/skills reload` | rescan user-global and project-local skill directories and reload into the live session |
+| `/skills check` | compare available files vs actually loaded skills across both tiers and report skip reasons |
+| `/skills install <path|url>` | copy skill into user skills dir and reload |
+| `/skills reload` | rescan the user-global skill directory and reload into the live session |
 | `/skills upgrade <name>` | reinstall from stored `source-url` |
 
-`/skills reload` rescans only the user-global and project-local directories; bundled skills are version-controlled and not rescanned at runtime. `/skills check` covers all three tiers (bundled, user-global, and project-local).
+`/skills reload` rescans only the user-global directory; bundled skills are version-controlled and not rescanned at runtime. `/skills check` covers both tiers (bundled and user-global).
 
-Installed skills are written to `<cwd>/.co-cli/skills/`.
+Installed skills are written to `~/.co-cli/skills/`.
 
 ## 3. Config
 
@@ -206,8 +205,8 @@ The skill system is lightly configured. The main runtime dependencies are the re
 
 | Setting | Source | Purpose |
 | --- | --- | --- |
-| `deps.skills_dir` | resolved in `resolve_workspace_paths()` as `<cwd>/.co-cli/skills` | project-local skill directory |
-| `deps.user_skills_dir` | defaults to `~/.co-cli/skills/` | user-global skill directory (middle tier) |
+| `deps.skills_dir` | package directory `co_cli/skills/` | bundled skills directory (lowest priority) |
+| `deps.user_skills_dir` | `~/.co-cli/skills/` | user-global skill directory (overrides bundled) |
 | `settings` values referenced by `requires.settings` | `co_cli/config/` | load gating only |
 
 There is no separate skills config object today.
@@ -223,7 +222,7 @@ There is no separate skills config object today.
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` (top-level); `active_skill_name` (runtime) |
 | `co_cli/knowledge/_frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/skills/` | package-default shipped skills |
-| `<cwd>/.co-cli/skills/` | project-local skill files and overrides |
+| `~/.co-cli/skills/` | user-global skill files; override bundled skills on name collision |
 | `docs/specs/flow-bootstrap.md` | when skills load during startup |
 | `docs/specs/core-loop.md` | how dispatched skill bodies flow through a normal turn |
 | `docs/specs/tools.md` | callable tool capabilities used by skills after dispatch |

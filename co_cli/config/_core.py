@@ -3,7 +3,6 @@
 import json
 import os
 from collections.abc import Mapping
-from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
@@ -67,22 +66,6 @@ def _ensure_dirs() -> None:
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _deep_merge_settings(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge nested settings dicts.
-
-    Scalar and list values are replaced wholesale by ``override``.
-    Dict values are merged key-by-key so partial nested overrides work.
-    """
-    merged = deepcopy(base)
-    for key, override_value in override.items():
-        base_value = merged.get(key)
-        if isinstance(base_value, dict) and isinstance(override_value, dict):
-            merged[key] = _deep_merge_settings(base_value, override_value)
-            continue
-        merged[key] = deepcopy(override_value)
-    return merged
 
 
 def _validate_personality(personality: str) -> list[str]:
@@ -278,18 +261,11 @@ class Settings(BaseModel):
             f.write(self.model_dump_json(indent=2, exclude_none=True))
 
 
-def find_project_config(_project_dir: Path | None = None) -> Path | None:
-    """Return .co-cli/settings.json in the project dir if it exists, else None."""
-    candidate = (_project_dir or Path.cwd()) / ".co-cli" / "settings.json"
-    return candidate if candidate.is_file() else None
-
-
 def load_config(
     _user_config_path: Path | None = None,
-    _project_dir: Path | None = None,
     _env: dict[str, str] | None = None,
 ) -> Settings:
-    """Load layered configuration: user config → project config → env vars."""
+    """Load configuration: user settings → env vars."""
     data: dict[str, Any] = {}
 
     user_config = _user_config_path if _user_config_path is not None else SETTINGS_FILE
@@ -300,24 +276,11 @@ def load_config(
             except Exception as e:
                 print(f"Error loading settings.json: {e}. Using defaults.")  # noqa: T201 — bootstrap error before logging is configured
 
-    project_config = find_project_config(_project_dir)
-    if project_config is not None:
-        with open(project_config) as f:
-            try:
-                data = _deep_merge_settings(data, json.load(f))
-            except Exception as e:
-                print(f"Error loading project config {project_config}: {e}. Skipping.")  # noqa: T201 — bootstrap error before logging is configured
-
     context = {"env": _env} if _env is not None else None
     try:
         resolved = Settings.model_validate(data, context=context)
     except ValidationError as exc:
-        loaded = [
-            str(user_config) if user_config.exists() else None,
-            str(project_config) if project_config else None,
-        ]
-        sources = [s for s in loaded if s]
-        hint = f" — check: {', '.join(sources)}" if sources else ""
+        hint = f" — check: {user_config}" if user_config.exists() else ""
         raise ValueError(f"Invalid configuration{hint}:\n{exc}") from exc
 
     for warning in _validate_personality(resolved.personality):
@@ -325,9 +288,6 @@ def load_config(
 
     return resolved
 
-
-# Resolved project config path (None when no .co-cli/settings.json in cwd)
-project_config_path: Path | None = find_project_config()
 
 # Lazy settings singleton
 _settings: Settings | None = None

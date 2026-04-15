@@ -242,7 +242,5 @@ def render_status_table(info: StatusResult) -> Table:
         )
         table.add_row("MCP Servers", status_str, details)
     table.add_row("Database", "Active", info.db_size)
-    if info.project_config:
-        table.add_row("Project Config", "Active", info.project_config)
 
     return table

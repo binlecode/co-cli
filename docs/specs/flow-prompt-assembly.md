@@ -17,7 +17,7 @@
 - Provider-specific wire format after the SDK has accepted the processed request
 - Memory/article schema internals (owned by `memory.md` and `library.md`)
 
-**Success criteria:** A reader can reconstruct which local files, config fields, runtime registries, and prior-turn artifacts shape the next model request, in what order, and can distinguish soul-defined personality from runtime insights stored in `.co-cli/memory/`.
+**Success criteria:** A reader can reconstruct which local files, config fields, runtime registries, and prior-turn artifacts shape the next model request, in what order, and can distinguish soul-defined personality from runtime insights stored in `~/.co-cli/memory/`.
 **Status:** Stable
 **Known gaps:** Exact provider payload serialization and any SDK-owned toolset instruction text are outside co-cli's source tree. This doc owns the co-cli sequence up to the SDK boundary and the co-cli-managed transforms applied before send.
 
@@ -78,7 +78,7 @@ if ollama:
 llm_model = build_model(config.llm)
 tool_registry = build_tool_registry(config)
 discover MCP tools -> tool_index
-load bundled + user + project skills
+load bundled + user-global skills
 assemble CoDeps(config, model, tool_index, skill_commands, paths, runtime)
 ```
 
@@ -190,7 +190,7 @@ Important boundaries:
 
 - soul-defined personality lives only under `souls/{role}/...`
 - the role-specific `souls/{role}/memories/*.md` files are the base personality memory layer and occupy step 2 after the seed
-- `.co-cli/memory/` is the runtime memory store populated by `save_memory`; it is not the base personality store
+- `~/.co-cli/memory/` is the runtime memory store populated by `save_memory`; it is not the base personality store
 - rule filename validation is fail-fast: invalid or non-contiguous rule numbering raises `ValueError`
 - the assembled static string must be non-empty
 
@@ -246,17 +246,15 @@ For co-cli, the instruction stack seen by the SDK is:
 1. the static string from `build_static_instructions()`
 2. `add_current_date`
 3. `add_shell_guidance`
-4. `add_project_instructions`
-5. `add_always_on_memories`
-6. `add_personality_memories`
-7. `add_category_awareness_prompt`
-8. any SDK/toolset-supplied dynamic instruction parts
+4. `add_always_on_memories`
+5. `add_personality_memories`
+6. `add_category_awareness_prompt`
+7. any SDK/toolset-supplied dynamic instruction parts
 
 The dynamic layers contribute the following request-time text:
 
 - current date: `Today is YYYY-MM-DD.`
 - shell guidance: approval/reminder text for shell execution
-- project instructions: full `.co-cli/instructions.md` when present
 - always-on memories: `Standing context:` followed by up to 5 `always_on=True` memory bodies, capped by `memory.injection_max_chars`
 - personality memories: `## Learned Context` followed by the 5 most recent insight entries tagged `personality-context`
 - category awareness: one short sentence listing deferred capability categories inferred from the current `tool_index`

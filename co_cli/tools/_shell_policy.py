@@ -103,6 +103,22 @@ def evaluate_shell_command(cmd: str, safe_prefixes: list[str]) -> ShellPolicyRes
             ShellDecisionEnum.DENY, "absolute-path destruction pattern (rm -rf /~)"
         )
 
+    # 5. Remote code execution via pipe-to-shell
+    if re.search(r"\b(curl|wget)\b.*\|\s*(ba|da|z|fi|k|c|t)?sh\b", cmd):
+        return ShellPolicyResult(
+            ShellDecisionEnum.DENY, "remote exec pattern (curl/wget pipe to shell)"
+        )
+
+    # 6. eval with remote fetch
+    if re.search(r"\beval\b.*\$\(\s*(curl|wget)\b", cmd):
+        return ShellPolicyResult(
+            ShellDecisionEnum.DENY, "remote exec pattern (eval with curl/wget)"
+        )
+
+    # 7. Fork bomb
+    if re.search(r":\s*\(\s*\)\s*\{.*:\s*\|.*:\s*&", cmd):
+        return ShellPolicyResult(ShellDecisionEnum.DENY, "fork bomb pattern")
+
     # ALLOW tier — safe prefix match with arg validation
     if _is_safe_command(cmd, safe_prefixes):
         return ShellPolicyResult(ShellDecisionEnum.ALLOW, "safe prefix match")

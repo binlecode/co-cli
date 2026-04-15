@@ -126,7 +126,6 @@ def build_agent(
             add_category_awareness_prompt,
             add_current_date,
             add_personality_memories,
-            add_project_instructions,
             add_shell_guidance,
         )
         from co_cli.prompts._assembly import build_static_instructions
@@ -156,7 +155,6 @@ def build_agent(
         # Conditional prompt layers — runtime-gated (fresh per turn, never accumulated)
         agent.instructions(add_current_date)
         agent.instructions(add_shell_guidance)
-        agent.instructions(add_project_instructions)
         agent.instructions(add_always_on_memories)
         agent.instructions(add_personality_memories)
         agent.instructions(add_category_awareness_prompt)

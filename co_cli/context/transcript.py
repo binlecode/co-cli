@@ -46,15 +46,11 @@ def append_messages(path: Path, messages: list[ModelMessage]) -> None:
     if not messages:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    short_id = path.stem[-8:]
-    try:
-        with path.open("a", encoding="utf-8") as f:
-            for msg in messages:
-                line = ModelMessagesTypeAdapter.dump_json([msg])
-                f.write(line.decode("utf-8") + "\n")
-        path.chmod(0o600)
-    except OSError as e:
-        logger.warning("Transcript write failed for session %s: %s", short_id, e)
+    with path.open("a", encoding="utf-8") as f:
+        for msg in messages:
+            line = ModelMessagesTypeAdapter.dump_json([msg])
+            f.write(line.decode("utf-8") + "\n")
+    path.chmod(0o600)
 
 
 def write_compact_boundary(path: Path) -> None:
@@ -65,13 +61,9 @@ def write_compact_boundary(path: Path) -> None:
     full uncompacted history — only post-compaction messages are returned.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    short_id = path.stem[-8:]
-    try:
-        with path.open("a", encoding="utf-8") as f:
-            f.write(COMPACT_BOUNDARY_MARKER + "\n")
-        path.chmod(0o600)
-    except OSError as e:
-        logger.warning("Compact boundary write failed for session %s: %s", short_id, e)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(COMPACT_BOUNDARY_MARKER + "\n")
+    path.chmod(0o600)
 
 
 def write_session_meta(
@@ -82,18 +74,14 @@ def write_session_meta(
 ) -> None:
     """Write a metadata control line for a newly branched session transcript."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    short_id = path.stem[-8:]
     payload = {"type": _SESSION_META_TYPE}
     if parent_session_path is not None:
         payload["parent_session"] = parent_session_path.name
     if reason:
         payload["reason"] = reason
-    try:
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
-        path.chmod(0o600)
-    except OSError as e:
-        logger.warning("Session metadata write failed for session %s: %s", short_id, e)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    path.chmod(0o600)
 
 
 def persist_session_history(

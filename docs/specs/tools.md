@@ -315,7 +315,7 @@ All paths pre-resolved by `CoToolLifecycle.before_tool_execute` and verified aga
 
 #### Knowledge — Memory (`tools/memory.py`)
 
-YAML-frontmatter markdown files in `.co-cli/memory/`. Memories are indexed in FTS via `docs_fts` in `search.db`; `search_memories` and `_recall_for_context` use `KnowledgeStore.search(source="memory")` when a store is available, falling back to `grep_recall` otherwise. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`. Memory writes are handled exclusively by the extractor agent via `save_memory` — the main agent has read-only access.
+YAML-frontmatter markdown files in `~/.co-cli/memory/`. Memories are indexed in FTS via `docs_fts` in `co-cli-search.db`; `search_memories` and `_recall_for_context` use `KnowledgeStore.search(source="memory")` when a store is available, falling back to `grep_recall` otherwise. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`. Memory writes are handled exclusively by the extractor agent via `save_memory` — the main agent has read-only access.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
@@ -404,7 +404,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
-| `session_search` | `query`, `limit=3` | FTS5/BM25 keyword search over past session transcripts in `.co-cli/session-index.db`; returns one deduplicated result per session (highest-scoring message); graceful empty result when `deps.session_index is None` |
+| `session_search` | `query`, `limit=3` | FTS5/BM25 keyword search over past session transcripts in `~/.co-cli/co-cli-search.db`; returns one deduplicated result per session (highest-scoring message); graceful empty result when `deps.session_index is None` |
 
 `session_search` is the read side of the session index. The index is built by `_init_session_index()` at startup (after `restore_session`) and synced incrementally by `SessionIndex.sync_sessions()`. The active session is excluded from sync so in-progress content is never indexed mid-session.
 

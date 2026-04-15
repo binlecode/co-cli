@@ -2,7 +2,7 @@
 
 This module provides tools for recalling and listing memories from the
 internal knowledge system. Memories are stored as markdown files with YAML
-frontmatter in .co-cli/memory/ (project-local). Write path is owned
+frontmatter in ~/.co-cli/memory/. Write path is owned
 exclusively by the extractor (co_cli/memory/_extractor.py via save_memory).
 
 Retrieval uses FTS5/BM25 via knowledge_store (DB-backed). Degrades to empty
