@@ -270,7 +270,7 @@ FROM spans WHERE name LIKE 'invoke_agent%' GROUP BY model;
 
 ### Privacy
 
-All data stays local. Tool responses and full conversation history are captured in span attributes. There is currently no built-in retention or pruning policy for this DB. To clear all traces: `rm ~/.co-cli/co-cli-logs.db`.
+All data stays local. Tool responses and full conversation history are captured in span attributes. Before any span is written to SQLite, `SQLiteSpanExporter` applies regex redaction to every string attribute value and every string value in event attribute dicts — replacing matches with `[REDACTED]`. The default pattern set covers common secret formats (OpenAI/Anthropic `sk-*` keys, Bearer tokens, GitHub `ghp_` tokens, generic `api_key=` pairs, AWS AKIA IDs, PEM private key headers). Values exceeding 64 KB bypass redaction as a performance guard. There is no built-in retention or pruning policy — the DB grows unbounded. To clear all traces: `rm ~/.co-cli/co-cli-logs.db`.
 
 ## 3. Config
 
@@ -288,6 +288,7 @@ All data stays local. Tool responses and full conversation history are captured 
 | `observability.log_level` | `CO_CLI_LOG_LEVEL` | `INFO` | Minimum level written to `co-cli.log` (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
 | `observability.log_max_size_mb` | `CO_CLI_LOG_MAX_SIZE_MB` | `5` | Max file size in MB before rotation (1–500) |
 | `observability.log_backup_count` | `CO_CLI_LOG_BACKUP_COUNT` | `3` | Rotated backup files to keep per log file (0–20) |
+| `observability.redact_patterns` | — | 6 default patterns | Regex list applied to span attribute strings before SQLite storage; extend via `settings.json` for custom secret formats |
 
 ### `co tail` Flags
 
@@ -312,7 +313,7 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/datasette_metadata.json` | Datasette UI config for `co logs` |
 | `co_cli/main.py` | `@app.command()` wrappers for `logs`, `traces`, `tail`; module-level OTel + file logging bootstrap |
 | `co_cli/config/_core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
-| `co_cli/config/_observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) |
+| `co_cli/config/_observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) and span redaction (`redact_patterns`) |
 | `~/.co-cli/co-cli-logs.db` | SQLite span storage |
 | `~/.co-cli/logs/co-cli.log` | Rotating operational log — INFO+ (all `logging.*` calls) |
 | `~/.co-cli/logs/errors.log` | Rotating error log — WARNING+ (quick triage) |

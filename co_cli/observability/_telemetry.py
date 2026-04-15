@@ -1,6 +1,7 @@
 import json
 import logging
 import logging.handlers
+import re
 import sqlite3
 import time
 from collections.abc import Sequence
@@ -22,10 +23,31 @@ _BUSY_TIMEOUT_MS = 5000
 _EXPORT_MAX_RETRIES = 3
 _EXPORT_RETRY_BASE_SECONDS = 0.1
 
+# Values longer than this are stored unredacted — scanning multi-hundred-KB
+# JSON blobs is not justified for the default pattern set.
+_MAX_REDACT_LEN = 65536
+
+
+def _redact(value: str, patterns: list[re.Pattern]) -> str:
+    """Replace all matches of each pattern in value with [REDACTED].
+
+    Values exceeding _MAX_REDACT_LEN are returned unchanged.
+    """
+    if len(value) > _MAX_REDACT_LEN:
+        return value
+    for pattern in patterns:
+        value = pattern.sub("[REDACTED]", value)
+    return value
+
 
 class SQLiteSpanExporter(SpanExporter):
-    def __init__(self, db_path: str = str(LOGS_DB)):
+    def __init__(
+        self,
+        db_path: str = str(LOGS_DB),
+        redact_patterns: list[str] | None = None,
+    ):
         self.db_path = db_path
+        self._patterns: list[re.Pattern] = [re.compile(p) for p in (redact_patterns or [])]
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -83,13 +105,25 @@ class SQLiteSpanExporter(SpanExporter):
                 status_code = span.status.status_code.name
                 status_description = span.status.description
 
+            # Span attributes — redact string values before storage
+            raw_attrs = dict(span.attributes) if span.attributes else {}
+            attrs = {
+                k: _redact(v, self._patterns) if isinstance(v, str) else v
+                for k, v in raw_attrs.items()
+            }
+
             # Events with attributes (OTel events can have attributes)
             events = []
             for e in span.events:
+                raw_event_attrs = dict(e.attributes) if e.attributes else {}
+                event_attrs = {
+                    k: _redact(v, self._patterns) if isinstance(v, str) else v
+                    for k, v in raw_event_attrs.items()
+                }
                 event = {
                     "name": e.name,
                     "timestamp": e.timestamp,
-                    "attributes": dict(e.attributes) if e.attributes else {},
+                    "attributes": event_attrs,
                 }
                 events.append(event)
 
@@ -110,7 +144,7 @@ class SQLiteSpanExporter(SpanExporter):
                     duration_ms,
                     status_code,
                     status_description,
-                    json.dumps(dict(span.attributes) if span.attributes else {}),
+                    json.dumps(attrs),
                     json.dumps(events),
                     json.dumps(resource),
                 )
@@ -230,6 +264,7 @@ def setup_tracer_provider(
     max_size_mb: int,
     backup_count: int,
     *,
+    redact_patterns: list[str] | None = None,
     skip_if_installed: bool = False,
 ) -> TracerProvider:
     """Create a TracerProvider with SQLite + text file span exporters.
@@ -244,6 +279,7 @@ def setup_tracer_provider(
         log_dir: Directory for ``spans.log`` (text exporter output).
         max_size_mb: Rotating log file size limit in MB.
         backup_count: Number of rotated backup files to keep.
+        redact_patterns: Regex patterns applied to string span attribute values before storage.
         skip_if_installed: When True, skip setup if a provider is already set.
 
     Returns the active ``TracerProvider`` (new or pre-existing).
@@ -255,7 +291,9 @@ def setup_tracer_provider(
 
     resource = Resource.create({"service.name": service_name, "service.version": service_version})
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(SimpleSpanProcessor(SQLiteSpanExporter()))
+    provider.add_span_processor(
+        SimpleSpanProcessor(SQLiteSpanExporter(redact_patterns=redact_patterns))
+    )
     provider.add_span_processor(
         SimpleSpanProcessor(TextSpanExporter(log_dir, max_size_mb, backup_count))
     )

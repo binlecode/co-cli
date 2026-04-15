@@ -4,6 +4,11 @@
 **Task type:** `code-feature`
 **Post-ship:** `/sync-doc`
 
+> **UAT note:** TASK-1 (span redaction) is a UAT blocker — credentials stored unredacted
+> in `~/.co-cli/co-cli-logs.db` contradicts the "trusted" and "local" mission positioning.
+> TASK-2 (logger suppression) and TASK-3 (provider error events) are hardening improvements
+> and are not UAT blockers. Ship TASK-1 first if the full plan is not ready.
+
 ---
 
 ## Context
@@ -144,7 +149,7 @@ FROM spans WHERE name = 'co.turn' AND status_code = 'ERROR';
 
 ## Implementation Plan
 
-### TASK-1: Span attribute redaction
+### ✓ DONE TASK-1: Span attribute redaction
 
 files: `co_cli/config/_observability.py` (new), `co_cli/config/_core.py`, `co_cli/observability/_telemetry.py`, `co_cli/main.py`, `tests/test_telemetry_redaction.py` (new)
 
@@ -228,3 +233,17 @@ Plan approved.
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev observability-hardening`
+
+---
+
+## Delivery Summary — TASK-1
+
+**Shipped:** v0.7.152
+
+**Changes:**
+- `co_cli/config/_observability.py` — added `redact_patterns: list[str]` to `ObservabilitySettings` with 6 default patterns (OpenAI/Anthropic `sk-*`, Bearer tokens, GitHub `ghp_`, generic `api_key=`, AWS AKIA IDs, PEM private key headers); module-level `_DEFAULT_REDACT_PATTERNS` constant
+- `co_cli/observability/_telemetry.py` — added `_MAX_REDACT_LEN = 65536`, `_redact()` helper, updated `SQLiteSpanExporter.__init__()` to accept `redact_patterns: list[str] | None`; redaction applied in `export()` to all span attribute string values and all event attribute string values before serialisation; `setup_tracer_provider()` accepts and forwards `redact_patterns`
+- `co_cli/main.py` — passes `settings.observability.redact_patterns` to `setup_tracer_provider()`
+- `tests/test_telemetry_redaction.py` — 7 new tests covering: `sk-` key redaction (SQLite round-trip), Bearer token in event attrs, clean value pass-through, identity field integrity, oversized value bypass, `_redact()` multi-match, `_redact()` size guard
+
+**Test result:** 478/478 passed

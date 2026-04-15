@@ -69,6 +69,7 @@ _tracer_provider = setup_tracer_provider(
     log_dir=LOGS_DIR,
     max_size_mb=settings.observability.log_max_size_mb,
     backup_count=settings.observability.log_backup_count,
+    redact_patterns=settings.observability.redact_patterns,
 )
 
 # Enable pydantic-ai instrumentation for all agents
