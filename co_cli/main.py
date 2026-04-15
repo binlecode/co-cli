@@ -7,10 +7,6 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 
 import typer
-from opentelemetry import trace
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
@@ -52,9 +48,13 @@ from co_cli.context.transcript import persist_session_history
 from co_cli.deps import CoDeps
 from co_cli.display._core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
 from co_cli.observability._file_logging import setup_file_logging
-from co_cli.observability._telemetry import SQLiteSpanExporter
+from co_cli.observability._telemetry import setup_tracer_provider
 
-# Dual-write: file logs (rotating) + SQLite OTel spans
+_VERSION = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())[
+    "project"
+]["version"]
+
+# Python logging → co-cli.log + errors.log (rotating)
 setup_file_logging(
     log_dir=LOGS_DIR,
     level=settings.observability.log_level,
@@ -62,30 +62,18 @@ setup_file_logging(
     backup_count=settings.observability.log_backup_count,
 )
 
-exporter = SQLiteSpanExporter()
-
-_VERSION = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())[
-    "project"
-]["version"]
-
-resource = Resource.create(
-    {
-        "service.name": "co-cli",
-        "service.version": _VERSION,
-    }
+# OTel spans → co-cli-logs.db (SQLite) + spans.log (text file)
+_tracer_provider = setup_tracer_provider(
+    service_name="co-cli",
+    service_version=_VERSION,
+    log_dir=LOGS_DIR,
+    max_size_mb=settings.observability.log_max_size_mb,
+    backup_count=settings.observability.log_backup_count,
 )
-tracer_provider = TracerProvider(resource=resource)
-tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
-trace.set_tracer_provider(tracer_provider)
 
 # Enable pydantic-ai instrumentation for all agents
 # Using version=3 for latest OTel GenAI semantic conventions (spec compliant)
-Agent.instrument_all(
-    InstrumentationSettings(
-        tracer_provider=tracer_provider,
-        version=3,
-    )
-)
+Agent.instrument_all(InstrumentationSettings(tracer_provider=_tracer_provider, version=3))
 
 app = typer.Typer(
     help="Co — personal AI operator · local-first · approval-first",

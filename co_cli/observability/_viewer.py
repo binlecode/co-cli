@@ -289,6 +289,93 @@ def format_duration(ms: float | None) -> str:
     return f"{ms / 1000:.2f}s"
 
 
+def _agent_attrs(attrs: dict) -> list[str]:
+    # pydantic-ai stores model name under "model_name" on invoke_agent spans
+    parts: list[str] = []
+    model = attrs.get("model_name", "") or attrs.get("gen_ai.request.model", "")
+    if model:
+        parts.append(f"model={model}")
+    in_tok = attrs.get("gen_ai.usage.input_tokens")
+    out_tok = attrs.get("gen_ai.usage.output_tokens")
+    if in_tok is not None and out_tok is not None:
+        parts.append(f"tokens={in_tok}\u2192{out_tok}")
+    return parts
+
+
+def _model_attrs(attrs: dict) -> list[str]:
+    parts: list[str] = []
+    in_tok = attrs.get("gen_ai.usage.input_tokens")
+    out_tok = attrs.get("gen_ai.usage.output_tokens")
+    if in_tok is not None:
+        parts.append(f"in={in_tok}")
+    if out_tok is not None:
+        parts.append(f"out={out_tok}")
+    finish = attrs.get("gen_ai.response.finish_reasons", "")
+    if finish:
+        parts.append(f"finish={finish}")
+    return parts
+
+
+def _tool_attrs(
+    attrs: dict,
+    *,
+    args_truncate: int | None,
+    include_result: bool,
+    result_truncate: int,
+) -> list[str]:
+    parts: list[str] = []
+    tool_name = attrs.get("gen_ai.tool.name", "")
+    if tool_name:
+        parts.append(f"tool={tool_name}")
+    raw_args = attrs.get("gen_ai.tool.call.arguments", "")
+    if raw_args:
+        arg_str = raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
+        if args_truncate is not None and len(arg_str) > args_truncate:
+            arg_str = arg_str[:args_truncate] + "\u2026"
+        parts.append(f"args={arg_str}")
+    if include_result:
+        raw_result = attrs.get("gen_ai.tool.call.result", "")
+        if raw_result:
+            result_str = raw_result if isinstance(raw_result, str) else json.dumps(raw_result)
+            if len(result_str) > result_truncate:
+                result_str = result_str[:result_truncate] + "\u2026"
+            parts.append(f"result={result_str}")
+    return parts
+
+
+def extract_span_attrs(
+    span_type: str,
+    attrs: dict,
+    *,
+    args_truncate: int | None = None,
+    include_result: bool = False,
+    result_truncate: int = 400,
+) -> list[str]:
+    """Extract key span attributes as formatted ``key=value`` strings.
+
+    Args:
+        span_type: One of ``"agent"``, ``"model"``, ``"tool"``.
+        attrs: Span attribute dict (OTel GenAI semantic conventions).
+        args_truncate: If set, truncate ``args=`` values to this many characters.
+        include_result: Include ``result=`` for tool spans (can be large).
+        result_truncate: Maximum characters for tool result before truncation.
+
+    Returns a list of strings; join with ``"  "`` for single-line display.
+    """
+    if span_type == "agent":
+        return _agent_attrs(attrs)
+    if span_type == "model":
+        return _model_attrs(attrs)
+    if span_type == "tool":
+        return _tool_attrs(
+            attrs,
+            args_truncate=args_truncate,
+            include_result=include_result,
+            result_truncate=result_truncate,
+        )
+    return []
+
+
 def escape_html(text: str) -> str:
     """Escape HTML special characters."""
     return (

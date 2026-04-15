@@ -1,14 +1,19 @@
 import json
 import logging
+import logging.handlers
 import sqlite3
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
 from co_cli.config._core import LOGS_DB
+from co_cli.observability._viewer import extract_span_attrs, format_duration, get_span_type
 
 logger = logging.getLogger(__name__)
 
@@ -137,3 +142,122 @@ class SQLiteSpanExporter(SpanExporter):
 
     def shutdown(self):
         pass
+
+
+# Maximum characters for tool result in spans.log (passed to extract_span_attrs).
+_RESULT_TRUNCATE = 400
+
+
+class TextSpanExporter(SpanExporter):
+    """Appends OTel spans as human-readable lines to spans.log.
+
+    One line per completed span: timestamp, type, name, key attributes, duration.
+    Enables cat/tail/grep debugging without requiring a DB query.
+    Uses a dedicated logger (``co_cli.observability.spans``) with ``propagate=False``
+    so span lines never bleed into ``co-cli.log``.
+    """
+
+    _logger_name = "co_cli.observability.spans"
+
+    def __init__(self, log_dir: Path, max_size_mb: int = 10, backup_count: int = 3) -> None:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "spans.log"
+
+        self._logger = logging.getLogger(self._logger_name)
+        self._logger.setLevel(logging.DEBUG)
+        self._logger.propagate = False
+
+        target = str(log_path)
+        for existing in self._logger.handlers:
+            if (
+                isinstance(existing, logging.handlers.RotatingFileHandler)
+                and existing.baseFilename == target
+            ):
+                return  # idempotent
+
+        handler = logging.handlers.RotatingFileHandler(
+            log_path,
+            maxBytes=max_size_mb * 1024 * 1024,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        self._logger.addHandler(handler)
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        for span in spans:
+            line = self._format_span(span)
+            if line:
+                self._logger.info(line)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        pass
+
+    def _format_span(self, span: ReadableSpan) -> str:
+        if span.context is None:
+            return ""
+
+        attrs: dict = dict(span.attributes) if span.attributes else {}
+        span_type = get_span_type(span.name)
+
+        ts = datetime.fromtimestamp(span.start_time / 1_000_000_000, tz=UTC)
+        ts_str = ts.strftime("%Y-%m-%dT%H:%M:%S.") + f"{ts.microsecond // 1000:03d}"
+
+        duration_ms = None
+        if span.end_time and span.start_time:
+            duration_ms = (span.end_time - span.start_time) / 1_000_000
+
+        status = " ERROR" if span.status and span.status.status_code.name == "ERROR" else ""
+        attr_parts = extract_span_attrs(
+            span_type, attrs, include_result=True, result_truncate=_RESULT_TRUNCATE
+        )
+        attr_str = "  ".join(attr_parts)
+
+        parts = [ts_str, f"[{span_type:<6}]", f"{span.name:<48}"]
+        if attr_str:
+            parts.append(attr_str)
+        parts.append(format_duration(duration_ms) + status)
+
+        return "  ".join(parts)
+
+
+def setup_tracer_provider(
+    service_name: str,
+    service_version: str,
+    log_dir: Path,
+    max_size_mb: int,
+    backup_count: int,
+    *,
+    skip_if_installed: bool = False,
+) -> TracerProvider:
+    """Create a TracerProvider with SQLite + text file span exporters.
+
+    Installs it as the global OTel provider via ``trace.set_tracer_provider``.
+    When ``skip_if_installed=True`` and a ``TracerProvider`` is already
+    installed, the existing provider is returned without modification.
+
+    Args:
+        service_name: OTel ``service.name`` resource attribute.
+        service_version: OTel ``service.version`` resource attribute.
+        log_dir: Directory for ``spans.log`` (text exporter output).
+        max_size_mb: Rotating log file size limit in MB.
+        backup_count: Number of rotated backup files to keep.
+        skip_if_installed: When True, skip setup if a provider is already set.
+
+    Returns the active ``TracerProvider`` (new or pre-existing).
+    """
+    if skip_if_installed:
+        current = trace.get_tracer_provider()
+        if isinstance(current, TracerProvider):
+            return current
+
+    resource = Resource.create({"service.name": service_name, "service.version": service_version})
+    provider = TracerProvider(resource=resource)
+    provider.add_span_processor(SimpleSpanProcessor(SQLiteSpanExporter()))
+    provider.add_span_processor(
+        SimpleSpanProcessor(TextSpanExporter(log_dir, max_size_mb, backup_count))
+    )
+    trace.set_tracer_provider(provider)
+    return provider

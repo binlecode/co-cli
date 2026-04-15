@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.text import Text
 
 from co_cli.config._core import LOGS_DB
-from co_cli.observability._viewer import format_duration, get_span_type
+from co_cli.observability._viewer import extract_span_attrs, format_duration, get_span_type
 
 TYPE_STYLES = {
     "agent": "cyan",
@@ -44,41 +44,7 @@ def _extract_output_messages(attrs: dict) -> list[tuple[str, str]]:
 
 def _extract_attrs(span_type: str, attrs: dict) -> str:
     """Compact single-line attribute summary shown on every span."""
-    parts: list[str] = []
-
-    if span_type == "agent":
-        # pydantic-ai stores model name under "model_name" on invoke_agent spans
-        model = attrs.get("model_name", "") or attrs.get("gen_ai.request.model", "")
-        if model:
-            parts.append(f"model={model}")
-        input_tok = attrs.get("gen_ai.usage.input_tokens")
-        output_tok = attrs.get("gen_ai.usage.output_tokens")
-        if input_tok is not None and output_tok is not None:
-            parts.append(f"tokens={input_tok}\u2192{output_tok}")
-
-    elif span_type == "model":
-        input_tok = attrs.get("gen_ai.usage.input_tokens")
-        output_tok = attrs.get("gen_ai.usage.output_tokens")
-        if input_tok is not None:
-            parts.append(f"in={input_tok}")
-        if output_tok is not None:
-            parts.append(f"out={output_tok}")
-        finish = attrs.get("gen_ai.response.finish_reasons", "")
-        if finish:
-            parts.append(f"finish={finish}")
-
-    elif span_type == "tool":
-        tool_name = attrs.get("gen_ai.tool.name", "")
-        if tool_name:
-            parts.append(f"tool={tool_name}")
-        # pydantic-ai v3 OTel attribute name
-        tool_args = attrs.get("gen_ai.tool.call.arguments", "")
-        if tool_args:
-            raw = tool_args if isinstance(tool_args, str) else json.dumps(tool_args)
-            truncated = raw[:80] + ("\u2026" if len(raw) > 80 else "")
-            parts.append(f"args={truncated}")
-
-    return "  ".join(parts)
+    return "  ".join(extract_span_attrs(span_type, attrs, args_truncate=80))
 
 
 def _vline(content: str, text_style: str = "white") -> Text:

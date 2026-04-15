@@ -33,17 +33,20 @@ Co CLI uses OpenTelemetry (OTel) to trace every agent operation. All data stays 
 │        │               │               │                  │
 │        └───────────────┴───────────────┘                  │
 │                         │                                 │
-│              ┌──────────┴──────────┐                      │
-│              ▼                     ▼                      │
-│   Agent.instrument_all()   setup_file_logging()           │
-│              │                     │                      │
-│              ▼                     ▼                      │
-│   TracerProvider ──▶ SQLiteSpanExporter   RotatingFileHandler (x2)
-│                                           co-cli.log / errors.log
-└──────────────┼────────────────────────────────────────────┘
+│        ┌────────────────┴────────────────┐                │
+│        ▼                                 ▼                │
+│   Agent.instrument_all()        setup_file_logging()      │
+│   setup_tracer_provider()              │                  │
+│        │                               ▼                  │
+│        ▼                    RotatingFileHandler (x2)      │
+│   TracerProvider                co-cli.log / errors.log   │
+│   ├──▶ SQLiteSpanExporter                                 │
+│   └──▶ TextSpanExporter                                   │
+└──────────────┬────────────────────────────────────────────┘
                │
-               ▼
-   ~/.co-cli/co-cli-logs.db    ~/.co-cli/logs/
+   ┌───────────┴──────────────┐
+   ▼                          ▼
+~/.co-cli/co-cli-logs.db    ~/.co-cli/logs/spans.log
                │
    ┌───────────┼───────────┐
    ▼           ▼           ▼
@@ -69,21 +72,21 @@ Run `co chat` in one terminal and `co tail` in another to watch the agent→mode
 
 ### Instrumentation Setup (`main.py`)
 
-Telemetry is bootstrapped at module load time, before any agent is created. Both write targets — file handlers and the SQLite exporter — are initialised at this step:
+Telemetry is bootstrapped at module load time, before any agent is created. All three write targets — file handlers, the SQLite exporter, and the text span exporter — are initialised at this step:
 
 ```
-setup_file_logging(LOGS_DIR, level, max_size_mb, backup_count)   # rotating files
-exporter = SQLiteSpanExporter()
-resource = Resource.create(service.name, service.version)
-tracer_provider = TracerProvider(resource)
-tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
-trace.set_tracer_provider(tracer_provider)
+setup_file_logging(LOGS_DIR, level, max_size_mb, backup_count)   # co-cli.log + errors.log
+tracer_provider = setup_tracer_provider(                          # co-cli-logs.db + spans.log
+    service_name, service_version, log_dir, max_size_mb, backup_count
+)
 Agent.instrument_all(InstrumentationSettings(tracer_provider, version=3))
 ```
 
-### File Logging — Dual-Write (`_file_logging.py`)
+`setup_tracer_provider()` (in `_telemetry.py`) creates a `TracerProvider` with two `SimpleSpanProcessor`s: one wrapping `SQLiteSpanExporter` and one wrapping `TextSpanExporter`. Both receive every span.
 
-`setup_file_logging()` attaches two `RotatingFileHandler`s to the Python root logger alongside the OTel SQLite exporter. Every `logging.*` call anywhere in the process is captured without per-module configuration.
+### File Logging (`_file_logging.py`)
+
+`setup_file_logging()` attaches two `RotatingFileHandler`s to the Python root logger. Every `logging.*` call anywhere in the process is captured without per-module configuration.
 
 **Files written under `~/.co-cli/logs/`:**
 
@@ -97,6 +100,21 @@ Agent.instrument_all(InstrumentationSettings(tracer_provider, version=3))
 **Secret redaction:** both files use `_RedactingFormatter`, which applies regex substitutions before any line reaches disk. Patterns covered: bearer tokens, `sk-*` / `sk-ant-*` API keys, GitHub `ghp_` tokens, `AIza*` Google tokens, JSON fields named `api_key`, `token`, `secret`, `password`, or `credential`, and PEM private key blocks.
 
 **Idempotent:** calling `setup_file_logging()` more than once with the same log directory is safe — duplicate handlers are not added.
+
+### Text Span Exporter (`_telemetry.py`)
+
+`TextSpanExporter` writes every OTel span to `~/.co-cli/logs/spans.log` as a single human-readable line — enabling `cat`/`tail`/`grep` debugging without a DB query.
+
+**Format:** one line per completed span:
+```
+2026-04-15T10:04:19.123  [tool  ]  execute_tool web_search                    tool=web_search  args={...}  result=...  890ms
+2026-04-15T10:04:18.456  [model ]  chat qwen3:8b                              in=1234 out=456 finish=stop  1.23s
+2026-04-15T10:04:18.123  [agent ]  invoke_agent agent                         model=qwen3:8b tokens=1234→456  5.68s
+```
+
+Tool results are included (truncated at 400 chars). Uses a dedicated `co_cli.observability.spans` logger with `propagate=False` so span lines never bleed into `co-cli.log`. Uses `extract_span_attrs()` (in `_viewer.py`) — the same attribute extraction function used by `co tail`.
+
+**Rotating file:** same `max_size_mb` / `backup_count` settings as the Python log files.
 
 `InstrumentationSettings(version=3)` selects the latest OTel GenAI semantic conventions:
 
@@ -287,9 +305,9 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | File | Purpose |
 |------|---------|
-| `co_cli/observability/_telemetry.py` | `SQLiteSpanExporter` — serialises OTel spans to SQLite with WAL + retry |
+| `co_cli/observability/_telemetry.py` | `SQLiteSpanExporter` (spans → SQLite), `TextSpanExporter` (spans → `spans.log`), `setup_tracer_provider()` (provider factory for both exporters) |
 | `co_cli/observability/_file_logging.py` | `setup_file_logging()` — attaches rotating file handlers + `_RedactingFormatter` to root logger |
-| `co_cli/observability/_viewer.py` | HTML generator — collapsible nested span tree, waterfall bars; shared `get_span_type()` and `format_duration()` |
+| `co_cli/observability/_viewer.py` | HTML generator — collapsible nested span tree, waterfall bars; shared `get_span_type()`, `format_duration()`, `extract_span_attrs()` |
 | `co_cli/observability/_tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
 | `co_cli/datasette_metadata.json` | Datasette UI config for `co logs` |
 | `co_cli/main.py` | `@app.command()` wrappers for `logs`, `traces`, `tail`; module-level OTel + file logging bootstrap |
@@ -298,4 +316,5 @@ All data stays local. Tool responses and full conversation history are captured 
 | `~/.co-cli/co-cli-logs.db` | SQLite span storage |
 | `~/.co-cli/logs/co-cli.log` | Rotating operational log — INFO+ (all `logging.*` calls) |
 | `~/.co-cli/logs/errors.log` | Rotating error log — WARNING+ (quick triage) |
+| `~/.co-cli/logs/spans.log` | Rotating OTel span log — one line per span; `cat`/`tail`/`grep` without DB query |
 | `~/.co-cli/traces.html` | Generated static HTML viewer (written by `co traces`) |

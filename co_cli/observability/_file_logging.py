@@ -1,4 +1,4 @@
-"""Rotating file log handler setup — dual-write alongside the SQLite OTel exporter.
+"""Rotating file log handler setup for Python ``logging`` output.
 
 Writes two files under ``log_dir``:
 - ``co-cli.log``  — INFO and above (all operational events)
@@ -6,6 +6,9 @@ Writes two files under ``log_dir``:
 
 Both files use ``RotatingFileHandler`` and a ``RedactingFormatter`` that strips
 common secret patterns before anything reaches disk.
+
+OTel span output (agent/model/tool events) is handled separately by
+``TextSpanExporter`` in ``_telemetry.py``, which writes to ``spans.log``.
 """
 
 import logging
