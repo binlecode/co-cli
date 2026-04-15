@@ -72,14 +72,19 @@ def _build_native_toolset(
         fn: Any,
         *,
         approval: bool = False,
-        sequential: bool = False,
+        is_read_only: bool = False,
+        is_concurrent_safe: bool = False,
         visibility: VisibilityPolicyEnum,
         integration: str | None = None,
         retries: int | None = None,
         max_result_size: int = 50_000,
     ) -> None:
+        assert not (is_read_only and not is_concurrent_safe), (
+            f"{fn.__name__}: is_read_only=True requires is_concurrent_safe=True"
+        )
         name = fn.__name__
         description = fn.__doc__.split("\n")[0].strip() if fn.__doc__ else fn.__name__
+        sequential = not is_concurrent_safe
         kwargs: dict[str, Any] = {
             "requires_approval": approval,
             "sequential": sequential,
@@ -96,94 +101,187 @@ def _build_native_toolset(
             visibility=visibility,
             integration=integration,
             max_result_size=max_result_size,
+            is_read_only=is_read_only,
+            is_concurrent_safe=is_concurrent_safe,
         )
 
     # --- Always-visible tools (defer_loading=False) ---
     _always_visible = VisibilityPolicyEnum.ALWAYS
 
     # Capability introspection
-    _register_tool(check_capabilities, visibility=_always_visible)
+    _register_tool(
+        check_capabilities, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
 
     # Session task tracking
-    _register_tool(write_todos, visibility=_always_visible)
-    _register_tool(read_todos, visibility=_always_visible)
+    _register_tool(write_todos, is_concurrent_safe=True, visibility=_always_visible)
+    _register_tool(
+        read_todos, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
 
     # Knowledge reads
-    _register_tool(search_memories, visibility=_always_visible)
-    _register_tool(search_knowledge, visibility=_always_visible)
-    _register_tool(search_articles, visibility=_always_visible)
-    _register_tool(read_article, visibility=_always_visible)
-    _register_tool(list_memories, visibility=_always_visible)
+    _register_tool(
+        search_memories, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
+    _register_tool(
+        search_knowledge, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
+    _register_tool(
+        search_articles, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
+    _register_tool(
+        read_article, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
+    _register_tool(
+        list_memories, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
 
     # Workspace reads
-    _register_tool(glob, visibility=_always_visible)
-    _register_tool(read_file, visibility=_always_visible, max_result_size=80_000)
-    _register_tool(grep, visibility=_always_visible)
+    _register_tool(glob, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible)
+    _register_tool(
+        read_file,
+        is_read_only=True,
+        is_concurrent_safe=True,
+        visibility=_always_visible,
+        max_result_size=80_000,
+    )
+    _register_tool(grep, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible)
 
     # Web
-    _register_tool(web_search, visibility=_always_visible, retries=3)
-    _register_tool(web_fetch, visibility=_always_visible, retries=3)
+    _register_tool(
+        web_search,
+        is_read_only=True,
+        is_concurrent_safe=True,
+        visibility=_always_visible,
+        retries=3,
+    )
+    _register_tool(
+        web_fetch,
+        is_read_only=True,
+        is_concurrent_safe=True,
+        visibility=_always_visible,
+        retries=3,
+    )
 
     # Execution
-    _register_tool(run_shell_command, visibility=_always_visible, max_result_size=30_000)
+    _register_tool(
+        run_shell_command,
+        is_concurrent_safe=True,
+        visibility=_always_visible,
+        max_result_size=30_000,
+    )
 
     # --- Deferred tools (defer_loading=True, discovered via SDK search_tools) ---
     _deferred_visible = VisibilityPolicyEnum.DEFERRED
 
     # File write tools
-    _register_tool(
-        write_file, approval=True, sequential=True, visibility=_deferred_visible, retries=1
-    )
-    _register_tool(patch, approval=True, sequential=True, visibility=_deferred_visible, retries=1)
+    _register_tool(write_file, approval=True, visibility=_deferred_visible, retries=1)
+    _register_tool(patch, approval=True, visibility=_deferred_visible, retries=1)
 
     # Knowledge write tools
-    _register_tool(save_article, approval=True, visibility=_deferred_visible, retries=1)
+    _register_tool(
+        save_article,
+        approval=True,
+        is_concurrent_safe=True,
+        visibility=_deferred_visible,
+        retries=1,
+    )
 
     # Background task tools
-    _register_tool(start_background_task, approval=True, visibility=_deferred_visible)
-    _register_tool(check_task_status, visibility=_deferred_visible)
-    _register_tool(cancel_background_task, visibility=_deferred_visible)
-    _register_tool(list_background_tasks, visibility=_deferred_visible)
+    _register_tool(
+        start_background_task, approval=True, is_concurrent_safe=True, visibility=_deferred_visible
+    )
+    _register_tool(
+        check_task_status, is_read_only=True, is_concurrent_safe=True, visibility=_deferred_visible
+    )
+    _register_tool(cancel_background_task, is_concurrent_safe=True, visibility=_deferred_visible)
+    _register_tool(
+        list_background_tasks,
+        is_read_only=True,
+        is_concurrent_safe=True,
+        visibility=_deferred_visible,
+    )
 
     # Delegation tools
-    _register_tool(delegate_coder, visibility=_deferred_visible)
-    _register_tool(delegate_researcher, visibility=_deferred_visible)
-    _register_tool(delegate_analyst, visibility=_deferred_visible)
-    _register_tool(delegate_reasoner, visibility=_deferred_visible)
+    _register_tool(delegate_coder, is_concurrent_safe=True, visibility=_deferred_visible)
+    _register_tool(delegate_researcher, is_concurrent_safe=True, visibility=_deferred_visible)
+    _register_tool(delegate_analyst, is_concurrent_safe=True, visibility=_deferred_visible)
+    _register_tool(delegate_reasoner, is_concurrent_safe=True, visibility=_deferred_visible)
 
     # Session history search
-    _register_tool(session_search, visibility=_deferred_visible)
+    _register_tool(
+        session_search, is_read_only=True, is_concurrent_safe=True, visibility=_deferred_visible
+    )
 
     # Integration tools — excluded when the required config/credential is absent
     if config.obsidian_vault_path:
-        _register_tool(list_notes, visibility=_deferred_visible, integration="obsidian")
-        _register_tool(search_notes, visibility=_deferred_visible, integration="obsidian")
-        _register_tool(read_note, visibility=_deferred_visible, integration="obsidian")
+        _register_tool(
+            list_notes,
+            is_read_only=True,
+            is_concurrent_safe=True,
+            visibility=_deferred_visible,
+            integration="obsidian",
+        )
+        _register_tool(
+            search_notes,
+            is_read_only=True,
+            is_concurrent_safe=True,
+            visibility=_deferred_visible,
+            integration="obsidian",
+        )
+        _register_tool(
+            read_note,
+            is_read_only=True,
+            is_concurrent_safe=True,
+            visibility=_deferred_visible,
+            integration="obsidian",
+        )
 
     if config.google_credentials_path:
         _register_tool(
-            search_drive_files, visibility=_deferred_visible, integration="google_drive", retries=3
+            search_drive_files,
+            is_read_only=True,
+            is_concurrent_safe=True,
+            visibility=_deferred_visible,
+            integration="google_drive",
+            retries=3,
         )
         _register_tool(
-            read_drive_file, visibility=_deferred_visible, integration="google_drive", retries=3
+            read_drive_file,
+            is_read_only=True,
+            is_concurrent_safe=True,
+            visibility=_deferred_visible,
+            integration="google_drive",
+            retries=3,
         )
         _register_tool(
-            list_gmail_emails, visibility=_deferred_visible, integration="google_gmail", retries=3
+            list_gmail_emails,
+            is_read_only=True,
+            is_concurrent_safe=True,
+            visibility=_deferred_visible,
+            integration="google_gmail",
+            retries=3,
         )
         _register_tool(
             search_gmail_emails,
+            is_read_only=True,
+            is_concurrent_safe=True,
             visibility=_deferred_visible,
             integration="google_gmail",
             retries=3,
         )
         _register_tool(
             list_calendar_events,
+            is_read_only=True,
+            is_concurrent_safe=True,
             visibility=_deferred_visible,
             integration="google_calendar",
             retries=3,
         )
         _register_tool(
             search_calendar_events,
+            is_read_only=True,
+            is_concurrent_safe=True,
             visibility=_deferred_visible,
             integration="google_calendar",
             retries=3,
@@ -191,6 +289,7 @@ def _build_native_toolset(
         _register_tool(
             create_gmail_draft,
             approval=True,
+            is_concurrent_safe=True,
             visibility=_deferred_visible,
             integration="google_gmail",
             retries=1,

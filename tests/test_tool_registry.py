@@ -221,12 +221,18 @@ async def test_write_tools_are_sequential() -> None:
     """write_file and patch must carry sequential=True; read_file must not."""
     from co_cli.agent._native_toolset import _build_native_toolset
 
-    toolset, _ = _build_native_toolset(_CONFIG)
+    toolset, native_index = _build_native_toolset(_CONFIG)
     ctx = _make_ctx(_make_deps())
     tools = await toolset.get_tools(ctx)
     assert tools["write_file"].tool_def.sequential is True
     assert tools["patch"].tool_def.sequential is True
     assert tools["read_file"].tool_def.sequential is False
+    assert native_index["write_file"].is_concurrent_safe is False
+    assert native_index["write_file"].is_read_only is False
+    assert native_index["patch"].is_concurrent_safe is False
+    assert native_index["patch"].is_read_only is False
+    assert native_index["read_file"].is_read_only is True
+    assert native_index["read_file"].is_concurrent_safe is True
 
 
 @pytest.mark.asyncio
@@ -241,12 +247,40 @@ async def test_excluded_tools_are_not_sequential() -> None:
     """
     from co_cli.agent._native_toolset import _build_native_toolset
 
-    toolset, _ = _build_native_toolset(_CONFIG)
+    toolset, native_index = _build_native_toolset(_CONFIG)
     ctx = _make_ctx(_make_deps())
     tools = await toolset.get_tools(ctx)
     assert tools["save_article"].tool_def.sequential is False
     assert tools["run_shell_command"].tool_def.sequential is False
     assert tools["write_todos"].tool_def.sequential is False
+    assert native_index["save_article"].is_concurrent_safe is True
+    assert native_index["run_shell_command"].is_concurrent_safe is True
+    assert native_index["write_todos"].is_concurrent_safe is True
+
+
+def test_toolinfo_read_only_tools() -> None:
+    """Read-only tools must have is_read_only=True and is_concurrent_safe=True."""
+    from co_cli.agent._native_toolset import _build_native_toolset
+
+    _, native_index = _build_native_toolset(_CONFIG)
+    assert native_index["read_file"].is_read_only is True
+    assert native_index["read_file"].is_concurrent_safe is True
+    assert native_index["glob"].is_read_only is True
+    assert native_index["glob"].is_concurrent_safe is True
+    assert native_index["grep"].is_read_only is True
+    assert native_index["grep"].is_concurrent_safe is True
+
+
+@pytest.mark.asyncio
+async def test_sequential_tool_count() -> None:
+    """Exactly 2 tools in the native toolset must have sequential=True: write_file and patch."""
+    from co_cli.agent._native_toolset import _build_native_toolset
+
+    toolset, _ = _build_native_toolset(_CONFIG)
+    ctx = _make_ctx(_make_deps())
+    tools = await toolset.get_tools(ctx)
+    sequential_names = {name for name, t in tools.items() if t.tool_def.sequential}
+    assert sequential_names == {"write_file", "patch"}
 
 
 def test_approval_resume_filter_hides_previously_discovered_deferred() -> None:

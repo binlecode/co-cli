@@ -97,7 +97,7 @@ only those + ALWAYS visible"]
 
 Approval controls permission; resource locks control correctness. 
 
-**Within-turn serialization:** `write_file` and `patch` are registered with `sequential=True`. The SDK serializes the entire batch if any tool in it is marked sequential.
+**Within-turn serialization:** `write_file` and `patch` are registered with `is_concurrent_safe=False`, which causes `_register_tool()` to derive `sequential=True`. The SDK serializes the entire batch if any tool in it is marked sequential.
 **Cross-agent locking:** `ResourceLockStore` is an in-process `asyncio.Lock` shared via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately.
 - `write_file` & `patch` lock on the resolved absolute path to prevent read-modify-write races.
 **Staleness Guard:** `CoDeps.file_read_mtimes` records the disk mtime at read. `write_file` and `patch` verify it hasn't changed before writing.
@@ -118,7 +118,8 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 **Axes of Registration (ToolInfo):**
 - **Visibility:** `ALWAYS` (visible on turn one) vs `DEFERRED` (discovered dynamically via `search_tools`).
 - **Approval:** `auto` (silent execution) vs `deferred` (user must approve, interrupts execution).
-- **Sequential:** `True` (forces entire batch serialization, e.g. for write operations) vs `False` (parallelizable).
+- **is_read_only:** `True` — tool never mutates any state. Implies `is_concurrent_safe=True`.
+- **is_concurrent_safe:** `True` — tool may run in parallel with others. Derived into SDK `sequential = not is_concurrent_safe`.
 - **Retries:** `1` (write-once), `3` (network reads), or `default` (`config.tool_retries`).
 - **Max Result Size:** Truncation threshold before spilling to storage (default 50k).
 - **Integration:** Gate tied to specific credentials/configs.
