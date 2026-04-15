@@ -187,7 +187,7 @@ done_when: |
 success_signal: openai/httpx/anthropic log lines no longer appear in verbose co output
 prerequisites: []
 
-### TASK-3: Provider error span events
+### ✓ DONE TASK-3: Provider error span events
 
 files: `co_cli/context/orchestrate.py`, `tests/test_orchestrate_error_event.py` (new)
 

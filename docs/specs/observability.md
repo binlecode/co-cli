@@ -166,7 +166,7 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 
 | Span Name (v3) | Kind | Key Attributes |
 |----------------|------|----------------|
-| `co.turn` | INTERNAL | `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens` — root span for every user turn; emitted by `co-cli.orchestrate` tracer in `run_turn()`; all pydantic-ai child spans attach under this root automatically |
+| `co.turn` | INTERNAL | `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens` — root span for every user turn; emitted by `co-cli.orchestrate` tracer in `run_turn()`; all pydantic-ai child spans attach under this root automatically. On terminal `ModelHTTPError` (429/5xx or budget-exhausted 400), adds a `provider_error` event with `http.status_code` (int) and `error.body` (str, capped at 500 chars). |
 | `invoke_agent {name}` | INTERNAL | `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `pydantic_ai.all_messages` |
 | `chat {model}` | CLIENT | `gen_ai.request.model`, `gen_ai.response.finish_reasons`, `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
 | `running tools` | INTERNAL | list of tool names |
@@ -260,6 +260,14 @@ SELECT json_extract(attributes, '$.gen_ai.request.model') AS model,
     SUM(json_extract(attributes, '$.gen_ai.usage.input_tokens')) AS input_tokens,
     SUM(json_extract(attributes, '$.gen_ai.usage.output_tokens')) AS output_tokens
 FROM spans WHERE name LIKE 'invoke_agent%' GROUP BY model;
+
+-- Provider errors (429/5xx/budget-exhausted 400) with status code and body
+SELECT datetime(start_time/1e9, 'unixepoch', 'localtime') AS time,
+    json_extract(events, '$[0].attributes.http\\.status_code') AS status,
+    json_extract(events, '$[0].attributes.error\\.body') AS body
+FROM spans WHERE name = 'co.turn' AND status_code = 'ERROR'
+    AND json_extract(events, '$[0].name') = 'provider_error'
+ORDER BY start_time DESC;
 ```
 
 ### Troubleshooting

@@ -624,6 +624,13 @@ async def run_turn(
                     # All other HTTP errors (429/5xx already retried by SDK, terminal errors)
                     frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
                     turn_state.outcome = "error"
+                    span.add_event(
+                        "provider_error",
+                        {
+                            "http.status_code": code,
+                            "error.body": str(e.body)[:500],
+                        },
+                    )
                     return _build_error_turn_result(turn_state)
 
                 except ModelAPIError as e:
