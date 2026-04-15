@@ -106,6 +106,7 @@ Approval controls permission; resource locks control correctness.
 **Cross-agent locking:** `ResourceLockStore` is an in-process `asyncio.Lock` shared via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately.
 - `write_file` & `patch` lock on the resolved absolute path to prevent read-modify-write races.
 **Staleness Guard:** `CoDeps.file_read_mtimes` records the disk mtime at read. `write_file` and `patch` verify it hasn't changed before writing.
+**Read-before-write enforcement:** `patch` requires a prior full `read_file` call — `CoDeps.file_partial_reads` tracks paths read with `start_line`/`end_line`; partial reads block patching until a full read clears the flag.
 
 ### Shell Policy
 

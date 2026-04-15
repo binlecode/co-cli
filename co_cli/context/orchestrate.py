@@ -21,6 +21,7 @@ from pydantic_ai import (
     RunContext,
 )
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import UsageLimits
 
 # Local alias — DeferredToolResults carries approval decisions (allow/deny),
 # not executed tool output. Actual tool output returns later as ToolReturnPart.
@@ -56,7 +57,7 @@ logger = logging.getLogger(__name__)
 # Per-segment hang-prevention timeout. Applied to each individual agent.run_stream_events()
 # call inside _execute_stream_segment(). Not a behavioral spec — a safety net that prevents
 # an unresponsive LLM from hanging a turn indefinitely.
-_LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 120
+_LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
 from co_cli.context.tool_approvals import (
@@ -323,6 +324,7 @@ async def _execute_stream_segment(
                 message_history=turn_state.current_history,
                 model_settings=model_settings,
                 usage=turn_state.latest_usage,
+                usage_limits=UsageLimits(request_limit=None),
                 deferred_tool_results=turn_state.tool_approval_decisions,
                 metadata={"session_id": deps.session.session_path.stem[-8:]},
             ):

@@ -172,6 +172,8 @@ class CoDeps:
     resource_locks: ResourceLockStore = field(default=None, repr=False)  # type: ignore[assignment]  # __post_init__ always initializes from None
     # File mtime registry — shared across parent and delegation agents by reference for staleness detection
     file_read_mtimes: dict[str, float] = field(default_factory=dict, repr=False)
+    # Paths for which only a partial read (start_line/end_line) was performed — cleared on full read
+    file_partial_reads: set[str] = field(default_factory=set, repr=False)
     # Service handles (optional, set during bootstrap)
     knowledge_store: KnowledgeStore | None = field(default=None, repr=False)
     session_index: SessionIndex | None = field(default=None, repr=False)
@@ -229,9 +231,10 @@ def fork_deps(base: CoDeps) -> CoDeps:
     Runtime: reset to clean defaults.
 
     Intentionally shared fields (by reference, not copied):
-      file_read_mtimes — cross-agent staleness detection
-      resource_locks   — cross-agent lock coordination
-      degradations     — read-only after bootstrap
+      file_read_mtimes    — cross-agent staleness detection
+      file_partial_reads  — cross-agent partial-read tracking
+      resource_locks      — cross-agent lock coordination
+      degradations        — read-only after bootstrap
     These are safe to share because per-turn mutable state (CoRuntimeState) is always fresh.
     """
     inherited_session = CoSessionState(
@@ -245,6 +248,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         config=base.config,
         resource_locks=base.resource_locks,
         file_read_mtimes=base.file_read_mtimes,
+        file_partial_reads=base.file_partial_reads,
         knowledge_store=base.knowledge_store,
         session_index=base.session_index,
         model=base.model,
