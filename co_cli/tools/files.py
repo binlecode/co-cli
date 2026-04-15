@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic_ai import RunContext
+from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
@@ -532,10 +532,11 @@ async def patch(
 ) -> ToolReturn:
     """Edit a file by replacing old_string with new_string, with fuzzy matching fallback.
 
-    Use for targeted modifications to existing files. Read the file first to
-    understand its content. Use the smallest unique old_string that
-    unambiguously identifies the edit location. Set replace_all=True only
-    when every occurrence should be replaced.
+    Use for targeted modifications to existing files. You must call read_file
+    at least once before patching — this tool will error if the file has not
+    been read. Use the smallest unique old_string that unambiguously identifies
+    the edit location. Set replace_all=True only when every occurrence should
+    be replaced.
 
     Tries four matching strategies in order: exact, line-trimmed (whitespace
     per line), indent-stripped (leading whitespace), escape-expanded (\\n \\t \\r).
@@ -562,7 +563,7 @@ async def patch(
 
     path_key = str(resolved)
     if err := _check_patch_preconditions(resolved, path, path_key, ctx):
-        return tool_error(err)
+        raise ModelRetry(err)
 
     from co_cli.tools.resource_lock import ResourceBusyError
 

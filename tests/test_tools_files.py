@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from pydantic_ai import RunContext
+from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
@@ -605,30 +605,27 @@ async def test_write_file_staleness_blocked(tmp_path):
 
 @pytest.mark.asyncio
 async def test_patch_staleness_blocked(tmp_path):
-    """patch returns error when file was modified since last read."""
+    """patch raises ModelRetry when file was modified since last read."""
     target = tmp_path / "stale.txt"
     target.write_text("original content")
     ctx = _make_ctx(tmp_path)
+    # Seed mtime as 0 to simulate a stale read (real mtime will differ)
     ctx.deps.file_read_mtimes[str(target)] = 0.0
 
-    result = await patch(ctx, path="stale.txt", old_string="original", new_string="new")
-
-    assert result.metadata.get("error") is True
-    assert "changed since last read" in result.return_value
+    with pytest.raises(ModelRetry, match="changed since last read"):
+        await patch(ctx, path="stale.txt", old_string="original", new_string="new")
 
 
 @pytest.mark.asyncio
 async def test_patch_requires_read_first(tmp_path):
-    """patch returns error when file has never been read (not in file_read_mtimes)."""
+    """patch raises ModelRetry when file has never been read (not in file_read_mtimes)."""
     target = tmp_path / "unread.txt"
     target.write_text("original content")
     ctx = _make_ctx(tmp_path)
     # Do NOT call read_file — file_read_mtimes is empty
 
-    result = await patch(ctx, path="unread.txt", old_string="original", new_string="replaced")
-
-    assert result.metadata.get("error") is True
-    assert "read_file" in result.return_value
+    with pytest.raises(ModelRetry, match="read_file"):
+        await patch(ctx, path="unread.txt", old_string="original", new_string="replaced")
 
 
 @pytest.mark.asyncio
@@ -745,17 +742,15 @@ async def test_patch_utf16(tmp_path):
 
 @pytest.mark.asyncio
 async def test_patch_partial_read_blocked(tmp_path):
-    """patch returns error when only a line range of the file was read."""
+    """patch raises ModelRetry when only a line range of the file was read."""
     target = tmp_path / "large.py"
     target.write_text("line one\nline two\nline three\n")
     ctx = _make_ctx(tmp_path)
     # Only read lines 1-2 — file is in file_read_mtimes but also in file_partial_reads
     await read_file(ctx, path="large.py", start_line=1, end_line=2)
 
-    result = await patch(ctx, path="large.py", old_string="line one", new_string="replaced")
-
-    assert result.metadata.get("error") is True
-    assert "start_line" in result.return_value or "end_line" in result.return_value
+    with pytest.raises(ModelRetry, match=r"start_line|end_line"):
+        await patch(ctx, path="large.py", old_string="line one", new_string="replaced")
 
 
 @pytest.mark.asyncio
@@ -766,8 +761,8 @@ async def test_patch_partial_clears_on_full_read(tmp_path):
     ctx = _make_ctx(tmp_path)
     await read_file(ctx, path="data.py", start_line=1, end_line=1)
     # Confirm patch is blocked after partial read
-    blocked = await patch(ctx, path="data.py", old_string="alpha", new_string="x")
-    assert blocked.metadata.get("error") is True
+    with pytest.raises(ModelRetry, match=r"start_line|end_line"):
+        await patch(ctx, path="data.py", old_string="alpha", new_string="x")
 
     # Full read clears the partial flag
     await read_file(ctx, path="data.py")
