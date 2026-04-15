@@ -30,7 +30,7 @@ from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
 from co_cli.knowledge._ranking import compute_confidence, detect_contradictions
 from co_cli.tools.memory import filter_memories, grep_recall, load_memories
-from co_cli.tools.tool_output import tool_output, tool_output_raw
+from co_cli.tools.tool_io import tool_output, tool_output_raw
 
 logger = logging.getLogger(__name__)
 

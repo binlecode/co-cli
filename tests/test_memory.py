@@ -17,10 +17,11 @@ from co_cli.deps import CoDeps
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools.memory import (
     _recall_for_context,
+    append_memory,
     list_memories,
     search_memories,
+    update_memory,
 )
-from co_cli.tools.memory_edit import append_memory, update_memory
 from co_cli.tools.shell_backend import ShellBackend
 
 # ---------------------------------------------------------------------------
@@ -468,7 +469,7 @@ def test_load_soul_mindsets_from_role_path():
 def test_update_memory_reindexes_in_db(tmp_path: Path):
     """update_memory must update the DB index so the new content is findable."""
     from co_cli.knowledge._store import KnowledgeStore
-    from co_cli.tools.memory_edit import update_memory
+    from co_cli.tools.memory import update_memory
 
     memory_dir = tmp_path / "memory"
     _write_memory(memory_dir, 1, "original-content-for-update-test")
@@ -495,7 +496,7 @@ def test_update_memory_reindexes_in_db(tmp_path: Path):
 def test_append_memory_reindexes_in_db(tmp_path: Path):
     """append_memory must update the DB index so the appended content is findable."""
     from co_cli.knowledge._store import KnowledgeStore
-    from co_cli.tools.memory_edit import append_memory
+    from co_cli.tools.memory import append_memory
 
     memory_dir = tmp_path / "memory"
     _write_memory(memory_dir, 1, "base-content-for-append-test")

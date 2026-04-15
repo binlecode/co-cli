@@ -3,14 +3,12 @@
 import base64
 from email.mime.text import MIMEText
 
-from googleapiclient.discovery import build
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools.tool_errors import handle_google_api_error, tool_error
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.google._auth import _get_google_service
+from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _GMAIL_NOT_CONFIGURED = (
     "Gmail: not configured. "
@@ -48,17 +46,6 @@ def _format_messages(service, message_ids: list[dict]) -> str:
     return output
 
 
-def _get_gmail_service(ctx: RunContext[CoDeps]):
-    """Extract and validate Gmail service from context.
-
-    Returns (service, None) on success, or (None, ToolReturn) for terminal config errors.
-    """
-    creds = get_cached_google_creds(ctx.deps)
-    if not creds:
-        return None, tool_error(_GMAIL_NOT_CONFIGURED)
-    return build("gmail", "v1", credentials=creds), None
-
-
 def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolReturn:
     """List the most recent emails from the user's Gmail inbox.
 
@@ -73,7 +60,7 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
     Args:
         max_results: Number of emails to return (default 5, max ~100).
     """
-    service, err = _get_gmail_service(ctx)
+    service, err = _get_google_service(ctx, "gmail", "v1", _GMAIL_NOT_CONFIGURED)
     if err:
         return err
     assert service is not None
@@ -112,7 +99,7 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
         query: Gmail search query (e.g. "from:alice subject:invoice newer_than:7d").
         max_results: Number of emails to return (default 5, max ~100).
     """
-    service, err = _get_gmail_service(ctx)
+    service, err = _get_google_service(ctx, "gmail", "v1", _GMAIL_NOT_CONFIGURED)
     if err:
         return err
     assert service is not None
@@ -148,7 +135,7 @@ def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
         subject: Email subject line.
         body: Email body as plain text.
     """
-    service, err = _get_gmail_service(ctx)
+    service, err = _get_google_service(ctx, "gmail", "v1", _GMAIL_NOT_CONFIGURED)
     if err:
         return err
     assert service is not None

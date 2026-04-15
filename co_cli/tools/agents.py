@@ -17,7 +17,7 @@ from co_cli.tools._agent_outputs import (
     ReasoningOutput,
     ResearchOutput,
 )
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_io import tool_output
 
 _TRACER = otel_trace.get_tracer("co-cli.agents")
 
@@ -399,7 +399,7 @@ async def delegate_analyst(
 
     from co_cli.agent._core import build_agent
     from co_cli.tools.articles import search_knowledge
-    from co_cli.tools.google_drive import search_drive_files
+    from co_cli.tools.google.drive import search_drive_files
 
     budget = max_requests or ctx.deps.config.subagent.max_requests_analysis
     model_obj = ctx.deps.model.model

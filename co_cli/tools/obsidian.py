@@ -8,7 +8,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
 from co_cli.knowledge._search_util import snippet_around
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_io import tool_output
 
 
 def _extract_frontmatter_tags(content: str) -> set[str]:

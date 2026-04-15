@@ -2,14 +2,12 @@
 
 from typing import Any
 
-from googleapiclient.discovery import build
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools.tool_errors import handle_google_api_error, tool_error
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.google._auth import _get_google_service
+from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _DRIVE_NOT_CONFIGURED = (
     "Drive: not configured. "
@@ -86,10 +84,9 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
         query: Search keywords (e.g. "weekly meeting", "Q4 budget report").
         page: Page number (1-based). Use 1 for first page, 2 for next, etc.
     """
-    creds = get_cached_google_creds(ctx.deps)
-    if not creds:
-        return tool_error(_DRIVE_NOT_CONFIGURED, ctx=ctx)
-    service = build("drive", "v3", credentials=creds)
+    service, err = _get_google_service(ctx, "drive", "v3", _DRIVE_NOT_CONFIGURED)
+    if err:
+        return err
 
     try:
         q = f"name contains '{query}' or fullText contains '{query}'"
@@ -138,10 +135,9 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
         file_id: The Google Drive file ID (from search_drive_files results,
                  e.g. "1e2ijrBd74oruWB0b-xGTiQvSwxGO6KK9HPTGaXnmOtI").
     """
-    creds = get_cached_google_creds(ctx.deps)
-    if not creds:
-        return tool_error(_DRIVE_NOT_CONFIGURED, ctx=ctx)
-    service = build("drive", "v3", credentials=creds)
+    service, err = _get_google_service(ctx, "drive", "v3", _DRIVE_NOT_CONFIGURED)
+    if err:
+        return err
 
     try:
         file = service.files().get(fileId=file_id, fields="name, mimeType").execute()

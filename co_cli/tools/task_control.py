@@ -21,7 +21,7 @@ from co_cli.tools.background import (
     kill_task,
     spawn_task,
 )
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_io import tool_output
 
 
 async def start_background_task(

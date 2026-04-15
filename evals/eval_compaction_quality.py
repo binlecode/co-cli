@@ -93,7 +93,7 @@ from co_cli.context.summarization import (
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import LlmModel, build_model
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_result_storage import (
+from co_cli.tools.tool_io import (
     PERSISTED_OUTPUT_TAG,
     TOOL_RESULT_MAX_SIZE,
     TOOL_RESULT_PREVIEW_SIZE,

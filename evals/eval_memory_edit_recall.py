@@ -35,9 +35,7 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.memory import search_memories
-from co_cli.tools.memory_edit import append_memory, update_memory
-from co_cli.tools.memory_write import save_memory
+from co_cli.tools.memory import append_memory, save_memory, search_memories, update_memory
 from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-memory-edit-recall.md"

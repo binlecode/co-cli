@@ -194,7 +194,7 @@ save_memory(ctx, content, type_=None, name=None, description=None,
 
 ### 2.4 Edit Path (Main Agent)
 
-`update_memory` and `append_memory` are defined in `tools/memory_edit.py` with `RunContext[CoDeps]` signatures but are **not registered on the main agent's toolset** as of the current codebase. They may be reserved for sub-agent use.
+`update_memory` and `append_memory` are defined in `tools/memory.py` with `RunContext[CoDeps]` signatures but are **not registered on the main agent's toolset** as of the current codebase. They may be reserved for sub-agent use.
 
 ```text
 update_memory(ctx, slug, old_content, new_content) -> ToolReturn
@@ -254,9 +254,7 @@ The `/memory` built-in provides inventory and deletion without an LLM turn. All 
 | `co_cli/memory/recall.py` | `MemoryEntry` dataclass; `load_memories`, `load_always_on_memories`, `grep_recall`, `filter_memories` |
 | `co_cli/memory/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
 | `co_cli/memory/prompts/memory_extractor.md` | extractor system prompt — signal types, caps, not-to-save list |
-| `co_cli/tools/memory_write.py` | `save_memory` — extractor-only write tool; UUID-suffix always-new file creation; re-indexes into `KnowledgeStore` after write |
-| `co_cli/tools/memory.py` | `_recall_for_context` (internal); agent tools: `search_memories`, `list_memories` |
-| `co_cli/tools/memory_edit.py` | `update_memory`, `append_memory` — unregistered surgical edit tools; atomic writes via temp-file + `os.replace`; re-indexes into `KnowledgeStore` after write |
+| `co_cli/tools/memory.py` | `_recall_for_context` (internal); agent tools: `search_memories`, `list_memories`; unregistered tools: `save_memory` (extractor-only, UUID-suffix always-new file), `update_memory`, `append_memory` (surgical edits; atomic writes via temp-file + `os.replace`; all re-index into `KnowledgeStore` after write) |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parsing (`parse_frontmatter`), validation (`validate_memory_frontmatter`), enums, `render_memory_file` |
 | `co_cli/commands/_commands.py` | `/memory` REPL subcommands: list, count, forget; `/new` session rotation |
 | `co_cli/context/_history.py` | `inject_opening_context` — calls `_recall_for_context` per new user turn |

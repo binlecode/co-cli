@@ -14,7 +14,7 @@ from rich.theme import Theme
 from co_cli.config._core import settings
 
 if TYPE_CHECKING:
-    from co_cli.tools.tool_output import ToolResultPayload
+    from co_cli.tools.tool_io import ToolResultPayload
 
 # -- Theme palettes (keyed by theme name) ------------------------------------
 

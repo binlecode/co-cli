@@ -10,11 +10,12 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_output import tool_output, tool_output_raw
-from co_cli.tools.tool_result_storage import (
+from co_cli.tools.tool_io import (
     PERSISTED_OUTPUT_TAG,
     TOOL_RESULT_MAX_SIZE,
     persist_if_oversized,
+    tool_output,
+    tool_output_raw,
 )
 
 _CONFIG = settings

@@ -1,40 +1,50 @@
-"""Memory recall tools for persistent knowledge.
+"""Memory tools — recall, list, save, and edit persistent memories.
 
-This module provides tools for recalling and listing memories from the
-internal knowledge system. Memories are stored as markdown files with YAML
-frontmatter in ~/.co-cli/memory/. Write path is owned
-exclusively by the extractor (co_cli/memory/_extractor.py via save_memory).
-
-Retrieval uses FTS5/BM25 via knowledge_store (DB-backed). Degrades to empty
-when knowledge_store is None.
+Memories are stored as markdown files with YAML frontmatter in
+~/.co-cli/memory/. FTS5/BM25 via knowledge_store (DB-backed) powers
+search; degrades to empty when knowledge_store is None.
 """
 
+import hashlib
 import logging
+import os
 import re
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 # Matches line-number prefixes injected by the Read tool (e.g. "1→ " or "Line 1: ")
 _LINE_PREFIX_RE = re.compile(r"(^|\n)\d+\u2192 ", re.MULTILINE)
 _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
 
-import yaml
 from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.knowledge._frontmatter import MemoryTypeEnum, parse_frontmatter, render_memory_file
 from co_cli.memory.recall import (
     MemoryEntry,
     load_memories,
 )
-from co_cli.tools.tool_errors import tool_error
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.resource_lock import ResourceBusyError
+from co_cli.tools.tool_io import tool_error, tool_output, tool_output_raw
 
 _TRACER = otel_trace.get_tracer("co.memory")
 
 logger = logging.getLogger(__name__)
+
+
+def _slugify(text: str) -> str:
+    """Convert text to a URL-safe slug, max 50 chars."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50]
+
+
+def _find_by_slug(memory_dir: Path, slug: str) -> Path | None:
+    """Return the memory file whose stem matches slug, or None."""
+    return next((p for p in memory_dir.glob("*.md") if p.stem == slug), None)
 
 
 def grep_recall(
@@ -363,6 +373,83 @@ async def list_memories(
     )
 
 
+async def save_memory(
+    ctx: RunContext[CoDeps],
+    content: str,
+    type_: str | None = None,
+    name: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    always_on: bool = False,
+) -> ToolReturn:
+    """Save a new memory to the memory directory, always creating a new file.
+
+    Two calls with identical content produce two distinct files (UUID suffix).
+    No dedup, no resource locks, no on_failure handling — write always succeeds or raises.
+    """
+    # _slugify is intentionally duplicated from articles.py; consolidation deferred
+    if type_ is not None and type_ not in {e.value for e in MemoryTypeEnum}:
+        raise ValueError(
+            f"Unknown memory type: {type_!r}. "
+            f"Valid values: {sorted(e.value for e in MemoryTypeEnum)}"
+        )
+
+    memory_dir = ctx.deps.memory_dir
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    memory_id = str(uuid4())
+
+    slug = _slugify(name) if name else _slugify(content[:50])
+    filename = f"{slug}-{memory_id[:8]}.md"
+
+    norm_tags = [t.lower() for t in tags] if tags else []
+
+    frontmatter: dict = {
+        "id": memory_id,
+        "kind": "memory",
+        "created": datetime.now(UTC).isoformat(),
+        "tags": norm_tags,
+    }
+    if type_ is not None:
+        frontmatter["type"] = type_
+    if name is not None:
+        frontmatter["name"] = name
+    if description is not None:
+        frontmatter["description"] = description
+    if always_on:
+        frontmatter["always_on"] = True
+
+    file_content = render_memory_file(frontmatter, content)
+
+    file_path = memory_dir / filename
+    with _TRACER.start_as_current_span("co.memory.save") as span:
+        span.set_attribute("memory.type", type_ or "untyped")
+        file_path.write_text(file_content, encoding="utf-8")
+
+    if ctx.deps.knowledge_store is not None:
+        content_hash = hashlib.sha256(file_content.encode()).hexdigest()
+        ctx.deps.knowledge_store.index(
+            source="memory",
+            kind="memory",
+            path=str(file_path),
+            title=name or slug,
+            content=content.strip(),
+            mtime=file_path.stat().st_mtime,
+            hash=content_hash,
+            tags=" ".join(norm_tags) if norm_tags else None,
+            created=frontmatter["created"],
+            type=type_,
+            description=description,
+        )
+
+    return tool_output_raw(
+        f"✓ Saved memory: {filename}",
+        action="saved",
+        path=str(file_path),
+        memory_id=memory_id,
+    )
+
+
 async def update_memory(
     ctx: RunContext[CoDeps],
     slug: str,
@@ -391,7 +478,7 @@ async def update_memory(
         new_content: Replacement text.
     """
     knowledge_dir = ctx.deps.memory_dir
-    match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
+    match = _find_by_slug(knowledge_dir, slug)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
 
@@ -402,9 +489,6 @@ async def update_memory(
                 f"{name} contains line-number prefixes (e.g. '1\u2192 ' or 'Line N: '). "
                 "Strip them before calling update_memory."
             )
-
-    from co_cli.tools.resource_lock import ResourceBusyError
-    from co_cli.tools.tool_errors import tool_error
 
     try:
         async with ctx.deps.resource_locks.try_acquire(slug):
@@ -444,11 +528,28 @@ async def update_memory(
 
                 updated_body = body_text.replace(old_norm, new_norm, 1)
                 fm["updated"] = datetime.now(UTC).isoformat()
-                md_content = (
-                    f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
-                    f"{updated_body.strip()}\n"
-                )
-                match.write_text(md_content, encoding="utf-8")
+                md_content = render_memory_file(fm, updated_body)
+                with tempfile.NamedTemporaryFile(
+                    "w", dir=match.parent, suffix=".tmp", delete=False, encoding="utf-8"
+                ) as tmp:
+                    tmp.write(md_content)
+                os.replace(tmp.name, match)
+
+                if ctx.deps.knowledge_store is not None:
+                    content_hash = hashlib.sha256(md_content.encode()).hexdigest()
+                    ctx.deps.knowledge_store.index(
+                        source="memory",
+                        kind="memory",
+                        path=str(match),
+                        title=fm.get("name") or slug,
+                        content=updated_body.strip(),
+                        mtime=match.stat().st_mtime,
+                        hash=content_hash,
+                        tags=" ".join(fm.get("tags", [])) or None,
+                        created=fm.get("created"),
+                        type=fm.get("type"),
+                        description=fm.get("description"),
+                    )
 
             return tool_output(
                 f"Updated memory '{slug}'.\n{updated_body.strip()}",
@@ -482,11 +583,8 @@ async def append_memory(
         slug: Full file stem of the target memory (e.g. "003-user-prefers-pytest").
         content: Text to append (added on a new line at the end of the body).
     """
-    from co_cli.tools.resource_lock import ResourceBusyError
-    from co_cli.tools.tool_errors import tool_error
-
     knowledge_dir = ctx.deps.memory_dir
-    match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
+    match = _find_by_slug(knowledge_dir, slug)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
 
@@ -501,11 +599,28 @@ async def append_memory(
 
                 updated_body = body.rstrip() + "\n" + content
                 fm["updated"] = datetime.now(UTC).isoformat()
-                md_content = (
-                    f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
-                    f"{updated_body.strip()}\n"
-                )
-                match.write_text(md_content, encoding="utf-8")
+                md_content = render_memory_file(fm, updated_body)
+                with tempfile.NamedTemporaryFile(
+                    "w", dir=match.parent, suffix=".tmp", delete=False, encoding="utf-8"
+                ) as tmp:
+                    tmp.write(md_content)
+                os.replace(tmp.name, match)
+
+                if ctx.deps.knowledge_store is not None:
+                    content_hash = hashlib.sha256(md_content.encode()).hexdigest()
+                    ctx.deps.knowledge_store.index(
+                        source="memory",
+                        kind="memory",
+                        path=str(match),
+                        title=fm.get("name") or slug,
+                        content=updated_body.strip(),
+                        mtime=match.stat().st_mtime,
+                        hash=content_hash,
+                        tags=" ".join(fm.get("tags", [])) or None,
+                        created=fm.get("created"),
+                        type=fm.get("type"),
+                        description=fm.get("description"),
+                    )
 
             return tool_output(
                 f"Appended to '{slug}'.",

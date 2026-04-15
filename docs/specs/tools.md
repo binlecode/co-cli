@@ -26,15 +26,12 @@
 The tool ecosystem is composed of core infrastructure for execution, lifecycle and approval, along with a suite of domain tools.
 
 ### Core Infrastructure
-- `co_cli/tools/tool_output.py` — `tool_output()` standard return wrapper and `ToolResult`
-- `co_cli/tools/tool_errors.py` — `tool_error()` helper and HTTP error processing
-- `co_cli/tools/tool_result_storage.py` — persistence for oversized results (>50k chars)
+- `co_cli/tools/tool_io.py` — `tool_output()`, `tool_output_raw()`, `tool_error()`, `ToolResultPayload`, HTTP error helpers, oversized-result persistence (>50k chars → content-addressed file)
 - `co_cli/tools/resource_lock.py` — in-process `ResourceLockStore` for async cross-agent concurrency
 - `co_cli/tools/background.py` — process-group management for long-running tasks
 - `co_cli/tools/shell_backend.py` — subprocess execution with output streaming
 - `co_cli/tools/_shell_policy.py`, `_shell_env.py` — command classification (ALLOW/DENY/APPROVE)
-- `co_cli/tools/_url_safety.py`, `_http_retry.py` — web request safety (internal IP blocks) and backoff
-- `co_cli/tools/_google_auth.py` — Google OAuth credential resolution
+- `co_cli/tools/google/_auth.py` — Google OAuth credential resolution; shared `_get_google_service()` factory (package-private)
 - `co_cli/tools/_agent_outputs.py` — typed `BaseModel` outputs for delegation agents
 - `co_cli/context/tool_display.py` — console rendering and truncation logic
 - `co_cli/context/tool_approvals.py` — approval subject resolution and loop logic
@@ -42,9 +39,7 @@ The tool ecosystem is composed of core infrastructure for execution, lifecycle a
 ### Domain Tools
 - `co_cli/tools/files.py` — `glob`, `read_file`, `grep`, `write_file`, `patch`
 - `co_cli/tools/shell.py` — `run_shell_command`
-- `co_cli/tools/memory.py` — `list_memories`, `search_memories` (read-only for main agent)
-- `co_cli/tools/memory_write.py` — `save_memory` (write path owned exclusively by the extractor agent)
-- `co_cli/tools/memory_edit.py` — `update_memory`, `append_memory` (surgical edits; currently exported but not registered to main agent)
+- `co_cli/tools/memory.py` — `search_memories`, `list_memories` (registered); `save_memory`, `update_memory`, `append_memory` (unregistered — extractor and sub-agent use only)
 - `co_cli/tools/articles.py` — `save_article`, `search_articles`, `read_article`, `search_knowledge`
 - `co_cli/tools/web.py` — `web_search`, `web_fetch`
 - `co_cli/tools/task_control.py` — `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks`
@@ -53,9 +48,9 @@ The tool ecosystem is composed of core infrastructure for execution, lifecycle a
 - `co_cli/tools/session_search.py` — `session_search` (transcript FTS search)
 - `co_cli/tools/agents.py` — delegation: `delegate_coder`, `delegate_researcher`, `delegate_analyst`, `delegate_reasoner`
 - `co_cli/tools/obsidian.py` — `list_notes`, `search_notes`, `read_note`
-- `co_cli/tools/google_drive.py` — `search_drive_files`, `read_drive_file`
-- `co_cli/tools/google_gmail.py` — `list_gmail_emails`, `search_gmail_emails`, `create_gmail_draft`
-- `co_cli/tools/google_calendar.py` — `list_calendar_events`, `search_calendar_events`
+- `co_cli/tools/google/drive.py` — `search_drive_files`, `read_drive_file`
+- `co_cli/tools/google/gmail.py` — `list_gmail_emails`, `search_gmail_emails`, `create_gmail_draft`
+- `co_cli/tools/google/calendar.py` — `list_calendar_events`, `search_calendar_events`
 
 ## 2. Tool Lifecycle & Concurrency
 

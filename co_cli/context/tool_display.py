@@ -6,7 +6,7 @@ require touching core-loop code for cosmetic reasons.
 
 from typing import TYPE_CHECKING, Any
 
-from co_cli.tools.tool_output import ToolResultPayload
+from co_cli.tools.tool_io import ToolResultPayload
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ToolCallPart

@@ -2,31 +2,18 @@
 
 from datetime import UTC, datetime, timedelta
 
-from googleapiclient.discovery import build
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools.tool_errors import handle_google_api_error, tool_error
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.google._auth import _get_google_service
+from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _CALENDAR_NOT_CONFIGURED = (
     "Calendar: not configured. "
     "Set google_credentials_path in settings or run: "
     "gcloud auth application-default login"
 )
-
-
-def _get_calendar_service(ctx: RunContext[CoDeps]):
-    """Extract and validate Calendar service from context.
-
-    Returns (service, None) on success, or (None, error_dict) for terminal config errors.
-    """
-    creds = get_cached_google_creds(ctx.deps)
-    if not creds:
-        return None, tool_error(_CALENDAR_NOT_CONFIGURED)
-    return build("calendar", "v3", credentials=creds), None
 
 
 def _format_events(events: list[dict]) -> str:
@@ -118,7 +105,7 @@ def list_calendar_events(
                     Use 7 for a week, 30 for a month.
         max_results: Max events to return (default 25, max 250).
     """
-    service, err = _get_calendar_service(ctx)
+    service, err = _get_google_service(ctx, "calendar", "v3", _CALENDAR_NOT_CONFIGURED)
     if err:
         return err
 
@@ -184,7 +171,7 @@ def search_calendar_events(
         days_ahead: Days ahead to search (default 30).
         max_results: Max events to return (default 25, max 250).
     """
-    service, err = _get_calendar_service(ctx)
+    service, err = _get_google_service(ctx, "calendar", "v3", _CALENDAR_NOT_CONFIGURED)
     if err:
         return err
 

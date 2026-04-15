@@ -9,7 +9,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.bootstrap.check import check_runtime
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_io import tool_output
 
 
 async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolReturn:

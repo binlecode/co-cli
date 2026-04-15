@@ -1,4 +1,4 @@
-"""Google API authentication."""
+"""Google API authentication — package-private, only imported within co_cli/tools/google/."""
 
 import os
 import shutil
@@ -8,6 +8,7 @@ from typing import Any
 from google.oauth2.credentials import Credentials
 
 from co_cli.config._core import ADC_PATH, GOOGLE_TOKEN_PATH
+from co_cli.tools.tool_io import tool_error
 
 ALL_GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
@@ -85,3 +86,28 @@ def get_cached_google_creds(deps: Any) -> Any | None:
         )
         deps.session.google_creds_resolved = True
     return deps.session.google_creds
+
+
+def _get_google_service(
+    ctx: Any,
+    service_name: str,
+    version: str,
+    not_configured_msg: str,
+) -> tuple[Any, Any]:
+    """Build and return a Google API service client.
+
+    Returns (service, None) on success, or (None, tool_error_result) when
+    credentials are not configured.
+
+    Args:
+        ctx: RunContext[CoDeps] instance.
+        service_name: Google API service name (e.g. "calendar", "drive", "gmail").
+        version: API version string (e.g. "v3", "v1").
+        not_configured_msg: Error message to surface when credentials are absent.
+    """
+    from googleapiclient.discovery import build
+
+    creds = get_cached_google_creds(ctx.deps)
+    if creds is None:
+        return None, tool_error(not_configured_msg)
+    return build(service_name, version, credentials=creds), None
