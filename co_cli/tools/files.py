@@ -4,7 +4,6 @@ import fnmatch
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
@@ -172,7 +171,13 @@ async def read_file(
     except UnicodeDecodeError:
         return tool_error(f"Binary file — cannot display as text: {path}")
 
-    ctx.deps.file_read_mtimes[str(resolved)] = resolved.stat().st_mtime
+    path_key = str(resolved)
+    ctx.deps.file_read_mtimes[path_key] = resolved.stat().st_mtime
+    is_partial = start_line is not None or end_line is not None
+    if is_partial:
+        ctx.deps.file_partial_reads.add(path_key)
+    else:
+        ctx.deps.file_partial_reads.discard(path_key)
     all_lines = content.splitlines(keepends=True)
     total_line_count = len(all_lines)
 
@@ -195,62 +200,144 @@ async def read_file(
     )
 
 
+def _grep_context_output(
+    rel_path: str, file_lines: list[str], match_indices: list[int], context: int
+) -> list[str]:
+    """Build grep-style context output for matched lines in one file.
+
+    Merges overlapping context windows and inserts '--' between disjoint groups.
+    Match lines use ':' separator; context lines use '-' separator.
+    """
+    ranges: list[tuple[int, int]] = []
+    for idx in match_indices:
+        lo = max(0, idx - context)
+        hi = min(len(file_lines) - 1, idx + context)
+        if ranges and lo <= ranges[-1][1] + 1:
+            ranges[-1] = (ranges[-1][0], hi)
+        else:
+            ranges.append((lo, hi))
+
+    match_set = set(match_indices)
+    output: list[str] = []
+    for group_idx, (lo, hi) in enumerate(ranges):
+        if group_idx > 0:
+            output.append("--")
+        for line_idx in range(lo, hi + 1):
+            sep = ":" if line_idx in match_set else "-"
+            output.append(f"{rel_path}:{line_idx + 1}{sep} {file_lines[line_idx]}")
+    return output
+
+
+def _grep_format_file_matches(
+    rel_path: str,
+    file_lines: list[str],
+    match_indices: list[int],
+    output_mode: str,
+    context_lines: int,
+) -> list[str]:
+    """Format grep matches for a single file according to output_mode."""
+    if output_mode == "content":
+        if context_lines > 0:
+            return _grep_context_output(rel_path, file_lines, match_indices, context_lines)
+        return [f"{rel_path}:{idx + 1}: {file_lines[idx]}" for idx in match_indices]
+    if output_mode == "files_with_matches":
+        return [rel_path]
+    # count mode
+    return [f"{rel_path}: {len(match_indices)}"]
+
+
 async def grep(
     ctx: RunContext[CoDeps],
     pattern: str,
+    path: str = ".",
     glob: str = "**/*",
-    max_matches: int = 50,
+    case_insensitive: bool = False,
+    output_mode: str = "content",
+    context_lines: int = 0,
+    head_limit: int = 250,
+    offset: int = 0,
 ) -> ToolReturn:
-    """Search file contents by regex pattern across the workspace.
+    """Search file contents by regex pattern across the workspace or a subdirectory.
 
     Use for content search — finding text, symbols, or patterns inside files.
     Prefer this over shell grep/rg for workspace content search.
 
     When NOT to use: for file-name discovery — use glob with a pattern instead.
 
-    Skips binary files. Returns up to max_matches results as file:line: text.
+    Skips binary files.
+
+    output_mode controls what is returned:
+      "content"           — matching lines with file:line_no: text (default)
+      "files_with_matches" — only file paths that contain at least one match
+      "count"             — file path and match count per file
 
     Args:
         pattern: Regular expression to search for.
+        path: Directory to search within, relative to the workspace root (default: ".").
         glob: Glob pattern to filter which files are searched (default: "**/*").
-        max_matches: Maximum number of matching lines to return (default: 50).
+        case_insensitive: If True, match regardless of case (default: False).
+        output_mode: One of "content", "files_with_matches", "count" (default: "content").
+        context_lines: Lines of context before and after each match in content mode (default: 0).
+        head_limit: Maximum output lines/entries to return; 0 means unlimited (default: 250).
+        offset: Skip the first N output lines/entries for pagination (default: 0).
     """
+    _VALID_MODES = {"content", "files_with_matches", "count"}
+    if output_mode not in _VALID_MODES:
+        return tool_error(
+            f"Invalid output_mode {output_mode!r} — use 'content', 'files_with_matches', or 'count'"
+        )
+
+    flags = re.IGNORECASE if case_insensitive else 0
     try:
-        compiled = re.compile(pattern)
+        compiled = re.compile(pattern, flags)
     except re.error:
         return tool_error(f"Invalid regex: {pattern}")
 
     workspace_root = ctx.deps.workspace_root
-    matches: list[dict[str, Any]] = []
-    lines_output: list[str] = []
+    try:
+        search_root = _enforce_workspace_boundary(Path(path), workspace_root)
+    except ValueError as e:
+        return tool_error(str(e))
+    if not search_root.is_dir():
+        return tool_error(f"Not a directory: {path}")
 
-    for file_path in workspace_root.glob(glob):
+    all_output: list[str] = []
+    total_match_count = 0
+
+    for file_path in search_root.glob(glob):
         if not file_path.is_file():
             continue
         try:
             text = file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            # Skip binary files
             continue
 
         rel_path = str(file_path.relative_to(workspace_root))
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            if compiled.search(line):
-                matches.append({"file": rel_path, "line": line_no, "text": line})
-                lines_output.append(f"{rel_path}:{line_no}: {line}")
-                if len(matches) >= max_matches:
-                    break
-        if len(matches) >= max_matches:
-            break
+        file_lines = text.splitlines()
+        match_indices = [idx for idx, line in enumerate(file_lines) if compiled.search(line)]
 
-    display = "\n".join(lines_output) if lines_output else "(no matches)"
+        if not match_indices:
+            continue
+
+        total_match_count += len(match_indices)
+
+        all_output.extend(
+            _grep_format_file_matches(
+                rel_path, file_lines, match_indices, output_mode, context_lines
+            )
+        )
+
+    paginated = all_output[offset : offset + head_limit] if head_limit > 0 else all_output[offset:]
+    truncated = len(all_output) - offset > len(paginated)
+    display = "\n".join(paginated) if paginated else "(no matches)"
 
     return tool_output(
         display,
         ctx=ctx,
         pattern=pattern,
-        count=len(matches),
-        matches=matches,
+        count=total_match_count,
+        mode=output_mode,
+        truncated=truncated,
     )
 
 
@@ -259,12 +346,11 @@ async def write_file(
     path: str,
     content: str,
 ) -> ToolReturn:
-    """Write content to a new file or completely rewrite an existing file.
+    """Write content to a new file or intentionally replace all contents of an existing file.
 
-    Prefer patch for modifying existing files — it targets a specific
-    section and avoids accidentally dropping content. Use write_file only for
-    creating new files or intentional full rewrites. Read the file first before
-    rewriting to confirm you are not losing content.
+    Use ONLY for creating new files or deliberate full rewrites. Never call this
+    after patch on the same file — patch already wrote the change. For targeted
+    edits to existing files, use patch instead.
 
     Creates parent directories as needed. Overwrites the file if it already exists.
 
@@ -375,6 +461,19 @@ _FUZZY_STRATEGIES: list[tuple[str, Callable[[str], tuple[str, list[int]]]]] = [
 ]
 
 
+def _check_patch_preconditions(
+    resolved: "Path", path: str, path_key: str, ctx: "RunContext[CoDeps]"
+) -> str | None:
+    """Return an error message if patch write preconditions fail, else None."""
+    if path_key not in ctx.deps.file_read_mtimes:
+        return f"Read the file with read_file before patching: {path}"
+    if path_key in ctx.deps.file_partial_reads:
+        return f"Only part of this file was read — call read_file without start_line/end_line before patching: {path}"
+    if _safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]:
+        return "File changed since last read — re-read before writing"
+    return None
+
+
 def _fuzzy_apply(
     content: str,
     old_string: str,
@@ -462,13 +561,9 @@ async def patch(
     if not resolved.exists():
         return tool_error(f"File not found: {path}")
 
-    # Staleness check before acquiring lock — fail-fast, no lock held on stale error
     path_key = str(resolved)
-    if (
-        path_key in ctx.deps.file_read_mtimes
-        and _safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]
-    ):
-        return tool_error("File changed since last read — re-read before writing")
+    if err := _check_patch_preconditions(resolved, path, path_key, ctx):
+        return tool_error(err)
 
     from co_cli.tools.resource_lock import ResourceBusyError
 
@@ -491,8 +586,15 @@ async def patch(
                 updated = content.replace(old_string, new_string)
                 resolved.write_text(updated, encoding=enc)
                 ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
+                old_preview = old_string[:120].replace("\n", "\\n")
+                new_preview = new_string[:120].replace("\n", "\\n")
+                display = (
+                    f"Patched: {path} ({count} replacement(s))\n"
+                    f"  - {old_preview!r}\n"
+                    f"  + {new_preview!r}"
+                )
                 return tool_output(
-                    f"Patched: {path} ({count} replacement(s))",
+                    display,
                     ctx=ctx,
                     path=str(resolved),
                     replacements=count,
@@ -510,8 +612,15 @@ async def patch(
                     updated, count = result
                     resolved.write_text(updated, encoding=enc)
                     ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
+                    old_preview = old_string[:120].replace("\n", "\\n")
+                    new_preview = new_string[:120].replace("\n", "\\n")
+                    display = (
+                        f"Patched: {path} ({count} replacement(s), {strategy_name} strategy)\n"
+                        f"  - {old_preview!r}\n"
+                        f"  + {new_preview!r}"
+                    )
                     return tool_output(
-                        f"Patched: {path} ({count} replacement(s), {strategy_name} strategy)",
+                        display,
                         ctx=ctx,
                         path=str(resolved),
                         replacements=count,

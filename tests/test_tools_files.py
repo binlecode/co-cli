@@ -286,10 +286,10 @@ async def test_grep(tmp_path):
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 2
-    files_matched = {m["file"] for m in result.metadata["matches"]}
-    assert "alpha.txt" in files_matched
-    assert "beta.txt" in files_matched
-    assert "gamma.txt" not in files_matched
+    # Content mode output: "file:line: text" — verify which files appear
+    assert "alpha.txt" in result.return_value
+    assert "beta.txt" in result.return_value
+    assert "gamma.txt" not in result.return_value
 
 
 @pytest.mark.asyncio
@@ -309,7 +309,7 @@ async def test_grep_no_matches(tmp_path):
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 0
-    assert result.metadata["matches"] == []
+    assert "(no matches)" in result.return_value
 
 
 @pytest.mark.asyncio
@@ -324,7 +324,7 @@ async def test_grep_recursive_subdirectory(tmp_path):
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 1
-    assert "src/pkg/deep.py" in result.metadata["matches"][0]["file"]
+    assert "src/pkg/deep.py" in result.return_value
 
 
 # --- write_file ---
@@ -379,10 +379,10 @@ async def test_write_file_path_escape(tmp_path):
 async def test_patch_exact_match(tmp_path):
     """Exact strategy replaces a unique string in a file."""
     (tmp_path / "config.txt").write_text("host=localhost\nport=8080\n")
+    ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="config.txt")
 
-    result = await patch(
-        _make_ctx(tmp_path), path="config.txt", old_string="localhost", new_string="example.com"
-    )
+    result = await patch(ctx, path="config.txt", old_string="localhost", new_string="example.com")
 
     assert not result.metadata.get("error")
     assert result.metadata["replacements"] == 1
@@ -394,10 +394,12 @@ async def test_patch_exact_match(tmp_path):
 async def test_patch_line_trimmed(tmp_path):
     """line-trimmed strategy matches when old_string has trailing whitespace per line."""
     (tmp_path / "code.py").write_text("def foo():\n    return 1\n")
+    ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="code.py")
 
     # old_string has trailing spaces on each line — not present in file
     result = await patch(
-        _make_ctx(tmp_path),
+        ctx,
         path="code.py",
         old_string="def foo():  \n    return 1  \n",
         new_string="def bar():\n    return 2\n",
@@ -412,10 +414,12 @@ async def test_patch_line_trimmed(tmp_path):
 async def test_patch_indent_stripped(tmp_path):
     """Fuzzy matching succeeds when old_string uses wrong indentation (tabs vs spaces)."""
     (tmp_path / "src.py").write_text("    x = 1\n    y = 2\n")
+    ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="src.py")
 
     # old_string uses tabs instead of spaces — a fuzzy strategy normalises the indentation
     result = await patch(
-        _make_ctx(tmp_path),
+        ctx,
         path="src.py",
         old_string="\tx = 1\n\ty = 2\n",
         new_string="    x = 10\n    y = 20\n",
@@ -430,10 +434,12 @@ async def test_patch_indent_stripped(tmp_path):
 async def test_patch_escape_expanded(tmp_path):
     """escape-expanded strategy matches when old_string uses literal \\n instead of actual newline."""
     (tmp_path / "data.txt").write_text("line one\nline two\n")
+    ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="data.txt")
 
     # old_string has literal backslash-n — should match actual newline in file
     result = await patch(
-        _make_ctx(tmp_path),
+        ctx,
         path="data.txt",
         old_string="line one\\nline two\\n",
         new_string="replaced\n",
@@ -448,10 +454,10 @@ async def test_patch_escape_expanded(tmp_path):
 async def test_patch_ambiguous_returns_error(tmp_path):
     """Returns error when old_string matches multiple times without replace_all=True."""
     (tmp_path / "repeat.txt").write_text("foo\nfoo\nbar\n")
+    ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="repeat.txt")
 
-    result = await patch(
-        _make_ctx(tmp_path), path="repeat.txt", old_string="foo", new_string="baz"
-    )
+    result = await patch(ctx, path="repeat.txt", old_string="foo", new_string="baz")
 
     assert result.metadata.get("error") is True
     assert "2" in result.return_value
@@ -461,10 +467,10 @@ async def test_patch_ambiguous_returns_error(tmp_path):
 async def test_patch_no_match_returns_error(tmp_path):
     """Returns error when no strategy matches — error mentions the file."""
     (tmp_path / "notes.txt").write_text("some content here\n")
+    ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="notes.txt")
 
-    result = await patch(
-        _make_ctx(tmp_path), path="notes.txt", old_string="absent_string", new_string="x"
-    )
+    result = await patch(ctx, path="notes.txt", old_string="absent_string", new_string="x")
 
     assert result.metadata.get("error") is True
     assert "notes.txt" in result.return_value
@@ -612,6 +618,51 @@ async def test_patch_staleness_blocked(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_patch_requires_read_first(tmp_path):
+    """patch returns error when file has never been read (not in file_read_mtimes)."""
+    target = tmp_path / "unread.txt"
+    target.write_text("original content")
+    ctx = _make_ctx(tmp_path)
+    # Do NOT call read_file — file_read_mtimes is empty
+
+    result = await patch(ctx, path="unread.txt", old_string="original", new_string="replaced")
+
+    assert result.metadata.get("error") is True
+    assert "read_file" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_patch_return_preview(tmp_path):
+    """patch return value includes old/new text preview after successful edit."""
+    target = tmp_path / "code.py"
+    target.write_text("x = 1\ny = 2\n")
+    ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="code.py")
+
+    result = await patch(ctx, path="code.py", old_string="x = 1", new_string="x = 99")
+
+    assert not result.metadata.get("error")
+    assert "x = 1" in result.return_value
+    assert "x = 99" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_grep_scoped_to_path(tmp_path):
+    """grep with path scopes search to the given subdirectory."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "inside.py").write_text("TARGET_TOKEN = 1")
+    (tmp_path / "outside.py").write_text("TARGET_TOKEN = 2")
+    ctx = _make_ctx(tmp_path)
+
+    result = await grep(ctx, pattern="TARGET_TOKEN", path="sub")
+
+    assert not result.metadata.get("error")
+    assert "inside.py" in result.return_value
+    assert "outside.py" not in result.return_value
+
+
+@pytest.mark.asyncio
 async def test_write_file_new_file_skips_staleness(tmp_path):
     """write_file skips staleness check for paths that were never read."""
     ctx = _make_ctx(tmp_path)
@@ -649,8 +700,11 @@ async def test_patch_size_guard(tmp_path):
 
     target = tmp_path / "huge.txt"
     target.write_bytes(b"x" * (_MAX_EDIT_BYTES + 1))
+    ctx = _make_ctx(tmp_path)
+    # Register the mtime directly — avoids reading 10 MB of data in this test
+    ctx.deps.file_read_mtimes[str(target)] = target.stat().st_mtime
 
-    result = await patch(_make_ctx(tmp_path), path="huge.txt", old_string="x", new_string="y")
+    result = await patch(ctx, path="huge.txt", old_string="x", new_string="y")
 
     assert result.metadata.get("error") is True
     assert "too large" in result.return_value
@@ -675,6 +729,7 @@ async def test_patch_utf16(tmp_path):
     target = tmp_path / "utf16edit.txt"
     target.write_bytes(b"\xff\xfe" + "hello world".encode("utf-16-le"))
     ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="utf16edit.txt")
 
     result = await patch(ctx, path="utf16edit.txt", old_string="hello", new_string="goodbye")
 
@@ -683,3 +738,118 @@ async def test_patch_utf16(tmp_path):
     # Encoding must be preserved — file is still readable as UTF-16 with the replacement applied
     updated_content = target.read_text(encoding="utf-16")
     assert "goodbye world" in updated_content
+
+
+# --- partial-read guard ---
+
+
+@pytest.mark.asyncio
+async def test_patch_partial_read_blocked(tmp_path):
+    """patch returns error when only a line range of the file was read."""
+    target = tmp_path / "large.py"
+    target.write_text("line one\nline two\nline three\n")
+    ctx = _make_ctx(tmp_path)
+    # Only read lines 1-2 — file is in file_read_mtimes but also in file_partial_reads
+    await read_file(ctx, path="large.py", start_line=1, end_line=2)
+
+    result = await patch(ctx, path="large.py", old_string="line one", new_string="replaced")
+
+    assert result.metadata.get("error") is True
+    assert "start_line" in result.return_value or "end_line" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_patch_partial_clears_on_full_read(tmp_path):
+    """A full read after a partial read clears the partial flag and allows patch."""
+    target = tmp_path / "data.py"
+    target.write_text("alpha\nbeta\ngamma\n")
+    ctx = _make_ctx(tmp_path)
+    await read_file(ctx, path="data.py", start_line=1, end_line=1)
+    # Confirm patch is blocked after partial read
+    blocked = await patch(ctx, path="data.py", old_string="alpha", new_string="x")
+    assert blocked.metadata.get("error") is True
+
+    # Full read clears the partial flag
+    await read_file(ctx, path="data.py")
+    result = await patch(ctx, path="data.py", old_string="alpha", new_string="x")
+    assert not result.metadata.get("error")
+
+
+# --- grep extended capabilities ---
+
+
+@pytest.mark.asyncio
+async def test_grep_case_insensitive(tmp_path):
+    """grep with case_insensitive=True matches regardless of case."""
+    (tmp_path / "a.txt").write_text("Hello World\n")
+    ctx = _make_ctx(tmp_path)
+
+    result = await grep(ctx, pattern="hello world", case_insensitive=True)
+
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 1
+    assert "a.txt" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_grep_files_with_matches_mode(tmp_path):
+    """output_mode='files_with_matches' returns only file paths, not line content."""
+    (tmp_path / "hit.txt").write_text("TARGET here\n")
+    (tmp_path / "miss.txt").write_text("nothing relevant\n")
+    ctx = _make_ctx(tmp_path)
+
+    result = await grep(ctx, pattern="TARGET", output_mode="files_with_matches")
+
+    assert not result.metadata.get("error")
+    assert "hit.txt" in result.return_value
+    assert "miss.txt" not in result.return_value
+    # Output is just the file path, no line numbers
+    assert ":" not in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_grep_count_mode(tmp_path):
+    """output_mode='count' returns file: N for each matched file."""
+    (tmp_path / "many.txt").write_text("MARK\nMARK\nno\n")
+    (tmp_path / "one.txt").write_text("MARK\n")
+    ctx = _make_ctx(tmp_path)
+
+    result = await grep(ctx, pattern="MARK", output_mode="count")
+
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 3  # 2 + 1 total matches
+    assert "many.txt: 2" in result.return_value
+    assert "one.txt: 1" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_grep_context_lines(tmp_path):
+    """context_lines includes surrounding lines around each match."""
+    (tmp_path / "src.py").write_text("before\nTARGET\nafter\n")
+    ctx = _make_ctx(tmp_path)
+
+    result = await grep(ctx, pattern="TARGET", context_lines=1)
+
+    assert not result.metadata.get("error")
+    assert "before" in result.return_value
+    assert "TARGET" in result.return_value
+    assert "after" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_grep_head_limit_and_offset(tmp_path):
+    """head_limit caps output; offset skips the first N entries."""
+    content = "\n".join(f"MATCH line {i}" for i in range(10))
+    (tmp_path / "big.txt").write_text(content + "\n")
+    ctx = _make_ctx(tmp_path)
+
+    result_limited = await grep(ctx, pattern="MATCH", head_limit=3)
+    assert not result_limited.metadata.get("error")
+    assert result_limited.metadata["truncated"] is True
+    assert result_limited.return_value.count("MATCH") == 3
+
+    result_offset = await grep(ctx, pattern="MATCH", head_limit=3, offset=3)
+    assert not result_offset.metadata.get("error")
+    # First result_limited entry must not appear in result_offset
+    first_line = result_limited.return_value.splitlines()[0]
+    assert first_line not in result_offset.return_value

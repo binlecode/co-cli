@@ -87,6 +87,8 @@ async def test_patch_same_path_contention(tmp_path: Path):
     ctx = _make_ctx(tmp_path)
     test_file = tmp_path / "target.txt"
     test_file.write_text("hello world", encoding="utf-8")
+    # Register mtime so the read-before-write guard passes — this test exercises lock contention
+    ctx.deps.file_read_mtimes[str(test_file)] = test_file.stat().st_mtime
 
     acquired = asyncio.Event()
     release = asyncio.Event()
@@ -120,6 +122,9 @@ async def test_patch_different_paths_no_contention(tmp_path: Path):
     file_b = tmp_path / "b.txt"
     file_a.write_text("aaa", encoding="utf-8")
     file_b.write_text("bbb", encoding="utf-8")
+    # Register mtimes so the read-before-write staleness guard passes
+    ctx.deps.file_read_mtimes[str(file_a)] = file_a.stat().st_mtime
+    ctx.deps.file_read_mtimes[str(file_b)] = file_b.stat().st_mtime
 
     result_a, result_b = await asyncio.gather(
         patch(ctx, "a.txt", "aaa", "AAA"),

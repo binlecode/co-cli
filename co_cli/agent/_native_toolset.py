@@ -37,7 +37,7 @@ from co_cli.tools.web import web_fetch, web_search
 def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
     """Filter for approval-resume narrowing only.
 
-    Normal turns: pass all unconditionally — SDK ToolSearchToolset handles
+    Normal turns: pass all tools — SDK ToolSearchToolset handles
     deferred visibility via defer_loading.
     Resume turns: narrow to approved tools + always-visible tools.
     Applies uniformly to native and MCP tools.
@@ -59,7 +59,7 @@ def _build_native_toolset(
     Tools are registered with defer_loading derived from VisibilityPolicyEnum. The SDK's
     ToolSearchToolset (auto-added by Agent) handles deferred visibility.
 
-    Domain tools (obsidian, google) are conditionally excluded when the relevant
+    Integration tools (obsidian, google) are excluded when the relevant
     config paths are absent — they would fail at runtime regardless.
 
     Returns (native_toolset, native_index) where native_index maps each tool name
@@ -154,7 +154,7 @@ def _build_native_toolset(
     # Session history search
     _register_tool(session_search, visibility=_deferred_visible)
 
-    # Domain tools — conditional on config presence; excluded when integration absent
+    # Integration tools — excluded when the required config/credential is absent
     if config.obsidian_vault_path:
         _register_tool(list_notes, visibility=_deferred_visible, integration="obsidian")
         _register_tool(search_notes, visibility=_deferred_visible, integration="obsidian")
