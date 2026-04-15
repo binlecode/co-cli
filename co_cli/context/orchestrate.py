@@ -631,7 +631,9 @@ async def run_turn(
                     return _build_error_turn_result(turn_state)
 
                 except TimeoutError:
-                    frontend.on_status("LLM segment timed out — model did not respond in time.")
+                    frontend.on_status(
+                        "LLM segment timed out — model did not respond. Try a shorter prompt, or check model health with `co config`."
+                    )
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)
 

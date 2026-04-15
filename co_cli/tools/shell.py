@@ -1,3 +1,5 @@
+import logging
+
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
@@ -5,6 +7,8 @@ from co_cli.deps import CoDeps
 from co_cli.tools._shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_errors import tool_error
 from co_cli.tools.tool_output import tool_output
+
+logger = logging.getLogger(__name__)
 
 
 async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolReturn:
@@ -39,6 +43,12 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
     # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → defer for user approval
     policy = evaluate_shell_command(cmd, ctx.deps.config.shell.safe_commands)
     if policy.decision == ShellDecisionEnum.DENY:
+        logger.debug(
+            "tool_denied tool_name=%s subject_kind=%s subject_value=%s",
+            "run_shell_command",
+            "shell",
+            cmd.split()[0] if cmd.strip() else "",
+        )
         return tool_error(policy.reason, ctx=ctx)
     if policy.decision == ShellDecisionEnum.REQUIRE_APPROVAL and not ctx.tool_call_approved:
         raise ApprovalRequired(metadata={"cmd": cmd})

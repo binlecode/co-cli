@@ -119,19 +119,24 @@ async def _finalize_turn(
 
     # Memory extraction — cadence-gated, fire-and-forget on clean turns
     if not turn_result.interrupted and turn_result.outcome != "error":
-        n = deps.config.memory.extract_every_n_turns
-        if n > 0:
-            deps.session.last_extracted_turn_idx += 1
-            if deps.session.last_extracted_turn_idx % n == 0:
-                cursor = deps.session.last_extracted_message_idx
-                delta = (
-                    next_history[cursor:]
-                    if 0 <= cursor <= len(next_history)
-                    else next_history[-20:]
-                )
-                fire_and_forget_extraction(
-                    delta, deps=deps, frontend=frontend, cursor_start=cursor
-                )
+        if deps.runtime.history_compaction_applied:
+            # Summarizer already processed the compacted content.
+            # Reset cursor to end of compacted history — skip extraction this turn.
+            deps.session.last_extracted_message_idx = len(next_history)
+        else:
+            n = deps.config.memory.extract_every_n_turns
+            if n > 0:
+                deps.session.last_extracted_turn_idx += 1
+                if deps.session.last_extracted_turn_idx % n == 0:
+                    cursor = deps.session.last_extracted_message_idx
+                    delta = (
+                        next_history[cursor:]
+                        if 0 <= cursor <= len(next_history)
+                        else next_history[-20:]
+                    )
+                    fire_and_forget_extraction(
+                        delta, deps=deps, frontend=frontend, cursor_start=cursor
+                    )
 
     deps.session.session_path = persist_session_history(
         session_path=deps.session.session_path,

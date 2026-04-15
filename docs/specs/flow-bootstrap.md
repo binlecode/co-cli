@@ -108,7 +108,7 @@ Bootstrap resolves env-derived MCP credentials, builds the foreground `LlmModel`
 
 ### Step 6. Connect MCP servers and discover their tools
 
-Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it stays alive for the session. Failures are isolated per server: a bad server produces a status warning and is skipped, while successful servers still contribute discovered tools to the merged `tool_index`.
+Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it stays alive for the session. Failures are isolated per server: a bad server produces a status warning, records a `"mcp.<prefix>"` entry in `degradations`, and is skipped, while successful servers still contribute discovered tools to the merged `tool_index`.
 
 ### Step 7. Load skills with three-pass precedence
 
@@ -204,7 +204,7 @@ Everything from `create_deps()` through banner display runs inside `_chat_loop()
 | --- | --- |
 | Config validation fails in `load_config()` | startup stops before `chat_loop()` begins |
 | `create_deps()` raises `ValueError` | `_chat_loop()` prints a startup error and exits |
-| MCP server fails to connect | warning only; native tools and other MCP servers still work |
+| MCP server fails to connect | status warning + `degradations["mcp.<prefix>"]` recorded; native tools and other MCP servers still work |
 | Knowledge backend construction fails | degrade `hybrid → fts5 → grep` |
 | Knowledge sync fails | close the store and continue without indexed retrieval |
 | Session restore fails to find usable state | create a new session |

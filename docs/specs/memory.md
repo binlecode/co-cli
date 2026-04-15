@@ -27,7 +27,7 @@ Covers memory storage, extraction, recall, and REPL management. Library articles
 
 Memory is flat `.md` files with YAML frontmatter stored in `.co-cli/memory/`. They are indexed in FTS via `docs_fts` in `search.db` — `search_memories` and `_recall_for_context` use `KnowledgeStore.search(source="memory")` when a store is available. Two kinds coexist in the store: `memory` (extracted observations) and `article` (saved external references — storage path lives here, but FTS indexing of articles is handled by the library subsystem).
 
-The extraction pipeline fires after each clean turn as a background asyncio task, scanning a delta window of new messages and calling `save_memory` for each signal. A cursor in `CoSessionState` tracks which messages have been processed; a failed extraction leaves the cursor unchanged so the delta is retried next turn.
+The extraction pipeline fires after each clean non-compaction turn as a background asyncio task, scanning a delta window of new messages and calling `save_memory` for each signal. A cursor in `CoSessionState` tracks which messages have been processed; a failed extraction leaves the cursor unchanged so the delta is retried next turn. When a turn applies inline compaction, extraction is skipped for that turn and the cursor is reset to the end of the compacted history — the summarizer has already processed the replaced content.
 
 The read path is used in three contexts: dynamic instruction injection (always-on entries), per-turn context injection (top-3 recalled into `inject_opening_context`), and agent tools (`search_memories`, `list_memories`).
 
@@ -149,6 +149,11 @@ list_memories(ctx, offset=0, limit=20, kind=None) -> ToolReturn   ← agent tool
 The main agent has no new-file write tools for memory. All extraction is owned by `_memory_extractor_agent` — a separate `Agent[CoDeps, None]` with `save_memory` as its only tool.
 
 ```text
+_finalize_turn (caller, in main.py):
+  -> skipped entirely when history_compaction_applied=True:
+       last_extracted_message_idx = len(next_history); return
+  -> otherwise: cadence gate (n > 0, last_extracted_turn_idx % n == 0) → call below
+
 fire_and_forget_extraction(delta, deps, frontend, *, cursor_start) -> None
   -> guards: if _in_flight task is still running, skip silently
   -> creates asyncio task "memory_extraction"; registers _on_extraction_done callback

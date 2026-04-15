@@ -209,3 +209,17 @@ async def test_shell_workspace_dir_param():
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "pwd")
     assert "tmp" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_shell_deny_emits_structured_log(caplog):
+    """DENY policy emits a structured tool_denied DEBUG log event before returning the error."""
+    ctx = _make_ctx()
+    with caplog.at_level("DEBUG", logger="co_cli.tools.shell"):
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await run_shell_command(ctx, "rm -rf /")
+    assert any(
+        "tool_denied tool_name=run_shell_command subject_kind=shell subject_value=rm" in r.message
+        for r in caplog.records
+        if r.levelname == "DEBUG"
+    )

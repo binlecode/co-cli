@@ -104,13 +104,25 @@ CLI start
 
 `CoDeps` is the shared runtime contract passed into tools and agent-side helpers. It carries:
 
-- configuration, treated as read-only after bootstrap
-- service handles such as shell, model, knowledge store, session index, and resource locks
-- bootstrap-built registries such as discovered tools and loaded skills
-- session state that persists across turns
-- runtime state that is reset or managed by orchestration
-- resolved workspace and user-global paths
-- degradation records produced during startup
+- **Config & Services** (read-only or long-lived after bootstrap)
+  - `config`: `Settings` object
+  - `shell`: `ShellBackend` handle
+  - `model`: `LlmModel` handle
+  - `knowledge_store`: Optional `KnowledgeStore` integration
+  - `session_index`: Optional `SessionIndex`
+  - `resource_locks`: Shared `ResourceLockStore`
+  - `file_read_mtimes`: Staleness detection registry
+- **Registries** (bootstrap-built tool definitions)
+  - `tool_index`: Flat dict of all `ToolInfo` metadata
+  - `tool_registry`: Live `pydantic-ai` ToolRegistry
+  - `skill_commands`: Discovered `SkillConfig` instances
+- **Mutable State** (split by lifecycle)
+  - `session`: `CoSessionState` (persists across turns: `session_todos`, `background_tasks`, `session_approval_rules`, etc.)
+  - `runtime`: `CoRuntimeState` (managed by orchestration: `safety_state`, `turn_usage`, `compaction_failure_count`)
+- **Paths** (resolved workspace and user-global paths)
+  - `workspace_root`, `memory_dir`, `sessions_dir`, `library_dir`, etc.
+- **Degradations**
+  - `degradations`: Dict of startup-detected capability drops
 
 The important architectural rule is that `co-cli` does not hide these concerns behind multiple config or service facades. Bootstrap assembles one runtime object, and the rest of the system consumes that object directly.
 
@@ -148,7 +160,7 @@ These settings most directly affect top-level system assembly.
 | --- | --- | --- | --- |
 | `llm.provider` | `LLM_PROVIDER` | `ollama-openai` | Default model provider used for the session runtime |
 | `llm.host` | `LLM_HOST` | `http://localhost:11434` | Ollama-compatible host used during model setup and runtime calls |
-| `llm.model` | `CO_LLM_MODEL` | provider default | Primary model name used when building the foreground agent |
+| `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-think` | Primary model name used when building the foreground agent |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled defaults | MCP server definitions attached during runtime assembly |
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | Personality assets injected during prompt assembly |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |
@@ -170,6 +182,8 @@ These settings most directly affect top-level system assembly.
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
 | `co_cli/observability/_telemetry.py` | SQLite-backed telemetry exporter used by the session runtime |
 | `co_cli/observability/_file_logging.py` | Rotating file log handlers — dual-write alongside the SQLite OTel DB |
+| `co_cli/observability/_tail.py` | Polling loop and terminal rendering for live trace spans |
+| `co_cli/observability/_viewer.py` | Static HTML generator for nested span visualisation |
 | `docs/specs/mission.md` | Product mission, strategic thesis, and stage roadmap |
 | `docs/specs/flow-bootstrap.md` | Startup sequencing and degradation details |
 | `docs/specs/flow-prompt-assembly.md` | End-to-end prompt assembly from startup inputs to model request |

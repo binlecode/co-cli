@@ -250,6 +250,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     tool_registry = build_tool_registry(config)
 
     # Step 4: MCP connect + discovery
+    degradations: dict[str, str] = {}
     if tool_registry.mcp_toolsets:
         connected: list = []
         for ts in tool_registry.mcp_toolsets:
@@ -264,6 +265,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
             )
             for prefix, err in discovery_errors.items():
                 frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err}")
+                degradations[f"mcp.{prefix}"] = err[:120]
             tool_registry.tool_index.update(mcp_index)
 
     # Step 5: load skills (filesystem reads — three-pass precedence merge)
@@ -276,7 +278,6 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     )
 
     # Step 6: discover knowledge backend + construct store (IO probes — three-tier fallback)
-    degradations: dict[str, str] = {}
     knowledge_store = _discover_knowledge_backend(config, frontend, degradations)
 
     # Step 7: sync knowledge store with current files on disk
