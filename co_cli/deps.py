@@ -10,7 +10,11 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.config._core import (
     DEFAULT_REASONING_DISPLAY,
+    LIBRARY_DIR,
+    MEMORY_DIR,
     SEARCH_DB,
+    SESSIONS_DIR,
+    TOOL_RESULTS_DIR,
     USER_DIR,
     Settings,
 )
@@ -141,13 +145,14 @@ class CoRuntimeState:
         self.history_compaction_applied = False
 
 
-# Path defaults (relative to cwd; resolved at runtime in create_deps)
-_DEFAULT_SKILLS_DIR = Path(".co-cli/skills")
+# Path defaults — all user-global; resolved from USER_DIR constants at runtime
+# skills_dir: co-bundled skills shipped with the package
+_DEFAULT_SKILLS_DIR = Path(__file__).parent / "skills"
 _DEFAULT_USER_SKILLS_DIR = USER_DIR / "skills"
-_DEFAULT_MEMORY_DIR = Path(".co-cli/memory")
-_DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
-_DEFAULT_SESSIONS_DIR = Path(".co-cli/sessions")
-_DEFAULT_TOOL_RESULTS_DIR = Path(".co-cli/tool-results")
+_DEFAULT_MEMORY_DIR = MEMORY_DIR
+_DEFAULT_LIBRARY_DIR = LIBRARY_DIR
+_DEFAULT_SESSIONS_DIR = SESSIONS_DIR
+_DEFAULT_TOOL_RESULTS_DIR = TOOL_RESULTS_DIR
 
 
 @dataclass
@@ -207,12 +212,12 @@ def resolve_workspace_paths(config: Settings, cwd: Path) -> dict[str, Any]:
         "obsidian_vault_path": Path(config.obsidian_vault_path)
         if config.obsidian_vault_path
         else None,
-        "memory_dir": cwd / ".co-cli" / "memory",
-        "skills_dir": cwd / ".co-cli" / "skills",
+        "memory_dir": MEMORY_DIR,
+        "skills_dir": Path(__file__).parent / "skills",
         "user_skills_dir": USER_DIR / "skills",
-        "sessions_dir": cwd / ".co-cli" / "sessions",
-        "tool_results_dir": cwd / ".co-cli" / "tool-results",
-        "library_dir": Path(config.library_path) if config.library_path else USER_DIR / "library",
+        "sessions_dir": SESSIONS_DIR,
+        "tool_results_dir": TOOL_RESULTS_DIR,
+        "library_dir": Path(config.library_path) if config.library_path else LIBRARY_DIR,
     }
 
 

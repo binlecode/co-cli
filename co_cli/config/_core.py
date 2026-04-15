@@ -35,6 +35,10 @@ SETTINGS_FILE = USER_DIR / "settings.json"
 SEARCH_DB = USER_DIR / "co-cli-search.db"
 LOGS_DB = USER_DIR / "co-cli-logs.db"
 LOGS_DIR = USER_DIR / "logs"
+MEMORY_DIR = USER_DIR / "memory"
+LIBRARY_DIR = USER_DIR / "library"
+SESSIONS_DIR = USER_DIR / "sessions"
+TOOL_RESULTS_DIR = USER_DIR / "tool-results"
 
 # Flat defaults (Settings-level, not grouped)
 DEFAULT_THEME = "light"
@@ -59,6 +63,10 @@ def _ensure_dirs() -> None:
     """Create the canonical user-global directory and subdirectories (idempotent)."""
     USER_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _deep_merge_settings(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

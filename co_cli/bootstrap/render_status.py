@@ -10,7 +10,7 @@ from pathlib import Path
 from rich.table import Table
 
 from co_cli.bootstrap.check import check_agent_llm, check_settings
-from co_cli.config._core import LOGS_DB, USER_DIR, Settings, project_config_path
+from co_cli.config._core import LOGS_DB, USER_DIR, Settings
 from co_cli.display._core import console
 
 _PYPROJECT = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
@@ -31,7 +31,6 @@ class StatusResult:
     mcp_servers: list[tuple[str, str, bool]]  # [(name, status, approval_required), ...]
     tool_count: int
     db_size: str  # "1.2 KB" | "0 KB"
-    project_config: str | None  # path to .co-cli/settings.json or None
     obsidian_vault_path: str | None = None
 
 
@@ -138,7 +137,6 @@ def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
         mcp_servers=mcp_status,
         tool_count=tool_count,
         db_size=db_size,
-        project_config=str(project_config_path) if project_config_path else None,
         obsidian_vault_path=str(config.obsidian_vault_path)
         if config.obsidian_vault_path
         else None,
@@ -157,20 +155,18 @@ class SecurityCheckResult:
 
 def check_security(
     _user_config_path: Path | None = None,
-    _project_config_path: Path | None = None,
 ) -> list[SecurityCheckResult]:
     """Run security posture checks. Returns a list of findings (empty = all clear).
 
     Checks:
       1. User settings.json file permissions (warn if not 0o600)
-      2. Project settings.json file permissions (warn if not 0o600)
-      3. Exec-approvals wildcard entries (pattern == "*" is a catch-all security risk)
+      2. Exec-approvals wildcard entries (pattern == "*" is a catch-all security risk)
     """
     findings: list[SecurityCheckResult] = []
 
-    # Check 1: user settings.json permissions
     user_cfg = _user_config_path or (USER_DIR / "settings.json")
     if Path(user_cfg).exists():
+        # Check 1: user settings.json permissions
         mode = Path(user_cfg).stat().st_mode & 0o777
         if mode != 0o600:
             findings.append(
@@ -182,40 +178,23 @@ def check_security(
                 )
             )
 
-    # Check 2: project settings.json permissions
-    project_cfg = _project_config_path or project_config_path
-    if project_cfg and Path(project_cfg).exists():
-        mode = Path(project_cfg).stat().st_mode & 0o777
-        if mode != 0o600:
-            findings.append(
-                SecurityCheckResult(
-                    severity="warn",
-                    check_id="project-config-permissions",
-                    detail=f".co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
-                    remediation=f"chmod 600 {project_cfg}",
-                )
-            )
-
-    # Check 3: wildcard shell_safe_commands entries
-    for label, cfg_path in [("user", user_cfg), ("project", project_cfg)]:
-        if not cfg_path or not Path(cfg_path).exists():
-            continue
+        # Check 2: wildcard shell_safe_commands entries
         try:
-            data = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+            data = json.loads(Path(user_cfg).read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            continue
+            data = {}
         shell_data = data.get("shell", {})
         safe_cmds = shell_data.get("safe_commands", []) if isinstance(shell_data, dict) else []
         if isinstance(safe_cmds, list) and "*" in safe_cmds:
             findings.append(
                 SecurityCheckResult(
                     severity="warn",
-                    check_id=f"{label}-config-shell-wildcard",
+                    check_id="user-config-shell-wildcard",
                     detail=(
-                        f"shell.safe_commands contains '*' in {cfg_path} — "
+                        f"shell.safe_commands contains '*' in {user_cfg} — "
                         "all shell commands are auto-approved without prompting"
                     ),
-                    remediation=f"Remove '*' from shell.safe_commands in {cfg_path}",
+                    remediation=f"Remove '*' from shell.safe_commands in {user_cfg}",
                 )
             )
 

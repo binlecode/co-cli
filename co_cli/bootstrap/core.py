@@ -271,11 +271,15 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     # Step 5: load skills (filesystem reads — three-pass precedence merge)
     from co_cli.commands._commands import _load_skills
 
+    skill_errors: list[str] = []
     skill_commands = _load_skills(
         paths["skills_dir"],
         settings=config,
         user_skills_dir=paths["user_skills_dir"],
+        errors=skill_errors,
     )
+    for msg in skill_errors:
+        frontend.on_status(msg)
 
     # Step 6: discover knowledge backend + construct store (IO probes — three-tier fallback)
     knowledge_store = _discover_knowledge_backend(config, frontend, degradations)

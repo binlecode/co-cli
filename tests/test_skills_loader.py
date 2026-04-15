@@ -104,28 +104,28 @@ async def test_skills_check_reports_missing_env_requirement(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_skills_install_local_registers_skill(tmp_path: Path):
-    """/skills install <path> copies the file and registers it in-session."""
+    """/skills install <path> copies the file to user_skills_dir and registers it in-session."""
     source = tmp_path / "myinstallskill.md"
     source.write_text("---\ndescription: My installed skill\n---\nDo something.", encoding="utf-8")
 
-    skills_dir = tmp_path / ".co-cli" / "skills"
-    ctx = _make_ctx(tmp_path, skills_dir=skills_dir)
+    user_skills_dir = tmp_path / "user-skills"
+    ctx = _make_ctx(tmp_path, user_skills_dir=user_skills_dir)
 
     result = await dispatch(f"/skills install {source}", ctx)
 
     assert isinstance(result, LocalOnly)
-    assert (skills_dir / "myinstallskill.md").exists()
+    assert (user_skills_dir / "myinstallskill.md").exists()
     assert "myinstallskill" in ctx.deps.skill_commands
 
 
 @pytest.mark.asyncio
 async def test_skill_upgrade_without_source_url_leaves_file_unchanged(tmp_path: Path):
     """/skills upgrade is a no-op when the skill was not installed from a URL."""
-    skills_dir = tmp_path / ".co-cli" / "skills"
+    user_skills_dir = tmp_path / "user-skills"
     original_content = "---\ndescription: Test\n---\nbody"
-    skill_file = _write_skill(skills_dir, "noupgrade", original_content)
+    skill_file = _write_skill(user_skills_dir, "noupgrade", original_content)
 
-    ctx = _make_ctx(tmp_path, skills_dir=skills_dir)
+    ctx = _make_ctx(tmp_path, user_skills_dir=user_skills_dir)
     await dispatch("/skills reload", ctx)
     result = await dispatch("/skills upgrade noupgrade", ctx)
 
@@ -133,19 +133,17 @@ async def test_skill_upgrade_without_source_url_leaves_file_unchanged(tmp_path: 
     assert skill_file.read_text(encoding="utf-8") == original_content
 
 
-def test_load_skills_project_overrides_user_global(tmp_path: Path):
-    """Project-local skills override same-name user-global skills."""
+def test_load_skills_user_overrides_bundled(tmp_path: Path):
+    """User skills override same-name bundled skills."""
+    bundled_dir = tmp_path / "bundled-skills"
     user_skills_dir = tmp_path / "user-skills"
-    project_skills_dir = tmp_path / ".co-cli" / "skills"
+    _write_skill(bundled_dir, "shared-skill", "---\ndescription: Bundled\n---\nBundled body")
     _write_skill(user_skills_dir, "shared-skill", "---\ndescription: User\n---\nUser body")
-    _write_skill(
-        project_skills_dir, "shared-skill", "---\ndescription: Project\n---\nProject body"
-    )
 
-    loaded = _load_skills(project_skills_dir, settings, user_skills_dir=user_skills_dir)
+    loaded = _load_skills(bundled_dir, settings, user_skills_dir=user_skills_dir)
 
-    assert loaded["shared-skill"].description == "Project"
-    assert loaded["shared-skill"].body == "Project body"
+    assert loaded["shared-skill"].description == "User"
+    assert loaded["shared-skill"].body == "User body"
 
 
 def test_load_skills_rejects_symlink_outside_root(tmp_path: Path):
