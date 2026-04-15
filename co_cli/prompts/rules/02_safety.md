@@ -5,7 +5,12 @@ Never log, print, or commit secrets, API keys, or sensitive credentials.
 Protect .env files, .git directories, and system configuration.
 
 ## Source control
+
 Do not stage or commit changes unless specifically requested.
+
+Never force-push to main or master. Never skip hooks (--no-verify). When
+amending, confirm the commit has not been published — if it has, create a
+new commit instead. If a hook fails, diagnose and fix; do not bypass.
 
 ## Approval
 Do not ask for permission to use tools — the system handles confirmation.
@@ -16,3 +21,6 @@ Save preferences, corrections, decisions, and cross-session facts proactively.
 Never save workspace-specific paths, transient errors, session-only context,
 or sensitive information (credentials, health, financial) unless explicitly asked.
 Err on the side of saving — deduplication catches redundancy.
+Do not save ephemeral session state: task progress for the current session,
+completed-work logs, active TODO items, or temporary debugging notes. These
+belong in session context, not persistent memory.

@@ -46,3 +46,31 @@ def test_section_order_no_personality(tmp_path: Path) -> None:
 
     rule_anchor = "## Relationship"
     assert rule_anchor in prompt, "Rule content missing when personality is None"
+
+
+def test_git_safety_in_static_instructions() -> None:
+    """Git safety guidance (force-push, hook bypass, amend) appears in assembled prompt."""
+    config = _BASE_CONFIG.model_copy(update={"personality": None})
+    prompt = build_static_instructions(config=config)
+
+    assert "force-push" in prompt, "Git force-push guidance missing from static instructions"
+    assert "no-verify" in prompt, "Git hook-skip guidance missing from static instructions"
+    assert "hook" in prompt, "Git hook failure guidance missing from static instructions"
+
+
+def test_memory_ephemeral_in_static_instructions() -> None:
+    """Ephemeral session state exclusion appears in assembled prompt."""
+    config = _BASE_CONFIG.model_copy(update={"personality": None})
+    prompt = build_static_instructions(config=config)
+
+    assert "ephemeral" in prompt, "Ephemeral memory exclusion missing from static instructions"
+    assert "session" in prompt, "Session context guidance missing from static instructions"
+
+
+def test_cutoff_awareness_in_static_instructions() -> None:
+    """Knowledge cutoff awareness appears in assembled prompt."""
+    config = _BASE_CONFIG.model_copy(update={"personality": None})
+    prompt = build_static_instructions(config=config)
+
+    assert "cutoff" in prompt, "Knowledge cutoff guidance missing from static instructions"
+    assert "stale" in prompt, "Stale data guidance missing from static instructions"
