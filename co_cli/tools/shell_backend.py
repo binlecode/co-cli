@@ -50,7 +50,7 @@ class ShellBackend:
         decoded = stdout.decode("utf-8")
         if proc.returncode != 0:
             raise RuntimeError(f"exit code {proc.returncode}: {decoded.strip()}")
-        return decoded
+        return decoded or "(no output)"
 
     def cleanup(self) -> None:
         """No-op — subprocess backend has no persistent resources."""

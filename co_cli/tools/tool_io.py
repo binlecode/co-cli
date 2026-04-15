@@ -81,6 +81,8 @@ def persist_if_oversized(
             f"tool: {tool_name}\n"
             f"file: {file_path}\n"
             f"size: {len(content)} chars\n"
+            f"To read the full output, call read_file with the path above and use "
+            f"start_line/end_line to page through it in chunks.\n"
             f"preview:\n{preview}\n"
             f"</persisted-output>"
         )
