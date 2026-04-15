@@ -31,13 +31,12 @@ def _deferred_descriptions() -> dict[str, str]:
 
 
 def test_file_write_tools_discoverable_by_keywords() -> None:
-    """write_file and edit_file surface for file-writing keyword queries."""
+    """write_file and patch surface for file-writing keyword queries."""
     descs = _deferred_descriptions()
     assert "write" in descs["write_file"]
     assert "file" in descs["write_file"]
-    assert "edit" in descs["edit_file"]
-    assert "file" in descs["edit_file"]
-    assert "replace" in descs["edit_file"]
+    assert "edit" in descs["patch"]
+    assert "file" in descs["patch"]
 
 
 def test_background_task_tools_discoverable_by_keywords() -> None:
@@ -114,14 +113,14 @@ def test_static_instructions_contain_search_tools_guidance() -> None:
 
 
 def test_shell_tool_description_redirects_file_operations() -> None:
-    """Shell tool docstring must redirect file creation/editing to write_file / edit_file.
+    """Shell tool docstring must redirect file creation/editing to write_file / patch.
 
     Regression: if these redirects are dropped, the model uses shell redirection
     (echo >>, cat <<EOF) instead of the dedicated write/edit tools.
     """
     doc = (run_shell_command.__doc__ or "").lower()
     assert "write_file" in doc
-    assert "edit_file" in doc
+    assert "patch" in doc
 
 
 def test_shell_tool_description_redirects_background_tasks() -> None:

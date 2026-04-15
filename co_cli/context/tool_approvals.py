@@ -44,7 +44,7 @@ def resolve_approval_subject(
 
     Resolution order:
       run_shell_command → shell subject (utility = first token)
-      write_file / edit_file → path subject (parent directory)
+      write_file / patch → path subject (parent directory)
       web_fetch → domain subject (parsed hostname)
       everything else → tool subject (can_remember=True)
     """
@@ -66,9 +66,9 @@ def resolve_approval_subject(
         )
 
     # File-path branch: scope to the parent directory so "always" approval covers
-    # all writes/edits within the same directory.  Both write_file and edit_file
+    # all writes/edits within the same directory.  Both write_file and patch
     # resolve to the same bare parent_dir value so cross-tool approval is intentional.
-    if tool_name in ("write_file", "edit_file"):
+    if tool_name in ("write_file", "patch"):
         path = args.get("path", "")
         parent = str(Path(path).parent) if path else ""
         hint = f"(allow all writes to {parent}/ this session?)" if parent else ""
@@ -78,15 +78,15 @@ def resolve_approval_subject(
             byte_count = len(content.encode()) if isinstance(content, str) else 0
             lines = [f"write_file(path={path!r}, {byte_count} bytes)"]
         else:
-            search = args.get("search", "")
-            replacement = args.get("replacement", "")
+            old_string = args.get("old_string", "")
+            new_string = args.get("new_string", "")
             replace_all = args.get("replace_all", False)
-            search_snip = (search[:60] + "…") if len(search) > 60 else search
-            repl_snip = (replacement[:60] + "…") if len(replacement) > 60 else replacement
+            old_snip = (old_string[:60] + "…") if len(old_string) > 60 else old_string
+            new_snip = (new_string[:60] + "…") if len(new_string) > 60 else new_string
             lines = [
-                f"edit_file(path={path!r})",
-                f"  search:      {search_snip!r}",
-                f"  replacement: {repl_snip!r}",
+                f"patch(path={path!r})",
+                f"  old_string:  {old_snip!r}",
+                f"  new_string:  {new_snip!r}",
                 f"  replace_all: {replace_all}",
             ]
 

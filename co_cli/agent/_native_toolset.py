@@ -16,7 +16,7 @@ from co_cli.tools.agents import (
 )
 from co_cli.tools.articles import read_article, save_article, search_articles, search_knowledge
 from co_cli.tools.capabilities import check_capabilities
-from co_cli.tools.files import edit_file, find_in_files, list_directory, read_file, write_file
+from co_cli.tools.files import glob, grep, patch, read_file, write_file
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.google_drive import read_drive_file, search_drive_files
 from co_cli.tools.google_gmail import create_gmail_draft, list_gmail_emails, search_gmail_emails
@@ -116,9 +116,9 @@ def _build_native_toolset(
     _register_tool(list_memories, visibility=_always_visible)
 
     # Workspace reads
-    _register_tool(list_directory, visibility=_always_visible)
+    _register_tool(glob, visibility=_always_visible)
     _register_tool(read_file, visibility=_always_visible, max_result_size=80_000)
-    _register_tool(find_in_files, visibility=_always_visible)
+    _register_tool(grep, visibility=_always_visible)
 
     # Web
     _register_tool(web_search, visibility=_always_visible, retries=3)
@@ -134,9 +134,7 @@ def _build_native_toolset(
     _register_tool(
         write_file, approval=True, sequential=True, visibility=_deferred_visible, retries=1
     )
-    _register_tool(
-        edit_file, approval=True, sequential=True, visibility=_deferred_visible, retries=1
-    )
+    _register_tool(patch, approval=True, sequential=True, visibility=_deferred_visible, retries=1)
 
     # Knowledge write tools
     _register_tool(save_article, approval=True, visibility=_deferred_visible, retries=1)

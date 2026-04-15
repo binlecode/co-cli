@@ -83,7 +83,7 @@ def test_category_awareness_prompt_includes_representative_tool_names() -> None:
     result = build_tool_registry(_CONFIG)
     prompt = build_category_awareness_prompt(result.tool_index)
     assert "write_file" in prompt
-    assert "edit_file" in prompt
+    assert "patch" in prompt
     assert "start_background_task" in prompt
     assert "delegate_coder" in prompt
 
@@ -157,17 +157,17 @@ def test_approval_resume_filter_normal_turn_passes_all() -> None:
     # Always tool
     assert _approval_resume_filter(ctx, ToolDefinition(name="read_file", description="")) is True
     # Deferred tool
-    assert _approval_resume_filter(ctx, ToolDefinition(name="edit_file", description="")) is True
+    assert _approval_resume_filter(ctx, ToolDefinition(name="patch", description="")) is True
     # Unknown tool
     assert _approval_resume_filter(ctx, ToolDefinition(name="unknown_xyz", description="")) is True
 
 
 def test_approval_resume_filter_narrows_to_approved_plus_always() -> None:
     """During resume, only resume_tool_names + ALWAYS tools are visible (BC-4)."""
-    deps = _make_deps(resume_tool_names=frozenset({"edit_file"}))
+    deps = _make_deps(resume_tool_names=frozenset({"patch"}))
     ctx = _make_ctx(deps)
     # Approved deferred tool — visible
-    assert _approval_resume_filter(ctx, ToolDefinition(name="edit_file", description="")) is True
+    assert _approval_resume_filter(ctx, ToolDefinition(name="patch", description="")) is True
     # Always tool — visible even without being in resume set
     assert _approval_resume_filter(ctx, ToolDefinition(name="read_file", description="")) is True
     # Deferred tool NOT in resume set — hidden
@@ -212,20 +212,20 @@ def test_approval_resume_filter_applies_to_mcp_tools() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sequential flag: write_file and edit_file
+# Sequential flag: write_file and patch
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_write_tools_are_sequential() -> None:
-    """write_file and edit_file must carry sequential=True; read_file must not."""
+    """write_file and patch must carry sequential=True; read_file must not."""
     from co_cli.agent._native_toolset import _build_native_toolset
 
     toolset, _ = _build_native_toolset(_CONFIG)
     ctx = _make_ctx(_make_deps())
     tools = await toolset.get_tools(ctx)
     assert tools["write_file"].tool_def.sequential is True
-    assert tools["edit_file"].tool_def.sequential is True
+    assert tools["patch"].tool_def.sequential is True
     assert tools["read_file"].tool_def.sequential is False
 
 
@@ -252,7 +252,7 @@ async def test_excluded_tools_are_not_sequential() -> None:
 def test_approval_resume_filter_hides_previously_discovered_deferred() -> None:
     """During resume, deferred tools not in resume_tool_names are hidden even if previously discovered."""
     # This validates BC-4: discovery state doesn't grant resume visibility
-    deps = _make_deps(resume_tool_names=frozenset({"edit_file"}))
+    deps = _make_deps(resume_tool_names=frozenset({"patch"}))
     ctx = _make_ctx(deps)
     # save_article is deferred, not in resume set — must be hidden
     # regardless of whether it was previously discovered via search_tools

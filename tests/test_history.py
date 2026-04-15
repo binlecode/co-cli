@@ -226,8 +226,8 @@ def test_group_by_turn_multi_tool_turn_stays_one_group():
         _user("do stuff"),
         _tool_call("read_file", "c1"),
         _tool_return("read_file", "file content", "c1"),
-        _tool_call("find_in_files", "c2"),
-        _tool_return("find_in_files", "search results", "c2"),
+        _tool_call("grep", "c2"),
+        _tool_return("grep", "search results", "c2"),
         _assistant("done"),
     ]
     groups = group_by_turn(msgs)
@@ -459,9 +459,7 @@ def test_gather_context_extracts_file_paths():
                 ToolCallPart(
                     tool_name="read_file", args={"file_path": "/src/main.py"}, tool_call_id="c1"
                 ),
-                ToolCallPart(
-                    tool_name="edit_file", args={"path": "/src/utils.py"}, tool_call_id="c2"
-                ),
+                ToolCallPart(tool_name="patch", args={"path": "/src/utils.py"}, tool_call_id="c2"),
             ]
         ),
         _tool_return("read_file", "content", "c1"),

@@ -9,21 +9,21 @@ PATH_NORMALIZATION_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
         "write_file",
-        "edit_file",
-        "list_directory",
+        "patch",
+        "glob",
     }
 )
 
 # Tools whose call args (path) are tracked for compaction working-set context.
-# Superset of PATH_NORMALIZATION_TOOLS — includes find_in_files whose pattern
+# Superset of PATH_NORMALIZATION_TOOLS — includes grep whose pattern
 # arg identifies a workspace scope even though it is not a single path.
 FILE_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
         "write_file",
-        "edit_file",
-        "find_in_files",
-        "list_directory",
+        "patch",
+        "grep",
+        "glob",
     }
 )
 
@@ -33,8 +33,8 @@ COMPACTABLE_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
         "run_shell_command",
-        "find_in_files",
-        "list_directory",
+        "grep",
+        "glob",
         "web_search",
         "web_fetch",
         "read_article",

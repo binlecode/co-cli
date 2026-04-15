@@ -18,12 +18,12 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
 
     Do not use shell for file reads, content search, or tasks with dedicated tools:
     - read_file instead of cat/head/tail
-    - find_in_files instead of grep/rg
-    - list_directory instead of ls/find
+    - grep instead of grep/rg
+    - glob instead of ls/find
     - web_fetch instead of curl for web pages
     - search_notes / read_note instead of grep/cat on the Obsidian vault
     - search_drive_files / read_drive_file instead of manual API calls
-    - write_file / edit_file instead of shell redirection for workspace file creation or editing
+    - write_file / patch instead of shell redirection for workspace file creation or editing
     - start_background_task instead of shell for detached long-running work
 
     Commands run in the project working directory. DENY-pattern commands are

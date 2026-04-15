@@ -34,7 +34,7 @@ def test_approval_tools_flagged():
     result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
 
     # These tools must require approval at the agent layer
-    for name in ("start_background_task", "save_article", "write_file", "edit_file"):
+    for name in ("start_background_task", "save_article", "write_file", "patch"):
         assert result.tool_index[name].approval is True, (
             f"Tool '{name}' should require approval but doesn't"
         )
@@ -111,7 +111,7 @@ def test_tool_index_visibility_policy_metadata():
         assert idx[name].visibility == VisibilityPolicyEnum.ALWAYS, f"{name} should be ALWAYS"
 
     # Spot-check deferred tools
-    for name in ("edit_file", "write_file", "save_article", "start_background_task"):
+    for name in ("patch", "write_file", "save_article", "start_background_task"):
         assert idx[name].visibility == VisibilityPolicyEnum.DEFERRED, f"{name} should be DEFERRED"
 
     # Connector integration metadata

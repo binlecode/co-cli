@@ -13,9 +13,9 @@ from co_cli.deps import CoDeps
 from co_cli.tools.files import (
     _enforce_workspace_boundary,
     _is_recursive_pattern,
-    edit_file,
-    find_in_files,
-    list_directory,
+    glob,
+    grep,
+    patch,
     read_file,
     write_file,
 )
@@ -35,17 +35,17 @@ def _make_ctx(workspace: Path) -> RunContext:
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-# --- list_directory ---
+# --- glob ---
 
 
 @pytest.mark.asyncio
-async def test_list_directory_basic(tmp_path):
+async def test_glob_basic(tmp_path):
     """Lists files and subdirectories in a workspace directory."""
     (tmp_path / "a.py").write_text("hello")
     (tmp_path / "b.txt").write_text("world")
     (tmp_path / "subdir").mkdir()
 
-    result = await list_directory(_make_ctx(tmp_path), path=".")
+    result = await glob(_make_ctx(tmp_path), path=".")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] >= 3
@@ -56,13 +56,13 @@ async def test_list_directory_basic(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_directory_pattern(tmp_path):
+async def test_glob_pattern(tmp_path):
     """Pattern filter restricts results to matching files only."""
     (tmp_path / "main.py").write_text("")
     (tmp_path / "util.py").write_text("")
     (tmp_path / "readme.txt").write_text("")
 
-    result = await list_directory(_make_ctx(tmp_path), path=".", pattern="*.py")
+    result = await glob(_make_ctx(tmp_path), path=".", pattern="*.py")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -72,7 +72,7 @@ async def test_list_directory_pattern(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_directory_recursive_glob(tmp_path):
+async def test_glob_recursive_glob(tmp_path):
     """Recursive glob pattern finds files across nested directories, sorted by mtime."""
     sub = tmp_path / "src" / "pkg"
     sub.mkdir(parents=True)
@@ -86,7 +86,7 @@ async def test_list_directory_recursive_glob(tmp_path):
     (tmp_path / "src" / "mid.py").write_text("m")
     (tmp_path / "readme.txt").write_text("ignore me")
 
-    result = await list_directory(_make_ctx(tmp_path), path=".", pattern="**/*.py")
+    result = await glob(_make_ctx(tmp_path), path=".", pattern="**/*.py")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -101,12 +101,12 @@ async def test_list_directory_recursive_glob(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_directory_recursive_truncation(tmp_path):
+async def test_glob_recursive_truncation(tmp_path):
     """Recursive glob truncates at max_entries and reports truncation."""
     for i in range(10):
         (tmp_path / f"file{i:02d}.py").write_text("")
 
-    result = await list_directory(_make_ctx(tmp_path), path=".", pattern="**/*.py", max_entries=3)
+    result = await glob(_make_ctx(tmp_path), path=".", pattern="**/*.py", max_entries=3)
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3
@@ -115,12 +115,12 @@ async def test_list_directory_recursive_truncation(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_directory_broken_symlink(tmp_path):
+async def test_glob_broken_symlink(tmp_path):
     """Broken symlinks do not crash recursive glob — they appear in results."""
     (tmp_path / "real.txt").write_text("exists")
     (tmp_path / "broken_link").symlink_to(tmp_path / "nonexistent_target")
 
-    result = await list_directory(_make_ctx(tmp_path), path=".", pattern="**/*")
+    result = await glob(_make_ctx(tmp_path), path=".", pattern="**/*")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -129,12 +129,12 @@ async def test_list_directory_broken_symlink(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_directory_shallow_truncation(tmp_path):
+async def test_glob_shallow_truncation(tmp_path):
     """Shallow listing truncates at max_entries and reports truncation."""
     for i in range(10):
         (tmp_path / f"file{i:02d}.txt").write_text("")
 
-    result = await list_directory(_make_ctx(tmp_path), path=".", max_entries=3)
+    result = await glob(_make_ctx(tmp_path), path=".", max_entries=3)
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3
@@ -151,19 +151,19 @@ def test_is_recursive_pattern():
 
 
 @pytest.mark.asyncio
-async def test_list_directory_not_found(tmp_path):
+async def test_glob_not_found(tmp_path):
     """Returns error dict when path does not exist."""
-    result = await list_directory(_make_ctx(tmp_path), path="nonexistent_dir")
+    result = await glob(_make_ctx(tmp_path), path="nonexistent_dir")
 
     assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
-async def test_list_directory_not_a_dir(tmp_path):
+async def test_glob_not_a_dir(tmp_path):
     """Returns error dict when path points to a file, not a directory."""
     (tmp_path / "afile.txt").write_text("content")
 
-    result = await list_directory(_make_ctx(tmp_path), path="afile.txt")
+    result = await glob(_make_ctx(tmp_path), path="afile.txt")
 
     assert result.metadata.get("error") is True
 
@@ -272,17 +272,17 @@ async def test_read_file_line_numbers_ranged(tmp_path):
     assert "     5\t" in result.return_value
 
 
-# --- find_in_files ---
+# --- grep ---
 
 
 @pytest.mark.asyncio
-async def test_find_in_files(tmp_path):
+async def test_grep(tmp_path):
     """Finds regex matches across files; only files containing pattern are returned."""
     (tmp_path / "alpha.txt").write_text("foo bar\nbaz\n")
     (tmp_path / "beta.txt").write_text("hello foo\n")
     (tmp_path / "gamma.txt").write_text("nothing here\n")
 
-    result = await find_in_files(_make_ctx(tmp_path), pattern="foo")
+    result = await grep(_make_ctx(tmp_path), pattern="foo")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 2
@@ -293,19 +293,19 @@ async def test_find_in_files(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_find_in_files_invalid_regex(tmp_path):
+async def test_grep_invalid_regex(tmp_path):
     """Returns error dict for malformed regex patterns."""
-    result = await find_in_files(_make_ctx(tmp_path), pattern="[unclosed")
+    result = await grep(_make_ctx(tmp_path), pattern="[unclosed")
 
     assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
-async def test_find_in_files_no_matches(tmp_path):
+async def test_grep_no_matches(tmp_path):
     """Returns zero count and empty matches list when nothing matches."""
     (tmp_path / "sample.txt").write_text("no match here\n")
 
-    result = await find_in_files(_make_ctx(tmp_path), pattern="zzz_will_never_match")
+    result = await grep(_make_ctx(tmp_path), pattern="zzz_will_never_match")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 0
@@ -313,14 +313,14 @@ async def test_find_in_files_no_matches(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_find_in_files_recursive_subdirectory(tmp_path):
+async def test_grep_recursive_subdirectory(tmp_path):
     """Recursive glob reaches files in deeply nested subdirectories."""
     deep = tmp_path / "src" / "pkg"
     deep.mkdir(parents=True)
     (deep / "deep.py").write_text("TARGET_MARKER = True\n")
     (tmp_path / "top.txt").write_text("no match here\n")
 
-    result = await find_in_files(_make_ctx(tmp_path), pattern="TARGET_MARKER")
+    result = await grep(_make_ctx(tmp_path), pattern="TARGET_MARKER")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 1
@@ -372,61 +372,108 @@ async def test_write_file_path_escape(tmp_path):
     assert result.metadata.get("error") is True
 
 
-# --- edit_file ---
+# --- patch ---
 
 
 @pytest.mark.asyncio
-async def test_edit_file_single(tmp_path):
-    """Replaces a unique search string in a file."""
+async def test_patch_exact_match(tmp_path):
+    """Exact strategy replaces a unique string in a file."""
     (tmp_path / "config.txt").write_text("host=localhost\nport=8080\n")
 
-    result = await edit_file(
-        _make_ctx(tmp_path), path="config.txt", search="localhost", replacement="example.com"
+    result = await patch(
+        _make_ctx(tmp_path), path="config.txt", old_string="localhost", new_string="example.com"
     )
 
     assert not result.metadata.get("error")
     assert result.metadata["replacements"] == 1
+    assert result.metadata["strategy"] == "exact"
     assert (tmp_path / "config.txt").read_text() == "host=example.com\nport=8080\n"
 
 
 @pytest.mark.asyncio
-async def test_edit_file_not_found(tmp_path):
-    """Raises ValueError when search string is absent from the file."""
-    (tmp_path / "notes.txt").write_text("some content here\n")
+async def test_patch_line_trimmed(tmp_path):
+    """line-trimmed strategy matches when old_string has trailing whitespace per line."""
+    (tmp_path / "code.py").write_text("def foo():\n    return 1\n")
 
-    with pytest.raises(ValueError, match="Search string not found"):
-        await edit_file(
-            _make_ctx(tmp_path), path="notes.txt", search="absent_string", replacement="x"
-        )
-
-
-@pytest.mark.asyncio
-async def test_edit_file_multiple_no_replace_all(tmp_path):
-    """Raises ValueError when search string appears multiple times without replace_all=True."""
-    (tmp_path / "repeat.txt").write_text("foo\nfoo\nbar\n")
-
-    with pytest.raises(ValueError, match="Found 2 occurrences"):
-        await edit_file(_make_ctx(tmp_path), path="repeat.txt", search="foo", replacement="baz")
-
-
-@pytest.mark.asyncio
-async def test_edit_file_replace_all(tmp_path):
-    """Replaces all occurrences when replace_all=True."""
-    (tmp_path / "multi.txt").write_text("foo\nfoo\nbar\n")
-
-    result = await edit_file(
-        _make_ctx(tmp_path), path="multi.txt", search="foo", replacement="qux", replace_all=True
+    # old_string has trailing spaces on each line — not present in file
+    result = await patch(
+        _make_ctx(tmp_path),
+        path="code.py",
+        old_string="def foo():  \n    return 1  \n",
+        new_string="def bar():\n    return 2\n",
     )
 
     assert not result.metadata.get("error")
-    assert result.metadata["replacements"] == 2
-    assert (tmp_path / "multi.txt").read_text() == "qux\nqux\nbar\n"
+    assert result.metadata["strategy"] == "line-trimmed"
+    assert (tmp_path / "code.py").read_text() == "def bar():\n    return 2\n"
 
 
 @pytest.mark.asyncio
-async def test_edit_file_not_found_path(tmp_path):
+async def test_patch_indent_stripped(tmp_path):
+    """Fuzzy matching succeeds when old_string uses wrong indentation (tabs vs spaces)."""
+    (tmp_path / "src.py").write_text("    x = 1\n    y = 2\n")
+
+    # old_string uses tabs instead of spaces — a fuzzy strategy normalises the indentation
+    result = await patch(
+        _make_ctx(tmp_path),
+        path="src.py",
+        old_string="\tx = 1\n\ty = 2\n",
+        new_string="    x = 10\n    y = 20\n",
+    )
+
+    assert not result.metadata.get("error")
+    assert result.metadata["replacements"] == 1
+    assert (tmp_path / "src.py").read_text() == "    x = 10\n    y = 20\n"
+
+
+@pytest.mark.asyncio
+async def test_patch_escape_expanded(tmp_path):
+    """escape-expanded strategy matches when old_string uses literal \\n instead of actual newline."""
+    (tmp_path / "data.txt").write_text("line one\nline two\n")
+
+    # old_string has literal backslash-n — should match actual newline in file
+    result = await patch(
+        _make_ctx(tmp_path),
+        path="data.txt",
+        old_string="line one\\nline two\\n",
+        new_string="replaced\n",
+    )
+
+    assert not result.metadata.get("error")
+    assert result.metadata["strategy"] == "escape-expanded"
+    assert (tmp_path / "data.txt").read_text() == "replaced\n"
+
+
+@pytest.mark.asyncio
+async def test_patch_ambiguous_returns_error(tmp_path):
+    """Returns error when old_string matches multiple times without replace_all=True."""
+    (tmp_path / "repeat.txt").write_text("foo\nfoo\nbar\n")
+
+    result = await patch(
+        _make_ctx(tmp_path), path="repeat.txt", old_string="foo", new_string="baz"
+    )
+
+    assert result.metadata.get("error") is True
+    assert "2" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_patch_no_match_returns_error(tmp_path):
+    """Returns error when no strategy matches — error mentions the file."""
+    (tmp_path / "notes.txt").write_text("some content here\n")
+
+    result = await patch(
+        _make_ctx(tmp_path), path="notes.txt", old_string="absent_string", new_string="x"
+    )
+
+    assert result.metadata.get("error") is True
+    assert "notes.txt" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_patch_not_found_path(tmp_path):
     """Returns error dict when the target file does not exist."""
-    result = await edit_file(_make_ctx(tmp_path), path="ghost.txt", search="x", replacement="y")
+    result = await patch(_make_ctx(tmp_path), path="ghost.txt", old_string="x", new_string="y")
 
     assert result.metadata.get("error") is True
 
@@ -551,14 +598,14 @@ async def test_write_file_staleness_blocked(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_edit_file_staleness_blocked(tmp_path):
-    """edit_file returns error when file was modified since last read."""
+async def test_patch_staleness_blocked(tmp_path):
+    """patch returns error when file was modified since last read."""
     target = tmp_path / "stale.txt"
     target.write_text("original content")
     ctx = _make_ctx(tmp_path)
     ctx.deps.file_read_mtimes[str(target)] = 0.0
 
-    result = await edit_file(ctx, path="stale.txt", search="original", replacement="new")
+    result = await patch(ctx, path="stale.txt", old_string="original", new_string="new")
 
     assert result.metadata.get("error") is True
     assert "changed since last read" in result.return_value
@@ -596,14 +643,14 @@ async def test_write_file_staleness_mtime_updated_after_write(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_edit_file_size_guard(tmp_path):
-    """edit_file returns error when file exceeds _MAX_EDIT_BYTES."""
+async def test_patch_size_guard(tmp_path):
+    """patch returns error when file exceeds _MAX_EDIT_BYTES."""
     from co_cli.tools.files import _MAX_EDIT_BYTES
 
     target = tmp_path / "huge.txt"
     target.write_bytes(b"x" * (_MAX_EDIT_BYTES + 1))
 
-    result = await edit_file(_make_ctx(tmp_path), path="huge.txt", search="x", replacement="y")
+    result = await patch(_make_ctx(tmp_path), path="huge.txt", old_string="x", new_string="y")
 
     assert result.metadata.get("error") is True
     assert "too large" in result.return_value
@@ -623,13 +670,13 @@ async def test_read_file_utf16le(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_edit_file_utf16(tmp_path):
-    """edit_file succeeds on UTF-16 files with BOM — edit applies and file remains valid UTF-16."""
+async def test_patch_utf16(tmp_path):
+    """patch succeeds on UTF-16 files with BOM — edit applies and file remains valid UTF-16."""
     target = tmp_path / "utf16edit.txt"
     target.write_bytes(b"\xff\xfe" + "hello world".encode("utf-16-le"))
     ctx = _make_ctx(tmp_path)
 
-    result = await edit_file(ctx, path="utf16edit.txt", search="hello", replacement="goodbye")
+    result = await patch(ctx, path="utf16edit.txt", old_string="hello", new_string="goodbye")
 
     assert not result.metadata.get("error")
     assert result.metadata["replacements"] == 1

@@ -3,7 +3,7 @@
 The SDK's ToolSearchToolset handles per-tool deferred visibility. This module
 provides a category-level prompt so the model knows which capability domains
 are available via search_tools. Native categories include representative tool
-names (e.g. "file editing (write_file, edit_file)") to reduce keyword-formation
+names (e.g. "file editing (write_file, patch)") to reduce keyword-formation
 burden for local models; integration categories are listed by label only.
 """
 
@@ -12,7 +12,7 @@ from co_cli.deps import ToolInfo, VisibilityPolicyEnum
 # Native deferred tool → category label
 _NATIVE_CATEGORIES: dict[str, str] = {
     "write_file": "file editing",
-    "edit_file": "file editing",
+    "patch": "file editing",
     "save_article": "memory management",
     "start_background_task": "background tasks",
     "check_task_status": "background tasks",
@@ -26,7 +26,7 @@ _NATIVE_CATEGORIES: dict[str, str] = {
 
 # Representative tool names for each native category (for keyword-formation hints)
 _NATIVE_CATEGORY_REPS: dict[str, list[str]] = {
-    "file editing": ["write_file", "edit_file"],
+    "file editing": ["write_file", "patch"],
     "background tasks": ["start_background_task"],
     "memory management": ["save_article"],
     "sub-agents": [

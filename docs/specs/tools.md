@@ -27,7 +27,7 @@ Native tools take `RunContext[CoDeps]` as their first argument and return `ToolR
 
 ```
 tools/
-  files.py           — workspace filesystem (list, read, find, write, edit)
+  files.py           — workspace filesystem (glob, read, grep, write, patch)
   shell.py           — conditionally approved subprocess execution
   memory.py          — memory recall
   articles.py        — knowledge article save and search
@@ -107,7 +107,7 @@ SDK idioms that drive the design:
 
 | Tier | `retries=` | Tools |
 |------|-----------|-------|
-| Write-once | 1 | `write_file`, `edit_file`, `save_article`, `create_gmail_draft` |
+| Write-once | 1 | `write_file`, `patch`, `save_article`, `create_gmail_draft` |
 | Network read | 3 | `web_search`, `web_fetch`, `list/search_gmail_emails`, `search/read_drive_file`, `list/search_calendar_events` |
 | Default | `config.tool_retries` | all others |
 
@@ -143,7 +143,7 @@ flowchart TD
 
 **CoToolLifecycle capability** (registered via `capabilities=[CoToolLifecycle()]` in `build_agent()`) intercepts every tool execution with two hooks:
 
-- `before_tool_execute` — resolves relative `path` args to absolute for file tools (`read_file`, `write_file`, `edit_file`, `list_directory`)
+- `before_tool_execute` — resolves relative `path` args to absolute for file tools (`read_file`, `write_file`, `patch`, `glob`)
 - `after_tool_execute` — enriches the SDK's `execute_tool` OTel span with `co.tool.source`, `co.tool.requires_approval`, `co.tool.result_size`; emits `logger.debug("tool_executed")`
 
 Denial logging (`tool_denied`) is emitted in `_collect_deferred_tool_approvals()` when approval is rejected.
@@ -199,7 +199,7 @@ Three approval classes:
 
 | Class | Condition | Examples |
 |-------|-----------|---------|
-| Always deferred | `requires_approval=True` | `write_file`, `edit_file`, `save_article`, `start_background_task`, `create_gmail_draft` |
+| Always deferred | `requires_approval=True` | `write_file`, `patch`, `save_article`, `start_background_task`, `create_gmail_draft` |
 | Shell inline | Registered `auto`; classified inside tool body | `run_shell_command` |
 | Always auto | `requires_approval=False` | reads, web, system, delegation agents, all read-only connector tools |
 
@@ -208,7 +208,7 @@ Approval subject scopes:
 | Tool shape | Subject kind | Remembered value |
 |-----------|-------------|-----------------|
 | `run_shell_command` | `shell` | first token of `cmd` |
-| `write_file`, `edit_file` | `path` | parent directory |
+| `write_file`, `patch` | `path` | parent directory |
 | `web_fetch` | `domain` | parsed hostname |
 | everything else (including MCP) | `tool` | tool name |
 
@@ -222,18 +222,18 @@ User responds `y` (once) / `n` (deny) / `a` (always for this scope this session)
 
 Approval controls permission; resource locks and sequential dispatch control correctness. When pydantic-ai dispatches multiple tool calls in parallel (or parent + subagent touch the same resource), read-modify-write tools must not corrupt data.
 
-**Within-turn serialization:** `write_file` and `edit_file` are registered with `sequential=True` via `_register_tool()`. pydantic-ai's `ToolManager.get_parallel_execution_mode()` serializes the entire batch if any tool in it is marked sequential — the batch runs in model-return order (the order the model listed the calls). A `read_file + write_file` batch still runs sequentially in the order the model returned them, which is typically read-then-write.
+**Within-turn serialization:** `write_file` and `patch` are registered with `sequential=True` via `_register_tool()`. pydantic-ai's `ToolManager.get_parallel_execution_mode()` serializes the entire batch if any tool in it is marked sequential — the batch runs in model-return order (the order the model listed the calls). A `read_file + write_file` batch still runs sequentially in the order the model returned them, which is typically read-then-write.
 
 **Cross-agent locking:** `ResourceLockStore` (`co_cli/tools/resource_lock.py`) is an in-process `asyncio.Lock` store keyed by resource identifier. Shared by reference across parent and subagents via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately — no blocking, no silent overwrite. ResourceLockStore remains necessary because the `sequential=True` flag only controls within-turn batch dispatch, not cross-agent concurrent calls.
 
 | Tool | Lock key | Why |
 |------|----------|-----|
-| `write_file` | resolved absolute path | prevents race with concurrent `edit_file` on the same path |
-| `edit_file` | resolved absolute path | read-modify-write; second edit reads stale content |
+| `write_file` | resolved absolute path | prevents race with concurrent `patch` on the same path |
+| `patch` | resolved absolute path | read-modify-write; second edit reads stale content |
 
 Tools that do NOT need locking: `save_article` (UUID IDs eliminate IO conflict; dedup is best-effort under concurrency), `run_shell_command` (too broad to guard), `create_gmail_draft` (independent external resources).
 
-**Session-scoped staleness guard** — `CoDeps.file_read_mtimes: dict[str, float]` (shared by reference across parent and subagents alongside `resource_locks`) records the mtime at which each path was last read. `write_file` and `edit_file` compare the current on-disk mtime against the recorded value before writing; a mismatch returns `tool_error("File changed since last read")`. New-file writes (path absent from the dict) skip the check entirely. The guard is advisory: it detects within-session races only, not modifications by external processes between sessions.
+**Session-scoped staleness guard** — `CoDeps.file_read_mtimes: dict[str, float]` (shared by reference across parent and subagents alongside `resource_locks`) records the mtime at which each path was last read. `write_file` and `patch` compare the current on-disk mtime against the recorded value before writing; a mismatch returns `tool_error("File changed since last read")`. New-file writes (path absent from the dict) skip the check entirely. The guard is advisory: it detects within-session races only, not modifications by external processes between sessions.
 
 ---
 
@@ -263,14 +263,14 @@ Conditional tools excluded when gate is absent.
 | `search_articles` | always | auto | — |
 | `read_article` | always | auto | — |
 | `list_memories` | always | auto | — |
-| `list_directory` | always | auto | — |
+| `glob` | always | auto | — |
 | `read_file` | always | auto | — |
-| `find_in_files` | always | auto | — |
+| `grep` | always | auto | — |
 | `web_search` | always | auto | — |
 | `web_fetch` | always | auto | — |
 | `run_shell_command` | always | auto¹ | — |
 | `write_file` | deferred | deferred | — |
-| `edit_file` | deferred | deferred | — |
+| `patch` | deferred | deferred | — |
 | `save_article` | deferred | deferred | — |
 | `start_background_task` | deferred | deferred | — |
 | `check_task_status` | deferred | auto | — |
@@ -307,11 +307,11 @@ All paths pre-resolved by `CoToolLifecycle.before_tool_execute` and verified aga
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
-| `list_directory` | `path="."`, `pattern="*"`, `max_entries=200` | Lists dir contents filtered by glob; entries tagged `[dir]` or `[file]`. Recursive patterns (`**`) sorted by mtime; tolerates broken symlinks |
+| `glob` | `path="."`, `pattern="*"`, `max_entries=200` | Lists dir contents filtered by glob; entries tagged `[dir]` or `[file]`. Recursive patterns (`**`) sorted by mtime; tolerates broken symlinks |
 | `read_file` | `path`, `start_line?`, `end_line?` | Returns `cat -n` numbered content (`{n:>6}\t{line}`); optional 1-indexed line range; BOM-detects UTF-16; returns error on binary files; records mtime in `file_read_mtimes` |
-| `find_in_files` | `pattern` (regex), `glob="**/*"`, `max_matches=50` | Regex search; skips binary files; returns `file:line: text` |
+| `grep` | `pattern` (regex), `glob="**/*"`, `max_matches=50` | Regex search; skips binary files; returns `file:line: text` |
 | `write_file` | `path`, `content` | Overwrites file (UTF-8); creates parent dirs; returns byte count; session-scoped staleness check inside resource lock (skipped for new files not yet in `file_read_mtimes`) |
-| `edit_file` | `path`, `search`, `replacement`, `replace_all=False` | Exact-string replace; staleness check before acquiring lock; 10 MB hard block; BOM-detects UTF-16; fails on ambiguous match unless `replace_all=True` |
+| `patch` | `path`, `old_string`, `new_string`, `replace_all=False` | Fuzzy-match replace with four strategies (exact → line-trimmed → indent-stripped → escape-expanded); staleness check before acquiring lock; 10 MB hard block; BOM-detects UTF-16; fails on ambiguous or no match unless `replace_all=True` |
 
 #### Knowledge — Memory (`tools/memory.py`)
 
@@ -376,7 +376,7 @@ Role-specific behavioral flags: `retry_on_empty` (researcher only — retries wi
 
 | Tool | Agent surface | Behavior |
 |------|--------------|---------|
-| `delegate_coder` | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; returns `summary`, `diff_preview`, `files_touched`, `confidence` |
+| `delegate_coder` | `glob`, `read_file`, `grep` | Read-only workspace analysis; returns `summary`, `diff_preview`, `files_touched`, `confidence` |
 | `delegate_researcher` | `web_search`, `web_fetch` | Web-only research; retries once with rephrased query (`retry_on_empty`) |
 | `delegate_analyst` | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; prepends `inputs` as context (`input_prepend`); returns `conclusion`, `evidence`, `reasoning` |
 | `delegate_reasoner` | none | Structured decomposition via reasoning model; returns `plan`, `steps`, `conclusion` |
@@ -410,7 +410,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 
 ---
 
-`search_tools` is the SDK's built-in `ToolSearchToolset` (auto-added by Agent). It uses tool name + description keyword matching to discover deferred tools. A category-level awareness prompt (rebuilt per turn) tells the model which capability domains are available via `search_tools`, with representative tool names included for native categories to reduce keyword-formation burden: e.g. `file editing (write_file, edit_file)`, `background tasks (start_background_task)`, `sub-agents (delegate_coder, ...)`. Configured integrations (Gmail, Drive, Calendar, Obsidian) are listed by label when active. Discovery state is reconstructed from message history by the SDK — no session-level cache.
+`search_tools` is the SDK's built-in `ToolSearchToolset` (auto-added by Agent). It uses tool name + description keyword matching to discover deferred tools. A category-level awareness prompt (rebuilt per turn) tells the model which capability domains are available via `search_tools`, with representative tool names included for native categories to reduce keyword-formation burden: e.g. `file editing (write_file, patch)`, `background tasks (start_background_task)`, `sub-agents (delegate_coder, ...)`. Configured integrations (Gmail, Drive, Calendar, Obsidian) are listed by label when active. Discovery state is reconstructed from message history by the SDK — no session-level cache.
 
 ---
 
@@ -442,7 +442,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 
 | File | Purpose |
 |------|---------|
-| `co_cli/tools/files.py` | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` |
+| `co_cli/tools/files.py` | `glob`, `read_file`, `grep`, `write_file`, `patch` |
 | `co_cli/tools/shell.py` | `run_shell_command` — conditionally approved subprocess execution |
 | `co_cli/tools/memory.py` | `list_memories`, `search_memories` (read-only; write path owned by extractor) |
 | `co_cli/tools/memory_write.py` | `save_memory` — extractor-only write tool; always creates a new UUID-suffixed memory file; re-indexes into `KnowledgeStore` after write |

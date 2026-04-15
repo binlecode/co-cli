@@ -1,7 +1,8 @@
-"""Native file system tools: list, read, find, write, edit."""
+"""Native file system tools: list, read, find, write, patch."""
 
 import fnmatch
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ def _enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
     return resolved
 
 
-_MAX_EDIT_BYTES = 10 * 1024 * 1024  # 10 MB hard block for edit_file
+_MAX_EDIT_BYTES = 10 * 1024 * 1024  # 10 MB hard block for patch
 
 
 def _safe_mtime(p: Path) -> float:
@@ -53,7 +54,7 @@ def _is_recursive_pattern(pattern: str) -> bool:
     return "**" in pattern or "/" in pattern
 
 
-async def list_directory(
+async def glob(
     ctx: RunContext[CoDeps],
     path: str = ".",
     pattern: str = "*",
@@ -65,7 +66,7 @@ async def list_directory(
     exist or find files by extension/name pattern. Use "**/*.ext" for recursive
     search by name (results sorted by modification time, newest first).
 
-    When NOT to use: for content search inside files — use find_in_files instead.
+    When NOT to use: for content search inside files — use grep instead.
 
     Args:
         path: Directory path relative to the workspace root (default: current directory).
@@ -143,8 +144,8 @@ async def read_file(
     Use for reading known files. Specify start_line/end_line when the relevant
     region is already known to avoid loading the entire file.
 
-    When NOT to use: when the file location is unknown — use list_directory or
-    find_in_files first to locate the file.
+    When NOT to use: when the file location is unknown — use glob or
+    grep first to locate the file.
 
     Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
     the full file is returned.
@@ -194,7 +195,7 @@ async def read_file(
     )
 
 
-async def find_in_files(
+async def grep(
     ctx: RunContext[CoDeps],
     pattern: str,
     glob: str = "**/*",
@@ -205,8 +206,7 @@ async def find_in_files(
     Use for content search — finding text, symbols, or patterns inside files.
     Prefer this over shell grep/rg for workspace content search.
 
-    When NOT to use: for file-name discovery — use list_directory with a glob
-    pattern instead.
+    When NOT to use: for file-name discovery — use glob with a pattern instead.
 
     Skips binary files. Returns up to max_matches results as file:line: text.
 
@@ -261,7 +261,7 @@ async def write_file(
 ) -> ToolReturn:
     """Write content to a new file or completely rewrite an existing file.
 
-    Prefer edit_file for modifying existing files — it targets a specific
+    Prefer patch for modifying existing files — it targets a specific
     section and avoids accidentally dropping content. Use write_file only for
     creating new files or intentional full rewrites. Read the file first before
     rewriting to confirm you are not losing content.
@@ -301,30 +301,157 @@ async def write_file(
         return tool_error(f"File {path} is being modified by another tool call — retry next turn")
 
 
-async def edit_file(
+def _transform_line_trimmed(text: str) -> tuple[str, list[int]]:
+    """Strip leading/trailing whitespace per line (line endings preserved)."""
+    result: list[str] = []
+    offsets: list[int] = []
+    pos = 0
+    for raw_line in text.splitlines(keepends=True):
+        if raw_line.endswith("\r\n"):
+            content, line_end = raw_line[:-2], "\r\n"
+        elif raw_line.endswith(("\n", "\r")):
+            content, line_end = raw_line[:-1], raw_line[-1]
+        else:
+            content, line_end = raw_line, ""
+        lstripped = content.lstrip()
+        lead_skip = len(content) - len(lstripped)
+        rstripped = lstripped.rstrip()
+        for idx, ch in enumerate(rstripped):
+            result.append(ch)
+            offsets.append(pos + lead_skip + idx)
+        for idx, ch in enumerate(line_end):
+            result.append(ch)
+            offsets.append(pos + len(content) + idx)
+        pos += len(raw_line)
+    return "".join(result), offsets
+
+
+def _transform_indent_stripped(text: str) -> tuple[str, list[int]]:
+    """Strip leading whitespace per line (trailing whitespace and line endings preserved)."""
+    result: list[str] = []
+    offsets: list[int] = []
+    pos = 0
+    for raw_line in text.splitlines(keepends=True):
+        if raw_line.endswith("\r\n"):
+            content, line_end = raw_line[:-2], "\r\n"
+        elif raw_line.endswith(("\n", "\r")):
+            content, line_end = raw_line[:-1], raw_line[-1]
+        else:
+            content, line_end = raw_line, ""
+        lstripped = content.lstrip()
+        lead_skip = len(content) - len(lstripped)
+        for idx, ch in enumerate(lstripped):
+            result.append(ch)
+            offsets.append(pos + lead_skip + idx)
+        for idx, ch in enumerate(line_end):
+            result.append(ch)
+            offsets.append(pos + len(content) + idx)
+        pos += len(raw_line)
+    return "".join(result), offsets
+
+
+def _transform_escape_expanded(text: str) -> tuple[str, list[int]]:
+    """Expand literal \\n \\t \\r escape sequences to actual characters."""
+    _ESC_MAP = {"n": "\n", "t": "\t", "r": "\r"}
+    result: list[str] = []
+    offsets: list[int] = []
+    idx = 0
+    while idx < len(text):
+        if idx + 1 < len(text) and text[idx] == "\\" and text[idx + 1] in _ESC_MAP:
+            result.append(_ESC_MAP[text[idx + 1]])
+            offsets.append(idx)
+            idx += 2
+        else:
+            result.append(text[idx])
+            offsets.append(idx)
+            idx += 1
+    return "".join(result), offsets
+
+
+_FUZZY_STRATEGIES: list[tuple[str, Callable[[str], tuple[str, list[int]]]]] = [
+    ("line-trimmed", _transform_line_trimmed),
+    ("indent-stripped", _transform_indent_stripped),
+    ("escape-expanded", _transform_escape_expanded),
+]
+
+
+def _fuzzy_apply(
+    content: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool,
+    transform_fn: Callable[[str], tuple[str, list[int]]],
+    strategy_name: str,
+) -> tuple[str, int] | str | None:
+    """Try one fuzzy strategy. Returns (updated_content, count), an error str, or None if no match.
+
+    Extends each match's orig_start backward to include any stripped leading whitespace
+    so new_string is applied at the true start of the matched block in the original.
+    """
+    t_content, offsets = transform_fn(content)
+    t_old, _ = transform_fn(old_string)
+    if not t_old:
+        return None
+
+    matches: list[tuple[int, int]] = []
+    search_start = 0
+    while True:
+        pos = t_content.find(t_old, search_start)
+        if pos == -1:
+            break
+        orig_start = offsets[pos]
+        orig_end = offsets[pos + len(t_old) - 1] + 1
+        # Extend orig_start backward to include stripped leading whitespace of the
+        # first matched line, so new_string is placed at the true line boundary.
+        line_boundary = content.rfind("\n", 0, orig_start)
+        line_boundary = 0 if line_boundary == -1 else line_boundary + 1
+        if not content[line_boundary:orig_start].strip():
+            orig_start = line_boundary
+        matches.append((orig_start, orig_end))
+        search_start = pos + len(t_old)
+
+    if not matches:
+        return None
+
+    if len(matches) > 1 and not replace_all:
+        return (
+            f"Found {len(matches)} occurrences using {strategy_name!r} strategy — "
+            "use replace_all=True to replace all"
+        )
+
+    result = content
+    for orig_start, orig_end in reversed(matches):
+        result = result[:orig_start] + new_string + result[orig_end:]
+    return result, len(matches)
+
+
+async def patch(
     ctx: RunContext[CoDeps],
     path: str,
-    search: str,
-    replacement: str,
+    old_string: str,
+    new_string: str,
     replace_all: bool = False,
 ) -> ToolReturn:
-    """Edit a file by replacing a specific search string with a replacement.
+    """Edit a file by replacing old_string with new_string, with fuzzy matching fallback.
 
     Use for targeted modifications to existing files. Read the file first to
-    understand its content. Use the smallest unique search string that
+    understand its content. Use the smallest unique old_string that
     unambiguously identifies the edit location. Set replace_all=True only
     when every occurrence should be replaced.
+
+    Tries four matching strategies in order: exact, line-trimmed (whitespace
+    per line), indent-stripped (leading whitespace), escape-expanded (\\n \\t \\r).
+    The first strategy that matches exactly once (or all when replace_all=True)
+    is applied. Returns an error if all strategies fail or if multiple matches
+    are found without replace_all=True.
 
     When NOT to use: for creating new files or complete rewrites — use
     write_file instead.
 
-    Raises ValueError if the search string is not found or if there are multiple
-    occurrences and replace_all is False.
-
     Args:
         path: File path relative to the workspace root.
-        search: Exact string to search for in the file.
-        replacement: String to replace the search string with.
+        old_string: String to replace (supports fuzzy matching).
+        new_string: Replacement string (applied verbatim).
         replace_all: If True, replace all occurrences; otherwise requires exactly one.
     """
     try:
@@ -353,25 +480,46 @@ async def edit_file(
                 )
             enc = _detect_encoding(resolved)
             content = resolved.read_text(encoding=enc)
-            count = content.count(search)
 
-            if count == 0:
-                raise ValueError(f"Search string not found in {path}: {search!r}")
-
-            if count > 1 and not replace_all:
-                raise ValueError(
-                    f"Found {count} occurrences of search string in {path}; use replace_all=True to replace all"
+            # Strategy 1: exact match (fast path)
+            count = content.count(old_string)
+            if count > 0:
+                if count > 1 and not replace_all:
+                    return tool_error(
+                        f"Found {count} occurrences in {path} — use replace_all=True to replace all"
+                    )
+                updated = content.replace(old_string, new_string)
+                resolved.write_text(updated, encoding=enc)
+                ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
+                return tool_output(
+                    f"Patched: {path} ({count} replacement(s))",
+                    ctx=ctx,
+                    path=str(resolved),
+                    replacements=count,
+                    strategy="exact",
                 )
 
-            updated = content.replace(search, replacement)
-            resolved.write_text(updated, encoding=enc)
-            ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
+            # Strategies 2-4: fuzzy matching
+            for strategy_name, transform_fn in _FUZZY_STRATEGIES:
+                result = _fuzzy_apply(
+                    content, old_string, new_string, replace_all, transform_fn, strategy_name
+                )
+                if isinstance(result, str):
+                    return tool_error(result)
+                if result is not None:
+                    updated, count = result
+                    resolved.write_text(updated, encoding=enc)
+                    ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
+                    return tool_output(
+                        f"Patched: {path} ({count} replacement(s), {strategy_name} strategy)",
+                        ctx=ctx,
+                        path=str(resolved),
+                        replacements=count,
+                        strategy=strategy_name,
+                    )
 
-            return tool_output(
-                f"Edited: {path} ({count} replacement(s))",
-                ctx=ctx,
-                path=str(resolved),
-                replacements=count,
+            return tool_error(
+                f"old_string not found in {path} — verify the text exists in the file"
             )
     except ResourceBusyError:
         return tool_error(f"File {path} is being modified by another tool call — retry next turn")

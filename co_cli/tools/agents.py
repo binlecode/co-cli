@@ -199,7 +199,7 @@ async def delegate_coder(
         raise ModelRetry("Coder agent is unavailable — handle this task directly.")
 
     from co_cli.agent._core import build_agent
-    from co_cli.tools.files import find_in_files, list_directory, read_file
+    from co_cli.tools.files import glob, grep, read_file
 
     budget = max_requests or ctx.deps.config.subagent.max_requests_coder
     model_obj = ctx.deps.model.model
@@ -210,7 +210,7 @@ async def delegate_coder(
         config=ctx.deps.config,
         model=model_obj,
         instructions=_coder_instructions(ctx.deps),
-        tool_fns=[list_directory, read_file, find_in_files],
+        tool_fns=[glob, read_file, grep],
         output_type=CodingOutput,
     )
 

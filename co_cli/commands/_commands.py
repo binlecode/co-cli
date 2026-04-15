@@ -469,7 +469,12 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
 
     # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
     user_skills_dir = ctx.deps.user_skills_dir
-    new_skills = _load_skills(ctx.deps.skills_dir, _settings, user_skills_dir=user_skills_dir)
+    errors: list[str] = []
+    new_skills = _load_skills(
+        ctx.deps.skills_dir, _settings, user_skills_dir=user_skills_dir, errors=errors
+    )
+    for msg in errors:
+        console.print(f"[warning]{msg}[/warning]")
     all_paths = sorted(user_skills_dir.glob("*.md")) if user_skills_dir.exists() else []
     for p in all_paths:
         if p.stem in new_skills:

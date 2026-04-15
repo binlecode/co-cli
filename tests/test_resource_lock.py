@@ -11,7 +11,7 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
-from co_cli.tools.files import edit_file
+from co_cli.tools.files import patch
 from co_cli.tools.resource_lock import ResourceBusyError, ResourceLockStore
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -78,12 +78,12 @@ async def test_lock_store_different_keys_no_contention():
     assert set(results) == {"a", "b"}
 
 
-# --- edit_file integration ---
+# --- patch integration ---
 
 
 @pytest.mark.asyncio
-async def test_edit_file_same_path_contention(tmp_path: Path):
-    """Two concurrent edit_file on the same path: first succeeds, second gets tool error."""
+async def test_patch_same_path_contention(tmp_path: Path):
+    """Two concurrent patch on the same path: first succeeds, second gets tool error."""
     ctx = _make_ctx(tmp_path)
     test_file = tmp_path / "target.txt"
     test_file.write_text("hello world", encoding="utf-8")
@@ -100,12 +100,12 @@ async def test_edit_file_same_path_contention(tmp_path: Path):
     task = asyncio.create_task(hold_lock())
     await acquired.wait()
 
-    # edit_file should fail with tool error (lock held)
-    result = await edit_file(ctx, "target.txt", "hello", "goodbye")
+    # patch should fail with tool error (lock held)
+    result = await patch(ctx, "target.txt", "hello", "goodbye")
     assert result.metadata.get("error") is True
     assert "being modified" in result.return_value
 
-    # File should be unchanged (edit didn't happen)
+    # File should be unchanged (patch didn't happen)
     assert test_file.read_text() == "hello world"
 
     release.set()
@@ -113,8 +113,8 @@ async def test_edit_file_same_path_contention(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_edit_file_different_paths_no_contention(tmp_path: Path):
-    """Two concurrent edit_file on different paths: both succeed."""
+async def test_patch_different_paths_no_contention(tmp_path: Path):
+    """Two concurrent patch on different paths: both succeed."""
     ctx = _make_ctx(tmp_path)
     file_a = tmp_path / "a.txt"
     file_b = tmp_path / "b.txt"
@@ -122,8 +122,8 @@ async def test_edit_file_different_paths_no_contention(tmp_path: Path):
     file_b.write_text("bbb", encoding="utf-8")
 
     result_a, result_b = await asyncio.gather(
-        edit_file(ctx, "a.txt", "aaa", "AAA"),
-        edit_file(ctx, "b.txt", "bbb", "BBB"),
+        patch(ctx, "a.txt", "aaa", "AAA"),
+        patch(ctx, "b.txt", "bbb", "BBB"),
     )
 
     assert result_a.metadata.get("error") is not True

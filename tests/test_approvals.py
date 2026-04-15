@@ -32,17 +32,17 @@ def test_write_file_display_includes_scope_hint():
     assert "this session" in subject.display
 
 
-# --- edit_file display ---
+# --- patch display ---
 
 
-def test_edit_file_display_includes_path_and_snippets():
-    """edit_file approval shows path, search snippet, and replacement snippet."""
+def test_patch_display_includes_path_and_snippets():
+    """patch approval shows path, old_string snippet, and new_string snippet."""
     subject = resolve_approval_subject(
-        "edit_file",
+        "patch",
         {
             "path": "src/bar.py",
-            "search": "old text",
-            "replacement": "new text",
+            "old_string": "old text",
+            "new_string": "new text",
             "replace_all": False,
         },
     )
@@ -51,30 +51,30 @@ def test_edit_file_display_includes_path_and_snippets():
     assert "new text" in subject.display
 
 
-def test_edit_file_display_truncates_long_search():
-    """edit_file approval truncates search/replacement strings longer than 60 chars."""
-    long_search = "x" * 100
+def test_patch_display_truncates_long_old_string():
+    """patch approval truncates old_string/new_string longer than 60 chars."""
+    long_old = "x" * 100
     subject = resolve_approval_subject(
-        "edit_file",
-        {"path": "a.py", "search": long_search, "replacement": "short"},
+        "patch",
+        {"path": "a.py", "old_string": long_old, "new_string": "short"},
     )
     assert "…" in subject.display
 
 
-def test_edit_file_display_includes_replace_all():
-    """edit_file approval shows replace_all flag."""
+def test_patch_display_includes_replace_all():
+    """patch approval shows replace_all flag."""
     subject = resolve_approval_subject(
-        "edit_file",
-        {"path": "a.py", "search": "x", "replacement": "y", "replace_all": True},
+        "patch",
+        {"path": "a.py", "old_string": "x", "new_string": "y", "replace_all": True},
     )
     assert "True" in subject.display
 
 
-def test_edit_file_display_includes_scope_hint():
-    """edit_file approval includes user-legible scope hint."""
+def test_patch_display_includes_scope_hint():
+    """patch approval includes user-legible scope hint."""
     subject = resolve_approval_subject(
-        "edit_file",
-        {"path": "src/bar.py", "search": "x", "replacement": "y"},
+        "patch",
+        {"path": "src/bar.py", "old_string": "x", "new_string": "y"},
     )
     assert "allow all writes" in subject.display
     assert "this session" in subject.display

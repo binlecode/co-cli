@@ -47,7 +47,7 @@ class SessionApprovalRule:
     kind: category of the approved subject
       SHELL  — shell utility (value = first token, e.g. "git")
       PATH   — file write/edit (value = bare parent_dir, e.g. "/proj/src");
-               shared across write_file and edit_file for the same directory
+               shared across write_file and patch for the same directory
       DOMAIN — web fetch (value = hostname, e.g. "docs.python.org")
       TOOL   — named tool (value = tool_name, e.g. "save_article");
                covers MCP tools and generic tools; can_remember=True
