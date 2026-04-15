@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import subprocess
 import time
@@ -75,6 +76,11 @@ _tracer_provider = setup_tracer_provider(
 # Enable pydantic-ai instrumentation for all agents
 # Using version=3 for latest OTel GenAI semantic conventions (spec compliant)
 Agent.instrument_all(InstrumentationSettings(tracer_provider=_tracer_provider, version=3))
+
+# Suppress noisy third-party loggers to WARNING; co_cli.* loggers are not affected
+_SUPPRESS_LOGGERS = ["openai", "httpx", "anthropic", "hpack"]
+for _logger_name in _SUPPRESS_LOGGERS:
+    logging.getLogger(_logger_name).setLevel(logging.WARNING)
 
 app = typer.Typer(
     help="Co — personal AI operator · local-first · approval-first",

@@ -77,9 +77,12 @@ Telemetry is bootstrapped at module load time, before any agent is created. All 
 ```
 setup_file_logging(LOGS_DIR, level, max_size_mb, backup_count)   # co-cli.log + errors.log
 tracer_provider = setup_tracer_provider(                          # co-cli-logs.db + spans.log
-    service_name, service_version, log_dir, max_size_mb, backup_count
+    service_name, service_version, log_dir, max_size_mb, backup_count,
+    redact_patterns=settings.observability.redact_patterns
 )
 Agent.instrument_all(InstrumentationSettings(tracer_provider, version=3))
+for logger_name in ["openai", "httpx", "anthropic", "hpack"]:    # co_cli.* loggers unaffected
+    logging.getLogger(logger_name).setLevel(WARNING)
 ```
 
 `setup_tracer_provider()` (in `_telemetry.py`) creates a `TracerProvider` with two `SimpleSpanProcessor`s: one wrapping `SQLiteSpanExporter` and one wrapping `TextSpanExporter`. Both receive every span.

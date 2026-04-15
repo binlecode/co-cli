@@ -173,7 +173,7 @@ done_when: |
 success_signal: tool args or file reads containing API keys appear as `[REDACTED]` in `co-cli-logs.db` span attributes
 prerequisites: []
 
-### TASK-2: Third-party logger suppression
+### ✓ DONE TASK-2: Third-party logger suppression
 
 files: `co_cli/main.py`, `tests/test_logger_suppression.py` (new)
 
