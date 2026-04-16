@@ -5,16 +5,16 @@
 **Goal:** Own prompt context assembly, history governance, and all persistent state outside the model.
 **Functional areas:**
 - Static and dynamic instruction layers
-- Five history processors (compaction, summarization, trim, tag injection, memory recall)
+- Five history processors (compaction, summarization, trim, tag injection, knowledge recall)
 - Session and transcript persistence (JSONL)
-- Memory and article storage (FTS5 search)
+- Knowledge artifact storage and retrieval (FTS5 search)
 - Knowledge index and background tasks
 
 **Non-goals:**
 - Concurrent-instance safety (no file lock — deferred)
 - TTL-based session cleanup
 
-**Success criteria:** Context fully reconstructed from disk each turn; memory extraction fires fire-and-forget; compaction has circuit breaker.
+**Success criteria:** Context fully reconstructed from disk each turn; knowledge extraction fires fire-and-forget; compaction has circuit breaker.
 **Status:** Stable
 **Known gaps:** Concurrent-instance safety — no file lock or PID guard (deferred).
 
@@ -32,9 +32,8 @@ The agent has no persistent state in model weights. Context is split across thre
 
 Persistent context lives outside the model:
 
-- user-global memories in `~/.co-cli/memory/`
+- user-global knowledge artifacts in `~/.co-cli/knowledge/` (extracted insights, articles, notes)
 - character memories and mindsets in `co_cli/prompts/personalities/souls/{role}/` (read-only system assets)
-- user-global articles in `library_dir`
 - session metadata and append-only transcripts in `~/.co-cli/sessions/`
 - a rebuildable `KnowledgeStore` at `knowledge_db_path`
 
@@ -60,8 +59,7 @@ flowchart TD
     Finalize[_finalize_turn]
 
     subgraph Storage["persistent stores"]
-        Memories["~/.co-cli/memory/*.md"]
-        Library["library_dir/*.md"]
+        Knowledge["~/.co-cli/knowledge/*.md"]
         Sessions["~/.co-cli/sessions/YYYY-MM-DD-T...Z-{uuid8}.jsonl"]
         Index["KnowledgeStore / co-cli-search.db"]
     end
@@ -71,8 +69,8 @@ flowchart TD
     Model --> Finalize
     ResumeModel --> Finalize
     Finalize --> Sessions
-    Finalize --> Memories
-    Library --> Index
+    Finalize --> Knowledge
+    Knowledge --> Index
 ```
 
 ## 2. Core Logic
@@ -96,7 +94,7 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 | --- | --- | --- |
 | `add_current_date` | always | `Today is YYYY-MM-DD.` |
 | `add_shell_guidance` | always | shell approval/reminder text |
-| `add_always_on_memories` | `always_on=True` entries exist | `Standing context:` block, capped by `memory_injection_max_chars` |
+| `add_standing_knowledge` | `pin_mode="standing"` (or legacy `always_on=True`) entries exist | `Standing context:` block, capped by `memory.injection_max_chars` |
 | `add_personality_memories` | `config.personality` is set | top 5 `personality-context` memories as `## Learned Context` |
 | `add_category_awareness_prompt` | deferred tools registered in tool_index | category-level prompt listing available capabilities via `search_tools` (~100 tokens) |
 
@@ -113,7 +111,7 @@ Five history processors run in this exact order:
 | `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
 | `compact_assistant_responses` | caps older `TextPart`/`ThinkingPart` to 2,500 chars with 20/80 head/tail retention; uses `_find_last_turn_start()` boundary, not turn grouping |
 | `detect_safety_issues` | detects identical-tool-call streaks and shell-error streaks; injects system warning at threshold |
-| `inject_opening_context` | once per new user turn, recalls top-3 memories matching user message as trailing `SystemPromptPart` |
+| `inject_opening_context` | once per new user turn, recalls top-3 knowledge artifacts matching user message as trailing `SystemPromptPart` |
 | `summarize_history_window` | when history exceeds compaction threshold, keeps head + summary marker + tail; summarizer uses structured template (Goal, Key Decisions, Working Set, Progress, Next Steps) |
 
 **Compaction** is budget-driven: `resolve_compaction_budget()` uses reasoning model context window, `llm.num_ctx` override, or 100K fallback. Triggers at 85% of budget. `_gather_compaction_context()` enriches the summarizer with file paths from `ToolCallPart.args`, pending todos, always-on memories, and prior summary text detected by the `[Summary of` prefix (capped at 4K chars). `_build_summarizer_prompt()` assembles the final prompt as: template → context addendum → personality addendum (personality always last).
@@ -164,65 +162,38 @@ Example: `2026-04-11-T142305Z-550e8400.jsonl`. The timestamp prefix makes lexico
 - Startup always begins with empty `message_history`; `/resume` is explicit
 - No concurrent-instance safety (future: file lock or PID guard)
 
-### 2.4 Memory & Article Storage
+### 2.4 Knowledge Storage
 
-Persistent knowledge is flat Markdown files with YAML frontmatter stored in two directories:
-
-| Store | Path | Contents |
-| --- | --- | --- |
-| memory | `deps.memory_dir` (`~/.co-cli/memory/`) | conversation-derived memories |
-| articles | `deps.library_dir` | saved external references and fetched docs |
+Knowledge artifacts are flat Markdown files with YAML frontmatter. The target storage model is a single `knowledge_dir` (`~/.co-cli/knowledge/`) holding all reusable artifacts — extracted insights, fetched articles, imported notes. During the Phase 2 migration, two legacy directories exist: `memory_dir` (extracted facts, `kind: memory`) and `library_dir` (articles, `kind: article`). Both load via the same backward-compatible reader. Full schema and lifecycle details in [knowledge.md](knowledge.md).
 
 #### 2.4.1 Data Model
 
-Every file is parsed into a `MemoryEntry` dataclass (`memory/recall.py`). `validate_memory_frontmatter()` enforces required fields and rejects malformed files with a warning (never crashes the load).
+Artifacts are parsed into `MemoryEntry` (current implementation, transitional) — forward-compatible with the target `KnowledgeArtifact` schema. `validate_memory_frontmatter()` enforces required fields and rejects malformed files with a warning (never crashes the load).
 
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `id` | `int \| str` | yes | new writes use UUID strings |
-| `created` | ISO8601 string | yes | set at write time, never mutated |
-| `kind` | `"memory" \| "article"` | no | defaults to `"memory"` |
-| `type` | `"user" \| "feedback" \| "project" \| "reference" \| null` | no | memory classification; warns on unknown values |
-| `name` | `str \| null` | no | short identifier ≤60 chars (e.g. `user-prefers-pytest`); used as slug source when present |
-| `description` | `str \| null` | no | ≤200 chars, no newlines; purpose hook for manifest dedup |
-| `updated` | ISO8601 string | no | written on consolidation via `overwrite_memory()` |
-| `tags` | `list[str]` | no | searched by `grep_recall`; filter axis for `load_memories` |
-| `related` | `list[str] \| null` | no | one-hop slug links expanded by `_recall_for_context()` |
-| `origin_url` | `str \| null` | no | article source URL; dedup key in `save_article()` |
-| `always_on` | `bool` | no | standing prompt injection (capped at 5 entries) |
+Key fields: `id` (UUID), `created` / `updated` (ISO8601), `kind` (`memory` | `article`), `type` (`user`, `feedback`, `project`, `reference`), `name`, `description`, `tags`, `related`, `origin_url` (article dedup key), `always_on` (standing context — target: `pin_mode="standing"`).
 
-#### 2.4.2 Read Path
+#### 2.4.2 Read Path (Transitional)
 
-Memories are indexed in FTS via `docs_fts` in `search.db`. `search_memories` and `_recall_for_context` use `KnowledgeStore.search(source="memory")` when a store is available, falling back to `grep_recall` when it is `None`.
+Extracted-fact artifacts are indexed in FTS via `docs_fts` in `search.db`. `_recall_for_context` uses `KnowledgeStore.search(source="memory")` when a store is available, falling back to `grep_recall` when it is `None`. In the target state (Phase 3), `_recall_for_context` searches `knowledge_dir` and returns both extracted facts and articles.
 
 ```text
-load_memories(memory_dir, kind=None, tags=None)
-  -> glob *.md, parse frontmatter, validate
-  -> early-exit per file on kind or tag mismatch
-  -> returns list[MemoryEntry]
-
-grep_recall(entries, query, max_results)
-  -> case-insensitive substring match on content + tags
-  -> sort by updated or created (newest first)
-  -> return top max_results
-
 _recall_for_context(ctx, query)  ← internal, called by inject_opening_context only
   -> if knowledge_store is None: return empty result
   -> knowledge_store.search(query, source="memory", kind="memory", ...)
   -> one-hop related slug expansion (up to 5 hops)
   -> return matched + related entries
 
-search_memories(ctx, query)      ← agent tool
+search_memories(ctx, query)      ← agent tool (transitional — target: delegates to session_search)
   -> if knowledge_store is None: return tool_error
   -> knowledge_store.search(query, source="memory", kind="memory", ...)
   -> sets OTel span attribute rag.backend = "fts5"
 ```
 
-The always-on layer (`load_always_on_memories`) runs at instruction-build time: loads all memories, filters `always_on=True`, caps at 5, injects into the `add_always_on_memories` dynamic instruction layer.
+The standing-context layer (`load_always_on_memories`) runs at instruction-build time: loads all knowledge artifacts, filters `always_on=True` (target: `pin_mode="standing"`), caps at 5, injects into the `add_standing_knowledge` dynamic instruction layer.
 
 #### 2.4.3 Write Path
 
-The main agent has no write-path memory tools. All memory writes are owned exclusively by the extractor agent (`_extractor.py`) — a separate `Agent[CoDeps, None]` with `save_memory` as its only tool.
+The main agent has no write-path knowledge tools. All knowledge writes are owned exclusively by the extractor agent (`_extractor.py`) — a separate `Agent[CoDeps, None]` with `save_memory` as its only tool (target: `save_knowledge`).
 
 ```text
 fire_and_forget_extraction(delta, deps, frontend, cursor_start)
@@ -231,87 +202,72 @@ fire_and_forget_extraction(delta, deps, frontend, cursor_start)
   -> on success: advances deps.session.last_extracted_message_idx = cursor_start + len(delta)
   -> on failure or exception: cursor unchanged (delta re-processed on next turn)
 
-save_memory(ctx, content, type_=None, name=None, description=None, tags=None, always_on=False)
+save_memory(ctx, content, type_=None, name=None, ...)  ← transitional; target: save_knowledge()
   -> validates type_ against MemoryTypeEnum
   -> slug = slugify(name) if name else slugify(content[:50])
   -> filename = f"{slug}-{uuid[:8]}.md"   # UUID suffix: two identical calls → two files
-  -> write YAML frontmatter + content to deps.memory_dir
-  -> if knowledge_store: knowledge_store.index(source="memory", ...) — re-indexes immediately
+  -> write YAML frontmatter + content to knowledge dir
+  -> if knowledge_store: re-indexes immediately
   -> no dedup, no resource locks — always creates a new file
 ```
 
-The extractor prompt instructs the model to classify observations into four types (`user`, `feedback`, `project`, `reference`) and call `save_memory` directly, with a cap of 3 calls per window. The cursor advances only on successful completion, so a failed extraction retries on the next turn.
+The extractor detects four signal categories (`user`, `feedback`, `project`, `reference`) — these map to `artifact_kind` values (`preference`, `feedback`, `rule`/`decision`, `reference`) in the target schema. Max 3 saves per window; cursor advances only on success.
 
-**Articles** — `save_article()` stores external references with `kind="article"` and dedup by exact `origin_url`.
+**Articles** — `save_article()` stores external references with dedup by `origin_url` (target: `source_ref`).
 
-#### 2.4.4 REPL Management
+#### 2.4.4 REPL Commands
 
-The `/memory` built-in provides inventory and deletion without requiring an LLM turn. All subcommands share a common filter pipeline: `load_memories(kind=)` → `_apply_memory_filters(older_than, type)` → `grep_recall(query)`.
+The `/knowledge` command namespace provides artifact inventory and management without an LLM turn. `/memory` remains as alias during transition.
 
 | Command | Syntax | Behavior |
 | --- | --- | --- |
-| `/memory list` | `[query] [flags]` | one line per entry: `id[:8]  date  [kind]  type  content[:80]`; footer shows count |
-| `/memory count` | `[query] [flags]` | prints `N memories` |
-| `/memory forget` | `<query\|flag> [flags]` | preview matched entries → prompt `Delete N memories? [y/N]` → unlink on `y` |
+| `/knowledge list` | `[query] [flags]` | one line per artifact: `id[:8]  date  kind  type  content[:80]`; footer shows count |
+| `/knowledge count` | `[query] [flags]` | prints `N knowledge artifacts` |
+| `/knowledge forget` | `<query\|flag> [flags]` | preview matched entries → prompt `Archive N artifacts? [y/N]` → archive on `y` |
 
-**Shared filter flags** (parsed by `_parse_memory_args`, applied by `_apply_memory_filters`):
-
-| Flag | Type | Effect |
-| --- | --- | --- |
-| `query` (positional) | string | case-insensitive substring match on content and tags via `grep_recall` |
-| `--older-than N` | int days | keep entries where `age_days > N` |
-| `--type X` | string | exact match on `type` field (`user`, `feedback`, `project`, `reference`) |
-| `--kind X` | string | passed to `load_memories(kind=X)` — `memory` or `article` |
-
-**Behavioral constraints on `/memory forget`:**
+**Behavioral constraints:**
 - No query and no flags → refuse and print usage; never bulk-deletes silently
-- Always displays a preview of matched entries and requires explicit `y` before any deletion, even for a single match
+- Always displays a preview and requires explicit `y` before archiving
 
 ### 2.5 Knowledge Index & Retrieval
 
-`KnowledgeStore` is a single SQLite-backed derived index at `knowledge_db_path`.
+`KnowledgeStore` is a single SQLite-backed derived index at `knowledge_db_path`. Disk (`knowledge_dir/*.md`) is the source of truth; the DB is derived and rebuildable via `sync_dir()`.
 
 ```mermaid
 flowchart LR
-    Memories["memory_dir/*.md"] --> MemGrep["load_memories + grep_recall"]
-    Library["library_dir/*.md"] --> SyncLib["sync_dir('library')"]
+    Knowledge["knowledge_dir/*.md\n(extracted facts + articles)"] --> SyncKnowledge["sync_dir('knowledge')"]
     Obsidian["obsidian vault"] --> SyncObs["sync_dir('obsidian') on demand"]
     Drive["read_drive_file()"] --> CacheDrive["index + index_chunks on read"]
 
-    SyncLib --> Docs["docs + docs_fts"]
-    SyncObs --> Docs
-    CacheDrive --> Docs
-
-    SyncLib --> Chunks["chunks + chunks_fts"]
+    SyncKnowledge --> Chunks["chunks + chunks_fts"]
     SyncObs --> Chunks
     CacheDrive --> Chunks
 
-    MemGrep --> MemTools["_recall_for_context / search_memories"]
-    Docs --> Search["KnowledgeStore.search"]
-    Chunks --> Search
-    Search --> ArtTools["search_knowledge / search_articles"]
+    Chunks --> Search["KnowledgeStore.search"]
+    Search --> KnowledgeTools["search_knowledge() — universal reusable-recall"]
+    Search --> TurnRecall["_recall_for_context() — turn-time injection"]
 ```
 
 | Structure | Role |
 | --- | --- |
-| `docs` + `docs_fts` | document-level records; used for memory FTS search (`source="memory"`) |
-| `chunks` + `chunks_fts` | chunk-level records for library, obsidian, and drive sources |
+| `chunks` + `chunks_fts` | chunk-level records for all knowledge sources |
 | `embedding_cache` | cached embeddings keyed by provider, model, content hash |
-| `docs_vec_{dims}` / `chunks_vec_{dims}` | hybrid-mode sqlite-vec tables |
+| `chunks_vec_{dims}` | hybrid-mode sqlite-vec tables |
 
-Memory is never chunked — it is indexed at document level in `docs_fts`. Bootstrap syncs only the library dir; Obsidian syncs lazily inside `search_knowledge()`; Drive files index after fetch.
+Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledge()`; Drive files index after fetch.
 
-| Entry point | Default scope | Notes |
+| Entry point | Scope | Purpose |
 | --- | --- | --- |
-| `_recall_for_context()` | memory only | FTS5 DB search via `docs_fts`; one-hop `related` expansion; internal — called by `inject_opening_context` |
-| `search_memories()` | memory only | FTS5 DB search via `docs_fts`; `rag.backend = "fts5"` OTel attribute |
-| `search_articles()` | library articles only | summary-level index |
-| `search_knowledge()` | `["library", "obsidian", "drive"]` | `source="memory"` rejected with redirect to `search_memories()` |
+| `_recall_for_context()` | knowledge artifacts | Turn-time injection into `SystemPromptPart`; internal, called by `inject_opening_context` |
+| `search_knowledge()` | all artifact kinds + Obsidian + Drive | Universal reusable-recall; primary agent search tool |
+| `search_articles()` | article artifacts only | Transitional alias for `search_knowledge(artifact_kind="article")` |
+| `search_memories()` | transitional — target: transcript search | See [cognition.md §2.6](cognition.md) |
+| `session_search()` | transcript index | Episodic recall over past sessions |
 
 | Backend | Behavior |
 | --- | --- |
 | `grep` | file-based fallback, no `KnowledgeStore` |
-| `fts5` | BM25 over `chunks_fts` (library, obsidian, drive) |
+| `fts5` | BM25 over `chunks_fts` |
 | `hybrid` | FTS + vector, RRF merge, optional TEI or LLM reranking |
 
 ### 2.6 Delegation & Background Tasks
@@ -339,12 +295,12 @@ Memory is never chunked — it is indexed at document level in `docs_fts`. Boots
 | --- | --- | --- | --- |
 | `deps.sessions_dir` | n/a | `~/.co-cli/sessions` | user-global; resolved onto `CoDeps`, not configurable via settings |
 
-### Memory
+### Knowledge Injection (MemorySettings)
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in recall scoring |
-| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for always-on and recalled injection |
+| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in turn-time recall scoring |
+| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for standing + recalled artifact injection |
 | `memory.extract_every_n_turns` | `CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | extraction cadence: run extractor every N clean turns; `0` disables |
 
 ### Knowledge
@@ -352,7 +308,7 @@ Memory is never chunked — it is indexed at document level in `docs_fts`. Boots
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `None` | optional Obsidian vault |
-| `library_path` | `CO_LIBRARY_PATH` | `None` | override for `library_dir` |
+| `knowledge_dir` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge/` | unified knowledge artifact directory |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | `grep`, `fts5`, or `hybrid` |
 | `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | embedding provider |
 | `knowledge.embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `embeddinggemma` | embedding model |
@@ -360,7 +316,7 @@ Memory is never chunked — it is indexed at document level in `docs_fts`. Boots
 | `knowledge.embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
 | `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI reranker URL |
 | `knowledge.llm_reranker` | — | `None` | optional LLM reranker |
-| `knowledge.chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | chunk size for non-memory sources |
+| `knowledge.chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | chunk size |
 | `knowledge.chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | overlap between chunks |
 
 ### Delegation

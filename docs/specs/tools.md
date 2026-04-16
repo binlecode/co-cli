@@ -39,7 +39,7 @@ The tool ecosystem is composed of core infrastructure for execution, lifecycle a
 ### Domain Tools
 - `co_cli/tools/files.py` — `glob`, `read_file`, `grep`, `write_file`, `patch`
 - `co_cli/tools/shell.py` — `run_shell_command`
-- `co_cli/tools/memory.py` — `search_memories`, `list_memories` (registered); `save_memory`, `update_memory`, `append_memory` (unregistered — extractor and sub-agent use only)
+- `co_cli/tools/memory.py` — `search_memories` (transitional; target: delegates to `session_search`), `list_memories` / `list_knowledge` (registered); `save_memory` / `save_knowledge` (unregistered — extractor sub-agent only)
 - `co_cli/tools/articles.py` — `save_article`, `search_articles`, `read_article`, `search_knowledge`
 - `co_cli/tools/web.py` — `web_search`, `web_fetch`
 - `co_cli/tools/task_control.py` — `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks`
@@ -132,9 +132,9 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 |------|------------|----------|-----|---------|----------|-------|
 | `check_capabilities` | ALWAYS | auto | no | default | 50k | Introspection for /doctor |
 | `write_todos`, `read_todos` | ALWAYS | auto | no | default | 50k | Session task list |
-| `search_memories`, `list_memories` | ALWAYS | auto | no | default | 50k | Read-only conversation memory |
-| `search_knowledge` | ALWAYS | auto | no | default | 50k | Cross-source search |
-| `search_articles`, `read_article` | ALWAYS | auto | no | default | 50k | Library reference docs |
+| `search_memories`, `list_memories` | ALWAYS | auto | no | default | 50k | Transitional: `search_memories` targets episodic recall (transcripts); `list_memories` targets knowledge inventory |
+| `search_knowledge` | ALWAYS | auto | no | default | 50k | Universal reusable-recall across all knowledge artifact kinds + Obsidian + Drive |
+| `search_articles`, `read_article` | ALWAYS | auto | no | default | 50k | Transitional alias: `search_articles` → `search_knowledge(artifact_kind="article")`; `read_article` reads full artifact body by slug |
 | `glob`, `grep` | ALWAYS | auto | no | default | 50k | Workspace search |
 | `read_file` | ALWAYS | auto | no | default | 80k | Workspace read |
 | `web_search`, `web_fetch` | ALWAYS | auto | no | 3 | 50k | Network bounds/fetch |
@@ -146,7 +146,7 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 | `cancel_background_task` | DEFERRED | auto | no | default | 50k | Kill proc tree |
 | `execute_code` | DEFERRED | auto* | yes | default | 50k | *Always requires approval (inline guard, no safe-prefix bypass) |
 | `research_web`, `analyze_knowledge`, `reason_about` | DEFERRED | auto | no | default | 50k | Isolated subagent spawning |
-| `session_search` | DEFERRED | auto | no | default | 50k | FTS over transcript DB |
+| `session_search` | DEFERRED | auto | no | default | 50k | Episodic memory search — FTS5 keyword search over past session transcripts |
 
 **Integration tools (10 tools)**
 Excluded when the required credential or config path is absent.
@@ -173,7 +173,7 @@ Configured in `settings.json`. MCP tools are normalized to `visibility=DEFERRED`
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Required for `web_search` |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Registration gate for Obsidian |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google |
-| `library_path` | `CO_LIBRARY_PATH` | `null` | Article directory override |
+| `knowledge_dir` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge/` | Unified knowledge artifact directory |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | 2 defaults | MCP server definitions |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Default agent retry budget |
 | `subagent.max_requests_*` | `CO_CLI_SUBAGENT_MAX_REQUESTS_*` | var | Per-role request caps |

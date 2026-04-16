@@ -23,7 +23,7 @@ This doc defines the top-level runtime architecture of `co-cli`: the major subsy
 
 ## 1. What & How
 
-`co-cli` is a local-first, approval-first terminal agent. A Typer CLI starts a REPL, startup assembles a `CoDeps` runtime and a single foreground `Agent`, and each user turn runs through one orchestration entrypoint that can call native tools, MCP tools, and persistent context stores. Durable state lives outside the model: session files, transcripts, memories, articles, the knowledge index, tool-result spill files, and telemetry are all stored on disk and reloaded or queried when needed.
+`co-cli` is a local-first, approval-first terminal agent. A Typer CLI starts a REPL, startup assembles a `CoDeps` runtime and a single foreground `Agent`, and each user turn runs through one orchestration entrypoint that can call native tools, MCP tools, and persistent context stores. Durable state lives outside the model: session transcripts, knowledge artifacts, the knowledge index, tool-result spill files, and telemetry are all stored on disk and reloaded or queried when needed.
 
 ```mermaid
 flowchart LR
@@ -120,7 +120,7 @@ CLI start
   - `session`: `CoSessionState` (persists across turns: `session_todos`, `background_tasks`, `session_approval_rules`, etc.)
   - `runtime`: `CoRuntimeState` (managed by orchestration: `safety_state`, `turn_usage`, `compaction_failure_count`)
 - **Paths** (resolved workspace and user-global paths)
-  - `workspace_root`, `memory_dir`, `sessions_dir`, `library_dir`, etc.
+  - `workspace_root`, `knowledge_dir`, `sessions_dir`, etc.
 - **Degradations**
   - `degradations`: Dict of startup-detected capability drops
 
@@ -137,7 +137,7 @@ The system is deliberately local-first:
 
 Persistent state is also intentionally small in surface area:
 
-- all user/session state lives under `~/.co-cli/` (memories, sessions, library, skills, settings)
+- all user/session state lives under `~/.co-cli/` (knowledge, sessions, skills, settings)
 - model context is rebuilt from files, settings, and history instead of being treated as hidden process state
 
 The specialized DESIGN docs own the detailed behavior inside each boundary:
@@ -145,7 +145,9 @@ The specialized DESIGN docs own the detailed behavior inside each boundary:
 - bootstrap order and degradation policy: [flow-bootstrap.md](flow-bootstrap.md)
 - turn execution, approvals, and retries: [core-loop.md](core-loop.md)
 - REPL loop, completer, and slash commands: [tui.md](tui.md)
-- memories, sessions, transcripts, and knowledge search: [context.md](context.md)
+- sessions, transcripts, and episodic recall: [context.md](context.md), [memory.md](memory.md)
+- knowledge artifacts, retrieval, and lifecycle: [knowledge.md](knowledge.md)
+- cognitive architecture (two-layer model): [cognition.md](cognition.md)
 - tool registration and approval behavior: [tools.md](tools.md)
 - skill loading and dispatch: [skills.md](skills.md)
 - provider and model selection rules: [llm-models.md](llm-models.md)
@@ -163,7 +165,7 @@ These settings most directly affect top-level system assembly.
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled defaults | MCP server definitions attached during runtime assembly |
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | Personality assets injected during prompt assembly |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |
-| `library_path` | `CO_LIBRARY_PATH` | `~/.co-cli/library` | User-global article store root |
+| `knowledge_dir` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge/` | User-global knowledge artifact store |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Terminal reasoning display mode for interactive turns |
 
 ## 4. Files
@@ -188,9 +190,10 @@ These settings most directly affect top-level system assembly.
 | `docs/specs/flow-prompt-assembly.md` | End-to-end prompt assembly from startup inputs to model request |
 | `docs/specs/core-loop.md` | Foreground-turn behavior and approval resumes |
 | `docs/specs/tui.md` | REPL loop, completer, slash command registry and dispatch |
-| `docs/specs/context.md` | Prompt context, persistence, and knowledge retrieval |
-| `docs/specs/memory.md` | Memory storage, extraction, recall, and REPL management |
-| `docs/specs/library.md` | Library article indexing and KnowledgeStore FTS5/hybrid search |
+| `docs/specs/cognition.md` | Two-layer cognitive architecture: Memory (transcripts) vs Knowledge (reusable artifacts) |
+| `docs/specs/memory.md` | Memory layer: session transcripts, session index, episodic recall |
+| `docs/specs/knowledge.md` | Knowledge layer: artifact schema, storage, retrieval, extraction, lifecycle |
+| `docs/specs/context.md` | Prompt context assembly, history governance, session persistence |
 | `docs/specs/tools.md` | Tool surface, approval classes, and visibility |
 | `docs/specs/skills.md` | Skill loading and slash-command delegation |
 | `docs/specs/llm-models.md` | Provider and model selection rules |

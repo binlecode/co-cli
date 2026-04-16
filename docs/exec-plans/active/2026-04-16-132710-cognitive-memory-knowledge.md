@@ -122,7 +122,7 @@ No behavior change. Extend config and data model to support subsequent phases.
 
 Align all product language with the two-layer model. No runtime behavior changes yet.
 
-### TASK-1.1: Rewrite `docs/specs/memory.md`
+### ✓ DONE TASK-1.1: Rewrite `docs/specs/memory.md`
 
 - `files:` `docs/specs/memory.md`
 - Redefine memory as the **transcript/event timeline** only:
@@ -133,7 +133,7 @@ Align all product language with the two-layer model. No runtime behavior changes
 - Preserve the transcript persistence mechanics (append, branching, compaction, resume) — those are correct.
 - `done_when:` Spec describes memory as raw timeline. No mention of `save_memory` or extracted facts.
 
-### TASK-1.2: Create `docs/specs/knowledge.md` (evolve from library.md)
+### ✓ DONE TASK-1.2: Create `docs/specs/knowledge.md` (evolve from library.md)
 
 - `files:` `docs/specs/knowledge.md` (new), `docs/specs/library.md` (deprecate or redirect)
 - Merge the scope of `library.md` (articles, FTS5 index, chunk search) with the extracted-facts scope formerly in `memory.md`.
@@ -142,7 +142,7 @@ Align all product language with the two-layer model. No runtime behavior changes
 - Document standing context as knowledge metadata (`pin_mode`), not a separate memory concept.
 - `done_when:` Spec covers all reusable artifacts under one umbrella.
 
-### TASK-1.3: Update system-level specs
+### ✓ DONE TASK-1.3: Update system-level specs
 
 - `files:` `docs/specs/system.md`, `docs/specs/context.md`, `docs/specs/tools.md`
 - Update terminology: "memory search" → transcript search. "knowledge search" → unified reusable-recall.
@@ -150,7 +150,7 @@ Align all product language with the two-layer model. No runtime behavior changes
 - Update `tools.md` catalog: mark `search_memories` as transitional, document `search_knowledge` as universal.
 - `done_when:` Specs internally consistent with the two-layer model.
 
-### TASK-1.4: Update extractor prompt
+### ✓ DONE TASK-1.4: Update extractor prompt
 
 - `files:` `co_cli/memory/prompts/memory_extractor.md`
 - Change framing: "You are extracting **knowledge artifacts** from this conversation — reusable facts, preferences, and decisions worth keeping."
