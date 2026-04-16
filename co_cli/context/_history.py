@@ -347,7 +347,7 @@ def compact_assistant_responses(
 # ---------------------------------------------------------------------------
 
 _CONTEXT_MAX_CHARS = 4_000
-_SUMMARY_MARKER_PREFIX = "[Summary of"
+_SUMMARY_MARKER_PREFIX = "This session is being continued from a previous conversation that ran out of context. The summary below"
 
 
 def _gather_file_paths(messages: list[ModelMessage]) -> str | None:
