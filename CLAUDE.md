@@ -219,8 +219,7 @@ Specs index:
 - `docs/specs/core-loop.md` — agent loop, turn orchestration, approval flow
 - `docs/specs/flow-bootstrap.md` — startup sequence from settings load to REPL entry
 - `docs/specs/context.md` — prompt context assembly, history governance, session persistence
-- `docs/specs/memory.md` — memory storage, extraction, recall, and REPL management
-- `docs/specs/library.md` — library article indexing, KnowledgeStore FTS5/hybrid search
+- `docs/specs/cognition.md` — two-layer cognitive architecture (Memory = transcripts, Knowledge = reusable artifacts), extraction, consolidation, retrieval
 - `docs/specs/tools.md` — tool registration, visibility tiers, approval model, tool catalog
 - `docs/specs/skills.md` — skill system, load order, dispatch, argument expansion
 - `docs/specs/llm-models.md` — single-model architecture, provider abstraction, model quirks
@@ -240,7 +239,7 @@ Specs index:
 
 ## Reference Repos
 
-Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-peer-personality.md` for personality research.
+Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-peer-personality-survey.md` for personality research.
 
 | Repo | Relevance to co-cli |
 |------|---------------------|

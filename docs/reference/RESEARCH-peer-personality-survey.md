@@ -113,7 +113,13 @@ Beyond local CLI peers, several 2026 systems treat personality as a primary arch
 
 **Relevance to co-cli**: SillyTavern's "context-over-command" philosophy directly validates co-cli's narrative-grounding approach (planted character memories, soul seeds as emotional anchors) over rule-heavy personality definitions. The finding that first messages are the strongest style signal connects to the functional emotions paper's finding that emotion vectors at the Assistant colon token predict response emotion (r=0.87) — early emotional context has outsized influence. SillyTavern's "emotional anchors" language aligns with co-cli's soul seed design. Key difference: SillyTavern is a frontend for roleplay; co-cli is an agentic engineering tool. SillyTavern has no safety constraints, no approval policies, no tool-use personality interaction.
 
-### Anima Architecture (Vera Calloway)
+### Soul.md (github.com/soul-md/soul.md)
+
+**What it is**: A prompt engineering convention and template system rather than an active application or memory runtime. Designed to let AI agents ingest a set of markdown files to emulate a specific user's identity, worldview, and voice.
+
+**Personality architecture**: Defined primarily by two files: `SOUL.md` (primary identity, worldview, opinions) and `STYLE.md` (writing style, voice, anti-patterns), supplemented by `examples/`. It requires agents to process these files in a specific order via a `SKILL.md` operating prompt.
+
+**Relevance to co-cli**: Extremely high philosophical alignment, though much simpler architecturally. `Soul.md` perfectly encapsulates the "context-over-command" approach, relying on deep narrative grounding and worldview rather than rigid behavioral rules. It validates `co-cli`'s decision to use explicit identity files (soul seeds) and trigger/response examples as the primary vectors for personality. However, `soul.md` represents the raw prompt-engineering approach without any of `co-cli`'s runtime infrastructure (FTS5 retrieval, automated memory consolidation, dynamic injection).
 
 **What it is**: External architecture for persistent AI identity built on Claude via MCP + Notion. Framework for AI personas with persistent identity and memory across sessions.
 
@@ -135,10 +141,10 @@ Beyond local CLI peers, several 2026 systems treat personality as a primary arch
 
 | Design principle | Systems that converge | Co-cli alignment |
 |-----------------|----------------------|------------------|
-| **Personality as probability-space shaping, not rule enforcement** | SillyTavern ("context-over-command"), AnimaWorks (conversational personality creation) | Strong — soul seeds and emotional anchors shape the model's operating space rather than prescribing outputs |
+| **Personality as probability-space shaping, not rule enforcement** | SillyTavern ("context-over-command"), AnimaWorks (conversational personality creation), Soul.md (worldview/identity over rules) | Strong — soul seeds and emotional anchors shape the model's operating space rather than prescribing outputs |
 | **First message / early context has outsized influence on style** | SillyTavern (first message is strongest style signal), Anima Architecture (structured loading establishes context at session start) | Strong — planted character memories and soul seed are loaded first in the static assembly |
 | **Memory and personality must interact, not exist in parallel** | AnimaWorks (six-channel priming, personality-shaped consolidation), mem0 (agent trait extraction) | Strong — personality-context memories, always-on memories, and character memories all inject personality-relevant content per turn |
-| **Fewer rules, clearer emotional anchors** | SillyTavern (2026 consensus), ElizaOS (adjectives + style over elaborate rules) | Moderate — co-cli's 29-file personality assembly (soul + 6 mindsets + 5 rules + examples + critique) is heavier than this consensus suggests. The soul seed and never-list may be doing the real work; mindsets may be over-specified |
+| **Fewer rules, clearer emotional anchors** | SillyTavern (2026 consensus), ElizaOS (adjectives + style over elaborate rules), Soul.md | Moderate — co-cli's 29-file personality assembly (soul + 6 mindsets + 5 rules + examples + critique) is heavier than this consensus suggests. The soul seed and never-list may be doing the real work; mindsets may be over-specified |
 | **Persistent identity requires external architecture, not model memory** | Anima Architecture (59-point improvement via external structure), AnimaWorks (identity.md + memory persistence) | Strong — co-cli's entire personality system is external to the model |
 | **Multi-context style adaptation** | ElizaOS (all/chat/post style objects), SillyTavern (Character's Note for mid-conversation injection) | Moderate — co-cli has 6 mindsets (technical, emotional, exploration, debugging, teaching, memory) which serve a similar function, adapting personality expression to task context |
 
@@ -302,6 +308,7 @@ The paper's clearest actionable finding: calm suppresses misalignment. Steering 
   FRONTIER SYSTEMS
   ElizaOS                         ■ (adjectives + style + examples)
   AnimaWorks                      ■ (identity.md + role templates)
+  Soul.md                         ■ (SOUL.md + STYLE.md templates)
   SillyTavern                                  ■ (character cards,
                                                   emotional anchors,
                                                   context-over-command)
@@ -354,6 +361,7 @@ Co-cli sits at the deep end of both axes. Among local CLI peers it is unique; am
 - codex: `~/workspace_genai/codex/codex-rs/core/prompt.md`
 - mem0: `~/workspace_genai/mem0/mem0/configs/prompts.py`, `mem0/memory/main.py`
 - AnimaWorks: `~/workspace_genai/animaworks` (https://github.com/xuiltul/animaworks) — Organization-as-Code, neuroscience-inspired memory, six-channel priming
+- Soul.md: `~/workspace_genai/soul.md` — Markdown template system for AI identity, worldview, and voice specification
 - ElizaOS: `~/workspace_genai/elizaos` (https://github.com/elizaOS/eliza) — multi-agent character interface, `adjectives`/`style`/`messageExamples` spec
 - SillyTavern: `~/workspace_genai/sillytavern` (https://github.com/SillyTavern/SillyTavern) — Character Card V3, context-over-command philosophy
 - Anima Architecture (Vera Calloway): https://www.veracalloway.com — 29 behavioral rules, 4 priority tiers, persistent identity via MCP+Notion (no public repo)

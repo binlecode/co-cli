@@ -213,12 +213,12 @@ Each gap is rated on two axes: **impact** (how much the missing capability impro
 
 ### Adoption candidates (Hermes → Co)
 
-| Gap | Impact | Cost | ROI verdict |
-| --- | --- | --- | --- |
-| Attribute redaction in span storage | H — co's SQLite stores raw tool args/results; secrets in tool inputs currently land in the trace DB in plaintext | M — requires a sanitizer pass in `SQLiteSpanExporter.export()` or a span processor | **Adopt.** Secret leakage risk is concrete. A span-attribute redaction processor inserted before `SQLiteSpanExporter` mirrors Hermes's `RedactingFormatter` approach. |
-| Third-party logger suppression | M — co's unmanaged root logger may emit noisy lines from openai/httpx in verbose sessions | L — two lines in `main.py` or a `logging.config` dict | **Adopt quickly.** Low cost, prevents confusing noise in verbose output. |
-| Per-message SQLite session DB | M — co's span DB supports trace-level queries but not per-message history queries (e.g. retrieve last N user messages) | H — requires new schema, flush path, and query API | **Defer.** Span DB already covers most inspection needs. Add only if a concrete use case (e.g. session replay, per-message search) is prioritized. |
-| Tool progress callbacks | L — co's pydantic-ai streaming events and `CoToolLifecycle` hooks already cover real-time tool reporting | H — adding a separate callback layer duplicates existing mechanisms | **Skip.** Architecture already handles this. |
-| Atomic JSON session writes | L — co does not write session JSON files; OTel span writes go through SQLite which handles atomicity natively | — | **N/A.** No analog in co's write path. |
-| API debug dumps | M — full request/response dumps are useful for provider debugging | L — log the raw API payload in verbose mode inside `_execute_stream_segment()` | **Adopt if needed.** Low cost; worth adding behind `--verbose` flag when provider debugging is a recurring need. |
+| Gap | Impact | Cost | ROI verdict | Current Status |
+| --- | --- | --- | --- | --- |
+| Attribute redaction in span storage | H — co's SQLite stores raw tool args/results; secrets in tool inputs currently land in the trace DB in plaintext | M — requires a sanitizer pass in `SQLiteSpanExporter.export()` or a span processor | **Adopt.** Secret leakage risk is concrete. A span-attribute redaction processor inserted before `SQLiteSpanExporter` mirrors Hermes's `RedactingFormatter` approach. | **Adopted.** Implemented via `redact_patterns` in `SQLiteSpanExporter` and `settings.observability.redact_patterns`. |
+| Third-party logger suppression | M — co's unmanaged root logger may emit noisy lines from openai/httpx in verbose sessions | L — two lines in `main.py` or a `logging.config` dict | **Adopt quickly.** Low cost, prevents confusing noise in verbose output. | **Adopted.** Implemented in `main.py` (`_SUPPRESS_LOGGERS`). |
+| Per-message SQLite session DB | M — co's span DB supports trace-level queries but not per-message history queries (e.g. retrieve last N user messages) | H — requires new schema, flush path, and query API | **Defer.** Span DB already covers most inspection needs. Add only if a concrete use case (e.g. session replay, per-message search) is prioritized. | **Deferred.** |
+| Tool progress callbacks | L — co's pydantic-ai streaming events and `CoToolLifecycle` hooks already cover real-time tool reporting | H — adding a separate callback layer duplicates existing mechanisms | **Skip.** Architecture already handles this. | **Skipped.** |
+| Atomic JSON session writes | L — co does not write session JSON files; OTel span writes go through SQLite which handles atomicity natively | — | **N/A.** No analog in co's write path. | **N/A.** |
+| API debug dumps | M — full request/response dumps are useful for provider debugging | L — log the raw API payload in verbose mode inside `_execute_stream_segment()` | **Adopt if needed.** Low cost; worth adding behind `--verbose` flag when provider debugging is a recurring need. | **Not Implemented.** |
 

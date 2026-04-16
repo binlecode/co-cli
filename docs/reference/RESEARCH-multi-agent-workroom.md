@@ -148,7 +148,22 @@ This elegant priority system guarantees that if a user drops a massive log file 
 
 ---
 
-## 4. Phased Rollout Plan
+## 4. Multi-Agent Design: AutoGen vs. co-cli Context Boundaries
+
+Following a review of `autogen`'s multi-agent architecture, the distinction between "code-first orchestration" and "prompt-first orchestration" becomes critical for this proposal.
+
+### AutoGen's Approach
+AutoGen solves complexity through **structural delegation** — splitting responsibilities into distinct agent instances (e.g., `AssistantAgent`, `CodeExecutorAgent`, `UserProxyAgent`) and wiring them together using a Team orchestrator like `SwarmGroupChat` or `RoundRobinGroupChat`. State is maintained internally by agents, and handoffs are explicit message types. This represents the classic, code-heavy multi-agent framework paradigm.
+
+### The 2026 Frontier Trend (co-cli Alignment)
+The 2026 frontier trend heavily favors **light agent + prompt orchestration**. Rather than building heavy, stateful Python classes, the consensus shifts orchestration into the prompt and relies on context boundaries (via tools, memory, and skills) to separate roles. `co-cli` uses specialized markdown skills (`orchestrate-plan`, `orchestrate-dev`) and a `Task` subagent tool to achieve the same role separation while remaining fundamentally lighter and more flexible.
+
+### Why the Workroom Pattern Completes the Design
+While `co-cli`'s lightweight prompt orchestration prevents framework lock-in, it lacks the physical isolation that AutoGen gets "for free" by spawning distinct agent environments (e.g., AutoGen's Docker-sandboxed `CodeExecutorAgent`). The **Multi-Agent Workroom Pattern** introduces this physical isolation to the file system, acting as the structural safety net for our lightweight orchestration. It guarantees that our lightweight subagents cannot pollute the global workspace while thinking or iterating.
+
+---
+
+## 5. Phased Rollout Plan
 
 ### Phase 1: Core Scaffolding & File Exchange
 1. Update `config.py` to generate `.co-cli/workspaces/` and `.co-cli/exchange/` on startup.
@@ -165,13 +180,13 @@ This elegant priority system guarantees that if a user drops a massive log file 
 
 ---
 
-## 5. Security & Risk Assessment
+## 6. Security & Risk Assessment
 
 * **Directory Traversal (High Risk):** An LLM might try to `read_file("../../src/secrets.env")`. 
   * *Mitigation:* `tools/files.py` must use `Path.resolve()` and explicitly check `resolved_path.is_relative_to(deps.workspace_dir)` before performing *any* I/O operations.
 * **Disk Bloat (Low Risk):** Workspaces pile up over time.
   * *Mitigation:* Apply the same TTL (Time-To-Live) cleanup logic we use for session persistence (`session_ttl_minutes`).
 
-## 6. Request for Comments
+## 7. Request for Comments
 - **PO:** Does the `exchange/` directory feel like the right UX for future multimodal file drops, or should we just track files wherever they are on disk?
 - **TL:** Should the `workspace_dir` boundary apply strictly to *all* tools (including shell execution), or just native file tools? (Recommendation: Both, to prevent `cat ../../main.py` via shell).
