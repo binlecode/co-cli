@@ -911,3 +911,88 @@ async def test_cmd_knowledge_unknown_subcommand_prints_usage(tmp_path):
     assert "dream" in out
     assert "restore" in out
     assert "decay-review" in out
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_stats_empty_dir(tmp_path):
+    """/knowledge stats on an empty dir reports zero artifacts and no dream state."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir)
+    with console.capture() as cap:
+        result = await dispatch("/knowledge stats", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "Knowledge: 0 artifacts" in out
+    assert "Last dream: never" in out
+    assert "Decay candidates: 0" in out
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_stats_counts_accurately(tmp_path):
+    """/knowledge stats reports correct kind breakdown, pinned, archived, and decay counts."""
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    archive_dir = knowledge_dir / "_archive"
+    archive_dir.mkdir()
+
+    # Active artifacts: 2 preference, 1 feedback (one pinned, one decay-protected)
+    _write_memory(knowledge_dir, "p1.md", "id-p1", "prefer dark mode", artifact_kind="preference")
+    _write_memory(
+        knowledge_dir,
+        "p2.md",
+        "id-p2",
+        "prefer pytest",
+        artifact_kind="preference",
+        pin_mode="standing",
+    )
+    _write_memory(
+        knowledge_dir,
+        "fb.md",
+        "id-fb",
+        "likes concise output",
+        artifact_kind="feedback",
+        decay_protected="true",
+    )
+
+    # Archived artifact
+    _write_memory(archive_dir, "old.md", "id-old", "old stuff", artifact_kind="preference")
+
+    # Dream state with 1 cycle
+    old_date = (datetime.now(UTC) - timedelta(days=365)).isoformat()
+    dream_state = {
+        "last_dream_at": "2026-04-15T22:00:00+00:00",
+        "processed_sessions": [],
+        "stats": {"total_cycles": 1, "total_extracted": 3, "total_merged": 2, "total_decayed": 1},
+    }
+    (knowledge_dir / "_dream_state.json").write_text(json.dumps(dream_state), encoding="utf-8")
+
+    # Stale decay candidate (old, never recalled)
+    _write_memory(knowledge_dir, "stale.md", "id-stale", "stale content", created=old_date)
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir)
+    with console.capture() as cap:
+        result = await dispatch("/knowledge stats", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+
+    # 4 active artifacts (p1, p2, fb, stale)
+    assert "Knowledge: 4 artifacts" in out
+    # kind breakdown includes both present kinds
+    assert "preference: 3" in out
+    assert "feedback: 1" in out
+    # pinned count
+    assert "pinned: 1" in out
+    # archived count
+    assert "Archived: 1" in out
+    # dream state timestamp present
+    assert "2026-04-15" in out
+    assert "3 extracted" in out
+    # decay candidate (stale.md is over 90 days old, never recalled)
+    assert "Decay candidates: 1" in out

@@ -15,6 +15,7 @@ settings.json
 .co_history
 co-cli-logs.db
 co-cli-search.db
+tmp/
 
 # Per-user ephemeral state
 .co-cli/memory/

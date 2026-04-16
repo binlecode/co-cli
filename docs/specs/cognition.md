@@ -21,7 +21,7 @@
 
 **Status:** Memory layer is transcripts only; Knowledge layer is the unified artifact store indexed under `source="knowledge"`. Lifecycle machinery (dedup on write, recall tracking, dream cycle with mine/merge/decay, archive/restore) is implemented and gated behind `knowledge.consolidation_enabled` (default off).
 
-**Known gaps:** `/knowledge stats` (Phase 6 health dashboard) is not yet implemented.
+**Known gaps:** None. All planned phases (0–6) shipped.
 
 ---
 
@@ -203,7 +203,7 @@ Batch lifecycle management for the knowledge layer. Runs at session end (when en
 | Saves per transcript mining session | 5 |
 | Dream cycle timeout | 60 seconds |
 
-All archived artifacts are recoverable via `/knowledge restore`.
+All archived artifacts are recoverable via `/knowledge restore`. Artifacts with `pin_mode="standing"` or `decay_protected=True` are immune from automated merge and decay.
 
 ### 2.6 Tool Surface
 
@@ -228,7 +228,7 @@ All archived artifacts are recoverable via `/knowledge restore`.
 | `/knowledge dream [--dry]` | Run consolidation cycle manually | Implemented |
 | `/knowledge restore [slug]` | List archived artifacts or restore by slug | Implemented |
 | `/knowledge decay-review [--dry]` | Show decay candidates, confirm to archive | Implemented |
-| `/knowledge stats` | Health dashboard (counts, last dream, decay candidates) | Phase 6 — not yet implemented |
+| `/knowledge stats` | Health dashboard (counts, last dream, decay candidates) | Implemented |
 
 `/memory` remains as deprecated alias.
 

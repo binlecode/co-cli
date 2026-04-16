@@ -1168,7 +1168,7 @@ async def _subcmd_memory_forget(
 
 
 _KNOWLEDGE_USAGE = (
-    "[bold]Usage:[/bold] /knowledge list|count|forget|dream|restore|decay-review "
+    "[bold]Usage:[/bold] /knowledge list|count|forget|dream|restore|decay-review|stats "
     "[query] [--older-than N] "
     "[--kind preference|feedback|rule|decision|article|reference|note] [--dry]"
 )
@@ -1268,8 +1268,50 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
     console.print(f"[success]✓ Archived {archived}.[/success]")
 
 
+async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
+    """Display knowledge health dashboard: artifact counts, archive size, dream state, decay."""
+    from co_cli.knowledge._decay import find_decay_candidates
+    from co_cli.knowledge._dream import load_dream_state
+
+    knowledge_dir = ctx.deps.knowledge_dir
+    artifacts = load_knowledge_artifacts(knowledge_dir)
+    total = len(artifacts)
+
+    kind_counts: dict[str, int] = {}
+    for a in artifacts:
+        kind_counts[a.artifact_kind] = kind_counts.get(a.artifact_kind, 0) + 1
+    kind_parts = ", ".join(f"{kind}: {count}" for kind, count in sorted(kind_counts.items()))
+
+    pinned = sum(1 for a in artifacts if a.pin_mode == "standing")
+    protected = sum(1 for a in artifacts if a.decay_protected)
+
+    archive_dir = knowledge_dir / "_archive"
+    archived = len(list(archive_dir.glob("*.md"))) if archive_dir.exists() else 0
+
+    state = load_dream_state(knowledge_dir)
+    if state.last_dream_at:
+        s = state.stats
+        last_dream = (
+            f"{state.last_dream_at}"
+            f" (total: {s.total_extracted} extracted, {s.total_merged} merged,"
+            f" {s.total_decayed} archived)"
+        )
+    else:
+        last_dream = "never"
+
+    candidates = find_decay_candidates(knowledge_dir, ctx.deps.config.knowledge)
+
+    console.print(f"Knowledge: {total} artifacts")
+    if kind_parts:
+        console.print(f"  {kind_parts}")
+    console.print(f"  pinned: {pinned}, decay-protected: {protected}")
+    console.print(f"Archived: {archived}")
+    console.print(f"Last dream: {last_dream}")
+    console.print(f"Decay candidates: {len(candidates)}")
+
+
 async def _cmd_knowledge(ctx: CommandContext, args: str) -> None:
-    """Dispatch /knowledge subcommands: list, count, forget, dream, restore, decay-review."""
+    """Dispatch /knowledge subcommands: list, count, forget, dream, restore, decay-review, stats."""
     parts = args.strip().split(maxsplit=1)
     if not parts:
         console.print(_KNOWLEDGE_USAGE)
@@ -1291,6 +1333,8 @@ async def _cmd_knowledge(ctx: CommandContext, args: str) -> None:
         await _subcmd_knowledge_restore(ctx, rest)
     elif subcommand == "decay-review":
         await _subcmd_knowledge_decay_review(ctx, rest)
+    elif subcommand == "stats":
+        await _subcmd_knowledge_stats(ctx)
     else:
         console.print(f"[bold red]Unknown /knowledge subcommand:[/bold red] {subcommand}")
         console.print(_KNOWLEDGE_USAGE)
@@ -1365,7 +1409,7 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     ),
     "knowledge": SlashCommand(
         "knowledge",
-        "Manage knowledge artifacts — /knowledge list|count|forget|dream|restore|decay-review [args]",
+        "Manage knowledge artifacts — /knowledge list|count|forget|dream|restore|decay-review|stats [args]",
         _cmd_knowledge,
     ),
     "memory": SlashCommand(

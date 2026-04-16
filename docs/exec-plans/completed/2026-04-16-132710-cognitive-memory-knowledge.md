@@ -555,14 +555,14 @@ Batch lifecycle management operating on the unified knowledge layer.
 
 ## Phase 6 — Observability & Health
 
-### TASK-6.1: OTel spans for dream operations
+### ✓ DONE TASK-6.1: OTel spans for dream operations
 
 - `files:` `co_cli/knowledge/_dream.py`
 - Spans: `co.dream.cycle` (parent), `co.dream.mine`, `co.dream.merge`, `co.dream.decay`
 - Attributes: `dream.extracted`, `dream.merged`, `dream.decayed`
 - `done_when:` Visible in `co traces` after a cycle.
 
-### TASK-6.2: `/knowledge stats`
+### ✓ DONE TASK-6.2: `/knowledge stats`
 
 - `files:` `co_cli/commands/_commands.py`
 - Output:
@@ -577,7 +577,7 @@ Batch lifecycle management operating on the unified knowledge layer.
 - Reads from `knowledge_dir` files + dream state + `_archive/` dir.
 - `done_when:` Accurate counts displayed.
 
-### TASK-6.3: Safety bounds documentation
+### ✓ DONE TASK-6.3: Safety bounds documentation
 
 - `files:` `docs/specs/cognition.md` (update from Phase 0)
 - Document all bounds:
