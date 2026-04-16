@@ -93,7 +93,7 @@ app = typer.Typer(
 def _default(ctx: typer.Context):
     """Start an interactive chat session (default when no subcommand is given)."""
     if ctx.invoked_subcommand is None:
-        chat()
+        _start_chat(theme=None, verbose=False, reasoning_display=None)
 
 
 async def _finalize_turn(
@@ -353,17 +353,8 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         await _drain_and_cleanup(deps, stack)
 
 
-@app.command()
-def chat(
-    theme: str = typer.Option(None, "--theme", "-t", help="Color theme: dark or light"),
-    verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Alias for --reasoning-display full"
-    ),
-    reasoning_display: str = typer.Option(
-        None, "--reasoning-display", help="Reasoning display mode: off, summary, full"
-    ),
-):
-    """Start an interactive chat session with Co."""
+def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None) -> None:
+    """Resolve startup options and enter the interactive chat loop."""
     if theme:
         settings.theme = theme
         set_theme(theme)
@@ -383,6 +374,20 @@ def chat(
         asyncio.run(_chat_loop(reasoning_display=effective_mode))
     except KeyboardInterrupt:
         pass  # Safety net: asyncio.run() may re-raise after task cancellation
+
+
+@app.command()
+def chat(
+    theme: str = typer.Option(None, "--theme", "-t", help="Color theme: dark or light"),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Alias for --reasoning-display full"
+    ),
+    reasoning_display: str = typer.Option(
+        None, "--reasoning-display", help="Reasoning display mode: off, summary, full"
+    ),
+):
+    """Start an interactive chat session with Co."""
+    _start_chat(theme=theme, verbose=verbose, reasoning_display=reasoning_display)
 
 
 @app.command()
