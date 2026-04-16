@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from co_cli.config._core import SEARCH_DB
 from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.knowledge._stopwords import STOPWORDS
 
 if TYPE_CHECKING:
     from co_cli.config._core import Settings
@@ -39,77 +40,6 @@ except ImportError:
     import sqlite3
 
 logger = logging.getLogger(__name__)
-
-# Common English stopwords — tokens that survive FTS5 but add no signal
-STOPWORDS: frozenset[str] = frozenset(
-    {
-        "a",
-        "an",
-        "the",
-        "and",
-        "or",
-        "but",
-        "in",
-        "on",
-        "at",
-        "to",
-        "for",
-        "of",
-        "with",
-        "by",
-        "from",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "could",
-        "should",
-        "may",
-        "might",
-        "shall",
-        "can",
-        "that",
-        "this",
-        "these",
-        "those",
-        "it",
-        "its",
-        "as",
-        "up",
-        "if",
-        "so",
-        "no",
-        "not",
-        "i",
-        "me",
-        "my",
-        "we",
-        "our",
-        "you",
-        "your",
-        "he",
-        "she",
-        "they",
-        "what",
-        "which",
-        "who",
-        "how",
-        "when",
-        "where",
-        "why",
-    }
-)
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS docs (

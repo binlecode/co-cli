@@ -14,12 +14,14 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
+from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools.memory import (
-    _recall_for_context,
+    _touch_recalled,
     append_memory,
     list_knowledge,
     list_memories,
+    save_knowledge,
     search_memories,
     update_memory,
 )
@@ -82,30 +84,57 @@ def _write_memory(
 
 
 # ---------------------------------------------------------------------------
-# _recall_for_context read-only invariant
+# _touch_recalled — recall tracking (TASK-4.3)
 # ---------------------------------------------------------------------------
 
 
-def test_recall_does_not_mutate_files(tmp_path: Path):
-    """_recall_for_context must not change any file's mtime (read-only path)."""
+def test_touch_recalled_increments_recall_count(tmp_path: Path) -> None:
+    """_touch_recalled increments recall_count from 0 to 1 on first recall."""
     memory_dir = tmp_path / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
-    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
-    try:
-        idx.sync_dir("knowledge", memory_dir)
-        before = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
-        result = asyncio.run(
-            _recall_for_context(
-                _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx), "dark theme"
-            )
-        )
-        assert result.metadata["count"] >= 1
-        after = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
-        assert before == after, "_recall_for_context must not modify any file's mtime"
-    finally:
-        idx.close()
+    asyncio.run(_touch_recalled([str(path)], ctx))
+
+    fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+    assert fm["recall_count"] == 1, "recall_count must be incremented to 1"
+
+
+def test_touch_recalled_sets_last_recalled_to_iso8601(tmp_path: Path) -> None:
+    """_touch_recalled writes a valid ISO8601 timestamp to last_recalled."""
+    memory_dir = tmp_path / "memory"
+    path = _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
+    ctx = _make_ctx(knowledge_dir=memory_dir)
+
+    before = datetime.now(UTC)
+    asyncio.run(_touch_recalled([str(path)], ctx))
+    after = datetime.now(UTC)
+
+    fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+    recalled_at = datetime.fromisoformat(fm["last_recalled"])
+    assert before <= recalled_at <= after, "last_recalled must be within the test window"
+
+
+def test_touch_recalled_accumulates_on_repeated_recall(tmp_path: Path) -> None:
+    """_touch_recalled increments recall_count independently on each call."""
+    memory_dir = tmp_path / "memory"
+    path = _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
+    ctx = _make_ctx(knowledge_dir=memory_dir)
+
+    asyncio.run(_touch_recalled([str(path)], ctx))
+    asyncio.run(_touch_recalled([str(path)], ctx))
+
+    fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+    assert fm["recall_count"] == 2, "recall_count must accumulate across calls"
+
+
+def test_touch_recalled_skips_missing_file(tmp_path: Path) -> None:
+    """_touch_recalled does not raise when a path no longer exists."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
+    missing = str(memory_dir / "ghost.md")
+    asyncio.run(_touch_recalled([missing], ctx))
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +325,6 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.articles import search_knowledge
 
     knowledge_dir = tmp_path / "knowledge"
@@ -392,7 +420,6 @@ def test_load_soul_mindsets_from_role_path():
 
 def test_update_memory_reindexes_in_db(tmp_path: Path):
     """update_memory must update the DB index so the new content is findable."""
-    from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.memory import update_memory
 
     memory_dir = tmp_path / "memory"
@@ -419,7 +446,6 @@ def test_update_memory_reindexes_in_db(tmp_path: Path):
 
 def test_append_memory_reindexes_in_db(tmp_path: Path):
     """append_memory must update the DB index so the appended content is findable."""
-    from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.memory import append_memory
 
     memory_dir = tmp_path / "memory"
@@ -440,3 +466,90 @@ def test_append_memory_reindexes_in_db(tmp_path: Path):
         )
     finally:
         idx.close()
+
+
+# ---------------------------------------------------------------------------
+# save_knowledge dedup (TASK-4.2)
+# ---------------------------------------------------------------------------
+
+
+def _make_dedup_ctx(knowledge_dir: Path, *, threshold: float = 0.75) -> RunContext:
+    """Return a RunContext with consolidation_enabled=True at given threshold."""
+    base = make_settings()
+    knowledge_cfg = base.knowledge.model_copy(
+        update={"consolidation_enabled": True, "consolidation_similarity_threshold": threshold}
+    )
+    config = base.model_copy(update={"knowledge": knowledge_cfg})
+    deps = CoDeps(
+        shell=ShellBackend(),
+        knowledge_store=None,
+        config=config,
+        knowledge_dir=knowledge_dir,
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+
+class TestSaveKnowledgeDedup:
+    def test_distinct_content_creates_new_file(self, tmp_path: Path) -> None:
+        """Unrelated content always writes a new artifact regardless of dedup setting."""
+        knowledge_dir = tmp_path / "knowledge"
+        _write_memory(knowledge_dir, 1, "completely unrelated existing entry", tags=[])
+        ctx = _make_dedup_ctx(knowledge_dir)
+        result = asyncio.run(save_knowledge(ctx, "user prefers pytest for testing", "preference"))
+        files = list(knowledge_dir.glob("*.md"))
+        assert len(files) == 2, "distinct content must produce a second file"
+        assert result.metadata["action"] == "saved"
+
+    def test_near_identical_content_skips_write(self, tmp_path: Path) -> None:
+        """Score > 0.9 must skip writing and return action='skipped'."""
+        knowledge_dir = tmp_path / "knowledge"
+        _write_memory(knowledge_dir, 1, "user prefers pytest over unittest", tags=[])
+        ctx = _make_dedup_ctx(knowledge_dir, threshold=0.5)
+        result = asyncio.run(
+            save_knowledge(ctx, "user prefers pytest over unittest", "preference")
+        )
+        files = list(knowledge_dir.glob("*.md"))
+        assert len(files) == 1, "no new file must be written on skip"
+        assert result.metadata["action"] == "skipped"
+
+    def test_superset_content_replaces_existing_body(self, tmp_path: Path) -> None:
+        """New content whose tokens are a strict superset of existing content triggers merge."""
+        knowledge_dir = tmp_path / "knowledge"
+        existing = _write_memory(knowledge_dir, 1, "user prefers pytest", tags=[])
+        ctx = _make_dedup_ctx(knowledge_dir, threshold=0.3)
+        result = asyncio.run(
+            save_knowledge(
+                ctx, "user prefers pytest over unittest framework for testing", "preference"
+            )
+        )
+        files = list(knowledge_dir.glob("*.md"))
+        assert len(files) == 1, "merge must not create a new file"
+        assert result.metadata["action"] == "merged"
+        updated_body = existing.read_text(encoding="utf-8")
+        assert "over unittest framework for testing" in updated_body
+
+    def test_overlapping_content_appends_to_existing(self, tmp_path: Path) -> None:
+        """Partially-overlapping content that is not a superset appends to the existing artifact."""
+        knowledge_dir = tmp_path / "knowledge"
+        existing = _write_memory(knowledge_dir, 1, "user prefers pytest ruff", tags=[])
+        ctx = _make_dedup_ctx(knowledge_dir, threshold=0.2)
+        result = asyncio.run(save_knowledge(ctx, "user prefers pytest mypy checks", "preference"))
+        files = list(knowledge_dir.glob("*.md"))
+        assert len(files) == 1, "append must not create a new file"
+        assert result.metadata["action"] == "appended"
+        updated_body = existing.read_text(encoding="utf-8")
+        # Both the original and appended content must be present
+        assert "ruff" in updated_body
+        assert "mypy checks" in updated_body
+
+    def test_dedup_bypassed_when_consolidation_disabled(self, tmp_path: Path) -> None:
+        """When consolidation_enabled=False, identical content always writes a new file."""
+        knowledge_dir = tmp_path / "knowledge"
+        _write_memory(knowledge_dir, 1, "user prefers pytest over unittest", tags=[])
+        ctx = _make_ctx(knowledge_dir=knowledge_dir)  # consolidation_enabled defaults to False
+        result = asyncio.run(
+            save_knowledge(ctx, "user prefers pytest over unittest", "preference")
+        )
+        files = list(knowledge_dir.glob("*.md"))
+        assert len(files) == 2, "disabled dedup must allow duplicate writes"
+        assert result.metadata["action"] == "saved"

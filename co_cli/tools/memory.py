@@ -9,6 +9,7 @@ references, and notes. FTS5/BM25 via ``knowledge_store`` powers search under
 ``save_knowledge`` is the sole write path, exposed to the extractor sub-agent.
 """
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -40,6 +41,7 @@ from co_cli.knowledge._frontmatter import (
     render_frontmatter,
     render_knowledge_file,
 )
+from co_cli.knowledge._similarity import find_similar_artifacts, is_content_superset
 from co_cli.tools.resource_lock import ResourceBusyError
 from co_cli.tools.session_search import session_search
 from co_cli.tools.tool_io import tool_error, tool_output, tool_output_raw
@@ -57,6 +59,56 @@ def _slugify(text: str) -> str:
 def _find_by_slug(knowledge_dir: Path, slug: str) -> Path | None:
     """Return the knowledge file whose stem matches slug, or None."""
     return next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
+
+
+def _update_artifact_body(
+    artifact: KnowledgeArtifact,
+    new_body: str,
+    ctx: RunContext[CoDeps],
+) -> None:
+    """Atomically overwrite the body of an existing artifact and re-index it."""
+    raw = artifact.path.read_text(encoding="utf-8")
+    fm, _ = parse_frontmatter(raw)
+    fm["updated"] = datetime.now(UTC).isoformat()
+    md_content = render_frontmatter(fm, new_body)
+    with tempfile.NamedTemporaryFile(
+        "w", dir=artifact.path.parent, suffix=".tmp", delete=False, encoding="utf-8"
+    ) as tmp:
+        tmp.write(md_content)
+    os.replace(tmp.name, artifact.path)
+    if ctx.deps.knowledge_store is not None:
+        _reindex_knowledge_file(ctx, artifact.path, new_body, md_content, fm, artifact.path.stem)
+
+
+async def _touch_recalled(
+    paths: list[str],
+    ctx: RunContext[CoDeps],
+) -> None:
+    """Fire-and-forget: increment recall_count and set last_recalled on hit artifacts.
+
+    Skips silently if the file no longer exists (race with /knowledge forget).
+    Does not block the recall return path — always launched via asyncio.create_task.
+    """
+    now = datetime.now(UTC).isoformat()
+    for path_str in paths:
+        path = Path(path_str)
+        if not path.exists():
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            fm, body = parse_frontmatter(raw)
+            fm["last_recalled"] = now
+            fm["recall_count"] = int(fm.get("recall_count") or 0) + 1
+            md_content = render_frontmatter(fm, body)
+            with tempfile.NamedTemporaryFile(
+                "w", dir=path.parent, suffix=".tmp", delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp.write(md_content)
+            os.replace(tmp.name, path)
+            if ctx.deps.knowledge_store is not None:
+                _reindex_knowledge_file(ctx, path, body, md_content, fm, path.stem)
+        except Exception:
+            logger.warning("_touch_recalled: failed to update %s", path_str, exc_info=True)
 
 
 def grep_recall(
@@ -151,6 +203,11 @@ async def _recall_for_context(
             count=0,
             results=[],
         )
+
+    hit_paths = [r.path for r in results]
+    # Fire-and-forget recall tracking; callback prevents premature GC of the task
+    _recall_task = asyncio.create_task(_touch_recalled(hit_paths, ctx))
+    _recall_task.add_done_callback(lambda _t: None)
 
     lines = [
         f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"
@@ -314,14 +371,16 @@ async def save_knowledge(
 
     Writes a canonical kind=knowledge markdown file under ctx.deps.knowledge_dir
     and indexes it under source='knowledge' so search_knowledge can retrieve it.
-    Two calls with identical content produce two distinct files (UUID suffix);
-    dedup lives in a later phase.
+
+    When consolidation_enabled=True, a similarity check runs before writing:
+    near-identical content (>0.9 Jaccard) is skipped; overlapping content is
+    merged into the existing artifact rather than creating a duplicate.
 
     Args:
         content: Primary text of the artifact.
         artifact_kind: One of preference | decision | rule | feedback | article | reference | note.
         title: Optional human-readable label.
-        description: Optional ≤200-char hook used for manifest dedup later.
+        description: Optional ≤200-char hook used for retrieval ranking.
         tags: Optional retrieval labels (lowercased before writing).
         pin_mode: 'standing' to inject as always-on context; 'none' by default.
     """
@@ -333,6 +392,36 @@ async def save_knowledge(
 
     knowledge_dir = ctx.deps.knowledge_dir
     knowledge_dir.mkdir(parents=True, exist_ok=True)
+
+    if ctx.deps.config.knowledge.consolidation_enabled:
+        threshold = ctx.deps.config.knowledge.consolidation_similarity_threshold
+        existing = load_knowledge_artifacts(knowledge_dir, artifact_kind=artifact_kind)
+        matches = find_similar_artifacts(content, artifact_kind, existing, threshold)
+        if matches:
+            best_artifact, best_score = matches[0]
+            with _TRACER.start_as_current_span("co.knowledge.dedup") as span:
+                if best_score > 0.9:
+                    span.set_attribute("knowledge.dedup_action", "skipped")
+                    return tool_output_raw(
+                        f"Skipped (near-identical to {best_artifact.path.name})",
+                        action="skipped",
+                        path=str(best_artifact.path),
+                        artifact_id=best_artifact.id,
+                    )
+                if is_content_superset(content, best_artifact.content):
+                    dedup_action = "merged"
+                    merged_body = content
+                else:
+                    dedup_action = "appended"
+                    merged_body = best_artifact.content.rstrip() + "\n" + content
+                span.set_attribute("knowledge.dedup_action", dedup_action)
+                _update_artifact_body(best_artifact, merged_body, ctx)
+                return tool_output_raw(
+                    f"✓ Saved knowledge ({dedup_action}): {best_artifact.path.name}",
+                    action=dedup_action,
+                    path=str(best_artifact.path),
+                    artifact_id=best_artifact.id,
+                )
 
     artifact_id = str(uuid4())
     slug = _slugify(title) if title else _slugify(content[:50])

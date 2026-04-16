@@ -362,7 +362,7 @@ Align the agent's tool surface with the two-layer model.
 
 Now operating on the corrected knowledge model. Solves the known gap: "extractor produces duplicates."
 
-### TASK-4.1: Token-level similarity utility
+### ✓ DONE TASK-4.1: Token-level similarity utility
 
 - `files:` `co_cli/knowledge/_similarity.py` (new)
 - Implement `token_jaccard(a: str, b: str) -> float`:
@@ -375,7 +375,7 @@ Now operating on the corrected knowledge model. Solves the known gap: "extractor
 - Pure Python, no external deps.
 - `done_when:` `uv run pytest tests/test_knowledge_similarity.py` passes (empty, identical, disjoint, unicode edge cases).
 
-### TASK-4.2: Dedup check in save_knowledge()
+### ✓ DONE TASK-4.2: Dedup check in save_knowledge()
 
 - `files:` `co_cli/tools/knowledge.py` (the renamed save path from TASK-2.4)
 - Before writing a new file:
@@ -390,7 +390,7 @@ Now operating on the corrected knowledge model. Solves the known gap: "extractor
 - OTel attribute: `knowledge.dedup_action`.
 - `done_when:` Tests cover: duplicate detection, merge, skip, distinct-write, and bypass-when-disabled paths.
 
-### TASK-4.3: Touch last_recalled on recall hits
+### ✓ DONE TASK-4.3: Touch last_recalled on recall hits
 
 - `files:` `co_cli/tools/memory.py` (`_recall_for_context`, line 106)
 - After knowledge store returns results, fire-and-forget `asyncio.create_task(_touch_recalled(paths))`:
@@ -824,3 +824,70 @@ Version bump: `0.7.164` → `0.7.166` (feature delivery).
 `0.7.166` → `0.7.168` (feature delivery)
 
 > Gate 2 — `/review-impl cognitive-memory-knowledge` required before `git mv` to `completed/`.
+
+## Implementation Review — 2026-04-16
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-3.2 | `search_memories()` returns transcript results | ✓ pass | `memory.py:183-198` — delegates directly to `session_search(ctx, query, limit)`; `test_memory.py:279-285` confirms session path |
+| TASK-3.3 | `list_knowledge()` returns unified artifact list | ✓ pass | `memory.py:201-291` — canonical function; `memory.py:294-301` — deprecated alias; `test_memory.py:116-145` pagination; `:147-156` alias parity |
+| TASK-3.5 | Standing context injected from knowledge artifacts | ✓ pass | `_instructions.py:24-31` — `add_standing_knowledge` calls `load_standing_artifacts(ctx.deps.knowledge_dir)`; `_core.py:129,158` — import + registration confirmed |
+| TASK-3.6 | Agent toolset reflects two-layer model | ✓ pass | `_native_toolset.py:127-146` — `list_knowledge`, `session_search` ALWAYS; deprecated aliases registered; `test_agent.py:101-113` spot-check; `test_session_search_tool.py:124-134` ALWAYS assertion |
+| TASK-3.7 | `/knowledge list` works; `/memory list` works with notice | ✓ pass | `_commands.py:1263-1272` — both in `BUILTIN_COMMANDS`; `:1198` deprecation notice; behavioral verification confirmed |
+
+### Issues Found & Fixed
+No issues found.
+
+### Tests
+- Command: `uv run pytest -v`
+- Result: 502 passed, 0 failed
+- Log: `.pytest-logs/$(date +%Y%m%d-%H%M%S)-review-impl.log`
+
+### Doc Sync
+- Scope: full (public API rename, REPL command surface change)
+- Result: clean — `add_always_on_memories` removed everywhere; `add_standing_knowledge`, `list_knowledge`, `session_search` ALWAYS present in all affected specs
+
+### Behavioral Verification
+- `uv run co config`: ✓ healthy — LLM online, database active, all integrations as configured
+- `add_standing_knowledge` confirmed in agent instruction callback list
+- `/knowledge` registered as primary command; `/memory` registered with `[Deprecated]` in description
+- `session_search` and `list_knowledge` both confirmed ALWAYS visibility at runtime
+
+### Overall: PASS
+Phase 3 tool surface convergence is complete, clean, and ship-ready.
+
+## Delivery Summary — Phase 4 — 2026-04-16
+
+**Overall: DELIVERED.** Phase 4 ships dedup-on-write and recall tracking on the unified knowledge layer.
+
+### Shipped
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-4.1 — Token-level similarity utility | `uv run pytest tests/test_knowledge_similarity.py` passes | ✓ pass (16 tests) |
+| TASK-4.2 — Dedup check in `save_knowledge()` | Tests cover skip/merge/append/save/bypass-disabled | ✓ pass (5 tests) |
+| TASK-4.3 — Touch `last_recalled` on recall hits | Tests verify `recall_count` increments and `last_recalled` updates | ✓ pass (4 tests) |
+
+### Files
+
+New:
+- `co_cli/knowledge/_stopwords.py` — shared STOPWORDS constant (factored from `_store.py`)
+- `co_cli/knowledge/_similarity.py` — `token_jaccard`, `find_similar_artifacts`, `is_content_superset`
+- `tests/test_knowledge_similarity.py` — 16 edge-case tests
+
+Modified:
+- `co_cli/knowledge/_store.py` — imports STOPWORDS from `_stopwords.py` (no functional change)
+- `co_cli/tools/memory.py` — `save_knowledge` dedup block; `_touch_recalled` coroutine; `_update_artifact_body` helper; fire-and-forget wired into `_recall_for_context`
+- `tests/test_memory.py` — removed stale `test_recall_does_not_mutate_files`; added 9 new dedup + recall tracking tests; imports updated
+
+### Notes
+
+- Dedup is zero-overhead when `consolidation_enabled=False` (default). No existing behavior changes for non-opt-in users.
+- `is_content_superset` determines merge vs. append: new content must be a strict superset of existing tokens to trigger replace.
+- `_touch_recalled` is fire-and-forget (`asyncio.create_task`). Tests exercise it directly via `asyncio.run` rather than via `_recall_for_context` to avoid task-cancellation false negatives.
+- `test_recall_does_not_mutate_files` removed: its premise (recall is read-only) was invalidated by TASK-4.3. The new tests verify the updated semantics directly.
+
+### Tests
+- Full suite: **526 passed**, 0 failed
+- Version bump: `0.7.168` → `0.7.170` (feature delivery)
