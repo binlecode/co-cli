@@ -182,11 +182,13 @@ async def _run_foreground_turn(
 
 
 async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None:
-    """Drain pending extractions and release all resources before exit."""
+    """Drain pending extractions, run the dream cycle if enabled, release resources."""
     from co_cli.memory._extractor import drain_pending_extraction
 
     await drain_pending_extraction()
     if deps is not None:
+        await _maybe_run_dream_cycle(deps)
+
         from co_cli.tools.background import kill_task
 
         for task_state in deps.session.background_tasks.values():
@@ -197,6 +199,37 @@ async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None
                     pass
         deps.shell.cleanup()
     await stack.aclose()
+
+
+async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
+    """Run the dream cycle on session end when enabled via knowledge config.
+
+    Bounded by a 60-second timeout. Errors are logged and never propagated —
+    session shutdown must not fail because consolidation hit a snag.
+    """
+    knowledge_config = deps.config.knowledge
+    if not knowledge_config.consolidation_enabled:
+        return
+    if knowledge_config.consolidation_trigger != "session_end":
+        return
+
+    from co_cli.knowledge._dream import run_dream_cycle
+
+    logger = logging.getLogger(__name__)
+    try:
+        async with asyncio.timeout(60):
+            result = await run_dream_cycle(deps)
+        if result.any_changes:
+            logger.info(
+                "Dream cycle: %d extracted, %d merged, %d archived",
+                result.extracted,
+                result.merged,
+                result.decayed,
+            )
+    except TimeoutError:
+        logger.warning("Dream cycle timed out after 60s")
+    except Exception:
+        logger.warning("Dream cycle failed", exc_info=True)
 
 
 def _apply_command_outcome(

@@ -36,20 +36,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _build_window(messages: list) -> str:
-    """Extract conversation turns from a delta slice as plain text.
+def _tag_messages(messages: list) -> list[tuple[int, str, str]]:
+    """Tag each extractable part in ``messages`` as ``(idx, kind, line)``.
 
-    Collects User/Co text lines and interleaved tool call/return lines.
-    Caps at max 10 text lines and max 10 tool lines, then merges back
-    in original turn order.
-
-    Args:
-        messages: Delta message slice (history[cursor:]).
-
-    Returns:
-        Formatted string of interleaved User/Co and tool lines.
+    Walks ``ModelRequest`` and ``ModelResponse`` entries and flattens their
+    parts into a tagged stream. ``idx`` preserves original turn order so
+    callers can impose independent caps on ``text`` vs. ``tool`` entries and
+    merge them back in order. Skips Read-tool output and oversized non-prose
+    tool results. Shared by the per-turn extractor and the dream-cycle miner.
     """
-    # Each entry: (original_index, kind, line_text)
     tagged: list[tuple[int, str, str]] = []
     idx = 0
 
@@ -62,10 +57,8 @@ def _build_window(messages: list) -> str:
                     idx += 1
                 elif isinstance(part, ToolReturnPart):
                     content = part.content if isinstance(part.content, str) else str(part.content)
-                    # Skip Read-tool output (line-number prefix pattern)
                     if content.startswith("1\u2192 "):
                         continue
-                    # Skip very long content with no sentence boundary in the first 200 chars
                     if len(content) > 1000 and not any(
                         ch in content[:200] for ch in (".", "!", "?")
                     ):
@@ -84,11 +77,30 @@ def _build_window(messages: list) -> str:
                     tagged.append((idx, "tool", f"Tool({part.tool_name}): {args_str}"))
                     idx += 1
 
+    return tagged
+
+
+def _build_window(messages: list, *, max_text: int = 10, max_tool: int = 10) -> str:
+    """Extract conversation turns from a delta slice as plain text.
+
+    Collects User/Co text lines and interleaved tool call/return lines.
+    Caps at max ``max_text`` text lines and max ``max_tool`` tool lines,
+    then merges back in original turn order.
+
+    Args:
+        messages: Delta message slice (history[cursor:]).
+        max_text: Maximum number of text lines to include (default 10).
+        max_tool: Maximum number of tool lines to include (default 10).
+
+    Returns:
+        Formatted string of interleaved User/Co and tool lines.
+    """
+    tagged = _tag_messages(messages)
+
     text_entries = [(orig_idx, line) for orig_idx, kind, line in tagged if kind == "text"]
     tool_entries = [(orig_idx, line) for orig_idx, kind, line in tagged if kind == "tool"]
 
-    # Apply independent caps: last 10 of each, then merge in original order
-    merged = text_entries[-10:] + tool_entries[-10:]
+    merged = text_entries[-max_text:] + tool_entries[-max_tool:]
     merged.sort(key=lambda entry: entry[0])
 
     return "\n".join(line for _, line in merged)

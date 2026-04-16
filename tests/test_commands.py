@@ -722,3 +722,192 @@ def test_load_skills_collects_errors_for_malformed_skill_file(tmp_path):
     assert isinstance(result, dict)
     assert len(errors) == 1
     assert "broken.md" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# /knowledge dream | restore | decay-review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_dream_dry_run(tmp_path):
+    """/knowledge dream --dry runs a cycle without writing state or touching artifacts."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    mem_file = _write_memory(knowledge_dir, "a.md", "id-dream-dry", "alpha content")
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir)
+    with console.capture() as cap:
+        result = await dispatch("/knowledge dream --dry", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "Dry run" in out or "dry run" in out
+    assert "extracted" in out
+    assert "merged" in out
+    assert "decayed" in out
+    assert mem_file.exists(), "File must not be touched in dry-run mode"
+    assert not (knowledge_dir / "_dream_state.json").exists(), (
+        "Dry run must not persist dream state"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_dream_real_run_writes_state(tmp_path):
+    """/knowledge dream runs the full cycle and persists dream state when any work happens."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir)
+    ctx.deps.sessions_dir = tmp_path / "sessions-absent"
+    with console.capture() as cap:
+        result = await dispatch("/knowledge dream", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "Dream cycle complete" in out
+    state_path = knowledge_dir / "_dream_state.json"
+    assert state_path.exists(), "Non-dry dream run must persist _dream_state.json"
+    state = state_path.read_text(encoding="utf-8")
+    assert "last_dream_at" in state
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_restore_empty_archive(tmp_path):
+    """/knowledge restore with no arg on an empty archive prints an empty-state message."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir)
+    with console.capture() as cap:
+        result = await dispatch("/knowledge restore", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert "No archived artifacts" in cap.get()
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_restore_moves_file_back(tmp_path):
+    """/knowledge restore <slug> moves an archived file back to knowledge_dir."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    archive_dir = knowledge_dir / "_archive"
+    archive_dir.mkdir()
+    archived_file = _write_memory(
+        archive_dir, "my-note-abcd1234.md", "id-restore", "restored body"
+    )
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir)
+    result = await dispatch("/knowledge restore my-note-abcd1234", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert not archived_file.exists(), "File must leave _archive/ after restore"
+    restored_path = knowledge_dir / "my-note-abcd1234.md"
+    assert restored_path.exists(), "File must reappear in knowledge_dir after restore"
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_restore_ambiguous(tmp_path):
+    """/knowledge restore with an ambiguous slug (multiple matches) reports failure."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    archive_dir = knowledge_dir / "_archive"
+    archive_dir.mkdir()
+    _write_memory(archive_dir, "note-1111.md", "id-amb-1", "first")
+    _write_memory(archive_dir, "note-2222.md", "id-amb-2", "second")
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir)
+    with console.capture() as cap:
+        result = await dispatch("/knowledge restore note", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert "Restore failed" in cap.get()
+    # Both files must remain in the archive since the slug was ambiguous
+    assert (archive_dir / "note-1111.md").exists()
+    assert (archive_dir / "note-2222.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_decay_review_dry_lists_only(tmp_path):
+    """/knowledge decay-review --dry lists stale candidates without archiving."""
+    from datetime import UTC, datetime, timedelta
+
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    old_date = (datetime.now(UTC) - timedelta(days=365)).isoformat()
+    stale = _write_memory(
+        knowledge_dir, "stale.md", "id-stale-1", "stale content", created=old_date
+    )
+    fresh = _write_memory(knowledge_dir, "fresh.md", "id-fresh-1", "fresh content")
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir)
+    with console.capture() as cap:
+        result = await dispatch("/knowledge decay-review --dry", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "stale" in out
+    assert "1 decay candidate" in out
+    assert stale.exists(), "Dry run must not archive candidates"
+    assert fresh.exists(), "Non-stale files must not be touched"
+    assert not (knowledge_dir / "_archive").exists(), "Dry run must not create _archive/"
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_decay_review_confirm_archives(tmp_path):
+    """/knowledge decay-review with y confirmation archives every candidate."""
+    from datetime import UTC, datetime, timedelta
+
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    old_date = (datetime.now(UTC) - timedelta(days=365)).isoformat()
+    stale = _write_memory(
+        knowledge_dir, "stale.md", "id-stale-arch", "stale content", created=old_date
+    )
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir, frontend=SilentFrontend(confirm_response=True))
+    with console.capture() as cap:
+        result = await dispatch("/knowledge decay-review", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert "Archived 1" in cap.get()
+    assert not stale.exists(), "Stale file must be moved out of knowledge_dir"
+    assert (knowledge_dir / "_archive" / "stale.md").exists(), (
+        "Stale file must appear in _archive/"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_decay_review_abort(tmp_path):
+    """/knowledge decay-review with n confirmation keeps every candidate in place."""
+    from datetime import UTC, datetime, timedelta
+
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    old_date = (datetime.now(UTC) - timedelta(days=365)).isoformat()
+    stale = _write_memory(
+        knowledge_dir, "stale.md", "id-stale-abort", "stale content", created=old_date
+    )
+
+    ctx = _make_ctx(knowledge_dir=knowledge_dir, frontend=SilentFrontend(confirm_response=False))
+    with console.capture() as cap:
+        result = await dispatch("/knowledge decay-review", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert "Aborted" in cap.get()
+    assert stale.exists(), "File must remain when user declines"
+
+
+@pytest.mark.asyncio
+async def test_cmd_knowledge_unknown_subcommand_prints_usage(tmp_path):
+    """Unknown /knowledge subcommand falls into the usage branch and still returns LocalOnly."""
+    ctx = _make_ctx(knowledge_dir=tmp_path)
+    with console.capture() as cap:
+        result = await dispatch("/knowledge bogus-subcmd", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "Unknown /knowledge subcommand" in out
+    assert "dream" in out
+    assert "restore" in out
+    assert "decay-review" in out

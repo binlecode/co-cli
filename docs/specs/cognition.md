@@ -19,9 +19,9 @@
 
 **Success criteria:** Reusable search routes through a single knowledge surface. Episodic recall routes through transcript search. The extractor writes knowledge artifacts. Standing context is sourced from knowledge metadata. Knowledge is self-maintaining via consolidation.
 
-**Status:** Memory layer is transcripts only; Knowledge layer is the unified artifact store indexed under `source="knowledge"`. Lifecycle machinery (dream cycle, decay, dedup) is gated behind `knowledge.consolidation_enabled` and ships in upcoming phases.
+**Status:** Memory layer is transcripts only; Knowledge layer is the unified artifact store indexed under `source="knowledge"`. Lifecycle machinery (dedup on write, recall tracking, dream cycle with mine/merge/decay, archive/restore) is implemented and gated behind `knowledge.consolidation_enabled` (default off).
 
-**Known gaps:** The consolidation modules (`_similarity`, `_archive`, `_decay`, `_dream`) are planned but not yet implemented.
+**Known gaps:** `/knowledge stats` (Phase 6 health dashboard) is not yet implemented.
 
 ---
 
@@ -225,10 +225,10 @@ All archived artifacts are recoverable via `/knowledge restore`.
 | `/knowledge list [query] [flags]` | List knowledge artifacts | Implemented |
 | `/knowledge count [query] [flags]` | Count artifacts | Implemented |
 | `/knowledge forget <query> [flags]` | Archive artifacts (preview + confirm) | Implemented |
+| `/knowledge dream [--dry]` | Run consolidation cycle manually | Implemented |
+| `/knowledge restore [slug]` | List archived artifacts or restore by slug | Implemented |
+| `/knowledge decay-review [--dry]` | Show decay candidates, confirm to archive | Implemented |
 | `/knowledge stats` | Health dashboard (counts, last dream, decay candidates) | Phase 6 — not yet implemented |
-| `/knowledge dream [--dry]` | Run consolidation cycle manually | Phase 5 — not yet implemented |
-| `/knowledge restore [slug]` | List archived artifacts or restore by slug | Phase 5 — not yet implemented |
-| `/knowledge decay-review [--dry]` | Show decay candidates, confirm to archive | Phase 5 — not yet implemented |
 
 `/memory` remains as deprecated alias.
 
@@ -283,11 +283,14 @@ All archived artifacts are recoverable via `/knowledge restore`.
 | `co_cli/knowledge/_ranking.py` | `compute_confidence()`, `detect_contradictions()` |
 | `co_cli/knowledge/_embedder.py` | `build_embedder()` — dispatches to ollama/gemini/tei/none |
 | `co_cli/knowledge/_reranker.py` | `build_llm_reranker()` — Ollama/Gemini listwise rerank |
-| `co_cli/knowledge/_search_util.py` | Shared FTS query-build helpers and stopword set |
-| `co_cli/knowledge/_similarity.py` | *(Phase 4)* Token Jaccard similarity for dedup/merge — not yet implemented |
-| `co_cli/knowledge/_archive.py` | *(Phase 5)* Archive/restore operations — not yet implemented |
-| `co_cli/knowledge/_decay.py` | *(Phase 5)* Decay candidate identification — not yet implemented |
-| `co_cli/knowledge/_dream.py` | *(Phase 5)* Dream cycle orchestrator, transcript mining, merge, decay sweep — not yet implemented |
+| `co_cli/knowledge/_search_util.py` | Shared FTS query-build helpers |
+| `co_cli/knowledge/_stopwords.py` | Shared `STOPWORDS` set for similarity and FTS tokenising |
+| `co_cli/knowledge/_similarity.py` | `token_jaccard`, `find_similar_artifacts`, `is_content_superset` for dedup/merge |
+| `co_cli/knowledge/_archive.py` | `archive_artifacts`, `restore_artifact` — move files to `_archive/` and back, keep FTS in sync |
+| `co_cli/knowledge/_decay.py` | `find_decay_candidates` — age + recall filters with pin/decay-protected immunity |
+| `co_cli/knowledge/_dream.py` | `DreamState`, `DreamResult`, `run_dream_cycle`, `_mine_transcripts`, `_merge_similar_artifacts`, `_decay_sweep` |
+| `co_cli/knowledge/prompts/dream_miner.md` | Retrospective transcript-miner sub-agent prompt |
+| `co_cli/knowledge/prompts/dream_merge.md` | Consolidation-merge sub-agent prompt |
 | `co_cli/tools/articles.py` | `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()`, `read_article()` |
 | `co_cli/tools/memory.py` | `search_memories()` (deprecated — delegates to `session_search()`), `list_knowledge()`, `list_memories()` (deprecated alias), `update_memory()`, `append_memory()`, `save_knowledge()` (extractor-only) |
 
@@ -304,8 +307,9 @@ All archived artifacts are recoverable via `/knowledge restore`.
 
 | File | Purpose |
 |------|---------|
-| `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, cursor tracking |
+| `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
 | `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
+| `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
 | `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — injects pinned artifacts as standing context every turn |
 

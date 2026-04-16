@@ -20,9 +20,9 @@
 
 **Success criteria:** All reusable recall routes through `search_knowledge()`; extracted insights and articles share one artifact model; standing context is sourced from `pin_mode` metadata, not a separate storage tier.
 
-**Status:** Unified artifact model, single `knowledge_dir`, `source="knowledge"` indexing. Upcoming phases converge the tool surface (`search_memories` → delegate to `session_search`, `list_memories` → `list_knowledge`, `/memory` → `/knowledge` aliases) and add dedup-on-write and the dream cycle (consolidation, decay, transcript mining) — gated behind `knowledge.consolidation_enabled`.
+**Status:** Unified artifact model, single `knowledge_dir`, `source="knowledge"` indexing. Tool surface converged: `search_memories` delegates to `session_search`, `list_knowledge` is canonical, `/knowledge` is the primary REPL namespace with `/memory` as deprecated alias. Dedup-on-write, recall tracking, and the full dream cycle (mine/merge/decay with archive/restore) are implemented and gated behind `knowledge.consolidation_enabled` (default off).
 
-**Known gaps:** Tool and command surfaces still use the memory-era names (`/memory`, `search_memories`). The consolidation pipeline (`_similarity`, `_archive`, `_decay`, `_dream`) is not yet implemented.
+**Known gaps:** `/knowledge stats` health dashboard (Phase 6) is not yet implemented.
 
 ---
 
@@ -173,23 +173,17 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 
 ### 2.6 REPL Commands
 
-Current (Phase 2):
+| Command | Purpose | Status |
+|---------|---------|--------|
+| `/knowledge list [query] [flags]` | List knowledge artifacts | Implemented |
+| `/knowledge count [query] [flags]` | Count artifacts | Implemented |
+| `/knowledge forget <query> [flags]` | Delete artifacts after confirm (removes file + DB row under `source="knowledge"`) | Implemented |
+| `/knowledge dream [--dry]` | Run consolidation cycle manually | Implemented |
+| `/knowledge restore [slug]` | List archived artifacts or restore by slug | Implemented |
+| `/knowledge decay-review [--dry]` | Preview decay candidates, confirm to archive | Implemented |
+| `/knowledge stats` | Health dashboard: counts by kind, pinned, decay candidates, last dream | Phase 6 — not yet implemented |
 
-| Command | Purpose |
-|---------|---------|
-| `/memory list [query] [flags]` | List knowledge artifacts |
-| `/memory count [query] [flags]` | Count artifacts |
-| `/memory forget <query> [flags]` | Delete artifacts after confirm (removes file + DB row under `source="knowledge"`) |
-
-Planned (Phase 3 introduces `/knowledge` alias; Phases 5–6 add `dream`, `restore`, `stats`, `decay-review`):
-
-| Command | Purpose | Phase |
-|---------|---------|-------|
-| `/knowledge list / count / forget` | Alias of `/memory` equivalents | 3 |
-| `/knowledge stats` | Health dashboard: counts by kind, pinned, decay candidates, last dream | 6 |
-| `/knowledge dream [--dry]` | Run consolidation cycle manually | 5 |
-| `/knowledge restore [slug]` | List archived artifacts or restore by slug | 5 |
-| `/knowledge decay-review [--dry]` | Preview decay candidates, confirm to archive | 5 |
+`/memory list|count|forget` remains as a deprecated alias that prints a deprecation notice and delegates to the `/knowledge` handlers.
 
 ## 3. Config
 
@@ -240,11 +234,14 @@ Planned (Phase 3 introduces `/knowledge` alias; Phases 5–6 add `dream`, `resto
 | `co_cli/knowledge/_ranking.py` | `compute_confidence()`, `detect_contradictions()` |
 | `co_cli/knowledge/_embedder.py` | `build_embedder()` — dispatches to ollama/gemini/tei/none |
 | `co_cli/knowledge/_reranker.py` | `build_llm_reranker()` — Ollama/Gemini listwise rerank |
-| `co_cli/knowledge/_search_util.py` | Shared FTS query-build helpers and stopword set |
-| `co_cli/knowledge/_similarity.py` | *(Phase 4)* Token Jaccard similarity for dedup and merge — not yet implemented |
-| `co_cli/knowledge/_archive.py` | *(Phase 5)* Archive/restore operations — not yet implemented |
-| `co_cli/knowledge/_decay.py` | *(Phase 5)* Decay candidate identification — not yet implemented |
-| `co_cli/knowledge/_dream.py` | *(Phase 5)* Dream cycle orchestrator — not yet implemented |
+| `co_cli/knowledge/_search_util.py` | Shared FTS query-build helpers |
+| `co_cli/knowledge/_stopwords.py` | Shared `STOPWORDS` set for similarity and FTS tokenising |
+| `co_cli/knowledge/_similarity.py` | `token_jaccard`, `find_similar_artifacts`, `is_content_superset` for dedup/merge |
+| `co_cli/knowledge/_archive.py` | `archive_artifacts`, `restore_artifact` — move files to `_archive/` and back, keep FTS in sync |
+| `co_cli/knowledge/_decay.py` | `find_decay_candidates` — age + recall filters with pin/decay-protected immunity |
+| `co_cli/knowledge/_dream.py` | `DreamState`, `DreamResult`, `run_dream_cycle`, `_mine_transcripts`, `_merge_similar_artifacts`, `_decay_sweep` |
+| `co_cli/knowledge/prompts/dream_miner.md` | Retrospective transcript-miner sub-agent prompt |
+| `co_cli/knowledge/prompts/dream_merge.md` | Consolidation-merge sub-agent prompt |
 | `co_cli/tools/articles.py` | `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()` (transitional), `read_article()` |
 | `co_cli/tools/memory.py` | `save_knowledge()` (extractor-only), `search_memories()`, `list_memories()`, `update_memory()`, `append_memory()`, `_recall_for_context()` |
 
@@ -252,8 +249,9 @@ Planned (Phase 3 introduces `/knowledge` alias; Phases 5–6 add `dream`, `resto
 
 | File | Purpose |
 |------|---------|
-| `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, cursor tracking |
+| `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
 | `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
+| `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
 | `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — pinned artifact injection as standing context every turn |
 

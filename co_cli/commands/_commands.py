@@ -1168,26 +1168,129 @@ async def _subcmd_memory_forget(
 
 
 _KNOWLEDGE_USAGE = (
-    "[bold]Usage:[/bold] /knowledge list|count|forget [query] "
-    "[--older-than N] [--kind preference|feedback|rule|decision|article|reference|note]"
+    "[bold]Usage:[/bold] /knowledge list|count|forget|dream|restore|decay-review "
+    "[query] [--older-than N] "
+    "[--kind preference|feedback|rule|decision|article|reference|note] [--dry]"
 )
 
 
+async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
+    """Manually trigger a dream cycle; honour ``--dry`` for a non-destructive preview."""
+    from co_cli.knowledge._dream import run_dream_cycle
+
+    tokens = rest.split()
+    dry_run = "--dry" in tokens
+
+    result = await run_dream_cycle(ctx.deps, dry_run=dry_run)
+
+    header = "Dream cycle — dry run — no changes written" if dry_run else "Dream cycle complete"
+    console.print(f"[info]{header}[/info]")
+    console.print(
+        f"  extracted: {result.extracted}  merged: {result.merged}  decayed: {result.decayed}"
+    )
+    if result.errors:
+        console.print(f"[warning]errors ({len(result.errors)}):[/warning]")
+        for err in result.errors:
+            console.print(f"  - {err}")
+
+
+async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
+    """List archived artifacts, or restore one whose filename starts with the given slug."""
+    from co_cli.knowledge._archive import restore_artifact
+    from co_cli.knowledge._artifact import load_knowledge_artifact
+
+    tokens = [t for t in rest.split() if not t.startswith("--")]
+    slug = tokens[0] if tokens else ""
+
+    archive_dir = ctx.deps.knowledge_dir / "_archive"
+    if not slug:
+        if not archive_dir.exists():
+            console.print("[dim]No archived artifacts.[/dim]")
+            return None
+        entries = sorted(p for p in archive_dir.glob("*.md") if p.is_file())
+        if not entries:
+            console.print("[dim]No archived artifacts.[/dim]")
+            return None
+        for path in entries:
+            slug_prefix = path.stem
+            try:
+                artifact = load_knowledge_artifact(path)
+                title = artifact.title or "(untitled)"
+            except ValueError as exc:
+                title = f"[warning]unreadable: {exc}[/warning]"
+            console.print(f"  {slug_prefix}  {title}")
+        console.print(f"[dim]{len(entries)} archived artifact(s)[/dim]")
+        return None
+
+    restored = restore_artifact(slug, ctx.deps.knowledge_dir, ctx.deps.knowledge_store)
+    if restored:
+        console.print(f"[success]✓ Restored {slug}[/success]")
+    else:
+        console.print(
+            f"[bold red]Restore failed:[/bold red] no unambiguous archive match for {slug!r}"
+        )
+
+
+async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None:
+    """Preview decay candidates and, with confirmation, archive them."""
+    from co_cli.knowledge._archive import archive_artifacts
+    from co_cli.knowledge._decay import find_decay_candidates
+
+    tokens = rest.split()
+    dry_run = "--dry" in tokens
+
+    candidates = find_decay_candidates(ctx.deps.knowledge_dir, ctx.deps.config.knowledge)
+    if not candidates:
+        console.print("[dim]No decay candidates.[/dim]")
+        return None
+
+    for art in candidates:
+        created = (art.created or "")[:10]
+        last = art.last_recalled[:10] if art.last_recalled else "never"
+        slug_prefix = art.path.stem
+        console.print(f"  {slug_prefix}  created={created}  last_recalled={last}")
+    console.print(f"[dim]{len(candidates)} decay candidate(s)[/dim]")
+
+    if dry_run:
+        return None
+
+    prompt_text = f"Archive {len(candidates)} decay candidates? [y/N] "
+    confirmed = (
+        ctx.frontend.prompt_confirm(prompt_text)
+        if ctx.frontend
+        else console.input(prompt_text).strip().lower() == "y"
+    )
+    if not confirmed:
+        console.print("[dim]Aborted.[/dim]")
+        return None
+
+    archived = archive_artifacts(candidates, ctx.deps.knowledge_dir, ctx.deps.knowledge_store)
+    console.print(f"[success]✓ Archived {archived}.[/success]")
+
+
 async def _cmd_knowledge(ctx: CommandContext, args: str) -> None:
-    """Dispatch /knowledge subcommands: list, count, forget."""
+    """Dispatch /knowledge subcommands: list, count, forget, dream, restore, decay-review."""
     parts = args.strip().split(maxsplit=1)
     if not parts:
         console.print(_KNOWLEDGE_USAGE)
         return None
     subcommand = parts[0].lower()
     rest = parts[1] if len(parts) > 1 else ""
-    query, filters = _parse_memory_args(rest)
     if subcommand == "list":
+        query, filters = _parse_memory_args(rest)
         await _subcmd_memory_list(ctx, query, filters)
     elif subcommand == "count":
+        query, filters = _parse_memory_args(rest)
         await _subcmd_memory_count(ctx, query, filters)
     elif subcommand == "forget":
+        query, filters = _parse_memory_args(rest)
         await _subcmd_memory_forget(ctx, query, filters)
+    elif subcommand == "dream":
+        await _subcmd_knowledge_dream(ctx, rest)
+    elif subcommand == "restore":
+        await _subcmd_knowledge_restore(ctx, rest)
+    elif subcommand == "decay-review":
+        await _subcmd_knowledge_decay_review(ctx, rest)
     else:
         console.print(f"[bold red]Unknown /knowledge subcommand:[/bold red] {subcommand}")
         console.print(_KNOWLEDGE_USAGE)
@@ -1262,7 +1365,7 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     ),
     "knowledge": SlashCommand(
         "knowledge",
-        "List, count, or delete knowledge artifacts — /knowledge list|count|forget [query] [flags]",
+        "Manage knowledge artifacts — /knowledge list|count|forget|dream|restore|decay-review [args]",
         _cmd_knowledge,
     ),
     "memory": SlashCommand(
