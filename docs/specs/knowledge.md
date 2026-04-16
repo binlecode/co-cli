@@ -247,7 +247,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | File | Purpose |
 |------|---------|
 | `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, cursor tracking |
-| `co_cli/memory/prompts/memory_extractor.md` | Extractor sub-agent system prompt |
+| `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
 | `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — pinned artifact injection |
 

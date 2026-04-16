@@ -94,11 +94,11 @@ def _build_window(messages: list) -> str:
     return "\n".join(line for _, line in merged)
 
 
-_PROMPT_PATH = Path(__file__).parent / "prompts" / "memory_extractor.md"
+_PROMPT_PATH = Path(__file__).parent / "prompts" / "knowledge_extractor.md"
 
-# Module-level memory extractor agent — tool-calling pattern.
+# Module-level knowledge extractor agent — tool-calling pattern.
 # No model at init; model passed at .run() time (same as prior _extraction_agent pattern).
-_memory_extractor_agent: Agent["CoDeps", str] = Agent(
+_knowledge_extractor_agent: Agent["CoDeps", str] = Agent(
     instructions=_PROMPT_PATH.read_text(encoding="utf-8").strip(),
     tools=[save_memory],
 )
@@ -118,7 +118,7 @@ async def _run_extraction_async(
     *,
     cursor_start: int,
 ) -> None:
-    """Background extraction: run _memory_extractor_agent on the delta window.
+    """Background extraction: run _knowledge_extractor_agent on the delta window.
 
     Advances deps.session.last_extracted_message_idx on success only.
     Handles CancelledError for clean shutdown.
@@ -134,7 +134,7 @@ async def _run_extraction_async(
             return
         _model = deps.model.model if deps.model else None
         with tracer.start_as_current_span("co.memory.extraction"):
-            await _memory_extractor_agent.run(
+            await _knowledge_extractor_agent.run(
                 window, deps=deps, model=_model, model_settings=NOREASON_SETTINGS
             )
         deps.session.last_extracted_message_idx = cursor_start + len(delta)

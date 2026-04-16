@@ -198,7 +198,7 @@ The main agent has no write-path knowledge tools. All knowledge writes are owned
 ```text
 fire_and_forget_extraction(delta, deps, frontend, cursor_start)
   -> builds a text window from delta (user turns, assistant text, tool calls, tool results)
-  -> runs _memory_extractor_agent.run(window, deps=deps) in a background task
+  -> runs _knowledge_extractor_agent.run(window, deps=deps) in a background task
   -> on success: advances deps.session.last_extracted_message_idx = cursor_start + len(delta)
   -> on failure or exception: cursor unchanged (delta re-processed on next turn)
 

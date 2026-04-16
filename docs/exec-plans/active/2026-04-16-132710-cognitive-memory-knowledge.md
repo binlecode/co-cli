@@ -152,7 +152,7 @@ Align all product language with the two-layer model. No runtime behavior changes
 
 ### ✓ DONE TASK-1.4: Update extractor prompt
 
-- `files:` `co_cli/memory/prompts/memory_extractor.md`
+- `files:` `co_cli/memory/prompts/knowledge_extractor.md`
 - Change framing: "You are extracting **knowledge artifacts** from this conversation — reusable facts, preferences, and decisions worth keeping."
 - Keep the 4 signal types (user, feedback, project, reference) — these become `artifact_kind` values.
 - No code change yet — the prompt update is safe because `save_memory()` still works.
@@ -241,7 +241,7 @@ Make extracted facts and articles share one conceptual model. This is the struct
   - Uses `render_knowledge_file()` format
   - Maps extractor's `type_` param to `artifact_kind`
   - Sets `source_type="detected"`, `source_ref=<session_id>`
-- Register `save_knowledge()` as the extractor sub-agent's tool (replaces `save_memory` in `_memory_extractor_agent.tools`).
+- Register `save_knowledge()` as the extractor sub-agent's tool (replaces `save_memory` in `_knowledge_extractor_agent.tools`).
 - Keep `save_memory()` as deprecated wrapper that delegates to `save_knowledge()`.
 - `done_when:` New extractions write `kind: knowledge` files to `knowledge_dir/`. Extractor tests pass.
 

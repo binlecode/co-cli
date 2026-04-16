@@ -1,6 +1,6 @@
-"""Integration tests for the memory extractor implementation and agent.
+"""Integration tests for the knowledge extractor implementation and agent.
 
-Verifies end-to-end: _memory_extractor_agent detects a preference in a window,
+Verifies end-to-end: _knowledge_extractor_agent detects a preference in a window,
 calls save_memory, and a file appears in the memory dir. Uses real deps, real
 model from production config, real filesystem via tmp_path.
 """
