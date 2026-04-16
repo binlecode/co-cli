@@ -5,21 +5,20 @@ creation via ``load_soul_mindsets()`` in ``personalities/_loader.py``. This modu
 only the per-turn personality-context memory injection.
 """
 
-from co_cli.config._core import MEMORY_DIR
-from co_cli.tools.memory import load_memories
+from co_cli.config._core import KNOWLEDGE_DIR
+from co_cli.memory.recall import load_knowledge_artifacts
 
 
 def _load_personality_memories() -> str:
-    """Load personality-context tagged memories for system prompt injection.
+    """Load personality-context tagged artifacts for system prompt injection.
 
-    Scans ``~/.co-cli/memory/`` for entries tagged with
+    Scans ``~/.co-cli/knowledge/`` for entries tagged with
     ``personality-context``. Returns the top 5 (by recency) formatted as
     a ``## Learned Context`` section, or empty string if none found.
 
     Called by ``add_personality_memories()`` in ``agent.py`` on every turn.
     """
-    memory_dir = MEMORY_DIR
-    personality_memories = load_memories(memory_dir, tags=["personality-context"])
+    personality_memories = load_knowledge_artifacts(KNOWLEDGE_DIR, tags=["personality-context"])
     if not personality_memories:
         return ""
 

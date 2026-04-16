@@ -32,7 +32,7 @@ def _make_ctx(
                 update={"search_backend": knowledge_search_backend}
             )
         ),
-        library_dir=tmp_path / "library",
+        knowledge_dir=tmp_path / "library",
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -55,15 +55,17 @@ async def test_save_article_creates_file(tmp_path: Path):
     assert result.metadata["action"] == "saved"
     assert isinstance(result.metadata["article_id"], str)
     assert len(result.metadata["article_id"]) == 36  # standard UUID with dashes
-    library_dir = tmp_path / "library"
-    files = list(library_dir.glob("*.md"))
+    knowledge_dir = tmp_path / "library"
+    files = list(knowledge_dir.glob("*.md"))
     assert len(files) == 1
 
     raw = files[0].read_text(encoding="utf-8")
     fm = yaml.safe_load(raw.split("---")[1])
-    assert fm["kind"] == "article"
+    assert fm["kind"] == "knowledge"
+    assert fm["artifact_kind"] == "article"
     assert fm["decay_protected"] is True
-    assert fm["origin_url"] == "https://docs.python.org/3/library/asyncio.html"
+    assert fm["source_ref"] == "https://docs.python.org/3/library/asyncio.html"
+    assert fm["source_type"] == "web_fetch"
     assert "python" in fm["tags"]
     assert "Python asyncio" in raw
 
@@ -80,8 +82,8 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
     )
 
     assert result.metadata["action"] == "consolidated"
-    library_dir = tmp_path / "library"
-    files = list(library_dir.glob("*.md"))
+    knowledge_dir = tmp_path / "library"
+    files = list(knowledge_dir.glob("*.md"))
     assert len(files) == 1, "Consolidation must not create a second file"
 
     raw = files[0].read_text(encoding="utf-8")
@@ -105,7 +107,7 @@ async def test_save_article_indexes_into_fts(tmp_path: Path):
         tags=["test"],
     )
 
-    results = idx.search("xyloquartz-article-fts-unique", source="library")
+    results = idx.search("xyloquartz-article-fts-unique", source="knowledge")
     assert len(results) >= 1, "Article must be findable via FTS after save"
     idx.close()
 
@@ -153,8 +155,8 @@ async def test_read_article_returns_full_body(tmp_path: Path):
         origin_url="https://example.com/read",
     )
 
-    library_dir = tmp_path / "library"
-    slug = next(iter(library_dir.glob("*.md"))).stem
+    knowledge_dir = tmp_path / "library"
+    slug = next(iter(knowledge_dir.glob("*.md"))).stem
 
     result = await read_article(ctx, slug)
     assert result.metadata["title"] == "Read Test Article"
@@ -189,4 +191,4 @@ async def test_search_knowledge_grep_finds_articles(tmp_path: Path):
 
     result = await search_knowledge(ctx, "xyloquartz-crosssource-unique")
     assert result.metadata["count"] >= 1
-    assert all(r["source"] == "library" for r in result.metadata["results"])
+    assert all(r["source"] == "knowledge" for r in result.metadata["results"])

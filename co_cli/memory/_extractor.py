@@ -1,9 +1,9 @@
-"""Post-turn memory extractor — extracts durable signals from conversation windows.
+"""Post-turn knowledge extractor — writes durable signals into the knowledge layer.
 
 Scans the post-turn message history (including tool calls and results) for
-memory-worthy signals across all 4 types (user, feedback, project, reference).
-Calls save_memory for each detected signal. Cursor-based delta prevents
-re-scanning already-extracted turns.
+reusable artifacts across four categories — preferences, feedback, rules,
+references — and calls ``save_knowledge`` for each. Cursor-based delta
+prevents re-scanning already-extracted turns.
 """
 
 import asyncio
@@ -26,7 +26,7 @@ from pydantic_ai.messages import (
 )
 
 from co_cli.config._llm import NOREASON_SETTINGS
-from co_cli.tools.memory import save_memory
+from co_cli.tools.memory import save_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ _PROMPT_PATH = Path(__file__).parent / "prompts" / "knowledge_extractor.md"
 # No model at init; model passed at .run() time (same as prior _extraction_agent pattern).
 _knowledge_extractor_agent: Agent["CoDeps", str] = Agent(
     instructions=_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-    tools=[save_memory],
+    tools=[save_knowledge],
 )
 
 

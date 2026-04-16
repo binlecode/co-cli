@@ -94,7 +94,7 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 | --- | --- | --- |
 | `add_current_date` | always | `Today is YYYY-MM-DD.` |
 | `add_shell_guidance` | always | shell approval/reminder text |
-| `add_standing_knowledge` | `pin_mode="standing"` (or legacy `always_on=True`) entries exist | `Standing context:` block, capped by `memory.injection_max_chars` |
+| `add_standing_knowledge` | `pin_mode="standing"` entries exist | `Standing context:` block, capped by `memory.injection_max_chars` |
 | `add_personality_memories` | `config.personality` is set | top 5 `personality-context` memories as `## Learned Context` |
 | `add_category_awareness_prompt` | deferred tools registered in tool_index | category-level prompt listing available capabilities via `search_tools` (~100 tokens) |
 
@@ -164,36 +164,36 @@ Example: `2026-04-11-T142305Z-550e8400.jsonl`. The timestamp prefix makes lexico
 
 ### 2.4 Knowledge Storage
 
-Knowledge artifacts are flat Markdown files with YAML frontmatter. The target storage model is a single `knowledge_dir` (`~/.co-cli/knowledge/`) holding all reusable artifacts — extracted insights, fetched articles, imported notes. During the Phase 2 migration, two legacy directories exist: `memory_dir` (extracted facts, `kind: memory`) and `library_dir` (articles, `kind: article`). Both load via the same backward-compatible reader. Full schema and lifecycle details in [knowledge.md](knowledge.md).
+Knowledge artifacts are flat Markdown files with YAML frontmatter under a single `knowledge_dir` (`~/.co-cli/knowledge/`, overridable via `CO_KNOWLEDGE_DIR`) — extracted facts, fetched articles, and imported notes share the directory. The loader requires `kind: knowledge` frontmatter. External sources (Obsidian, Drive) live outside `knowledge_dir` but are indexed into the same search backend. Full schema and lifecycle details in [knowledge.md](knowledge.md).
 
 #### 2.4.1 Data Model
 
-Artifacts are parsed into `MemoryEntry` (current implementation, transitional) — forward-compatible with the target `KnowledgeArtifact` schema. `validate_memory_frontmatter()` enforces required fields and rejects malformed files with a warning (never crashes the load).
+All artifacts parse into `KnowledgeArtifact` (`co_cli/knowledge/_artifact.py`) with an `artifact_kind` subtype (`preference` | `decision` | `rule` | `feedback` | `article` | `reference` | `note`). `co_cli/memory/recall.py` re-exports `load_knowledge_artifacts` and `load_standing_artifacts` so prompt-assembly and personality injection can import them without triggering the `tools/` ↔ `memory/` import cycle.
 
-Key fields: `id` (UUID), `created` / `updated` (ISO8601), `kind` (`memory` | `article`), `type` (`user`, `feedback`, `project`, `reference`), `name`, `description`, `tags`, `related`, `origin_url` (article dedup key), `always_on` (standing context — target: `pin_mode="standing"`).
+Frontmatter fields: `id` (UUID), `kind: knowledge`, `artifact_kind`, `title`, `description`, `created` / `updated` (ISO8601), `tags`, `related`, `source_type` (`detected` | `web_fetch` | `manual` | `obsidian` | `drive` | `consolidated`), `source_ref` (session id, URL, or artifact id — also the dedup key for articles), `pin_mode` (`standing` for always-on injection; otherwise `none`), `decay_protected`, `last_recalled`, `recall_count`.
 
-#### 2.4.2 Read Path (Transitional)
+#### 2.4.2 Read Path
 
-Extracted-fact artifacts are indexed in FTS via `docs_fts` in `search.db`. `_recall_for_context` uses `KnowledgeStore.search(source="memory")` when a store is available, falling back to `grep_recall` when it is `None`. In the target state (Phase 3), `_recall_for_context` searches `knowledge_dir` and returns both extracted facts and articles.
+All knowledge artifacts are indexed under a single `source="knowledge"` label across both `docs` and `chunks_fts` (plus `chunks_vec` in hybrid mode). `_recall_for_context` queries that source when a store is available and falls back to empty output when the store is `None`.
 
 ```text
 _recall_for_context(ctx, query)  ← internal, called by inject_opening_context only
   -> if knowledge_store is None: return empty result
-  -> knowledge_store.search(query, source="memory", kind="memory", ...)
+  -> knowledge_store.search(query, source="knowledge", ...)
   -> one-hop related slug expansion (up to 5 hops)
   -> return matched + related entries
 
 search_memories(ctx, query)      ← agent tool (transitional — target: delegates to session_search)
   -> if knowledge_store is None: return tool_error
-  -> knowledge_store.search(query, source="memory", kind="memory", ...)
+  -> knowledge_store.search(query, source="knowledge", ...)
   -> sets OTel span attribute rag.backend = "fts5"
 ```
 
-The standing-context layer (`load_always_on_memories`) runs at instruction-build time: loads all knowledge artifacts, filters `always_on=True` (target: `pin_mode="standing"`), caps at 5, injects into the `add_standing_knowledge` dynamic instruction layer.
+The standing-context layer (`load_standing_artifacts`) runs at instruction-build time: loads all knowledge artifacts, keeps those with `pin_mode="standing"`, caps at 5, and injects them into the `add_always_on_memories` dynamic instruction layer.
 
 #### 2.4.3 Write Path
 
-The main agent has no write-path knowledge tools. All knowledge writes are owned exclusively by the extractor agent (`_extractor.py`) — a separate `Agent[CoDeps, None]` with `save_memory` as its only tool (target: `save_knowledge`).
+The main agent has no write-path knowledge tools. All knowledge writes are owned exclusively by the extractor agent (`_extractor.py`) — a separate `Agent[CoDeps, None]` with `save_knowledge` as its only tool.
 
 ```text
 fire_and_forget_extraction(delta, deps, frontend, cursor_start)
@@ -202,18 +202,19 @@ fire_and_forget_extraction(delta, deps, frontend, cursor_start)
   -> on success: advances deps.session.last_extracted_message_idx = cursor_start + len(delta)
   -> on failure or exception: cursor unchanged (delta re-processed on next turn)
 
-save_memory(ctx, content, type_=None, name=None, ...)  ← transitional; target: save_knowledge()
-  -> validates type_ against MemoryTypeEnum
-  -> slug = slugify(name) if name else slugify(content[:50])
+save_knowledge(ctx, content, artifact_kind, title=None, description=None, tags=None, pin_mode="none")
+  -> validates artifact_kind against ArtifactKindEnum
+  -> slug = slugify(title) if title else slugify(content[:50])
   -> filename = f"{slug}-{uuid[:8]}.md"   # UUID suffix: two identical calls → two files
-  -> write YAML frontmatter + content to knowledge dir
-  -> if knowledge_store: re-indexes immediately
+  -> render canonical kind=knowledge frontmatter + content into knowledge_dir
+  -> source_type="detected"; source_ref=current session id when available
+  -> if knowledge_store: index() + index_chunks("knowledge", ...)
   -> no dedup, no resource locks — always creates a new file
 ```
 
-The extractor detects four signal categories (`user`, `feedback`, `project`, `reference`) — these map to `artifact_kind` values (`preference`, `feedback`, `rule`/`decision`, `reference`) in the target schema. Max 3 saves per window; cursor advances only on success.
+``save_knowledge`` is the sole write path. The extractor detects four signal categories (`preference`, `feedback`, `rule`, `reference`) — corresponding directly to `artifact_kind` values. Max 3 saves per window; cursor advances only on success.
 
-**Articles** — `save_article()` stores external references with dedup by `origin_url` (target: `source_ref`).
+**Articles** — `save_article()` stores external references under the same schema with `artifact_kind="article"`, `source_type="web_fetch"`, and `source_ref=origin_url` (dedup key).
 
 #### 2.4.4 REPL Commands
 
@@ -344,12 +345,12 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
-| `co_cli/memory/recall.py` | `MemoryEntry` dataclass, `load_memories`, `load_always_on_memories` |
+| `co_cli/memory/recall.py` | Re-exports `load_knowledge_artifacts` and `load_standing_artifacts` for prompt-assembly and personality injection (avoids the `tools/` ↔ `memory/` import cycle) |
 | `co_cli/memory/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
-| `co_cli/tools/memory_write.py` | `save_memory` — extractor-only write tool; UUID-suffix always-new file write; re-indexes into `KnowledgeStore` after write |
-| `co_cli/knowledge/_frontmatter.py` | frontmatter parsing and validation |
+| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `PinModeEnum`, `CertaintyEnum`), loader |
+| `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate, `render_knowledge_file` (artifact → .md), `render_frontmatter` (dict → .md for in-place updates) |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
-| `co_cli/tools/memory.py` | `grep_recall`, `_recall_for_context` (internal), agent tools: `search_memories`, `list_memories` |
+| `co_cli/tools/memory.py` | `save_knowledge` (extractor-only write tool), `grep_recall`, `_recall_for_context`, agent tools: `search_memories`, `list_memories`, `update_memory`, `append_memory` |
 | `co_cli/tools/articles.py` | article save/search/read plus cross-source `search_knowledge()` |
 | `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
 | `co_cli/tools/agents.py` | delegation tools and result metadata |

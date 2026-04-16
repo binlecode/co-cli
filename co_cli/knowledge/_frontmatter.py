@@ -1,58 +1,36 @@
-"""YAML frontmatter parsing and validation utilities.
+"""YAML frontmatter parse, validate, and render for knowledge artifacts.
 
-This module provides functions for parsing and validating YAML frontmatter
-in markdown files used by the internal knowledge system.
+See ``co_cli.knowledge._artifact.KnowledgeArtifact`` for the data model.
 """
+
+from __future__ import annotations
 
 import logging
 import re
-from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
+if TYPE_CHECKING:
+    from co_cli.knowledge._artifact import KnowledgeArtifact
+
 logger = logging.getLogger(__name__)
 
+KIND_KNOWLEDGE = "knowledge"
 
-class MemoryKindEnum(StrEnum):
-    MEMORY = "memory"
-    ARTICLE = "article"
-
-
-class MemoryTypeEnum(StrEnum):
-    USER = "user"
-    FEEDBACK = "feedback"
-    PROJECT = "project"
-    REFERENCE = "reference"
+_ISO8601_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+_DESCRIPTION_MAX = 200
 
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
-    """Parse YAML frontmatter from markdown content.
-
-    Expects frontmatter delimited by --- lines:
-        ---
-        key: value
-        ---
-        Body content here
-
-    Args:
-        content: Markdown content potentially containing frontmatter
-
-    Returns:
-        Tuple of (frontmatter_dict, body_markdown).
-        If no frontmatter found, returns ({}, content).
-    """
-    # Match pattern: start of string, ---, yaml content, ---, body
+    """Parse YAML frontmatter delimited by ``---`` lines. Returns ({}, content) on miss."""
     pattern = r"^---\s*\n(.*?)\n---\s*\n?(.*)"
     match = re.match(pattern, content, re.DOTALL)
-
     if not match:
         return {}, content
 
     yaml_content = match.group(1).strip()
     body = match.group(2)
-
-    # Handle empty frontmatter
     if not yaml_content:
         return {}, body
 
@@ -61,167 +39,148 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
         if frontmatter is None:
             frontmatter = {}
         if not isinstance(frontmatter, dict):
-            # Invalid frontmatter structure, treat as no frontmatter
             return {}, body
 
-        # Convert datetime objects back to ISO8601 strings with Z suffix
         for key, value in frontmatter.items():
-            if hasattr(value, "isoformat"):  # datetime object
-                iso_str = value.isoformat()
-                # Replace +00:00 with Z for standard UTC format
-                iso_str = iso_str.replace("+00:00", "Z")
+            if hasattr(value, "isoformat"):
+                iso_str = value.isoformat().replace("+00:00", "Z")
                 frontmatter[key] = iso_str
 
         return frontmatter, body
     except yaml.YAMLError:
-        # Malformed YAML, treat as no frontmatter
         return {}, content
 
 
 def strip_frontmatter(content: str) -> str:
-    """Strip YAML frontmatter from markdown, returning body only.
-
-    Args:
-        content: Markdown content potentially containing frontmatter
-
-    Returns:
-        Body content with frontmatter removed
-    """
+    """Return the markdown body with any YAML frontmatter removed."""
     _, body = parse_frontmatter(content)
     return body
 
 
-def _validate_id_field(fm: dict[str, Any]) -> None:
-    if "id" not in fm:
-        raise ValueError("memory frontmatter missing required field: id")
-    if isinstance(fm["id"], bool) or not isinstance(fm["id"], (int, str)):
-        raise ValueError("memory frontmatter field 'id' must be an integer or string")
-    if isinstance(fm["id"], str) and not fm["id"].strip():
-        raise ValueError("memory frontmatter field 'id' must not be empty")
-
-
-def _validate_created_field(fm: dict[str, Any]) -> None:
-    if "created" not in fm:
-        raise ValueError("memory frontmatter missing required field: created")
-    if not isinstance(fm["created"], str):
-        raise ValueError("memory frontmatter field 'created' must be a string")
-    if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["created"]):
+def _require_iso8601(fm: dict[str, Any], key: str, required: bool) -> None:
+    value = fm.get(key)
+    if value is None:
+        if required:
+            raise ValueError(f"knowledge frontmatter missing required field: {key}")
+        return
+    if not isinstance(value, str) or not _ISO8601_RE.match(value):
         raise ValueError(
-            "memory frontmatter field 'created' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
+            f"knowledge frontmatter field '{key}' must be ISO8601 (YYYY-MM-DDTHH:MM:SS)"
         )
 
 
-def _validate_kind_fields(fm: dict[str, Any]) -> None:
-    if "kind" in fm and fm["kind"] not in (MemoryKindEnum.MEMORY, MemoryKindEnum.ARTICLE):
-        raise ValueError("memory frontmatter field 'kind' must be 'memory' or 'article'")
-    if (
-        "origin_url" in fm
-        and fm["origin_url"] is not None
-        and not isinstance(fm["origin_url"], str)
-    ):
-        raise ValueError("memory frontmatter field 'origin_url' must be a string or null")
-    if "tags" in fm:
-        if not isinstance(fm["tags"], list):
-            raise ValueError("memory frontmatter field 'tags' must be a list")
-        if not all(isinstance(tag, str) for tag in fm["tags"]):
-            raise ValueError("memory frontmatter field 'tags' must contain only strings")
+def _require_str_list(fm: dict[str, Any], key: str) -> None:
+    value = fm.get(key)
+    if value is None:
+        return
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"knowledge frontmatter field '{key}' must be a list of strings")
 
 
-def _validate_type_and_desc(fm: dict[str, Any]) -> None:
-    if "type" in fm and fm["type"] is not None:
-        if not isinstance(fm["type"], str):
-            raise ValueError("memory frontmatter field 'type' must be a string or null")
-        valid_types = {e.value for e in MemoryTypeEnum}
-        if fm["type"] not in valid_types:
-            logger.warning(
-                "memory frontmatter field 'type' has unknown value %r — ignoring",
-                fm["type"],
-            )
-    if "description" in fm and fm["description"] is not None:
-        if not isinstance(fm["description"], str):
-            raise ValueError("memory frontmatter field 'description' must be a string or null")
-        if not fm["description"].strip():
-            raise ValueError("memory frontmatter field 'description' must not be empty")
-        if "\n" in fm["description"]:
-            raise ValueError("memory frontmatter field 'description' must not contain newlines")
-        if len(fm["description"]) > 200:
-            raise ValueError("memory frontmatter field 'description' must be ≤200 characters")
+def _validate_identity(fm: dict[str, Any]) -> None:
+    if "id" not in fm:
+        raise ValueError("knowledge frontmatter missing required field: id")
+    if isinstance(fm["id"], bool) or not isinstance(fm["id"], (int, str)):
+        raise ValueError("knowledge frontmatter field 'id' must be an integer or string")
+    if isinstance(fm["id"], str) and not fm["id"].strip():
+        raise ValueError("knowledge frontmatter field 'id' must not be empty")
+    if fm.get("kind") != KIND_KNOWLEDGE:
+        raise ValueError(
+            f"knowledge frontmatter field 'kind' must be {KIND_KNOWLEDGE!r} "
+            f"(got {fm.get('kind')!r})"
+        )
+    if "artifact_kind" not in fm or not isinstance(fm["artifact_kind"], str):
+        raise ValueError("knowledge frontmatter missing required field: artifact_kind")
 
 
-def _validate_temporal_fields(fm: dict[str, Any]) -> None:
-    if "updated" in fm:
-        if not isinstance(fm["updated"], str):
-            raise ValueError("memory frontmatter field 'updated' must be a string")
-        if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["updated"]):
-            raise ValueError(
-                "memory frontmatter field 'updated' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
-            )
+def _validate_string_fields(fm: dict[str, Any]) -> None:
+    for key in ("title", "description", "source_type", "source_ref", "certainty", "pin_mode"):
+        if key in fm and fm[key] is not None and not isinstance(fm[key], str):
+            raise ValueError(f"knowledge frontmatter field {key!r} must be a string or null")
+    description = fm.get("description")
+    if description is None:
+        return
+    if not description.strip():
+        raise ValueError("knowledge frontmatter field 'description' must not be empty")
+    if "\n" in description:
+        raise ValueError("knowledge frontmatter field 'description' must not contain newlines")
+    if len(description) > _DESCRIPTION_MAX:
+        raise ValueError(
+            f"knowledge frontmatter field 'description' must be ≤{_DESCRIPTION_MAX} characters"
+        )
+
+
+def _validate_typed_scalars(fm: dict[str, Any]) -> None:
     if "decay_protected" in fm and not isinstance(fm["decay_protected"], bool):
-        raise ValueError("memory frontmatter field 'decay_protected' must be a boolean")
-    if "title" in fm and fm["title"] is not None and not isinstance(fm["title"], str):
-        raise ValueError("memory frontmatter field 'title' must be a string or null")
-
-
-def _validate_relationship_fields(fm: dict[str, Any]) -> None:
-    if "related" in fm and fm["related"] is not None:
-        if not isinstance(fm["related"], list):
-            raise ValueError("memory frontmatter field 'related' must be a list or null")
-        if not all(isinstance(s, str) for s in fm["related"]):
-            raise ValueError("memory frontmatter field 'related' must contain only strings")
-    if "always_on" in fm and not isinstance(fm["always_on"], bool):
-        raise ValueError("memory frontmatter field 'always_on' must be a boolean")
-
-
-def _validate_recall_fields(fm: dict[str, Any]) -> None:
-    if (
-        "provenance" in fm
-        and fm["provenance"] is not None
-        and not isinstance(fm["provenance"], str)
-    ):
-        raise ValueError("memory frontmatter field 'provenance' must be a string or null")
-    if "last_recalled" in fm and fm["last_recalled"] is not None:
-        if not isinstance(fm["last_recalled"], str):
-            raise ValueError("memory frontmatter field 'last_recalled' must be a string or null")
-        if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["last_recalled"]):
-            raise ValueError("memory frontmatter field 'last_recalled' must be ISO8601 format")
+        raise ValueError("knowledge frontmatter field 'decay_protected' must be a boolean")
     if "recall_count" in fm and not isinstance(fm["recall_count"], int):
-        raise ValueError("memory frontmatter field 'recall_count' must be an integer")
+        raise ValueError("knowledge frontmatter field 'recall_count' must be an integer")
 
 
-def render_memory_file(fm: dict[str, Any], body: str) -> str:
-    """Render a memory file content string from frontmatter dict and body text."""
-    return f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body.strip()}\n"
+def validate_knowledge_frontmatter(fm: dict[str, Any]) -> None:
+    """Validate canonical kind=knowledge frontmatter.
 
-
-def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
-    """Validate memory file frontmatter structure.
-
-    Required fields:
-        - id: int
-        - created: ISO8601 timestamp string
-
-    Optional fields:
-        - kind: str ("memory" or "article")
-        - origin_url: str or null (source URL for articles)
-        - type: str (user | feedback | project | reference)
-        - description: str (≤200 chars, no newlines — purpose hook for manifest dedup)
-        - tags: list[str]
-        - updated: ISO8601 timestamp string (added when consolidated)
-        - decay_protected: bool (prevent decay if true)
-        - provenance: str or null (detected | user-told | consolidated | web-fetch | manual)
-        - last_recalled: ISO8601 timestamp string or null (updated on recall hit)
-        - recall_count: int (incremented on each recall hit)
-
-    Args:
-        fm: Frontmatter dictionary
-
-    Raises:
-        ValueError: If frontmatter is invalid
+    Required: id, kind=knowledge, artifact_kind, created.
+    Optional: title, description, updated, tags, related, source_type,
+              source_ref, certainty, pin_mode, decay_protected, last_recalled,
+              recall_count.
     """
-    _validate_id_field(fm)
-    _validate_created_field(fm)
-    _validate_kind_fields(fm)
-    _validate_type_and_desc(fm)
-    _validate_temporal_fields(fm)
-    _validate_relationship_fields(fm)
-    _validate_recall_fields(fm)
+    _validate_identity(fm)
+    _require_iso8601(fm, "created", required=True)
+    _require_iso8601(fm, "updated", required=False)
+    _require_iso8601(fm, "last_recalled", required=False)
+    _require_str_list(fm, "tags")
+    _require_str_list(fm, "related")
+    _validate_string_fields(fm)
+    _validate_typed_scalars(fm)
+
+
+def _artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
+    """Serialize a KnowledgeArtifact to its frontmatter dict.
+
+    Drops None, empty-list, and default-valued fields so files stay readable.
+    Always keeps id, kind, artifact_kind, created (required identity).
+    """
+    fm: dict[str, Any] = {
+        "id": artifact.id,
+        "kind": KIND_KNOWLEDGE,
+        "artifact_kind": artifact.artifact_kind,
+        "created": artifact.created,
+    }
+    optional: list[tuple[str, Any]] = [
+        ("title", artifact.title),
+        ("description", artifact.description),
+        ("updated", artifact.updated),
+        ("tags", list(artifact.tags)),
+        ("related", list(artifact.related)),
+        ("source_type", artifact.source_type),
+        ("source_ref", artifact.source_ref),
+        ("certainty", artifact.certainty),
+        ("last_recalled", artifact.last_recalled),
+        ("recall_count", artifact.recall_count),
+    ]
+    for key, value in optional:
+        if value:
+            fm[key] = value
+    if artifact.pin_mode and artifact.pin_mode != "none":
+        fm["pin_mode"] = artifact.pin_mode
+    if artifact.decay_protected:
+        fm["decay_protected"] = True
+    return fm
+
+
+def render_knowledge_file(artifact: KnowledgeArtifact) -> str:
+    """Render a KnowledgeArtifact to a .md file (YAML frontmatter + body)."""
+    fm = _artifact_to_frontmatter(artifact)
+    return render_frontmatter(fm, artifact.content)
+
+
+def render_frontmatter(fm: dict[str, Any], body: str) -> str:
+    """Serialize a frontmatter dict + body to .md text.
+
+    Used by in-place updates (``update_memory``, ``append_memory``) that already
+    hold a parsed frontmatter dict. For new writes, prefer
+    ``render_knowledge_file(artifact)``.
+    """
+    yaml_text = yaml.dump(fm, default_flow_style=False, sort_keys=True)
+    return f"---\n{yaml_text}---\n\n{body.strip()}\n"

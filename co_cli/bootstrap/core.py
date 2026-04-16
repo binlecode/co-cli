@@ -151,10 +151,9 @@ def _sync_knowledge_store(
     store: KnowledgeStore | None,
     config: Settings,
     frontend: TerminalFrontend,
-    memory_dir: Path,
-    library_dir: Path,
+    knowledge_dir: Path,
 ) -> KnowledgeStore | None:
-    """Reconcile the knowledge store with current memory + library files on disk.
+    """Reconcile the knowledge store with current knowledge files on disk.
 
     Hash-based — skips unchanged files. On sync failure, closes the store and
     returns None (grep fallback for the session).
@@ -165,9 +164,8 @@ def _sync_knowledge_store(
 
     with _TRACER.start_as_current_span("sync_knowledge") as span:
         try:
-            if memory_dir.exists() or library_dir.exists():
-                art_count = store.sync_dir("library", library_dir, kind_filter="article")
-                count = art_count
+            if knowledge_dir.exists():
+                count = store.sync_dir("knowledge", knowledge_dir)
                 backend = config.knowledge.search_backend
                 span.set_attribute("count", count)
                 span.set_attribute("backend", backend)
@@ -175,7 +173,7 @@ def _sync_knowledge_store(
                 frontend.on_status(f"  Knowledge synced — {count} item(s) ({backend})")
             else:
                 span.set_attribute("status", "skipped")
-                frontend.on_status("  Knowledge store empty — no memory/library dirs")
+                frontend.on_status("  Knowledge store empty — no knowledge dir")
         except Exception as e:
             span.set_attribute("status", "error")
             span.set_attribute("error", str(e))
@@ -272,8 +270,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
         knowledge_store,
         config,
         frontend,
-        memory_dir=paths["memory_dir"],
-        library_dir=paths["library_dir"],
+        knowledge_dir=paths["knowledge_dir"],
     )
 
     # Step 8: assemble deps

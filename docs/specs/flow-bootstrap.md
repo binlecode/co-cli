@@ -47,8 +47,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ enter MCP toolsets on stack; discover_mcp_tools(); merge MCP tool_index
 │  ├─ _load_skills(skills_dir, settings=config, user_skills_dir=...)
 │  ├─ _discover_knowledge_backend(config, frontend, degradations)
-│  ├─ _sync_knowledge_store(store, config, frontend, memory_dir, library_dir)
-│  │      syncs library articles only; on failure closes store and falls back to grep
+│  ├─ _sync_knowledge_store(store, config, frontend, knowledge_dir)
+│  │      indexes every .md in knowledge_dir under source="knowledge"; on failure closes store and falls back to grep
 │  └─ return CoDeps(...)
 │
 ├─ deps.session.reasoning_display = CLI-selected mode
@@ -139,7 +139,7 @@ When degradation happens, bootstrap records the reason in `deps.degradations`. D
 
 ### Step 9. Sync the knowledge store
 
-If a `KnowledgeStore` exists, bootstrap syncs library articles from disk into the index. Memory files are not indexed during bootstrap. Sync is hash-based, so unchanged library files are skipped. A sync failure closes the store and disables indexed retrieval for the session; the CLI continues without aborting startup.
+If a `KnowledgeStore` exists, bootstrap syncs every `.md` file under `knowledge_dir` into the index under a single `source="knowledge"` label — extracted facts and articles alike are indexed into `docs` + `chunks_fts` (and `chunks_vec` in hybrid mode). Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and disables indexed retrieval for the session; the CLI continues without aborting startup.
 
 ### Step 10. Assemble `CoDeps`
 
@@ -221,7 +221,7 @@ These settings most directly affect bootstrap behavior.
 | `llm.num_ctx` | `LLM_NUM_CTX` | provider default | Context window target; may be overwritten by the Ollama runtime probe |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
 | `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
-| `library_path` | `CO_LIBRARY_PATH` | `~/.co-cli/library` | User-global article directory used during knowledge sync |
+| `knowledge_path` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge` | User-global knowledge artifact directory synced during bootstrap (extracted facts, articles, notes) |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled defaults | MCP server definitions connected during startup |
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | Personality selected before agent instruction assembly |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Default reasoning-display mode at startup; CLI flags can override it before REPL entry |

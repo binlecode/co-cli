@@ -19,9 +19,9 @@
 
 **Success criteria:** Reusable search routes through a single knowledge surface. Episodic recall routes through transcript search. The extractor writes knowledge artifacts. Standing context is sourced from knowledge metadata. Knowledge is self-maintaining via consolidation.
 
-**Status:** Target state (supersedes `memory.md` for extracted-fact scope and `library.md` for article/retrieval scope)
+**Status:** Memory layer is transcripts only; Knowledge layer is the unified artifact store indexed under `source="knowledge"`. Lifecycle machinery (dream cycle, decay, dedup) is gated behind `knowledge.consolidation_enabled` and ships in upcoming phases.
 
-**Known gaps:** Existing `memory.md` and `library.md` describe the pre-correction architecture. Session/transcript mechanics remain correctly documented in [context.md](context.md).
+**Known gaps:** The consolidation modules (`_similarity`, `_archive`, `_decay`, `_dream`) are planned but not yet implemented.
 
 ---
 
@@ -124,18 +124,6 @@ Every knowledge artifact is a `.md` file with YAML frontmatter:
 | `decay_protected` | Boolean — immune from automated decay |
 | `last_recalled` | ISO8601 timestamp of most recent recall hit |
 | `recall_count` | Integer count of recall hits |
-
-**Backward compatibility:** Files with legacy `kind: memory` or `kind: article` frontmatter are parsed into the unified model via field mapping (`type` -> `artifact_kind`, `always_on` -> `pin_mode`, `origin_url` -> `source_ref`, `name` -> `title`).
-
-**`artifact_kind` mapping from legacy `type` values:**
-
-| Legacy `type` | `artifact_kind` |
-|--------------|-----------------|
-| `user` | `preference` |
-| `feedback` | `feedback` |
-| `project` | `rule` or `decision` |
-| `reference` | `reference` |
-| (articles) | `article` |
 
 ### 2.3 Knowledge Retrieval
 
@@ -288,20 +276,20 @@ All archived artifacts are recoverable via `/knowledge restore`.
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, backward-compat loader |
+| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, loader, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `PinModeEnum`, `CertaintyEnum`) |
 | `co_cli/knowledge/_store.py` | `KnowledgeStore` — SQLite FTS5/hybrid search, `sync_dir`, chunk indexing |
-| `co_cli/knowledge/_frontmatter.py` | Frontmatter parse/validate/render for knowledge artifacts |
+| `co_cli/knowledge/_frontmatter.py` | Frontmatter parse/validate, `render_knowledge_file`, `render_frontmatter` |
 | `co_cli/knowledge/_chunker.py` | `chunk_text()` — paragraph/line/char split with overlap |
 | `co_cli/knowledge/_ranking.py` | `compute_confidence()`, `detect_contradictions()` |
 | `co_cli/knowledge/_embedder.py` | `build_embedder()` — dispatches to ollama/gemini/tei/none |
 | `co_cli/knowledge/_reranker.py` | `build_llm_reranker()` — Ollama/Gemini listwise rerank |
-| `co_cli/knowledge/_similarity.py` | Token Jaccard similarity for dedup/merge |
-| `co_cli/knowledge/_stopwords.py` | Shared stopword set (FTS query building + similarity) |
-| `co_cli/knowledge/_archive.py` | Archive/restore operations |
-| `co_cli/knowledge/_decay.py` | Decay candidate identification |
-| `co_cli/knowledge/_dream.py` | Dream cycle orchestrator, transcript mining, merge, decay sweep |
-| `co_cli/tools/articles.py` | `search_knowledge()`, `save_article()`, `search_articles()`, `read_article()` |
-| `co_cli/tools/memory.py` | `search_memories()` (delegates to transcript search), `list_knowledge()`, `save_knowledge()` (extractor-only) |
+| `co_cli/knowledge/_search_util.py` | Shared FTS query-build helpers and stopword set |
+| `co_cli/knowledge/_similarity.py` | *(Phase 4)* Token Jaccard similarity for dedup/merge — not yet implemented |
+| `co_cli/knowledge/_archive.py` | *(Phase 5)* Archive/restore operations — not yet implemented |
+| `co_cli/knowledge/_decay.py` | *(Phase 5)* Decay candidate identification — not yet implemented |
+| `co_cli/knowledge/_dream.py` | *(Phase 5)* Dream cycle orchestrator, transcript mining, merge, decay sweep — not yet implemented |
+| `co_cli/tools/articles.py` | `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()`, `read_article()` |
+| `co_cli/tools/memory.py` | `search_memories()` (queries `source="knowledge"`; Phase 3 retargets to transcript search), `list_memories()`, `update_memory()`, `append_memory()`, `save_knowledge()` (extractor-only), `save_memory()` (deprecated wrapper) |
 
 ### Memory Layer
 
@@ -319,7 +307,7 @@ All archived artifacts are recoverable via `/knowledge restore`.
 | `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, cursor tracking |
 | `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
-| `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — pinned artifact injection |
+| `co_cli/agent/_instructions.py` | `add_always_on_memories()` — injects pinned artifacts (Phase 3 renames to `add_standing_knowledge()`) |
 
 ### Config
 

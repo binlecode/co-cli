@@ -377,11 +377,11 @@ def _gather_session_todos(todos: list) -> str | None:
     return "Active tasks:\n" + "\n".join(todo_lines)
 
 
-def _gather_always_on_memories(memory_dir: Path) -> str | None:
-    """Load always-on memories for compaction context."""
-    from co_cli.memory.recall import load_always_on_memories
+def _gather_always_on_memories(knowledge_dir: Path) -> str | None:
+    """Load standing knowledge artifacts for compaction context."""
+    from co_cli.memory.recall import load_standing_artifacts
 
-    memories = load_always_on_memories(memory_dir)
+    memories = load_standing_artifacts(knowledge_dir)
     if not memories:
         return None
     return "Standing memories:\n" + "\n".join(m.content[:200] for m in memories[:5])
@@ -422,7 +422,7 @@ def _gather_compaction_context(
         for p in [
             _gather_file_paths(messages),
             _gather_session_todos(ctx.deps.session.session_todos),
-            _gather_always_on_memories(ctx.deps.memory_dir),
+            _gather_always_on_memories(ctx.deps.knowledge_dir),
             _gather_prior_summaries(dropped),
         ]
         if p is not None

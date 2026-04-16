@@ -133,7 +133,7 @@ async def test_last_extracted_idx_advances_on_empty_window(tmp_path: Path) -> No
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
-        memory_dir=memory_dir,
+        knowledge_dir=memory_dir,
         model=None,  # No model needed for empty window fast-path
     )
 
@@ -168,7 +168,7 @@ async def test_cursor_does_not_advance_on_extraction_failure(tmp_path: Path) -> 
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
-        memory_dir=memory_dir,
+        knowledge_dir=memory_dir,
         model=None,
     )
     frontend = SilentFrontend()

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Eval: memory edit recall — save → recall → update → recall updated content.
+"""Eval: knowledge edit recall — save → recall → update → recall updated content.
 
-Validates the TASK-7 end-to-end flow: update_memory and append_memory re-index
-into the DB, and subsequent search_memories picks up the changes.
+Validates the end-to-end flow: update_memory and append_memory re-index into
+the DB, and subsequent search_memories picks up the changes.
 
-    save_memory           → DB indexed → search_memories finds unique sentinel
+    save_knowledge        → DB indexed → search_memories finds unique sentinel
     update_memory         → reindexes   → search finds new content, not original
     append_memory         → reindexes   → search finds appended content
     update (no DB)        → file written → search degrades to grep (no crash)
 
-The degraded path (knowledge_store=None after save) verifies that memory edits
+The degraded path (knowledge_store=None after save) verifies that edits
 complete cleanly even when the DB is unavailable at edit time.
 
 Writes: docs/REPORT-eval-memory-edit-recall.md (prepends dated section each run).
@@ -35,7 +35,7 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.memory import append_memory, save_memory, search_memories, update_memory
+from co_cli.tools.memory import append_memory, save_knowledge, search_memories, update_memory
 from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-memory-edit-recall.md"
@@ -61,13 +61,13 @@ def _make_ctx(
         config=cfg,
         session=CoSessionState(),
     )
-    deps.memory_dir = memory_dir
+    deps.knowledge_dir = memory_dir
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
 def _slug_from_ctx(ctx: RunContext) -> str | None:
     """Return the slug of the most recently written memory file."""
-    memory_dir: Path = ctx.deps.memory_dir
+    memory_dir: Path = ctx.deps.knowledge_dir
     files = sorted(memory_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
     return files[0].stem if files else None
 
@@ -91,15 +91,15 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
 
     try:
         t = time.monotonic()
-        save_result = await save_memory(
+        save_result = await save_knowledge(
             ctx,
             content=f"User prefers {sentinel} for all testing.",
-            type_="user",
-            name="test-preference",
+            artifact_kind="preference",
+            title="test-preference",
         )
         steps.append(
             {
-                "name": "save_memory",
+                "name": "save_knowledge",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"saved={save_result.metadata.get('saved')}",
             }
@@ -151,13 +151,16 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
     try:
         # Save with original content
         t = time.monotonic()
-        await save_memory(
-            ctx, content=f"Uses {original} for testing.", type_="user", name="update-test"
+        await save_knowledge(
+            ctx,
+            content=f"Uses {original} for testing.",
+            artifact_kind="preference",
+            title="update-test",
         )
         slug = _slug_from_ctx(ctx)
         steps.append(
             {
-                "name": "save_memory",
+                "name": "save_knowledge",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"slug={slug}",
             }
@@ -249,13 +252,16 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
     try:
         t = time.monotonic()
-        await save_memory(
-            ctx, content=f"Base content: {base_keyword}.", type_="project", name="append-test"
+        await save_knowledge(
+            ctx,
+            content=f"Base content: {base_keyword}.",
+            artifact_kind="rule",
+            title="append-test",
         )
         slug = _slug_from_ctx(ctx)
         steps.append(
             {
-                "name": "save_memory",
+                "name": "save_knowledge",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"slug={slug}",
             }
@@ -327,11 +333,11 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
     updated = f"{_SENTINEL_BASE}-no-db-updated"
 
     try:
-        await save_memory(
+        await save_knowledge(
             ctx_with_db,
             content=f"Content: {original}.",
-            type_="project",
-            name="no-db-test",
+            artifact_kind="rule",
+            title="no-db-test",
         )
     finally:
         ks.close()
@@ -339,7 +345,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
     slug = _slug_from_ctx(ctx_with_db)
     steps.append(
         {
-            "name": "save_memory (with DB, for file creation)",
+            "name": "save_knowledge (with DB, for file creation)",
             "ms": 0,
             "detail": f"slug={slug}",
         }

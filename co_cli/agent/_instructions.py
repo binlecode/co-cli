@@ -5,7 +5,7 @@ from datetime import date
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
-from co_cli.memory.recall import load_always_on_memories
+from co_cli.memory.recall import load_standing_artifacts
 
 
 def add_current_date(ctx: RunContext[CoDeps]) -> str:
@@ -23,7 +23,7 @@ def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
 
 def add_always_on_memories(ctx: RunContext[CoDeps]) -> str:
     """Inject always_on memories as standing context every turn."""
-    entries = load_always_on_memories(ctx.deps.memory_dir)
+    entries = load_standing_artifacts(ctx.deps.knowledge_dir)
     if not entries:
         return ""
     max_chars = ctx.deps.config.memory.injection_max_chars

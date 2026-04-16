@@ -62,7 +62,7 @@ def _make_ctx(
         config=cfg,
         session=CoSessionState(),
     )
-    deps.library_dir = library_dir
+    deps.knowledge_dir = library_dir
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 

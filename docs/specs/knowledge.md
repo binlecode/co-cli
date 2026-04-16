@@ -20,9 +20,9 @@
 
 **Success criteria:** All reusable recall routes through `search_knowledge()`; extracted insights and articles share one artifact model; standing context is sourced from `pin_mode` metadata, not a separate storage tier.
 
-**Status:** Target state — unification of the legacy `memory/*.md` (extracted facts) and `library/*.md` (articles) stores into a single `knowledge/` directory. See [cognition.md](cognition.md) for the two-layer architecture rationale.
+**Status:** Unified artifact model, single `knowledge_dir`, `source="knowledge"` indexing. Upcoming phases converge the tool surface (`search_memories` → delegate to `session_search`, `list_memories` → `list_knowledge`, `/memory` → `/knowledge` aliases) and add dedup-on-write and the dream cycle (consolidation, decay, transcript mining) — gated behind `knowledge.consolidation_enabled`.
 
-**Known gaps:** Phase 2–3 implement the schema migration and tool surface convergence. During transition, legacy `kind: memory` and `kind: article` files are supported via backward-compatible loading.
+**Known gaps:** Tool and command surfaces still use the memory-era names (`/memory`, `search_memories`). The consolidation pipeline (`_similarity`, `_archive`, `_decay`, `_dream`) is not yet implemented.
 
 ---
 
@@ -93,17 +93,17 @@ Every knowledge artifact is a `.md` file with YAML frontmatter:
 
 **`artifact_kind` subtypes:**
 
-| Kind | Meaning | Maps from legacy `type` |
-|------|---------|------------------------|
-| `preference` | User style, tool, or workflow preference | `user` |
-| `feedback` | Correction or workflow guidance | `feedback` |
-| `rule` | Project invariant or standing constraint | `project` |
-| `decision` | Recorded design or architectural decision | `project` |
-| `article` | Fetched external document or documentation | (articles) |
-| `reference` | External system pointer (URL, project, channel) | `reference` |
-| `note` | Manually authored or imported note | — |
+| Kind | Meaning |
+|------|---------|
+| `preference` | User style, tool, or workflow preference |
+| `feedback` | Correction or workflow guidance |
+| `rule` | Project invariant or standing constraint |
+| `decision` | Recorded design or architectural decision |
+| `article` | Fetched external document or documentation |
+| `reference` | External system pointer (URL, project, channel) |
+| `note` | Manually authored or imported note |
 
-**Backward compatibility:** Files with legacy `kind: memory` frontmatter are loaded via field mapping (`type` → `artifact_kind`, `always_on=True` → `pin_mode="standing"`, `name` → `title`). Files with `kind: article` map `origin_url` → `source_ref`, `title` stays. Neither format is rewritten on load — the backward-compat reader is applied only at parse time.
+The loader requires `kind: knowledge` with an `artifact_kind`; files missing either raise `ValueError`.
 
 ### 2.2 Storage Model
 
@@ -122,7 +122,7 @@ Artifacts are split into overlapping chunks at index time (chunk size: 600 estim
 
 All reusable recall routes through the Knowledge layer via three paths:
 
-**Standing context** — artifacts with `pin_mode="standing"` are injected into every model request as a dynamic instruction layer via `add_standing_knowledge()`. Capped at 5 entries, truncated to `memory.injection_max_chars`. Backward compatible: legacy `always_on=True` files loaded from `knowledge_dir` are treated as `pin_mode="standing"`.
+**Standing context** — artifacts with `pin_mode="standing"` are injected into every model request as a dynamic instruction layer via `add_always_on_memories()` (Phase 3 renames to `add_standing_knowledge`). Capped at 5 entries, truncated to `memory.injection_max_chars`.
 
 **Turn-time recall** — on each new user turn, `inject_opening_context` calls `_recall_for_context()` which queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are injected as a trailing `SystemPromptPart`. Both extracted facts and articles are eligible — any reusable, relevant artifact surfaces here.
 
@@ -173,17 +173,23 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 
 ### 2.6 REPL Commands
 
+Current (Phase 2):
+
 | Command | Purpose |
 |---------|---------|
-| `/knowledge list [query] [flags]` | List knowledge artifacts |
-| `/knowledge count [query] [flags]` | Count artifacts |
-| `/knowledge forget <query> [flags]` | Archive artifacts (preview + confirm) |
-| `/knowledge stats` | Health dashboard: counts by kind, pinned, decay candidates, last dream |
-| `/knowledge dream [--dry]` | Run consolidation cycle manually |
-| `/knowledge restore [slug]` | List archived artifacts or restore by slug |
-| `/knowledge decay-review [--dry]` | Preview decay candidates, confirm to archive |
+| `/memory list [query] [flags]` | List knowledge artifacts |
+| `/memory count [query] [flags]` | Count artifacts |
+| `/memory forget <query> [flags]` | Delete artifacts after confirm (removes file + DB row under `source="knowledge"`) |
 
-`/memory` remains as alias during transition.
+Planned (Phase 3 introduces `/knowledge` alias; Phases 5–6 add `dream`, `restore`, `stats`, `decay-review`):
+
+| Command | Purpose | Phase |
+|---------|---------|-------|
+| `/knowledge list / count / forget` | Alias of `/memory` equivalents | 3 |
+| `/knowledge stats` | Health dashboard: counts by kind, pinned, decay candidates, last dream | 6 |
+| `/knowledge dream [--dry]` | Run consolidation cycle manually | 5 |
+| `/knowledge restore [slug]` | List archived artifacts or restore by slug | 5 |
+| `/knowledge decay-review [--dry]` | Preview decay candidates, confirm to archive | 5 |
 
 ## 3. Config
 
@@ -227,20 +233,20 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, backward-compatible loader for `kind: memory` and `kind: article` files |
+| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums, loader |
 | `co_cli/knowledge/_store.py` | `KnowledgeStore` — SQLite FTS5/hybrid search, `sync_dir()`, chunk indexing |
-| `co_cli/knowledge/_frontmatter.py` | Frontmatter parse, validate, and render for knowledge artifacts |
+| `co_cli/knowledge/_frontmatter.py` | Frontmatter parse/validate, `render_knowledge_file`, `render_frontmatter` |
 | `co_cli/knowledge/_chunker.py` | `chunk_text()` — paragraph/line/char split with overlap |
 | `co_cli/knowledge/_ranking.py` | `compute_confidence()`, `detect_contradictions()` |
 | `co_cli/knowledge/_embedder.py` | `build_embedder()` — dispatches to ollama/gemini/tei/none |
 | `co_cli/knowledge/_reranker.py` | `build_llm_reranker()` — Ollama/Gemini listwise rerank |
-| `co_cli/knowledge/_similarity.py` | Token Jaccard similarity for dedup and merge |
-| `co_cli/knowledge/_stopwords.py` | Shared stopword set used by FTS query building and similarity |
-| `co_cli/knowledge/_archive.py` | `archive_artifacts()`, `restore_artifact()` |
-| `co_cli/knowledge/_decay.py` | `find_decay_candidates()` |
-| `co_cli/knowledge/_dream.py` | Dream cycle orchestrator: transcript mining, merge, decay sweep |
-| `co_cli/tools/articles.py` | `search_knowledge()`, `save_article()`, `search_articles()` (transitional), `read_article()` |
-| `co_cli/tools/memory.py` | `list_knowledge()`, `save_knowledge()` (extractor-only), `search_memories()` (transitional — delegates to session_search) |
+| `co_cli/knowledge/_search_util.py` | Shared FTS query-build helpers and stopword set |
+| `co_cli/knowledge/_similarity.py` | *(Phase 4)* Token Jaccard similarity for dedup and merge — not yet implemented |
+| `co_cli/knowledge/_archive.py` | *(Phase 5)* Archive/restore operations — not yet implemented |
+| `co_cli/knowledge/_decay.py` | *(Phase 5)* Decay candidate identification — not yet implemented |
+| `co_cli/knowledge/_dream.py` | *(Phase 5)* Dream cycle orchestrator — not yet implemented |
+| `co_cli/tools/articles.py` | `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()` (transitional), `read_article()` |
+| `co_cli/tools/memory.py` | `save_knowledge()` (extractor-only), `search_memories()`, `list_memories()`, `update_memory()`, `append_memory()`, `_recall_for_context()` |
 
 ### Extraction & Injection
 
@@ -249,7 +255,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, cursor tracking |
 | `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
-| `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — pinned artifact injection |
+| `co_cli/agent/_instructions.py` | `add_always_on_memories()` — pinned artifact injection (Phase 3 renames to `add_standing_knowledge`) |
 
 ### Config
 

@@ -25,8 +25,7 @@ def _make_deps(
     tmp_path: Path,
     *,
     knowledge_store: KnowledgeStore | None = None,
-    memory_dir: Path | None = None,
-    library_dir: Path | None = None,
+    knowledge_dir: Path | None = None,
     mcp_servers: dict | None = None,
 ) -> CoDeps:
     config = make_settings(
@@ -40,66 +39,59 @@ def _make_deps(
         session=CoSessionState(),
         runtime=runtime,
         sessions_dir=tmp_path / "sessions",
-        memory_dir=memory_dir or tmp_path / "memory",
-        library_dir=library_dir or tmp_path / "library",
+        knowledge_dir=knowledge_dir or tmp_path / "knowledge",
     )
 
 
-def _write_memory_file(path: Path, *, mem_id: int, body: str) -> None:
-    path.write_text(
-        (
-            "---\n"
-            f"id: {mem_id}\n"
-            "created: '2026-03-01T00:00:00+00:00'\n"
-            "kind: memory\n"
-            "tags:\n"
-            "- test\n"
-            "---\n\n"
-            f"{body}\n"
-        ),
-        encoding="utf-8",
-    )
-
-
-def _write_article_file(path: Path, *, art_id: int, body: str) -> None:
+def _write_knowledge_file(
+    path: Path,
+    *,
+    artifact_id: int | str,
+    artifact_kind: str,
+    body: str,
+    extra: dict | None = None,
+) -> None:
+    """Write a canonical kind=knowledge artifact file."""
     fm = {
-        "id": art_id,
-        "kind": "article",
+        "id": str(artifact_id),
+        "kind": "knowledge",
+        "artifact_kind": artifact_kind,
         "created": "2026-01-01T00:00:00+00:00",
-        "tags": [],
-        "decay_protected": True,
-        "origin_url": "https://example.com/test",
+        "tags": ["test"],
     }
+    if extra:
+        fm.update(extra)
     path.write_text(
         f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body}\n",
         encoding="utf-8",
     )
 
 
-def test_sync_knowledge_store_indexes_article_only(tmp_path: Path) -> None:
-    """_sync_knowledge_store reconciles article files into the store; memory is not indexed."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir()
-    library_dir = tmp_path / "library"
-    library_dir.mkdir()
-    _write_memory_file(
-        memory_dir / "001-test-mem.md",
-        mem_id=1,
+def test_sync_knowledge_store_indexes_unified_knowledge(tmp_path: Path) -> None:
+    """_sync_knowledge_store indexes both memory- and article-kind files under source='knowledge'."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    _write_knowledge_file(
+        knowledge_dir / "001-test-mem.md",
+        artifact_id=1,
+        artifact_kind="preference",
         body=(
             "Finch Weinberg is a robotics engineer who survived a solar flare "
             "that scorched the Earth. He lives in a bunker in St. Louis with his "
             "dog Goodyear and a robot named Jeff he built to take care of the dog."
         ),
     )
-    _write_article_file(
-        library_dir / "002-test-art.md",
-        art_id=2,
+    _write_knowledge_file(
+        knowledge_dir / "002-test-art.md",
+        artifact_id=2,
+        artifact_kind="article",
         body=(
             "The movie Finch (2021) directed by Miguel Sapochnik stars Tom Hanks "
             "as the titular character. The film explores themes of companionship, "
             "trust, and what it means to be alive in a post-apocalyptic world. "
             "Jeff the robot learns to drive an RV across the American West."
         ),
+        extra={"decay_protected": True, "source_ref": "https://example.com/test"},
     )
 
     config = make_settings(
@@ -114,13 +106,17 @@ def test_sync_knowledge_store_indexes_article_only(tmp_path: Path) -> None:
     store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
     assert store is not None, "_discover_knowledge_backend must return a store for fts5"
     try:
-        store = _sync_knowledge_store(store, config, TerminalFrontend(), memory_dir, library_dir)
+        store = _sync_knowledge_store(store, config, TerminalFrontend(), knowledge_dir)
         assert store is not None, "_sync_knowledge_store must not disable the store on success"
 
-        # Memory is no longer synced to FTS by bootstrap — only articles are indexed
-        art_results = store.search("Tom Hanks post-apocalyptic robot", source="library", limit=5)
+        # Both memory-kind and article-kind files index under source='knowledge'
+        art_results = store.search("Tom Hanks post-apocalyptic robot", source="knowledge", limit=5)
         assert any("002-test-art.md" in r.path for r in art_results), (
             "Article about the Finch movie must be findable via FTS5"
+        )
+        mem_results = store.search("solar flare Goodyear bunker", source="knowledge", limit=5)
+        assert any("001-test-mem.md" in r.path for r in mem_results), (
+            "Memory-kind file must also be findable under the unified knowledge source"
         )
     finally:
         if store is not None:
@@ -187,18 +183,18 @@ def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavai
     tmp_path: Path,
 ) -> None:
     """Hybrid degrades to FTS5 when embedder unreachable — degraded store must sync and search."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir()
-    library_dir = tmp_path / "library"
-    library_dir.mkdir()
-    _write_article_file(
-        library_dir / "001-test-degraded.md",
-        art_id=1,
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    _write_knowledge_file(
+        knowledge_dir / "001-test-degraded.md",
+        artifact_id=1,
+        artifact_kind="article",
         body=(
             "Finch programmed Jeff with three directives: protect Goodyear, "
             "never hurt a living thing, and always tell the truth. These rules "
             "guide Jeff's behavior throughout the journey to San Francisco."
         ),
+        extra={"decay_protected": True, "source_ref": "https://example.com/finch"},
     )
 
     config = make_settings(
@@ -222,10 +218,10 @@ def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavai
             "Discovery must record degradation in degradations dict"
         )
 
-        # Degraded FTS5 store must still sync and search via keyword matching (articles only)
-        store = _sync_knowledge_store(store, config, TerminalFrontend(), memory_dir, library_dir)
+        # Degraded FTS5 store must still sync and search via keyword matching
+        store = _sync_knowledge_store(store, config, TerminalFrontend(), knowledge_dir)
         assert store is not None, "Sync must succeed on the degraded fts5 store"
-        results = store.search("Jeff directives protect Goodyear", source="library", limit=5)
+        results = store.search("Jeff directives protect Goodyear", source="knowledge", limit=5)
         assert any("001-test-degraded.md" in r.path for r in results), (
             "Degraded fts5 store must find Jeff's directives via keyword search on articles"
         )
@@ -426,8 +422,7 @@ def test_restore_session_readonly_dir_does_not_raise(tmp_path: Path) -> None:
             session=CoSessionState(),
             runtime=runtime,
             sessions_dir=readonly_dir,
-            memory_dir=tmp_path / "memory",
-            library_dir=tmp_path / "library",
+            knowledge_dir=tmp_path / "knowledge",
         )
         result = restore_session(deps, TerminalFrontend())
         assert isinstance(result, Path), "restore_session() must return a Path"

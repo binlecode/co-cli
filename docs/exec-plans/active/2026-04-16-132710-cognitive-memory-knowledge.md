@@ -164,7 +164,7 @@ Align all product language with the two-layer model. No runtime behavior changes
 
 Make extracted facts and articles share one conceptual model. This is the structural migration.
 
-### TASK-2.1: Unified `KnowledgeArtifact` model
+### ✓ DONE TASK-2.1: Unified `KnowledgeArtifact` model
 
 - `files:` `co_cli/knowledge/_artifact.py` (new)
 - Define `KnowledgeArtifact` dataclass — the successor to both `MemoryEntry` (for extracted facts) and the implicit article model:
@@ -194,7 +194,7 @@ Make extracted facts and articles share one conceptual model. This is the struct
   - Files with `kind: article` map `origin_url` → `source_ref`, `title` stays
 - `done_when:` All existing `memory/*.md` and `library/*.md` files parse into `KnowledgeArtifact` without errors.
 
-### TASK-2.2: Migrate frontmatter writer
+### ✓ DONE TASK-2.2: Migrate frontmatter writer
 
 - `files:` `co_cli/knowledge/_frontmatter.py`
 - Add `render_knowledge_file(artifact: KnowledgeArtifact) -> str` that writes the new canonical frontmatter format:
@@ -212,7 +212,7 @@ Make extracted facts and articles share one conceptual model. This is the struct
 - Existing files are NOT rewritten — they load via backward-compatible reader (TASK-2.1).
 - `done_when:` New files written in canonical format. Old files still loadable.
 
-### TASK-2.3: Merge into single `knowledge_dir`
+### ✓ DONE TASK-2.3: Merge into single `knowledge_dir`
 
 - `files:` `co_cli/deps.py`, `co_cli/config/_core.py`, `co_cli/config/_knowledge.py`
 - Replace `memory_dir` and `library_dir` with `knowledge_dir: Path` on CoDeps (default: `~/.co-cli/knowledge/`).
@@ -220,7 +220,7 @@ Make extracted facts and articles share one conceptual model. This is the struct
 - Remove `memory_dir` and `library_dir` fields from CoDeps. All reads/writes target `knowledge_dir`.
 - `done_when:` CoDeps has one `knowledge_dir`. All tool and store code references updated. Tests pass.
 
-### TASK-2.3b: One-time migration script
+### ✓ DONE TASK-2.3b: One-time migration script
 
 - `files:` `scripts/migrate-knowledge-dir.py` (new)
 - On first run after upgrade (or via explicit `co migrate`):
@@ -233,7 +233,7 @@ Make extracted facts and articles share one conceptual model. This is the struct
 - Also wire auto-migration into bootstrap: if `knowledge_dir` is empty but `memory_dir` or `library_dir` have `.md` files, run migration automatically with console notice.
 - `done_when:` Fresh install uses `knowledge_dir` only. Existing installs auto-migrate on first run. Manual `scripts/migrate-knowledge-dir.py` works standalone.
 
-### TASK-2.4: Extractor writes knowledge artifacts
+### ✓ DONE TASK-2.4: Extractor writes knowledge artifacts
 
 - `files:` `co_cli/memory/_extractor.py`, `co_cli/tools/memory.py`
 - Change `save_memory()` → `save_knowledge()`:
@@ -245,7 +245,7 @@ Make extracted facts and articles share one conceptual model. This is the struct
 - Keep `save_memory()` as deprecated wrapper that delegates to `save_knowledge()`.
 - `done_when:` New extractions write `kind: knowledge` files to `knowledge_dir/`. Extractor tests pass.
 
-### TASK-2.5: Update `save_article()` to write knowledge artifacts
+### ✓ DONE TASK-2.5: Update `save_article()` to write knowledge artifacts
 
 - `files:` `co_cli/tools/articles.py` (line 208)
 - `save_article()` writes to `knowledge_dir/` using `render_knowledge_file()`:
@@ -255,7 +255,7 @@ Make extracted facts and articles share one conceptual model. This is the struct
 - Keep function name `save_article()` — it's a valid action verb even under the new model. But the output format and location change.
 - `done_when:` New articles written as knowledge artifacts. URL dedup still works.
 
-### TASK-2.6: Knowledge store re-indexing
+### ✓ DONE TASK-2.6: Knowledge store re-indexing
 
 - `files:` `co_cli/bootstrap/core.py`, `co_cli/knowledge/_store.py`
 - Update `sync_knowledge_store()` to index `knowledge_dir` as the sole source:
@@ -678,3 +678,119 @@ Cross-reviewed against updated `docs/PROPOSAL-memory-vs-knowledge-architecture.m
 
 > Gate 1 — Review required before proceeding.
 > Right model? Right sequencing? Right migration strategy?
+
+## Independent Review — 2026-04-16
+
+Cold-read pass over `/tmp/phase2-diff.patch` (2273 lines), plus the new untracked
+files `co_cli/knowledge/_artifact.py`, `co_cli/knowledge/_migrate.py`,
+`scripts/migrate-knowledge-dir.py`, `tests/test_knowledge_artifact.py`,
+`tests/test_knowledge_migrate.py`. Engineering Rules in `CLAUDE.md` applied per
+section. Stale-reference grep across `co_cli/`, `tests/`, `docs/`.
+
+| File | Finding | Severity | Task |
+|------|---------|----------|------|
+| `tests/test_knowledge_artifact.py:247-261` | `test_existing_real_memory_and_library_files_parse` reads `Path.home() / ".co-cli"` directly — violates the "DO NOT hardcode `~/.co-cli` or `Path.home() / ".co-cli"`" pitfall in CLAUDE.md and bypasses `CO_CLI_HOME`. Also violates "Test data isolation — use `tmp_path`". The done_when check should run from a fixture-prepared dir, not user-actual data; otherwise the result is non-deterministic across machines. | blocking | TASK-2.1 |
+| `co_cli/tools/memory.py:478-483` (`save_knowledge`) and `co_cli/tools/articles.py:589-594` (`_consolidate_and_reindex`) | Tool functions return `tool_output_raw(...)` despite having `RunContext`. Per `tool_output_raw` docstring: "Tool functions with ctx should always use tool_output()." Bypasses `tool_results_dir` size-check / persistence. Pre-existing for `save_memory`, but `save_knowledge` is new code in TASK-2.4 and should adopt the canonical helper. | minor | TASK-2.4 |
+| `co_cli/tools/memory.py:417-421` (`save_knowledge`) | Validation failure raises `ValueError` instead of returning `tool_error(...)`. Tool errors should surface as structured `ToolReturn` so the model can recover (per CLAUDE.md "Tool return type"). Pre-existing pattern but newly written here. | minor | TASK-2.4 |
+| `co_cli/tools/memory.py:431-432` (`save_knowledge`) | `source_ref = session_path.stem if session_path and str(session_path) else None` — `str(session_path)` is always truthy when `session_path` is a `Path`. Redundant clause; the bool check on `session_path` already gates the rare `None` case. | minor | TASK-2.4 |
+| `co_cli/knowledge/_frontmatter.py:252-283` (`validate_memory_frontmatter`) | Docstring still claims `kind` is "memory" or "article" — but the diff added "knowledge" as a third value at line 121-128. Schema doc-staleness inside the validator. No new fields (`artifact_kind`, `source_type`, `source_ref`, `pin_mode`, `certainty`, `recall_count`) are validated, so canonical files pass through unchecked. | minor | TASK-2.2 |
+| `co_cli/tools/articles.py` (`save_article`) | The previous code path called `validate_memory_frontmatter(frontmatter)` before writing (enforced by completed plan `2026-04-13-130528-code-quality-refactor`). The new path constructs a `KnowledgeArtifact` and calls `render_knowledge_file()` without `validate_memory_frontmatter`. Schema constraints (`description ≤200 chars`, `decay_protected: bool`, etc.) are now enforced only by the dataclass typing, which won't catch e.g. a multi-line description string. | minor | TASK-2.5 |
+| `co_cli/tools/articles.py:60-63` (`_grep_fallback_knowledge`) and elsewhere | `filter_memories(...)` / `grep_recall(...)` accept `list[MemoryEntry]` per signature but are now called with `list[KnowledgeArtifact]`. Runtime works via duck-typing on `.tags`/`.created`/`.content`/`.updated`, but the type signatures are wrong. Either widen the type to a Protocol or convert before calling. | minor | TASK-2.5 |
+| `docs/specs/personality.md:118`, `docs/specs/flow-bootstrap.md:50`, `docs/specs/flow-bootstrap.md:224`, `docs/specs/context.md:167` | Spec drift: still reference `memory_dir`/`library_dir`/`CO_LIBRARY_PATH`/`load_memories(memory_dir, …)`. Per CLAUDE.md, these should be reconciled by `/sync-doc` before shipping. Not a code blocker but the specs are now out of sync with the implementation. | minor | cross-cutting (TASK-2.3) |
+| `co_cli/knowledge/_store.py:608` | Docstring still mentions `source="memory"` as a valid filter shortcut and claims it's "transient during migration" — but `search_knowledge` no longer rejects `source="memory"` (the rejection guard was removed at `articles.py:175-181` per the diff). The two pieces are coherent (legacy rows still queryable) but the docstring conflicts with the unification narrative. | minor | TASK-2.6 |
+
+### Cold-read coverage notes (per Review Discipline)
+
+Files read in full or in relevant detail:
+- `co_cli/knowledge/_artifact.py` — verified KnowledgeArtifact schema, legacy-mapping, batch loader, kind-filter.
+- `co_cli/knowledge/_migrate.py` — verified idempotency (`_has_md_files` short-circuit), collision suffix logic via `_unique_destination`, that `_archive/` and other subdirs are not swept (top-level `glob("*.md")`), and that originals are moved (`shutil.move`) not copied. **Migration safety: passes** — no path traversal (only `.glob("*.md")` from a known root), atomic enough for the use case.
+- `co_cli/knowledge/_frontmatter.py` — verified `_artifact_to_frontmatter`, `render_knowledge_file`, `MemoryKindEnum.KNOWLEDGE` addition, render-omits-defaults behavior.
+- `co_cli/knowledge/_store.py` — verified docstring updates and that `sync_dir("knowledge", knowledge_dir)` indexes everything in the dir under one source label.
+- `co_cli/bootstrap/core.py` — verified migration runs before path consumers, `_sync_knowledge_store` signature is single-dir, paths dict no longer has `memory_dir`.
+- `co_cli/deps.py` — verified `library_dir` and `memory_dir` removed from `CoDeps` and `fork_deps`; `_DEFAULT_LIBRARY_DIR` / `_DEFAULT_MEMORY_DIR` deleted.
+- `co_cli/config/_core.py` — verified `KNOWLEDGE_DIR` constant, `knowledge_path` field, `CO_KNOWLEDGE_DIR` env-var rename, `_ensure_dirs` no longer creates legacy dirs.
+- `co_cli/tools/memory.py` — verified `save_knowledge` writes canonical kind=knowledge, indexes both docs and chunks, `_reindex_knowledge_file` shared helper, `save_memory` deprecated wrapper preserves four-type vocabulary.
+- `co_cli/tools/articles.py` — verified `save_article` writes canonical knowledge artifact with `artifact_kind=article`, `source_type=web_fetch`, `source_ref=origin_url`; URL dedup preserved via `_find_article_by_url` (now also matches legacy `origin_url`); consolidation rewrites in canonical format.
+- `co_cli/memory/_extractor.py` — verified extractor agent registers `save_knowledge`, prompt uses new vocabulary (`preference`/`feedback`/`rule`/`reference`) and new param names (`artifact_kind=`, `title=`).
+- `co_cli/memory/prompts/knowledge_extractor.md` — verified all `save_memory(...)` examples replaced with `save_knowledge(... artifact_kind=...)`.
+- `co_cli/agent/_native_toolset.py` — verified `save_article` retains `approval=True`; `save_knowledge` is **not** registered as a top-level toolset entry (only used by the extractor agent).
+- All test files in the diff — verified `memory_dir=` keyword arg renamed to `knowledge_dir=` consistently across `_make_ctx` / `_make_deps` helpers; `idx.sync_dir("knowledge", …)` and `source="knowledge"` used in assertions.
+- `tests/test_knowledge_artifact.py` and `tests/test_knowledge_migrate.py` — verified real-deps usage (no mocks) except for the home-dir read flagged above.
+
+Cross-task coherence checks:
+- Source label is uniformly `"knowledge"` in production writes/reads. The only `"memory"`/`"library"` survivals are in `sync_dir`'s arg signature (legacy values still accepted) and store docstrings (transitional language). Confirmed via grep.
+- Frontmatter format: new writes go through `render_knowledge_file()` → `kind: knowledge` + `artifact_kind`. Confirmed by `test_save_article_creates_file` and `test_render_knowledge_file_emits_canonical_kind`.
+- Extractor prompt aligned with `save_knowledge` signature. Confirmed by reading the new prompt and signature side-by-side.
+- Done_when checks: TASK-2.1 has `test_existing_real_memory_and_library_files_parse` (problematic per blocker above); TASK-2.3b has `tests/test_knowledge_migrate.py::test_idempotent_rerun`; TASK-2.5 has `tests/test_articles.py::test_save_article_dedup_by_url`. All map cleanly.
+
+**Overall: 1 blocking / 8 minor**
+
+The blocker is the home-dir read in the test file — a one-line `pytest.skip()` would not be enough; the test should be redesigned around `tmp_path` with synthetic legacy fixtures, or removed in favour of the existing dedicated tests in `test_knowledge_artifact.py` that already cover canonical/legacy parsing comprehensively. The minors are cumulative tech-debt around the new helpers (raw vs. ctx-aware tool returns, missing schema validation on the new write path, type-signature drift) and spec drift that `/sync-doc` should sweep.
+
+## Delivery Summary — 2026-04-16
+
+**Overall: DELIVERED.** Phase 2 ships the unified two-layer cognitive model (Memory = transcripts, Knowledge = reusable artifacts) with the canonical `KnowledgeArtifact` schema, single `knowledge_dir`, unified `source="knowledge"` indexing, and extractor writing `save_knowledge()` directly.
+
+### Scope changes from plan (mid-delivery directive)
+
+Partway through delivery the owner directed a **"no backward compatibility"** principle — co-cli is pre-release, so obsolete legacy assets get reset rather than migrated. This dropped several planned surfaces:
+
+| Planned | Shipped |
+|---------|---------|
+| `migrate_knowledge_dir()` + `scripts/migrate-knowledge-dir.py` + auto-migration bootstrap hook | **Removed entirely.** No migration code exists. |
+| Backward-compat reader in `_artifact.py` (`_map_legacy_memory`, `_map_legacy_article`) | **Removed.** Loader requires `kind: knowledge`; raises on anything else. |
+| `save_memory()` deprecated wrapper delegating to `save_knowledge()` | **Removed.** `save_knowledge()` is the sole write path. |
+| `render_memory_file()` as deprecated alias in `_frontmatter.py` | **Removed.** Replaced with `render_frontmatter()` (dict form for in-place updates) + `render_knowledge_file()` (artifact form for new writes). |
+| `MemoryEntry` dataclass + `load_memories()` / `load_always_on_memories()` | **Removed.** All callers migrated to `KnowledgeArtifact` + `load_knowledge_artifacts()` / `load_standing_artifacts()`. |
+| `MemoryTypeEnum` (legacy type vocabulary: user / feedback / project / reference) | **Removed.** `ArtifactKindEnum` is the single artifact-kind vocabulary. |
+| `origin_url` frontmatter field (articles) | **Replaced** by canonical `source_ref`. No fallback. |
+| `_uses_chunks_leg()` memory-source branch, `_run_memory_fts()` docs_fts path, `index_chunks` memory reject | **Removed.** All sources chunk into `chunks_fts` uniformly. |
+| `/memory --type` flag (legacy 4-type filter) | **Removed.** Only `--kind` (artifact_kind) remains. |
+| Follow-up task: tests for migration script | **Deleted** (`tests/test_knowledge_migrate.py` removed). |
+
+### Shipped per planned task
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-2.1 — KnowledgeArtifact model | Canonical loader parses; rejects non-knowledge kind | ✓ pass |
+| TASK-2.2 — `render_knowledge_file()` | New files written in canonical format; in-place updates via `render_frontmatter()` | ✓ pass |
+| TASK-2.3 — Merge to single `knowledge_dir` | CoDeps has one `knowledge_dir`; all callers updated (`memory_dir`/`library_dir` removed everywhere) | ✓ pass |
+| TASK-2.3b — Migration script | Scope changed: migration removed entirely per reset directive | — replaced |
+| TASK-2.4 — Extractor writes knowledge | `save_knowledge()` registered; extractor prompt updated; no `save_memory()` wrapper | ✓ pass |
+| TASK-2.5 — `save_article()` writes knowledge | Canonical artifact writer; `source_ref` dedup key; no `origin_url` fallback | ✓ pass |
+| TASK-2.6 — Knowledge store re-indexing | Sync uses `source="knowledge"`; all sources chunked; legacy paths removed | ✓ pass |
+
+### Tests
+
+- Full suite: **500 passed** (one flaky external web-fetch retried green)
+- New tests: `tests/test_knowledge_artifact.py` (12 tests covering loader, renderer, validator, standing-artifact loader)
+- Removed tests: `tests/test_knowledge_migrate.py`, `test_load_memories_tolerates_unknown_artifact_type`, `test_render_memory_file_backward_compat`, plus assorted legacy fixture writers rewritten to emit canonical format
+
+### Docs synced
+
+`docs/specs/cognition.md`, `knowledge.md`, `context.md`, `flow-bootstrap.md`, `flow-prompt-assembly.md`, `personality.md`, `tools.md` all purged of migration / backward-compat / legacy narrative. Describes the canonical system as the only system.
+
+### Independent Review outcome
+
+1 blocker (home-dir test read) — **fixed** during delivery by replacing with hermetic synthetic-fixture test. Minors were resolved implicitly by the reset scope change (validator renamed, `save_memory` wrapper removed, MemoryEntry type-signature drift gone with the class). No remaining blockers.
+
+### Files (final shipped set)
+
+New:
+- `co_cli/knowledge/_artifact.py`
+- `tests/test_knowledge_artifact.py`
+
+Modified (production):
+- `co_cli/agent/_instructions.py`, `co_cli/bootstrap/core.py`, `co_cli/commands/_commands.py`, `co_cli/config/_core.py`, `co_cli/context/_history.py`, `co_cli/deps.py`
+- `co_cli/knowledge/_frontmatter.py`, `co_cli/knowledge/_store.py`
+- `co_cli/memory/_extractor.py`, `co_cli/memory/prompts/knowledge_extractor.md`, `co_cli/memory/recall.py`
+- `co_cli/prompts/personalities/_injector.py`
+- `co_cli/tools/articles.py`, `co_cli/tools/memory.py`
+
+Modified (tests + evals): `tests/test_articles.py`, `test_bootstrap.py`, `test_commands.py`, `test_extractor_integration.py`, `test_extractor_window.py`, `test_history.py`, `test_memory.py`; `evals/_deps.py`, `eval_article_fetch_flow.py`, `eval_compaction_quality.py`, `eval_memory_edit_recall.py`, `eval_memory_recall.py`
+
+Modified (docs): all seven specs listed under "Docs synced"; this plan file
+
+Version bump: `0.7.164` → `0.7.166` (feature delivery).
+
+> Gate 2 — `/review-impl` required before `git mv` to `completed/`.

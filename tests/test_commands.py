@@ -64,7 +64,7 @@ _AGENT = Agent(
 def _make_ctx(
     message_history: list | None = None,
     *,
-    memory_dir: "Path | None" = None,
+    knowledge_dir: "Path | None" = None,
     frontend: "Frontend | None" = None,
 ) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
@@ -74,7 +74,7 @@ def _make_ctx(
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(),
-        **({"memory_dir": memory_dir} if memory_dir is not None else {}),
+        **({"knowledge_dir": knowledge_dir} if knowledge_dir is not None else {}),
     )
     return CommandContext(
         message_history=message_history or [],
@@ -447,16 +447,19 @@ def test_cleanup_skill_clears_active_skill_name():
 def _write_memory(
     memory_dir: Path, filename: str, entry_id: str, content: str, **fm_extra
 ) -> Path:
-    """Write a minimal valid memory file and return its path."""
+    """Write a canonical kind=knowledge artifact and return its path."""
     from datetime import UTC, datetime
 
     created = fm_extra.pop("created", datetime.now(UTC).isoformat())
-    kind = fm_extra.pop("kind", "memory")
+    artifact_kind = fm_extra.pop("artifact_kind", fm_extra.pop("kind", "preference"))
+    if artifact_kind == "memory":
+        artifact_kind = "preference"
     tags = fm_extra.pop("tags", [])
     tags_yaml = "[" + ", ".join(tags) + "]"
     extra_lines = "".join(f"{k}: {v}\n" for k, v in fm_extra.items())
     raw = (
-        f"---\nid: {entry_id}\nkind: {kind}\ncreated: '{created}'\ntags: {tags_yaml}\n"
+        f"---\nid: '{entry_id}'\nkind: knowledge\nartifact_kind: {artifact_kind}\n"
+        f"created: '{created}'\ntags: {tags_yaml}\n"
         f"{extra_lines}---\n\n{content}\n"
     )
     path = memory_dir / filename
@@ -473,7 +476,7 @@ async def test_cmd_memory_list_all(tmp_path):
     _write_memory(memory_dir, "b.md", "bbb-0002", "beta content")
     _write_memory(memory_dir, "c.md", "ccc-0003", "gamma content")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
     with console.capture() as cap:
         result = await dispatch("/memory list", ctx)
 
@@ -493,7 +496,7 @@ async def test_cmd_memory_list_query(tmp_path):
     _write_memory(memory_dir, "b.md", "bbb-0002", "nothing special")
     _write_memory(memory_dir, "c.md", "ccc-0003", "also nothing relevant")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
     with console.capture() as cap:
         result = await dispatch("/memory list unique-zeta-keyword", ctx)
 
@@ -516,7 +519,7 @@ async def test_cmd_memory_list_older_than(tmp_path):
     _write_memory(memory_dir, "old.md", "old-entry-id", "old content", created=old_date)
     _write_memory(memory_dir, "recent.md", "new-entry-id", "recent content", created=recent_date)
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
     with console.capture() as cap:
         result = await dispatch("/memory list --older-than 30", ctx)
 
@@ -527,21 +530,21 @@ async def test_cmd_memory_list_older_than(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cmd_memory_list_type(tmp_path):
-    """/memory list --type feedback returns only entries with type: feedback."""
+async def test_cmd_memory_list_kind(tmp_path):
+    """/memory list --kind feedback returns only feedback artifacts."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
-    _write_memory(memory_dir, "fb.md", "fb-entry-id", "feedback content", type="feedback")
-    _write_memory(memory_dir, "pr.md", "pr-entry-id", "project content", type="project")
+    _write_memory(memory_dir, "fb.md", "fb-entry-id", "feedback content", kind="feedback")
+    _write_memory(memory_dir, "ru.md", "ru-entry-id", "rule content", kind="rule")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
     with console.capture() as cap:
-        result = await dispatch("/memory list --type feedback", ctx)
+        result = await dispatch("/memory list --kind feedback", ctx)
 
     assert isinstance(result, LocalOnly)
     out = cap.get()
     assert "fb-entry" in out
-    assert "pr-entry" not in out
+    assert "ru-entry" not in out
 
 
 @pytest.mark.asyncio
@@ -553,7 +556,7 @@ async def test_cmd_memory_count_all(tmp_path):
     _write_memory(memory_dir, "b.md", "id-beta", "beta")
     _write_memory(memory_dir, "c.md", "id-gamma", "gamma")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
     with console.capture() as cap:
         result = await dispatch("/memory count", ctx)
 
@@ -570,7 +573,7 @@ async def test_cmd_memory_count_query(tmp_path):
     _write_memory(memory_dir, "b.md", "id-match2", "xylophone-unique-token also")
     _write_memory(memory_dir, "c.md", "id-nomatch", "nothing relevant at all")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
     with console.capture() as cap:
         result = await dispatch("/memory count xylophone-unique-token", ctx)
 
@@ -590,7 +593,7 @@ async def test_cmd_memory_forget_no_args(tmp_path):
     memory_dir.mkdir()
     mem_file = _write_memory(memory_dir, "a.md", "id-should-stay", "some content")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
     result = await dispatch("/memory forget", ctx)
 
     assert isinstance(result, LocalOnly)
@@ -606,7 +609,7 @@ async def test_cmd_memory_forget_confirm_yes(tmp_path):
     f2 = _write_memory(memory_dir, "b.md", "id-del-2", "zeta-forget-token also here")
     f3 = _write_memory(memory_dir, "c.md", "id-keep", "unrelated content")
 
-    ctx = _make_ctx(memory_dir=memory_dir, frontend=SilentFrontend(confirm_response=True))
+    ctx = _make_ctx(knowledge_dir=memory_dir, frontend=SilentFrontend(confirm_response=True))
     result = await dispatch("/memory forget zeta-forget-token", ctx)
 
     assert isinstance(result, LocalOnly)
@@ -623,7 +626,7 @@ async def test_cmd_memory_forget_confirm_no(tmp_path):
     f1 = _write_memory(memory_dir, "a.md", "id-safe-1", "omega-abort-token content")
     f2 = _write_memory(memory_dir, "b.md", "id-safe-2", "omega-abort-token also")
 
-    ctx = _make_ctx(memory_dir=memory_dir, frontend=SilentFrontend(confirm_response=False))
+    ctx = _make_ctx(knowledge_dir=memory_dir, frontend=SilentFrontend(confirm_response=False))
     result = await dispatch("/memory forget omega-abort-token", ctx)
 
     assert isinstance(result, LocalOnly)
@@ -638,7 +641,7 @@ async def test_cmd_memory_forget_no_match(tmp_path):
     memory_dir.mkdir()
     _write_memory(memory_dir, "a.md", "id-exists", "some totally different content")
 
-    ctx = _make_ctx(memory_dir=memory_dir, frontend=SilentFrontend(confirm_response=True))
+    ctx = _make_ctx(knowledge_dir=memory_dir, frontend=SilentFrontend(confirm_response=True))
     with console.capture() as cap:
         result = await dispatch("/memory forget nonexistent-zzz-query", ctx)
 
@@ -657,9 +660,9 @@ async def test_cmd_memory_forget_removes_db_entry(tmp_path):
 
     idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     try:
-        idx.sync_dir("memory", memory_dir)
+        idx.sync_dir("knowledge", memory_dir)
         # Confirm the entry is in the DB before forget
-        before = idx.search(token, source="memory", limit=10)
+        before = idx.search(token, source="knowledge", limit=10)
         assert any(str(f1) in r.path for r in before), "Entry must be indexed before forget"
 
         deps = CoDeps(
@@ -668,7 +671,7 @@ async def test_cmd_memory_forget_removes_db_entry(tmp_path):
             tool_index=dict(_TOOL_REG.tool_index),
             config=_CONFIG_NO_MCP,
             session=CoSessionState(),
-            memory_dir=memory_dir,
+            knowledge_dir=memory_dir,
             knowledge_store=idx,
         )
         ctx = CommandContext(
@@ -681,7 +684,7 @@ async def test_cmd_memory_forget_removes_db_entry(tmp_path):
 
         assert isinstance(result, LocalOnly)
         assert not f1.exists(), "File must be deleted"
-        after = idx.search(token, source="memory", limit=10)
+        after = idx.search(token, source="knowledge", limit=10)
         assert not any(str(f1) in r.path for r in after), "DB entry must be removed after forget"
     finally:
         idx.close()
@@ -695,7 +698,7 @@ async def test_cmd_memory_forget_removes_db_entry(tmp_path):
 @pytest.mark.asyncio
 async def test_cmd_memory_registered(tmp_path):
     """/memory list dispatches successfully — command is registered in BUILTIN_COMMANDS."""
-    ctx = _make_ctx(memory_dir=tmp_path)
+    ctx = _make_ctx(knowledge_dir=tmp_path)
     result = await dispatch("/memory list", ctx)
     assert isinstance(result, LocalOnly)
 

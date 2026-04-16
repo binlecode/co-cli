@@ -207,7 +207,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
                     knowledge_store.sync_dir("memory", memory_dir) if memory_dir.exists() else 0
                 )
                 ks_label = f"KnowledgeStore({n_indexed} docs indexed)"
-                deps = make_eval_deps(knowledge_store=knowledge_store, memory_dir=memory_dir)
+                deps = make_eval_deps(knowledge_store=knowledge_store, knowledge_dir=memory_dir)
 
             steps.append(
                 {

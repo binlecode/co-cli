@@ -1,23 +1,20 @@
 """SQLite FTS5 knowledge index for ranked search across all text sources.
 
-KnowledgeStore is a single SQLite-backed search index (search.db) that any
-source can write to. The `source` column distinguishes origin. The `kind`
-column ('memory', 'article') distinguishes knowledge file types.
+KnowledgeStore is a single SQLite-backed search index (``search.db``) that any
+source writes to. The ``source`` column distinguishes origin; the ``kind`` /
+``type`` columns hold the ``artifact_kind`` subtype for local artifacts.
 
 Source namespace:
-  source='library'  — kind:article files (user-global saved references)
-  source='obsidian' — Obsidian vault notes
-  source='drive'    — Google Drive docs (indexed on read)
+  source='knowledge' — reusable artifacts under ~/.co-cli/knowledge/
+                       (preferences, rules, feedback, articles, notes, references)
+  source='obsidian'  — Obsidian vault notes
+  source='drive'     — Google Drive docs (indexed on read)
 
-Memory files (kind:memory) use grep-only search — they are not indexed in FTS.
-
-The index is derived and rebuildable — deleting search.db and restarting
-rebuilds cleanly from files.
-
-FTS5 BM25 ranking on chunks_fts (library, obsidian, drive). docs_fts table
-retained for schema migration/reset only.
-Hybrid mode adds sqlite-vec vector similarity (chunks_vec) merged via RRF.
-Falls back to FTS5-only if embedding provider is unavailable.
+All sources chunk into ``chunks_fts`` (and ``chunks_vec`` in hybrid mode). The
+index is derived and rebuildable — deleting ``search.db`` and restarting
+rebuilds cleanly from files. Hybrid mode adds sqlite-vec vector similarity
+merged via RRF and falls back to FTS5-only if the embedding provider is
+unavailable.
 """
 
 import dataclasses
@@ -204,17 +201,6 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
 END;
 """
 
-_MEMORY_FTS_SQL = """
-SELECT d.source, d.kind, d.path, d.title, d.tags, d.category, d.created, d.updated,
-       d.provenance, d.certainty, d.type, d.description,
-       snippet(docs_fts, 1, '>', '<', '...', 40) AS snippet,
-       bm25(docs_fts) AS rank
-  FROM docs_fts
-  JOIN docs d ON d.rowid = docs_fts.rowid
- WHERE docs_fts MATCH ?
-   AND d.source = 'memory'
-"""
-
 _CHUNKS_FTS_SQL = """
 SELECT c.source, c.doc_path AS path,
        snippet(chunks_fts, 0, '>', '<', '...', 40) AS snippet,
@@ -226,15 +212,6 @@ SELECT c.source, c.doc_path AS path,
   JOIN docs d ON d.source = c.source AND d.path = c.doc_path AND d.chunk_id = 0
  WHERE chunks_fts MATCH ?
 """
-
-
-def _uses_chunks_leg(source: str | list[str] | None) -> bool:
-    """True when the non-memory (chunks_fts/chunks_vec) leg should be queried."""
-    if source is None:
-        return True
-    if isinstance(source, str):
-        return source != "memory"
-    return any(s != "memory" for s in source)
 
 
 def _coerce_sources(source: str | list[str] | None) -> list[str] | None:
@@ -296,7 +273,7 @@ class KnowledgeStore:
 
     Usage:
         idx = KnowledgeStore(config=Settings())
-        idx.sync_dir("library", library_dir, kind_filter="article")
+        idx.sync_dir("knowledge", knowledge_dir)
         results = idx.search("pytest testing")
         idx.close()
     """
@@ -503,16 +480,12 @@ class KnowledgeStore:
         """Write paragraph chunks to chunks/chunks_fts (and chunks_vec in hybrid mode).
 
         Replaces all existing chunks for (source, doc_path) atomically.
-        Memory source is not allowed — raises ValueError.
 
         Args:
-            source: Source label ('library', 'obsidian', 'drive'). Not 'memory'.
+            source: Source label ('knowledge', 'obsidian', 'drive').
             doc_path: Path key matching the docs.path for this document.
             chunks: List of Chunk objects from _chunker.chunk_text().
         """
-        if source == "memory":
-            raise ValueError("memory source must not be chunked")
-
         if self._backend == "hybrid":
             existing_rowids = [
                 row[0]
@@ -599,10 +572,10 @@ class KnowledgeStore:
         In hybrid mode, falls back to FTS5 if the embedding provider fails.
 
         Source filter shortcuts:
-          source="library"  → library articles only
-          source="obsidian" → Obsidian vault notes only
-          source=["library", "obsidian", "drive"] → multiple sources via IN-clause
-          source="memory"   → memory files (docs_fts leg; no chunks required)
+          source="knowledge" → local knowledge artifacts
+          source="obsidian"  → Obsidian vault notes only
+          source="drive"     → Google Drive documents only
+          source=["knowledge", "obsidian", "drive"] → multiple sources via IN-clause
         """
         if self._build_fts_query(query) is None:
             return []
@@ -646,19 +619,6 @@ class KnowledgeStore:
         limit: int,
     ) -> list[SearchResult]:
         """Hybrid BM25 + vector search with chunk-level RRF. Falls back to FTS5."""
-        # Memory source: no vector leg — use FTS docs-leg only
-        if not _uses_chunks_leg(source):
-            return self._fts_search(
-                query,
-                source=source,
-                kind=kind,
-                tags=tags,
-                tag_match_mode=tag_match_mode,
-                created_after=created_after,
-                created_before=created_before,
-                limit=limit,
-            )
-
         fts_chunks = self._fts_chunks_raw(
             query,
             source=source,
@@ -695,71 +655,6 @@ class KnowledgeStore:
         fts_results = sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)
         return self._rerank_results(query, fts_results, limit)
 
-    def _run_memory_fts(
-        self,
-        fts_query: str,
-        *,
-        kind: str | None,
-        tags: list[str] | None,
-        tag_match_mode: Literal["any", "all"],
-        created_after: str | None,
-        created_before: str | None,
-        limit: int,
-    ) -> list[SearchResult]:
-        """Execute docs_fts (memory source) leg. Returns SearchResult list sorted by score."""
-        sql = _MEMORY_FTS_SQL
-        params: list[Any] = [fts_query]
-        if kind is not None:
-            sql += " AND d.kind = ?"
-            params.append(kind)
-        if created_after is not None:
-            sql += " AND d.created >= ?"
-            params.append(created_after)
-        if created_before is not None:
-            sql += " AND d.created <= ?"
-            params.append(created_before)
-        sql += " ORDER BY rank LIMIT ?"
-        params.append(limit * 4)
-        try:
-            rows = self._conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError as e:  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
-            logger.warning(f"Memory FTS search error: {e}")
-            return []
-
-        if tags:
-            tag_set = set(tags)
-            if tag_match_mode == "all":
-                rows = [r for r in rows if tag_set <= {t for t in (r["tags"] or "").split() if t}]
-            else:
-                rows = [r for r in rows if tag_set & {t for t in (r["tags"] or "").split() if t}]
-
-        results: list[SearchResult] = []
-        for row in rows:
-            rank = row["rank"]
-            score = 1.0 / (1.0 + abs(rank))
-            results.append(
-                SearchResult(
-                    source=row["source"],
-                    kind=row["kind"],
-                    path=row["path"],
-                    title=row["title"],
-                    snippet=row["snippet"],
-                    score=score,
-                    tags=row["tags"],
-                    category=row["category"],
-                    created=row["created"],
-                    updated=row["updated"],
-                    provenance=row["provenance"],
-                    certainty=row["certainty"],
-                    chunk_index=None,
-                    start_line=None,
-                    end_line=None,
-                    type=row["type"],
-                    description=row["description"],
-                )
-            )
-        return sorted(results, key=lambda r: r.score, reverse=True)[:limit]
-
     def _fts_search(
         self,
         query: str,
@@ -772,22 +667,10 @@ class KnowledgeStore:
         created_before: str | None,
         limit: int,
     ) -> list[SearchResult]:
-        """BM25 FTS5 search. Uses docs_fts leg for memory, chunks_fts for all other sources."""
+        """BM25 FTS5 search over chunks_fts — single leg for all sources."""
         fts_query = self._build_fts_query(query)
         if fts_query is None:
             return []
-
-        # Memory path: docs_fts leg (memories are whole-doc, no chunks)
-        if not _uses_chunks_leg(source):
-            return self._run_memory_fts(
-                fts_query,
-                kind=kind,
-                tags=list(dict.fromkeys(tags)) if tags else tags,
-                tag_match_mode=tag_match_mode,
-                created_after=created_after,
-                created_before=created_before,
-                limit=limit,
-            )
 
         tags = list(dict.fromkeys(tags)) if tags else tags
         # Chunks leg always uses a larger pool: one document produces N chunk rows,
@@ -1334,19 +1217,17 @@ class KnowledgeStore:
         source: str,
         directory: Path,
         glob: str = "**/*.md",
-        kind_filter: str | None = None,
     ) -> int:
         """Incrementally index a directory of markdown files.
 
         Parses frontmatter for metadata. Uses SHA256 hash for change detection
         (only re-indexes changed files). Removes stale entries for deleted files.
+        Every indexed file is also chunked into ``chunks_fts``.
 
         Args:
-            source: Source label ('memory', 'library', 'obsidian', 'drive').
+            source: Source label ('knowledge', 'obsidian', 'drive').
             directory: Directory to scan.
             glob: Glob pattern for files (default '**/*.md', recursive).
-            kind_filter: When set, only index files whose frontmatter kind matches.
-                         When None, all files are indexed regardless of kind.
 
         Returns:
             Number of files indexed (new or changed).
@@ -1354,10 +1235,7 @@ class KnowledgeStore:
         if not directory.exists():
             return 0
 
-        if source != "memory":
-            from co_cli.knowledge._chunker import chunk_text as _chunk_text
-        else:
-            _chunk_text = None
+        from co_cli.knowledge._chunker import chunk_text as _chunk_text
 
         current_paths: set[str] = set()
         indexed = 0
@@ -1373,9 +1251,7 @@ class KnowledgeStore:
                     continue
 
                 fm, body = parse_frontmatter(raw)
-                kind = fm.get("kind", "memory")
-                if kind_filter is not None and kind != kind_filter:
-                    continue
+                artifact_kind = fm.get("artifact_kind") or fm.get("kind")
                 title = fm.get("title") or file_path.stem
                 tags_list = fm.get("tags") or []
                 tags_str = " ".join(tags_list) if tags_list else None
@@ -1383,7 +1259,7 @@ class KnowledgeStore:
 
                 self.index(
                     source=source,
-                    kind=kind,
+                    kind=artifact_kind,
                     path=path_str,
                     title=title,
                     content=body.strip(),
@@ -1393,16 +1269,15 @@ class KnowledgeStore:
                     category=fm.get("auto_category"),
                     created=fm.get("created"),
                     updated=fm.get("updated"),
-                    type=fm.get("type"),
+                    type=artifact_kind,
                     description=fm.get("description"),
                 )
-                if _chunk_text is not None:
-                    text_chunks = _chunk_text(
-                        body.strip(),
-                        chunk_size=self._chunk_size,
-                        overlap=self._chunk_overlap,
-                    )
-                    self.index_chunks(source, path_str, text_chunks)
+                text_chunks = _chunk_text(
+                    body.strip(),
+                    chunk_size=self._chunk_size,
+                    overlap=self._chunk_overlap,
+                )
+                self.index_chunks(source, path_str, text_chunks)
                 indexed += 1
             except Exception as e:
                 logger.warning(f"Failed to index {file_path}: {e}")

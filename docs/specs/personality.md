@@ -37,7 +37,7 @@ Personality enters the agent via two paths:
 
 2. **Per-turn** — `add_personality_memories()` is registered as an `@agent.instructions`
    callback. It fires fresh on every turn, injecting the top-5 most recent memories tagged
-   `personality-context` from `~/.co-cli/memory/`. This lets learned context about the user
+   `personality-context` from `~/.co-cli/knowledge/`. This lets learned context about the user
    accumulate over sessions and shape personality expression without modifying the soul files.
 
 ```
@@ -56,7 +56,7 @@ build_static_instructions(config)
 Each turn
     ↓
 add_personality_memories()   — @agent.instructions callback
-    → loads top-5 "personality-context" memories from ~/.co-cli/memory/
+    → loads top-5 "personality-context" memories from ~/.co-cli/knowledge/
     → injected as ## Learned Context block
 ```
 
@@ -115,7 +115,7 @@ be numbered `01`–`05`, contiguous, and unique. Current rules: `01_identity.md`
 `_load_personality_memories()` in `personalities/_injector.py`:
 
 ```
-memories = load_memories(memory_dir, tags=["personality-context"])
+memories = load_knowledge_artifacts(knowledge_dir, tags=["personality-context"])
 sorted by recency (updated_at or created_at)
 take top 5
 return "## Learned Context\n\n" + bullet list of bodies

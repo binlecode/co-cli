@@ -173,7 +173,7 @@ def _make_ctx(
         session=session,
     )
     if memory_dir is not None:
-        deps.memory_dir = memory_dir
+        deps.knowledge_dir = memory_dir
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 

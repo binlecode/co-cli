@@ -15,9 +15,9 @@
 - Tool semantics and approval policy details (owned by `tools.md` and `core-loop.md`)
 - Session browser, transcript format, and slash-command catalog details
 - Provider-specific wire format after the SDK has accepted the processed request
-- Memory/article schema internals (owned by `memory.md` and `library.md`)
+- Memory/article schema internals (owned by `memory.md` and `knowledge.md`)
 
-**Success criteria:** A reader can reconstruct which local files, config fields, runtime registries, and prior-turn artifacts shape the next model request, in what order, and can distinguish soul-defined personality from runtime insights stored in `~/.co-cli/memory/`.
+**Success criteria:** A reader can reconstruct which local files, config fields, runtime registries, and prior-turn artifacts shape the next model request, in what order, and can distinguish soul-defined personality from runtime insights stored in `~/.co-cli/knowledge/`.
 **Status:** Stable
 **Known gaps:** Exact provider payload serialization and any SDK-owned toolset instruction text are outside co-cli's source tree. This doc owns the co-cli sequence up to the SDK boundary and the co-cli-managed transforms applied before send.
 
@@ -190,7 +190,7 @@ Important boundaries:
 
 - soul-defined personality lives only under `souls/{role}/...`
 - the role-specific `souls/{role}/memories/*.md` files are the base personality memory layer and occupy step 2 after the seed
-- `~/.co-cli/memory/` is the runtime memory store populated by `save_memory`; it is not the base personality store
+- `~/.co-cli/knowledge/` is the runtime knowledge store populated by `save_knowledge` (and the deprecated `save_memory` wrapper); it is not the base personality store
 - rule filename validation is fail-fast: invalid or non-contiguous rule numbering raises `ValueError`
 - the assembled static string must be non-empty
 

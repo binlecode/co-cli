@@ -10,8 +10,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.config._core import (
     DEFAULT_REASONING_DISPLAY,
-    LIBRARY_DIR,
-    MEMORY_DIR,
+    KNOWLEDGE_DIR,
     SEARCH_DB,
     SESSIONS_DIR,
     TOOL_RESULTS_DIR,
@@ -152,8 +151,7 @@ class CoRuntimeState:
 # skills_dir: co-bundled skills shipped with the package
 _DEFAULT_SKILLS_DIR = Path(__file__).parent / "skills"
 _DEFAULT_USER_SKILLS_DIR = USER_DIR / "skills"
-_DEFAULT_MEMORY_DIR = MEMORY_DIR
-_DEFAULT_LIBRARY_DIR = LIBRARY_DIR
+_DEFAULT_KNOWLEDGE_DIR = KNOWLEDGE_DIR
 _DEFAULT_SESSIONS_DIR = SESSIONS_DIR
 _DEFAULT_TOOL_RESULTS_DIR = TOOL_RESULTS_DIR
 
@@ -164,7 +162,7 @@ class CoDeps:
 
     config: Settings instance (read-only after bootstrap).
     Workspace paths and runtime degradation state live here, not on config.
-    Tools access via ctx.deps.config.llm.provider, ctx.deps.memory_dir, etc.
+    Tools access via ctx.deps.config.llm.provider, ctx.deps.knowledge_dir, etc.
     """
 
     # Service handles
@@ -192,10 +190,9 @@ class CoDeps:
     # Workspace paths — resolved from cwd at bootstrap, not from config
     workspace_root: Path = field(default_factory=Path.cwd)
     obsidian_vault_path: Path | None = None
-    memory_dir: Path = field(default_factory=lambda: _DEFAULT_MEMORY_DIR)
+    knowledge_dir: Path = field(default_factory=lambda: _DEFAULT_KNOWLEDGE_DIR)
     skills_dir: Path = field(default_factory=lambda: _DEFAULT_SKILLS_DIR)
     user_skills_dir: Path = field(default_factory=lambda: _DEFAULT_USER_SKILLS_DIR)
-    library_dir: Path = field(default_factory=lambda: _DEFAULT_LIBRARY_DIR)
     knowledge_db_path: Path = field(default_factory=lambda: SEARCH_DB)
     sessions_dir: Path = field(default_factory=lambda: _DEFAULT_SESSIONS_DIR)
     tool_results_dir: Path = field(default_factory=lambda: _DEFAULT_TOOL_RESULTS_DIR)
@@ -217,12 +214,11 @@ def resolve_workspace_paths(config: Settings, cwd: Path) -> dict[str, Any]:
         "obsidian_vault_path": Path(config.obsidian_vault_path)
         if config.obsidian_vault_path
         else None,
-        "memory_dir": MEMORY_DIR,
         "skills_dir": Path(__file__).parent / "skills",
         "user_skills_dir": USER_DIR / "skills",
         "sessions_dir": SESSIONS_DIR,
         "tool_results_dir": TOOL_RESULTS_DIR,
-        "library_dir": Path(config.library_path) if config.library_path else LIBRARY_DIR,
+        "knowledge_dir": Path(config.knowledge_path) if config.knowledge_path else KNOWLEDGE_DIR,
     }
 
 
@@ -261,10 +257,9 @@ def fork_deps(base: CoDeps) -> CoDeps:
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
         workspace_root=base.workspace_root,
         obsidian_vault_path=base.obsidian_vault_path,
-        memory_dir=base.memory_dir,
+        knowledge_dir=base.knowledge_dir,
         skills_dir=base.skills_dir,
         user_skills_dir=base.user_skills_dir,
-        library_dir=base.library_dir,
         knowledge_db_path=base.knowledge_db_path,
         sessions_dir=base.sessions_dir,
         tool_results_dir=base.tool_results_dir,

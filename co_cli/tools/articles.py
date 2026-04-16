@@ -1,35 +1,32 @@
 """Article tools for saving and retrieving external reference material.
 
-Articles are externally-fetched knowledge items (web docs, reference material,
-research) stored as markdown files with YAML frontmatter in the user-global library
-(~/.co-cli/library/ by default, configurable via CO_LIBRARY_PATH).
-They differ from memories in three ways:
-- kind: article (vs kind: memory)
-- origin_url: URL they were fetched from
+Articles are externally-fetched knowledge artifacts (web docs, reference
+material, research) stored as markdown files in ``~/.co-cli/knowledge/``
+(configurable via ``CO_KNOWLEDGE_DIR``). They are one ``artifact_kind`` under
+the unified knowledge layer:
+- artifact_kind: article
+- source_type: web_fetch
+- source_ref: the origin URL (also used as the dedup key)
 - decay_protected: true by default
 
-Use save_article vs save_memory:
-- save_article: externally-fetched web content, reference material, documentation
-- save_memory: conversation-derived facts, user preferences, decisions, corrections
-
-Use search_articles for summary-level lookup; use read_article for full body.
+Use ``search_articles`` for summary-level lookup; use ``read_article`` for full body.
 """
 
 import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
-import yaml
 from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
+from co_cli.knowledge._artifact import ArtifactKindEnum, KnowledgeArtifact, SourceTypeEnum
+from co_cli.knowledge._frontmatter import parse_frontmatter, render_knowledge_file
 from co_cli.knowledge._ranking import compute_confidence, detect_contradictions
-from co_cli.tools.memory import filter_memories, grep_recall, load_memories
+from co_cli.tools.memory import filter_memories, grep_recall
 from co_cli.tools.tool_io import tool_output, tool_output_raw
 
 logger = logging.getLogger(__name__)
@@ -52,7 +49,7 @@ def _grep_fallback_knowledge(
     limit: int,
 ) -> "ToolReturn":
     """Grep-based fallback when FTS store is unavailable."""
-    if source not in (None, "library"):
+    if source not in (None, "knowledge"):
         return tool_output(
             f"No results for '{query}' (source={source!r} requires FTS)",
             ctx=ctx,
@@ -60,22 +57,22 @@ def _grep_fallback_knowledge(
             results=[],
         )
     otel_trace.get_current_span().set_attribute("rag.backend", "grep")
-    effective_kind = kind if kind is not None else "article"
-    memories = load_memories(ctx.deps.library_dir, kind=effective_kind)
-    memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
-    matches = grep_recall(memories, query, limit)
+    from co_cli.knowledge._artifact import load_knowledge_artifacts
+
+    artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind)
+    artifacts = filter_memories(artifacts, tags, tag_match_mode, created_after, created_before)
+    matches = grep_recall(artifacts, query, limit)
     if not matches:
         return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
     lines = [f"Found {len(matches)} result(s) for '{query}':\n"]
     result_dicts = []
     for m in matches:
-        result_source = "memory" if m.kind == "memory" else "library"
-        lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
+        lines.append(f"**{m.path.stem}** [{m.artifact_kind}]: {m.content[:100]}")
         result_dicts.append(
             {
-                "source": result_source,
-                "kind": m.kind,
-                "title": m.path.stem,
+                "source": "knowledge",
+                "kind": m.artifact_kind,
+                "title": m.title or m.path.stem,
                 "snippet": m.content[:100],
                 "score": 0.0,
                 "path": str(m.path),
@@ -132,18 +129,18 @@ async def search_knowledge(
     created_before: str | None = None,
 ) -> ToolReturn:
     """Primary cross-source knowledge search — use this when the source is unknown
-    or when you want unified results across memories, articles, Obsidian notes,
-    and Drive docs in a single ranked result set.
+    or when you want unified results across local knowledge artifacts, Obsidian
+    notes, and Drive docs in a single ranked result set.
 
     Source filter shortcuts:
-    - source="library" → local articles only
-    - source="obsidian" → Obsidian vault notes only
+    - source="knowledge" → local knowledge artifacts only (preferences, rules, articles, notes)
+    - source="obsidian"  → Obsidian vault notes only
+    - source="drive"     → Google Drive docs only
 
-    Default (source=None) searches library, obsidian, and drive — memories excluded.
-    Use search_memories() for dedicated memory search.
+    Default (source=None) searches knowledge, obsidian, and drive.
 
-    Falls back to grep on knowledge files (articles) when FTS unavailable.
-    Obsidian and Drive require FTS — results are article-only in fallback mode.
+    Falls back to grep on knowledge files when FTS unavailable. Obsidian and
+    Drive require FTS — results are local-artifact-only in fallback mode.
 
     Returns a dict with:
     - display: formatted ranked results — show directly to the user
@@ -152,8 +149,8 @@ async def search_knowledge(
 
     Args:
         query: Free-text search query.
-        kind: Filter by kind — "memory" or "article". None = all.
-        source: Filter by source — "library", "obsidian", or "drive". None = all.
+        kind: Filter by artifact_kind — "preference", "article", "rule", etc. None = all.
+        source: Filter by source — "knowledge", "obsidian", or "drive". None = all.
         limit: Max results to return (default 10).
         tags: Tag filter list. None = no filter.
         tag_match_mode: 'any' (OR) or 'all' (AND — doc must have every tag).
@@ -161,7 +158,6 @@ async def search_knowledge(
         created_before: ISO8601 date string; only return items created on or before this date.
     """
     if ctx.deps.knowledge_store is None:
-        # Fallback: grep knowledge files (articles); obsidian/drive require FTS
         return _grep_fallback_knowledge(
             ctx, query, source, kind, tags, tag_match_mode, created_after, created_before, limit
         )
@@ -175,15 +171,7 @@ async def search_knowledge(
     otel_trace.get_current_span().set_attribute(
         "rag.backend", ctx.deps.config.knowledge.search_backend
     )
-    # Reject source="memory" — use search_memories() for memory search.
-    if source == "memory":
-        return tool_output(
-            "source='memory' is not supported by search_knowledge. Use search_memories() instead.",
-            ctx=ctx,
-            count=0,
-            results=[],
-        )
-    fts_source = source if source is not None else ["library", "obsidian", "drive"]
+    fts_source = source if source is not None else ["knowledge", "obsidian", "drive"]
     try:
         results = ctx.deps.knowledge_store.search(
             query,
@@ -216,15 +204,11 @@ async def save_article(
     """Save an article from external reference material for long-term retrieval.
 
     Use for web pages, documentation, or research worth keeping permanently.
-    Articles are decay-protected and persist indefinitely unlike memories.
-
-    Use save_article for externally-fetched content — web docs, API references,
-    research papers, guides. Use save_memory for conversation-derived facts
-    (preferences, decisions, corrections).
+    Articles are decay-protected and persist indefinitely.
 
     Deduplication by origin_url: saving the same URL a second time consolidates
     (updates content and tags) rather than creating a duplicate. The origin_url
-    is the dedup key, not content similarity.
+    is stored as ``source_ref`` on the artifact and serves as the dedup key.
 
     Returns a dict with:
     - display: confirmation message — show directly to the user
@@ -236,89 +220,51 @@ async def save_article(
         title: Article title (used in display and as slug base).
         origin_url: Source URL the article was fetched from.
         tags: Categorization tags (e.g. ["python", "async", "reference"]).
-        related: Slugs of related memories/articles for knowledge linking.
+        related: Slugs of related knowledge artifacts for cross-linking.
     """
-    library_dir = ctx.deps.library_dir
-    library_dir.mkdir(parents=True, exist_ok=True)
+    knowledge_dir = ctx.deps.knowledge_dir
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
 
-    # Dedup by origin_url exact match
-    existing = _find_article_by_url(library_dir, origin_url)
+    existing = _find_article_by_url(knowledge_dir, origin_url)
     if existing is not None:
-        result = _consolidate_article(existing, content, title, tags, origin_url)
-        if ctx.deps.knowledge_store is not None:
-            try:
-                updated_raw = existing.read_text(encoding="utf-8")
-                fm2, body2 = parse_frontmatter(updated_raw)
-                # Use merged tags from frontmatter, not just the incoming tags arg
-                merged_tags_str = " ".join(fm2.get("tags", []))
-                ctx.deps.knowledge_store.index(
-                    source="library",
-                    kind="article",
-                    path=str(existing),
-                    title=title,
-                    content=body2.strip(),
-                    mtime=existing.stat().st_mtime,
-                    hash=_content_hash(updated_raw),
-                    tags=merged_tags_str,
-                    created=fm2.get("created"),
-                    updated=fm2.get("updated"),
-                )
-                from co_cli.knowledge._chunker import chunk_text
-
-                consolidated_chunks = chunk_text(
-                    body2.strip(),
-                    chunk_size=ctx.deps.config.knowledge.chunk_size,
-                    overlap=ctx.deps.config.knowledge.chunk_overlap,
-                )
-                ctx.deps.knowledge_store.index_chunks(
-                    "library", str(existing), consolidated_chunks
-                )
-            except Exception as e:
-                logger.warning(f"Failed to reindex consolidated article: {e}")
-        return result
+        return _consolidate_and_reindex(ctx, existing, content, title, tags, origin_url)
 
     import uuid as _uuid
 
     article_id = str(_uuid.uuid4())
     slug = _slugify(title[:50])
     filename = f"{slug}-{article_id[:6]}.md"
+    file_path = knowledge_dir / filename
 
-    frontmatter: dict[str, Any] = {
-        "id": article_id,
-        "kind": "article",
-        "title": title,
-        "origin_url": origin_url,
-        "created": datetime.now(UTC).isoformat(),
-        "tags": tags or [],
-        "provenance": "web-fetch",
-        "decay_protected": True,
-        "auto_category": None,
-    }
-    if related:
-        frontmatter["related"] = related
-
-    validate_memory_frontmatter(frontmatter)
-
-    md_content = (
-        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{content.strip()}\n"
+    artifact = KnowledgeArtifact(
+        id=article_id,
+        path=file_path,
+        artifact_kind=ArtifactKindEnum.ARTICLE.value,
+        title=title,
+        content=content,
+        created=datetime.now(UTC).isoformat(),
+        tags=list(tags or []),
+        related=list(related or []),
+        source_type=SourceTypeEnum.WEB_FETCH.value,
+        source_ref=origin_url,
+        decay_protected=True,
     )
-
-    file_path = library_dir / filename
+    md_content = render_knowledge_file(artifact)
     file_path.write_text(md_content, encoding="utf-8")
     logger.info(f"Saved article {article_id} to {file_path}")
 
     if ctx.deps.knowledge_store is not None:
         try:
             ctx.deps.knowledge_store.index(
-                source="library",
-                kind="article",
+                source="knowledge",
+                kind=ArtifactKindEnum.ARTICLE.value,
                 path=str(file_path),
                 title=title,
                 content=content,
                 mtime=file_path.stat().st_mtime,
                 hash=_content_hash(md_content),
                 tags=" ".join(tags or []),
-                created=frontmatter["created"],
+                created=artifact.created,
             )
             from co_cli.knowledge._chunker import chunk_text
 
@@ -327,7 +273,7 @@ async def save_article(
                 chunk_size=ctx.deps.config.knowledge.chunk_size,
                 overlap=ctx.deps.config.knowledge.chunk_overlap,
             )
-            ctx.deps.knowledge_store.index_chunks("library", str(file_path), article_chunks)
+            ctx.deps.knowledge_store.index_chunks("knowledge", str(file_path), article_chunks)
         except Exception as e:
             logger.warning(f"Failed to index article {article_id}: {e}")
 
@@ -341,7 +287,7 @@ async def save_article(
 
 def _fts_search_articles(
     ctx: "RunContext[CoDeps]",
-    library_dir: Path,
+    knowledge_dir: Path,
     query: str,
     tags: "list[str] | None",
     tag_match_mode: "Literal['any', 'all']",
@@ -353,8 +299,8 @@ def _fts_search_articles(
     try:
         fts_results = ctx.deps.knowledge_store.search(
             query,
-            source="library",
-            kind="article",
+            source="knowledge",
+            kind=ArtifactKindEnum.ARTICLE.value,
             tags=tags,
             tag_match_mode=tag_match_mode,
             created_after=created_after,
@@ -379,7 +325,7 @@ def _fts_search_articles(
                 except Exception:
                     pass
             article_id = fm_data.get("id")
-            origin_url = fm_data.get("origin_url")
+            origin_url = fm_data.get("source_ref")
             title = r.title or fm_data.get("title", Path(r.path).stem if r.path else "")
             lines.append(f"**{title}** (score: {r.score:.3f})")
             if r.tags:
@@ -411,7 +357,7 @@ def _fts_search_articles(
 
 def _grep_search_articles(
     ctx: "RunContext[CoDeps]",
-    library_dir: Path,
+    knowledge_dir: Path,
     query: str,
     tags: "list[str] | None",
     tag_match_mode: "Literal['any', 'all']",
@@ -420,7 +366,11 @@ def _grep_search_articles(
     max_results: int,
 ) -> "ToolReturn":
     """Grep fallback search path for articles."""
-    articles = load_memories(library_dir, kind="article")
+    from co_cli.knowledge._artifact import load_knowledge_artifacts
+
+    articles = load_knowledge_artifacts(
+        knowledge_dir, artifact_kind=ArtifactKindEnum.ARTICLE.value
+    )
     query_lower = query.lower()
     matches = [
         a
@@ -440,14 +390,12 @@ def _grep_search_articles(
     lines = [f"Found {len(matches)} article(s) matching '{query}':\n"]
     result_dicts = []
     for a in matches:
-        raw = a.path.read_text(encoding="utf-8")
-        fm, _ = parse_frontmatter(raw)
-        title = fm.get("title", a.path.stem)
-        origin_url = fm.get("origin_url", "")
+        title = a.title or a.path.stem
+        origin_url = a.source_ref or ""
         first_para = a.content.split("\n\n")[0] if a.content else ""
         if len(first_para) > 200:
             first_para = first_para[:197] + "..."
-        display_id = str(a.id)[:8] if isinstance(a.id, str) else str(a.id)
+        display_id = str(a.id)[:8]
         lines.append(f"**{title}** (id: {display_id})")
         if origin_url:
             lines.append(f"Source: {origin_url}")
@@ -504,7 +452,7 @@ async def search_articles(
         created_after: ISO8601 date string; only return articles created on or after this date.
         created_before: ISO8601 date string; only return articles created on or before this date.
     """
-    library_dir = ctx.deps.library_dir
+    knowledge_dir = ctx.deps.knowledge_dir
 
     if (
         ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid")
@@ -512,7 +460,7 @@ async def search_articles(
     ):
         result = _fts_search_articles(
             ctx,
-            library_dir,
+            knowledge_dir,
             query,
             tags,
             tag_match_mode,
@@ -524,7 +472,7 @@ async def search_articles(
             return result
 
     return _grep_search_articles(
-        ctx, library_dir, query, tags, tag_match_mode, created_after, created_before, max_results
+        ctx, knowledge_dir, query, tags, tag_match_mode, created_after, created_before, max_results
     )
 
 
@@ -551,13 +499,13 @@ async def read_article(
     Args:
         slug: File stem from search_articles result (e.g. "042-python-asyncio-guide").
     """
-    library_dir = ctx.deps.library_dir
+    knowledge_dir = ctx.deps.knowledge_dir
 
     # Find by slug (file stem)
-    candidates = list(library_dir.glob(f"{slug}.md"))
+    candidates = list(knowledge_dir.glob(f"{slug}.md"))
     if not candidates:
         # Try prefix match (slug might be partial)
-        candidates = list(library_dir.glob(f"{slug}*.md"))
+        candidates = list(knowledge_dir.glob(f"{slug}*.md"))
     if not candidates:
         return tool_output(
             f"Article '{slug}' not found.",
@@ -573,7 +521,7 @@ async def read_article(
     fm, body = parse_frontmatter(raw)
 
     title = fm.get("title", path.stem)
-    origin_url = fm.get("origin_url", "")
+    origin_url = fm.get("source_ref") or ""
     article_id = fm.get("id")
 
     header_parts = [f"# {title}"]
@@ -597,51 +545,85 @@ async def read_article(
 
 
 def _find_article_by_url(knowledge_dir: Path, origin_url: str) -> Path | None:
-    """Find an existing article file by origin_url exact match.
-
-    Returns the Path of the matching file, or None if not found.
-    """
+    """Return the existing article whose ``source_ref`` matches origin_url, else None."""
     if not knowledge_dir.exists():
         return None
     for path in knowledge_dir.glob("*.md"):
         try:
             raw = path.read_text(encoding="utf-8")
             if origin_url not in raw:
-                # Fast prefilter — skip frontmatter parse if URL absent
                 continue
             fm, _ = parse_frontmatter(raw)
-            if fm.get("origin_url") == origin_url:
+            if fm.get("source_ref") == origin_url:
                 return path
         except Exception:
             continue
     return None
 
 
-def _consolidate_article(
+def _consolidate_and_reindex(
+    ctx: RunContext[CoDeps],
     path: Path,
     new_content: str,
     new_title: str,
     new_tags: list[str] | None,
     origin_url: str,
 ) -> ToolReturn:
-    """Consolidate an existing article (same origin_url) with new content."""
+    """Consolidate an existing article (same source_ref) and re-sync the index."""
     raw = path.read_text(encoding="utf-8")
     fm, _ = parse_frontmatter(raw)
 
-    existing_tags = fm.get("tags", [])
-    merged_tags = list(set(existing_tags + (new_tags or [])))
+    existing_tags = fm.get("tags") or []
+    merged_tags = sorted(set(existing_tags) | set(new_tags or []))
+    artifact_id = str(fm.get("id") or "")
+    created = fm.get("created") or datetime.now(UTC).isoformat()
 
-    fm["updated"] = datetime.now(UTC).isoformat()
-    fm["tags"] = merged_tags
-    fm["title"] = new_title
-
-    md_content = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{new_content.strip()}\n"
+    artifact = KnowledgeArtifact(
+        id=artifact_id,
+        path=path,
+        artifact_kind=ArtifactKindEnum.ARTICLE.value,
+        title=new_title,
+        content=new_content,
+        created=created,
+        updated=datetime.now(UTC).isoformat(),
+        tags=merged_tags,
+        related=list(fm.get("related") or []),
+        source_type=SourceTypeEnum.WEB_FETCH.value,
+        source_ref=origin_url,
+        decay_protected=True,
+    )
+    md_content = render_knowledge_file(artifact)
     path.write_text(md_content, encoding="utf-8")
-    logger.info(f"Consolidated article {fm.get('id')} (same origin_url)")
+    logger.info(f"Consolidated article {artifact_id} (same origin_url)")
+
+    if ctx.deps.knowledge_store is not None:
+        try:
+            ctx.deps.knowledge_store.index(
+                source="knowledge",
+                kind=ArtifactKindEnum.ARTICLE.value,
+                path=str(path),
+                title=new_title,
+                content=new_content.strip(),
+                mtime=path.stat().st_mtime,
+                hash=_content_hash(md_content),
+                tags=" ".join(merged_tags),
+                created=created,
+                updated=artifact.updated,
+            )
+            from co_cli.knowledge._chunker import chunk_text
+
+            chunks = chunk_text(
+                new_content.strip(),
+                chunk_size=ctx.deps.config.knowledge.chunk_size,
+                overlap=ctx.deps.config.knowledge.chunk_overlap,
+            )
+            ctx.deps.knowledge_store.index_chunks("knowledge", str(path), chunks)
+        except Exception as e:
+            logger.warning(f"Failed to reindex consolidated article: {e}")
 
     return tool_output_raw(
-        f"✓ Updated article {fm.get('id')}: {path.name}\nSource: {origin_url}\nLocation: {path}",
-        article_id=fm.get("id"),
+        f"✓ Updated article {artifact_id}: {path.name}\nSource: {origin_url}\nLocation: {path}",
+        article_id=artifact_id,
         action="consolidated",
     )
 

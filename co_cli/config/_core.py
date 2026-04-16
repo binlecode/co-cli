@@ -34,8 +34,7 @@ SETTINGS_FILE = USER_DIR / "settings.json"
 SEARCH_DB = USER_DIR / "co-cli-search.db"
 LOGS_DB = USER_DIR / "co-cli-logs.db"
 LOGS_DIR = USER_DIR / "logs"
-MEMORY_DIR = USER_DIR / "memory"
-LIBRARY_DIR = USER_DIR / "library"
+KNOWLEDGE_DIR = USER_DIR / "knowledge"
 SESSIONS_DIR = USER_DIR / "sessions"
 TOOL_RESULTS_DIR = USER_DIR / "tool-results"
 
@@ -62,8 +61,7 @@ def _ensure_dirs() -> None:
     """Create the canonical user-global directory and subdirectories (idempotent)."""
     USER_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -137,7 +135,7 @@ class Settings(BaseModel):
     obsidian_vault_path: str | None = Field(default=None)
     brave_search_api_key: str | None = Field(default=None)
     google_credentials_path: str | None = Field(default=None)
-    library_path: str | None = Field(default=None)
+    knowledge_path: str | None = Field(default=None)
 
     # Flat — behavior
     theme: str = Field(default=DEFAULT_THEME)
@@ -179,7 +177,7 @@ class Settings(BaseModel):
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
-            "library_path": "CO_LIBRARY_PATH",
+            "knowledge_path": "CO_KNOWLEDGE_DIR",
             "theme": "CO_CLI_THEME",
             "reasoning_display": "CO_CLI_REASONING_DISPLAY",
             "personality": "CO_CLI_PERSONALITY",

@@ -431,7 +431,7 @@ def test_current_turn_protection_multi_tool():
 
 
 def _make_gather_ctx(
-    memory_dir: Path | None = None,
+    knowledge_dir: Path | None = None,
     session_todos: list[dict] | None = None,
 ) -> RunContext:
     """RunContext for _gather_compaction_context tests."""
@@ -445,7 +445,7 @@ def _make_gather_ctx(
         shell=ShellBackend(),
         config=config,
         session=session,
-        memory_dir=memory_dir or Path("/nonexistent-test-dir"),
+        knowledge_dir=knowledge_dir or Path("/nonexistent-test-dir"),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -510,33 +510,35 @@ def test_gather_context_returns_none_when_empty():
 
 
 def test_gather_context_always_on_memories(tmp_path: Path):
-    """_gather_compaction_context includes always-on memories from real .md files."""
-    mem_dir = tmp_path / "memory"
+    """_gather_compaction_context includes standing artifacts from canonical .md files."""
+    mem_dir = tmp_path / "knowledge"
     mem_dir.mkdir()
-    # Create an always-on memory file with YAML frontmatter
-    mem_file = mem_dir / "always-on-test.md"
-    mem_file.write_text(
+    # pin_mode=standing artifact — should surface in standing context
+    standing = mem_dir / "standing-test.md"
+    standing.write_text(
         "---\n"
-        "id: 9001\n"
-        "kind: memory\n"
+        "id: '9001'\n"
+        "kind: knowledge\n"
+        "artifact_kind: preference\n"
         "tags: [test]\n"
         "created: '2025-01-01T00:00:00Z'\n"
-        "always_on: true\n"
+        "pin_mode: standing\n"
         "---\n"
         "Important standing context for the session.\n"
     )
-    # Create a non-always-on memory (should NOT appear)
-    normal_mem = mem_dir / "normal-test.md"
-    normal_mem.write_text(
+    # Non-pinned artifact — must NOT appear
+    normal = mem_dir / "normal-test.md"
+    normal.write_text(
         "---\n"
-        "id: 9002\n"
-        "kind: memory\n"
+        "id: '9002'\n"
+        "kind: knowledge\n"
+        "artifact_kind: preference\n"
         "tags: [test]\n"
         "created: '2025-01-01T00:00:00Z'\n"
         "---\n"
         "This is a normal memory.\n"
     )
-    ctx = _make_gather_ctx(memory_dir=mem_dir)
+    ctx = _make_gather_ctx(knowledge_dir=mem_dir)
     result = _gather_compaction_context(ctx, [_user("hello"), _assistant("hi")], dropped=[])
     assert result is not None
     assert "Standing memories:" in result

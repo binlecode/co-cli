@@ -22,7 +22,7 @@ from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.deps import ApprovalKindEnum, CoDeps
 from co_cli.display._core import Frontend, console
 from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.memory.recall import MemoryEntry, load_memories
+from co_cli.memory.recall import KnowledgeArtifact, load_knowledge_artifacts
 from co_cli.tools.memory import grep_recall
 
 logger = logging.getLogger(__name__)
@@ -1029,14 +1029,15 @@ async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
 # -- /memory ---------------------------------------------------------------
 
 _MEMORY_USAGE = (
-    "[bold]Usage:[/bold] /memory list|count|forget [query] [--older-than N] [--type X] [--kind X]"
+    "[bold]Usage:[/bold] /memory list|count|forget [query] "
+    "[--older-than N] [--kind preference|feedback|rule|decision|article|reference|note]"
 )
 
 
 def _parse_memory_args(args: str) -> tuple[str | None, dict[str, Any]]:
     """Parse /memory subcommand args into (query, filters).
 
-    Flags: --older-than N (int days), --type X (str), --kind X (str).
+    Flags: ``--older-than N`` (int days), ``--kind X`` (artifact_kind).
     Remaining non-flag tokens are joined as the query string.
     Returns (None, filters) when no query tokens are present.
     """
@@ -1053,10 +1054,6 @@ def _parse_memory_args(args: str) -> tuple[str | None, dict[str, Any]]:
                 continue
             except ValueError:
                 pass
-        elif tok == "--type" and idx + 1 < len(tokens):
-            filters["type"] = tokens[idx + 1]
-            idx += 2
-            continue
         elif tok == "--kind" and idx + 1 < len(tokens):
             filters["kind"] = tokens[idx + 1]
             idx += 2
@@ -1068,11 +1065,12 @@ def _parse_memory_args(args: str) -> tuple[str | None, dict[str, Any]]:
 
 
 def _apply_memory_filters(
-    entries: list[MemoryEntry], filters: dict[str, Any]
-) -> list[MemoryEntry]:
-    """Apply older_than_days and type filters to a loaded entry list.
+    entries: list[KnowledgeArtifact], filters: dict[str, Any]
+) -> list[KnowledgeArtifact]:
+    """Apply older_than_days filter to a loaded artifact list.
 
-    kind is handled upstream via load_memories(kind=...) and is not re-applied here.
+    ``kind`` is applied upstream via ``load_knowledge_artifacts(artifact_kind=...)``
+    and is not re-applied here.
     """
     result = entries
     if "older_than_days" in filters:
@@ -1083,18 +1081,22 @@ def _apply_memory_filters(
             for m in result
             if (now - datetime.fromisoformat(m.created.replace("Z", "+00:00"))).days > cutoff_days
         ]
-    if "type" in filters:
-        type_filter = filters["type"]
-        result = [m for m in result if m.type == type_filter]
     return result
+
+
+def _format_memory_row(m: KnowledgeArtifact) -> str:
+    id_prefix = m.id[:8]
+    created = m.created[:10]
+    snippet = m.content[:80]
+    return f"{id_prefix}  {created}  [{m.artifact_kind}]  {snippet}"
 
 
 async def _subcmd_memory_list(
     ctx: CommandContext, query: str | None, filters: dict[str, Any]
 ) -> None:
-    """Display matching memories — one line each, with a count footer."""
+    """Display matching knowledge artifacts — one line each, with a count footer."""
     kind_filter = filters.get("kind")
-    entries = load_memories(ctx.deps.memory_dir, kind=kind_filter)
+    entries = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind_filter)
     entries = _apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
@@ -1102,20 +1104,16 @@ async def _subcmd_memory_list(
         console.print("[dim]No memories found.[/dim]")
     else:
         for m in entries:
-            id_prefix = str(m.id)[:8]
-            created = m.created[:10]
-            type_label = m.type or ""
-            snippet = m.content[:80]
-            console.print(f"{id_prefix}  {created}  [{m.kind}]  {type_label}  {snippet}")
+            console.print(_format_memory_row(m))
     console.print(f"[dim]{len(entries)} memories[/dim]")
 
 
 async def _subcmd_memory_count(
     ctx: CommandContext, query: str | None, filters: dict[str, Any]
 ) -> None:
-    """Print the count of matching memories."""
+    """Print the count of matching artifacts."""
     kind_filter = filters.get("kind")
-    entries = load_memories(ctx.deps.memory_dir, kind=kind_filter)
+    entries = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind_filter)
     entries = _apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
@@ -1125,21 +1123,20 @@ async def _subcmd_memory_count(
 async def _subcmd_memory_forget(
     ctx: CommandContext, query: str | None, filters: dict[str, Any]
 ) -> None:
-    """Delete matching memories after user confirmation.
+    """Delete matching artifacts after user confirmation.
 
     Refuses if no query and no filters supplied.
     Always prompts for y/N confirmation before deleting.
     """
     if query is None and not filters:
         console.print(
-            "[bold red]Usage:[/bold red] /memory forget <query>"
-            " [--older-than N] [--type X] [--kind X]"
+            "[bold red]Usage:[/bold red] /memory forget <query> [--older-than N] [--kind X]"
         )
         console.print("[dim]Provide a query or at least one filter to select memories.[/dim]")
         return None
 
     kind_filter = filters.get("kind")
-    entries = load_memories(ctx.deps.memory_dir, kind=kind_filter)
+    entries = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind_filter)
     entries = _apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
@@ -1149,11 +1146,7 @@ async def _subcmd_memory_forget(
         return None
 
     for m in entries:
-        id_prefix = str(m.id)[:8]
-        created = m.created[:10]
-        type_label = m.type or ""
-        snippet = m.content[:80]
-        console.print(f"{id_prefix}  {created}  [{m.kind}]  {type_label}  {snippet}")
+        console.print(_format_memory_row(m))
 
     prompt_text = f"Delete {len(entries)} memories? [y/N] "
     confirmed = (
@@ -1168,7 +1161,7 @@ async def _subcmd_memory_forget(
     for m in entries:
         m.path.unlink()
         if ctx.deps.knowledge_store is not None:
-            ctx.deps.knowledge_store.remove("memory", str(m.path))
+            ctx.deps.knowledge_store.remove("knowledge", str(m.path))
 
     console.print(f"[success]✓ Deleted {len(entries)} memories.[/success]")
     return None

@@ -34,7 +34,7 @@ _AGENT = build_agent(config=settings)
 
 def _make_ctx(
     *,
-    memory_dir: Path | None = None,
+    knowledge_dir: Path | None = None,
     knowledge_store: Any = None,
 ) -> RunContext:
     """Return a real RunContext with real CoDeps for memory tool tests."""
@@ -44,8 +44,8 @@ def _make_ctx(
         "knowledge_store": knowledge_store,
         "config": config,
     }
-    if memory_dir is not None:
-        deps_kwargs["memory_dir"] = memory_dir
+    if knowledge_dir is not None:
+        deps_kwargs["knowledge_dir"] = knowledge_dir
     deps = CoDeps(**deps_kwargs)
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -57,15 +57,18 @@ def _write_memory(
     tags: list[str] | None = None,
     created: str | None = None,
     updated: str | None = None,
+    artifact_kind: str = "preference",
 ) -> Path:
-    """Write a memory file for testing."""
+    """Write a canonical knowledge artifact file for testing."""
     memory_dir.mkdir(parents=True, exist_ok=True)
     if created is None:
         created = datetime.now(UTC).isoformat()
     slug = content[:30].lower().replace(" ", "-")
     filename = f"{memory_id:03d}-{slug}.md"
     fm: dict[str, Any] = {
-        "id": memory_id,
+        "id": str(memory_id),
+        "kind": "knowledge",
+        "artifact_kind": artifact_kind,
         "created": created,
         "tags": tags or [],
     }
@@ -90,11 +93,11 @@ def test_recall_does_not_mutate_files(tmp_path: Path):
 
     idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     try:
-        idx.sync_dir("memory", memory_dir)
+        idx.sync_dir("knowledge", memory_dir)
         before = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
         result = asyncio.run(
             _recall_for_context(
-                _make_ctx(memory_dir=memory_dir, knowledge_store=idx), "dark theme"
+                _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx), "dark theme"
             )
         )
         assert result.metadata["count"] >= 1
@@ -115,7 +118,7 @@ def test_list_memories_pagination(tmp_path: Path):
     for i in range(1, 6):
         _write_memory(memory_dir, i, f"Memory content number {i}", tags=["test"])
 
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     # Page 1: offset=0, limit=2
     r1 = asyncio.run(list_memories(ctx, offset=0, limit=2))
@@ -124,8 +127,8 @@ def test_list_memories_pagination(tmp_path: Path):
     assert r1.metadata["offset"] == 0
     assert r1.metadata["limit"] == 2
     assert r1.metadata["has_more"] is True
-    assert r1.metadata["memories"][0]["id"] == 1
-    assert r1.metadata["memories"][1]["id"] == 2
+    assert r1.metadata["memories"][0]["id"] == "1"
+    assert r1.metadata["memories"][1]["id"] == "2"
 
     # Page 2: offset=2, limit=2
     r2 = asyncio.run(list_memories(ctx, offset=2, limit=2))
@@ -149,7 +152,7 @@ def test_update_memory_replaces_exact_match(tmp_path: Path):
     """update_memory replaces old_content with new_content in the body."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest over unittest", tags=["preference"])
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
     asyncio.run(update_memory(ctx, slug, "pytest over unittest", "pytest over all others"))
@@ -163,7 +166,7 @@ def test_update_memory_raises_not_found(tmp_path: Path):
     """update_memory raises FileNotFoundError for an unknown slug."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     with pytest.raises(FileNotFoundError, match="not found"):
         asyncio.run(update_memory(ctx, "999-nonexistent", "old", "new"))
@@ -173,7 +176,7 @@ def test_update_memory_raises_zero_occurrences(tmp_path: Path):
     """update_memory raises ValueError when old_content is not in the body."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
 
@@ -185,7 +188,7 @@ def test_update_memory_raises_ambiguous(tmp_path: Path):
     """update_memory raises ValueError when old_content appears more than once."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User uses pytest. Also uses pytest.", tags=["preference"])
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
 
@@ -197,7 +200,7 @@ def test_update_memory_rejects_line_prefix(tmp_path: Path):
     """update_memory raises ValueError when old_content contains Read-tool line prefixes."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
 
@@ -217,7 +220,7 @@ def test_update_memory_tab_normalization(tmp_path: Path):
     memory_dir = tmp_path / "memory"
     # 5 spaces at column 3: what expandtabs() produces for "foo\tbar"
     path = _write_memory(memory_dir, 1, "foo     bar", tags=["preference"])
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
     # old_content uses a tab; after expandtabs() it matches the body
@@ -235,7 +238,7 @@ def test_append_memory_adds_to_end(tmp_path: Path):
     """append_memory appends content as a new line at the end of the body."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
     asyncio.run(append_memory(ctx, slug, "Also uses coverage reports."))
@@ -249,7 +252,7 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
     """append_memory raises FileNotFoundError for an unknown slug."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
-    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx = _make_ctx(knowledge_dir=memory_dir)
 
     with pytest.raises(FileNotFoundError, match="not found"):
         asyncio.run(append_memory(ctx, "999-nonexistent", "extra line"))
@@ -273,12 +276,12 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
 
     idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     try:
-        idx.sync_dir("memory", memory_dir)
-        ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx)
+        idx.sync_dir("knowledge", memory_dir)
+        ctx = _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx)
 
         result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
         assert result.metadata["count"] >= 2
-        assert all(r["source"] == "memory" for r in result.metadata["results"])
+        assert all(r["source"] == "knowledge" for r in result.metadata["results"])
     finally:
         idx.close()
 
@@ -287,72 +290,9 @@ def test_search_memories_empty_query_returns_guard(tmp_path: Path):
     """search_memories with empty query returns guard message."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
-    result = asyncio.run(search_memories(_make_ctx(memory_dir=memory_dir), "   "))
+    result = asyncio.run(search_memories(_make_ctx(knowledge_dir=memory_dir), "   "))
     assert result.metadata["count"] == 0
     assert "required" in result.return_value.lower()
-
-
-# ---------------------------------------------------------------------------
-# artifact_type display
-# ---------------------------------------------------------------------------
-
-
-def _write_memory_with_artifact_type(
-    memory_dir: Path,
-    memory_id: int,
-    content: str,
-    artifact_type: str | None = None,
-    tags: list[str] | None = None,
-) -> Path:
-    """Write a memory file with optional artifact_type frontmatter field."""
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    slug = content[:30].lower().replace(" ", "-")
-    filename = f"{memory_id:03d}-{slug}.md"
-    fm: dict[str, Any] = {
-        "id": memory_id,
-        "created": datetime.now(UTC).isoformat(),
-        "tags": tags or [],
-    }
-    if artifact_type is not None:
-        fm["artifact_type"] = artifact_type
-    md = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{content}\n"
-    path = memory_dir / filename
-    path.write_text(md, encoding="utf-8")
-    return path
-
-
-def test_list_memories_displays_artifact_type(tmp_path: Path):
-    """list_memories display contains artifact_type value when present."""
-    memory_dir = tmp_path / "memory"
-
-    _write_memory_with_artifact_type(
-        memory_dir, 1, "Session summary content", artifact_type="custom_artifact"
-    )
-
-    ctx = _make_ctx(memory_dir=memory_dir)
-    result = asyncio.run(list_memories(ctx))
-
-    assert "custom_artifact" in result.return_value
-
-
-# ---------------------------------------------------------------------------
-# ArtifactTypeEnum — write-strict / read-tolerant policy
-# ---------------------------------------------------------------------------
-
-
-def test_load_memories_tolerates_unknown_artifact_type(tmp_path: Path):
-    """load_memories must load entries with unknown artifact_type without skipping them."""
-    from co_cli.memory.recall import load_memories
-
-    memory_dir = tmp_path / "memory"
-    _write_memory_with_artifact_type(
-        memory_dir, 1, "Memory with unknown artifact type", artifact_type="future_unknown_type"
-    )
-    entries = load_memories(memory_dir)
-
-    assert any(e.artifact_type == "future_unknown_type" for e in entries), (
-        "load_memories must load entries with unknown artifact_type, not skip them"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -369,24 +309,23 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
     from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.articles import search_knowledge
 
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir()
-    library_dir = tmp_path / "library"
-    library_dir.mkdir()
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
 
-    _write_memory(memory_dir, 1, "rag-backend-annotation-fts-test", tags=["test"])
-    article_path = library_dir / "001-rag-backend-test.md"
-    article_path.write_text(
-        "---\nkind: article\ntags: [test]\n---\nrag-backend-annotation-fts-test article\n",
-        encoding="utf-8",
+    _write_memory(knowledge_dir, 1, "rag-backend-annotation-fts-test", tags=["test"])
+    _write_memory(
+        knowledge_dir,
+        2,
+        "rag-backend-annotation-fts-test article",
+        tags=["test"],
+        artifact_kind="article",
     )
 
     idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     try:
-        idx.sync_dir("memory", memory_dir)
-        idx.sync_dir("library", library_dir)
+        idx.sync_dir("knowledge", knowledge_dir)
 
-        mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx)
+        mem_ctx = _make_ctx(knowledge_dir=knowledge_dir, knowledge_store=idx)
         fts_know_ctx = RunContext(
             deps=CoDeps(
                 shell=ShellBackend(),
@@ -396,7 +335,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
                         update={"search_backend": "fts5"}
                     )
                 ),
-                library_dir=library_dir,
+                knowledge_dir=knowledge_dir,
             ),
             model=_AGENT.model,
             usage=RunUsage(),
@@ -406,7 +345,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
                 shell=ShellBackend(),
                 knowledge_store=None,
                 config=make_settings(),
-                library_dir=library_dir,
+                knowledge_dir=knowledge_dir,
             ),
             model=_AGENT.model,
             usage=RunUsage(),
@@ -478,14 +417,14 @@ def test_update_memory_reindexes_in_db(tmp_path: Path):
 
     idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     try:
-        idx.sync_dir("memory", memory_dir)
-        ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx)
+        idx.sync_dir("knowledge", memory_dir)
+        ctx = _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx)
 
         asyncio.run(
             update_memory(ctx, slug, "original-content-for-update-test", "updated-content-xyz")
         )
 
-        results = idx.search("updated-content-xyz", source="memory", kind="memory", limit=5)
+        results = idx.search("updated-content-xyz", source="knowledge", limit=5)
         assert any("updated-content-xyz" in r.snippet for r in results), (
             "update_memory must re-index so the updated content is searchable"
         )
@@ -505,14 +444,12 @@ def test_append_memory_reindexes_in_db(tmp_path: Path):
 
     idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     try:
-        idx.sync_dir("memory", memory_dir)
-        ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx)
+        idx.sync_dir("knowledge", memory_dir)
+        ctx = _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx)
 
         asyncio.run(append_memory(ctx, slug, "appended-unique-content-abc"))
 
-        results = idx.search(
-            "appended-unique-content-abc", source="memory", kind="memory", limit=5
-        )
+        results = idx.search("appended-unique-content-abc", source="knowledge", limit=5)
         assert any("appended-unique-content-abc" in r.snippet for r in results), (
             "append_memory must re-index so the appended content is searchable"
         )

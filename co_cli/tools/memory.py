@@ -1,8 +1,12 @@
-"""Memory tools — recall, list, save, and edit persistent memories.
+"""Memory/knowledge tools — recall, list, save, and edit persistent artifacts.
 
-Memories are stored as markdown files with YAML frontmatter in
-~/.co-cli/memory/. FTS5/BM25 via knowledge_store (DB-backed) powers
-search; degrades to empty when knowledge_store is None.
+Artifacts are stored as markdown files with ``kind: knowledge`` frontmatter in
+``ctx.deps.knowledge_dir`` (default ``~/.co-cli/knowledge/``). An
+``artifact_kind`` subtype distinguishes preferences, rules, feedback, articles,
+references, and notes. FTS5/BM25 via ``knowledge_store`` powers search under
+``source="knowledge"``; degrades to empty when the store is unavailable.
+
+``save_knowledge`` is the sole write path, exposed to the extractor sub-agent.
 """
 
 import hashlib
@@ -24,10 +28,17 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._frontmatter import MemoryTypeEnum, parse_frontmatter, render_memory_file
-from co_cli.memory.recall import (
-    MemoryEntry,
-    load_memories,
+from co_cli.knowledge._artifact import (
+    ArtifactKindEnum,
+    KnowledgeArtifact,
+    PinModeEnum,
+    SourceTypeEnum,
+    load_knowledge_artifacts,
+)
+from co_cli.knowledge._frontmatter import (
+    parse_frontmatter,
+    render_frontmatter,
+    render_knowledge_file,
 )
 from co_cli.tools.resource_lock import ResourceBusyError
 from co_cli.tools.tool_io import tool_error, tool_output, tool_output_raw
@@ -42,24 +53,24 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50]
 
 
-def _find_by_slug(memory_dir: Path, slug: str) -> Path | None:
-    """Return the memory file whose stem matches slug, or None."""
-    return next((p for p in memory_dir.glob("*.md") if p.stem == slug), None)
+def _find_by_slug(knowledge_dir: Path, slug: str) -> Path | None:
+    """Return the knowledge file whose stem matches slug, or None."""
+    return next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
 
 
 def grep_recall(
-    memories: list[MemoryEntry],
+    artifacts: list[KnowledgeArtifact],
     query: str,
     max_results: int,
-) -> list[MemoryEntry]:
-    """Case-insensitive substring search across memory content and tags.
+) -> list[KnowledgeArtifact]:
+    """Case-insensitive substring search across content and tags.
 
     Sorts by recency (updated or created, newest first).
     """
     query_lower = query.lower()
     matches = [
         m
-        for m in memories
+        for m in artifacts
         if query_lower in m.content.lower() or any(query_lower in t.lower() for t in m.tags)
     ]
     matches.sort(key=lambda m: m.updated or m.created, reverse=True)
@@ -67,24 +78,13 @@ def grep_recall(
 
 
 def filter_memories(
-    entries: list[MemoryEntry],
+    entries: list[KnowledgeArtifact],
     tags: list[str] | None = None,
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> list[MemoryEntry]:
-    """Filter a list of MemoryEntry by tags and date range.
-
-    Args:
-        entries: Source list to filter (not mutated).
-        tags: Exact tag filter list. None = no filter.
-        tag_match_mode: 'any' (OR) or 'all' (AND — entry must have every tag).
-        created_after: ISO8601 date string; keep entries created on or after this date.
-        created_before: ISO8601 date string; keep entries created on or before this date.
-
-    Returns:
-        Filtered list (new list, same MemoryEntry objects).
-    """
+) -> list[KnowledgeArtifact]:
+    """Filter artifacts by tags and creation date range."""
     result = entries
     if tags:
         if tag_match_mode == "all":
@@ -135,8 +135,7 @@ async def _recall_for_context(
 
     results = ctx.deps.knowledge_store.search(
         query,
-        source="memory",
-        kind="memory",
+        source="knowledge",
         tags=tags,
         tag_match_mode=tag_match_mode,
         created_after=created_after,
@@ -219,8 +218,7 @@ async def search_memories(
     otel_trace.get_current_span().set_attribute("rag.backend", "fts5")
     results = ctx.deps.knowledge_store.search(
         query,
-        source="memory",
-        kind="memory",
+        source="knowledge",
         tags=tags,
         tag_match_mode=tag_match_mode,
         created_after=created_after,
@@ -264,32 +262,26 @@ async def list_memories(
     For personal notes, use list_notes. For cloud documents, use
     search_drive_files.
 
-    Use this for a full inventory. Keep paginating until
-    has_more is false when you need a complete listing.
-
     Returns a dict with:
-    - display: formatted memory inventory — show directly to the user
-    - count: number of memories in this page
-    - total: total number of memories across all pages
+    - display: formatted inventory — show directly to the user
+    - count: number of artifacts in this page
+    - total: total number of artifacts across all pages
     - offset: starting position of this page
     - limit: page size requested
     - has_more: true if more pages exist beyond this one
-    - memories: list of summary dicts with id, created, tags, summary, kind
+    - memories: list of summary dicts with id, created, updated, artifact_kind, tags, summary
 
     Args:
-        offset: Starting position (0-based). Example: offset=20 skips the
-                first 20 memories.
-        limit: Max memories per page (default 20).
-        kind: Filter by kind — "memory", "article", or None for all.
-              Passing kind="article" returns only saved articles.
-              Passing kind="memory" returns only conversation memories.
+        offset: Starting position (0-based). Example: offset=20 skips the first 20 entries.
+        limit: Max entries per page (default 20).
+        kind: Filter by artifact_kind (e.g. "preference", "article", "rule"). None = all.
     """
-    memory_dir = ctx.deps.memory_dir
-    memories = load_memories(memory_dir, kind=kind)
+    knowledge_dir = ctx.deps.knowledge_dir
+    artifacts = load_knowledge_artifacts(knowledge_dir, artifact_kind=kind)
 
-    if not memories:
-        no_dir = not memory_dir.exists()
-        kind_note = f" (kind={kind})" if kind else ""
+    if not artifacts:
+        no_dir = not knowledge_dir.exists()
+        kind_note = f" (artifact_kind={kind})" if kind else ""
         msg = "No memories saved yet." if no_dir else f"No memories found{kind_note}."
         return tool_output(
             msg,
@@ -302,58 +294,35 @@ async def list_memories(
             memories=[],
         )
 
-    # Sort by ID
-    memories.sort(key=lambda m: str(m.id))
-    total = len(memories)
+    artifacts.sort(key=lambda a: a.id)
+    total = len(artifacts)
+    page = artifacts[offset : offset + limit]
 
-    # Paginate
-    page = memories[offset : offset + limit]
-
-    # Build summary dicts
     memory_dicts: list[dict[str, Any]] = []
-    for m in page:
-        body_lines = m.content.split("\n")
+    for a in page:
+        body_lines = a.content.split("\n")
         summary = body_lines[0] if body_lines else "(empty)"
         if len(summary) > 80:
             summary = summary[:77] + "..."
-
         memory_dicts.append(
             {
-                "id": m.id,
-                "kind": m.kind,
-                "artifact_type": m.artifact_type,
-                "created": m.created,
-                "updated": m.updated,
-                "tags": m.tags,
-                "type": m.type,
+                "id": a.id,
+                "artifact_kind": a.artifact_kind,
+                "created": a.created,
+                "updated": a.updated,
+                "tags": a.tags,
                 "summary": summary,
             }
         )
 
     has_more = offset + limit < total
-
-    # Format as markdown list with lifecycle indicators
     lines = [f"Total memories: {total}\n"]
-
     for md in memory_dicts:
-        # Format dates
         created_date = md["created"][:10]
-        if md.get("updated"):
-            updated_date = md["updated"][:10]
-            date_str = f"{created_date} → {updated_date}"
-        else:
-            date_str = created_date
-
-        # Format type label
-        category_str = f" [{md['type']}]" if md.get("type") else ""
-
-        kind_str = f" [{md.get('kind', 'memory')}]"
-        artifact_str = f" ({md['artifact_type']})" if md.get("artifact_type") else ""
-        display_id = str(md["id"])[:8] if isinstance(md["id"], str) else f"{md['id']:03d}"
-        lines.append(
-            f"**{display_id}** ({date_str}){kind_str}{artifact_str}{category_str} "
-            f": {md['summary']}"
-        )
+        date_str = f"{created_date} → {md['updated'][:10]}" if md.get("updated") else created_date
+        kind_str = f" [{md['artifact_kind']}]"
+        display_id = md["id"][:8]
+        lines.append(f"**{display_id}** ({date_str}){kind_str} : {md['summary']}")
 
     if has_more:
         lines.append(
@@ -373,81 +342,140 @@ async def list_memories(
     )
 
 
-async def save_memory(
+async def save_knowledge(
     ctx: RunContext[CoDeps],
     content: str,
-    type_: str | None = None,
-    name: str | None = None,
+    artifact_kind: str,
+    title: str | None = None,
     description: str | None = None,
     tags: list[str] | None = None,
-    always_on: bool = False,
+    pin_mode: str = PinModeEnum.NONE.value,
 ) -> ToolReturn:
-    """Save a new memory to the memory directory, always creating a new file.
+    """Save a reusable knowledge artifact (preference, rule, feedback, decision, article, reference, note).
 
-    Two calls with identical content produce two distinct files (UUID suffix).
-    No dedup, no resource locks, no on_failure handling — write always succeeds or raises.
+    Writes a canonical kind=knowledge markdown file under ctx.deps.knowledge_dir
+    and indexes it under source='knowledge' so search_knowledge can retrieve it.
+    Two calls with identical content produce two distinct files (UUID suffix);
+    dedup lives in a later phase.
+
+    Args:
+        content: Primary text of the artifact.
+        artifact_kind: One of preference | decision | rule | feedback | article | reference | note.
+        title: Optional human-readable label.
+        description: Optional ≤200-char hook used for manifest dedup later.
+        tags: Optional retrieval labels (lowercased before writing).
+        pin_mode: 'standing' to inject as always-on context; 'none' by default.
     """
-    # _slugify is intentionally duplicated from articles.py; consolidation deferred
-    if type_ is not None and type_ not in {e.value for e in MemoryTypeEnum}:
+    valid_kinds = {e.value for e in ArtifactKindEnum}
+    if artifact_kind not in valid_kinds:
         raise ValueError(
-            f"Unknown memory type: {type_!r}. "
-            f"Valid values: {sorted(e.value for e in MemoryTypeEnum)}"
+            f"Unknown artifact_kind: {artifact_kind!r}. Valid values: {sorted(valid_kinds)}"
         )
 
-    memory_dir = ctx.deps.memory_dir
-    memory_dir.mkdir(parents=True, exist_ok=True)
+    knowledge_dir = ctx.deps.knowledge_dir
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
 
-    memory_id = str(uuid4())
+    artifact_id = str(uuid4())
+    slug = _slugify(title) if title else _slugify(content[:50])
+    filename = f"{slug}-{artifact_id[:8]}.md"
+    file_path = knowledge_dir / filename
 
-    slug = _slugify(name) if name else _slugify(content[:50])
-    filename = f"{slug}-{memory_id[:8]}.md"
+    session_path = ctx.deps.session.session_path
+    source_ref = session_path.stem if session_path and str(session_path) else None
 
-    norm_tags = [t.lower() for t in tags] if tags else []
+    artifact = KnowledgeArtifact(
+        id=artifact_id,
+        path=file_path,
+        artifact_kind=artifact_kind,
+        title=title,
+        content=content,
+        created=datetime.now(UTC).isoformat(),
+        description=description,
+        tags=[t.lower() for t in (tags or [])],
+        source_type=SourceTypeEnum.DETECTED.value,
+        source_ref=source_ref,
+        pin_mode=pin_mode,
+    )
 
-    frontmatter: dict = {
-        "id": memory_id,
-        "kind": "memory",
-        "created": datetime.now(UTC).isoformat(),
-        "tags": norm_tags,
-    }
-    if type_ is not None:
-        frontmatter["type"] = type_
-    if name is not None:
-        frontmatter["name"] = name
-    if description is not None:
-        frontmatter["description"] = description
-    if always_on:
-        frontmatter["always_on"] = True
-
-    file_content = render_memory_file(frontmatter, content)
-
-    file_path = memory_dir / filename
-    with _TRACER.start_as_current_span("co.memory.save") as span:
-        span.set_attribute("memory.type", type_ or "untyped")
+    file_content = render_knowledge_file(artifact)
+    with _TRACER.start_as_current_span("co.knowledge.save") as span:
+        span.set_attribute("knowledge.artifact_kind", artifact_kind)
         file_path.write_text(file_content, encoding="utf-8")
 
     if ctx.deps.knowledge_store is not None:
         content_hash = hashlib.sha256(file_content.encode()).hexdigest()
-        ctx.deps.knowledge_store.index(
-            source="memory",
-            kind="memory",
+        store = ctx.deps.knowledge_store
+        store.index(
+            source="knowledge",
+            kind=artifact_kind,
             path=str(file_path),
-            title=name or slug,
+            title=title or slug,
             content=content.strip(),
             mtime=file_path.stat().st_mtime,
             hash=content_hash,
-            tags=" ".join(norm_tags) if norm_tags else None,
-            created=frontmatter["created"],
-            type=type_,
+            tags=" ".join(artifact.tags) if artifact.tags else None,
+            created=artifact.created,
+            type=artifact_kind,
             description=description,
         )
+        from co_cli.knowledge._chunker import chunk_text
+
+        chunks = chunk_text(
+            content.strip(),
+            chunk_size=ctx.deps.config.knowledge.chunk_size,
+            overlap=ctx.deps.config.knowledge.chunk_overlap,
+        )
+        store.index_chunks("knowledge", str(file_path), chunks)
 
     return tool_output_raw(
-        f"✓ Saved memory: {filename}",
+        f"✓ Saved knowledge: {filename}",
         action="saved",
         path=str(file_path),
-        memory_id=memory_id,
+        artifact_id=artifact_id,
     )
+
+
+def _reindex_knowledge_file(
+    ctx: RunContext[CoDeps],
+    path: Path,
+    body: str,
+    md_content: str,
+    fm: dict[str, Any],
+    slug: str,
+) -> None:
+    """Re-index a knowledge file's docs row and chunk rows after in-place mutation.
+
+    Both legs must stay in sync when the file body changes: docs_fts serves
+    non-chunks queries, chunks_fts serves chunk-level queries. sync_dir normally
+    handles both at once, but update_memory/append_memory mutate a single file
+    and need to refresh the DB inline.
+    """
+    store = ctx.deps.knowledge_store
+    if store is None:
+        return
+    content_hash = hashlib.sha256(md_content.encode()).hexdigest()
+    artifact_kind = fm.get("artifact_kind", ArtifactKindEnum.NOTE.value)
+    store.index(
+        source="knowledge",
+        kind=artifact_kind,
+        path=str(path),
+        title=fm.get("title") or slug,
+        content=body.strip(),
+        mtime=path.stat().st_mtime,
+        hash=content_hash,
+        tags=" ".join(fm.get("tags", [])) or None,
+        created=fm.get("created"),
+        type=artifact_kind,
+        description=fm.get("description"),
+    )
+    from co_cli.knowledge._chunker import chunk_text
+
+    chunks = chunk_text(
+        body.strip(),
+        chunk_size=ctx.deps.config.knowledge.chunk_size,
+        overlap=ctx.deps.config.knowledge.chunk_overlap,
+    )
+    store.index_chunks("knowledge", str(path), chunks)
 
 
 async def update_memory(
@@ -477,7 +505,7 @@ async def update_memory(
         old_content: Exact passage to replace (must appear exactly once).
         new_content: Replacement text.
     """
-    knowledge_dir = ctx.deps.memory_dir
+    knowledge_dir = ctx.deps.knowledge_dir
     match = _find_by_slug(knowledge_dir, slug)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
@@ -528,7 +556,7 @@ async def update_memory(
 
                 updated_body = body_text.replace(old_norm, new_norm, 1)
                 fm["updated"] = datetime.now(UTC).isoformat()
-                md_content = render_memory_file(fm, updated_body)
+                md_content = render_frontmatter(fm, updated_body)
                 with tempfile.NamedTemporaryFile(
                     "w", dir=match.parent, suffix=".tmp", delete=False, encoding="utf-8"
                 ) as tmp:
@@ -536,20 +564,7 @@ async def update_memory(
                 os.replace(tmp.name, match)
 
                 if ctx.deps.knowledge_store is not None:
-                    content_hash = hashlib.sha256(md_content.encode()).hexdigest()
-                    ctx.deps.knowledge_store.index(
-                        source="memory",
-                        kind="memory",
-                        path=str(match),
-                        title=fm.get("name") or slug,
-                        content=updated_body.strip(),
-                        mtime=match.stat().st_mtime,
-                        hash=content_hash,
-                        tags=" ".join(fm.get("tags", [])) or None,
-                        created=fm.get("created"),
-                        type=fm.get("type"),
-                        description=fm.get("description"),
-                    )
+                    _reindex_knowledge_file(ctx, match, updated_body, md_content, fm, slug)
 
             return tool_output(
                 f"Updated memory '{slug}'.\n{updated_body.strip()}",
@@ -583,7 +598,7 @@ async def append_memory(
         slug: Full file stem of the target memory (e.g. "003-user-prefers-pytest").
         content: Text to append (added on a new line at the end of the body).
     """
-    knowledge_dir = ctx.deps.memory_dir
+    knowledge_dir = ctx.deps.knowledge_dir
     match = _find_by_slug(knowledge_dir, slug)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
@@ -599,7 +614,7 @@ async def append_memory(
 
                 updated_body = body.rstrip() + "\n" + content
                 fm["updated"] = datetime.now(UTC).isoformat()
-                md_content = render_memory_file(fm, updated_body)
+                md_content = render_frontmatter(fm, updated_body)
                 with tempfile.NamedTemporaryFile(
                     "w", dir=match.parent, suffix=".tmp", delete=False, encoding="utf-8"
                 ) as tmp:
@@ -607,20 +622,7 @@ async def append_memory(
                 os.replace(tmp.name, match)
 
                 if ctx.deps.knowledge_store is not None:
-                    content_hash = hashlib.sha256(md_content.encode()).hexdigest()
-                    ctx.deps.knowledge_store.index(
-                        source="memory",
-                        kind="memory",
-                        path=str(match),
-                        title=fm.get("name") or slug,
-                        content=updated_body.strip(),
-                        mtime=match.stat().st_mtime,
-                        hash=content_hash,
-                        tags=" ".join(fm.get("tags", [])) or None,
-                        created=fm.get("created"),
-                        type=fm.get("type"),
-                        description=fm.get("description"),
-                    )
+                    _reindex_knowledge_file(ctx, match, updated_body, md_content, fm, slug)
 
             return tool_output(
                 f"Appended to '{slug}'.",

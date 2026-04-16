@@ -33,7 +33,7 @@ async def test_run_extraction_async_indexes_memory_and_advances_cursor(tmp_path:
         shell=ShellBackend(),
         knowledge_store=knowledge_store,
         config=config,
-        memory_dir=memory_dir,
+        knowledge_dir=memory_dir,
         model=llm_model,
     )
     messages = [
@@ -67,7 +67,7 @@ async def test_run_extraction_async_indexes_memory_and_advances_cursor(tmp_path:
             )
 
         files = list(memory_dir.glob("*.md"))
-        results = knowledge_store.search("pytest", source="memory", kind="memory", limit=5)
+        results = knowledge_store.search("pytest", source="knowledge", limit=5)
 
         assert deps.session.last_extracted_message_idx == len(messages)
         assert len(files) >= 1
