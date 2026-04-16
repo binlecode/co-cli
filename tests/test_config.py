@@ -112,6 +112,61 @@ def test_invalid_config_schema_names_file(tmp_path):
         load_config(_user_config_path=user_settings)
 
 
+def test_knowledge_lifecycle_defaults(tmp_path):
+    """Knowledge lifecycle fields have correct defaults when not set."""
+    settings = load_config(_user_config_path=tmp_path / "nonexistent.json")
+    assert settings.knowledge.consolidation_enabled is False
+    assert settings.knowledge.consolidation_trigger == "session_end"
+    assert settings.knowledge.consolidation_lookback_sessions == 5
+    assert settings.knowledge.consolidation_similarity_threshold == 0.75
+    assert settings.knowledge.max_artifact_count == 300
+    assert settings.knowledge.decay_after_days == 90
+
+
+def test_knowledge_lifecycle_env_overrides(tmp_path):
+    """CO_KNOWLEDGE_CONSOLIDATION_ENABLED and CO_KNOWLEDGE_DECAY_AFTER_DAYS override defaults."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _env={"CO_KNOWLEDGE_CONSOLIDATION_ENABLED": "true", "CO_KNOWLEDGE_DECAY_AFTER_DAYS": "45"},
+    )
+    assert settings.knowledge.consolidation_enabled is True
+    assert settings.knowledge.decay_after_days == 45
+
+
+def test_knowledge_lifecycle_from_user_config(tmp_path):
+    """knowledge lifecycle fields can be set via settings.json."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(
+        json.dumps(
+            {
+                "knowledge": {
+                    "consolidation_enabled": True,
+                    "consolidation_trigger": "manual",
+                    "consolidation_lookback_sessions": 10,
+                    "consolidation_similarity_threshold": 0.85,
+                    "max_artifact_count": 500,
+                    "decay_after_days": 30,
+                }
+            }
+        )
+    )
+    settings = load_config(_user_config_path=user_settings)
+    assert settings.knowledge.consolidation_enabled is True
+    assert settings.knowledge.consolidation_trigger == "manual"
+    assert settings.knowledge.consolidation_lookback_sessions == 10
+    assert settings.knowledge.consolidation_similarity_threshold == 0.85
+    assert settings.knowledge.max_artifact_count == 500
+    assert settings.knowledge.decay_after_days == 30
+
+
+def test_knowledge_consolidation_trigger_invalid(tmp_path):
+    """consolidation_trigger rejects values outside {session_end, manual}."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(json.dumps({"knowledge": {"consolidation_trigger": "hourly"}}))
+    with pytest.raises(ValueError, match=r"literal_error|consolidation_trigger"):
+        load_config(_user_config_path=user_settings)
+
+
 def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     """build_agent() must not rewrite GEMINI_API_KEY when config provides llm_api_key."""
     user_settings = tmp_path / "settings.json"

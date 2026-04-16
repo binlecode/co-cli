@@ -212,6 +212,8 @@ class Settings(BaseModel):
                 "embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
                 "chunk_size": "CO_CLI_KNOWLEDGE_CHUNK_SIZE",
                 "chunk_overlap": "CO_CLI_KNOWLEDGE_CHUNK_OVERLAP",
+                "consolidation_enabled": "CO_KNOWLEDGE_CONSOLIDATION_ENABLED",
+                "decay_after_days": "CO_KNOWLEDGE_DECAY_AFTER_DAYS",
             },
             "memory": {
                 "recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",

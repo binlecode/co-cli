@@ -1,4 +1,4 @@
-"""Knowledge search, embedding, and chunking settings."""
+"""Knowledge search, embedding, chunking, and lifecycle settings."""
 
 from typing import Any, Literal
 
@@ -44,3 +44,9 @@ class KnowledgeSettings(BaseModel):
     embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
     chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)
     chunk_overlap: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, ge=0)
+    consolidation_enabled: bool = Field(default=False)
+    consolidation_trigger: Literal["session_end", "manual"] = Field(default="session_end")
+    consolidation_lookback_sessions: int = Field(default=5, ge=1)
+    consolidation_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    max_artifact_count: int = Field(default=300, ge=1)
+    decay_after_days: int = Field(default=90, ge=1)

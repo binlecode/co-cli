@@ -78,7 +78,7 @@ Seven phases, each independently shippable. Phases 0–3 correct the model. Phas
 
 No behavior change. Extend config and data model to support subsequent phases.
 
-### TASK-0.1: Knowledge lifecycle config fields
+### ✓ DONE TASK-0.1: Knowledge lifecycle config fields
 
 - `files:` `co_cli/config/_knowledge.py`
 - Add fields to `KnowledgeSettings`:
@@ -94,7 +94,7 @@ No behavior change. Extend config and data model to support subsequent phases.
 - Note: these go in `KnowledgeSettings`, not `MemorySettings` — under the new model, lifecycle management is a knowledge concern.
 - `done_when:` `uv run pytest tests/test_config.py` passes. New fields visible in `co status` output.
 
-### TASK-0.2: Recall tracking fields on frontmatter
+### ✓ DONE TASK-0.2: Recall tracking fields on frontmatter
 
 - `files:` `co_cli/knowledge/_frontmatter.py`, `co_cli/memory/recall.py` (lines 24–39)
 - Add to `MemoryEntry` dataclass (will be renamed in Phase 2, but fields are forward-compatible):
@@ -107,13 +107,14 @@ No behavior change. Extend config and data model to support subsequent phases.
 - Backward compatible: existing files without these fields load with `None`/`0`.
 - `done_when:` Existing memory + article files parse without errors. `uv run pytest tests/test_memory*.py` passes.
 
-### TASK-0.3: Cognition spec
+### ✓ DONE TASK-0.3: Cognition spec
 
 - `files:` `docs/specs/cognition.md` (new)
 - Document: two-layer architecture, what belongs where, promotion/consolidation bridge, retrieval model.
 - Cross-reference from `memory.md` and `library.md` Product Intent sections.
 - This spec becomes the umbrella that `memory.md` (transcripts) and the future `knowledge.md` (artifacts) reference.
 - `done_when:` Spec follows project conventions.
+- **Note:** Pre-completed — `docs/specs/cognition.md` was already fully written before this delivery.
 
 ---
 

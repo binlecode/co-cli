@@ -37,6 +37,9 @@ class MemoryEntry:
     always_on: bool = False
     description: str | None = None
     type: str | None = None
+    provenance: str | None = None
+    last_recalled: str | None = None
+    recall_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +106,9 @@ def load_memories(
                     always_on=fm.get("always_on", False),
                     description=fm.get("description"),
                     type=fm.get("type"),
+                    provenance=fm.get("provenance"),
+                    last_recalled=fm.get("last_recalled"),
+                    recall_count=fm.get("recall_count", 0),
                 )
             )
         except Exception as e:

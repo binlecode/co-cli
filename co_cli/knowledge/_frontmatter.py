@@ -172,6 +172,22 @@ def _validate_relationship_fields(fm: dict[str, Any]) -> None:
         raise ValueError("memory frontmatter field 'always_on' must be a boolean")
 
 
+def _validate_recall_fields(fm: dict[str, Any]) -> None:
+    if (
+        "provenance" in fm
+        and fm["provenance"] is not None
+        and not isinstance(fm["provenance"], str)
+    ):
+        raise ValueError("memory frontmatter field 'provenance' must be a string or null")
+    if "last_recalled" in fm and fm["last_recalled"] is not None:
+        if not isinstance(fm["last_recalled"], str):
+            raise ValueError("memory frontmatter field 'last_recalled' must be a string or null")
+        if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["last_recalled"]):
+            raise ValueError("memory frontmatter field 'last_recalled' must be ISO8601 format")
+    if "recall_count" in fm and not isinstance(fm["recall_count"], int):
+        raise ValueError("memory frontmatter field 'recall_count' must be an integer")
+
+
 def render_memory_file(fm: dict[str, Any], body: str) -> str:
     """Render a memory file content string from frontmatter dict and body text."""
     return f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body.strip()}\n"
@@ -192,6 +208,9 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
         - tags: list[str]
         - updated: ISO8601 timestamp string (added when consolidated)
         - decay_protected: bool (prevent decay if true)
+        - provenance: str or null (detected | user-told | consolidated | web-fetch | manual)
+        - last_recalled: ISO8601 timestamp string or null (updated on recall hit)
+        - recall_count: int (incremented on each recall hit)
 
     Args:
         fm: Frontmatter dictionary
@@ -205,3 +224,4 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     _validate_type_and_desc(fm)
     _validate_temporal_fields(fm)
     _validate_relationship_fields(fm)
+    _validate_recall_fields(fm)
