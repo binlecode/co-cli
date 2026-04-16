@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -11,7 +10,7 @@ from opentelemetry import trace
 if TYPE_CHECKING:
     from co_cli.knowledge._store import KnowledgeStore
 
-from co_cli.config._core import MCPServerSettings, Settings, settings
+from co_cli.config._core import Settings, settings
 from co_cli.context.session import find_latest_session, new_session_path
 from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
@@ -26,21 +25,6 @@ KnowledgeBackendLiteral = Literal["grep", "fts5", "hybrid"]
 def _summarize_backend_error(exc: Exception) -> str:
     detail = str(exc).strip() or exc.__class__.__name__
     return detail.splitlines()[0]
-
-
-def _resolve_mcp_env_tokens(config: Settings) -> dict[str, MCPServerSettings]:
-    """Resolve env-based tokens for MCP servers. Returns resolved server dict."""
-    resolved_servers: dict[str, MCPServerSettings] = {}
-    for name, srv_cfg in (config.mcp_servers or {}).items():
-        if name == "github":
-            env = dict(srv_cfg.env) if srv_cfg.env else {}
-            if "GITHUB_PERSONAL_ACCESS_TOKEN" not in env:
-                token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
-                if token:
-                    env["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
-                srv_cfg = srv_cfg.model_copy(update={"env": env})
-        resolved_servers[name] = srv_cfg
-    return resolved_servers
 
 
 def _resolve_reranker(
@@ -244,8 +228,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
             )
             config.llm.num_ctx = runtime_num_ctx
 
-    # Step 3: resolve MCP env tokens + build registries
-    config.mcp_servers = _resolve_mcp_env_tokens(config)
+    # Step 3: build registries
     llm_model = build_model(config.llm)
     tool_registry = build_tool_registry(config)
 
