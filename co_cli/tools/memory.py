@@ -41,6 +41,7 @@ from co_cli.knowledge._frontmatter import (
     render_knowledge_file,
 )
 from co_cli.tools.resource_lock import ResourceBusyError
+from co_cli.tools.session_search import session_search
 from co_cli.tools.tool_io import tool_error, tool_output, tool_output_raw
 
 _TRACER = otel_trace.get_tracer("co.memory")
@@ -183,84 +184,32 @@ async def search_memories(
     ctx: RunContext[CoDeps],
     query: str,
     *,
-    limit: int = 10,
-    tags: list[str] | None = None,
-    tag_match_mode: Literal["any", "all"] = "any",
-    created_after: str | None = None,
-    created_before: str | None = None,
+    limit: int = 5,
 ) -> ToolReturn:
-    """Keyword search over saved memories. Use this to look up preferences,
-    decisions, corrections, and context facts saved across sessions.
+    """Search episodic memory — past conversation transcripts.
 
-    For knowledge articles and external sources, use search_knowledge instead.
-
-    Returns a dict with:
-    - display: formatted ranked results — show directly to the user
-    - count: number of results
-    - results: list of {source, kind, title, snippet, score, path} dicts
+    Searches session transcripts by keyword and returns ranked excerpts.
+    For saved preferences, rules, and knowledge artifacts, use search_knowledge.
 
     Args:
-        query: Free-text search query (e.g. "python testing", "database preference").
-        limit: Max results to return (default 10).
-        tags: Tag filter list. None = no filter.
-        tag_match_mode: 'any' (OR) or 'all' (AND — doc must have every tag).
-        created_after: ISO8601 date string; only return items created on or after this date.
-        created_before: ISO8601 date string; only return items created on or before this date.
+        query: Free-text search query.
+        limit: Max results to return (default 5).
     """
-    if not query.strip():
-        return tool_output("Query is required.", ctx=ctx, count=0, results=[])
-    if limit < 1:
-        return tool_output("limit must be >= 1.", ctx=ctx, count=0, results=[])
-
-    if ctx.deps.knowledge_store is None:
-        return tool_error("Knowledge store unavailable — memory search requires DB index")
-
-    otel_trace.get_current_span().set_attribute("rag.backend", "fts5")
-    results = ctx.deps.knowledge_store.search(
-        query,
-        source="knowledge",
-        tags=tags,
-        tag_match_mode=tag_match_mode,
-        created_after=created_after,
-        created_before=created_before,
-        limit=limit,
-    )
-
-    if not results:
-        return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
-
-    lines = [
-        f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"
-    ]
-    result_dicts = []
-    for r in results:
-        lines.append(f"**{r.title or r.path}** [{r.kind or 'memory'}]: {r.snippet or ''}")
-        result_dicts.append(
-            {
-                "source": r.source,
-                "kind": r.kind,
-                "title": r.title,
-                "snippet": r.snippet,
-                "score": r.score,
-                "path": r.path,
-            }
-        )
-    return tool_output("\n".join(lines), ctx=ctx, count=len(results), results=result_dicts)
+    return await session_search(ctx, query, limit)
 
 
-async def list_memories(
+async def list_knowledge(
     ctx: RunContext[CoDeps],
     offset: int = 0,
     limit: int = 20,
     kind: str | None = None,
 ) -> ToolReturn:
-    """List saved memories with IDs, dates, tags, and one-line summaries.
+    """List saved knowledge artifacts with IDs, dates, tags, and one-line summaries.
     Returns one page at a time (default 20 per page).
 
-    Memories are cross-session knowledge: preferences, decisions, corrections,
-    and research findings. For targeted lookup by keyword, use search_memories.
-    For personal notes, use list_notes. For cloud documents, use
-    search_drive_files.
+    Covers all artifact kinds: preferences, decisions, rules, feedback, articles,
+    references, and notes. For targeted lookup by keyword, use search_knowledge.
+    For personal notes, use list_notes. For cloud documents, use search_drive_files.
 
     Returns a dict with:
     - display: formatted inventory — show directly to the user
@@ -316,7 +265,7 @@ async def list_memories(
         )
 
     has_more = offset + limit < total
-    lines = [f"Total memories: {total}\n"]
+    lines = [f"Total knowledge artifacts: {total}\n"]
     for md in memory_dicts:
         created_date = md["created"][:10]
         date_str = f"{created_date} → {md['updated'][:10]}" if md.get("updated") else created_date
@@ -340,6 +289,16 @@ async def list_memories(
         has_more=has_more,
         memories=memory_dicts,
     )
+
+
+async def list_memories(
+    ctx: RunContext[CoDeps],
+    offset: int = 0,
+    limit: int = 20,
+    kind: str | None = None,
+) -> ToolReturn:
+    """[Deprecated] Use list_knowledge instead."""
+    return await list_knowledge(ctx, offset=offset, limit=limit, kind=kind)
 
 
 async def save_knowledge(
@@ -489,7 +448,7 @@ async def update_memory(
     path, no full-body replacement.
 
     *slug* is the full file stem, e.g. ``"001-dont-use-trailing-comments"``.
-    Use list_memories to find it.
+    Use list_knowledge to find it.
 
     Guards applied before any I/O:
     - Rejects old_content / new_content that contain Read-tool line-number
@@ -588,7 +547,7 @@ async def append_memory(
     Safer than update_memory when you don't have an exact passage to match.
 
     *slug* is the full file stem, e.g. ``"001-dont-use-trailing-comments"``.
-    Use list_memories to find it.
+    Use list_knowledge to find it.
 
     Returns a dict with:
     - display: confirmation message

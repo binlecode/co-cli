@@ -25,6 +25,7 @@ TOOL_START_DISPLAY_ARG: dict[str, str] = {
     "search_articles": "query",
     "search_knowledge": "query",
     "search_memories": "query",
+    "session_search": "query",
     "search_notes": "query",
     "read_note": "filename",
     "execute_code": "cmd",

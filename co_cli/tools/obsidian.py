@@ -165,7 +165,7 @@ def search_notes(
     query is broad.
 
     This tool searches the user's Obsidian note vault (local markdown files).
-    For stored preferences and decisions, use search_memories instead. For cloud
+    For stored preferences and decisions, use search_knowledge instead. For cloud
     documents, use search_drive_files.
 
     Returns a dict with:
@@ -216,7 +216,7 @@ def list_notes(
 
     Use this for a directory overview or to discover note paths before calling
     read_note. For keyword search within note content, use search_notes
-    instead. For stored preferences and decisions, use list_memories.
+    instead. For stored preferences and decisions, use list_knowledge.
 
     Keep paginating until has_more is false when you need a complete listing.
 

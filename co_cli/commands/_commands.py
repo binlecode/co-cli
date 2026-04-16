@@ -1167,8 +1167,36 @@ async def _subcmd_memory_forget(
     return None
 
 
+_KNOWLEDGE_USAGE = (
+    "[bold]Usage:[/bold] /knowledge list|count|forget [query] "
+    "[--older-than N] [--kind preference|feedback|rule|decision|article|reference|note]"
+)
+
+
+async def _cmd_knowledge(ctx: CommandContext, args: str) -> None:
+    """Dispatch /knowledge subcommands: list, count, forget."""
+    parts = args.strip().split(maxsplit=1)
+    if not parts:
+        console.print(_KNOWLEDGE_USAGE)
+        return None
+    subcommand = parts[0].lower()
+    rest = parts[1] if len(parts) > 1 else ""
+    query, filters = _parse_memory_args(rest)
+    if subcommand == "list":
+        await _subcmd_memory_list(ctx, query, filters)
+    elif subcommand == "count":
+        await _subcmd_memory_count(ctx, query, filters)
+    elif subcommand == "forget":
+        await _subcmd_memory_forget(ctx, query, filters)
+    else:
+        console.print(f"[bold red]Unknown /knowledge subcommand:[/bold red] {subcommand}")
+        console.print(_KNOWLEDGE_USAGE)
+    return None
+
+
 async def _cmd_memory(ctx: CommandContext, args: str) -> None:
-    """Dispatch /memory subcommands: list, count, forget."""
+    """[Deprecated] Use /knowledge instead. Dispatch /memory subcommands: list, count, forget."""
+    console.print("[dim]/memory is deprecated — use /knowledge instead.[/dim]")
     parts = args.strip().split(maxsplit=1)
     if not parts:
         console.print(_MEMORY_USAGE)
@@ -1232,9 +1260,14 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "compact": SlashCommand(
         "compact", "Summarize conversation via LLM to reduce context", _cmd_compact
     ),
+    "knowledge": SlashCommand(
+        "knowledge",
+        "List, count, or delete knowledge artifacts — /knowledge list|count|forget [query] [flags]",
+        _cmd_knowledge,
+    ),
     "memory": SlashCommand(
         "memory",
-        "List, count, or delete memories — /memory list|count|forget [query] [flags]",
+        "[Deprecated] Use /knowledge — /memory list|count|forget [query] [flags]",
         _cmd_memory,
     ),
     "approvals": SlashCommand("approvals", "Manage session approval rules", _cmd_approvals),

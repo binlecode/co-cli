@@ -80,6 +80,10 @@ def test_memory_write_tools_not_in_agent() -> None:
         "save_memory must not be registered in main agent — extractor-only tool"
     )
     # Read tools are always-visible (not deferred), so present in tool_index but not deferred
+    assert "search_knowledge" in _NATIVE_INDEX
+    assert "list_knowledge" in _NATIVE_INDEX
+    assert "session_search" in _NATIVE_INDEX
+    # Deprecated aliases still registered for backward compatibility
     assert "search_memories" in _NATIVE_INDEX
     assert "list_memories" in _NATIVE_INDEX
 

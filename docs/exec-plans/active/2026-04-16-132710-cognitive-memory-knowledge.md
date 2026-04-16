@@ -270,7 +270,7 @@ Make extracted facts and articles share one conceptual model. This is the struct
 
 Align the agent's tool surface with the two-layer model.
 
-### TASK-3.1: Expand `search_knowledge()` to cover all reusable artifacts
+### ✓ DONE TASK-3.1: Expand `search_knowledge()` to cover all reusable artifacts
 
 - `files:` `co_cli/tools/articles.py` (line 122)
 - Remove the `source="memory"` rejection (line 178–185). Instead, search all knowledge sources including former memory-extracted facts.
@@ -278,7 +278,7 @@ Align the agent's tool surface with the two-layer model.
 - Update docstring: "Primary search over all reusable knowledge — preferences, rules, articles, notes, and synced sources."
 - `done_when:` `search_knowledge("user prefers pytest")` returns extracted facts. No source rejection.
 
-### TASK-3.2: Repurpose `search_memories()` for transcript search
+### ✓ DONE TASK-3.2: Repurpose `search_memories()` for transcript search
 
 - `files:` `co_cli/tools/memory.py` (line 183)
 - Rewrite `search_memories()` to delegate to `session_search()`:
@@ -291,7 +291,7 @@ Align the agent's tool surface with the two-layer model.
 - Update docstring to say "episodic memory (transcripts)" explicitly.
 - `done_when:` `search_memories("pytest")` returns transcript excerpts, not extracted facts.
 
-### TASK-3.3: Repurpose `list_memories()` for knowledge listing
+### ✓ DONE TASK-3.3: Repurpose `list_memories()` for knowledge listing
 
 - `files:` `co_cli/tools/memory.py` (line 253)
 - Rename to `list_knowledge()` (keep `list_memories` as deprecated alias).
@@ -299,7 +299,7 @@ Align the agent's tool surface with the two-layer model.
 - Update output to show `artifact_kind` column.
 - `done_when:` `list_knowledge()` returns both old extracted facts and articles in one unified list.
 
-### TASK-3.4: Update `_recall_for_context` to search knowledge
+### ✓ DONE TASK-3.4: Update `_recall_for_context` to search knowledge
 
 - `files:` `co_cli/tools/memory.py` (line 106)
 - Change `_recall_for_context()` from:
@@ -314,7 +314,7 @@ Align the agent's tool surface with the two-layer model.
 - Filter by relevance score, not by legacy `kind`.
 - `done_when:` Per-turn recall returns both extracted facts and articles.
 
-### TASK-3.5: Update standing context injection
+### ✓ DONE TASK-3.5: Update standing context injection
 
 - `files:` `co_cli/agent/_instructions.py` (line 24)
 - Change `add_always_on_memories()` → `add_standing_knowledge()`:
@@ -328,7 +328,7 @@ Align the agent's tool surface with the two-layer model.
 - Register updated function in agent builder.
 - `done_when:` Standing context injected from knowledge artifacts. Old `always_on` entries still work.
 
-### TASK-3.6: Update tool registration
+### ✓ DONE TASK-3.6: Update tool registration
 
 - `files:` `co_cli/agent/_native_toolset.py` (lines 123–138)
 - Current ALWAYS-visible knowledge reads:
@@ -343,7 +343,7 @@ Align the agent's tool surface with the two-layer model.
 - Deprecation: `search_articles` and `search_memories` remain registered but delegate to the canonical tools. Remove in a future cleanup pass.
 - `done_when:` Agent toolset reflects two-layer model. Old tool names still callable.
 
-### TASK-3.7: Update `/memory` REPL commands
+### ✓ DONE TASK-3.7: Update `/memory` REPL commands
 
 - `files:` `co_cli/commands/_commands.py`
 - Add `/knowledge` as primary command namespace:
@@ -794,3 +794,33 @@ Modified (docs): all seven specs listed under "Docs synced"; this plan file
 Version bump: `0.7.164` → `0.7.166` (feature delivery).
 
 > Gate 2 — `/review-impl` required before `git mv` to `completed/`.
+
+## Delivery Summary — Phase 3 — 2026-04-16
+
+**Overall: DELIVERED.** Phase 3 ships the tool surface convergence: `search_memories` now delegates to `session_search` for episodic (transcript) recall; `list_knowledge` is the canonical artifact listing tool; `session_search` is promoted from DEFERRED to ALWAYS; `/knowledge` is the primary REPL command namespace.
+
+### Pre-completed (Phase 2 had already landed these)
+- TASK-3.1: `search_knowledge()` already covered all sources — no source rejection
+- TASK-3.4: `_recall_for_context()` already used `source="knowledge"` with no kind filter
+
+### Shipped
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-3.2 — `search_memories()` → `session_search()` delegation | `search_memories()` returns transcript results | ✓ pass |
+| TASK-3.3 — `list_memories()` → `list_knowledge()` + deprecated alias | `list_knowledge()` returns unified artifact list | ✓ pass |
+| TASK-3.5 — `add_standing_knowledge()` rename | Standing context injected from knowledge artifacts | ✓ pass |
+| TASK-3.6 — Tool registration update | `session_search` ALWAYS; `list_knowledge` ALWAYS; deprecated aliases remain | ✓ pass |
+| TASK-3.7 — `/knowledge` command namespace | `/knowledge list|count|forget` works; `/memory` works with deprecation notice | ✓ pass |
+
+### Tests
+- Full suite: **502 passed**
+- Updated: `test_memory.py`, `test_agent.py`, `test_session_search_tool.py`, `test_tool_prompt_discovery.py`, `test_tool_calling_functional.py`
+
+### Docs synced
+`tools.md`, `cognition.md`, `tui.md`, `context.md`, `knowledge.md`, `flow-prompt-assembly.md`
+
+### Version bump
+`0.7.166` → `0.7.168` (feature delivery)
+
+> Gate 2 — `/review-impl cognitive-memory-knowledge` required before `git mv` to `completed/`.

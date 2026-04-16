@@ -220,17 +220,17 @@ All archived artifacts are recoverable via `/knowledge restore`.
 
 ### 2.7 REPL Commands
 
-| Command | Purpose |
-|---------|---------|
-| `/knowledge list [query] [flags]` | List knowledge artifacts |
-| `/knowledge count [query] [flags]` | Count artifacts |
-| `/knowledge forget <query> [flags]` | Archive artifacts (preview + confirm) |
-| `/knowledge stats` | Health dashboard (counts, last dream, decay candidates) |
-| `/knowledge dream [--dry]` | Run consolidation cycle manually |
-| `/knowledge restore [slug]` | List archived artifacts or restore by slug |
-| `/knowledge decay-review [--dry]` | Show decay candidates, confirm to archive |
+| Command | Purpose | Status |
+|---------|---------|--------|
+| `/knowledge list [query] [flags]` | List knowledge artifacts | Implemented |
+| `/knowledge count [query] [flags]` | Count artifacts | Implemented |
+| `/knowledge forget <query> [flags]` | Archive artifacts (preview + confirm) | Implemented |
+| `/knowledge stats` | Health dashboard (counts, last dream, decay candidates) | Phase 6 — not yet implemented |
+| `/knowledge dream [--dry]` | Run consolidation cycle manually | Phase 5 — not yet implemented |
+| `/knowledge restore [slug]` | List archived artifacts or restore by slug | Phase 5 — not yet implemented |
+| `/knowledge decay-review [--dry]` | Show decay candidates, confirm to archive | Phase 5 — not yet implemented |
 
-`/memory` remains as alias during transition.
+`/memory` remains as deprecated alias.
 
 ## 3. Config
 
@@ -289,7 +289,7 @@ All archived artifacts are recoverable via `/knowledge restore`.
 | `co_cli/knowledge/_decay.py` | *(Phase 5)* Decay candidate identification — not yet implemented |
 | `co_cli/knowledge/_dream.py` | *(Phase 5)* Dream cycle orchestrator, transcript mining, merge, decay sweep — not yet implemented |
 | `co_cli/tools/articles.py` | `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()`, `read_article()` |
-| `co_cli/tools/memory.py` | `search_memories()` (queries `source="knowledge"`; Phase 3 retargets to transcript search), `list_memories()`, `update_memory()`, `append_memory()`, `save_knowledge()` (extractor-only), `save_memory()` (deprecated wrapper) |
+| `co_cli/tools/memory.py` | `search_memories()` (deprecated — delegates to `session_search()`), `list_knowledge()`, `list_memories()` (deprecated alias), `update_memory()`, `append_memory()`, `save_knowledge()` (extractor-only) |
 
 ### Memory Layer
 
@@ -307,7 +307,7 @@ All archived artifacts are recoverable via `/knowledge restore`.
 | `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, cursor tracking |
 | `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
-| `co_cli/agent/_instructions.py` | `add_always_on_memories()` — injects pinned artifacts (Phase 3 renames to `add_standing_knowledge()`) |
+| `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — injects pinned artifacts as standing context every turn |
 
 ### Config
 

@@ -8,7 +8,7 @@
 - Visibility tiers (always-registered vs deferred/discoverable)
 - Three approval classes (auto-approve, requires-approval, deferred)
 - Shell policy and resource locks
-- MCP integration and tool catalog (36 tools)
+- MCP integration and tool catalog (37 tools)
 
 **Non-goals:**
 - Parallel MCP execution across servers
@@ -39,7 +39,7 @@ The tool ecosystem is composed of core infrastructure for execution, lifecycle a
 ### Domain Tools
 - `co_cli/tools/files.py` — `glob`, `read_file`, `grep`, `write_file`, `patch`
 - `co_cli/tools/shell.py` — `run_shell_command`
-- `co_cli/tools/memory.py` — `search_memories` (queries `source="knowledge"`; Phase 3 retargets to `session_search`), `list_memories` (registered); `update_memory`, `append_memory` (approval-required); `save_knowledge` (unregistered — extractor sub-agent only); `save_memory` (deprecated wrapper delegating to `save_knowledge`)
+- `co_cli/tools/memory.py` — `search_memories` (deprecated — delegates to `session_search` for episodic recall), `list_knowledge` (registered — canonical artifact listing), `list_memories` (deprecated alias for `list_knowledge`); `update_memory`, `append_memory` (approval-required); `save_knowledge` (unregistered — extractor sub-agent only)
 - `co_cli/tools/articles.py` — `save_article`, `search_articles`, `read_article`, `search_knowledge`
 - `co_cli/tools/web.py` — `web_search`, `web_fetch`
 - `co_cli/tools/task_control.py` — `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks`
@@ -127,14 +127,17 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 
 ### Tool Catalog
 
-**Core tools (26 tools)**
+**Core tools (27 tools)**
 | Tool | Visibility | Approval | Seq | Retries | Max Size | Notes |
 |------|------------|----------|-----|---------|----------|-------|
 | `check_capabilities` | ALWAYS | auto | no | default | 50k | Introspection for /doctor |
 | `write_todos`, `read_todos` | ALWAYS | auto | no | default | 50k | Session task list |
-| `search_memories`, `list_memories` | ALWAYS | auto | no | default | 50k | Transitional: `search_memories` targets episodic recall (transcripts); `list_memories` targets knowledge inventory |
 | `search_knowledge` | ALWAYS | auto | no | default | 50k | Universal reusable-recall across all knowledge artifact kinds + Obsidian + Drive |
-| `search_articles`, `read_article` | ALWAYS | auto | no | default | 50k | Transitional alias: `search_articles` → `search_knowledge(artifact_kind="article")`; `read_article` reads full artifact body by slug |
+| `list_knowledge` | ALWAYS | auto | no | default | 50k | Paginated artifact inventory with `artifact_kind` column |
+| `read_article` | ALWAYS | auto | no | default | 50k | Read full artifact body by slug |
+| `session_search` | ALWAYS | auto | no | default | 50k | Episodic memory — FTS5 keyword search over past session transcripts |
+| `search_memories` | ALWAYS | auto | no | default | 50k | Deprecated — delegates to `session_search` |
+| `search_articles`, `list_memories` | ALWAYS | auto | no | default | 50k | Deprecated aliases: `search_articles` → `search_knowledge`; `list_memories` → `list_knowledge` |
 | `glob`, `grep` | ALWAYS | auto | no | default | 50k | Workspace search |
 | `read_file` | ALWAYS | auto | no | default | 80k | Workspace read |
 | `web_search`, `web_fetch` | ALWAYS | auto | no | 3 | 50k | Network bounds/fetch |
@@ -146,7 +149,6 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 | `cancel_background_task` | DEFERRED | auto | no | default | 50k | Kill proc tree |
 | `execute_code` | DEFERRED | auto* | yes | default | 50k | *Always requires approval (inline guard, no safe-prefix bypass) |
 | `research_web`, `analyze_knowledge`, `reason_about` | DEFERRED | auto | no | default | 50k | Isolated subagent spawning |
-| `session_search` | DEFERRED | auto | no | default | 50k | Episodic memory search — FTS5 keyword search over past session transcripts |
 
 **Integration tools (10 tools)**
 Excluded when the required credential or config path is absent.

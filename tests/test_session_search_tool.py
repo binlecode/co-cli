@@ -121,14 +121,14 @@ async def test_session_search_graceful_when_index_none(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_session_search_registered_with_deferred_visibility() -> None:
-    """session_search must appear in tool_index with DEFERRED visibility."""
+def test_session_search_registered_with_always_visibility() -> None:
+    """session_search is the episodic memory tool — must be ALWAYS visible (Phase 3)."""
     from co_cli.agent._core import build_tool_registry
 
     registry = build_tool_registry(_CONFIG)
     tool_index = registry.tool_index
 
     assert "session_search" in tool_index, "'session_search' must be registered in tool_index"
-    assert tool_index["session_search"].visibility == VisibilityPolicyEnum.DEFERRED, (
-        f"session_search visibility must be DEFERRED, got {tool_index['session_search'].visibility}"
+    assert tool_index["session_search"].visibility == VisibilityPolicyEnum.ALWAYS, (
+        f"session_search visibility must be ALWAYS, got {tool_index['session_search'].visibility}"
     )

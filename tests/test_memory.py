@@ -18,6 +18,7 @@ from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools.memory import (
     _recall_for_context,
     append_memory,
+    list_knowledge,
     list_memories,
     search_memories,
     update_memory,
@@ -108,12 +109,12 @@ def test_recall_does_not_mutate_files(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# list_memories pagination
+# list_knowledge pagination
 # ---------------------------------------------------------------------------
 
 
-def test_list_memories_pagination(tmp_path: Path):
-    """list_memories returns correct pages with offset/limit."""
+def test_list_knowledge_pagination(tmp_path: Path):
+    """list_knowledge returns correct pages with offset/limit."""
     memory_dir = tmp_path / "memory"
     for i in range(1, 6):
         _write_memory(memory_dir, i, f"Memory content number {i}", tags=["test"])
@@ -121,7 +122,7 @@ def test_list_memories_pagination(tmp_path: Path):
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     # Page 1: offset=0, limit=2
-    r1 = asyncio.run(list_memories(ctx, offset=0, limit=2))
+    r1 = asyncio.run(list_knowledge(ctx, offset=0, limit=2))
     assert r1.metadata["count"] == 2
     assert r1.metadata["total"] == 5
     assert r1.metadata["offset"] == 0
@@ -131,16 +132,28 @@ def test_list_memories_pagination(tmp_path: Path):
     assert r1.metadata["memories"][1]["id"] == "2"
 
     # Page 2: offset=2, limit=2
-    r2 = asyncio.run(list_memories(ctx, offset=2, limit=2))
+    r2 = asyncio.run(list_knowledge(ctx, offset=2, limit=2))
     assert r2.metadata["count"] == 2
     assert r2.metadata["total"] == 5
     assert r2.metadata["has_more"] is True
 
     # Page 3: offset=4, limit=2 — partial last page
-    r3 = asyncio.run(list_memories(ctx, offset=4, limit=2))
+    r3 = asyncio.run(list_knowledge(ctx, offset=4, limit=2))
     assert r3.metadata["count"] == 1
     assert r3.metadata["total"] == 5
     assert r3.metadata["has_more"] is False
+
+
+def test_list_memories_deprecated_alias(tmp_path: Path):
+    """list_memories (deprecated) delegates to list_knowledge — same results."""
+    memory_dir = tmp_path / "memory"
+    _write_memory(memory_dir, 1, "Memory content number 1", tags=["test"])
+
+    ctx = _make_ctx(knowledge_dir=memory_dir)
+    r_knowledge = asyncio.run(list_knowledge(ctx, offset=0, limit=5))
+    r_memories = asyncio.run(list_memories(ctx, offset=0, limit=5))
+    assert r_knowledge.metadata["count"] == r_memories.metadata["count"]
+    assert r_knowledge.metadata["total"] == r_memories.metadata["total"]
 
 
 # ---------------------------------------------------------------------------
@@ -259,40 +272,17 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# search_memories — dedicated memory search tool
+# search_memories — deprecated wrapper over session_search
 # ---------------------------------------------------------------------------
 
 
-def test_search_memories_finds_saved_memories(tmp_path: Path):
-    """search_memories returns saved memories via FTS5 DB search."""
-    memory_dir = tmp_path / "memory"
-
-    _write_memory(
-        memory_dir, 1, "User prefers xyloquartz-search-test framework", tags=["preference"]
-    )
-    _write_memory(
-        memory_dir, 2, "User uses xyloquartz-search-test for all tests", tags=["context"]
-    )
-
-    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
-    try:
-        idx.sync_dir("knowledge", memory_dir)
-        ctx = _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx)
-
-        result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
-        assert result.metadata["count"] >= 2
-        assert all(r["source"] == "knowledge" for r in result.metadata["results"])
-    finally:
-        idx.close()
-
-
-def test_search_memories_empty_query_returns_guard(tmp_path: Path):
-    """search_memories with empty query returns guard message."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    result = asyncio.run(search_memories(_make_ctx(knowledge_dir=memory_dir), "   "))
+def test_search_memories_delegates_to_session_search(tmp_path: Path):
+    """search_memories delegates to session_search — returns not-available when no session index."""
+    ctx = _make_ctx(knowledge_dir=tmp_path / "knowledge")
+    result = asyncio.run(search_memories(ctx, "some query"))
+    # session_index is None in test context → session_search returns its own not-available message
     assert result.metadata["count"] == 0
-    assert "required" in result.return_value.lower()
+    assert "session" in result.return_value.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +291,7 @@ def test_search_memories_empty_query_returns_guard(tmp_path: Path):
 
 
 def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
-    """search_memories and search_knowledge stamp rag.backend on the active OTel span."""
+    """search_knowledge stamps rag.backend on the active OTel span."""
     from opentelemetry import trace as otel_trace
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -325,7 +315,6 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
     try:
         idx.sync_dir("knowledge", knowledge_dir)
 
-        mem_ctx = _make_ctx(knowledge_dir=knowledge_dir, knowledge_store=idx)
         fts_know_ctx = RunContext(
             deps=CoDeps(
                 shell=ShellBackend(),
@@ -360,15 +349,11 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
 
         tracer = _orig.get_tracer("test.rag_backend")
         with tracer.start_as_current_span("execute_tool test") as parent_span:
-            # (1) search_memories — FTS5 DB search
-            asyncio.run(search_memories(mem_ctx, "rag-backend-annotation-fts-test"))
-            assert parent_span.attributes.get("rag.backend") == "fts5"
-
-            # (2) search_knowledge FTS path
+            # (1) search_knowledge FTS path
             asyncio.run(search_knowledge(fts_know_ctx, "rag-backend-annotation-fts-test"))
             assert parent_span.attributes.get("rag.backend") in ("fts5", "hybrid")
 
-            # (3) search_knowledge grep path
+            # (2) search_knowledge grep path
             asyncio.run(search_knowledge(grep_know_ctx, "rag-backend-annotation-fts-test"))
             assert parent_span.attributes.get("rag.backend") == "grep"
     finally:

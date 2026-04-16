@@ -146,7 +146,7 @@ async def test_tool_selection_and_arg_extraction(
                     f"'database preferences' in query={(args or {}).get('query')!r}"
                 )
                 continue
-            if tool_name == "list_memories":
+            if tool_name in ("list_memories", "list_knowledge"):
                 kind = (args or {}).get("kind")
                 if kind in (None, "memory"):
                     return
@@ -154,7 +154,8 @@ async def test_tool_selection_and_arg_extraction(
                 continue
             last_details = (
                 f"tool={tool_name!r}, expected one of "
-                f"('search_knowledge', 'search_memories', 'list_memories'), args={args!r}"
+                f"('search_knowledge', 'search_memories', 'list_memories', 'list_knowledge'),"
+                f" args={args!r}"
             )
             continue
 

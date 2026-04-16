@@ -122,7 +122,7 @@ Artifacts are split into overlapping chunks at index time (chunk size: 600 estim
 
 All reusable recall routes through the Knowledge layer via three paths:
 
-**Standing context** — artifacts with `pin_mode="standing"` are injected into every model request as a dynamic instruction layer via `add_always_on_memories()` (Phase 3 renames to `add_standing_knowledge`). Capped at 5 entries, truncated to `memory.injection_max_chars`.
+**Standing context** — artifacts with `pin_mode="standing"` are injected into every model request as a dynamic instruction layer via `add_standing_knowledge()`. Capped at 5 entries, truncated to `memory.injection_max_chars`.
 
 **Turn-time recall** — on each new user turn, `inject_opening_context` calls `_recall_for_context()` which queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are injected as a trailing `SystemPromptPart`. Both extracted facts and articles are eligible — any reusable, relevant artifact surfaces here.
 
@@ -255,7 +255,7 @@ Planned (Phase 3 introduces `/knowledge` alias; Phases 5–6 add `dream`, `resto
 | `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, cursor tracking |
 | `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
-| `co_cli/agent/_instructions.py` | `add_always_on_memories()` — pinned artifact injection (Phase 3 renames to `add_standing_knowledge`) |
+| `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — pinned artifact injection as standing context every turn |
 
 ### Config
 

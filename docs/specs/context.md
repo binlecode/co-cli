@@ -189,7 +189,7 @@ search_memories(ctx, query)      ← agent tool (transitional — target: delega
   -> sets OTel span attribute rag.backend = "fts5"
 ```
 
-The standing-context layer (`load_standing_artifacts`) runs at instruction-build time: loads all knowledge artifacts, keeps those with `pin_mode="standing"`, caps at 5, and injects them into the `add_always_on_memories` dynamic instruction layer.
+The standing-context layer (`load_standing_artifacts`) runs at instruction-build time: loads all knowledge artifacts, keeps those with `pin_mode="standing"`, caps at 5, and injects them into the `add_standing_knowledge` dynamic instruction layer.
 
 #### 2.4.3 Write Path
 

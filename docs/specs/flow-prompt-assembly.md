@@ -190,7 +190,7 @@ Important boundaries:
 
 - soul-defined personality lives only under `souls/{role}/...`
 - the role-specific `souls/{role}/memories/*.md` files are the base personality memory layer and occupy step 2 after the seed
-- `~/.co-cli/knowledge/` is the runtime knowledge store populated by `save_knowledge` (and the deprecated `save_memory` wrapper); it is not the base personality store
+- `~/.co-cli/knowledge/` is the runtime knowledge store populated by `save_knowledge`; it is not the base personality store
 - rule filename validation is fail-fast: invalid or non-contiguous rule numbering raises `ValueError`
 - the assembled static string must be non-empty
 
@@ -246,7 +246,7 @@ For co-cli, the instruction stack seen by the SDK is:
 1. the static string from `build_static_instructions()`
 2. `add_current_date`
 3. `add_shell_guidance`
-4. `add_always_on_memories`
+4. `add_standing_knowledge`
 5. `add_personality_memories`
 6. `add_category_awareness_prompt`
 7. any SDK/toolset-supplied dynamic instruction parts

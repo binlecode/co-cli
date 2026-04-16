@@ -20,7 +20,7 @@ from co_cli.tools.files import glob, grep, patch, read_file, write_file
 from co_cli.tools.google.calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.google.drive import read_drive_file, search_drive_files
 from co_cli.tools.google.gmail import create_gmail_draft, list_gmail_emails, search_gmail_emails
-from co_cli.tools.memory import list_memories, search_memories
+from co_cli.tools.memory import list_knowledge, list_memories, search_memories
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
 from co_cli.tools.session_search import session_search
 from co_cli.tools.shell import run_shell_command
@@ -122,16 +122,24 @@ def _build_native_toolset(
 
     # Knowledge reads
     _register_tool(
-        search_memories, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
-    )
-    _register_tool(
         search_knowledge, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
     )
     _register_tool(
-        search_articles, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+        list_knowledge, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
     )
     _register_tool(
         read_article, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
+    # Episodic memory — transcript search
+    _register_tool(
+        session_search, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
+    # Deprecated aliases — delegate to canonical tools; remove in a future pass
+    _register_tool(
+        search_memories, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+    )
+    _register_tool(
+        search_articles, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
     )
     _register_tool(
         list_memories, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
@@ -210,11 +218,6 @@ def _build_native_toolset(
     _register_tool(research_web, is_concurrent_safe=True, visibility=_deferred_visible)
     _register_tool(analyze_knowledge, is_concurrent_safe=True, visibility=_deferred_visible)
     _register_tool(reason_about, is_concurrent_safe=True, visibility=_deferred_visible)
-
-    # Session history search
-    _register_tool(
-        session_search, is_read_only=True, is_concurrent_safe=True, visibility=_deferred_visible
-    )
 
     # Integration tools — excluded when the required config/credential is absent
     if config.obsidian_vault_path:

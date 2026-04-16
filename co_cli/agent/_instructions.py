@@ -21,8 +21,8 @@ def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
     )
 
 
-def add_always_on_memories(ctx: RunContext[CoDeps]) -> str:
-    """Inject always_on memories as standing context every turn."""
+def add_standing_knowledge(ctx: RunContext[CoDeps]) -> str:
+    """Inject pinned knowledge artifacts as standing context every turn."""
     entries = load_standing_artifacts(ctx.deps.knowledge_dir)
     if not entries:
         return ""

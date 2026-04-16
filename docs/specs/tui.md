@@ -124,7 +124,7 @@ CommandContext:
   deps: CoDeps                  — full runtime dependencies
   agent: Agent[CoDeps, ...]     — live agent (needed by LLM-backed commands)
   completer: Any | None         — live WordCompleter (for completer updates)
-  input_fn: Callable | None     — injectable for testable confirmation prompts
+  frontend: Frontend | None     — terminal frontend for confirmation prompts
 ```
 
 `deps.session` and `deps.runtime` are mutable throughout the session. Commands that update
@@ -157,7 +157,8 @@ All built-in commands are registered in `BUILTIN_COMMANDS: dict[str, SlashComman
 | `/status` | `[task-id]` | System health check, or status of a specific task | `None` |
 | `/tools` | — | List registered agent tools with descriptions | `None` |
 | `/skills` | `[name]` | List loaded skills; show detail for named skill | `None` |
-| `/memory` | `list\|count\|forget [query] [flags]` | Manage session memories | `None` |
+| `/knowledge` | `list\|count\|forget [query] [flags]` | Manage knowledge artifacts | `None` |
+| `/memory` | `list\|count\|forget [query] [flags]` | [Deprecated — use `/knowledge`] Manage knowledge artifacts | `None` |
 | `/approvals` | `list\|clear\|...` | View and manage session approval rules | `None` |
 | `/background` | `<command>` | Run a shell command in the background | `None` |
 | `/tasks` | — | List running/completed background tasks | `None` |
