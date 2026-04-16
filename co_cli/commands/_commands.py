@@ -1167,6 +1167,8 @@ async def _subcmd_memory_forget(
 
     for m in entries:
         m.path.unlink()
+        if ctx.deps.knowledge_store is not None:
+            ctx.deps.knowledge_store.remove("memory", str(m.path))
 
     console.print(f"[success]✓ Deleted {len(entries)} memories.[/success]")
     return None

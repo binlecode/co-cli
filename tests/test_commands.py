@@ -36,6 +36,7 @@ from co_cli.context.tool_approvals import (
 )
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
 from co_cli.display._core import Frontend, console
+from co_cli.knowledge._store import KnowledgeStore
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -643,6 +644,47 @@ async def test_cmd_memory_forget_no_match(tmp_path):
 
     assert isinstance(result, LocalOnly)
     assert "No memories matched" in cap.get()
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_forget_removes_db_entry(tmp_path):
+    """/memory forget removes the matching entry from search.db, not just the file."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    token = "kappa-db-purge-token"
+    f1 = _write_memory(memory_dir, "a.md", "id-db-del", f"{token} content")
+    _write_memory(memory_dir, "b.md", "id-db-keep", "unrelated entry")
+
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
+    try:
+        idx.sync_dir("memory", memory_dir)
+        # Confirm the entry is in the DB before forget
+        before = idx.search(token, source="memory", limit=10)
+        assert any(str(f1) in r.path for r in before), "Entry must be indexed before forget"
+
+        deps = CoDeps(
+            shell=ShellBackend(),
+            model=_LLM_MODEL,
+            tool_index=dict(_TOOL_REG.tool_index),
+            config=_CONFIG_NO_MCP,
+            session=CoSessionState(),
+            memory_dir=memory_dir,
+            knowledge_store=idx,
+        )
+        ctx = CommandContext(
+            message_history=[],
+            deps=deps,
+            agent=_AGENT,
+            frontend=SilentFrontend(confirm_response=True),
+        )
+        result = await dispatch(f"/memory forget {token}", ctx)
+
+        assert isinstance(result, LocalOnly)
+        assert not f1.exists(), "File must be deleted"
+        after = idx.search(token, source="memory", limit=10)
+        assert not any(str(f1) in r.path for r in after), "DB entry must be removed after forget"
+    finally:
+        idx.close()
 
 
 # ---------------------------------------------------------------------------
