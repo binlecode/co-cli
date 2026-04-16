@@ -2,70 +2,29 @@
   "llm": {
     "provider": "ollama-openai",
     "host": "http://localhost:11434",
+    "model": "qwen3.5:35b-a3b-think",
     "num_ctx": 262144,
-    "role_models": {
-      "reasoning": {
-        "model": "qwen3.5:35b-a3b-think",
-        "provider": "ollama-openai",
-        "api_params": {
-          "temperature": 1.0,
-          "top_p": 0.95,
-          "max_tokens": 32768,
-          "num_ctx": 131072,
-          "num_predict": 32768
-        }
-      },
-      "summarization": {
-        "model": "qwen3.5:35b-a3b-think",
-        "provider": "ollama-openai",
-        "api_params": {
-          "temperature": 0.7,
-          "top_p": 0.8,
-          "max_tokens": 16384,
-          "reasoning_effort": "none",
-          "top_k": 20,
-          "min_p": 0.0,
-          "presence_penalty": 1.5,
-          "repeat_penalty": 1.0,
-          "num_ctx": 131072,
-          "num_predict": 16384
-        }
-      },
-      "coding": {
-        "model": "qwen3.5:35b-a3b-code",
-        "provider": "ollama-openai"
-      },
-      "research": {
-        "model": "qwen3.5:35b-a3b-think",
-        "provider": "ollama-openai",
-        "api_params": {
-          "temperature": 0.7,
-          "top_p": 0.8,
-          "max_tokens": 16384,
-          "reasoning_effort": "none",
-          "top_k": 20,
-          "min_p": 0.0,
-          "presence_penalty": 1.5,
-          "repeat_penalty": 1.0,
-          "num_ctx": 131072,
-          "num_predict": 16384
-        }
-      },
-      "analysis": {
-        "model": "qwen3.5:35b-a3b-think",
-        "provider": "ollama-openai",
-        "api_params": {
-          "temperature": 0.7,
-          "top_p": 0.8,
-          "max_tokens": 16384,
-          "reasoning_effort": "none",
-          "top_k": 20,
-          "min_p": 0.0,
-          "presence_penalty": 1.5,
-          "repeat_penalty": 1.0,
-          "num_ctx": 131072,
-          "num_predict": 16384
-        }
+    "api_key": null,
+    "ctx_warn_threshold": 0.85,
+    "ctx_overflow_threshold": 1.0,
+    "reasoning": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "max_tokens": 32768,
+      "num_ctx": 131072
+    },
+    "noreason": {
+      "temperature": 0.7,
+      "top_p": 0.8,
+      "max_tokens": 16384,
+      "extra_body": {
+        "reasoning_effort": "none",
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repeat_penalty": 1.0,
+        "num_ctx": 131072,
+        "num_predict": 16384
       }
     }
   },
@@ -76,14 +35,15 @@
     "embedding_dims": 1024,
     "embed_api_url": "http://127.0.0.1:8283",
     "cross_encoder_reranker_url": "http://127.0.0.1:8282",
+    "tei_rerank_batch_size": 50,
     "chunk_size": 600,
-    "chunk_overlap": 80
+    "chunk_overlap": 80,
+    "llm_reranker": null
   },
   "memory": {
-    "max_count": 200,
     "recall_half_life_days": 30,
-    "auto_save_tags": ["user", "feedback", "project", "reference"],
-    "injection_max_chars": 2000
+    "injection_max_chars": 2000,
+    "extract_every_n_turns": 3
   },
   "web": {
     "fetch_allowed_domains": [],
@@ -95,7 +55,6 @@
   },
   "subagent": {
     "scope_chars": 120,
-    "max_requests_coder": 10,
     "max_requests_research": 10,
     "max_requests_analysis": 8,
     "max_requests_thinking": 3
@@ -114,15 +73,23 @@
       "git branch", "git tag", "git blame"
     ]
   },
+  "observability": {
+    "log_level": "INFO",
+    "log_max_size_mb": 5,
+    "log_backup_count": 3
+  },
 
   "obsidian_vault_path": "",
   "google_credentials_path": "",
   "brave_search_api_key": "",
+  "library_path": "",
 
   "theme": "light",
   "personality": "tars",
   "tool_retries": 3,
   "reasoning_display": "summary",
+  "doom_loop_threshold": 3,
+  "max_reflections": 3,
 
   "mcp_servers": {}
 }
