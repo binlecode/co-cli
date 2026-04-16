@@ -219,7 +219,6 @@ class Settings(BaseModel):
             },
             "subagent": {
                 "scope_chars": "CO_CLI_SUBAGENT_SCOPE_CHARS",
-                "max_requests_coder": "CO_CLI_SUBAGENT_MAX_REQUESTS_CODER",
                 "max_requests_research": "CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH",
                 "max_requests_analysis": "CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS",
                 "max_requests_thinking": "CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING",

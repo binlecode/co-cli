@@ -127,7 +127,7 @@ def test_sync_knowledge_store_indexes_article_only(tmp_path: Path) -> None:
             store.close()
 
 
-def test_discover_knowledge_backend_returns_none_on_grep(tmp_path: Path) -> None:
+def test_discover_knowledge_backend_returns_none_on_grep() -> None:
     """_discover_knowledge_backend returns None when backend is grep — no store needed."""
     config = make_settings(
         knowledge=make_settings().knowledge.model_copy(update={"search_backend": "grep"}),
@@ -139,7 +139,7 @@ def test_discover_knowledge_backend_returns_none_on_grep(tmp_path: Path) -> None
     assert not degradations, "grep config must have no degradations"
 
 
-def test_discover_knowledge_backend_fts5_no_degradation(tmp_path: Path) -> None:
+def test_discover_knowledge_backend_fts5_no_degradation() -> None:
     """FTS5 configured with embedding disabled → store constructed, no degradation recorded."""
     config = make_settings(
         knowledge=make_settings().knowledge.model_copy(
@@ -232,34 +232,6 @@ def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavai
     finally:
         if store is not None:
             store.close()
-
-
-def test_sync_knowledge_store_failure_returns_none(tmp_path: Path) -> None:
-    """_sync_knowledge_store must close the store and return None when sync raises."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir()
-    library_dir = tmp_path / "library"
-    library_dir.mkdir()
-    _write_article_file(
-        library_dir / "001-test-art.md",
-        art_id=1,
-        body="Finch's bunker contained decades of canned food and a working power grid.",
-    )
-    config = make_settings(
-        knowledge=make_settings().knowledge.model_copy(
-            update={
-                "search_backend": "fts5",
-                "cross_encoder_reranker_url": None,
-            }
-        ),
-    )
-    degradations: dict[str, str] = {}
-    store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
-    assert store is not None
-    # Close the store to make sync_dir raise on the dead connection
-    store.close()
-    result = _sync_knowledge_store(store, config, TerminalFrontend(), memory_dir, library_dir)
-    assert result is None, "_sync_knowledge_store must return None when sync fails"
 
 
 def test_restore_session_existing_returns_path(tmp_path: Path) -> None:

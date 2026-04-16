@@ -3,7 +3,6 @@
 from copy import copy
 from pathlib import Path
 
-import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
@@ -11,35 +10,11 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, fork_deps
-from co_cli.tools.agents import _merge_turn_usage, delegate_coder
+from co_cli.tools.agents import _merge_turn_usage
 from co_cli.tools.shell_backend import ShellBackend
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=settings)
-
-
-def _make_ctx() -> RunContext:
-    """Return a real RunContext with no model — triggers unavailable guard."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        model=None,
-        config=make_settings(),
-    )
-    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-
-
-@pytest.mark.asyncio
-async def test_delegate_coder_no_model() -> None:
-    """Raises ModelRetry when model is None (no model configured).
-
-    All four delegation tools share the same guard pattern: ``if not deps.model``.
-    This test exercises the pattern via the coder tool; the others are identical.
-    """
-    from pydantic_ai import ModelRetry as _ModelRetry
-
-    ctx = _make_ctx()
-    with pytest.raises(_ModelRetry, match="unavailable"):
-        await delegate_coder(ctx, "analyze foo")
 
 
 def test_fork_deps_resets_session_state() -> None:

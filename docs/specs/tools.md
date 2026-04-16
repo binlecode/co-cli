@@ -46,7 +46,8 @@ The tool ecosystem is composed of core infrastructure for execution, lifecycle a
 - `co_cli/tools/todo.py` — `write_todos`, `read_todos`
 - `co_cli/tools/capabilities.py` — `check_capabilities`
 - `co_cli/tools/session_search.py` — `session_search` (transcript FTS search)
-- `co_cli/tools/agents.py` — delegation: `delegate_coder`, `delegate_researcher`, `delegate_analyst`, `delegate_reasoner`
+- `co_cli/tools/agents.py` — delegation: `research_web`, `analyze_knowledge`, `reason_about`
+- `co_cli/tools/execute_code.py` — `execute_code`
 - `co_cli/tools/obsidian.py` — `list_notes`, `search_notes`, `read_note`
 - `co_cli/tools/google/drive.py` — `search_drive_files`, `read_drive_file`
 - `co_cli/tools/google/gmail.py` — `list_gmail_emails`, `search_gmail_emails`, `create_gmail_draft`
@@ -97,7 +98,7 @@ only those + ALWAYS visible"]
 
 Approval controls permission; resource locks control correctness. 
 
-**Within-turn serialization:** `write_file` and `patch` are registered with `is_concurrent_safe=False`, which causes `_register_tool()` to derive `sequential=True`. The SDK serializes the entire batch if any tool in it is marked sequential.
+**Within-turn serialization:** `write_file`, `patch`, and `execute_code` are registered with `is_concurrent_safe=False`, which causes `_register_tool()` to derive `sequential=True`. The SDK serializes the entire batch if any tool in it is marked sequential.
 **Cross-agent locking:** `ResourceLockStore` is an in-process `asyncio.Lock` shared via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately.
 - `write_file` & `patch` lock on the resolved absolute path to prevent read-modify-write races.
 **Staleness Guard:** `CoDeps.file_read_mtimes` records the disk mtime at read. `write_file` and `patch` verify it hasn't changed before writing.
@@ -143,7 +144,8 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 | `start_background_task` | DEFERRED | deferred | no | default | 50k | Async proc execution |
 | `check_task_status`, `list_background_tasks` | DEFERRED | auto | no | default | 50k | Read background state |
 | `cancel_background_task` | DEFERRED | auto | no | default | 50k | Kill proc tree |
-| `delegate_coder`, `delegate_researcher`, `delegate_analyst`, `delegate_reasoner` | DEFERRED | auto | no | default | 50k | Isolated subagent spawning |
+| `execute_code` | DEFERRED | auto* | yes | default | 50k | *Always requires approval (inline guard, no safe-prefix bypass) |
+| `research_web`, `analyze_knowledge`, `reason_about` | DEFERRED | auto | no | default | 50k | Isolated subagent spawning |
 | `session_search` | DEFERRED | auto | no | default | 50k | FTS over transcript DB |
 
 **Integration tools (10 tools)**

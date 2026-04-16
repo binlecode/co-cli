@@ -70,6 +70,7 @@ def test_category_awareness_prompt_includes_native_categories() -> None:
     assert "file editing" in prompt
     assert "memory management" in prompt
     assert "background tasks" in prompt
+    assert "code execution" in prompt
     assert "sub-agents" in prompt
 
 
@@ -85,7 +86,8 @@ def test_category_awareness_prompt_includes_representative_tool_names() -> None:
     assert "write_file" in prompt
     assert "patch" in prompt
     assert "start_background_task" in prompt
-    assert "delegate_coder" in prompt
+    assert "execute_code" in prompt
+    assert "analyze_code" not in prompt
 
 
 def test_category_awareness_prompt_includes_integration_categories() -> None:
@@ -273,14 +275,14 @@ def test_toolinfo_read_only_tools() -> None:
 
 @pytest.mark.asyncio
 async def test_sequential_tool_count() -> None:
-    """Exactly 2 tools in the native toolset must have sequential=True: write_file and patch."""
+    """Exactly 3 tools in the native toolset must have sequential=True: write_file, patch, execute_code."""
     from co_cli.agent._native_toolset import _build_native_toolset
 
     toolset, _ = _build_native_toolset(_CONFIG)
     ctx = _make_ctx(_make_deps())
     tools = await toolset.get_tools(ctx)
     sequential_names = {name for name, t in tools.items() if t.tool_def.sequential}
-    assert sequential_names == {"write_file", "patch"}
+    assert sequential_names == {"write_file", "patch", "execute_code"}
 
 
 def test_toolinfo_retries() -> None:

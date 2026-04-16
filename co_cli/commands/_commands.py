@@ -20,7 +20,7 @@ from co_cli.commands._skill_types import SkillConfig
 from co_cli.config._core import VALID_REASONING_DISPLAY_MODES
 from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.deps import ApprovalKindEnum, CoDeps
-from co_cli.display._core import console
+from co_cli.display._core import Frontend, console
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.memory.recall import MemoryEntry, load_memories
 from co_cli.tools.memory import grep_recall
@@ -41,9 +41,7 @@ class CommandContext:
     # Holds the live WordCompleter from chat_loop() — typed Any to keep _commands.py
     # free of prompt_toolkit imports (design boundary). None outside REPL context.
     completer: Any = None
-    # Injectable input function for testable confirmation prompts.
-    # When None, callers fall back to console.input().
-    input_fn: Callable[[str], str] | None = None
+    frontend: Frontend | None = None
 
 
 @dataclass(frozen=True)
@@ -281,10 +279,9 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
 
     _DELEGATION_TOOLS = frozenset(
         {
-            "delegate_coder",
-            "delegate_researcher",
-            "delegate_analyst",
-            "delegate_reasoner",
+            "research_web",
+            "analyze_knowledge",
+            "reason_about",
             "start_background_task",
         }
     )
@@ -577,18 +574,27 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
         console.print("[bold yellow]Security scan warnings:[/bold yellow]")
         for w in warnings:
             console.print(f"  [yellow]{w}[/yellow]")
-        answer = (ctx.input_fn or console.input)("Install anyway? [y/N] ")
-        if answer.strip().lower() != "y":
+        confirmed = (
+            ctx.frontend.prompt_confirm("Install anyway? [y/N] ")
+            if ctx.frontend
+            else console.input("Install anyway? [y/N] ").strip().lower() == "y"
+        )
+        if not confirmed:
             console.print("[dim]Install cancelled.[/dim]")
             return
 
     # Confirm overwrite if file already exists (skip when force=True)
     dest = ctx.deps.user_skills_dir / filename
     if dest.exists() and not force:
-        answer = (ctx.input_fn or console.input)(f"Overwrite existing skill '{filename}'? [y/N] ")
-        if answer.strip().lower() != "y":
+        msg = f"Overwrite existing skill '{filename}'? [y/N] "
+        confirmed = (
+            ctx.frontend.prompt_confirm(msg)
+            if ctx.frontend
+            else console.input(msg).strip().lower() == "y"
+        )
+        if not confirmed:
             console.print("[dim]Install cancelled.[/dim]")
-            return
+        return
 
     # Write to user_skills_dir
     ctx.deps.user_skills_dir.mkdir(parents=True, exist_ok=True)
@@ -1150,8 +1156,12 @@ async def _subcmd_memory_forget(
         console.print(f"{id_prefix}  {created}  [{m.kind}]  {type_label}  {snippet}")
 
     prompt_text = f"Delete {len(entries)} memories? [y/N] "
-    response = (ctx.input_fn or console.input)(prompt_text)
-    if response.strip().lower() != "y":
+    confirmed = (
+        ctx.frontend.prompt_confirm(prompt_text)
+        if ctx.frontend
+        else console.input(prompt_text).strip().lower() == "y"
+    )
+    if not confirmed:
         console.print("[dim]Aborted.[/dim]")
         return None
 

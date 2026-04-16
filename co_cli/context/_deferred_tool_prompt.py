@@ -18,10 +18,10 @@ _NATIVE_CATEGORIES: dict[str, str] = {
     "check_task_status": "background tasks",
     "cancel_background_task": "background tasks",
     "list_background_tasks": "background tasks",
-    "delegate_coder": "sub-agents",
-    "delegate_researcher": "sub-agents",
-    "delegate_analyst": "sub-agents",
-    "delegate_reasoner": "sub-agents",
+    "execute_code": "code execution",
+    "research_web": "sub-agents",
+    "analyze_knowledge": "sub-agents",
+    "reason_about": "sub-agents",
 }
 
 # Representative tool names for each native category (for keyword-formation hints)
@@ -29,11 +29,11 @@ _NATIVE_CATEGORY_REPS: dict[str, list[str]] = {
     "file editing": ["write_file", "patch"],
     "background tasks": ["start_background_task"],
     "memory management": ["save_article"],
+    "code execution": ["execute_code"],
     "sub-agents": [
-        "delegate_coder",
-        "delegate_researcher",
-        "delegate_analyst",
-        "delegate_reasoner",
+        "research_web",
+        "analyze_knowledge",
+        "reason_about",
     ],
 }
 

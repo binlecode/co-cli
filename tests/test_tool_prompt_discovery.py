@@ -51,15 +51,21 @@ def test_background_task_tools_discoverable_by_keywords() -> None:
     assert "background" in descs["list_background_tasks"]
 
 
+def test_execute_code_tool_discoverable_by_keywords() -> None:
+    """execute_code surfaces for code execution queries."""
+    descs = _deferred_descriptions()
+    assert "execute_code" in descs
+    assert "run" in descs["execute_code"] or "interpreter" in descs["execute_code"]
+
+
 def test_delegation_tools_discoverable_by_keywords() -> None:
     """Delegation tools surface for delegation/analysis/research queries."""
     descs = _deferred_descriptions()
-    assert "coder" in descs["delegate_coder"] or "coding" in descs["delegate_coder"]
-    assert "analysis" in descs["delegate_coder"] or "codebase" in descs["delegate_coder"]
-    assert "research" in descs["delegate_researcher"]
-    assert "web" in descs["delegate_researcher"]
-    assert "analysis" in descs["delegate_analyst"] or "knowledge" in descs["delegate_analyst"]
-    assert "reasoning" in descs["delegate_reasoner"] or "thinking" in descs["delegate_reasoner"]
+    assert "analyze_code" not in descs
+    assert "research" in descs["research_web"]
+    assert "web" in descs["research_web"]
+    assert "analysis" in descs["analyze_knowledge"] or "knowledge" in descs["analyze_knowledge"]
+    assert "reasoning" in descs["reason_about"] or "thinking" in descs["reason_about"]
 
 
 def test_memory_write_tools_not_in_agent() -> None:

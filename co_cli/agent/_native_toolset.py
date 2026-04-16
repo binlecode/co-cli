@@ -9,13 +9,13 @@ from pydantic_ai.toolsets import FunctionToolset
 from co_cli.config._core import Settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.tools.agents import (
-    delegate_analyst,
-    delegate_coder,
-    delegate_reasoner,
-    delegate_researcher,
+    analyze_knowledge,
+    reason_about,
+    research_web,
 )
 from co_cli.tools.articles import read_article, save_article, search_articles, search_knowledge
 from co_cli.tools.capabilities import check_capabilities
+from co_cli.tools.execute_code import execute_code
 from co_cli.tools.files import glob, grep, patch, read_file, write_file
 from co_cli.tools.google.calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.google.drive import read_drive_file, search_drive_files
@@ -203,11 +203,13 @@ def _build_native_toolset(
         visibility=_deferred_visible,
     )
 
+    # Code execution
+    _register_tool(execute_code, is_concurrent_safe=False, visibility=_deferred_visible)
+
     # Delegation tools
-    _register_tool(delegate_coder, is_concurrent_safe=True, visibility=_deferred_visible)
-    _register_tool(delegate_researcher, is_concurrent_safe=True, visibility=_deferred_visible)
-    _register_tool(delegate_analyst, is_concurrent_safe=True, visibility=_deferred_visible)
-    _register_tool(delegate_reasoner, is_concurrent_safe=True, visibility=_deferred_visible)
+    _register_tool(research_web, is_concurrent_safe=True, visibility=_deferred_visible)
+    _register_tool(analyze_knowledge, is_concurrent_safe=True, visibility=_deferred_visible)
+    _register_tool(reason_about, is_concurrent_safe=True, visibility=_deferred_visible)
 
     # Session history search
     _register_tool(
