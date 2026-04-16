@@ -3,15 +3,17 @@
 import signal
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.rule import Rule
 from rich.text import Text
 from rich.theme import Theme
 
 from co_cli.config._core import settings
+from co_cli.context.tool_approvals import ApprovalSubject
 
 if TYPE_CHECKING:
     from co_cli.tools.tool_io import ToolResultPayload
@@ -169,10 +171,7 @@ def prompt_selection(
 
 @runtime_checkable
 class Frontend(Protocol):
-    """Display and interaction contract for the orchestration layer.
-
-    Implementations: TerminalFrontend (Rich/prompt-toolkit), RecordingFrontend (tests).
-    """
+    """Display and interaction contract for the orchestration layer."""
 
     def on_text_delta(self, accumulated: str) -> None:
         """Incremental Markdown render (called at throttled FPS)."""
@@ -214,8 +213,12 @@ class Frontend(Protocol):
         """Fallback Markdown render when streaming didn't emit text."""
         ...
 
-    def prompt_approval(self, description: str) -> str:
+    def prompt_approval(self, subject: ApprovalSubject) -> str:
         """Prompt user for approval. Returns 'y', 'n', or 'a'."""
+        ...
+
+    def prompt_confirm(self, message: str) -> bool:
+        """Prompt user for a yes/no confirmation. Returns True if confirmed."""
         ...
 
     def clear_status(self) -> None:
@@ -443,10 +446,24 @@ class TerminalFrontend:
         self._clear_status_live()
         console.print(Markdown(text))
 
-    def prompt_approval(self, description: str) -> str:
+    def _build_approval_panel(self, subject: ApprovalSubject) -> Panel:
+        """Build the Rich Panel renderable for an approval prompt."""
+        parts: list[object] = [Text(subject.display)]
+        if subject.preview is not None:
+            parts.append(Rule(style="dim"))
+            parts.append(Text(subject.preview, style="dim"))
+        return Panel(
+            Group(*parts),
+            title=subject.tool_name,
+            border_style="warning",
+            title_align="left",
+        )
+
+    def prompt_approval(self, subject: ApprovalSubject) -> str:
         """Prompt user for y/n with SIGINT handler swap for blocking input."""
         self._clear_status_live()
-        console.print(f"Allow [bold]{description}[/bold]?" + _CHOICES_HINT, end=" ")
+        console.print(self._build_approval_panel(subject))
+        console.print("Allow?" + _CHOICES_HINT, end=" ")
 
         prev_handler = signal.getsignal(signal.SIGINT)
         signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -463,6 +480,11 @@ class TerminalFrontend:
             signal.signal(signal.SIGINT, prev_handler)
 
         return choice
+
+    def prompt_confirm(self, message: str) -> bool:
+        """Prompt user for a yes/no confirmation. Returns True if user types 'y'."""
+        response = console.input(message)
+        return response.strip().lower() == "y"
 
     def cleanup(self) -> None:
         """Stop any active Live instances to restore terminal state."""

@@ -560,7 +560,7 @@ async def summarize_history_window(
         possible, else a static marker (circuit-breaker fallback)
 
     Summarisation runs inline via ``summarize_messages()`` when compaction
-    triggers. When ``deps.model`` is absent (sub-agents, tests) or the
+    triggers. When ``deps.model`` is absent (sub-agent context) or the
     circuit breaker is tripped (3+ consecutive failures), falls back to a
     static marker without attempting an LLM call.
 

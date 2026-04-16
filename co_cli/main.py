@@ -285,6 +285,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                         message_history=message_history,
                         deps=deps,
                         agent=agent,
+                        frontend=frontend,
                         completer=completer,
                     )
                     outcome = await dispatch_command(user_input, cmd_ctx)

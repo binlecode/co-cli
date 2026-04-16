@@ -80,7 +80,7 @@ def build_agent(
     Args:
         config: Session config — static instructions, tool policy, MCP servers.
         model: Pre-built LlmModel or raw pydantic-ai model. When omitted,
-            built from config internally (used by evals and tests).
+            built from config internally.
         tool_registry: Pre-built tool registry. Provide for the orchestrator path.
             When omitted and no delegation params given, built from config internally.
         instructions: Static instruction string for delegation tools.

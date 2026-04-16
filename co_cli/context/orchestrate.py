@@ -1,4 +1,4 @@
-"""Orchestration state machine — extracted from main.py for testability.
+"""Orchestration state machine — turn handling, streaming, and approval flow.
 
 Contains TurnResult, run_turn(), and supporting private functions.
 Frontend lives in co_cli/display/_core.py. Stream rendering policy
@@ -203,7 +203,7 @@ async def _collect_deferred_tool_approvals(
             continue
 
         # User prompt
-        choice = frontend.prompt_approval(subject.display) if frontend is not None else "n"
+        choice = frontend.prompt_approval(subject) if frontend is not None else "n"
 
         approved = choice in ("y", "a")
         record_approval_choice(

@@ -1,6 +1,7 @@
 """Functional tests for the terminal display frontend."""
 
-from co_cli.display._core import TerminalFrontend
+from co_cli.context.tool_approvals import resolve_approval_subject
+from co_cli.display._core import TerminalFrontend, console
 from co_cli.display._stream_renderer import StreamRenderer
 
 
@@ -69,3 +70,45 @@ def test_stream_renderer_summary_mode_empty_buffer_emits_nothing() -> None:
         assert frontend.active_status_text() is None
     finally:
         frontend.cleanup()
+
+
+def test_build_approval_panel_includes_tool_name_and_preview() -> None:
+    """Approval panel contains tool_name as title and preview content when present."""
+    subject = resolve_approval_subject(
+        "write_file",
+        {"path": "src/foo.py", "content": "def hello():\n    return 'world'\n"},
+    )
+    assert subject.preview is not None
+
+    frontend = TerminalFrontend()
+    try:
+        panel = frontend._build_approval_panel(subject)
+        with console.capture() as capture:
+            console.print(panel)
+        output = capture.get()
+    finally:
+        frontend.cleanup()
+
+    assert "write_file" in output
+    assert "def hello" in output
+
+
+def test_build_approval_panel_no_preview_block_when_preview_is_none() -> None:
+    """Approval panel renders only display text when preview is None — no separator shown."""
+    subject = resolve_approval_subject(
+        "run_shell_command",
+        {"cmd": "git status"},
+    )
+    assert subject.preview is None
+
+    frontend = TerminalFrontend()
+    try:
+        panel = frontend._build_approval_panel(subject)
+        with console.capture() as capture:
+            console.print(panel)
+        output = capture.get()
+    finally:
+        frontend.cleanup()
+
+    assert "run_shell_command" in output
+    assert "git status" in output

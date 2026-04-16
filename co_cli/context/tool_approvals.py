@@ -22,11 +22,13 @@ from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 class ApprovalSubject:
     """Resolved representation of what is being approved.
 
-    tool_name:   the registered tool name (e.g. "run_shell_command")
-    kind:        category matching SessionApprovalRule.kind
-    value:       the scoped key used for session rule matching
-    display:     human-readable description shown in the approval prompt
+    tool_name:    the registered tool name (e.g. "run_shell_command")
+    kind:         category matching SessionApprovalRule.kind
+    value:        the scoped key used for session rule matching
+    display:      human-readable description shown in the approval prompt
     can_remember: whether 'a' should store a session rule
+    preview:      optional content preview (write_file: first N lines of content;
+                  None for all other tool kinds — display is sufficient)
     """
 
     tool_name: str
@@ -34,6 +36,32 @@ class ApprovalSubject:
     value: str
     display: str
     can_remember: bool
+    preview: str | None = None
+
+
+def _build_write_file_preview(content: str | None) -> str | None:
+    """Build a preview string for write_file content.
+
+    Returns None when content is missing, non-string, or empty.
+    Caps at 30 lines and 4000 chars; appends '... (+N more lines)' when truncated.
+    """
+    if not isinstance(content, str) or not content:
+        return None
+    content_lines = content.split("\n")
+    total_lines = len(content_lines)
+    preview_lines = content_lines[:30]
+    preview_text = "\n".join(preview_lines)
+    char_capped = len(preview_text) > 4000
+    if char_capped:
+        preview_text = preview_text[:4000]
+    line_capped = total_lines > 30
+    if char_capped or line_capped:
+        extra = total_lines - len(preview_lines)
+        if extra > 0:
+            preview_text += f"\n... (+{extra} more lines)"
+        else:
+            preview_text += "\n... (truncated)"
+    return preview_text
 
 
 def resolve_approval_subject(
@@ -77,18 +105,20 @@ def resolve_approval_subject(
             content = args.get("content", "")
             byte_count = len(content.encode()) if isinstance(content, str) else 0
             lines = [f"write_file(path={path!r}, {byte_count} bytes)"]
+            preview = _build_write_file_preview(content)
         else:
             old_string = args.get("old_string", "")
             new_string = args.get("new_string", "")
             replace_all = args.get("replace_all", False)
-            old_snip = (old_string[:60] + "…") if len(old_string) > 60 else old_string
-            new_snip = (new_string[:60] + "…") if len(new_string) > 60 else new_string
+            old_snip = (old_string[:400] + "…") if len(old_string) > 400 else old_string
+            new_snip = (new_string[:400] + "…") if len(new_string) > 400 else new_string
             lines = [
                 f"patch(path={path!r})",
                 f"  old_string:  {old_snip!r}",
                 f"  new_string:  {new_snip!r}",
                 f"  replace_all: {replace_all}",
             ]
+            preview = None
 
         if hint:
             lines.append(f"  {hint}")
@@ -98,6 +128,7 @@ def resolve_approval_subject(
             value=parent,
             display="\n".join(lines),
             can_remember=bool(parent),
+            preview=preview,
         )
 
     # Web-domain branch: scope to the hostname so "always" approval covers all

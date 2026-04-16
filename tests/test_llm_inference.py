@@ -175,25 +175,12 @@ def test_resolve_explicit_context_window_beats_model_default() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_noreason_settings_temperature_matches_constant() -> None:
+def test_noreason_settings_match_constants() -> None:
     assert NOREASON_SETTINGS.get("temperature") == DEFAULT_NOREASON_TEMPERATURE
-
-
-def test_noreason_settings_top_p_matches_constant() -> None:
     assert NOREASON_SETTINGS.get("top_p") == DEFAULT_NOREASON_TOP_P
-
-
-def test_noreason_settings_max_tokens_matches_constant() -> None:
     assert NOREASON_SETTINGS.get("max_tokens") == DEFAULT_NOREASON_MAX_TOKENS
-
-
-def test_noreason_settings_extra_body_has_reasoning_effort_none() -> None:
     extra = NOREASON_SETTINGS.get("extra_body") or {}
     assert extra.get("reasoning_effort") == "none"
-
-
-def test_noreason_settings_extra_body_matches_default_constant() -> None:
-    extra = NOREASON_SETTINGS.get("extra_body") or {}
     for key, value in DEFAULT_NOREASON_EXTRA_BODY.items():
         assert extra.get(key) == value, f"NOREASON_SETTINGS.extra_body[{key!r}] mismatch"
 

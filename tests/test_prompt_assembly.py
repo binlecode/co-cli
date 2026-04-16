@@ -1,7 +1,5 @@
 """Section-order gate for static instruction assembly."""
 
-from pathlib import Path
-
 from co_cli.config._core import settings
 from co_cli.prompts._assembly import build_static_instructions
 
@@ -9,7 +7,7 @@ from co_cli.prompts._assembly import build_static_instructions
 _BASE_CONFIG = settings
 
 
-def test_section_order_finch(tmp_path: Path) -> None:
+def test_section_order_finch() -> None:
     """All static instruction sections appear in the required order for finch personality.
 
     Required order: soul seed < first rule < soul examples < critique.
@@ -39,7 +37,7 @@ def test_section_order_finch(tmp_path: Path) -> None:
     )
 
 
-def test_section_order_no_personality(tmp_path: Path) -> None:
+def test_section_order_no_personality() -> None:
     """Assembly without personality still produces a non-empty prompt (rules only)."""
     config = _BASE_CONFIG.model_copy(update={"personality": None})
     prompt = build_static_instructions(config=config)

@@ -35,7 +35,7 @@ from co_cli.context.tool_approvals import (
     resolve_approval_subject,
 )
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
-from co_cli.display._core import console
+from co_cli.display._core import Frontend, console
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -64,6 +64,7 @@ def _make_ctx(
     message_history: list | None = None,
     *,
     memory_dir: "Path | None" = None,
+    frontend: "Frontend | None" = None,
 ) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
     deps = CoDeps(
@@ -78,6 +79,7 @@ def _make_ctx(
         message_history=message_history or [],
         deps=deps,
         agent=_AGENT,
+        frontend=frontend or SilentFrontend(),
     )
 
 
@@ -603,8 +605,7 @@ async def test_cmd_memory_forget_confirm_yes(tmp_path):
     f2 = _write_memory(memory_dir, "b.md", "id-del-2", "zeta-forget-token also here")
     f3 = _write_memory(memory_dir, "c.md", "id-keep", "unrelated content")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
-    ctx.input_fn = lambda _: "y"
+    ctx = _make_ctx(memory_dir=memory_dir, frontend=SilentFrontend(confirm_response=True))
     result = await dispatch("/memory forget zeta-forget-token", ctx)
 
     assert isinstance(result, LocalOnly)
@@ -621,8 +622,7 @@ async def test_cmd_memory_forget_confirm_no(tmp_path):
     f1 = _write_memory(memory_dir, "a.md", "id-safe-1", "omega-abort-token content")
     f2 = _write_memory(memory_dir, "b.md", "id-safe-2", "omega-abort-token also")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
-    ctx.input_fn = lambda _: "n"
+    ctx = _make_ctx(memory_dir=memory_dir, frontend=SilentFrontend(confirm_response=False))
     result = await dispatch("/memory forget omega-abort-token", ctx)
 
     assert isinstance(result, LocalOnly)
@@ -637,8 +637,7 @@ async def test_cmd_memory_forget_no_match(tmp_path):
     memory_dir.mkdir()
     _write_memory(memory_dir, "a.md", "id-exists", "some totally different content")
 
-    ctx = _make_ctx(memory_dir=memory_dir)
-    ctx.input_fn = lambda _: "y"
+    ctx = _make_ctx(memory_dir=memory_dir, frontend=SilentFrontend(confirm_response=True))
     with console.capture() as cap:
         result = await dispatch("/memory forget nonexistent-zzz-query", ctx)
 

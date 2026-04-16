@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from co_cli.context.tool_approvals import ApprovalSubject
+
 
 class SilentFrontend:
     """No-op frontend for tests. Pass approval_response to control deferral behaviour:
@@ -9,9 +11,11 @@ class SilentFrontend:
     - "n": deny all deferred tools
     """
 
-    def __init__(self, *, approval_response: str = "y") -> None:
+    def __init__(self, *, approval_response: str = "y", confirm_response: bool = False) -> None:
         self.statuses: list[str] = []
         self._approval_response = approval_response
+        self._confirm_response = confirm_response
+        self.last_approval_subject: ApprovalSubject | None = None
 
     def on_text_delta(self, accumulated: str) -> None:
         pass
@@ -43,8 +47,12 @@ class SilentFrontend:
     def on_final_output(self, text: str) -> None:
         pass
 
-    def prompt_approval(self, description: str) -> str:
+    def prompt_approval(self, subject: ApprovalSubject) -> str:
+        self.last_approval_subject = subject
         return self._approval_response
+
+    def prompt_confirm(self, message: str) -> bool:
+        return self._confirm_response
 
     def cleanup(self) -> None:
         pass

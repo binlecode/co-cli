@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from co_cli.context.tool_approvals import ApprovalSubject
+
 
 class SilentFrontend:
     """Minimal frontend that captures status messages.
@@ -46,8 +48,11 @@ class SilentFrontend:
     def on_final_output(self, text: str) -> None:
         self.final_text = text
 
-    def prompt_approval(self, description: str) -> str:
+    def prompt_approval(self, subject: ApprovalSubject) -> str:
         return self._approval_response
+
+    def prompt_confirm(self, message: str) -> bool:
+        return True
 
     def cleanup(self) -> None:
         pass
@@ -72,6 +77,6 @@ class CapturingFrontend(SilentFrontend):
         if self._verbose:
             print(f"    STATUS: {message}")
 
-    def prompt_approval(self, description: str) -> str:
-        self.approval_calls.append(description)
+    def prompt_approval(self, subject: ApprovalSubject) -> str:
+        self.approval_calls.append(subject.display)
         return self._approval_response

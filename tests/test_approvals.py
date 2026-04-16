@@ -1,7 +1,13 @@
 """Tests for approval subject resolution — display format and session-rule matching."""
 
+import pytest
+
 from co_cli.config._core import settings
-from co_cli.context.tool_approvals import is_auto_approved, resolve_approval_subject
+from co_cli.context.tool_approvals import (
+    ApprovalSubject,
+    is_auto_approved,
+    resolve_approval_subject,
+)
 from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -52,8 +58,8 @@ def test_patch_display_includes_path_and_snippets():
 
 
 def test_patch_display_truncates_long_old_string():
-    """patch approval truncates old_string/new_string longer than 60 chars."""
-    long_old = "x" * 100
+    """patch approval truncates old_string/new_string longer than 400 chars."""
+    long_old = "x" * 500
     subject = resolve_approval_subject(
         "patch",
         {"path": "a.py", "old_string": long_old, "new_string": "short"},
@@ -178,3 +184,59 @@ def test_resolve_approval_subject_generic_tool_fallback():
     assert subject.kind == ApprovalKindEnum.TOOL
     assert subject.value == "create_gmail_draft"
     assert subject.can_remember is True
+
+
+# --- write_file preview ---
+
+
+def test_write_file_preview_populated():
+    """write_file subject has preview containing content lines when content is non-empty."""
+    content = "line one\nline two\nline three"
+    subject = resolve_approval_subject("write_file", {"path": "f.py", "content": content})
+    assert subject.preview is not None
+    assert "line one" in subject.preview
+    assert "line two" in subject.preview
+
+
+def test_write_file_preview_truncated():
+    """write_file preview is capped at 30 lines with a truncation marker when exceeded."""
+    content = "line\n" * 50
+    subject = resolve_approval_subject("write_file", {"path": "f.py", "content": content})
+    assert subject.preview is not None
+    assert "... (" in subject.preview
+    assert subject.preview.count("\n") < 50
+
+
+def test_write_file_preview_none_for_empty_content():
+    """write_file subject has preview=None when content is an empty string."""
+    subject = resolve_approval_subject("write_file", {"path": "f.py", "content": ""})
+    assert subject.preview is None
+
+
+# --- approval-loop wiring regression ---
+
+
+@pytest.mark.asyncio
+async def test_collect_deferred_approvals_passes_subject_to_frontend() -> None:
+    """_collect_deferred_tool_approvals passes ApprovalSubject to frontend.prompt_approval."""
+    from pydantic_ai import AgentRunResult, DeferredToolRequests
+    from pydantic_ai.messages import ToolCallPart
+    from tests._frontend import SilentFrontend
+
+    from co_cli.context.orchestrate import _collect_deferred_tool_approvals
+
+    deps = _make_deps()
+    frontend = SilentFrontend(approval_response="y")
+
+    call = ToolCallPart(
+        tool_name="write_file",
+        args={"path": "src/foo.py", "content": "print('hello')\n"},
+        tool_call_id="call-001",
+    )
+    deferred = DeferredToolRequests(approvals=[call])
+    result = AgentRunResult(output=deferred)
+
+    decisions = await _collect_deferred_tool_approvals(result, deps, frontend)
+
+    assert isinstance(frontend.last_approval_subject, ApprovalSubject)
+    assert decisions.approvals["call-001"] is True
