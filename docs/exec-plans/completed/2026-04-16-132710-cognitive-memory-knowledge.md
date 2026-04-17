@@ -1111,3 +1111,62 @@ Other blocking findings (3) were already identified and fixed inline during orch
 ### Overall: PASS
 
 Phase 5 consolidation lifecycle is complete, safety-bounded, and ship-ready. All nine tasks meet their `done_when` with file:line evidence. The three orchestrate-dev blockers (save cap, archive/restore collision guards) are fixed and regression-tested. One doc drift caught on cold re-read (`knowledge.md` stale Phase 3/4/5 markers) and corrected. Live LLM integration paths verified for mining, merging, and full-cycle orchestration. Feature-gated — no behavior change for existing users.
+
+## Implementation Review (Whole-Plan Consolidated) — 2026-04-16
+
+Scope: Phases 0–6 (every `✓ DONE` task). Cold re-read of current source tree against the plan after Phase 5 PASS + post-ship refactors (`d23ce4f` remove dead standing-artifact injection, `6b671a3` remove `pin_mode` entirely) to confirm the whole delivery is internally consistent and ship-ready after the cleanup refactors.
+
+### Evidence
+
+| Phase | Task(s) | Spec Fidelity | Key Evidence |
+|-------|---------|---------------|-------------|
+| 0 | TASK-0.1 Config fields | ✓ pass | `co_cli/config/_knowledge.py:47-52` — `consolidation_enabled`, `consolidation_trigger`, `consolidation_lookback_sessions`, `consolidation_similarity_threshold`, `max_artifact_count`, `decay_after_days` all present with constraints and defaults |
+| 0 | TASK-0.2 Recall tracking fields | ✓ pass | `co_cli/knowledge/_artifact.py:62-67` — `source_type`, `source_ref`, `last_recalled`, `recall_count` on `KnowledgeArtifact` |
+| 0 | TASK-0.3 Cognition spec | ✓ pass | `docs/specs/cognition.md` — two-layer architecture, extraction bridge, consolidation, tool surface, REPL commands all documented |
+| 1 | TASK-1.1–1.4 Spec+prompt correction | ✓ pass | `docs/specs/memory.md` (transcripts only), `docs/specs/knowledge.md` (unified artifact model), `co_cli/memory/prompts/knowledge_extractor.md` (knowledge-artifact framing with `save_knowledge(artifact_kind=…)`) |
+| 2 | TASK-2.1–2.6 Schema unification | ✓ pass | `co_cli/knowledge/_artifact.py:92-106` loader rejects non-knowledge kind; `co_cli/knowledge/_frontmatter.py` canonical `render_knowledge_file`; `co_cli/deps.py` single `knowledge_dir` field; extractor registers `save_knowledge`; `save_article` writes `artifact_kind=article`, `source_type=web_fetch`, `source_ref=origin_url`; store indexes `source="knowledge"` only |
+| 3 | TASK-3.1–3.7 Tool surface | ✓ pass | `co_cli/tools/memory.py:188-209` `_recall_for_context` uses `source="knowledge"` with no kind filter; `search_memories` delegates to `session_search`; `list_knowledge` canonical with deprecated `list_memories` alias; `session_search` ALWAYS visible; `/knowledge` is primary REPL namespace at `co_cli/commands/_commands.py` |
+| 4 | TASK-4.1–4.3 Dedup + recall | ✓ pass | `co_cli/knowledge/_similarity.py` `token_jaccard`/`find_similar_artifacts`/`is_content_superset`; `co_cli/knowledge/_stopwords.py` shared STOPWORDS; `co_cli/tools/memory.py:82-110` `_touch_recalled` atomic write with re-index; fire-and-forget via `asyncio.create_task` with done-callback keepalive at `:208-209`; dedup gated on `consolidation_enabled` with `knowledge.dedup_action` OTel attr |
+| 5 | TASK-5.1–5.9 Dream cycle | ✓ pass | `co_cli/knowledge/_archive.py:29-47` `_non_colliding_path` (blocker fix, symmetric both legs); `co_cli/knowledge/_decay.py` all four filter branches; `co_cli/knowledge/_dream.py:55-59` safety caps `_MAX_MERGES_PER_CYCLE=10`, `_MAX_CLUSTER_SIZE=5`, `_MAX_DECAY_PER_CYCLE=20`, `_MAX_MINE_SAVES_PER_SESSION=5`; `co_cli/main.py:204-232` session-end hook with 60s timeout, feature gate, errors non-propagating; `/knowledge dream|restore|decay-review` wired at `_commands.py` |
+| 6 | TASK-6.1–6.3 Observability | ✓ pass | `co_cli/knowledge/_dream.py` OTel parent span `co.dream.cycle` + children `mine`/`merge`/`decay` with `dream.extracted`/`dream.merged`/`dream.decayed` attrs; `co_cli/commands/_commands.py:1271-1309` `/knowledge stats` renders kind breakdown, decay-protected, archived, last dream, decay candidates; safety bounds documented in `docs/specs/cognition.md` §2.5 |
+
+### Issues Found & Fixed
+
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Spec drift: decay sweep still said "not pinned, and not decay-protected" after `pin_mode` removal (commit `6b671a3`) | `docs/specs/cognition.md:189` | minor (stale doc) | Fixed — removed "not pinned, " |
+| Spec drift: injection max-chars described "standing + recalled" after standing-artifact injection removed (commit `d23ce4f`) | `docs/specs/cognition.md:256`, `docs/specs/knowledge.md:209` | minor | Fixed — changed to "recalled knowledge injection" |
+| Spec drift: `/knowledge stats` row marked "Phase 6 — not yet implemented" though acacce7 landed the dashboard; `Known gaps` line stale | `docs/specs/knowledge.md:25,179` | minor | Fixed — status → Implemented; Known gaps → None |
+| Spec drift: decay sweep description still referenced "not pinned or decay-protected"; `_decay.py` row mentioned "pin/decay-protected immunity" | `docs/specs/knowledge.md:165,236` | minor | Fixed — pinned clause removed |
+| Code docstring drift: `_merge_similar_artifacts` docstring said "immune (pinned or decay-protected) artifact" | `co_cli/knowledge/_dream.py:417` | minor | Fixed — trimmed to "decay-protected artifact" |
+| Test docstring drift: `test_cmd_knowledge_stats_counts_accurately` docstring mentioned "pinned" | `tests/test_commands.py:935` | minor | Fixed — replaced with "decay-protected" |
+
+All findings were doc/docstring staleness introduced when commits `d23ce4f` and `6b671a3` removed the `pin_mode` feature after the Phase 5 review. No functional issues. No blocking findings.
+
+### Tests
+
+- Command: `uv run pytest`
+- Result: **592 passed, 0 failed** (209.06s)
+- Log: `.pytest-logs/20260416-202645-review-impl.log`
+
+### Lint
+
+- Command: `scripts/quality-gate.sh lint`
+- Result: PASS — ruff check clean, 186 files already formatted
+
+### Doc Sync
+
+- Scope: narrow — cleanup of `pin_mode`/`pinned`/"standing injection" stale references in `cognition.md` + `knowledge.md`
+- Result: fixed inline (no `/sync-doc` invocation needed — scope was bounded to two active specs and trimmed via direct edits)
+
+### Behavioral Verification
+
+- `uv run co config`: ✓ healthy — LLM online (Ollama qwen3.5:35b-a3b-think), Shell active, Google/Web Search configured, Database 211 MB, MCP context7 ready
+- `/knowledge stats` command covered by automated test `test_cmd_knowledge_stats_counts_accurately` (passed)
+- Lifecycle + dream cycle: feature gate `consolidation_enabled=False` default unchanged — zero behavior change for existing users
+- Live-LLM integration tests (`@pytest.mark.local`) exercised on last full run: mining, 4-cluster merge, full-cycle orchestrator
+- **`success_signal` verified:** two-layer cognitive model is operational — unified `knowledge_dir`, `search_memories` → transcripts, `search_knowledge` → reusable artifacts, dream cycle recoverable via `/knowledge restore`
+
+### Overall: PASS
+
+Whole-plan delivery of the two-layer cognitive architecture (Memory = transcripts, Knowledge = reusable artifacts) is complete and ship-ready across Phases 0–6. All task `done_when` criteria satisfied with file:line evidence. Six minor doc/docstring drift items caught on this consolidated pass (all introduced by the post-Phase-5 pin_mode and standing-artifact refactors) were fixed inline. 592 tests pass, lint clean, behavioral verification healthy. No blockers, no escalations.

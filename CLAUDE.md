@@ -161,6 +161,7 @@ Package `__init__.py` files must be docstring-only. When a module becomes a pack
 - When asked to analyze or review, confirm the approach before searching, fetching, or writing.
 - When asked to append to an existing doc, never create a new file instead.
 - Never add unsolicited notes, reminders, or meta-commentary to outputs unless explicitly asked.
+- **Temporary Files**: Any temporary or scratch Python scripts created during your work must be placed in a `tmp/` folder at the repository root. Do not create `.py` script files directly in the repository root.
 - **Subagents**: declare tool permissions upfront (Read, Edit, Bash, Grep). Each subagent cleans up dead code before returning. After all finish, do an integration review for stale imports and orphaned references.
 
 ### Dev Workflow

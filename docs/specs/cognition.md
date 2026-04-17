@@ -186,7 +186,7 @@ Batch lifecycle management for the knowledge layer. Runs at session end (when en
 
 **Knowledge merge** — loads all active artifacts, groups by `artifact_kind`, computes pairwise similarity within groups, identifies clusters above threshold. A consolidation sub-agent merges each cluster into a single higher-density artifact. Originals are archived (never deleted).
 
-**Decay sweep** — identifies artifacts that are old (> `decay_after_days`), never recalled or last recalled long ago, not pinned, and not decay-protected. Archives them to `knowledge_dir/_archive/`.
+**Decay sweep** — identifies artifacts that are old (> `decay_after_days`), never recalled or last recalled long ago, and not decay-protected. Archives them to `knowledge_dir/_archive/`.
 
 **Safety bounds:**
 
@@ -253,7 +253,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life for confidence decay scoring |
-| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars for standing + recalled injection |
+| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars for recalled knowledge injection |
 | `memory.extract_every_n_turns` | `CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | Extraction cadence (0 = disabled) |
 
 ### Paths

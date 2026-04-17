@@ -932,7 +932,7 @@ async def test_cmd_knowledge_stats_empty_dir(tmp_path):
 
 @pytest.mark.asyncio
 async def test_cmd_knowledge_stats_counts_accurately(tmp_path):
-    """/knowledge stats reports correct kind breakdown, pinned, archived, and decay counts."""
+    """/knowledge stats reports correct kind breakdown, decay-protected, archived, and decay counts."""
     import json
     from datetime import UTC, datetime, timedelta
 

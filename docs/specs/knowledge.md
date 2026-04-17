@@ -20,9 +20,9 @@
 
 **Success criteria:** All reusable recall routes through `search_knowledge()`; extracted insights and articles share one artifact model; retrieval uses turn-time recall and explicit search.
 
-**Status:** Unified artifact model, single `knowledge_dir`, `source="knowledge"` indexing. Tool surface converged: `search_memories` delegates to `session_search`, `list_knowledge` is canonical, `/knowledge` is the primary REPL namespace with `/memory` as deprecated alias. Dedup-on-write, recall tracking, and the full dream cycle (mine/merge/decay with archive/restore) are implemented and gated behind `knowledge.consolidation_enabled` (default off).
+**Status:** Unified artifact model, single `knowledge_dir`, `source="knowledge"` indexing. Tool surface converged: `search_memories` delegates to `session_search`, `list_knowledge` is canonical, `/knowledge` is the primary REPL namespace with `/memory` as deprecated alias. Dedup-on-write, recall tracking, the full dream cycle (mine/merge/decay with archive/restore), and the `/knowledge stats` health dashboard are implemented; lifecycle machinery is gated behind `knowledge.consolidation_enabled` (default off).
 
-**Known gaps:** `/knowledge stats` health dashboard (Phase 6) is not yet implemented.
+**Known gaps:** None.
 
 ---
 
@@ -162,7 +162,7 @@ Batch lifecycle management via the dream cycle — runs at session end (when ena
 
 **Knowledge merge** — groups artifacts by `artifact_kind`, computes pairwise similarity, consolidates clusters into higher-density artifacts. Originals are archived, never deleted.
 
-**Decay sweep** — archives old artifacts with no recent recalls that are not pinned or decay-protected.
+**Decay sweep** — archives old artifacts with no recent recalls that are not decay-protected.
 
 All archived artifacts are recoverable via `/knowledge restore`. Safety bounds and dream cycle mechanics are documented in [cognition.md §2.5](cognition.md).
 
@@ -176,7 +176,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | `/knowledge dream [--dry]` | Run consolidation cycle manually | Implemented |
 | `/knowledge restore [slug]` | List archived artifacts or restore by slug | Implemented |
 | `/knowledge decay-review [--dry]` | Preview decay candidates, confirm to archive | Implemented |
-| `/knowledge stats` | Health dashboard: counts by kind, pinned, decay candidates, last dream | Phase 6 — not yet implemented |
+| `/knowledge stats` | Health dashboard: counts by kind, decay-protected, archived, decay candidates, last dream | Implemented |
 
 `/memory list|count|forget` remains as a deprecated alias that prints a deprecation notice and delegates to the `/knowledge` handlers.
 
@@ -206,7 +206,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life for confidence decay scoring |
-| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars for recalled artifact injection |
+| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars for recalled knowledge injection |
 | `memory.extract_every_n_turns` | `CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | Extraction cadence (0 = disabled) |
 
 ### Paths
@@ -233,7 +233,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | `co_cli/knowledge/_stopwords.py` | Shared `STOPWORDS` set for similarity and FTS tokenising |
 | `co_cli/knowledge/_similarity.py` | `token_jaccard`, `find_similar_artifacts`, `is_content_superset` for dedup/merge |
 | `co_cli/knowledge/_archive.py` | `archive_artifacts`, `restore_artifact` — move files to `_archive/` and back, keep FTS in sync |
-| `co_cli/knowledge/_decay.py` | `find_decay_candidates` — age + recall filters with pin/decay-protected immunity |
+| `co_cli/knowledge/_decay.py` | `find_decay_candidates` — age + recall filters with decay-protected immunity |
 | `co_cli/knowledge/_dream.py` | `DreamState`, `DreamResult`, `run_dream_cycle`, `_mine_transcripts`, `_merge_similar_artifacts`, `_decay_sweep` |
 | `co_cli/knowledge/prompts/dream_miner.md` | Retrospective transcript-miner sub-agent prompt |
 | `co_cli/knowledge/prompts/dream_merge.md` | Consolidation-merge sub-agent prompt |

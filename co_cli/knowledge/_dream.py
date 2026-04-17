@@ -414,9 +414,8 @@ async def _merge_similar_artifacts(deps: CoDeps) -> int:
     """Run the merge phase of the dream cycle.
 
     Returns the number of clusters merged. Respects per-cycle and per-cluster
-    caps. Skips clusters containing any immune (pinned or decay-protected)
-    artifact. Archives originals only after the merged artifact is durably
-    written.
+    caps. Skips clusters containing any decay-protected artifact. Archives
+    originals only after the merged artifact is durably written.
     """
     clusters = _identify_mergeable_clusters(deps)
     if not clusters:
