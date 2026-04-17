@@ -55,7 +55,7 @@ _VERSION = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.to
     "project"
 ]["version"]
 
-# Python logging → co-cli.log + errors.log (rotating)
+# Python logging + OTel spans → co-cli.jsonl (single rotating JSONL file)
 setup_file_logging(
     log_dir=LOGS_DIR,
     level=settings.observability.log_level,
@@ -63,13 +63,10 @@ setup_file_logging(
     backup_count=settings.observability.log_backup_count,
 )
 
-# OTel spans → co-cli-logs.db (SQLite) + spans.log (text file)
+# OTel spans → co-cli-logs.db (SQLite) + co-cli.jsonl (via JsonSpanExporter propagation)
 _tracer_provider = setup_tracer_provider(
     service_name="co-cli",
     service_version=_VERSION,
-    log_dir=LOGS_DIR,
-    max_size_mb=settings.observability.log_max_size_mb,
-    backup_count=settings.observability.log_backup_count,
     redact_patterns=settings.observability.redact_patterns,
 )
 

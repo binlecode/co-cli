@@ -38,15 +38,15 @@ Co CLI uses OpenTelemetry (OTel) to trace every agent operation. All data stays 
 │   Agent.instrument_all()        setup_file_logging()      │
 │   setup_tracer_provider()              │                  │
 │        │                               ▼                  │
-│        ▼                    RotatingFileHandler (x2)      │
-│   TracerProvider                co-cli.log / errors.log   │
-│   ├──▶ SQLiteSpanExporter                                 │
-│   └──▶ TextSpanExporter                                   │
+│        ▼                    RotatingFileHandler            │
+│   TracerProvider                co-cli.jsonl              │
+│   ├──▶ SQLiteSpanExporter           ▲                     │
+│   └──▶ JsonSpanExporter ────────────┘ (propagating logger)│
 └──────────────┬────────────────────────────────────────────┘
                │
    ┌───────────┴──────────────┐
    ▼                          ▼
-~/.co-cli/co-cli-logs.db    ~/.co-cli/logs/spans.log
+~/.co-cli/co-cli-logs.db    ~/.co-cli/logs/co-cli.jsonl
                │
    ┌───────────┼───────────┐
    ▼           ▼           ▼
@@ -72,12 +72,12 @@ Run `co chat` in one terminal and `co tail` in another to watch the agent→mode
 
 ### Instrumentation Setup (`main.py`)
 
-Telemetry is bootstrapped at module load time, before any agent is created. All three write targets — file handlers, the SQLite exporter, and the text span exporter — are initialised at this step:
+Telemetry is bootstrapped at module load time, before any agent is created. All write targets — the JSONL file handler, the SQLite exporter, and the JSONL span exporter — are initialised at this step:
 
 ```
-setup_file_logging(LOGS_DIR, level, max_size_mb, backup_count)   # co-cli.log + errors.log
-tracer_provider = setup_tracer_provider(                          # co-cli-logs.db + spans.log
-    service_name, service_version, log_dir, max_size_mb, backup_count,
+setup_file_logging(LOGS_DIR, level, max_size_mb, backup_count)   # co-cli.jsonl
+tracer_provider = setup_tracer_provider(                          # co-cli-logs.db + co-cli.jsonl
+    service_name, service_version,
     redact_patterns=settings.observability.redact_patterns
 )
 Agent.instrument_all(InstrumentationSettings(tracer_provider, version=3))
@@ -85,39 +85,40 @@ for logger_name in ["openai", "httpx", "anthropic", "hpack"]:    # co_cli.* logg
     logging.getLogger(logger_name).setLevel(WARNING)
 ```
 
-`setup_tracer_provider()` (in `_telemetry.py`) creates a `TracerProvider` with two `SimpleSpanProcessor`s: one wrapping `SQLiteSpanExporter` and one wrapping `TextSpanExporter`. Both receive every span.
+`setup_tracer_provider()` (in `_telemetry.py`) creates a `TracerProvider` with two `SimpleSpanProcessor`s: one wrapping `SQLiteSpanExporter` and one wrapping `JsonSpanExporter`. Both receive every span.
 
 ### File Logging (`_file_logging.py`)
 
-`setup_file_logging()` attaches two `RotatingFileHandler`s to the Python root logger. Every `logging.*` call anywhere in the process is captured without per-module configuration.
+`setup_file_logging()` attaches a single `RotatingFileHandler` to the Python root logger. Every `logging.*` call anywhere in the process is captured without per-module configuration.
 
-**Files written under `~/.co-cli/logs/`:**
+**File written under `~/.co-cli/logs/`:**
 
 | File | Level filter | Max size | Backups |
 |------|-------------|----------|---------|
-| `co-cli.log` | INFO+ | `log_max_size_mb` MB | `log_backup_count` |
-| `errors.log` | WARNING+ | `log_max_size_mb / 2` MB | `max(1, log_backup_count - 1)` |
+| `co-cli.jsonl` | INFO+ | `log_max_size_mb` MB | `log_backup_count` |
 
-**Format:** `YYYY-MM-DD HH:MM:SS [LEVEL] [logger.name]: message`
+**Format:** one JSON object per line. Python logging records use `"kind": "log"`:
+```json
+{"ts": "2026-04-15T10:04:17.000Z", "kind": "log", "level": "INFO", "logger": "co_cli.context.orchestrate", "msg": "..."}
+```
+OTel span records (from `JsonSpanExporter`) use `"kind": "span"` and are passed through as-is.
 
-**Secret redaction:** both files use `_RedactingFormatter`, which applies regex substitutions before any line reaches disk. Patterns covered: bearer tokens, `sk-*` / `sk-ant-*` API keys, GitHub `ghp_` tokens, `AIza*` Google tokens, JSON fields named `api_key`, `token`, `secret`, `password`, or `credential`, and PEM private key blocks.
+**Secret redaction:** `_JsonRedactingFormatter` applies regex substitutions to each message before serialisation. Patterns covered: bearer tokens, `sk-*` / `sk-ant-*` API keys, GitHub `ghp_` tokens, `AIza*` Google tokens, JSON fields named `api_key`, `token`, `secret`, `password`, or `credential`, and PEM private key blocks.
 
 **Idempotent:** calling `setup_file_logging()` more than once with the same log directory is safe — duplicate handlers are not added.
 
-### Text Span Exporter (`_telemetry.py`)
+### JSON Span Exporter (`_telemetry.py`)
 
-`TextSpanExporter` writes every OTel span to `~/.co-cli/logs/spans.log` as a single human-readable line — enabling `cat`/`tail`/`grep` debugging without a DB query.
+`JsonSpanExporter` writes every OTel span to `~/.co-cli/logs/co-cli.jsonl` as a JSON line containing 100% of span content — enabling `jq` queries without a DB query. Uses a dedicated `co_cli.observability.spans` logger with `propagate=True` and no own handler, so records flow to the root logger's `RotatingFileHandler` that owns `co-cli.jsonl`.
 
-**Format:** one line per completed span:
-```
-2026-04-15T10:04:19.123  [tool  ]  execute_tool web_search                    tool=web_search  args={...}  result=...  890ms
-2026-04-15T10:04:18.456  [model ]  chat qwen3:8b                              in=1234 out=456 finish=stop  1.23s
-2026-04-15T10:04:18.123  [agent ]  invoke_agent agent                         model=qwen3:8b tokens=1234→456  5.68s
+**Format:** one JSON object per completed span:
+```json
+{"ts": "2026-04-15T10:04:19.123Z", "kind": "span", "span_id": "...", "trace_id": "...", "parent_id": "...", "name": "execute_tool web_search", "attributes": {"gen_ai.tool.name": "web_search", ...}, "events": [], "duration_ms": 890.0, "status": "OK", "status_description": null}
 ```
 
-Tool results are included (truncated at 400 chars). Uses a dedicated `co_cli.observability.spans` logger with `propagate=False` so span lines never bleed into `co-cli.log`. Uses `extract_span_attrs()` (in `_viewer.py`) — the same attribute extraction function used by `co tail`.
+Full attributes and events are included with no truncation. String attribute values are redacted using the same patterns as `SQLiteSpanExporter`.
 
-**Rotating file:** same `max_size_mb` / `backup_count` settings as the Python log files.
+**Querying:** `jq 'select(.kind=="span" and .name=="co.turn")' ~/.co-cli/logs/co-cli.jsonl`
 
 `InstrumentationSettings(version=3)` selects the latest OTel GenAI semantic conventions:
 
@@ -296,7 +297,7 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | Setting | Env Var | Default | Description |
 |---------|--------|---------|-------------|
-| `observability.log_level` | `CO_CLI_LOG_LEVEL` | `INFO` | Minimum level written to `co-cli.log` (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
+| `observability.log_level` | `CO_CLI_LOG_LEVEL` | `INFO` | Minimum level written to `co-cli.jsonl` (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
 | `observability.log_max_size_mb` | `CO_CLI_LOG_MAX_SIZE_MB` | `5` | Max file size in MB before rotation (1–500) |
 | `observability.log_backup_count` | `CO_CLI_LOG_BACKUP_COUNT` | `3` | Rotated backup files to keep per log file (0–20) |
 | `observability.redact_patterns` | — | 6 default patterns | Regex list applied to span attribute strings before SQLite storage; extend via `settings.json` for custom secret formats |
@@ -317,8 +318,8 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | File | Purpose |
 |------|---------|
-| `co_cli/observability/_telemetry.py` | `SQLiteSpanExporter` (spans → SQLite), `TextSpanExporter` (spans → `spans.log`), `setup_tracer_provider()` (provider factory for both exporters) |
-| `co_cli/observability/_file_logging.py` | `setup_file_logging()` — attaches rotating file handlers + `_RedactingFormatter` to root logger |
+| `co_cli/observability/_telemetry.py` | `SQLiteSpanExporter` (spans → SQLite), `JsonSpanExporter` (spans → `co-cli.jsonl` via propagating logger), `setup_tracer_provider()` (provider factory for both exporters) |
+| `co_cli/observability/_file_logging.py` | `setup_file_logging()` — attaches single rotating JSONL handler + `_JsonRedactingFormatter` to root logger |
 | `co_cli/observability/_viewer.py` | HTML generator — collapsible nested span tree, waterfall bars; shared `get_span_type()`, `format_duration()`, `extract_span_attrs()` |
 | `co_cli/observability/_tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
 | `co_cli/datasette_metadata.json` | Datasette UI config for `co logs` |
@@ -326,7 +327,5 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/config/_core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
 | `co_cli/config/_observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) and span redaction (`redact_patterns`) |
 | `~/.co-cli/co-cli-logs.db` | SQLite span storage |
-| `~/.co-cli/logs/co-cli.log` | Rotating operational log — INFO+ (all `logging.*` calls) |
-| `~/.co-cli/logs/errors.log` | Rotating error log — WARNING+ (quick triage) |
-| `~/.co-cli/logs/spans.log` | Rotating OTel span log — one line per span; `cat`/`tail`/`grep` without DB query |
+| `~/.co-cli/logs/co-cli.jsonl` | Single rotating JSONL log — INFO+ Python logging records (`"kind": "log"`) and OTel span records (`"kind": "span"`) |
 | `~/.co-cli/traces.html` | Generated static HTML viewer (written by `co traces`) |

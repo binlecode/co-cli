@@ -30,7 +30,7 @@ def init_eval_observability() -> None:
     ``co_cli.main`` has already installed a provider (``skip_if_installed``
     prevents a second provider from overwriting the first).
     """
-    # Python logging → co-cli.log + errors.log (rotating, idempotent)
+    # Python logging + OTel spans → co-cli.jsonl (rotating, idempotent)
     setup_file_logging(
         log_dir=LOGS_DIR,
         level=settings.observability.log_level,
@@ -38,15 +38,12 @@ def init_eval_observability() -> None:
         backup_count=settings.observability.log_backup_count,
     )
 
-    # OTel spans → co-cli-logs.db + spans.log
+    # OTel spans → co-cli-logs.db (SQLite) + co-cli.jsonl (via JsonSpanExporter propagation)
     # SimpleSpanProcessor (synchronous) flushes before the short-lived eval
     # process exits; BatchSpanProcessor would drop spans without force_flush.
     provider = setup_tracer_provider(
         service_name="co-cli-eval",
         service_version=_VERSION,
-        log_dir=LOGS_DIR,
-        max_size_mb=settings.observability.log_max_size_mb,
-        backup_count=settings.observability.log_backup_count,
         skip_if_installed=True,
     )
     Agent.instrument_all(InstrumentationSettings(tracer_provider=provider, version=3))

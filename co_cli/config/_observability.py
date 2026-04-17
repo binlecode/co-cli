@@ -14,11 +14,11 @@ _DEFAULT_REDACT_PATTERNS: list[str] = [
 
 
 class ObservabilitySettings(BaseModel):
-    """Controls file logging behaviour (dual-write alongside the SQLite OTel DB)."""
+    """Controls JSONL file logging and OTel span redaction."""
 
     log_level: str = Field(
         default="INFO",
-        description="Minimum log level written to co-cli.log (DEBUG/INFO/WARNING/ERROR).",
+        description="Minimum log level written to co-cli.jsonl (DEBUG/INFO/WARNING/ERROR).",
     )
     log_max_size_mb: int = Field(
         default=5,

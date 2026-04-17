@@ -1,37 +1,27 @@
-"""Rotating file log handler setup for Python ``logging`` output.
+"""Rotating JSONL log handler for Python ``logging`` output.
 
-Writes two files under ``log_dir``:
-- ``co-cli.log``  — INFO and above (all operational events)
-- ``errors.log``  — WARNING and above (quick triage)
+Writes a single ``co-cli.jsonl`` file under ``log_dir``.
+Each line is a JSON object: ``{"ts", "kind": "log", "level", "logger", "msg"}``,
+plus ``"exc_info"`` when a record carries exception info.
 
-Both files use ``RotatingFileHandler`` and a ``RedactingFormatter`` that strips
-common secret patterns before anything reaches disk.
-
-OTel span output (agent/model/tool events) is handled separately by
-``TextSpanExporter`` in ``_telemetry.py``, which writes to ``spans.log``.
+OTel span output (agent/model/tool events) is also written to ``co-cli.jsonl``
+via ``JsonSpanExporter`` in ``_telemetry.py``, which emits through a propagating
+logger so all output converges in one file.
 """
 
+import json
 import logging
 import logging.handlers
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
-_LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(name)s]: %(message)s"
-_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-
-# Patterns that look like secrets — matched against each formatted line.
-# Each entry is (pattern, replacement).
 _REDACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    # Generic bearer / auth headers
     (re.compile(r"(Bearer\s+)[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE), r"\1***"),
-    # OpenAI / Anthropic / common API key prefixes
     (re.compile(r"\b(sk-[A-Za-z0-9]{6})[A-Za-z0-9\-]{10,}"), r"\1***"),
     (re.compile(r"\b(sk-ant-[A-Za-z0-9]{6})[A-Za-z0-9\-]{10,}"), r"\1***"),
-    # GitHub tokens
     (re.compile(r"\b(ghp_[A-Za-z0-9]{6})[A-Za-z0-9]{30,}"), r"\1***"),
-    # Google / AIza tokens
     (re.compile(r"\b(AIza[A-Za-z0-9]{6})[A-Za-z0-9\-_]{25,}"), r"\1***"),
-    # JSON fields that typically carry secrets
     (
         re.compile(
             r'("(?:api_?key|token|secret|password|credential)[^"]*"\s*:\s*")[^"]{8,}(")',
@@ -39,7 +29,6 @@ _REDACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         ),
         r"\1***\2",
     ),
-    # Private key blocks
     (
         re.compile(
             r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL
@@ -49,14 +38,41 @@ _REDACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-class _RedactingFormatter(logging.Formatter):
-    """Formatter that scrubs common secret patterns from each log record."""
+class _JsonRedactingFormatter(logging.Formatter):
+    """Formats log records as redacted single-line JSON objects.
+
+    If the message is already a valid JSON dict (e.g. a span record from
+    ``JsonSpanExporter``), it is passed through after redaction. Otherwise
+    the record is wrapped in a standard envelope with ``"kind": "log"``.
+    """
 
     def format(self, record: logging.LogRecord) -> str:
-        line = super().format(record)
+        msg = record.getMessage()
         for pattern, replacement in _REDACT_PATTERNS:
-            line = pattern.sub(replacement, line)
-        return line
+            msg = pattern.sub(replacement, msg)
+
+        # Pass-through pre-serialised JSON dicts (span records from JsonSpanExporter)
+        try:
+            parsed = json.loads(msg)
+            if isinstance(parsed, dict):
+                return msg
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        ts = (
+            datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.")
+            + f"{int(record.msecs):03d}Z"
+        )
+        entry: dict = {
+            "ts": ts,
+            "kind": "log",
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": msg,
+        }
+        if record.exc_info:
+            entry["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(entry)
 
 
 def setup_file_logging(
@@ -65,14 +81,18 @@ def setup_file_logging(
     max_size_mb: int = 5,
     backup_count: int = 3,
 ) -> None:
-    """Attach rotating file handlers to the root logger.
+    """Attach a rotating JSONL handler to the root logger.
+
+    Writes ``co-cli.jsonl`` — one JSON object per line. Python ``logging``
+    records have ``"kind": "log"``; OTel span records from ``JsonSpanExporter``
+    have ``"kind": "span"`` and arrive via logger propagation.
 
     Idempotent — calling more than once with the same ``log_dir`` is safe;
     duplicate handlers are not added.
 
     Args:
-        log_dir: Directory where ``co-cli.log`` and ``errors.log`` are written.
-        level: Minimum level for the main log (e.g. ``"INFO"``, ``"DEBUG"``).
+        log_dir: Directory where ``co-cli.jsonl`` is written.
+        level: Minimum level for the log (e.g. ``"INFO"``, ``"DEBUG"``).
         max_size_mb: Maximum file size in MB before rotation.
         backup_count: Number of rotated backup files to keep.
     """
@@ -81,27 +101,18 @@ def setup_file_logging(
     numeric_level = getattr(logging, level.upper(), logging.INFO)
     max_bytes = max_size_mb * 1024 * 1024
 
-    formatter = _RedactingFormatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT)
+    formatter = _JsonRedactingFormatter()
     root = logging.getLogger()
 
-    # Ensure root logger passes everything through to handlers.
     if root.level == logging.NOTSET or root.level > numeric_level:
         root.setLevel(numeric_level)
 
     _attach_handler(
         root,
-        log_dir / "co-cli.log",
+        log_dir / "co-cli.jsonl",
         level=numeric_level,
         max_bytes=max_bytes,
         backup_count=backup_count,
-        formatter=formatter,
-    )
-    _attach_handler(
-        root,
-        log_dir / "errors.log",
-        level=logging.WARNING,
-        max_bytes=max_bytes // 2,
-        backup_count=max(1, backup_count - 1),
         formatter=formatter,
     )
 
