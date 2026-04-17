@@ -120,18 +120,13 @@ Full attributes and events are included with no truncation. String attribute val
 
 **Querying with jq:** `jq 'select(.kind=="span" and .name=="co.turn")' ~/.co-cli/logs/co-cli.jsonl`
 
-**Advanced JSONL Tailing (jq + perl):**
-To parse nested JSON strings (like `pydantic_ai.all_messages`) and format literal `\n` characters for terminal readability, use the `scripts/tail-jsonl.sh` utility or this command:
+**Pretty-tailing JSONL (standalone shell utility):**
+`scripts/tail-jsonl.sh` is a self-contained `jq`-based tail utility — no Python runtime required. It color-codes output by record type: agent spans (cyan), model spans (magenta), tool spans (yellow), log records by level. Requires only `jq`.
 
 ```bash
-tail -f ~/.co-cli/logs/co-cli.jsonl | jq --unbuffered '
-  walk(
-    if type == "string" and (startswith("{") or startswith("[")) 
-    then (fromjson? // .) 
-    else . 
-    end
-  )
-' | perl -pe 's/\\n/\n/g'
+scripts/tail-jsonl.sh              # follow from current end
+scripts/tail-jsonl.sh -n 20        # show last 20 lines then follow
+scripts/tail-jsonl.sh errors.jsonl # tail the errors file
 ```
 
 `InstrumentationSettings(version=3)` selects the latest OTel GenAI semantic conventions:
