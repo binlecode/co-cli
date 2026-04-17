@@ -987,8 +987,6 @@ async def test_cmd_knowledge_stats_counts_accurately(tmp_path):
     # kind breakdown includes both present kinds
     assert "preference: 3" in out
     assert "feedback: 1" in out
-    # pinned count
-    assert "pinned: 1" in out
     # archived count
     assert "Archived: 1" in out
     # dream state timestamp present

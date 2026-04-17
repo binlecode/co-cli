@@ -32,7 +32,6 @@ from co_cli.deps import CoDeps
 from co_cli.knowledge._artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
-    PinModeEnum,
     SourceTypeEnum,
     load_knowledge_artifacts,
 )
@@ -365,7 +364,6 @@ async def save_knowledge(
     title: str | None = None,
     description: str | None = None,
     tags: list[str] | None = None,
-    pin_mode: str = PinModeEnum.NONE.value,
 ) -> ToolReturn:
     """Save a reusable knowledge artifact (preference, rule, feedback, decision, article, reference, note).
 
@@ -382,7 +380,6 @@ async def save_knowledge(
         title: Optional human-readable label.
         description: Optional ≤200-char hook used for retrieval ranking.
         tags: Optional retrieval labels (lowercased before writing).
-        pin_mode: 'standing' to inject as always-on context; 'none' by default.
     """
     valid_kinds = {e.value for e in ArtifactKindEnum}
     if artifact_kind not in valid_kinds:
@@ -442,7 +439,6 @@ async def save_knowledge(
         tags=[t.lower() for t in (tags or [])],
         source_type=SourceTypeEnum.DETECTED.value,
         source_ref=source_ref,
-        pin_mode=pin_mode,
     )
 
     file_content = render_knowledge_file(artifact)

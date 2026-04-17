@@ -140,14 +140,3 @@ def load_knowledge_artifacts(
             continue
         artifacts.append(artifact)
     return artifacts
-
-
-def load_standing_artifacts(knowledge_dir: Path, cap: int = 5) -> list[KnowledgeArtifact]:
-    """Return up to *cap* artifacts with pin_mode='standing' for always-on injection."""
-    if not knowledge_dir.exists():
-        return []
-    return [
-        a
-        for a in load_knowledge_artifacts(knowledge_dir)
-        if a.pin_mode == PinModeEnum.STANDING.value
-    ][:cap]

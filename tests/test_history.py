@@ -509,42 +509,6 @@ def test_gather_context_returns_none_when_empty():
     assert result is None
 
 
-def test_gather_context_always_on_memories(tmp_path: Path):
-    """_gather_compaction_context includes standing artifacts from canonical .md files."""
-    mem_dir = tmp_path / "knowledge"
-    mem_dir.mkdir()
-    # pin_mode=standing artifact — should surface in standing context
-    standing = mem_dir / "standing-test.md"
-    standing.write_text(
-        "---\n"
-        "id: '9001'\n"
-        "kind: knowledge\n"
-        "artifact_kind: preference\n"
-        "tags: [test]\n"
-        "created: '2025-01-01T00:00:00Z'\n"
-        "pin_mode: standing\n"
-        "---\n"
-        "Important standing context for the session.\n"
-    )
-    # Non-pinned artifact — must NOT appear
-    normal = mem_dir / "normal-test.md"
-    normal.write_text(
-        "---\n"
-        "id: '9002'\n"
-        "kind: knowledge\n"
-        "artifact_kind: preference\n"
-        "tags: [test]\n"
-        "created: '2025-01-01T00:00:00Z'\n"
-        "---\n"
-        "This is a normal memory.\n"
-    )
-    ctx = _make_gather_ctx(knowledge_dir=mem_dir)
-    result = _gather_compaction_context(ctx, [_user("hello"), _assistant("hi")], dropped=[])
-    assert result is not None
-    assert "Standing memories:" in result
-    assert "Important standing context" in result
-
-
 def test_gather_context_truncates_to_max_chars():
     """_gather_compaction_context with >4K combined sources → output truncated to _CONTEXT_MAX_CHARS."""
     # Create a huge prior summary in dropped messages

@@ -246,16 +246,14 @@ For co-cli, the instruction stack seen by the SDK is:
 1. the static string from `build_static_instructions()`
 2. `add_current_date`
 3. `add_shell_guidance`
-4. `add_standing_knowledge`
-5. `add_personality_memories`
-6. `add_category_awareness_prompt`
-7. any SDK/toolset-supplied dynamic instruction parts
+4. `add_personality_memories`
+5. `add_category_awareness_prompt`
+6. any SDK/toolset-supplied dynamic instruction parts
 
 The dynamic layers contribute the following request-time text:
 
 - current date: `Today is YYYY-MM-DD.`
 - shell guidance: approval/reminder text for shell execution
-- always-on memories: `Standing context:` followed by up to 5 `always_on=True` memory bodies, capped by `memory.injection_max_chars`
 - personality memories: `## Learned Context` followed by the 5 most recent insight entries tagged `personality-context`
 - category awareness: one short sentence listing deferred capability categories inferred from the current `tool_index`
 
@@ -300,7 +298,7 @@ When inline summarization triggers, it launches a separate no-tools summarizer c
 
 - the dropped middle messages as `message_history`
 - a summarizer prompt template
-- optional side-channel context from touched file paths, active todos, always-on memories, and prior summaries
+- optional side-channel context from touched file paths, active todos, and prior summaries
 - an extra personality addendum when `config.personality` is enabled
 
 If the summarizer is unavailable or the circuit breaker is tripped, the processor falls back to a static marker instead of an LLM summary.
@@ -347,7 +345,6 @@ show generic error banner on failed turns
 Future prompt effects:
 
 - newly extracted insights can later appear in `Relevant memories:` recall
-- memories marked `always_on=True` can later appear in `Standing context:`
 - insights tagged `personality-context` can later appear in `## Learned Context`
 - transcript-replacement commands such as `/compact`, `/resume`, `/new`, and `/clear` alter the future `message_history` that enters step 2.6
 
@@ -365,7 +362,7 @@ The important invariant is that co-cli never stores prompt state in model weight
 | `llm.num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama context budget input; runtime probe may override it before agent construction |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled defaults | MCP discovery extends `tool_index`, which changes deferred-tool awareness text |
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | Selects the soul tree for static assembly and enables `personality-context` dynamic injection |
-| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Caps always-on memory injection and recalled-memory injection |
+| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Caps recalled-memory injection |
 
 ---
 
@@ -387,5 +384,5 @@ The important invariant is that co-cli never stores prompt state in model weight
 | `co_cli/context/orchestrate.py` | Segment execution, approval resumes, and `agent.run_stream_events(...)` orchestration |
 | `co_cli/context/_history.py` | History processors, recall injection, safety injection, and inline compaction |
 | `co_cli/context/summarization.py` | Summarizer prompt construction and inline/manual compaction engine |
-| `co_cli/memory/recall.py` | Always-on memory loading and grep-based recall primitives |
+| `co_cli/memory/recall.py` | Knowledge artifact loader re-exports for prompt-assembly and personality injection |
 | `co_cli/tools/memory.py` | `_recall_for_context()` used by request-time memory injection |

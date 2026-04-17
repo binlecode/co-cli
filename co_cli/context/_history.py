@@ -17,7 +17,6 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import cast
 
 from pydantic_ai import RunContext
@@ -377,16 +376,6 @@ def _gather_session_todos(todos: list) -> str | None:
     return "Active tasks:\n" + "\n".join(todo_lines)
 
 
-def _gather_always_on_memories(knowledge_dir: Path) -> str | None:
-    """Load standing knowledge artifacts for compaction context."""
-    from co_cli.memory.recall import load_standing_artifacts
-
-    memories = load_standing_artifacts(knowledge_dir)
-    if not memories:
-        return None
-    return "Standing memories:\n" + "\n".join(m.content[:200] for m in memories[:5])
-
-
 def _gather_prior_summaries(dropped: list[ModelMessage]) -> str | None:
     """Extract prior summary text from dropped messages."""
     summaries: list[str] = []
@@ -412,8 +401,7 @@ def _gather_compaction_context(
     Sources:
     1. File working set from ToolCallPart.args (never truncated by processor #1)
     2. Pending session todos from ctx.deps.session
-    3. Always-on memories (the summarizer is a separate agent without the main agent's dynamic layers)
-    4. Prior-summary text from dropped messages
+    3. Prior-summary text from dropped messages
 
     Returns None when no context was gathered.
     """
@@ -422,7 +410,6 @@ def _gather_compaction_context(
         for p in [
             _gather_file_paths(messages),
             _gather_session_todos(ctx.deps.session.session_todos),
-            _gather_always_on_memories(ctx.deps.knowledge_dir),
             _gather_prior_summaries(dropped),
         ]
         if p is not None

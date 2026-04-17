@@ -11,7 +11,6 @@ from co_cli.knowledge._artifact import (
     SourceTypeEnum,
     load_knowledge_artifact,
     load_knowledge_artifacts,
-    load_standing_artifacts,
 )
 from co_cli.knowledge._frontmatter import (
     parse_frontmatter,
@@ -106,23 +105,6 @@ def test_load_knowledge_artifacts_filters_by_kind(tmp_path: Path) -> None:
     articles = load_knowledge_artifacts(tmp_path, artifact_kind="article")
     assert len(articles) == 1
     assert articles[0].id == "b"
-
-
-def test_load_standing_artifacts_caps_and_filters(tmp_path: Path) -> None:
-    """Only pin_mode='standing' entries returned, capped at `cap`."""
-    for idx in range(7):
-        _write(
-            tmp_path / f"s{idx}.md",
-            f"id: s{idx}\nkind: knowledge\nartifact_kind: preference\n"
-            f"created: '2026-04-16T10:00:00Z'\npin_mode: standing\n",
-        )
-    _write(
-        tmp_path / "plain.md",
-        "id: plain\nkind: knowledge\nartifact_kind: preference\ncreated: '2026-04-16T10:00:00Z'\n",
-    )
-    standing = load_standing_artifacts(tmp_path, cap=5)
-    assert len(standing) == 5
-    assert all(a.pin_mode == PinModeEnum.STANDING.value for a in standing)
 
 
 def test_render_knowledge_file_emits_canonical_kind(tmp_path: Path) -> None:

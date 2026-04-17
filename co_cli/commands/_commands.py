@@ -1282,7 +1282,6 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
         kind_counts[a.artifact_kind] = kind_counts.get(a.artifact_kind, 0) + 1
     kind_parts = ", ".join(f"{kind}: {count}" for kind, count in sorted(kind_counts.items()))
 
-    pinned = sum(1 for a in artifacts if a.pin_mode == "standing")
     protected = sum(1 for a in artifacts if a.decay_protected)
 
     archive_dir = knowledge_dir / "_archive"
@@ -1304,7 +1303,7 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     console.print(f"Knowledge: {total} artifacts")
     if kind_parts:
         console.print(f"  {kind_parts}")
-    console.print(f"  pinned: {pinned}, decay-protected: {protected}")
+    console.print(f"  decay-protected: {protected}")
     console.print(f"Archived: {archived}")
     console.print(f"Last dream: {last_dream}")
     console.print(f"Decay candidates: {len(candidates)}")

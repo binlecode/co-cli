@@ -5,7 +5,6 @@ from datetime import date
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
-from co_cli.memory.recall import load_standing_artifacts
 
 
 def add_current_date(ctx: RunContext[CoDeps]) -> str:
@@ -19,16 +18,6 @@ def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
         "Shell runs as subprocess. DENY-pattern commands are blocked before deferral. "
         "Safe-prefix commands execute directly. All others require user approval."
     )
-
-
-def add_standing_knowledge(ctx: RunContext[CoDeps]) -> str:
-    """Inject pinned knowledge artifacts as standing context every turn."""
-    entries = load_standing_artifacts(ctx.deps.knowledge_dir)
-    if not entries:
-        return ""
-    max_chars = ctx.deps.config.memory.injection_max_chars
-    text = "\n\n".join(e.content for e in entries)[:max_chars]
-    return f"Standing context:\n{text}"
 
 
 def add_personality_memories(ctx: RunContext[CoDeps]) -> str:

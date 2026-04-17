@@ -6,7 +6,7 @@
 
 **Functional areas:**
 - Memory layer: session transcripts, session index, episodic recall
-- Knowledge layer: unified artifact model, FTS5/hybrid search, standing context, turn-time recall
+- Knowledge layer: unified artifact model, FTS5/hybrid search, turn-time recall, explicit search
 - Extraction: per-turn signal detection writing to the knowledge layer
 - Consolidation: batch dedup, merge, decay, and transcript mining ("dreaming")
 - Retrieval: episodic search over transcripts, reusable search over knowledge
@@ -17,7 +17,7 @@
 - Real-time file-watch triggers
 - Provider-side memory or server-managed context
 
-**Success criteria:** Reusable search routes through a single knowledge surface. Episodic recall routes through transcript search. The extractor writes knowledge artifacts. Standing context is sourced from knowledge metadata. Knowledge is self-maintaining via consolidation.
+**Success criteria:** Reusable search routes through a single knowledge surface. Episodic recall routes through transcript search. The extractor writes knowledge artifacts. Knowledge is self-maintaining via consolidation.
 
 **Status:** Memory layer is transcripts only; Knowledge layer is the unified artifact store indexed under `source="knowledge"`. Lifecycle machinery (dedup on write, recall tracking, dream cycle with mine/merge/decay, archive/restore) is implemented and gated behind `knowledge.consolidation_enabled` (default off).
 
@@ -25,7 +25,7 @@
 
 ---
 
-This spec defines the cognitive architecture of `co-cli`: what belongs in Memory vs Knowledge, how artifacts flow between layers, and how retrieval, standing context, and lifecycle management work. Transcript persistence mechanics (append, branching, compaction, resume) live in [context.md](context.md). Startup sequencing in [flow-bootstrap.md](flow-bootstrap.md). Tool registration and approval in [tools.md](tools.md). Prompt assembly in [context.md](context.md).
+This spec defines the cognitive architecture of `co-cli`: what belongs in Memory vs Knowledge, how artifacts flow between layers, and how retrieval and lifecycle management work. Transcript persistence mechanics (append, branching, compaction, resume) live in [context.md](context.md). Startup sequencing in [flow-bootstrap.md](flow-bootstrap.md). Tool registration and approval in [tools.md](tools.md). Prompt assembly in [context.md](context.md).
 
 ## 1. What & How
 
@@ -59,7 +59,6 @@ flowchart TD
     subgraph Recall["Retrieval"]
         EpisodicSearch["session_search (transcript FTS)"]
         KnowledgeSearch["search_knowledge (unified reusable-recall)"]
-        StandingCtx["standing context (pinned artifacts)"]
         TurnRecall["turn-time recall (top-N injection)"]
     end
 
@@ -74,7 +73,6 @@ flowchart TD
     SessionIdx --> EpisodicSearch
     SearchDB --> KnowledgeSearch
     SearchDB --> TurnRecall
-    KDir --> StandingCtx
 ```
 
 ## 2. Core Logic
@@ -120,16 +118,14 @@ Every knowledge artifact is a `.md` file with YAML frontmatter:
 | `source_type` | Origin: `detected`, `web_fetch`, `manual`, `obsidian`, `drive`, `consolidated` |
 | `source_ref` | Pointer to origin: session ID, URL, file path, or artifact ID |
 | `certainty` | Confidence: `high`, `medium`, `low` |
-| `pin_mode` | Standing-context eligibility: `standing` (always injected) or `none` |
+| `pin_mode` | Lifecycle immunity: `standing` (immune from automated decay/merge) or `none` |
 | `decay_protected` | Boolean — immune from automated decay |
 | `last_recalled` | ISO8601 timestamp of most recent recall hit |
 | `recall_count` | Integer count of recall hits |
 
 ### 2.3 Knowledge Retrieval
 
-All reusable recall routes through the knowledge layer. Three retrieval paths:
-
-**Standing context** — artifacts with `pin_mode="standing"` are injected into every model request as a dynamic instruction layer. Capped at 5 entries, truncated to `injection_max_chars`.
+All reusable recall routes through the knowledge layer via two retrieval paths:
 
 **Turn-time recall** — on each new user turn, `inject_opening_context` queries `search.db` for the top-N knowledge artifacts matching the user's message. Results are injected as a trailing `SystemPromptPart`. This surfaces both extracted facts and articles — anything reusable and relevant.
 
@@ -203,7 +199,7 @@ Batch lifecycle management for the knowledge layer. Runs at session end (when en
 | Saves per transcript mining session | 5 |
 | Dream cycle timeout | 60 seconds |
 
-All archived artifacts are recoverable via `/knowledge restore`. Artifacts with `pin_mode="standing"` or `decay_protected=True` are immune from automated merge and decay.
+All archived artifacts are recoverable via `/knowledge restore`. Artifacts with `pin_mode="standing"` or `decay_protected=True` are immune from automated merge and decay (but are not injected into context — `pin_mode` is a lifecycle-protection flag only).
 
 ### 2.6 Tool Surface
 
@@ -311,8 +307,6 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
-| `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — injects pinned artifacts as standing context every turn |
-
 ### Config
 
 | File | Purpose |

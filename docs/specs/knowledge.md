@@ -8,7 +8,7 @@
 - Unified knowledge artifact model (`KnowledgeArtifact`, `artifact_kind` subtypes)
 - Artifact storage: human-editable `.md` files with YAML frontmatter in `knowledge_dir`
 - FTS5 and hybrid (FTS5 + vector) retrieval via `KnowledgeStore`
-- Three retrieval paths: standing context, turn-time recall, explicit tool search
+- Two retrieval paths: turn-time recall, explicit tool search
 - Extraction bridge from Memory (per-turn extractor writes to Knowledge)
 - Consolidation lifecycle: dedup on write, dream cycle (merge, decay, transcript mining)
 
@@ -18,7 +18,7 @@
 - Multi-user or concurrent-write safety
 - Real-time file-watch triggers
 
-**Success criteria:** All reusable recall routes through `search_knowledge()`; extracted insights and articles share one artifact model; standing context is sourced from `pin_mode` metadata, not a separate storage tier.
+**Success criteria:** All reusable recall routes through `search_knowledge()`; extracted insights and articles share one artifact model; retrieval uses turn-time recall and explicit search.
 
 **Status:** Unified artifact model, single `knowledge_dir`, `source="knowledge"` indexing. Tool surface converged: `search_memories` delegates to `session_search`, `list_knowledge` is canonical, `/knowledge` is the primary REPL namespace with `/memory` as deprecated alias. Dedup-on-write, recall tracking, and the full dream cycle (mine/merge/decay with archive/restore) are implemented and gated behind `knowledge.consolidation_enabled` (default off).
 
@@ -47,7 +47,6 @@ flowchart TD
     end
 
     subgraph Retrieval["Retrieval Paths"]
-        Standing["standing context\n(pin_mode=standing, always injected)"]
         TurnRecall["turn-time recall\n(inject_opening_context, top-N per turn)"]
         ExplicitSearch["search_knowledge()\n(on-demand, all artifact kinds)"]
     end
@@ -63,7 +62,6 @@ flowchart TD
     Artifacts -->|sync_dir| DB
     DreamCycle -->|archive originals| Archive
     DB --> Retrieval
-    Artifacts --> Standing
 ```
 
 ## 2. Core Logic
@@ -86,7 +84,7 @@ Every knowledge artifact is a `.md` file with YAML frontmatter:
 | `source_type` | enum | Origin: `detected`, `web_fetch`, `manual`, `obsidian`, `drive`, `consolidated` |
 | `source_ref` | string | Pointer to origin: session ID, URL, file path, or artifact ID |
 | `certainty` | enum | Confidence: `high`, `medium`, `low` |
-| `pin_mode` | enum | `standing` (always injected into context) or `none` (default) |
+| `pin_mode` | enum | `standing` (immune from automated decay/merge) or `none` (default) |
 | `decay_protected` | bool | Immune from automated decay |
 | `last_recalled` | ISO8601 | Timestamp of most recent recall hit |
 | `recall_count` | int | Count of recall hits |
@@ -121,8 +119,6 @@ Artifacts are split into overlapping chunks at index time (chunk size: 600 estim
 ### 2.3 Retrieval Paths
 
 All reusable recall routes through the Knowledge layer via three paths:
-
-**Standing context** — artifacts with `pin_mode="standing"` are injected into every model request as a dynamic instruction layer via `add_standing_knowledge()`. Capped at 5 entries, truncated to `memory.injection_max_chars`.
 
 **Turn-time recall** — on each new user turn, `inject_opening_context` calls `_recall_for_context()` which queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are injected as a trailing `SystemPromptPart`. Both extracted facts and articles are eligible — any reusable, relevant artifact surfaces here.
 
@@ -211,7 +207,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life for confidence decay scoring |
-| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars for standing + recalled artifact injection |
+| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars for recalled artifact injection |
 | `memory.extract_every_n_turns` | `CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | Extraction cadence (0 = disabled) |
 
 ### Paths
@@ -253,8 +249,6 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
-| `co_cli/agent/_instructions.py` | `add_standing_knowledge()` — pinned artifact injection as standing context every turn |
-
 ### Config
 
 | File | Purpose |

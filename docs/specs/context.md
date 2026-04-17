@@ -94,7 +94,6 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 | --- | --- | --- |
 | `add_current_date` | always | `Today is YYYY-MM-DD.` |
 | `add_shell_guidance` | always | shell approval/reminder text |
-| `add_standing_knowledge` | `pin_mode="standing"` entries exist | `Standing context:` block, capped by `memory.injection_max_chars` |
 | `add_personality_memories` | `config.personality` is set | top 5 `personality-context` memories as `## Learned Context` |
 | `add_category_awareness_prompt` | deferred tools registered in tool_index | category-level prompt listing available capabilities via `search_tools` (~100 tokens) |
 
@@ -114,7 +113,7 @@ Five history processors run in this exact order:
 | `inject_opening_context` | once per new user turn, recalls top-3 knowledge artifacts matching user message as trailing `SystemPromptPart` |
 | `summarize_history_window` | when history exceeds compaction threshold, keeps head + summary marker + tail; summarizer uses structured template (Goal, Key Decisions, Working Set, Progress, Next Steps) |
 
-**Compaction** is budget-driven: `resolve_compaction_budget()` uses reasoning model context window, `llm.num_ctx` override, or 100K fallback. Triggers at 85% of budget. `_gather_compaction_context()` enriches the summarizer with file paths from `ToolCallPart.args`, pending todos, always-on memories, and prior summary text detected by the `[Summary of` prefix (capped at 4K chars). `_build_summarizer_prompt()` assembles the final prompt as: template → context addendum → personality addendum (personality always last).
+**Compaction** is budget-driven: `resolve_compaction_budget()` uses reasoning model context window, `llm.num_ctx` override, or 100K fallback. Triggers at 85% of budget. `_gather_compaction_context()` enriches the summarizer with file paths from `ToolCallPart.args`, pending todos, and prior summary text detected by the `[Summary of` prefix (capped at 4K chars). `_build_summarizer_prompt()` assembles the final prompt as: template → context addendum → personality addendum (personality always last).
 
 LLM summarization falls back to a static marker when model registry is absent, failure count ≥ 3, or the summarizer call fails.
 
@@ -168,9 +167,9 @@ Knowledge artifacts are flat Markdown files with YAML frontmatter under a single
 
 #### 2.4.1 Data Model
 
-All artifacts parse into `KnowledgeArtifact` (`co_cli/knowledge/_artifact.py`) with an `artifact_kind` subtype (`preference` | `decision` | `rule` | `feedback` | `article` | `reference` | `note`). `co_cli/memory/recall.py` re-exports `load_knowledge_artifacts` and `load_standing_artifacts` so prompt-assembly and personality injection can import them without triggering the `tools/` ↔ `memory/` import cycle.
+All artifacts parse into `KnowledgeArtifact` (`co_cli/knowledge/_artifact.py`) with an `artifact_kind` subtype (`preference` | `decision` | `rule` | `feedback` | `article` | `reference` | `note`). `co_cli/memory/recall.py` re-exports `load_knowledge_artifacts` so prompt-assembly and personality injection can import it without triggering the `tools/` ↔ `memory/` import cycle.
 
-Frontmatter fields: `id` (UUID), `kind: knowledge`, `artifact_kind`, `title`, `description`, `created` / `updated` (ISO8601), `tags`, `related`, `source_type` (`detected` | `web_fetch` | `manual` | `obsidian` | `drive` | `consolidated`), `source_ref` (session id, URL, or artifact id — also the dedup key for articles), `pin_mode` (`standing` for always-on injection; otherwise `none`), `decay_protected`, `last_recalled`, `recall_count`.
+Frontmatter fields: `id` (UUID), `kind: knowledge`, `artifact_kind`, `title`, `description`, `created` / `updated` (ISO8601), `tags`, `related`, `source_type` (`detected` | `web_fetch` | `manual` | `obsidian` | `drive` | `consolidated`), `source_ref` (session id, URL, or artifact id — also the dedup key for articles), `pin_mode` (`standing` to protect from automated decay/merge; otherwise `none`), `decay_protected`, `last_recalled`, `recall_count`.
 
 #### 2.4.2 Read Path
 
@@ -189,7 +188,6 @@ search_memories(ctx, query)      ← agent tool (transitional — target: delega
   -> sets OTel span attribute rag.backend = "fts5"
 ```
 
-The standing-context layer (`load_standing_artifacts`) runs at instruction-build time: loads all knowledge artifacts, keeps those with `pin_mode="standing"`, caps at 5, and injects them into the `add_standing_knowledge` dynamic instruction layer.
 
 #### 2.4.3 Write Path
 
@@ -301,7 +299,7 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in turn-time recall scoring |
-| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for standing + recalled artifact injection |
+| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for recalled artifact injection |
 | `memory.extract_every_n_turns` | `CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | extraction cadence: run extractor every N clean turns; `0` disables |
 
 ### Knowledge
@@ -345,7 +343,7 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
-| `co_cli/memory/recall.py` | Re-exports `load_knowledge_artifacts` and `load_standing_artifacts` for prompt-assembly and personality injection (avoids the `tools/` ↔ `memory/` import cycle) |
+| `co_cli/memory/recall.py` | Re-exports `load_knowledge_artifacts` for prompt-assembly and personality injection (avoids the `tools/` ↔ `memory/` import cycle) |
 | `co_cli/memory/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
 | `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `PinModeEnum`, `CertaintyEnum`), loader |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate, `render_knowledge_file` (artifact → .md), `render_frontmatter` (dict → .md for in-place updates) |

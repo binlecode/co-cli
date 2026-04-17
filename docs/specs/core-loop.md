@@ -247,14 +247,14 @@ Processor roles:
 
 Ordering rationale:
 
-- **#1–2 before #5**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos, always-on memories) to compensate. This keeps the working path simple while preserving a useful handoff summary.
+- **#1–2 before #5**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate. This keeps the working path simple while preserving a useful handoff summary.
 - **#3 before #5**: `detect_safety_issues` scans recent tool calls for doom loops and shell error streaks. Running it before summarization ensures it scans the full un-compacted history — if summarization drops the middle first, streak evidence in the dropped slice would be missed.
 - **#4 before #5**: `inject_opening_context` appends recalled memories at the tail, outside the summarizer's dropped slice. Placed before summarization to keep the costliest processor (LLM call) last.
 - **All sync processors (#1–3) before async (#4–5)**: sync processors run inline with zero overhead. Async processors are awaited directly on the event loop.
 
 Compaction behavior:
 
-- `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, always-on memories, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
+- `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds 85% of the budget
 - token count is the real provider-reported `input_tokens` from the latest `ModelResponse`; when no usage is available it falls back to a character-count estimate (`total_chars // 4`)
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
