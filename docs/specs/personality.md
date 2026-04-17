@@ -36,9 +36,10 @@ Personality enters the agent via two paths:
    within a session.
 
 2. **Per-turn** — `add_personality_memories()` is registered as an `@agent.instructions`
-   callback. It fires fresh on every turn, injecting the top-5 most recent memories tagged
-   `personality-context` from `~/.co-cli/knowledge/`. This lets learned context about the user
-   accumulate over sessions and shape personality expression without modifying the soul files.
+   callback. It fires every turn, but `_load_personality_memories()` caches its result for the
+   process lifetime — the disk scan runs only once per session. The result injects the top-5
+   most recent memories tagged `personality-context` from `~/.co-cli/knowledge/`, letting
+   learned context about the user accumulate over sessions without modifying the soul files.
 
 ```
 Session start
@@ -115,14 +116,18 @@ be numbered `01`–`05`, contiguous, and unique. Current rules: `01_identity.md`
 `_load_personality_memories()` in `personalities/_injector.py`:
 
 ```
+if _personality_cache is not None:
+    return _personality_cache                      # cached — no disk scan
 memories = load_knowledge_artifacts(knowledge_dir, tags=["personality-context"])
 sorted by recency (updated_at or created_at)
 take top 5
-return "## Learned Context\n\n" + bullet list of bodies
+_personality_cache = "## Learned Context\n\n" + bullet list of bodies
+return _personality_cache
 ```
 
-This layer allows user-specific working-style observations to accumulate across sessions
-without editing soul files. The memory extraction pipeline (in context.md) is responsible
+The cache is process-scoped (module-level `_personality_cache`). Call
+`invalidate_personality_cache()` after any tool write that adds or removes the
+`personality-context` tag. The memory extraction pipeline (in context.md) is responsible
 for tagging relevant observations as `personality-context`.
 
 ### Personality Discovery and Validation

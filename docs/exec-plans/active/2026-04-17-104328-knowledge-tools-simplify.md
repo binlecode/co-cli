@@ -539,3 +539,42 @@ All three blocking findings were fixed inline (TL): `_atomic_write` applied to `
 
 **Overall: DELIVERED**
 All 9 tasks shipped. Three reviewer-blocking findings in `_dream.py:_write_consolidated_artifact` (missed `_atomic_write` + raw source literals) were fixed inline before close. Full suite green, docs synced.
+
+---
+
+## Implementation Review — 2026-04-17
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | No `NamedTemporaryFile`/`write_text` outside `_atomic_write`; tests pass | ✓ pass | `grep "NamedTemporaryFile\|write_text" tools/knowledge.py` → exit 1 (zero hits); `_atomic_write` at `mutator.py:18` used at `tools/knowledge.py:78,392,619,940,1004,1096` and `_dream.py:328` |
+| TASK-2 | `store.index`/`chunk_text`/`index_chunks` only inside `_reindex_knowledge_file`; tests pass | ✓ pass | `grep "store\.index\|chunk_text\|index_chunks" tools/knowledge.py` → exit 1; all routed through `mutator.py:26` |
+| TASK-3 | Zero raw `"knowledge"`/`"obsidian"`/`"drive"` source literals; `IndexSourceEnum` in `_artifact.py` | ✓ pass | `_artifact.py:42` — `class IndexSourceEnum(StrEnum)`; 4 grep hits in `tools/knowledge.py` all exempt (docstring lines 502–504,519; result dict `"source": "knowledge"` at line 439 is per spec exemption) |
+| TASK-4 | Zero `_build_window`/`_build_dream_window` refs; `build_transcript_window` 1 def + 2 calls | ✓ pass | `grep -rn "_build_window\|_build_dream_window" co_cli/` → zero source hits; `build_transcript_window` def at `_distiller.py:83`, calls at `_distiller.py:144`, `_dream.py:185` |
+| TASK-5 | `def _update_artifact_body`/`def _reindex_knowledge_file` not in `tools/knowledge.py` | ✓ pass | `grep "def _update_artifact_body\|def _reindex_knowledge_file" tools/knowledge.py` → exit 1; both defined only in `mutator.py:67,26` |
+| TASK-6 | `_count_active_artifacts` at most 2 call sites per loop body | ✓ pass | `_dream.py:194` (before loop), `_dream.py:205` (inside chunk loop); `saves_so_far = 0` init at line 196; no post-loop call |
+| TASK-7 | Early-skip guard in double loop | ✓ pass | `_dream.py:276` — `if find(i) == find(j): continue` before `token_jaccard` call |
+| TASK-8 | Single glob in `read_article` slug-lookup | ✓ pass | `tools/knowledge.py:856` — `list(knowledge_dir.glob(f"{slug}*.md"))`; line 857 partitions into exact/prefix |
+| TASK-9 | Cache set after first call; second call returns same object; invalidation clears cache | ✓ pass | `_injector.py:11,37-38,54` — `_personality_cache` module-level, checked before scan, set after scan; `invalidate_personality_cache()` at line 14 |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| TASK-9 `done_when` not met: no test calls `_load_personality_memories()` twice and verifies cache | (missing) | blocking | Added `tests/test_personality_cache.py` — calls twice, asserts `result2 is result1` and `_personality_cache is not None` after first call, `None` after `invalidate_personality_cache()`. 1 passed. |
+| `personality.md` describes `_load_personality_memories()` as reading "fresh on every turn" | `docs/specs/personality.md:39,116–122` | minor | Updated section 1 and section 2 pseudocode to reflect process-scoped cache and `invalidate_personality_cache()` contract |
+
+### Tests
+- Command: `uv run pytest -x`
+- Result: 601 passed, 0 failed
+- Log: `.pytest-logs/YYYYMMDD-HHMMSS-review-impl.log`
+
+### Doc Sync
+- Scope: full (all specs)
+- Result: `personality.md` fixed (cache behavior); all other specs clean
+
+### Behavioral Verification
+- `uv run co config`: ✓ healthy (LLM Online, Shell Active, DB Active)
+- No user-facing surface changed by this delivery — all tasks are internal refactors.
+
+### Overall: PASS
+One blocking finding (missing TASK-9 cache test) added and verified green; one doc inaccuracy in `personality.md` corrected. 601/601 tests pass, lint clean, behavioral verification passed.
