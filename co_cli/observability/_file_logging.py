@@ -116,6 +116,16 @@ def setup_file_logging(
         formatter=formatter,
     )
 
+    # Dedicated WARNING+ file for fast error triage without wading through span JSON
+    _attach_handler(
+        root,
+        log_dir / "errors.jsonl",
+        level=logging.WARNING,
+        max_bytes=2 * 1024 * 1024,
+        backup_count=2,
+        formatter=formatter,
+    )
+
 
 def _attach_handler(
     logger: logging.Logger,

@@ -192,22 +192,78 @@ def test_json_formatter_passthrough_span_json(tmp_path):
     assert parsed["name"] == "test.op"
 
 
+def _isolated_file_logging(log_dir, level="DEBUG", max_size_mb=1, backup_count=1):
+    """Call setup_file_logging and return handlers added, for cleanup in tests."""
+    root = logging.getLogger()
+    before = set(root.handlers)
+    setup_file_logging(
+        log_dir=log_dir, level=level, max_size_mb=max_size_mb, backup_count=backup_count
+    )
+    return [h for h in root.handlers if h not in before]
+
+
 def test_setup_file_logging_writes_jsonl(tmp_path):
     """setup_file_logging writes JSON lines to co-cli.jsonl on the root logger."""
     log_dir = tmp_path / "logs"
-    setup_file_logging(log_dir=log_dir, level="DEBUG", max_size_mb=1, backup_count=1)
+    added = _isolated_file_logging(log_dir)
+    try:
+        test_logger = logging.getLogger("co_cli.test_jsonl_write")
+        test_logger.info("jsonl test message")
 
-    test_logger = logging.getLogger("co_cli.test_jsonl_write")
-    test_logger.info("jsonl test message")
+        for handler in added:
+            handler.flush()
 
-    # Flush handlers
-    for handler in logging.getLogger().handlers:
-        handler.flush()
+        jsonl_path = log_dir / "co-cli.jsonl"
+        assert jsonl_path.exists(), "co-cli.jsonl was not created"
 
-    jsonl_path = log_dir / "co-cli.jsonl"
-    assert jsonl_path.exists(), "co-cli.jsonl was not created"
+        lines = [ln for ln in jsonl_path.read_text().splitlines() if ln.strip()]
+        assert any(
+            json.loads(ln).get("msg") == "jsonl test message" for ln in lines if ln.startswith("{")
+        ), "expected log message not found in co-cli.jsonl"
+    finally:
+        root = logging.getLogger()
+        for h in added:
+            root.removeHandler(h)
+            h.close()
 
-    lines = [ln for ln in jsonl_path.read_text().splitlines() if ln.strip()]
-    assert any(
-        json.loads(ln).get("msg") == "jsonl test message" for ln in lines if ln.startswith("{")
-    ), "expected log message not found in co-cli.jsonl"
+
+def test_setup_file_logging_creates_errors_jsonl(tmp_path):
+    """setup_file_logging creates errors.jsonl alongside co-cli.jsonl."""
+    log_dir = tmp_path / "logs"
+    added = _isolated_file_logging(log_dir)
+    try:
+        logging.getLogger("co_cli.test_errors_create").warning("trigger errors file")
+        for handler in added:
+            handler.flush()
+        assert (log_dir / "errors.jsonl").exists(), "errors.jsonl was not created"
+    finally:
+        root = logging.getLogger()
+        for h in added:
+            root.removeHandler(h)
+            h.close()
+
+
+def test_errors_jsonl_captures_warning_not_info(tmp_path):
+    """errors.jsonl receives WARNING+ records but excludes INFO records."""
+    log_dir = tmp_path / "logs"
+    added = _isolated_file_logging(log_dir)
+    try:
+        logger = logging.getLogger("co_cli.test_errors_filter")
+        logger.info("info-only message")
+        logger.warning("warning message")
+        for handler in added:
+            handler.flush()
+
+        errors_lines = [
+            json.loads(ln)
+            for ln in (log_dir / "errors.jsonl").read_text().splitlines()
+            if ln.strip() and ln.startswith("{")
+        ]
+        msgs = {entry["msg"] for entry in errors_lines}
+        assert "warning message" in msgs, "WARNING not found in errors.jsonl"
+        assert "info-only message" not in msgs, "INFO must not appear in errors.jsonl"
+    finally:
+        root = logging.getLogger()
+        for h in added:
+            root.removeHandler(h)
+            h.close()
