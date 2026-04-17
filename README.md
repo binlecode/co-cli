@@ -125,12 +125,6 @@ uv run co tail --tools-only # Only tool calls
 uv run co tail -n -l 10    # Print last 10 spans and exit
 ```
 
-#### `co logs` — Datasette Dashboard
-Launch a local Datasette dashboard to inspect traces with SQL.
-```bash
-uv run co logs
-```
-
 #### `co traces` — Visual Trace Viewer
 Generate and open a static HTML page with nested, collapsible span trees.
 ```bash

@@ -33,7 +33,7 @@ Any voice design has to fit the system that exists today:
 - interrupted turns are already patched with dangling tool-return repair plus an abort marker
 - `co_cli/main.py` already centralizes the REPL loop, slash-command dispatch, Ctrl-C handling, and post-turn hooks
 - `co_cli/status.py` already owns environment diagnostics, which is the natural home for future audio checks
-- OTel trace output already flows into `co-cli.db` and is surfaced through `co logs`, `co traces`, and `co tail`
+- OTel trace output already flows into `co-cli.db` and is surfaced through `co traces` and `co tail`
 
 That means the right integration model is still an I/O overlay:
 

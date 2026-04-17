@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import subprocess
 import time
 import tomllib
 from contextlib import AsyncExitStack
@@ -394,39 +393,6 @@ def config():
     console.print(render_status_table(sys_status))
     findings = check_security()
     render_security_findings(findings)
-
-
-@app.command()
-def logs():
-    """Launch a local dashboard (Datasette) to inspect agent traces."""
-    import webbrowser
-
-    db_path = LOGS_DB
-    if not db_path.exists():
-        console.print("[yellow]No logs found yet.[/yellow]")
-        return
-
-    # Metadata file for better display
-    metadata_path = Path(__file__).parent / "datasette_metadata.json"
-
-    url = "http://127.0.0.1:8001"
-    console.print("[bold green]Opening Datasette dashboard...[/bold green]")
-    console.print(f"[cyan]URL: {url}[/cyan]")
-    console.print("[dim]Press Ctrl+C to stop[/dim]")
-
-    # Auto-open browser after a short delay
-    import threading
-
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-
-    cmd = ["datasette", str(db_path), "--port", "8001"]
-    if metadata_path.exists():
-        cmd.extend(["--metadata", str(metadata_path)])
-
-    try:
-        subprocess.run(cmd)
-    except KeyboardInterrupt:
-        pass
 
 
 @app.command()

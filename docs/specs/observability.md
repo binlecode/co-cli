@@ -2,11 +2,10 @@
 
 ## Product Intent
 
-**Goal:** Trace every agent operation to local SQLite; provide three viewer modes.
+**Goal:** Trace every agent operation to local SQLite; provide two first-party viewer modes.
 **Functional areas:**
 - OTel instrumentation and `SQLiteSpanExporter`
 - WAL mode for concurrent read access
-- Datasette viewer (ad-hoc SQL)
 - HTML tree viewer (nested span hierarchy)
 - Live tail viewer (real-time terminal)
 
@@ -15,7 +14,7 @@
 - Distributed tracing
 - Retention/pruning automation
 
-**Success criteria:** Every turn produces spans in `co-cli-logs.db` and `co-cli.jsonl`; WAL mode enables concurrent read; all three viewers work on the same DB.
+**Success criteria:** Every turn produces spans in `co-cli-logs.db` and `co-cli.jsonl`; WAL mode enables concurrent read; both viewers work on the same DB.
 **Status:** Stable
 **Known gaps:** No retention/pruning policy — DB grows unbounded.
 
@@ -23,7 +22,7 @@
 
 ## 1. What & How
 
-Co CLI uses OpenTelemetry (OTel) to trace every agent operation. All data stays local in a SQLite database — no external telemetry endpoints. Three viewers are available: Datasette for ad-hoc SQL queries, a static HTML tree viewer, and a real-time terminal tail.
+Co CLI uses OpenTelemetry (OTel) to trace every agent operation. All data stays local in a SQLite database — no external telemetry endpoints. Two viewers are available: a static HTML tree viewer and a real-time terminal tail.
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -48,10 +47,10 @@ Co CLI uses OpenTelemetry (OTel) to trace every agent operation. All data stays 
    ▼                          ▼
 ~/.co-cli/co-cli-logs.db    ~/.co-cli/logs/co-cli.jsonl
                │
-   ┌───────────┼───────────┐
-   ▼           ▼           ▼
-co logs    co traces    co tail
-(Datasette)  (HTML)   (terminal)
+   ┌───────────┴───────────┐
+   ▼                       ▼
+co traces               co tail
+  (HTML)              (terminal)
 ```
 
 Run `co chat` in one terminal and `co tail` in another to watch the agent→model→tool flow live:
@@ -169,7 +168,7 @@ CREATE TABLE spans (
 
 ### Concurrent Access (WAL Mode)
 
-Three processes touch the same DB simultaneously: `co chat` (writer), `co tail` (reader, long-lived connection), and `co logs`/Datasette (reader). Three layers of defense:
+Two processes touch the same DB simultaneously: `co chat` (writer) and `co tail` (reader, long-lived connection). Three layers of defense:
 
 1. **WAL journal mode** — separates reads from writes; readers see a consistent snapshot while the writer appends.
 2. **Busy timeout (5 s)** — handles brief exclusive locks during WAL checkpoints.
@@ -197,7 +196,7 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 
 **Attribute rendering:** tool, model, message, and token fields are rendered first, then the remaining attributes are appended. Long values are truncated at 200 chars with an `[expand]` toggle that pretty-prints JSON in-place. `logfire.*` internal attributes are suppressed.
 
-**Color scheme** — consistent across all three viewers:
+**Color scheme** — consistent across both viewers:
 
 | Type | HTML class | Hex |
 |------|-----------|-----|
@@ -339,8 +338,7 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/observability/_file_logging.py` | `setup_file_logging()` — attaches single rotating JSONL handler + `_JsonRedactingFormatter` to root logger |
 | `co_cli/observability/_viewer.py` | HTML generator — collapsible nested span tree, waterfall bars; shared `get_span_type()`, `format_duration()`, `extract_span_attrs()` |
 | `co_cli/observability/_tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
-| `co_cli/datasette_metadata.json` | Datasette UI config for `co logs` |
-| `co_cli/main.py` | `@app.command()` wrappers for `logs`, `traces`, `tail`; module-level OTel + file logging bootstrap |
+| `co_cli/main.py` | `@app.command()` wrappers for `traces` and `tail`; module-level OTel + file logging bootstrap |
 | `co_cli/config/_core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
 | `co_cli/config/_observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) and span redaction (`redact_patterns`) |
 | `~/.co-cli/co-cli-logs.db` | SQLite span storage |
