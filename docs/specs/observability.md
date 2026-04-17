@@ -88,9 +88,9 @@ for logger_name in ["openai", "httpx", "anthropic", "hpack"]:    # co_cli.* logg
 
 ### File Logging (`_file_logging.py`)
 
-`setup_file_logging()` attaches a single `RotatingFileHandler` to the Python root logger. Every `logging.*` call anywhere in the process is captured without per-module configuration.
+`setup_file_logging()` attaches two `RotatingFileHandler`s to the Python root logger. Every `logging.*` call anywhere in the process is captured without per-module configuration.
 
-**File written under `~/.co-cli/logs/`:**
+**Files written under `~/.co-cli/logs/`:**
 
 | File | Level filter | Max size | Backups |
 |------|-------------|----------|---------|

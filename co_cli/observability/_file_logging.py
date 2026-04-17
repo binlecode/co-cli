@@ -1,6 +1,9 @@
 """Rotating JSONL log handler for Python ``logging`` output.
 
-Writes a single ``co-cli.jsonl`` file under ``log_dir``.
+Writes two files under ``log_dir``:
+- ``co-cli.jsonl`` — INFO+ records (Python logging + OTel spans via propagation)
+- ``errors.jsonl`` — WARNING+ only; fixed 2 MB / 2 backups for fast error triage
+
 Each line is a JSON object: ``{"ts", "kind": "log", "level", "logger", "msg"}``,
 plus ``"exc_info"`` when a record carries exception info.
 
@@ -81,20 +84,21 @@ def setup_file_logging(
     max_size_mb: int = 5,
     backup_count: int = 3,
 ) -> None:
-    """Attach a rotating JSONL handler to the root logger.
+    """Attach rotating JSONL handlers to the root logger.
 
-    Writes ``co-cli.jsonl`` — one JSON object per line. Python ``logging``
-    records have ``"kind": "log"``; OTel span records from ``JsonSpanExporter``
-    have ``"kind": "span"`` and arrive via logger propagation.
+    Writes two files under ``log_dir``:
+    - ``co-cli.jsonl`` — INFO+ (configurable); captures Python logging records
+      (``"kind": "log"``) and OTel span records (``"kind": "span"``).
+    - ``errors.jsonl`` — WARNING+ only; fixed 2 MB / 2 backups.
 
     Idempotent — calling more than once with the same ``log_dir`` is safe;
     duplicate handlers are not added.
 
     Args:
-        log_dir: Directory where ``co-cli.jsonl`` is written.
-        level: Minimum level for the log (e.g. ``"INFO"``, ``"DEBUG"``).
-        max_size_mb: Maximum file size in MB before rotation.
-        backup_count: Number of rotated backup files to keep.
+        log_dir: Directory where log files are written.
+        level: Minimum level for ``co-cli.jsonl`` (e.g. ``"INFO"``, ``"DEBUG"``).
+        max_size_mb: Maximum file size in MB before rotation (``co-cli.jsonl`` only).
+        backup_count: Rotated backup files to keep (``co-cli.jsonl`` only).
     """
     log_dir.mkdir(parents=True, exist_ok=True)
 

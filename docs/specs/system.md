@@ -182,7 +182,7 @@ These settings most directly affect top-level system assembly.
 | `co_cli/deps.py` | Shared runtime contract and workspace path resolution |
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
 | `co_cli/observability/_telemetry.py` | OTel span exporters (`SQLiteSpanExporter`, `JsonSpanExporter`) and `setup_tracer_provider()` factory |
-| `co_cli/observability/_file_logging.py` | Single rotating JSONL handler + `_JsonRedactingFormatter` for unified `co-cli.jsonl` output |
+| `co_cli/observability/_file_logging.py` | Two rotating JSONL handlers + `_JsonRedactingFormatter` — `co-cli.jsonl` (INFO+) and `errors.jsonl` (WARNING+) |
 | `co_cli/observability/_tail.py` | Polling loop and terminal rendering for live trace spans |
 | `co_cli/observability/_viewer.py` | Static HTML generator for nested span visualisation |
 | `docs/specs/mission.md` | Product mission, strategic thesis, and stage roadmap |
