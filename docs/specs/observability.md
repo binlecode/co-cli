@@ -118,7 +118,21 @@ OTel span records (from `JsonSpanExporter`) use `"kind": "span"` and are passed 
 
 Full attributes and events are included with no truncation. String attribute values are redacted using the same patterns as `SQLiteSpanExporter`.
 
-**Querying:** `jq 'select(.kind=="span" and .name=="co.turn")' ~/.co-cli/logs/co-cli.jsonl`
+**Querying with jq:** `jq 'select(.kind=="span" and .name=="co.turn")' ~/.co-cli/logs/co-cli.jsonl`
+
+**Advanced JSONL Tailing (jq + perl):**
+To parse nested JSON strings (like `pydantic_ai.all_messages`) and format literal `\n` characters for terminal readability, use the `scripts/tail-jsonl.sh` utility or this command:
+
+```bash
+tail -f ~/.co-cli/logs/co-cli.jsonl | jq --unbuffered '
+  walk(
+    if type == "string" and (startswith("{") or startswith("[")) 
+    then (fromjson? // .) 
+    else . 
+    end
+  )
+' | perl -pe 's/\\n/\n/g'
+```
 
 `InstrumentationSettings(version=3)` selects the latest OTel GenAI semantic conventions:
 

@@ -21,8 +21,8 @@ from co_cli.config._core import VALID_REASONING_DISPLAY_MODES
 from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.deps import ApprovalKindEnum, CoDeps
 from co_cli.display._core import Frontend, console
+from co_cli.knowledge._artifact import KnowledgeArtifact, load_knowledge_artifacts
 from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.memory.recall import KnowledgeArtifact, load_knowledge_artifacts
 from co_cli.tools.memory import grep_recall
 
 logger = logging.getLogger(__name__)

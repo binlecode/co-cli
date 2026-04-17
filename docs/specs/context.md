@@ -167,7 +167,7 @@ Knowledge artifacts are flat Markdown files with YAML frontmatter under a single
 
 #### 2.4.1 Data Model
 
-All artifacts parse into `KnowledgeArtifact` (`co_cli/knowledge/_artifact.py`) with an `artifact_kind` subtype (`preference` | `decision` | `rule` | `feedback` | `article` | `reference` | `note`). `co_cli/memory/recall.py` re-exports `load_knowledge_artifacts` so prompt-assembly and personality injection can import it without triggering the `tools/` ↔ `memory/` import cycle.
+All artifacts parse into `KnowledgeArtifact` (`co_cli/knowledge/_artifact.py`) with an `artifact_kind` subtype (`preference` | `decision` | `rule` | `feedback` | `article` | `reference` | `note`). Prompt-assembly and personality injection import `load_knowledge_artifacts` directly from `co_cli/knowledge/_artifact.py`.
 
 Frontmatter fields: `id` (UUID), `kind: knowledge`, `artifact_kind`, `title`, `description`, `created` / `updated` (ISO8601), `tags`, `related`, `source_type` (`detected` | `web_fetch` | `manual` | `obsidian` | `drive` | `consolidated`), `source_ref` (session id, URL, or artifact id — also the dedup key for articles), `decay_protected`, `last_recalled`, `recall_count`.
 
@@ -343,13 +343,12 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
-| `co_cli/memory/recall.py` | Re-exports `load_knowledge_artifacts` for prompt-assembly and personality injection (avoids the `tools/` ↔ `memory/` import cycle) |
 | `co_cli/memory/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
 | `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `CertaintyEnum`), loader |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate, `render_knowledge_file` (artifact → .md), `render_frontmatter` (dict → .md for in-place updates) |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
-| `co_cli/tools/memory.py` | `save_knowledge` (extractor-only write tool), `grep_recall`, `_recall_for_context`, agent tools: `search_memories`, `list_memories`, `update_memory`, `append_memory` |
-| `co_cli/tools/articles.py` | article save/search/read plus cross-source `search_knowledge()` |
+| `co_cli/tools/knowledge.py` | `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article` |
+| `co_cli/tools/memory.py` | `grep_recall`, `_recall_for_context`, agent tools: `search_memories`, `list_memories`, `update_memory`, `append_memory` |
 | `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
 | `co_cli/tools/agents.py` | delegation tools and result metadata |
 | `co_cli/tools/background.py` | session-scoped background task state and subprocess monitor |

@@ -286,8 +286,8 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `co_cli/knowledge/_dream.py` | `DreamState`, `DreamResult`, `run_dream_cycle`, `_mine_transcripts`, `_merge_similar_artifacts`, `_decay_sweep` |
 | `co_cli/knowledge/prompts/dream_miner.md` | Retrospective transcript-miner sub-agent prompt |
 | `co_cli/knowledge/prompts/dream_merge.md` | Consolidation-merge sub-agent prompt |
-| `co_cli/tools/articles.py` | `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()`, `read_article()` |
-| `co_cli/tools/memory.py` | `search_memories()` (deprecated — delegates to `session_search()`), `list_knowledge()`, `list_memories()` (deprecated alias), `update_memory()`, `append_memory()`, `save_knowledge()` (extractor-only) |
+| `co_cli/tools/knowledge.py` | `save_knowledge()` (extractor-only), `list_knowledge()`, `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()`, `read_article()` |
+| `co_cli/tools/memory.py` | `search_memories()` (deprecated — delegates to `session_search()`), `list_memories()` (deprecated alias), `update_memory()`, `append_memory()` |
 
 ### Memory Layer
 

@@ -16,12 +16,11 @@ from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._store import KnowledgeStore
+from co_cli.tools.knowledge import list_knowledge, save_knowledge
 from co_cli.tools.memory import (
     _touch_recalled,
     append_memory,
-    list_knowledge,
     list_memories,
-    save_knowledge,
     search_memories,
     update_memory,
 )
@@ -325,7 +324,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from co_cli.tools.articles import search_knowledge
+    from co_cli.tools.knowledge import search_knowledge
 
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir()

@@ -39,8 +39,8 @@ The tool ecosystem is composed of core infrastructure for execution, lifecycle a
 ### Domain Tools
 - `co_cli/tools/files.py` — `glob`, `read_file`, `grep`, `write_file`, `patch`
 - `co_cli/tools/shell.py` — `run_shell_command`
-- `co_cli/tools/memory.py` — `search_memories` (deprecated — delegates to `session_search` for episodic recall), `list_knowledge` (registered — canonical artifact listing), `list_memories` (deprecated alias for `list_knowledge`); `update_memory`, `append_memory` (approval-required); `save_knowledge` (unregistered — extractor sub-agent only)
-- `co_cli/tools/articles.py` — `save_article`, `search_articles`, `read_article`, `search_knowledge`
+- `co_cli/tools/memory.py` — `search_memories` (deprecated — delegates to `session_search` for episodic recall), `list_memories` (deprecated alias for `list_knowledge`); `update_memory`, `append_memory` (approval-required)
+- `co_cli/tools/knowledge.py` — `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article`
 - `co_cli/tools/web.py` — `web_search`, `web_fetch`
 - `co_cli/tools/task_control.py` — `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks`
 - `co_cli/tools/todo.py` — `write_todos`, `read_todos`

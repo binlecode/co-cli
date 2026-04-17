@@ -384,5 +384,5 @@ The important invariant is that co-cli never stores prompt state in model weight
 | `co_cli/context/orchestrate.py` | Segment execution, approval resumes, and `agent.run_stream_events(...)` orchestration |
 | `co_cli/context/_history.py` | History processors, recall injection, safety injection, and inline compaction |
 | `co_cli/context/summarization.py` | Summarizer prompt construction and inline/manual compaction engine |
-| `co_cli/memory/recall.py` | Knowledge artifact loader re-exports for prompt-assembly and personality injection |
+| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact`, `load_knowledge_artifacts` — imported directly by prompt-assembly and personality injection |
 | `co_cli/tools/memory.py` | `_recall_for_context()` used by request-time memory injection |

@@ -12,7 +12,7 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.articles import read_article, save_article, search_articles, search_knowledge
+from co_cli.tools.knowledge import read_article, save_article, search_articles, search_knowledge
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)

@@ -37,7 +37,7 @@ from co_cli.knowledge._decay import find_decay_candidates
 from co_cli.knowledge._frontmatter import render_knowledge_file
 from co_cli.knowledge._similarity import token_jaccard
 from co_cli.memory._extractor import _tag_messages
-from co_cli.tools.memory import _slugify, save_knowledge
+from co_cli.tools.knowledge import _slugify, save_knowledge
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps

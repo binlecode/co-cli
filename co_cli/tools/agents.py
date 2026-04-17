@@ -295,8 +295,8 @@ async def analyze_knowledge(
         raise ModelRetry("Analysis agent is unavailable — handle this task directly.")
 
     from co_cli.agent._core import build_agent
-    from co_cli.tools.articles import search_knowledge
     from co_cli.tools.google.drive import search_drive_files
+    from co_cli.tools.knowledge import search_knowledge
 
     budget = max_requests or ctx.deps.config.subagent.max_requests_analysis
 

@@ -6,7 +6,7 @@ only the per-turn personality-context memory injection.
 """
 
 from co_cli.config._core import KNOWLEDGE_DIR
-from co_cli.memory.recall import load_knowledge_artifacts
+from co_cli.knowledge._artifact import load_knowledge_artifacts
 
 
 def _load_personality_memories() -> str:
