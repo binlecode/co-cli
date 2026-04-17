@@ -222,7 +222,8 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums, loader |
+| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `CertaintyEnum`, `IndexSourceEnum`), loader |
+| `co_cli/knowledge/mutator.py` | Atomic write helper (`_atomic_write`), unified FTS re-index (`_reindex_knowledge_file`), artifact body update (`_update_artifact_body`) |
 | `co_cli/knowledge/_store.py` | `KnowledgeStore` — SQLite FTS5/hybrid search, `sync_dir()`, chunk indexing |
 | `co_cli/knowledge/_frontmatter.py` | Frontmatter parse/validate, `render_knowledge_file`, `render_frontmatter` |
 | `co_cli/knowledge/_chunker.py` | `chunk_text()` — paragraph/line/char split with overlap |
@@ -244,7 +245,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
+| `co_cli/knowledge/_distiller.py` | Fire-and-forget extraction pipeline, `build_transcript_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
 | `co_cli/knowledge/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |

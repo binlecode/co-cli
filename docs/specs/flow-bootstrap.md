@@ -241,4 +241,4 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/context/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/knowledge/_store.py` | Implements the indexed knowledge store used when bootstrap enables it |
 | `co_cli/memory/_store.py` | `MemoryIndex` — FTS5 session index opened and synced during bootstrap |
-| `co_cli/memory/_extractor.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |
+| `co_cli/memory/_indexer.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |

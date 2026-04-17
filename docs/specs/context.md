@@ -192,7 +192,7 @@ search_memory(ctx, query, limit)    ← agent tool
 
 #### 2.4.3 Write Path
 
-The main agent has no write-path knowledge tools. All knowledge writes are owned exclusively by the extractor agent (`_extractor.py`) — a separate `Agent[CoDeps, None]` with `save_knowledge` as its only tool.
+The main agent has no write-path knowledge tools. All knowledge writes are owned exclusively by the extractor agent (`_distiller.py`) — a separate `Agent[CoDeps, None]` with `save_knowledge` as its only tool.
 
 ```text
 fire_and_forget_extraction(delta, deps, frontend, cursor_start)
@@ -342,8 +342,8 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | `co_cli/context/transcript.py` | JSONL transcript: append, load, compact boundary, and parent/child session metadata |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
-| `co_cli/knowledge/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
-| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `CertaintyEnum`), loader |
+| `co_cli/knowledge/_distiller.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `build_transcript_window` |
+| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `CertaintyEnum`, `IndexSourceEnum`), loader |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate, `render_knowledge_file` (artifact → .md), `render_frontmatter` (dict → .md for in-place updates) |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
 | `co_cli/tools/knowledge.py` | `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article`, `update_knowledge`, `append_knowledge`, internal helpers: `grep_recall`, `filter_artifacts`, `_recall_for_context`, `_touch_recalled` |

@@ -28,15 +28,17 @@ from pydantic_ai import Agent
 from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.knowledge._archive import archive_artifacts
 from co_cli.knowledge._artifact import (
+    IndexSourceEnum,
     KnowledgeArtifact,
     SourceTypeEnum,
     load_knowledge_artifacts,
 )
 from co_cli.knowledge._chunker import chunk_text
 from co_cli.knowledge._decay import find_decay_candidates
-from co_cli.knowledge._distiller import _tag_messages
+from co_cli.knowledge._distiller import build_transcript_window
 from co_cli.knowledge._frontmatter import render_knowledge_file
 from co_cli.knowledge._similarity import token_jaccard
+from co_cli.knowledge.mutator import _atomic_write
 from co_cli.tools.knowledge import _slugify, save_knowledge
 
 if TYPE_CHECKING:
@@ -117,26 +119,6 @@ _dream_miner_agent: Agent[CoDeps, str] = Agent(
 )
 
 
-def _build_dream_window(
-    messages: list,
-    *,
-    max_text: int = _DREAM_WINDOW_MAX_TEXT,
-    max_tool: int = _DREAM_WINDOW_MAX_TOOL,
-) -> str:
-    """Format an entire past transcript as a single window for retrospective extraction.
-
-    Uses the same tagging logic as the per-turn extractor but with looser caps
-    so cross-turn patterns become visible. Text and tool streams are capped
-    independently, then merged back in original turn order.
-    """
-    tagged = _tag_messages(messages)
-    text_entries = [(orig_idx, line) for orig_idx, kind, line in tagged if kind == "text"]
-    tool_entries = [(orig_idx, line) for orig_idx, kind, line in tagged if kind == "tool"]
-    merged = text_entries[-max_text:] + tool_entries[-max_tool:]
-    merged.sort(key=lambda entry: entry[0])
-    return "\n".join(line for _, line in merged)
-
-
 def _chunk_dream_window(
     window: str,
     *,
@@ -200,12 +182,18 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState) -> int:
             state.processed_sessions.append(session_name)
             continue
 
-        window = _build_dream_window(messages)
+        window = build_transcript_window(
+            messages,
+            max_text=_DREAM_WINDOW_MAX_TEXT,
+            max_tool=_DREAM_WINDOW_MAX_TOOL,
+        )
         if not window.strip():
             state.processed_sessions.append(session_name)
             continue
 
         before_count = _count_active_artifacts(deps.knowledge_dir)
+        # initialize before loop — covers zero-chunk case where saves_so_far is never assigned
+        saves_so_far = 0
         try:
             for chunk in _chunk_dream_window(window):
                 await _dream_miner_agent.run(
@@ -230,8 +218,7 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState) -> int:
             )
             continue
 
-        after_count = _count_active_artifacts(deps.knowledge_dir)
-        extracted_total += max(0, after_count - before_count)
+        extracted_total += saves_so_far
         state.processed_sessions.append(session_name)
 
     return extracted_total
@@ -286,6 +273,8 @@ def _cluster_by_similarity(
 
     for i in range(size):
         for j in range(i + 1, size):
+            if find(i) == find(j):
+                continue
             if token_jaccard(members[i].content, members[j].content) >= threshold:
                 union(i, j)
 
@@ -336,13 +325,13 @@ def _write_consolidated_artifact(
     )
 
     file_content = render_knowledge_file(merged_artifact)
-    file_path.write_text(file_content, encoding="utf-8")
+    _atomic_write(file_path, file_content)
 
     store = deps.knowledge_store
     if store is not None:
         content_hash = hashlib.sha256(file_content.encode()).hexdigest()
         store.index(
-            source="knowledge",
+            source=IndexSourceEnum.KNOWLEDGE,
             kind=kind,
             path=str(file_path),
             title=title,
@@ -359,7 +348,7 @@ def _write_consolidated_artifact(
             chunk_size=deps.config.knowledge.chunk_size,
             overlap=deps.config.knowledge.chunk_overlap,
         )
-        store.index_chunks("knowledge", str(file_path), chunks)
+        store.index_chunks(IndexSourceEnum.KNOWLEDGE, str(file_path), chunks)
 
     return merged_artifact
 

@@ -1,4 +1,4 @@
-"""Tests for _build_window() tool context expansion and cursor-based delta extraction."""
+"""Tests for build_transcript_window() tool context expansion and cursor-based delta extraction."""
 
 import asyncio
 from pathlib import Path
@@ -16,7 +16,7 @@ from tests._settings import make_settings
 
 from co_cli.deps import CoDeps
 from co_cli.knowledge._distiller import (
-    _build_window,
+    build_transcript_window,
     drain_pending_extraction,
     fire_and_forget_extraction,
 )
@@ -42,7 +42,7 @@ def test_tool_call_part_appears_in_window() -> None:
             model_name="test-model",
         ),
     ]
-    window = _build_window(messages)
+    window = build_transcript_window(messages)
     assert "Tool(list_dir)" in window
 
 
@@ -60,7 +60,7 @@ def test_tool_return_truncated_at_300() -> None:
             ]
         ),
     ]
-    window = _build_window(messages)
+    window = build_transcript_window(messages)
     # The line is: "Tool result (read_file): " + content[:300]
     assert "Tool result (read_file):" in window
     result_line = next(line for line in window.splitlines() if "Tool result (read_file)" in line)
@@ -85,7 +85,7 @@ def test_large_read_tool_output_skipped() -> None:
             ]
         ),
     ]
-    window = _build_window(messages)
+    window = build_transcript_window(messages)
     assert "Tool result (read_file)" not in window
 
     # Also test: >1000 chars with no sentence boundary in first 200 chars
@@ -101,7 +101,7 @@ def test_large_read_tool_output_skipped() -> None:
             ]
         ),
     ]
-    window_no_boundary = _build_window(messages_no_boundary)
+    window_no_boundary = build_transcript_window(messages_no_boundary)
     assert "Tool result (list_dir)" not in window_no_boundary
 
 
@@ -112,7 +112,7 @@ def test_cursor_excludes_messages_before_start() -> None:
     ]
     # Set cursor to start at index 3 — delta is messages[3:]
     delta = all_messages[3:]
-    window = _build_window(delta)
+    window = build_transcript_window(delta)
 
     # Only messages at index 3 and 4 should appear
     assert "question 3" in window

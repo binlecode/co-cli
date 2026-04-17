@@ -39,6 +39,12 @@ class SourceTypeEnum(StrEnum):
     CONSOLIDATED = "consolidated"
 
 
+class IndexSourceEnum(StrEnum):
+    KNOWLEDGE = "knowledge"
+    OBSIDIAN = "obsidian"
+    DRIVE = "drive"
+
+
 class CertaintyEnum(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"

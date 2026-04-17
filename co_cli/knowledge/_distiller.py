@@ -80,15 +80,16 @@ def _tag_messages(messages: list) -> list[tuple[int, str, str]]:
     return tagged
 
 
-def _build_window(messages: list, *, max_text: int = 10, max_tool: int = 10) -> str:
-    """Extract conversation turns from a delta slice as plain text.
+def build_transcript_window(messages: list, *, max_text: int = 10, max_tool: int = 10) -> str:
+    """Extract conversation turns from a message list as plain text.
 
+    Shared by the per-turn extractor and the dream-cycle miner.
     Collects User/Co text lines and interleaved tool call/return lines.
     Caps at max ``max_text`` text lines and max ``max_tool`` tool lines,
     then merges back in original turn order.
 
     Args:
-        messages: Delta message slice (history[cursor:]).
+        messages: Message list (delta slice or full transcript).
         max_text: Maximum number of text lines to include (default 10).
         max_tool: Maximum number of tool lines to include (default 10).
 
@@ -140,7 +141,7 @@ async def _run_extraction_async(
 
     tracer = otel_trace.get_tracer("co.memory")
     try:
-        window = _build_window(delta)
+        window = build_transcript_window(delta)
         if not window.strip():
             deps.session.last_extracted_message_idx = cursor_start + len(delta)
             return

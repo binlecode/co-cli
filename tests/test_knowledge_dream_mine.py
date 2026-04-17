@@ -1,6 +1,6 @@
 """Tests for transcript mining (TASK-5.4).
 
-Covers ``_build_dream_window`` and ``_chunk_dream_window`` pure logic plus
+Covers ``build_transcript_window`` and ``_chunk_dream_window`` pure logic plus
 ``_mine_transcripts`` end-to-end behavior. The integration test at the end
 runs a real LLM call through the dream miner agent (``@pytest.mark.local``).
 """
@@ -24,9 +24,9 @@ from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.context.transcript import append_messages
 from co_cli.deps import CoDeps
+from co_cli.knowledge._distiller import build_transcript_window
 from co_cli.knowledge._dream import (
     DreamState,
-    _build_dream_window,
     _chunk_dream_window,
     _mine_transcripts,
 )
@@ -54,11 +54,11 @@ def _tool_return(name: str, content: str) -> ModelRequest:
 
 
 # ---------------------------------------------------------------------------
-# _build_dream_window — pure logic
+# build_transcript_window — pure logic
 # ---------------------------------------------------------------------------
 
 
-def test_build_dream_window_interleaves_text_and_tool_in_order() -> None:
+def test_build_transcript_window_interleaves_text_and_tool_in_order() -> None:
     messages = [
         _req("First user line"),
         _resp("First assistant line"),
@@ -67,7 +67,7 @@ def test_build_dream_window_interleaves_text_and_tool_in_order() -> None:
         _resp("Follow-up assistant line"),
     ]
 
-    window = _build_dream_window(messages)
+    window = build_transcript_window(messages)
 
     lines = window.split("\n")
     assert lines[0].startswith("User:")
@@ -77,14 +77,14 @@ def test_build_dream_window_interleaves_text_and_tool_in_order() -> None:
     assert lines[4].startswith("Co:")
 
 
-def test_build_dream_window_applies_independent_caps() -> None:
+def test_build_transcript_window_applies_independent_caps() -> None:
     messages: list = []
     for i in range(60):
         messages.append(_req(f"user-line-{i}"))
     for i in range(60):
         messages.append(_tool_resp(f"tool-{i}", "args"))
 
-    window = _build_dream_window(messages, max_text=50, max_tool=50)
+    window = build_transcript_window(messages, max_text=50, max_tool=50)
     lines = window.split("\n")
 
     assert len(lines) == 100
@@ -92,8 +92,8 @@ def test_build_dream_window_applies_independent_caps() -> None:
     assert sum(1 for line in lines if line.startswith("Tool(")) == 50
 
 
-def test_build_dream_window_empty_messages_returns_empty_string() -> None:
-    assert _build_dream_window([]) == ""
+def test_build_transcript_window_empty_messages_returns_empty_string() -> None:
+    assert build_transcript_window([]) == ""
 
 
 # ---------------------------------------------------------------------------

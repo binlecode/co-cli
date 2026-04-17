@@ -10,11 +10,8 @@ the extractor sub-agent and dream-cycle consolidation.
 """
 
 import asyncio
-import hashlib
 import logging
-import os
 import re
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -27,6 +24,7 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps
 from co_cli.knowledge._artifact import (
     ArtifactKindEnum,
+    IndexSourceEnum,
     KnowledgeArtifact,
     SourceTypeEnum,
     load_knowledge_artifacts,
@@ -38,6 +36,7 @@ from co_cli.knowledge._frontmatter import (
 )
 from co_cli.knowledge._ranking import compute_confidence, detect_contradictions
 from co_cli.knowledge._similarity import find_similar_artifacts, is_content_superset
+from co_cli.knowledge.mutator import _atomic_write, _reindex_knowledge_file, _update_artifact_body
 from co_cli.tools.resource_lock import ResourceBusyError
 from co_cli.tools.tool_io import tool_error, tool_output, tool_output_raw
 
@@ -49,68 +48,6 @@ logger = logging.getLogger(__name__)
 def _slugify(text: str) -> str:
     """Convert text to a URL-safe slug, max 50 chars."""
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50]
-
-
-def _update_artifact_body(
-    artifact: KnowledgeArtifact,
-    new_body: str,
-    ctx: RunContext[CoDeps],
-) -> None:
-    """Atomically overwrite the body of an existing artifact and re-index it."""
-    raw = artifact.path.read_text(encoding="utf-8")
-    fm, _ = parse_frontmatter(raw)
-    fm["updated"] = datetime.now(UTC).isoformat()
-    md_content = render_frontmatter(fm, new_body)
-    with tempfile.NamedTemporaryFile(
-        "w", dir=artifact.path.parent, suffix=".tmp", delete=False, encoding="utf-8"
-    ) as tmp:
-        tmp.write(md_content)
-    os.replace(tmp.name, artifact.path)
-    if ctx.deps.knowledge_store is not None:
-        _reindex_knowledge_file(ctx, artifact.path, new_body, md_content, fm, artifact.path.stem)
-
-
-def _reindex_knowledge_file(
-    ctx: RunContext[CoDeps],
-    path: Path,
-    body: str,
-    md_content: str,
-    fm: dict[str, Any],
-    slug: str,
-) -> None:
-    """Re-index a knowledge file's docs row and chunk rows after in-place mutation.
-
-    Both legs must stay in sync when the file body changes: docs_fts serves
-    non-chunks queries, chunks_fts serves chunk-level queries. sync_dir normally
-    handles both at once, but callers that mutate a single file (e.g. update_knowledge,
-    append_knowledge, _update_artifact_body) need to refresh the DB inline.
-    """
-    store = ctx.deps.knowledge_store
-    if store is None:
-        return
-    content_hash = hashlib.sha256(md_content.encode()).hexdigest()
-    artifact_kind = fm.get("artifact_kind", ArtifactKindEnum.NOTE.value)
-    store.index(
-        source="knowledge",
-        kind=artifact_kind,
-        path=str(path),
-        title=fm.get("title") or slug,
-        content=body.strip(),
-        mtime=path.stat().st_mtime,
-        hash=content_hash,
-        tags=" ".join(fm.get("tags", [])) or None,
-        created=fm.get("created"),
-        type=artifact_kind,
-        description=fm.get("description"),
-    )
-    from co_cli.knowledge._chunker import chunk_text
-
-    chunks = chunk_text(
-        body.strip(),
-        chunk_size=ctx.deps.config.knowledge.chunk_size,
-        overlap=ctx.deps.config.knowledge.chunk_overlap,
-    )
-    store.index_chunks("knowledge", str(path), chunks)
 
 
 def _find_by_slug(knowledge_dir: Path, slug: str) -> Path | None:
@@ -138,11 +75,7 @@ async def _touch_recalled(
             fm["last_recalled"] = now
             fm["recall_count"] = int(fm.get("recall_count") or 0) + 1
             md_content = render_frontmatter(fm, body)
-            with tempfile.NamedTemporaryFile(
-                "w", dir=path.parent, suffix=".tmp", delete=False, encoding="utf-8"
-            ) as tmp:
-                tmp.write(md_content)
-            os.replace(tmp.name, path)
+            _atomic_write(path, md_content)
             if ctx.deps.knowledge_store is not None:
                 _reindex_knowledge_file(ctx, path, body, md_content, fm, path.stem)
         except Exception:
@@ -221,7 +154,7 @@ async def _recall_for_context(
 
     results = ctx.deps.knowledge_store.search(
         query,
-        source="knowledge",
+        source=IndexSourceEnum.KNOWLEDGE,
         tags=tags,
         tag_match_mode=tag_match_mode,
         created_after=created_after,
@@ -447,34 +380,17 @@ async def save_knowledge(
     )
 
     file_content = render_knowledge_file(artifact)
+    fm_dict = {
+        "artifact_kind": artifact_kind,
+        "title": artifact.title,
+        "tags": artifact.tags,
+        "created": artifact.created,
+        "description": artifact.description,
+    }
     with _TRACER.start_as_current_span("co.knowledge.save") as span:
         span.set_attribute("knowledge.artifact_kind", artifact_kind)
-        file_path.write_text(file_content, encoding="utf-8")
-
-    if ctx.deps.knowledge_store is not None:
-        content_hash = hashlib.sha256(file_content.encode()).hexdigest()
-        store = ctx.deps.knowledge_store
-        store.index(
-            source="knowledge",
-            kind=artifact_kind,
-            path=str(file_path),
-            title=title or slug,
-            content=content.strip(),
-            mtime=file_path.stat().st_mtime,
-            hash=content_hash,
-            tags=" ".join(artifact.tags) if artifact.tags else None,
-            created=artifact.created,
-            type=artifact_kind,
-            description=description,
-        )
-        from co_cli.knowledge._chunker import chunk_text
-
-        chunks = chunk_text(
-            content.strip(),
-            chunk_size=ctx.deps.config.knowledge.chunk_size,
-            overlap=ctx.deps.config.knowledge.chunk_overlap,
-        )
-        store.index_chunks("knowledge", str(file_path), chunks)
+        _atomic_write(file_path, file_content)
+    _reindex_knowledge_file(ctx, file_path, content, file_content, fm_dict, slug)
 
     return tool_output_raw(
         f"✓ Saved knowledge: {filename}",
@@ -501,7 +417,7 @@ def _grep_fallback_knowledge(
     limit: int,
 ) -> "ToolReturn":
     """Grep-based fallback when FTS store is unavailable."""
-    if source not in (None, "knowledge"):
+    if source not in (None, IndexSourceEnum.KNOWLEDGE):
         return tool_output(
             f"No results for '{query}' (source={source!r} requires FTS)",
             ctx=ctx,
@@ -612,16 +528,18 @@ async def search_knowledge(
             ctx, query, source, kind, tags, tag_match_mode, created_after, created_before, limit
         )
 
-    if ctx.deps.obsidian_vault_path and source in (None, "obsidian"):
+    if ctx.deps.obsidian_vault_path and source in (None, IndexSourceEnum.OBSIDIAN):
         try:
-            ctx.deps.knowledge_store.sync_dir("obsidian", ctx.deps.obsidian_vault_path)
+            ctx.deps.knowledge_store.sync_dir(
+                IndexSourceEnum.OBSIDIAN, ctx.deps.obsidian_vault_path
+            )
         except Exception as e:
             logger.warning(f"Obsidian sync failed: {e}")
 
     otel_trace.get_current_span().set_attribute(
         "rag.backend", ctx.deps.config.knowledge.search_backend
     )
-    fts_source = source if source is not None else ["knowledge", "obsidian", "drive"]
+    fts_source = source if source is not None else list(IndexSourceEnum)
     try:
         results = ctx.deps.knowledge_store.search(
             query,
@@ -698,32 +616,19 @@ async def save_article(
         decay_protected=True,
     )
     md_content = render_knowledge_file(artifact)
-    file_path.write_text(md_content, encoding="utf-8")
+    _atomic_write(file_path, md_content)
     logger.info(f"Saved article {article_id} to {file_path}")
 
-    if ctx.deps.knowledge_store is not None:
-        try:
-            ctx.deps.knowledge_store.index(
-                source="knowledge",
-                kind=ArtifactKindEnum.ARTICLE.value,
-                path=str(file_path),
-                title=title,
-                content=content,
-                mtime=file_path.stat().st_mtime,
-                hash=_content_hash(md_content),
-                tags=" ".join(tags or []),
-                created=artifact.created,
-            )
-            from co_cli.knowledge._chunker import chunk_text
-
-            article_chunks = chunk_text(
-                content,
-                chunk_size=ctx.deps.config.knowledge.chunk_size,
-                overlap=ctx.deps.config.knowledge.chunk_overlap,
-            )
-            ctx.deps.knowledge_store.index_chunks("knowledge", str(file_path), article_chunks)
-        except Exception as e:
-            logger.warning(f"Failed to index article {article_id}: {e}")
+    fm_dict = {
+        "artifact_kind": ArtifactKindEnum.ARTICLE.value,
+        "title": title,
+        "tags": list(tags or []),
+        "created": artifact.created,
+    }
+    try:
+        _reindex_knowledge_file(ctx, file_path, content, md_content, fm_dict, slug)
+    except Exception as e:
+        logger.warning(f"Failed to index article {article_id}: {e}")
 
     return tool_output(
         f"✓ Saved article {article_id}: {filename}\nSource: {origin_url}\nLocation: {file_path}",
@@ -747,7 +652,7 @@ def _fts_search_articles(
     try:
         fts_results = ctx.deps.knowledge_store.search(
             query,
-            source="knowledge",
+            source=IndexSourceEnum.KNOWLEDGE,
             kind=ArtifactKindEnum.ARTICLE.value,
             tags=tags,
             tag_match_mode=tag_match_mode,
@@ -947,11 +852,9 @@ async def read_article(
     """
     knowledge_dir = ctx.deps.knowledge_dir
 
-    # Find by slug (file stem)
-    candidates = list(knowledge_dir.glob(f"{slug}.md"))
-    if not candidates:
-        # Try prefix match (slug might be partial)
-        candidates = list(knowledge_dir.glob(f"{slug}*.md"))
+    # Single glob — exact stem match takes priority over prefix match
+    all_candidates = list(knowledge_dir.glob(f"{slug}*.md"))
+    candidates = [p for p in all_candidates if p.stem == slug] or all_candidates
     if not candidates:
         return tool_output(
             f"Article '{slug}' not found.",
@@ -1034,44 +937,25 @@ def _consolidate_and_reindex(
         decay_protected=True,
     )
     md_content = render_knowledge_file(artifact)
-    path.write_text(md_content, encoding="utf-8")
+    _atomic_write(path, md_content)
     logger.info(f"Consolidated article {artifact_id} (same origin_url)")
 
-    if ctx.deps.knowledge_store is not None:
-        try:
-            ctx.deps.knowledge_store.index(
-                source="knowledge",
-                kind=ArtifactKindEnum.ARTICLE.value,
-                path=str(path),
-                title=new_title,
-                content=new_content.strip(),
-                mtime=path.stat().st_mtime,
-                hash=_content_hash(md_content),
-                tags=" ".join(merged_tags),
-                created=created,
-                updated=artifact.updated,
-            )
-            from co_cli.knowledge._chunker import chunk_text
-
-            chunks = chunk_text(
-                new_content.strip(),
-                chunk_size=ctx.deps.config.knowledge.chunk_size,
-                overlap=ctx.deps.config.knowledge.chunk_overlap,
-            )
-            ctx.deps.knowledge_store.index_chunks("knowledge", str(path), chunks)
-        except Exception as e:
-            logger.warning(f"Failed to reindex consolidated article: {e}")
+    fm_dict = {
+        "artifact_kind": ArtifactKindEnum.ARTICLE.value,
+        "title": new_title,
+        "tags": merged_tags,
+        "created": created,
+    }
+    try:
+        _reindex_knowledge_file(ctx, path, new_content, md_content, fm_dict, path.stem)
+    except Exception as e:
+        logger.warning(f"Failed to reindex consolidated article: {e}")
 
     return tool_output_raw(
         f"✓ Updated article {artifact_id}: {path.name}\nSource: {origin_url}\nLocation: {path}",
         article_id=artifact_id,
         action="consolidated",
     )
-
-
-def _content_hash(content: str) -> str:
-    """SHA256 hash of file content for FTS change detection."""
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 # Matches line-number prefixes injected by the Read tool (e.g. "1→ " or "Line 1: ")
@@ -1117,11 +1001,7 @@ async def append_knowledge(
                 updated_body = body.rstrip() + "\n" + content
                 fm["updated"] = datetime.now(UTC).isoformat()
                 md_content = render_frontmatter(fm, updated_body)
-                with tempfile.NamedTemporaryFile(
-                    "w", dir=match.parent, suffix=".tmp", delete=False, encoding="utf-8"
-                ) as tmp:
-                    tmp.write(md_content)
-                os.replace(tmp.name, match)
+                _atomic_write(match, md_content)
 
                 if ctx.deps.knowledge_store is not None:
                     _reindex_knowledge_file(ctx, match, updated_body, md_content, fm, slug)
@@ -1213,11 +1093,7 @@ async def update_knowledge(
                 updated_body = body_text.replace(old_norm, new_norm, 1)
                 fm["updated"] = datetime.now(UTC).isoformat()
                 md_content = render_frontmatter(fm, updated_body)
-                with tempfile.NamedTemporaryFile(
-                    "w", dir=match.parent, suffix=".tmp", delete=False, encoding="utf-8"
-                ) as tmp:
-                    tmp.write(md_content)
-                os.replace(tmp.name, match)
+                _atomic_write(match, md_content)
 
                 if ctx.deps.knowledge_store is not None:
                     _reindex_knowledge_file(ctx, match, updated_body, md_content, fm, slug)
