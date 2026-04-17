@@ -238,14 +238,14 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | `co_cli/knowledge/prompts/dream_miner.md` | Retrospective transcript-miner sub-agent prompt |
 | `co_cli/knowledge/prompts/dream_merge.md` | Consolidation-merge sub-agent prompt |
 | `co_cli/tools/knowledge.py` | `save_knowledge()` (extractor-only), `list_knowledge()`, `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()`, `read_article()`, `update_knowledge()`, `append_knowledge()`, internal helpers: `grep_recall`, `filter_artifacts`, `_recall_for_context`, `_touch_recalled`, `_find_by_slug` |
-| `co_cli/tools/memory.py` | `search_memories()` (deprecated alias for `session_search`) |
+| `co_cli/tools/memory.py` | `search_memory()` — agent tool for episodic recall over session transcripts |
 
 ### Extraction & Injection
 
 | File | Purpose |
 |------|---------|
-| `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
-| `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
+| `co_cli/knowledge/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
+| `co_cli/knowledge/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
 ### Config

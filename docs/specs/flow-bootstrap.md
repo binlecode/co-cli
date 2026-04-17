@@ -56,7 +56,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 │
 ├─ restore_session(deps, frontend) → current_session_path
-├─ _init_session_index(deps, current_session_path, frontend)
+├─ _init_memory_index(deps, current_session_path, frontend)
 ├─ frontend.on_status("  {skill_count} skill(s) loaded")
 ├─ [if restored path exists] console.print("Previous session available — /resume to continue")
 ├─ display_welcome_banner(deps)
@@ -174,18 +174,18 @@ else:
 
 No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing lifecycle are owned by [context.md](context.md).
 
-### Step 12b. Initialise the session index
+### Step 12b. Initialise the memory index
 
-After `restore_session()` returns, `_init_session_index()` opens or creates the user-global FTS5 session index (`~/.co-cli/co-cli-search.db`) and syncs past sessions into it. The current session path is excluded from sync.
+After `restore_session()` returns, `_init_memory_index()` opens or creates the user-global FTS5 session index (`~/.co-cli/session-index.db`) and syncs past sessions into it. The current session path is excluded from sync.
 
 ```text
-store = SessionIndex(db_path=sessions_dir.parent / "co-cli-search.db")
+store = MemoryIndex(db_path=sessions_dir.parent / "session-index.db")
 store.sync_sessions(sessions_dir, exclude=current_session_path)
-deps.session_index = store
+deps.memory_index = store
 
 on failure:
     log warning
-    deps.session_index = None  # graceful degradation; session_search returns empty
+    deps.memory_index = None  # graceful degradation; search_memory returns empty
 ```
 
 The index is derived and rebuildable: deleting `~/.co-cli/co-cli-search.db` and restarting rebuilds cleanly from `*.jsonl` files. Change detection is size-based (append-only transcripts).
@@ -206,7 +206,7 @@ Everything from `create_deps()` through banner display runs inside `_chat_loop()
 | Knowledge backend construction fails | degrade `hybrid → fts5 → grep` |
 | Knowledge sync fails | close the store and continue without indexed retrieval |
 | Session restore fails to find usable state | create a new session |
-| Session index fails to open or sync | `deps.session_index = None`; `session_search` returns empty; startup continues |
+| Session index fails to open or sync | `deps.memory_index = None`; `search_memory` returns empty; startup continues |
 | One skill file fails to load | skip that file and continue loading others |
 
 ## 3. Config
@@ -231,7 +231,7 @@ These settings most directly affect bootstrap behavior.
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | Owns module-load logging and telemetry setup, `_chat_loop()` startup orchestration, and the REPL boundary |
-| `co_cli/bootstrap/core.py` | Owns `create_deps()`, `restore_session()`, and `_init_session_index()` |
+| `co_cli/bootstrap/core.py` | Owns `create_deps()`, `restore_session()`, and `_init_memory_index()` |
 | `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama `num_ctx` checks |
 | `co_cli/bootstrap/banner.py` | Renders the welcome banner that marks bootstrap completion |
 | `co_cli/bootstrap/render_status.py` | On-demand status and security reporting, not inline bootstrap |
@@ -240,5 +240,5 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/commands/_commands.py` | Loads skills during bootstrap and later refreshes them in the REPL |
 | `co_cli/context/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/knowledge/_store.py` | Implements the indexed knowledge store used when bootstrap enables it |
-| `co_cli/session_index/_store.py` | `SessionIndex` — FTS5 session index opened and synced during bootstrap |
-| `co_cli/session_index/_extractor.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |
+| `co_cli/memory/_store.py` | `MemoryIndex` — FTS5 session index opened and synced during bootstrap |
+| `co_cli/memory/_extractor.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |

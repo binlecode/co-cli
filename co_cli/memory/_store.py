@@ -1,6 +1,6 @@
-"""SQLite FTS5 session index — storage, sync, and search.
+"""SQLite FTS5 memory index — storage, sync, and search.
 
-Manages a user-global SQLite database (~/.co-cli/co-cli-search.db) that indexes
+Manages a user-global SQLite database (~/.co-cli/session-index.db) that indexes
 user-prompt and assistant-text content from past session JSONL transcripts.
 Supports keyword search via FTS5 BM25 ranking with porter unicode61 tokeniser.
 
@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from co_cli.context.session import parse_session_filename
-from co_cli.session_index._extractor import extract_messages
+from co_cli.memory._extractor import extract_messages
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +77,11 @@ class SessionSearchResult:
     score: float
 
 
-class SessionIndex:
+class MemoryIndex:
     """FTS5 index over session transcript content.
 
     Lifecycle:
-      store = SessionIndex(db_path)
+      store = MemoryIndex(db_path)
       store.sync_sessions(sessions_dir, exclude=current_path)
       results = store.search("query")
       store.close()

@@ -17,7 +17,7 @@ async def session_search(ctx: RunContext[CoDeps], query: str, limit: int = 3) ->
     up to limit results.  Returns an empty-result message when the index is
     unavailable (DB error, first run, or degraded startup).
     """
-    store = ctx.deps.session_index
+    store = ctx.deps.memory_index
     if store is None:
         return tool_output(
             "Session index is not available — no past sessions have been indexed yet.",

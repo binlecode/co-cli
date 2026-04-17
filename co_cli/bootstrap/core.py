@@ -289,28 +289,28 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     )
 
 
-def _init_session_index(
+def _init_memory_index(
     deps: CoDeps,
     current_session_path: Path,
     frontend: TerminalFrontend,
 ) -> None:
-    """Open the session index DB and sync past sessions into it.
+    """Open the memory index DB and sync past sessions into it.
 
-    Initialises deps.session_index in-place.  On any error, logs a warning,
-    sets deps.session_index = None, and continues (graceful degradation).
+    Initialises deps.memory_index in-place.  On any error, logs a warning,
+    sets deps.memory_index = None, and continues (graceful degradation).
     The current_session_path is excluded from the sync so the in-progress
     session is never indexed mid-session.
     """
-    from co_cli.session_index._store import SessionIndex
+    from co_cli.memory._store import MemoryIndex
 
     db_path = deps.sessions_dir.parent / "session-index.db"
     try:
-        store = SessionIndex(db_path)
+        store = MemoryIndex(db_path)
         store.sync_sessions(deps.sessions_dir, exclude=current_session_path)
-        deps.session_index = store
+        deps.memory_index = store
     except Exception as exc:
         logger.warning("Session index unavailable: %s", exc)
-        deps.session_index = None
+        deps.memory_index = None
         frontend.on_status(f"  Session index unavailable — {exc}")
 
 

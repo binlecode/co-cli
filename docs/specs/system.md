@@ -93,7 +93,7 @@ CLI start
   -> create_deps
   -> build_agent
   -> restore_session
-  -> _init_session_index
+  -> _init_memory_index
   -> enter REPL
       -> local command or agent turn
       -> approvals / tools / persistence / post-turn writes as needed
@@ -109,7 +109,7 @@ CLI start
   - `shell`: `ShellBackend` handle
   - `model`: `LlmModel` handle
   - `knowledge_store`: Optional `KnowledgeStore` integration
-  - `session_index`: Optional `SessionIndex`
+  - `memory_index`: Optional `MemoryIndex`
   - `resource_locks`: Shared `ResourceLockStore`
   - `file_read_mtimes`: Staleness detection registry
 - **Registries** (bootstrap-built tool definitions)

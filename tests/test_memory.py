@@ -23,7 +23,7 @@ from co_cli.tools.knowledge import (
     save_knowledge,
     update_knowledge,
 )
-from co_cli.tools.memory import search_memories
+from co_cli.tools.memory import search_memory
 from co_cli.tools.shell_backend import ShellBackend
 
 # ---------------------------------------------------------------------------
@@ -288,15 +288,15 @@ def test_append_knowledge_missing_slug_raises(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# search_memories — deprecated wrapper over session_search
+# search_memory — episodic recall over session transcripts
 # ---------------------------------------------------------------------------
 
 
-def test_search_memories_delegates_to_session_search(tmp_path: Path):
-    """search_memories delegates to session_search — returns not-available when no session index."""
+def test_search_memory_delegates_to_session_search(tmp_path: Path):
+    """search_memory delegates to session_search — returns not-available when no memory index."""
     ctx = _make_ctx(knowledge_dir=tmp_path / "knowledge")
-    result = asyncio.run(search_memories(ctx, "some query"))
-    # session_index is None in test context → session_search returns its own not-available message
+    result = asyncio.run(search_memory(ctx, "some query"))
+    # memory_index is None in test context → session_search returns its own not-available message
     assert result.metadata["count"] == 0
     assert "session" in result.return_value.lower()
 

@@ -21,8 +21,8 @@ from pydantic_ai.messages import (
 
 from co_cli.context.session import session_filename
 from co_cli.context.transcript import append_messages, write_compact_boundary
-from co_cli.session_index._extractor import extract_messages
-from co_cli.session_index._store import SessionIndex, SessionSearchResult
+from co_cli.memory._extractor import extract_messages
+from co_cli.memory._store import MemoryIndex, SessionSearchResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -120,7 +120,7 @@ def test_extract_messages_missing_file_returns_empty(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# TASK-1 test 2: SessionIndex.index_session populates tables; FTS row count matches
+# TASK-1 test 2: MemoryIndex.index_session populates tables; FTS row count matches
 # ---------------------------------------------------------------------------
 
 
@@ -139,7 +139,7 @@ def test_index_session_populates_sessions_and_messages(tmp_path: Path) -> None:
         ],
     )
     db_path = tmp_path / "session-index.db"
-    store = SessionIndex(db_path)
+    store = MemoryIndex(db_path)
     try:
         store.index_session(path)
 
@@ -159,7 +159,7 @@ def test_index_session_populates_sessions_and_messages(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# TASK-1 test 3: SessionIndex.search returns SessionSearchResult with correct session_id
+# TASK-1 test 3: MemoryIndex.search returns SessionSearchResult with correct session_id
 # ---------------------------------------------------------------------------
 
 
@@ -191,7 +191,7 @@ def test_search_returns_results_with_correct_session_id(tmp_path: Path) -> None:
     )
 
     db_path = tmp_path / "session-index.db"
-    store = SessionIndex(db_path)
+    store = MemoryIndex(db_path)
     try:
         store.index_session(path)
         results = store.search("monad functional programming")
@@ -224,7 +224,7 @@ def test_sync_sessions_skips_unchanged_and_reindexes_on_growth(tmp_path: Path) -
     )
 
     db_path = tmp_path / "session-index.db"
-    store = SessionIndex(db_path)
+    store = MemoryIndex(db_path)
     try:
         store.sync_sessions(sessions_dir)
         count_after_first = store._conn.execute("SELECT count(*) FROM messages").fetchone()[0]
@@ -287,7 +287,7 @@ def test_sync_sessions_exclude_omits_active_session(tmp_path: Path) -> None:
     )
 
     db_path = tmp_path / "session-index.db"
-    store = SessionIndex(db_path)
+    store = MemoryIndex(db_path)
     try:
         store.sync_sessions(sessions_dir, exclude=path_b)
 

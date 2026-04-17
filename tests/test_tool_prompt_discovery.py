@@ -85,9 +85,7 @@ def test_knowledge_tool_registration() -> None:
     # Read tools are always-visible (not deferred), so present in tool_index but not deferred
     assert "search_knowledge" in _NATIVE_INDEX
     assert "list_knowledge" in _NATIVE_INDEX
-    assert "session_search" in _NATIVE_INDEX
-    # search_memories is kept as alias for episodic search
-    assert "search_memories" in _NATIVE_INDEX
+    assert "search_memory" in _NATIVE_INDEX
 
 
 def test_article_write_tool_discoverable_by_keywords() -> None:

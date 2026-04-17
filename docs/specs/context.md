@@ -182,10 +182,11 @@ _recall_for_context(ctx, query)  ← internal, called by inject_opening_context 
   -> one-hop related slug expansion (up to 5 hops)
   -> return matched + related entries
 
-search_memories(ctx, query)      ← agent tool (transitional — target: delegates to session_search)
-  -> if knowledge_store is None: return tool_error
-  -> knowledge_store.search(query, source="knowledge", ...)
-  -> sets OTel span attribute rag.backend = "fts5"
+search_memory(ctx, query, limit)    ← agent tool
+  -> delegates to session_search(ctx, query, limit)
+     -> if memory_index is None: return not-available message
+     -> memory_index.search(query, limit)     ← FTS5 BM25 on session-index.db
+     -> return ranked excerpts (session_id, date, snippet, score)
 ```
 
 
@@ -260,8 +261,7 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | `_recall_for_context()` | knowledge artifacts | Turn-time injection into `SystemPromptPart`; internal, called by `inject_opening_context` |
 | `search_knowledge()` | all artifact kinds + Obsidian + Drive | Universal reusable-recall; primary agent search tool |
 | `search_articles()` | article artifacts only | Transitional alias for `search_knowledge(artifact_kind="article")` |
-| `search_memories()` | transitional — target: transcript search | See [cognition.md §2.6](cognition.md) |
-| `session_search()` | transcript index | Episodic recall over past sessions |
+| `search_memory()` | transcript index | Episodic recall over past sessions |
 
 | Backend | Behavior |
 | --- | --- |
@@ -341,18 +341,17 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | `co_cli/context/session.py` | session filename generation, latest-session discovery, new-path factory |
 | `co_cli/context/transcript.py` | JSONL transcript: append, load, compact boundary, and parent/child session metadata |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
-| `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
-| `co_cli/memory/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
+| `co_cli/knowledge/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
 | `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `CertaintyEnum`), loader |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate, `render_knowledge_file` (artifact → .md), `render_frontmatter` (dict → .md for in-place updates) |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
 | `co_cli/tools/knowledge.py` | `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article`, `update_knowledge`, `append_knowledge`, internal helpers: `grep_recall`, `filter_artifacts`, `_recall_for_context`, `_touch_recalled` |
-| `co_cli/tools/memory.py` | `search_memories` (agent tool — deprecated alias for `session_search`) |
-| `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
+| `co_cli/tools/memory.py` | `search_memory` — agent tool for episodic recall over session transcripts |
+| `co_cli/tools/google/drive.py` | Drive fetch plus opportunistic index/chunk caching |
 | `co_cli/tools/agents.py` | delegation tools and result metadata |
 | `co_cli/tools/background.py` | session-scoped background task state and subprocess monitor |
-| `co_cli/tools/tool_output.py` | `ToolReturn` construction and optional oversized-result persistence |
+| `co_cli/tools/tool_io.py` | `tool_output()`, `tool_error()`, `ToolResultPayload`, oversized-result persistence |
 | `co_cli/commands/_commands.py` | slash-command dispatch; `/memory`, `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |
 | `co_cli/bootstrap/core.py` | knowledge backend discovery, store sync, session restore |
 | `co_cli/main.py` | `_finalize_turn()` transcript persistence, `_chat_loop()` REPL session lifecycle |

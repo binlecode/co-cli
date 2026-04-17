@@ -65,7 +65,7 @@ Current high-signal fields exposed on `MemoryEntry` or enforced by frontmatter v
 
 - standing context via `load_always_on_memories()` with a hard cap of 5 entries
 - per-turn dynamic recall via `_recall_for_context()` on each new user turn
-- explicit inventory/search via `list_memories()` and `search_memories()`
+- explicit inventory/search via `list_memories()` and `search_memory()`
 
 Current behavior:
 

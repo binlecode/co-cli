@@ -3,7 +3,7 @@
 
 Validates the canonical startup path described in ``docs/specs/flow-bootstrap.md``:
 
-  create_deps() -> build_agent() -> restore_session() -> _init_session_index()
+  create_deps() -> build_agent() -> restore_session() -> _init_memory_index()
   -> display_welcome_banner()
 
 The eval uses the real configured system, records the emitted startup statuses,
@@ -29,7 +29,7 @@ from evals._timeouts import EVAL_BOOTSTRAP_TIMEOUT_SECS
 
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import _init_session_index, create_deps, restore_session
+from co_cli.bootstrap.core import _init_memory_index, create_deps, restore_session
 from co_cli.commands._commands import BUILTIN_COMMANDS, _build_completer_words, get_skill_registry
 from co_cli.config._core import get_settings
 from co_cli.deps import CoDeps, ToolSourceEnum
@@ -302,7 +302,7 @@ def _run_session_case(
     deps: CoDeps | None,
     frontend: TrackingFrontend,
 ) -> EvalCaseResult:
-    """Run restore_session() and _init_session_index() and validate ordering/state."""
+    """Run restore_session() and _init_memory_index() and validate ordering/state."""
     if deps is None:
         return _make_skip_case("restore-session-index", "Skipped because create-deps failed")
 
@@ -322,15 +322,15 @@ def _run_session_case(
         )
 
         step_t0 = time.monotonic()
-        _init_session_index(deps, current_session_path, frontend)
-        if deps.session_index is None:
-            index_detail = "session_index=None"
+        _init_memory_index(deps, current_session_path, frontend)
+        if deps.memory_index is None:
+            index_detail = "memory_index=None"
         else:
-            search_results = deps.session_index.search("bootstrap")
-            index_detail = f"session_index=ready search_results={len(search_results)}"
+            search_results = deps.memory_index.search("bootstrap")
+            index_detail = f"memory_index=ready search_results={len(search_results)}"
         steps.append(
             EvalStep(
-                name="init_session_index",
+                name="init_memory_index",
                 ms=(time.monotonic() - step_t0) * 1000,
                 detail=index_detail,
             )
@@ -353,10 +353,10 @@ def _run_session_case(
         elif session_status_idx is not None and knowledge_status_idx >= session_status_idx:
             failures.append("knowledge sync/status did not occur before session restore status")
         if (
-            deps.session_index is None
+            deps.memory_index is None
             and _first_status_index(frontend.statuses, "Session index unavailable") is None
         ):
-            failures.append("session index degraded but no degradation status was emitted")
+            failures.append("memory index degraded but no degradation status was emitted")
 
         if failures:
             verdict = "FAIL"

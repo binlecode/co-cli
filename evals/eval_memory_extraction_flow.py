@@ -47,9 +47,9 @@ from pydantic_ai.messages import (
 from co_cli.agent._core import build_agent
 from co_cli.config._core import get_settings, settings
 from co_cli.context.orchestrate import run_turn
+from co_cli.knowledge._extractor import drain_pending_extraction, fire_and_forget_extraction
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.llm._factory import build_model
-from co_cli.memory._extractor import drain_pending_extraction, fire_and_forget_extraction
 
 _EXTRACTION_TIMEOUT_SECS = EVAL_MEMORY_EXTRACTION_TIMEOUT_SECS
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-memory-extraction-flow.md"

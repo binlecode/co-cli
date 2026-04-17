@@ -25,7 +25,7 @@ def test_build_agent_registers_all_tools():
     assert len(tool_names) == len(set(tool_names)), "Duplicate tool registration"
 
     # Core tools always present
-    for tool in ("run_shell_command", "check_capabilities", "web_search", "search_memories"):
+    for tool in ("run_shell_command", "check_capabilities", "web_search", "search_memory"):
         assert tool in result.tool_index, f"Expected core tool '{tool}' to be registered"
 
 
@@ -106,7 +106,7 @@ def test_tool_index_visibility_policy_metadata():
         "web_search",
         "run_shell_command",
         "list_knowledge",
-        "session_search",
+        "search_memory",
         "search_knowledge",
     ):
         assert idx[name].visibility == VisibilityPolicyEnum.ALWAYS, f"{name} should be ALWAYS"

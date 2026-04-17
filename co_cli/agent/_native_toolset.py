@@ -28,9 +28,8 @@ from co_cli.tools.knowledge import (
     search_knowledge,
     update_knowledge,
 )
-from co_cli.tools.memory import search_memories
+from co_cli.tools.memory import search_memory
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
-from co_cli.tools.session_search import session_search
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.task_control import (
     cancel_background_task,
@@ -138,14 +137,11 @@ def _build_native_toolset(
     _register_tool(
         read_article, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
     )
-    # Episodic memory — transcript search
+    # Episodic memory recall
     _register_tool(
-        session_search, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
+        search_memory, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
     )
-    # Deprecated aliases — delegate to canonical tools; remove in a future pass
-    _register_tool(
-        search_memories, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
-    )
+    # Article index — canonical; required by the search → read_article slug-lookup workflow
     _register_tool(
         search_articles, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
     )

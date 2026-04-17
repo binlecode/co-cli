@@ -1,1 +1,1 @@
-"""Memory lifecycle, retention, extraction, and save agent."""
+"""Memory layer — FTS5 keyword search over past session transcripts."""

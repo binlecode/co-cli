@@ -203,7 +203,7 @@ Primary sources:
 
 This means the system reuses:
 
-- `search_memories`
+- `search_memory`
 - `search_knowledge`
 - session index retrieval
 - current static prompt and dynamic instruction layers

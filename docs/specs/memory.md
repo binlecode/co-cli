@@ -7,7 +7,7 @@
 **Functional areas:**
 - Session transcript persistence (append-only JSONL)
 - Session index (FTS5 keyword search over past transcripts)
-- Episodic recall via `session_search()`
+- Episodic recall via `search_memory()`
 - Session lifecycle: new, resume, compaction branching
 
 **Non-goals:**
@@ -15,11 +15,11 @@
 - Lifecycle management — Memory is never consolidated, decayed, or curated
 - Semantic or vector retrieval over transcripts
 
-**Success criteria:** Transcripts are append-only and permanent; episodic recall routes through `session_search()`; the Memory layer contains no extracted facts or reusable artifacts.
+**Success criteria:** Transcripts are append-only and permanent; episodic recall routes through `search_memory()`; the Memory layer contains no extracted facts or reusable artifacts.
 
 **Status:** Stable — transcript mechanics predate the two-layer model; terminology aligned with [cognition.md](cognition.md).
 
-**Known gaps:** SessionIndex sync from the current session runs only at session close — the active session is not searchable until the next startup.
+**Known gaps:** MemoryIndex sync from the current session runs only at session close — the active session is not searchable until the next startup.
 
 ---
 
@@ -29,7 +29,7 @@ Full session persistence mechanics (per-turn write, compaction branching, `/resu
 
 ## 1. What & How
 
-Memory is the session/event timeline. Canonical storage is append-only `.jsonl` transcripts in `sessions_dir`. Each line is a serialized `ModelMessage`. A `SessionIndex` (SQLite FTS5 in `session-index.db`) indexes user prompts and assistant text from past sessions for keyword search.
+Memory is the session/event timeline. Canonical storage is append-only `.jsonl` transcripts in `sessions_dir`. Each line is a serialized `ModelMessage`. A `MemoryIndex` (SQLite FTS5 in `session-index.db`) indexes user prompts and assistant text from past sessions for keyword search.
 
 ```mermaid
 flowchart LR
@@ -40,10 +40,10 @@ flowchart LR
 
     Write["_finalize_turn()"] --> Transcripts
     Transcripts -->|"session close"| SessionIdx
-    SessionIdx --> session_search["session_search()"]
+    SessionIdx --> search_memory["search_memory()"]
 ```
 
-The Memory layer has one retrieval surface: `session_search()`, which queries `session-index.db` for BM25-ranked keyword excerpts across past conversations. There is no semantic or vector retrieval over transcripts.
+The Memory layer has one retrieval surface: `search_memory()`, which queries `session-index.db` for BM25-ranked keyword excerpts across past conversations. There is no semantic or vector retrieval over transcripts.
 
 ## 2. Core Logic
 
@@ -65,13 +65,13 @@ Full mechanics (startup restore, per-turn append accounting, overflow recovery, 
 
 ### 2.2 Session Index
 
-`SessionIndex` (SQLite FTS5 in `session-index.db`) indexes user prompts and assistant text from closed sessions. The active session is excluded from indexing until it closes.
+`MemoryIndex` (SQLite FTS5 in `session-index.db`) indexes user prompts and assistant text from closed sessions. The active session is excluded from indexing until it closes.
 
-Bootstrap initializes the index via `_init_session_index()` during startup. Indexing runs at session close — not inline during a turn.
+Bootstrap initializes the index via `_init_memory_index()` during startup. Indexing runs at session close — not inline during a turn.
 
 ### 2.3 Episodic Retrieval
 
-`session_search(ctx, query, limit)` is the single retrieval surface into Memory. It queries `session-index.db` for BM25-ranked keyword matches and returns excerpts from past sessions with metadata (date, session ID, snippet). `search_memories()` is a transitional alias that delegates to `session_search()` — see [cognition.md §2.6](cognition.md) for the tool surface.
+`session_search(ctx, query, limit)` is the internal retrieval function. It queries `session-index.db` for BM25-ranked keyword matches and returns excerpts from past sessions with metadata (date, session ID, snippet). The agent tool is `search_memory()`, which delegates to `session_search()` — see [cognition.md §2.6](cognition.md) for the tool surface.
 
 There is no semantic search, vector retrieval, or cross-session summarization over transcripts.
 
@@ -96,5 +96,5 @@ There is no semantic search, vector retrieval, or cross-session summarization ov
 |------|---------|
 | `co_cli/context/transcript.py` | JSONL transcript: append, load, compact boundary, parent/child session metadata |
 | `co_cli/context/session.py` | Session filename generation, latest-session discovery, new-path factory |
-| `co_cli/session_index/_store.py` | `SessionIndex` — FTS5 over past session transcripts |
-| `co_cli/tools/session_search.py` | `session_search()` — keyword search over transcript index |
+| `co_cli/memory/_store.py` | `MemoryIndex` — FTS5 over past session transcripts |
+| `co_cli/tools/session_search.py` | `session_search()` — internal keyword search function; `search_memory()` in `tools/memory.py` is the agent-facing tool |

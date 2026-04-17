@@ -39,13 +39,13 @@ The tool ecosystem is composed of core infrastructure for execution, lifecycle a
 ### Domain Tools
 - `co_cli/tools/files.py` — `glob`, `read_file`, `grep`, `write_file`, `patch`
 - `co_cli/tools/shell.py` — `run_shell_command`
-- `co_cli/tools/memory.py` — `search_memories` (deprecated — delegates to `session_search` for episodic recall)
+- `co_cli/tools/memory.py` — `search_memory` (episodic recall — delegates to `session_search` internal function)
 - `co_cli/tools/knowledge.py` — `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article`, `update_knowledge`, `append_knowledge`, internal helpers: `grep_recall`, `filter_artifacts`, `_recall_for_context`, `_touch_recalled`, `_find_by_slug`
 - `co_cli/tools/web.py` — `web_search`, `web_fetch`
 - `co_cli/tools/task_control.py` — `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks`
 - `co_cli/tools/todo.py` — `write_todos`, `read_todos`
 - `co_cli/tools/capabilities.py` — `check_capabilities`
-- `co_cli/tools/session_search.py` — `session_search` (transcript FTS search)
+- `co_cli/tools/session_search.py` — `session_search` (internal transcript FTS function; not registered as agent tool — used by `search_memory` in `tools/memory.py`)
 - `co_cli/tools/agents.py` — delegation: `research_web`, `analyze_knowledge`, `reason_about`
 - `co_cli/tools/execute_code.py` — `execute_code`
 - `co_cli/tools/obsidian.py` — `list_notes`, `search_notes`, `read_note`
@@ -135,9 +135,8 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 | `search_knowledge` | ALWAYS | auto | no | default | 50k | Universal reusable-recall across all knowledge artifact kinds + Obsidian + Drive |
 | `list_knowledge` | ALWAYS | auto | no | default | 50k | Paginated artifact inventory with `artifact_kind` column |
 | `read_article` | ALWAYS | auto | no | default | 50k | Read full artifact body by slug |
-| `session_search` | ALWAYS | auto | no | default | 50k | Episodic memory — FTS5 keyword search over past session transcripts |
-| `search_memories` | ALWAYS | auto | no | default | 50k | Deprecated — delegates to `session_search` |
-| `search_articles` | ALWAYS | auto | no | default | 50k | Deprecated alias: `search_articles` → `search_knowledge` |
+| `search_memory` | ALWAYS | auto | no | default | 50k | Episodic memory — FTS5 keyword search over past session transcripts |
+| `search_articles` | ALWAYS | auto | no | default | 50k | Article index search — canonical; required by the search → `read_article` slug-lookup workflow |
 | `update_knowledge` | DEFERRED | deferred | no | 1 | 50k | Surgical passage replacement in a knowledge artifact; slug-level resource lock |
 | `append_knowledge` | DEFERRED | deferred | no | 1 | 50k | Append content to end of a knowledge artifact; slug-level resource lock |
 | `glob`, `grep` | ALWAYS | auto | no | default | 50k | Workspace search |

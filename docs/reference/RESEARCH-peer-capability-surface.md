@@ -98,7 +98,7 @@ Scan date: 2026-04-05
 | File I/O | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` | `tools/files.py` |
 | Shell | `run_shell_command` | `tools/shell.py` |
 | Web | `web_search` (Brave), `web_fetch` | `tools/web.py` |
-| Memory | `save_memory`, `recall_memory`, `search_memories`, `list_memories`, `update_memory`, `append_memory` | `tools/memory.py` |
+| Memory | `save_memory`, `recall_memory`, `search_memory`, `list_memories`, `update_memory`, `append_memory` | `tools/memory.py` |
 | Knowledge | `search_knowledge`, `save_article`, `search_articles`, `read_article` | `tools/articles.py` |
 | Subagents | `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` | `tools/subagent.py` |
 | Task control | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` | `tools/task_control.py` |

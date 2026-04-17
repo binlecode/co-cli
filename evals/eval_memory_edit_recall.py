@@ -2,9 +2,9 @@
 """Eval: knowledge edit recall — save → recall → update → recall updated content.
 
 Validates the end-to-end flow: update_knowledge and append_knowledge re-index into
-the DB, and subsequent search_memories picks up the changes.
+the DB, and subsequent search_memory picks up the changes.
 
-    save_knowledge        → DB indexed → search_memories finds unique sentinel
+    save_knowledge        → DB indexed → search_memory finds unique sentinel
     update_knowledge      → reindexes   → search finds new content, not original
     append_knowledge      → reindexes   → search finds appended content
     update_knowledge (no DB) → file written → search degrades to grep (no crash)
@@ -36,7 +36,7 @@ from co_cli.config._core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools.knowledge import append_knowledge, save_knowledge, update_knowledge
-from co_cli.tools.memory import search_memories
+from co_cli.tools.memory import search_memory
 from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-memory-edit-recall.md"
@@ -51,7 +51,7 @@ def _make_ctx(
     knowledge_store: KnowledgeStore | None = None,
 ) -> RunContext:
     cfg = get_settings()
-    # Force fts5 backend so search_memories uses DB when KnowledgeStore present
+    # Force fts5 backend so search_memory uses DB when KnowledgeStore present
     if cfg.knowledge.search_backend != "fts5":
         cfg = cfg.model_copy(
             update={"knowledge": cfg.knowledge.model_copy(update={"search_backend": "fts5"})}
@@ -79,7 +79,7 @@ def _slug_from_ctx(ctx: RunContext) -> str | None:
 
 
 async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
-    """save_memory indexes into DB; search_memories finds it by unique sentinel."""
+    """save_memory indexes into DB; search_memory finds it by unique sentinel."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "save-recall" / "memory"
@@ -107,11 +107,11 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
         )
 
         t = time.monotonic()
-        search_result = await search_memories(ctx, sentinel)
+        search_result = await search_memory(ctx, sentinel)
         found_count = search_result.metadata.get("count", 0)
         steps.append(
             {
-                "name": "search_memories (FTS5)",
+                "name": "search_memory (FTS5)",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"count={found_count}",
             }
@@ -120,7 +120,7 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
         if found_count < 1:
             verdict, failure = (
                 "FAIL",
-                f"search_memories returned 0 after save (sentinel={sentinel!r})",
+                f"search_memory returned 0 after save (sentinel={sentinel!r})",
             )
         else:
             verdict, failure = "PASS", None
@@ -168,7 +168,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         )
 
         # Verify original is findable
-        before_results = await search_memories(ctx, original)
+        before_results = await search_memory(ctx, original)
         before_count = before_results.metadata.get("count", 0)
         steps.append(
             {
@@ -196,7 +196,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
         # Search for new content
         t = time.monotonic()
-        new_results = await search_memories(ctx, updated)
+        new_results = await search_memory(ctx, updated)
         new_count = new_results.metadata.get("count", 0)
         steps.append(
             {
@@ -207,7 +207,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         )
 
         # Original keyword should no longer match
-        old_results = await search_memories(ctx, original)
+        old_results = await search_memory(ctx, original)
         old_still_found = old_results.metadata.get("count", 0)
         steps.append(
             {
@@ -279,7 +279,7 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         )
 
         t = time.monotonic()
-        append_results = await search_memories(ctx, appended_keyword)
+        append_results = await search_memory(ctx, appended_keyword)
         append_count = append_results.metadata.get("count", 0)
         steps.append(
             {
@@ -291,7 +291,7 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
         # Base content must still be in the file
         t = time.monotonic()
-        base_results = await search_memories(ctx, base_keyword)
+        base_results = await search_memory(ctx, base_keyword)
         base_count = base_results.metadata.get("count", 0)
         steps.append(
             {

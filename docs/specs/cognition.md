@@ -57,7 +57,7 @@ flowchart TD
     end
 
     subgraph Recall["Retrieval"]
-        EpisodicSearch["session_search (transcript FTS)"]
+        EpisodicSearch["search_memory (transcript FTS)"]
         KnowledgeSearch["search_knowledge (unified reusable-recall)"]
         TurnRecall["turn-time recall (top-N injection)"]
     end
@@ -81,9 +81,9 @@ flowchart TD
 
 Memory is the session/event timeline. Its canonical storage is append-only `.jsonl` transcripts in `sessions_dir`. Each line is a serialized `ModelMessage` (pydantic-ai discriminated union). Oversized tool results are spilled to `tool-results/` and replaced with `<persisted-output>` placeholders.
 
-A `SessionIndex` (SQLite FTS5 in `session-index.db`) indexes user prompts and assistant text from past sessions for keyword search. The current session is excluded from indexing until it closes.
+A `MemoryIndex` (SQLite FTS5 in `session-index.db`) indexes user prompts and assistant text from past sessions for keyword search. The current session is excluded from indexing until it closes.
 
-**Episodic retrieval** uses `session_search()`, which queries `session-index.db` for ranked excerpts across past conversations. This is the only search path into Memory — there is no semantic or vector retrieval over transcripts.
+**Episodic retrieval** uses `search_memory()` (the agent tool), which internally calls `session_search()` to query `session-index.db` for ranked excerpts across past conversations. This is the only search path into Memory — there is no semantic or vector retrieval over transcripts.
 
 Memory is not curated, not consolidated, and not subject to lifecycle management. It is append-only and grows indefinitely (with optional session-level pruning when disk usage exceeds a threshold).
 
@@ -205,11 +205,10 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | Tool | Layer | Visibility | Purpose |
 |------|-------|-----------|---------|
 | `search_knowledge()` | Knowledge | ALWAYS | Universal reusable-recall across all artifact kinds + Obsidian + Drive |
-| `search_memories()` | Memory | ALWAYS | Episodic recall — delegates to `session_search()` |
+| `search_memory()` | Memory | ALWAYS | Episodic recall — FTS5 keyword search over past session transcripts |
 | `list_knowledge()` | Knowledge | ALWAYS | Paginated artifact inventory with `artifact_kind` column |
 | `read_article()` | Knowledge | ALWAYS | Read full artifact body by slug |
 | `save_article()` | Knowledge | DEFERRED | Write article/reference artifact (dedup by `source_ref`) |
-| `session_search()` | Memory | ALWAYS | FTS5 keyword search over past session transcripts |
 
 `save_knowledge()` is the extractor sub-agent's write tool — not registered on the main agent.
 
@@ -287,7 +286,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `co_cli/knowledge/prompts/dream_miner.md` | Retrospective transcript-miner sub-agent prompt |
 | `co_cli/knowledge/prompts/dream_merge.md` | Consolidation-merge sub-agent prompt |
 | `co_cli/tools/knowledge.py` | `save_knowledge()` (extractor-only), `list_knowledge()`, `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()`, `read_article()`, `update_knowledge()`, `append_knowledge()` |
-| `co_cli/tools/memory.py` | `search_memories()` (deprecated — delegates to `session_search()`) |
+| `co_cli/tools/memory.py` | `search_memory()` — episodic recall over session transcripts |
 
 ### Memory Layer
 
@@ -295,15 +294,15 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 |------|---------|
 | `co_cli/context/transcript.py` | JSONL transcript append/load, session branching, compaction boundaries |
 | `co_cli/context/session.py` | Session path generation, latest-session discovery |
-| `co_cli/session_index/_store.py` | `SessionIndex` — FTS5 over past session transcripts |
+| `co_cli/memory/_store.py` | `MemoryIndex` — FTS5 over past session transcripts |
 | `co_cli/tools/session_search.py` | `session_search()` — keyword search over transcript index |
 
 ### Extraction & Injection
 
 | File | Purpose |
 |------|---------|
-| `co_cli/memory/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
-| `co_cli/memory/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
+| `co_cli/knowledge/_extractor.py` | Fire-and-forget extraction pipeline, `_build_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
+| `co_cli/knowledge/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
 | `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
 ### Config

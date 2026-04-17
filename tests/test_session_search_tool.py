@@ -13,7 +13,7 @@ from co_cli.agent._core import build_agent
 from co_cli.context.session import session_filename
 from co_cli.context.transcript import append_messages
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.session_index._store import SessionIndex
+from co_cli.memory._store import MemoryIndex
 from co_cli.tools.session_search import session_search
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -27,21 +27,21 @@ def _make_ctx(deps: CoDeps) -> RunContext:
         deps=deps,
         model=_MODEL,
         usage=RunUsage(),
-        tool_name="session_search",
+        tool_name="search_memory",
     )
 
 
-def _make_deps(tmp_path: Path, *, session_index: SessionIndex | None = None) -> CoDeps:
+def _make_deps(tmp_path: Path, *, memory_index: MemoryIndex | None = None) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         config=_CONFIG,
-        session_index=session_index,
+        memory_index=memory_index,
         sessions_dir=tmp_path / "sessions",
         tool_results_dir=tmp_path / "tool-results",
     )
 
 
-def _write_indexed_session(sessions_dir: Path, store: SessionIndex, *, content: str) -> str:
+def _write_indexed_session(sessions_dir: Path, store: MemoryIndex, *, content: str) -> str:
     """Write a session JSONL and index it; return the uuid8 session_id."""
     sessions_dir.mkdir(parents=True, exist_ok=True)
     now = datetime(2026, 4, 14, 10, 0, 0, tzinfo=UTC)
@@ -67,7 +67,7 @@ def _write_indexed_session(sessions_dir: Path, store: SessionIndex, *, content: 
 async def test_session_search_returns_results_when_indexed(tmp_path: Path) -> None:
     """session_search returns ToolReturn with session results when index has data."""
     db_path = tmp_path / "session-index.db"
-    store = SessionIndex(db_path)
+    store = MemoryIndex(db_path)
     try:
         sessions_dir = tmp_path / "sessions"
         _write_indexed_session(
@@ -76,7 +76,7 @@ async def test_session_search_returns_results_when_indexed(tmp_path: Path) -> No
             content="Explain how the Python asyncio event loop works",
         )
 
-        deps = _make_deps(tmp_path, session_index=store)
+        deps = _make_deps(tmp_path, memory_index=store)
         ctx = _make_ctx(deps)
 
         result = await session_search(ctx, "asyncio event loop", limit=3)
@@ -103,8 +103,8 @@ async def test_session_search_returns_results_when_indexed(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_session_search_graceful_when_index_none(tmp_path: Path) -> None:
-    """session_search returns a graceful message when deps.session_index is None."""
-    deps = _make_deps(tmp_path, session_index=None)
+    """session_search returns a graceful message when deps.memory_index is None."""
+    deps = _make_deps(tmp_path, memory_index=None)
     ctx = _make_ctx(deps)
 
     result = await session_search(ctx, "anything")
@@ -121,14 +121,14 @@ async def test_session_search_graceful_when_index_none(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_session_search_registered_with_always_visibility() -> None:
-    """session_search is the episodic memory tool — must be ALWAYS visible (Phase 3)."""
+def test_search_memory_registered_with_always_visibility() -> None:
+    """search_memory is the episodic memory tool — must be ALWAYS visible."""
     from co_cli.agent._core import build_tool_registry
 
     registry = build_tool_registry(_CONFIG)
     tool_index = registry.tool_index
 
-    assert "session_search" in tool_index, "'session_search' must be registered in tool_index"
-    assert tool_index["session_search"].visibility == VisibilityPolicyEnum.ALWAYS, (
-        f"session_search visibility must be ALWAYS, got {tool_index['session_search'].visibility}"
+    assert "search_memory" in tool_index, "'search_memory' must be registered in tool_index"
+    assert tool_index["search_memory"].visibility == VisibilityPolicyEnum.ALWAYS, (
+        f"search_memory visibility must be ALWAYS, got {tool_index['search_memory'].visibility}"
     )

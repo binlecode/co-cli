@@ -17,7 +17,7 @@ from pydantic_ai.messages import ModelMessage
 
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import _init_session_index, create_deps, restore_session
+from co_cli.bootstrap.core import _init_memory_index, create_deps, restore_session
 from co_cli.bootstrap.render_status import (
     check_security,
     get_status,
@@ -105,7 +105,7 @@ async def _finalize_turn(
     Does NOT handle skill-run cleanup — that is done by cleanup_skill_run_state() in finally.
     Does NOT handle /compact or built-in slash-command persistence.
     """
-    from co_cli.memory._extractor import fire_and_forget_extraction
+    from co_cli.knowledge._extractor import fire_and_forget_extraction
 
     next_history = turn_result.messages
 
@@ -180,7 +180,7 @@ async def _run_foreground_turn(
 
 async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None:
     """Drain pending extractions, run the dream cycle if enabled, release resources."""
-    from co_cli.memory._extractor import drain_pending_extraction
+    from co_cli.knowledge._extractor import drain_pending_extraction
 
     await drain_pending_extraction()
     if deps is not None:
@@ -284,7 +284,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
         current_session_path = restore_session(deps, frontend)
-        _init_session_index(deps, current_session_path, frontend)
+        _init_memory_index(deps, current_session_path, frontend)
         from co_cli.commands._commands import get_skill_registry
 
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")

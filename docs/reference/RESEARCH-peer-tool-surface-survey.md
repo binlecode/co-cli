@@ -72,7 +72,7 @@ Native registration currently breaks down as:
 
 | Bucket | Tools |
 |--------|-------|
-| Always-visible reads and introspection | `check_capabilities`, `write_todos`, `read_todos`, `search_memories`, `search_knowledge`, `search_articles`, `read_article`, `list_memories`, `glob`, `read_file`, `grep`, `web_search`, `web_fetch`, `run_shell_command` |
+| Always-visible reads and introspection | `check_capabilities`, `write_todos`, `read_todos`, `search_memory`, `search_knowledge`, `search_articles`, `read_article`, `list_memories`, `glob`, `read_file`, `grep`, `web_search`, `web_fetch`, `run_shell_command` |
 | Deferred writes and state changes | `write_file`, `patch`, `save_article`, `start_background_task` |
 | Deferred read/control tools | `check_task_status`, `cancel_background_task`, `list_background_tasks`, `session_search` |
 | Deferred delegation | `delegate_coder`, `delegate_researcher`, `delegate_analyst`, `delegate_reasoner` |

@@ -431,13 +431,13 @@ def test_restore_session_readonly_dir_does_not_raise(tmp_path: Path) -> None:
         os.chmod(readonly_dir, 0o755)
 
 
-def test_init_session_index_indexes_past_sessions(tmp_path: Path) -> None:
-    """_init_session_index opens the DB and syncs past sessions; deps.session_index is set."""
+def test_init_memory_index_indexes_past_sessions(tmp_path: Path) -> None:
+    """_init_memory_index opens the DB and syncs past sessions; deps.memory_index is set."""
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-    from co_cli.bootstrap.core import _init_session_index
+    from co_cli.bootstrap.core import _init_memory_index
     from co_cli.context.transcript import append_messages
-    from co_cli.session_index._store import SessionIndex
+    from co_cli.memory._store import MemoryIndex
 
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(parents=True)
@@ -477,12 +477,12 @@ def test_init_session_index_indexes_past_sessions(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path)
 
-    _init_session_index(deps, current_path, TerminalFrontend())
+    _init_memory_index(deps, current_path, TerminalFrontend())
 
-    assert isinstance(deps.session_index, SessionIndex), (
-        "deps.session_index must be a SessionIndex after _init_session_index"
+    assert isinstance(deps.memory_index, MemoryIndex), (
+        "deps.memory_index must be a MemoryIndex after _init_memory_index"
     )
-    results = deps.session_index.search("Fibonacci sequence")
+    results = deps.memory_index.search("Fibonacci sequence")
     assert len(results) >= 1, "Indexed past session must be searchable by keyword"
     assert results[0].session_id == "past0001", (
         f"Result must reference the past session, got {results[0].session_id!r}"
