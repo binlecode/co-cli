@@ -9,7 +9,7 @@ from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.tools.files import (
     _enforce_workspace_boundary,
     _is_recursive_pattern,
@@ -20,6 +20,7 @@ from co_cli.tools.files import (
     write_file,
 )
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=settings)
@@ -848,3 +849,76 @@ async def test_grep_head_limit_and_offset(tmp_path):
     # First result_limited entry must not appear in result_offset
     first_line = result_limited.return_value.splitlines()[0]
     assert first_line not in result_offset.return_value
+
+
+# ---------------------------------------------------------------------------
+# ctx-path regression tests — verify error returns go through tool_output(ctx=ctx)
+# ---------------------------------------------------------------------------
+
+
+def _make_ctx_sized(workspace: Path, tool_name: str, max_result_size: int = 10) -> RunContext:
+    """Return a RunContext with tool_name registered at max_result_size in tool_index."""
+    info = ToolInfo(
+        name=tool_name,
+        description="test tool",
+        approval=False,
+        source=ToolSourceEnum.NATIVE,
+        visibility=VisibilityPolicyEnum.ALWAYS,
+        max_result_size=max_result_size,
+    )
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(),
+        workspace_root=workspace,
+        tool_results_dir=workspace / "tool-results",
+        tool_index={tool_name: info},
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage(), tool_name=tool_name)
+
+
+@pytest.mark.asyncio
+async def test_glob_error_uses_ctx_path(tmp_path):
+    """Oversized glob 'path not found' error is persisted through the ctx-aware path."""
+    ctx = _make_ctx_sized(tmp_path, "glob")
+    result = await glob(ctx, path="a" * 50)
+    assert PERSISTED_OUTPUT_TAG in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_read_file_error_uses_ctx_path(tmp_path):
+    """Oversized read_file 'file not found' error is persisted through the ctx-aware path."""
+    ctx = _make_ctx_sized(tmp_path, "read_file")
+    result = await read_file(ctx, path="nonexistent_" + "a" * 50)
+    assert PERSISTED_OUTPUT_TAG in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_grep_error_uses_ctx_path(tmp_path):
+    """Oversized grep 'invalid regex' error is persisted through the ctx-aware path."""
+    ctx = _make_ctx_sized(tmp_path, "grep")
+    result = await grep(ctx, pattern="[unclosed")
+    assert PERSISTED_OUTPUT_TAG in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_write_file_error_uses_ctx_path(tmp_path):
+    """Oversized write_file staleness error is persisted through the ctx-aware path."""
+    target = tmp_path / "data.txt"
+    target.write_text("initial")
+    ctx = _make_ctx_sized(tmp_path, "write_file")
+    # Seed a stale mtime (0.0) — real mtime differs, triggering the staleness guard
+    ctx.deps.file_read_mtimes[str(target)] = 0.0
+    result = await write_file(ctx, path="data.txt", content="new content")
+    assert PERSISTED_OUTPUT_TAG in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_patch_error_uses_ctx_path(tmp_path):
+    """Oversized patch 'old_string not found' error is persisted through the ctx-aware path."""
+    target = tmp_path / "code.txt"
+    target.write_text("some content here")
+    ctx = _make_ctx_sized(tmp_path, "patch")
+    # Populate file_read_mtimes directly to satisfy the read-before-patch guard
+    ctx.deps.file_read_mtimes[str(target)] = target.stat().st_mtime
+    result = await patch(ctx, path="code.txt", old_string="absent_string_xyz", new_string="x")
+    assert PERSISTED_OUTPUT_TAG in result.return_value

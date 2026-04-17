@@ -75,7 +75,7 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
     except ModelRetry:
         raise
     except Exception as e:
-        return handle_google_api_error("Gmail", e)
+        return handle_google_api_error("Gmail", e, ctx=ctx)
 
 
 def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolReturn:
@@ -118,7 +118,7 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
     except ModelRetry:
         raise
     except Exception as e:
-        return handle_google_api_error("Gmail", e)
+        return handle_google_api_error("Gmail", e, ctx=ctx)
 
 
 def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> ToolReturn:
@@ -152,4 +152,4 @@ def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
     except ModelRetry:
         raise
     except Exception as e:
-        return handle_google_api_error("Gmail", e)
+        return handle_google_api_error("Gmail", e, ctx=ctx)

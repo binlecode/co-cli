@@ -171,16 +171,18 @@ ToolResultPayload = str | ToolReturn | None
 def tool_error(
     message: str,
     *,
-    ctx: "RunContext[CoDeps] | None" = None,
+    ctx: "RunContext[CoDeps]",
 ) -> ToolReturn:
     """Return a ToolReturn for terminal (non-retryable) tool failures.
 
     Unlike ModelRetry, this stops the retry loop immediately — the model
     sees the error in the tool result and can pick a different tool.
+
+    Tool functions always have RunContext; use this helper. For ctx-less
+    helpers (e.g. _http_get_with_retries), call tool_output_raw(..., error=True)
+    directly.
     """
-    if ctx is not None:
-        return tool_output(message, ctx=ctx, error=True)
-    return tool_output_raw(message, error=True)
+    return tool_output(message, ctx=ctx, error=True)
 
 
 def http_status_code(e: Exception) -> int | None:
@@ -207,7 +209,7 @@ def handle_google_api_error(
     label: str,
     e: Exception,
     *,
-    ctx: "RunContext[CoDeps] | None" = None,
+    ctx: "RunContext[CoDeps]",
 ) -> ToolReturn:
     """Route Google API errors to tool_error or ModelRetry.
 

@@ -75,13 +75,13 @@ async def glob(
     try:
         resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
-        return tool_error(str(e))
+        return tool_error(str(e), ctx=ctx)
 
     if not resolved.exists():
-        return tool_error(f"Path not found: {path}")
+        return tool_error(f"Path not found: {path}", ctx=ctx)
 
     if not resolved.is_dir():
-        return tool_error(f"Not a directory: {path}")
+        return tool_error(f"Not a directory: {path}", ctx=ctx)
 
     workspace_root = ctx.deps.workspace_root
     truncated = False
@@ -156,19 +156,19 @@ async def read_file(
     try:
         resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
-        return tool_error(str(e))
+        return tool_error(str(e), ctx=ctx)
 
     if not resolved.exists():
-        return tool_error(f"File not found: {path}")
+        return tool_error(f"File not found: {path}", ctx=ctx)
 
     if resolved.is_dir():
-        return tool_error(f"Path is a directory: {path}")
+        return tool_error(f"Path is a directory: {path}", ctx=ctx)
 
     try:
         enc = _detect_encoding(resolved)
         content = resolved.read_text(encoding=enc)
     except UnicodeDecodeError:
-        return tool_error(f"Binary file — cannot display as text: {path}")
+        return tool_error(f"Binary file — cannot display as text: {path}", ctx=ctx)
 
     path_key = str(resolved)
     ctx.deps.file_read_mtimes[path_key] = resolved.stat().st_mtime
@@ -283,22 +283,23 @@ async def grep(
     _VALID_MODES = {"content", "files_with_matches", "count"}
     if output_mode not in _VALID_MODES:
         return tool_error(
-            f"Invalid output_mode {output_mode!r} — use 'content', 'files_with_matches', or 'count'"
+            f"Invalid output_mode {output_mode!r} — use 'content', 'files_with_matches', or 'count'",
+            ctx=ctx,
         )
 
     flags = re.IGNORECASE if case_insensitive else 0
     try:
         compiled = re.compile(pattern, flags)
     except re.error:
-        return tool_error(f"Invalid regex: {pattern}")
+        return tool_error(f"Invalid regex: {pattern}", ctx=ctx)
 
     workspace_root = ctx.deps.workspace_root
     try:
         search_root = _enforce_workspace_boundary(Path(path), workspace_root)
     except ValueError as e:
-        return tool_error(str(e))
+        return tool_error(str(e), ctx=ctx)
     if not search_root.is_dir():
-        return tool_error(f"Not a directory: {path}")
+        return tool_error(f"Not a directory: {path}", ctx=ctx)
 
     all_output: list[str] = []
     total_match_count = 0
@@ -360,7 +361,7 @@ async def write_file(
     try:
         resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
-        return tool_error(str(e))
+        return tool_error(str(e), ctx=ctx)
 
     from co_cli.tools.resource_lock import ResourceBusyError
 
@@ -371,7 +372,7 @@ async def write_file(
                 path_key in ctx.deps.file_read_mtimes
                 and _safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]
             ):
-                return tool_error("File changed since last read — re-read before writing")
+                return tool_error("File changed since last read — re-read before writing", ctx=ctx)
             resolved.parent.mkdir(parents=True, exist_ok=True)
             resolved.write_text(content, encoding="utf-8")
             byte_count = len(content.encode("utf-8"))
@@ -383,7 +384,9 @@ async def write_file(
                 bytes=byte_count,
             )
     except ResourceBusyError:
-        return tool_error(f"File {path} is being modified by another tool call — retry next turn")
+        return tool_error(
+            f"File {path} is being modified by another tool call — retry next turn", ctx=ctx
+        )
 
 
 def _transform_line_trimmed(text: str) -> tuple[str, list[int]]:
@@ -556,10 +559,10 @@ async def patch(
     try:
         resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
-        return tool_error(str(e))
+        return tool_error(str(e), ctx=ctx)
 
     if not resolved.exists():
-        return tool_error(f"File not found: {path}")
+        return tool_error(f"File not found: {path}", ctx=ctx)
 
     path_key = str(resolved)
     if err := _check_patch_preconditions(resolved, path, path_key, ctx):
@@ -571,7 +574,8 @@ async def patch(
         async with ctx.deps.resource_locks.try_acquire(str(resolved)):
             if resolved.stat().st_size > _MAX_EDIT_BYTES:
                 return tool_error(
-                    f"File too large to edit in-place ({resolved.stat().st_size // 1024} KB) — use shell tools"
+                    f"File too large to edit in-place ({resolved.stat().st_size // 1024} KB) — use shell tools",
+                    ctx=ctx,
                 )
             enc = _detect_encoding(resolved)
             content = resolved.read_text(encoding=enc)
@@ -581,7 +585,8 @@ async def patch(
             if count > 0:
                 if count > 1 and not replace_all:
                     return tool_error(
-                        f"Found {count} occurrences in {path} — use replace_all=True to replace all"
+                        f"Found {count} occurrences in {path} — use replace_all=True to replace all",
+                        ctx=ctx,
                     )
                 updated = content.replace(old_string, new_string)
                 resolved.write_text(updated, encoding=enc)
@@ -607,7 +612,7 @@ async def patch(
                     content, old_string, new_string, replace_all, transform_fn, strategy_name
                 )
                 if isinstance(result, str):
-                    return tool_error(result)
+                    return tool_error(result, ctx=ctx)
                 if result is not None:
                     updated, count = result
                     resolved.write_text(updated, encoding=enc)
@@ -628,7 +633,10 @@ async def patch(
                     )
 
             return tool_error(
-                f"old_string not found in {path} — verify the text exists in the file"
+                f"old_string not found in {path} — verify the text exists in the file",
+                ctx=ctx,
             )
     except ResourceBusyError:
-        return tool_error(f"File {path} is being modified by another tool call — retry next turn")
+        return tool_error(
+            f"File {path} is being modified by another tool call — retry next turn", ctx=ctx
+        )

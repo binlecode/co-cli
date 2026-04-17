@@ -38,7 +38,7 @@ from co_cli.knowledge._ranking import compute_confidence, detect_contradictions
 from co_cli.knowledge._similarity import find_similar_artifacts, is_content_superset
 from co_cli.knowledge.mutator import _atomic_write, _reindex_knowledge_file, _update_artifact_body
 from co_cli.tools.resource_lock import ResourceBusyError
-from co_cli.tools.tool_io import tool_error, tool_output, tool_output_raw
+from co_cli.tools.tool_io import tool_error, tool_output
 
 _TRACER = otel_trace.get_tracer("co.knowledge")
 
@@ -337,8 +337,9 @@ async def save_knowledge(
             with _TRACER.start_as_current_span("co.knowledge.dedup") as span:
                 if best_score > 0.9:
                     span.set_attribute("knowledge.dedup_action", "skipped")
-                    return tool_output_raw(
+                    return tool_output(
                         f"Skipped (near-identical to {best_artifact.path.name})",
+                        ctx=ctx,
                         action="skipped",
                         path=str(best_artifact.path),
                         artifact_id=best_artifact.id,
@@ -351,8 +352,9 @@ async def save_knowledge(
                     merged_body = best_artifact.content.rstrip() + "\n" + content
                 span.set_attribute("knowledge.dedup_action", dedup_action)
                 _update_artifact_body(best_artifact, merged_body, ctx)
-                return tool_output_raw(
+                return tool_output(
                     f"✓ Saved knowledge ({dedup_action}): {best_artifact.path.name}",
+                    ctx=ctx,
                     action=dedup_action,
                     path=str(best_artifact.path),
                     artifact_id=best_artifact.id,
@@ -392,8 +394,9 @@ async def save_knowledge(
         _atomic_write(file_path, file_content)
     _reindex_knowledge_file(ctx, file_path, content, file_content, fm_dict, slug)
 
-    return tool_output_raw(
+    return tool_output(
         f"✓ Saved knowledge: {filename}",
+        ctx=ctx,
         action="saved",
         path=str(file_path),
         artifact_id=artifact_id,
@@ -951,8 +954,9 @@ def _consolidate_and_reindex(
     except Exception as e:
         logger.warning(f"Failed to reindex consolidated article: {e}")
 
-    return tool_output_raw(
+    return tool_output(
         f"✓ Updated article {artifact_id}: {path.name}\nSource: {origin_url}\nLocation: {path}",
+        ctx=ctx,
         article_id=artifact_id,
         action="consolidated",
     )
@@ -1013,7 +1017,8 @@ async def append_knowledge(
             )
     except ResourceBusyError:
         return tool_error(
-            f"Artifact '{slug}' is being modified by another tool call — retry next turn"
+            f"Artifact '{slug}' is being modified by another tool call — retry next turn",
+            ctx=ctx,
         )
 
 
@@ -1105,5 +1110,6 @@ async def update_knowledge(
             )
     except ResourceBusyError:
         return tool_error(
-            f"Artifact '{slug}' is being modified by another tool call — retry next turn"
+            f"Artifact '{slug}' is being modified by another tool call — retry next turn",
+            ctx=ctx,
         )

@@ -20,7 +20,7 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_io import tool_error, tool_output
+from co_cli.tools.tool_io import tool_error, tool_output, tool_output_raw
 
 # ---------------------------------------------------------------------------
 # SSRF protection (inlined from _url_safety.py — only used by this module)
@@ -395,10 +395,12 @@ async def _http_get_with_retries(
                 max_retry_after_seconds=backoff_max_seconds,
             )
             if not decision.retryable:
-                return tool_error(decision.message)
+                return tool_output_raw(decision.message, error=True)
 
             if attempt >= attempts_total:
-                return tool_error(f"{decision.message} Retries exhausted ({max_retries}).")
+                return tool_output_raw(
+                    f"{decision.message} Retries exhausted ({max_retries}).", error=True
+                )
 
             delay = compute_backoff_delay(
                 attempt=attempt,
@@ -410,7 +412,7 @@ async def _http_get_with_retries(
                 delay = max(delay, min(decision.delay_seconds, backoff_max_seconds))
             await asyncio.sleep(delay)
 
-    return tool_error(f"{tool_name} failed for {target}.")
+    return tool_output_raw(f"{tool_name} failed for {target}.", error=True)
 
 
 async def web_search(
@@ -584,7 +586,8 @@ async def web_fetch(
     if not _is_content_type_allowed(content_type):
         return tool_error(
             f"web_fetch blocked: unsupported content type '{content_type}'. "
-            "Only text and structured data formats are supported."
+            "Only text and structured data formats are supported.",
+            ctx=ctx,
         )
 
     raw_bytes = resp.content[:_MAX_FETCH_BYTES]

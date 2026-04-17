@@ -13,7 +13,7 @@ from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools.knowledge import (
@@ -25,6 +25,7 @@ from co_cli.tools.knowledge import (
 )
 from co_cli.tools.memory import search_memory
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -538,3 +539,95 @@ class TestSaveKnowledgeDedup:
         files = list(knowledge_dir.glob("*.md"))
         assert len(files) == 2, "disabled dedup must allow duplicate writes"
         assert result.metadata["action"] == "saved"
+
+
+# ---------------------------------------------------------------------------
+# ctx-path regression tests — verify error/success returns go through tool_output(ctx=ctx)
+# ---------------------------------------------------------------------------
+
+
+def _make_ctx_sized_knowledge(
+    knowledge_dir: Path,
+    tool_results_dir: Path,
+    tool_name: str,
+    max_result_size: int = 10,
+) -> RunContext:
+    """Return a RunContext with tool_name registered at max_result_size in tool_index."""
+    info = ToolInfo(
+        name=tool_name,
+        description="test tool",
+        approval=False,
+        source=ToolSourceEnum.NATIVE,
+        visibility=VisibilityPolicyEnum.ALWAYS,
+        max_result_size=max_result_size,
+    )
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(),
+        knowledge_dir=knowledge_dir,
+        tool_results_dir=tool_results_dir,
+        tool_index={tool_name: info},
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage(), tool_name=tool_name)
+
+
+@pytest.mark.asyncio
+async def test_append_knowledge_busy_error_uses_ctx_path(tmp_path: Path) -> None:
+    """Oversized append_knowledge busy error is persisted through the ctx-aware path."""
+    knowledge_dir = tmp_path / "knowledge"
+    path = _write_memory(knowledge_dir, 1, "test content for lock", tags=["test"])
+    slug = path.stem
+    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "append_knowledge")
+
+    acquired = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_lock() -> None:
+        async with ctx.deps.resource_locks.try_acquire(slug):
+            acquired.set()
+            await release.wait()
+
+    task = asyncio.create_task(hold_lock())
+    await acquired.wait()
+
+    result = await append_knowledge(ctx, slug, "extra content")
+    assert PERSISTED_OUTPUT_TAG in result.return_value
+
+    release.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_update_knowledge_busy_error_uses_ctx_path(tmp_path: Path) -> None:
+    """Oversized update_knowledge busy error is persisted through the ctx-aware path."""
+    knowledge_dir = tmp_path / "knowledge"
+    path = _write_memory(knowledge_dir, 1, "test content for update lock", tags=["test"])
+    slug = path.stem
+    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "update_knowledge")
+
+    acquired = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_lock() -> None:
+        async with ctx.deps.resource_locks.try_acquire(slug):
+            acquired.set()
+            await release.wait()
+
+    task = asyncio.create_task(hold_lock())
+    await acquired.wait()
+
+    result = await update_knowledge(ctx, slug, "test content for update lock", "new content")
+    assert PERSISTED_OUTPUT_TAG in result.return_value
+
+    release.set()
+    await task
+
+
+def test_save_knowledge_success_uses_ctx_path(tmp_path: Path) -> None:
+    """Oversized save_knowledge success message is persisted through the ctx-aware path."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    # consolidation_enabled=False by default — isolates the final-save return path
+    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "save_knowledge")
+    result = asyncio.run(save_knowledge(ctx, "some knowledge content to save", "preference"))
+    assert PERSISTED_OUTPUT_TAG in result.return_value

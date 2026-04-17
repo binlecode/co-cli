@@ -138,7 +138,7 @@ def list_calendar_events(
     except ModelRetry:
         raise
     except Exception as e:
-        return handle_google_api_error("Calendar", e)
+        return handle_google_api_error("Calendar", e, ctx=ctx)
 
 
 def search_calendar_events(
@@ -205,4 +205,4 @@ def search_calendar_events(
     except ModelRetry:
         raise
     except Exception as e:
-        return handle_google_api_error("Calendar", e)
+        return handle_google_api_error("Calendar", e, ctx=ctx)
