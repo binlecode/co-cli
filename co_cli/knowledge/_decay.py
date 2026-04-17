@@ -24,10 +24,9 @@ def find_decay_candidates(
     """Return artifacts eligible for automated decay.
 
     Filters applied in order:
-    1. Exclude: ``pin_mode`` is truthy and not ``"none"`` (e.g. ``"standing"``)
-    2. Exclude: ``decay_protected`` is True
-    3. Include only: ``created`` older than ``config.decay_after_days``
-    4. Include only: ``last_recalled is None`` OR ``last_recalled`` older than
+    1. Exclude: ``decay_protected`` is True
+    2. Include only: ``created`` older than ``config.decay_after_days``
+    3. Include only: ``last_recalled is None`` OR ``last_recalled`` older than
        ``config.decay_after_days``
 
     Result is sorted by age descending (oldest ``created`` first).
@@ -37,8 +36,6 @@ def find_decay_candidates(
 
     candidates: list[KnowledgeArtifact] = []
     for artifact in artifacts:
-        if _is_pinned(artifact.pin_mode):
-            continue
         if artifact.decay_protected:
             continue
 
@@ -55,13 +52,6 @@ def find_decay_candidates(
 
     candidates.sort(key=lambda art: _parse_iso8601(art.created) or cutoff)
     return candidates
-
-
-def _is_pinned(pin_mode: str | None) -> bool:
-    """Truthy pin_mode that is not the default 'none' sentinel means pinned."""
-    if not pin_mode:
-        return False
-    return pin_mode != "none"
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:

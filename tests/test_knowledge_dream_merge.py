@@ -15,7 +15,6 @@ from co_cli.deps import CoDeps
 from co_cli.knowledge._artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
-    PinModeEnum,
     SourceTypeEnum,
     load_knowledge_artifact,
     load_knowledge_artifacts,
@@ -37,7 +36,6 @@ def _write_artifact(
     content: str,
     artifact_kind: str = ArtifactKindEnum.PREFERENCE.value,
     title: str | None = None,
-    pin_mode: str = PinModeEnum.NONE.value,
     decay_protected: bool = False,
     tags: list[str] | None = None,
 ) -> KnowledgeArtifact:
@@ -52,7 +50,6 @@ def _write_artifact(
         title=title,
         content=content,
         created=datetime.now(UTC).isoformat(),
-        pin_mode=pin_mode,
         decay_protected=decay_protected,
         tags=list(tags or []),
         source_type=SourceTypeEnum.DETECTED.value,
@@ -85,12 +82,7 @@ def _make_deps(tmp_path: Path, *, with_model: bool) -> tuple[CoDeps, KnowledgeSt
 # ---------------------------------------------------------------------------
 
 
-def test_merge_immunity_for_standing_and_decay_protected(tmp_path: Path) -> None:
-    artifact_standing = _write_artifact(
-        tmp_path,
-        content="pinned",
-        pin_mode=PinModeEnum.STANDING.value,
-    )
+def test_merge_immunity_for_decay_protected(tmp_path: Path) -> None:
     artifact_protected = _write_artifact(
         tmp_path,
         content="protected",
@@ -98,7 +90,6 @@ def test_merge_immunity_for_standing_and_decay_protected(tmp_path: Path) -> None
     )
     artifact_regular = _write_artifact(tmp_path, content="regular")
 
-    assert _is_merge_immune(artifact_standing) is True
     assert _is_merge_immune(artifact_protected) is True
     assert _is_merge_immune(artifact_regular) is False
 
@@ -193,7 +184,7 @@ async def test_merge_skips_when_every_similar_artifact_is_immune(tmp_path: Path)
         _write_artifact(
             deps.knowledge_dir,
             content=common_content,
-            pin_mode=PinModeEnum.STANDING.value,
+            decay_protected=True,
         )
         _write_artifact(
             deps.knowledge_dir,

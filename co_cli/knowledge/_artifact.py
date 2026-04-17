@@ -39,11 +39,6 @@ class SourceTypeEnum(StrEnum):
     CONSOLIDATED = "consolidated"
 
 
-class PinModeEnum(StrEnum):
-    STANDING = "standing"
-    NONE = "none"
-
-
 class CertaintyEnum(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
@@ -67,7 +62,6 @@ class KnowledgeArtifact:
     source_type: str | None = None
     source_ref: str | None = None
     certainty: str | None = None
-    pin_mode: str = PinModeEnum.NONE.value
     decay_protected: bool = False
     last_recalled: str | None = None
     recall_count: int = 0
@@ -89,7 +83,6 @@ def _coerce_fields(fm: dict[str, Any], body: str, path: Path) -> KnowledgeArtifa
         source_type=fm.get("source_type"),
         source_ref=fm.get("source_ref"),
         certainty=fm.get("certainty"),
-        pin_mode=fm.get("pin_mode", PinModeEnum.NONE.value),
         decay_protected=bool(fm.get("decay_protected", False)),
         last_recalled=fm.get("last_recalled"),
         recall_count=int(fm.get("recall_count", 0) or 0),

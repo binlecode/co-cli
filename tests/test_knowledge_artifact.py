@@ -7,7 +7,6 @@ import pytest
 from co_cli.knowledge._artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
-    PinModeEnum,
     SourceTypeEnum,
     load_knowledge_artifact,
     load_knowledge_artifacts,
@@ -34,7 +33,6 @@ def test_load_canonical_knowledge_artifact(tmp_path: Path) -> None:
             "artifact_kind: preference\n"
             "title: Prefers pytest\n"
             "created: '2026-04-16T10:00:00Z'\n"
-            "pin_mode: standing\n"
             "source_type: detected\n"
             "source_ref: session-abc\n"
             "tags:\n- testing\n"
@@ -45,7 +43,6 @@ def test_load_canonical_knowledge_artifact(tmp_path: Path) -> None:
     assert artifact.id == "abc-123"
     assert artifact.artifact_kind == ArtifactKindEnum.PREFERENCE.value
     assert artifact.title == "Prefers pytest"
-    assert artifact.pin_mode == PinModeEnum.STANDING.value
     assert artifact.source_type == SourceTypeEnum.DETECTED.value
     assert artifact.source_ref == "session-abc"
     assert artifact.tags == ["testing"]
@@ -119,14 +116,13 @@ def test_render_knowledge_file_emits_canonical_kind(tmp_path: Path) -> None:
         tags=["testing"],
         source_type=SourceTypeEnum.DETECTED.value,
         source_ref="session-abc",
-        pin_mode=PinModeEnum.STANDING.value,
     )
     rendered = render_knowledge_file(artifact)
     fm, body = parse_frontmatter(rendered)
     assert fm["kind"] == "knowledge"
     assert fm["artifact_kind"] == "preference"
     assert fm["title"] == "Prefers pytest"
-    assert fm["pin_mode"] == "standing"
+    assert "pin_mode" not in fm
     assert fm["source_ref"] == "session-abc"
     assert body.strip() == "User prefers pytest."
     validate_knowledge_frontmatter(fm)
@@ -160,7 +156,7 @@ def test_render_knowledge_file_round_trip_via_loader(tmp_path: Path) -> None:
 
 
 def test_render_knowledge_file_omits_defaults(tmp_path: Path) -> None:
-    """Default values (pin_mode=none, decay_protected=False, recall_count=0) are omitted from YAML."""
+    """Default values (decay_protected=False, recall_count=0) are omitted from YAML."""
     artifact = KnowledgeArtifact(
         id="m-1",
         path=tmp_path / "m.md",
@@ -171,7 +167,6 @@ def test_render_knowledge_file_omits_defaults(tmp_path: Path) -> None:
     )
     rendered = render_knowledge_file(artifact)
     fm, _ = parse_frontmatter(rendered)
-    assert "pin_mode" not in fm
     assert "decay_protected" not in fm
     assert "recall_count" not in fm
     assert "title" not in fm

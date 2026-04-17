@@ -19,7 +19,6 @@ def _write_artifact(
     artifact_id: str,
     created: str,
     last_recalled: str | None = None,
-    pin_mode: str | None = None,
     decay_protected: bool = False,
     artifact_kind: str = "note",
     body: str = "content body",
@@ -33,8 +32,6 @@ def _write_artifact(
     ]
     if last_recalled is not None:
         lines.append(f"last_recalled: '{last_recalled}'")
-    if pin_mode is not None:
-        lines.append(f"pin_mode: {pin_mode}")
     if decay_protected:
         lines.append("decay_protected: true")
     frontmatter = "\n".join(lines) + "\n"
@@ -107,19 +104,6 @@ def test_old_recalled_long_ago_is_candidate(tmp_path: Path) -> None:
     assert [c.id for c in candidates] == ["stale-recall"]
 
 
-def test_pin_mode_standing_is_immune(tmp_path: Path) -> None:
-    """pin_mode='standing' blocks decay regardless of age / recall staleness."""
-    now = datetime.now(UTC)
-    _write_artifact(
-        tmp_path,
-        artifact_id="pinned",
-        created=_iso(now - timedelta(days=500)),
-        last_recalled=None,
-        pin_mode="standing",
-    )
-    assert find_decay_candidates(tmp_path, _settings(90)) == []
-
-
 def test_decay_protected_is_immune(tmp_path: Path) -> None:
     """decay_protected=true blocks decay regardless of age / recall staleness."""
     now = datetime.now(UTC)
@@ -131,20 +115,6 @@ def test_decay_protected_is_immune(tmp_path: Path) -> None:
         decay_protected=True,
     )
     assert find_decay_candidates(tmp_path, _settings(90)) == []
-
-
-def test_pin_mode_none_does_not_grant_immunity(tmp_path: Path) -> None:
-    """The default pin_mode='none' must NOT be treated as pinned."""
-    now = datetime.now(UTC)
-    _write_artifact(
-        tmp_path,
-        artifact_id="plain",
-        created=_iso(now - timedelta(days=200)),
-        last_recalled=None,
-        pin_mode="none",
-    )
-    candidates = find_decay_candidates(tmp_path, _settings(90))
-    assert [c.id for c in candidates] == ["plain"]
 
 
 def test_candidates_sorted_oldest_created_first(tmp_path: Path) -> None:
@@ -183,12 +153,6 @@ def test_mixed_population_returns_correct_subset(tmp_path: Path) -> None:
         artifact_id="b-old-active",
         created=_iso(now - timedelta(days=300)),
         last_recalled=_iso(now - timedelta(days=5)),
-    )
-    _write_artifact(
-        tmp_path,
-        artifact_id="c-pinned",
-        created=_iso(now - timedelta(days=300)),
-        pin_mode="standing",
     )
     _write_artifact(
         tmp_path,

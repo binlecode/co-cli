@@ -169,7 +169,7 @@ Knowledge artifacts are flat Markdown files with YAML frontmatter under a single
 
 All artifacts parse into `KnowledgeArtifact` (`co_cli/knowledge/_artifact.py`) with an `artifact_kind` subtype (`preference` | `decision` | `rule` | `feedback` | `article` | `reference` | `note`). `co_cli/memory/recall.py` re-exports `load_knowledge_artifacts` so prompt-assembly and personality injection can import it without triggering the `tools/` ↔ `memory/` import cycle.
 
-Frontmatter fields: `id` (UUID), `kind: knowledge`, `artifact_kind`, `title`, `description`, `created` / `updated` (ISO8601), `tags`, `related`, `source_type` (`detected` | `web_fetch` | `manual` | `obsidian` | `drive` | `consolidated`), `source_ref` (session id, URL, or artifact id — also the dedup key for articles), `pin_mode` (`standing` to protect from automated decay/merge; otherwise `none`), `decay_protected`, `last_recalled`, `recall_count`.
+Frontmatter fields: `id` (UUID), `kind: knowledge`, `artifact_kind`, `title`, `description`, `created` / `updated` (ISO8601), `tags`, `related`, `source_type` (`detected` | `web_fetch` | `manual` | `obsidian` | `drive` | `consolidated`), `source_ref` (session id, URL, or artifact id — also the dedup key for articles), `decay_protected`, `last_recalled`, `recall_count`.
 
 #### 2.4.2 Read Path
 
@@ -200,7 +200,7 @@ fire_and_forget_extraction(delta, deps, frontend, cursor_start)
   -> on success: advances deps.session.last_extracted_message_idx = cursor_start + len(delta)
   -> on failure or exception: cursor unchanged (delta re-processed on next turn)
 
-save_knowledge(ctx, content, artifact_kind, title=None, description=None, tags=None, pin_mode="none")
+save_knowledge(ctx, content, artifact_kind, title=None, description=None, tags=None)
   -> validates artifact_kind against ArtifactKindEnum
   -> slug = slugify(title) if title else slugify(content[:50])
   -> filename = f"{slug}-{uuid[:8]}.md"   # UUID suffix: two identical calls → two files
@@ -345,7 +345,7 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
 | `co_cli/memory/recall.py` | Re-exports `load_knowledge_artifacts` for prompt-assembly and personality injection (avoids the `tools/` ↔ `memory/` import cycle) |
 | `co_cli/memory/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
-| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `PinModeEnum`, `CertaintyEnum`), loader |
+| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `CertaintyEnum`), loader |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate, `render_knowledge_file` (artifact → .md), `render_frontmatter` (dict → .md for in-place updates) |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
 | `co_cli/tools/memory.py` | `save_knowledge` (extractor-only write tool), `grep_recall`, `_recall_for_context`, agent tools: `search_memories`, `list_memories`, `update_memory`, `append_memory` |

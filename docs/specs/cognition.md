@@ -118,7 +118,6 @@ Every knowledge artifact is a `.md` file with YAML frontmatter:
 | `source_type` | Origin: `detected`, `web_fetch`, `manual`, `obsidian`, `drive`, `consolidated` |
 | `source_ref` | Pointer to origin: session ID, URL, file path, or artifact ID |
 | `certainty` | Confidence: `high`, `medium`, `low` |
-| `pin_mode` | Lifecycle immunity: `standing` (immune from automated decay/merge) or `none` |
 | `decay_protected` | Boolean — immune from automated decay |
 | `last_recalled` | ISO8601 timestamp of most recent recall hit |
 | `recall_count` | Integer count of recall hits |
@@ -199,7 +198,7 @@ Batch lifecycle management for the knowledge layer. Runs at session end (when en
 | Saves per transcript mining session | 5 |
 | Dream cycle timeout | 60 seconds |
 
-All archived artifacts are recoverable via `/knowledge restore`. Artifacts with `pin_mode="standing"` or `decay_protected=True` are immune from automated merge and decay (but are not injected into context — `pin_mode` is a lifecycle-protection flag only).
+All archived artifacts are recoverable via `/knowledge restore`. Artifacts with `decay_protected=True` are immune from automated merge and decay.
 
 ### 2.6 Tool Surface
 
@@ -272,7 +271,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, loader, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `PinModeEnum`, `CertaintyEnum`) |
+| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, loader, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `CertaintyEnum`) |
 | `co_cli/knowledge/_store.py` | `KnowledgeStore` — SQLite FTS5/hybrid search, `sync_dir`, chunk indexing |
 | `co_cli/knowledge/_frontmatter.py` | Frontmatter parse/validate, `render_knowledge_file`, `render_frontmatter` |
 | `co_cli/knowledge/_chunker.py` | `chunk_text()` — paragraph/line/char split with overlap |

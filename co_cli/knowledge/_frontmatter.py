@@ -94,7 +94,7 @@ def _validate_identity(fm: dict[str, Any]) -> None:
 
 
 def _validate_string_fields(fm: dict[str, Any]) -> None:
-    for key in ("title", "description", "source_type", "source_ref", "certainty", "pin_mode"):
+    for key in ("title", "description", "source_type", "source_ref", "certainty"):
         if key in fm and fm[key] is not None and not isinstance(fm[key], str):
             raise ValueError(f"knowledge frontmatter field {key!r} must be a string or null")
     description = fm.get("description")
@@ -122,7 +122,7 @@ def validate_knowledge_frontmatter(fm: dict[str, Any]) -> None:
 
     Required: id, kind=knowledge, artifact_kind, created.
     Optional: title, description, updated, tags, related, source_type,
-              source_ref, certainty, pin_mode, decay_protected, last_recalled,
+              source_ref, certainty, decay_protected, last_recalled,
               recall_count.
     """
     _validate_identity(fm)
@@ -162,8 +162,6 @@ def _artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
     for key, value in optional:
         if value:
             fm[key] = value
-    if artifact.pin_mode and artifact.pin_mode != "none":
-        fm["pin_mode"] = artifact.pin_mode
     if artifact.decay_protected:
         fm["decay_protected"] = True
     return fm

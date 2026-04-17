@@ -13,7 +13,6 @@ from co_cli.deps import CoDeps
 from co_cli.knowledge._artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
-    PinModeEnum,
     SourceTypeEnum,
 )
 from co_cli.knowledge._dream import _MAX_DECAY_PER_CYCLE, _decay_sweep
@@ -27,7 +26,6 @@ def _write_aged_artifact(
     *,
     created_days_ago: int,
     last_recalled_days_ago: int | None,
-    pin_mode: str = PinModeEnum.NONE.value,
     decay_protected: bool = False,
     content: str = "forgotten artifact body",
 ) -> Path:
@@ -49,7 +47,6 @@ def _write_aged_artifact(
         content=content,
         created=created,
         last_recalled=last_recalled,
-        pin_mode=pin_mode,
         decay_protected=decay_protected,
         source_type=SourceTypeEnum.DETECTED.value,
     )
@@ -109,14 +106,14 @@ def test_decay_sweep_archives_old_unrecalled_artifacts(tmp_path: Path) -> None:
         store.close()
 
 
-def test_decay_sweep_skips_pinned_and_decay_protected(tmp_path: Path) -> None:
+def test_decay_sweep_skips_decay_protected(tmp_path: Path) -> None:
     deps, store = _make_deps(tmp_path)
     try:
         _write_aged_artifact(
             deps.knowledge_dir,
             created_days_ago=365,
             last_recalled_days_ago=None,
-            pin_mode=PinModeEnum.STANDING.value,
+            decay_protected=True,
         )
         _write_aged_artifact(
             deps.knowledge_dir,

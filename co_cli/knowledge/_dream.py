@@ -29,7 +29,6 @@ from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.knowledge._archive import archive_artifacts
 from co_cli.knowledge._artifact import (
     KnowledgeArtifact,
-    PinModeEnum,
     SourceTypeEnum,
     load_knowledge_artifacts,
 )
@@ -256,10 +255,8 @@ _dream_merge_agent: Agent[CoDeps, str] = Agent(
 
 
 def _is_merge_immune(artifact: KnowledgeArtifact) -> bool:
-    """Artifacts with standing pin_mode or decay_protected are never merged."""
-    if artifact.decay_protected:
-        return True
-    return artifact.pin_mode not in (None, "", PinModeEnum.NONE.value)
+    """decay_protected artifacts are never merged."""
+    return artifact.decay_protected
 
 
 def _cluster_by_similarity(

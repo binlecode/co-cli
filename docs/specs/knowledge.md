@@ -84,7 +84,6 @@ Every knowledge artifact is a `.md` file with YAML frontmatter:
 | `source_type` | enum | Origin: `detected`, `web_fetch`, `manual`, `obsidian`, `drive`, `consolidated` |
 | `source_ref` | string | Pointer to origin: session ID, URL, file path, or artifact ID |
 | `certainty` | enum | Confidence: `high`, `medium`, `low` |
-| `pin_mode` | enum | `standing` (immune from automated decay/merge) or `none` (default) |
 | `decay_protected` | bool | Immune from automated decay |
 | `last_recalled` | ISO8601 | Timestamp of most recent recall hit |
 | `recall_count` | int | Count of recall hits |

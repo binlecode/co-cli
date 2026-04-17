@@ -941,7 +941,7 @@ async def test_cmd_knowledge_stats_counts_accurately(tmp_path):
     archive_dir = knowledge_dir / "_archive"
     archive_dir.mkdir()
 
-    # Active artifacts: 2 preference, 1 feedback (one pinned, one decay-protected)
+    # Active artifacts: 2 preference, 1 feedback (one decay-protected)
     _write_memory(knowledge_dir, "p1.md", "id-p1", "prefer dark mode", artifact_kind="preference")
     _write_memory(
         knowledge_dir,
@@ -949,7 +949,6 @@ async def test_cmd_knowledge_stats_counts_accurately(tmp_path):
         "id-p2",
         "prefer pytest",
         artifact_kind="preference",
-        pin_mode="standing",
     )
     _write_memory(
         knowledge_dir,
