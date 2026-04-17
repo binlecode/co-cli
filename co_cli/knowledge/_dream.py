@@ -34,7 +34,7 @@ from co_cli.knowledge._artifact import (
 )
 from co_cli.knowledge._chunker import chunk_text
 from co_cli.knowledge._decay import find_decay_candidates
-from co_cli.knowledge._extractor import _tag_messages
+from co_cli.knowledge._distiller import _tag_messages
 from co_cli.knowledge._frontmatter import render_knowledge_file
 from co_cli.knowledge._similarity import token_jaccard
 from co_cli.tools.knowledge import _slugify, save_knowledge

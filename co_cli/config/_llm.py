@@ -46,7 +46,7 @@ DEFAULT_NOREASON_EXTRA_BODY: dict[str, Any] = {
 }
 
 # Static constant for callers that don't have LlmSettings at import time
-# (e.g. context/_history.py, memory/_extractor.py). Uses the same default
+# (e.g. context/_history.py, memory/_indexer.py). Uses the same default
 # values as NoReasonSettings so dynamic build_noreason_model_settings() and
 # this constant are always in sync.
 NOREASON_SETTINGS = ModelSettings(

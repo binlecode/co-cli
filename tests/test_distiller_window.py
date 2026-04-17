@@ -15,7 +15,7 @@ from tests._frontend import SilentFrontend
 from tests._settings import make_settings
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._extractor import (
+from co_cli.knowledge._distiller import (
     _build_window,
     drain_pending_extraction,
     fire_and_forget_extraction,

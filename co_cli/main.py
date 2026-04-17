@@ -105,7 +105,7 @@ async def _finalize_turn(
     Does NOT handle skill-run cleanup — that is done by cleanup_skill_run_state() in finally.
     Does NOT handle /compact or built-in slash-command persistence.
     """
-    from co_cli.knowledge._extractor import fire_and_forget_extraction
+    from co_cli.knowledge._distiller import fire_and_forget_extraction
 
     next_history = turn_result.messages
 
@@ -180,7 +180,7 @@ async def _run_foreground_turn(
 
 async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None:
     """Drain pending extractions, run the dream cycle if enabled, release resources."""
-    from co_cli.knowledge._extractor import drain_pending_extraction
+    from co_cli.knowledge._distiller import drain_pending_extraction
 
     await drain_pending_extraction()
     if deps is not None:
