@@ -347,8 +347,8 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 | `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` dataclass, enums (`ArtifactKindEnum`, `SourceTypeEnum`, `CertaintyEnum`), loader |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate, `render_knowledge_file` (artifact → .md), `render_frontmatter` (dict → .md for in-place updates) |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
-| `co_cli/tools/knowledge.py` | `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article` |
-| `co_cli/tools/memory.py` | `grep_recall`, `_recall_for_context`, agent tools: `search_memories`, `list_memories`, `update_memory`, `append_memory` |
+| `co_cli/tools/knowledge.py` | `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article`, `update_knowledge`, `append_knowledge`, internal helpers: `grep_recall`, `filter_artifacts`, `_recall_for_context`, `_touch_recalled` |
+| `co_cli/tools/memory.py` | `search_memories` (agent tool — deprecated alias for `session_search`) |
 | `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
 | `co_cli/tools/agents.py` | delegation tools and result metadata |
 | `co_cli/tools/background.py` | session-scoped background task state and subprocess monitor |

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Eval: knowledge edit recall — save → recall → update → recall updated content.
 
-Validates the end-to-end flow: update_memory and append_memory re-index into
+Validates the end-to-end flow: update_knowledge and append_knowledge re-index into
 the DB, and subsequent search_memories picks up the changes.
 
     save_knowledge        → DB indexed → search_memories finds unique sentinel
-    update_memory         → reindexes   → search finds new content, not original
-    append_memory         → reindexes   → search finds appended content
-    update (no DB)        → file written → search degrades to grep (no crash)
+    update_knowledge      → reindexes   → search finds new content, not original
+    append_knowledge      → reindexes   → search finds appended content
+    update_knowledge (no DB) → file written → search degrades to grep (no crash)
 
 The degraded path (knowledge_store=None after save) verifies that edits
 complete cleanly even when the DB is unavailable at edit time.
@@ -35,8 +35,8 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.knowledge import save_knowledge
-from co_cli.tools.memory import append_memory, search_memories, update_memory
+from co_cli.tools.knowledge import append_knowledge, save_knowledge, update_knowledge
+from co_cli.tools.memory import search_memories
 from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-memory-edit-recall.md"
@@ -137,7 +137,7 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
-    """update_memory rewrites content and reindexes; search finds new, not original."""
+    """update_knowledge rewrites content and reindexes; search finds new, not original."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "update-recall" / "memory"
@@ -180,7 +180,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
         # Update with new content
         t = time.monotonic()
-        update_result = await update_memory(
+        update_result = await update_knowledge(
             ctx,
             slug=slug,
             old_content=f"Uses {original} for testing.",
@@ -188,7 +188,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         )
         steps.append(
             {
-                "name": "update_memory + reindex",
+                "name": "update_knowledge + reindex",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"updated={update_result.metadata.get('updated')}",
             }
@@ -239,7 +239,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
-    """append_memory adds content and reindexes; search finds appended keyword."""
+    """append_knowledge adds content and reindexes; search finds appended keyword."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "append-recall" / "memory"
@@ -269,10 +269,10 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         )
 
         t = time.monotonic()
-        await append_memory(ctx, slug=slug, content=f"Appended: {appended_keyword}.")
+        await append_knowledge(ctx, slug=slug, content=f"Appended: {appended_keyword}.")
         steps.append(
             {
-                "name": "append_memory + reindex",
+                "name": "append_knowledge + reindex",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"appended keyword={appended_keyword!r}",
             }
@@ -320,7 +320,7 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
-    """update_memory completes cleanly when knowledge_store=None; no crash, file updated."""
+    """update_knowledge completes cleanly when knowledge_store=None; no crash, file updated."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "edit-no-db" / "memory"
@@ -357,7 +357,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
 
     t = time.monotonic()
     try:
-        await update_memory(
+        await update_knowledge(
             ctx_no_db,
             slug=slug,
             old_content=f"Content: {original}.",
@@ -370,7 +370,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
 
     steps.append(
         {
-            "name": "update_memory (knowledge_store=None)",
+            "name": "update_knowledge (knowledge_store=None)",
             "ms": (time.monotonic() - t) * 1000,
             "detail": f"exception={exception_raised}",
         }
@@ -389,7 +389,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
     )
 
     if exception_raised:
-        verdict, failure = "FAIL", f"update_memory raised exception without DB: {exception_msg}"
+        verdict, failure = "FAIL", f"update_knowledge raised exception without DB: {exception_msg}"
     elif not file_updated:
         verdict, failure = "FAIL", "file not updated on disk when knowledge_store=None"
     else:

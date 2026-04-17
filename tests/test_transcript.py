@@ -271,6 +271,67 @@ def test_load_transcript_rejects_oversized_file(tmp_path: Path) -> None:
     assert loaded == []
 
 
+def test_load_transcript_tolerates_legacy_tool_names(tmp_path: Path) -> None:
+    """Sessions containing renamed tool names (e.g. update_memory) load without exception.
+
+    After the rename-memory-tools-to-knowledge refactor, persisted sessions may
+    contain ToolCallPart/ToolReturnPart with the old names update_memory and
+    append_memory. load_transcript must not raise — tool_name is an opaque string
+    in pydantic-ai's type adapter and is never validated against a live registry.
+    """
+    path = tmp_path / "sessions" / "test-legacy-tools-001.jsonl"
+
+    legacy_messages = [
+        ModelRequest(parts=[UserPromptPart(content="remember this fact")]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="update_memory",
+                    args='{"title": "test", "content": "legacy fact"}',
+                    tool_call_id="call-1",
+                ),
+            ],
+            model_name="test-model",
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="update_memory",
+                    content="saved",
+                    tool_call_id="call-1",
+                ),
+            ],
+        ),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="append_memory",
+                    args='{"title": "test", "content": "more"}',
+                    tool_call_id="call-2",
+                ),
+            ],
+            model_name="test-model",
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="append_memory",
+                    content="appended",
+                    tool_call_id="call-2",
+                ),
+            ],
+        ),
+    ]
+
+    append_messages(path, legacy_messages)
+    loaded = load_transcript(path)
+
+    assert len(loaded) == len(legacy_messages)
+    # Legacy tool names survive the round-trip unchanged
+    assert loaded[1].parts[0].tool_name == "update_memory"
+    assert loaded[3].parts[0].tool_name == "append_memory"
+
+
 def test_format_file_size() -> None:
     """format_file_size produces human-readable output."""
     assert format_file_size(500) == "500 B"

@@ -268,7 +268,7 @@ Memory recall is also per-turn, not sticky:
 - `inject_opening_context()` stores counters in `deps.session.memory_recall_state`
 - it recalls only once per new user turn
 - failure to recall silently leaves history unchanged
-- the recall logic itself lives in `tools/memory.py::_recall_for_context()` (internal — called by `inject_opening_context`, not registered as an agent tool)
+- the recall logic itself lives in `tools/knowledge.py::_recall_for_context()` (internal — called by `inject_opening_context`, not registered as an agent tool)
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 

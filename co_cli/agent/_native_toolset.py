@@ -20,13 +20,15 @@ from co_cli.tools.google.calendar import list_calendar_events, search_calendar_e
 from co_cli.tools.google.drive import read_drive_file, search_drive_files
 from co_cli.tools.google.gmail import create_gmail_draft, list_gmail_emails, search_gmail_emails
 from co_cli.tools.knowledge import (
+    append_knowledge,
     list_knowledge,
     read_article,
     save_article,
     search_articles,
     search_knowledge,
+    update_knowledge,
 )
-from co_cli.tools.memory import list_memories, search_memories
+from co_cli.tools.memory import search_memories
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
 from co_cli.tools.session_search import session_search
 from co_cli.tools.shell import run_shell_command
@@ -147,9 +149,6 @@ def _build_native_toolset(
     _register_tool(
         search_articles, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
     )
-    _register_tool(
-        list_memories, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible
-    )
 
     # Workspace reads
     _register_tool(glob, is_read_only=True, is_concurrent_safe=True, visibility=_always_visible)
@@ -194,6 +193,20 @@ def _build_native_toolset(
     _register_tool(patch, approval=True, visibility=_deferred_visible, retries=1)
 
     # Knowledge write tools
+    _register_tool(
+        update_knowledge,
+        approval=True,
+        is_concurrent_safe=True,
+        visibility=_deferred_visible,
+        retries=1,
+    )
+    _register_tool(
+        append_knowledge,
+        approval=True,
+        is_concurrent_safe=True,
+        visibility=_deferred_visible,
+        retries=1,
+    )
     _register_tool(
         save_article,
         approval=True,

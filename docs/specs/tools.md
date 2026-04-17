@@ -39,8 +39,8 @@ The tool ecosystem is composed of core infrastructure for execution, lifecycle a
 ### Domain Tools
 - `co_cli/tools/files.py` — `glob`, `read_file`, `grep`, `write_file`, `patch`
 - `co_cli/tools/shell.py` — `run_shell_command`
-- `co_cli/tools/memory.py` — `search_memories` (deprecated — delegates to `session_search` for episodic recall), `list_memories` (deprecated alias for `list_knowledge`); `update_memory`, `append_memory` (approval-required)
-- `co_cli/tools/knowledge.py` — `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article`
+- `co_cli/tools/memory.py` — `search_memories` (deprecated — delegates to `session_search` for episodic recall)
+- `co_cli/tools/knowledge.py` — `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article`, `update_knowledge`, `append_knowledge`, internal helpers: `grep_recall`, `filter_artifacts`, `_recall_for_context`, `_touch_recalled`, `_find_by_slug`
 - `co_cli/tools/web.py` — `web_search`, `web_fetch`
 - `co_cli/tools/task_control.py` — `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks`
 - `co_cli/tools/todo.py` — `write_todos`, `read_todos`
@@ -127,7 +127,7 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 
 ### Tool Catalog
 
-**Core tools (27 tools)**
+**Core tools (28 tools)**
 | Tool | Visibility | Approval | Seq | Retries | Max Size | Notes |
 |------|------------|----------|-----|---------|----------|-------|
 | `check_capabilities` | ALWAYS | auto | no | default | 50k | Introspection for /doctor |
@@ -137,7 +137,9 @@ MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `
 | `read_article` | ALWAYS | auto | no | default | 50k | Read full artifact body by slug |
 | `session_search` | ALWAYS | auto | no | default | 50k | Episodic memory — FTS5 keyword search over past session transcripts |
 | `search_memories` | ALWAYS | auto | no | default | 50k | Deprecated — delegates to `session_search` |
-| `search_articles`, `list_memories` | ALWAYS | auto | no | default | 50k | Deprecated aliases: `search_articles` → `search_knowledge`; `list_memories` → `list_knowledge` |
+| `search_articles` | ALWAYS | auto | no | default | 50k | Deprecated alias: `search_articles` → `search_knowledge` |
+| `update_knowledge` | DEFERRED | deferred | no | 1 | 50k | Surgical passage replacement in a knowledge artifact; slug-level resource lock |
+| `append_knowledge` | DEFERRED | deferred | no | 1 | 50k | Append content to end of a knowledge artifact; slug-level resource lock |
 | `glob`, `grep` | ALWAYS | auto | no | default | 50k | Workspace search |
 | `read_file` | ALWAYS | auto | no | default | 80k | Workspace read |
 | `web_search`, `web_fetch` | ALWAYS | auto | no | 3 | 50k | Network bounds/fetch |

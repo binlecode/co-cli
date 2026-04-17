@@ -68,24 +68,26 @@ def test_delegation_tools_discoverable_by_keywords() -> None:
     assert "reasoning" in descs["reason_about"] or "thinking" in descs["reason_about"]
 
 
-def test_memory_write_tools_not_in_agent() -> None:
-    """Memory write tools must not be registered in the agent at all."""
+def test_knowledge_tool_registration() -> None:
+    """Verify knowledge tool catalog: read tools always-visible, write tools deferred."""
     descs = _deferred_descriptions()
-    # Write tools removed from agent in P1 refactor
-    assert "save_memory" not in descs, "save_memory must not be registered in agent"
-    assert "update_memory" not in descs, "update_memory must not be registered in agent"
-    assert "append_memory" not in descs, "append_memory must not be registered in agent"
     # save_memory is extractor-only — must never appear in the main agent tool_index
     assert "save_memory" not in _NATIVE_INDEX, (
         "save_memory must not be registered in main agent — extractor-only tool"
     )
+    # Old memory-named tool aliases must not exist in the catalog
+    assert "update_memory" not in descs, "update_memory must not be registered — renamed"
+    assert "append_memory" not in descs, "append_memory must not be registered — renamed"
+    assert "list_memories" not in _NATIVE_INDEX
+    # Knowledge write tools now registered as deferred
+    assert "update_knowledge" in descs, "update_knowledge must be registered as deferred"
+    assert "append_knowledge" in descs, "append_knowledge must be registered as deferred"
     # Read tools are always-visible (not deferred), so present in tool_index but not deferred
     assert "search_knowledge" in _NATIVE_INDEX
     assert "list_knowledge" in _NATIVE_INDEX
     assert "session_search" in _NATIVE_INDEX
-    # Deprecated aliases still registered for backward compatibility
+    # search_memories is kept as alias for episodic search
     assert "search_memories" in _NATIVE_INDEX
-    assert "list_memories" in _NATIVE_INDEX
 
 
 def test_article_write_tool_discoverable_by_keywords() -> None:

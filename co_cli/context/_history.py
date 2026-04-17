@@ -645,7 +645,7 @@ async def inject_opening_context(
         return messages
 
     # Recall memories for the current topic
-    from co_cli.tools.memory import _recall_for_context
+    from co_cli.tools.knowledge import _recall_for_context
 
     try:
         result = await _recall_for_context(ctx, user_msg, max_results=3)

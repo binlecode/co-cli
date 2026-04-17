@@ -16,14 +16,14 @@ from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.knowledge import list_knowledge, save_knowledge
-from co_cli.tools.memory import (
+from co_cli.tools.knowledge import (
     _touch_recalled,
-    append_memory,
-    list_memories,
-    search_memories,
-    update_memory,
+    append_knowledge,
+    list_knowledge,
+    save_knowledge,
+    update_knowledge,
 )
+from co_cli.tools.memory import search_memories
 from co_cli.tools.shell_backend import ShellBackend
 
 # ---------------------------------------------------------------------------
@@ -172,49 +172,37 @@ def test_list_knowledge_pagination(tmp_path: Path):
     assert r3.metadata["has_more"] is False
 
 
-def test_list_memories_deprecated_alias(tmp_path: Path):
-    """list_memories (deprecated) delegates to list_knowledge — same results."""
-    memory_dir = tmp_path / "memory"
-    _write_memory(memory_dir, 1, "Memory content number 1", tags=["test"])
-
-    ctx = _make_ctx(knowledge_dir=memory_dir)
-    r_knowledge = asyncio.run(list_knowledge(ctx, offset=0, limit=5))
-    r_memories = asyncio.run(list_memories(ctx, offset=0, limit=5))
-    assert r_knowledge.metadata["count"] == r_memories.metadata["count"]
-    assert r_knowledge.metadata["total"] == r_memories.metadata["total"]
-
-
 # ---------------------------------------------------------------------------
-# update_memory — surgical text replacement
+# update_knowledge — surgical text replacement
 # ---------------------------------------------------------------------------
 
 
-def test_update_memory_replaces_exact_match(tmp_path: Path):
-    """update_memory replaces old_content with new_content in the body."""
+def test_update_knowledge_replaces_exact_match(tmp_path: Path):
+    """update_knowledge replaces old_content with new_content in the body."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest over unittest", tags=["preference"])
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
-    asyncio.run(update_memory(ctx, slug, "pytest over unittest", "pytest over all others"))
+    asyncio.run(update_knowledge(ctx, slug, "pytest over unittest", "pytest over all others"))
 
     updated_text = path.read_text(encoding="utf-8")
     assert "pytest over all others" in updated_text
     assert "pytest over unittest" not in updated_text
 
 
-def test_update_memory_raises_not_found(tmp_path: Path):
-    """update_memory raises FileNotFoundError for an unknown slug."""
+def test_update_knowledge_raises_not_found(tmp_path: Path):
+    """update_knowledge raises FileNotFoundError for an unknown slug."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     with pytest.raises(FileNotFoundError, match="not found"):
-        asyncio.run(update_memory(ctx, "999-nonexistent", "old", "new"))
+        asyncio.run(update_knowledge(ctx, "999-nonexistent", "old", "new"))
 
 
-def test_update_memory_raises_zero_occurrences(tmp_path: Path):
-    """update_memory raises ValueError when old_content is not in the body."""
+def test_update_knowledge_raises_zero_occurrences(tmp_path: Path):
+    """update_knowledge raises ValueError when old_content is not in the body."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(knowledge_dir=memory_dir)
@@ -222,11 +210,11 @@ def test_update_memory_raises_zero_occurrences(tmp_path: Path):
     slug = path.stem
 
     with pytest.raises(ValueError, match="not found"):
-        asyncio.run(update_memory(ctx, slug, "unittest", "mocha"))
+        asyncio.run(update_knowledge(ctx, slug, "unittest", "mocha"))
 
 
-def test_update_memory_raises_ambiguous(tmp_path: Path):
-    """update_memory raises ValueError when old_content appears more than once."""
+def test_update_knowledge_raises_ambiguous(tmp_path: Path):
+    """update_knowledge raises ValueError when old_content appears more than once."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User uses pytest. Also uses pytest.", tags=["preference"])
     ctx = _make_ctx(knowledge_dir=memory_dir)
@@ -234,11 +222,11 @@ def test_update_memory_raises_ambiguous(tmp_path: Path):
     slug = path.stem
 
     with pytest.raises(ValueError, match="2 times"):
-        asyncio.run(update_memory(ctx, slug, "pytest", "mocha"))
+        asyncio.run(update_knowledge(ctx, slug, "pytest", "mocha"))
 
 
-def test_update_memory_rejects_line_prefix(tmp_path: Path):
-    """update_memory raises ValueError when old_content contains Read-tool line prefixes."""
+def test_update_knowledge_rejects_line_prefix(tmp_path: Path):
+    """update_knowledge raises ValueError when old_content contains Read-tool line prefixes."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(knowledge_dir=memory_dir)
@@ -247,11 +235,11 @@ def test_update_memory_rejects_line_prefix(tmp_path: Path):
 
     # Simulate Read tool artifact: "1→ User prefers pytest"
     with pytest.raises(ValueError, match="line-number prefixes"):
-        asyncio.run(update_memory(ctx, slug, "1\u2192 User prefers pytest", "new"))
+        asyncio.run(update_knowledge(ctx, slug, "1\u2192 User prefers pytest", "new"))
 
 
-def test_update_memory_tab_normalization(tmp_path: Path):
-    """update_memory matches when the body uses spaces where old_content has a tab.
+def test_update_knowledge_tab_normalization(tmp_path: Path):
+    """update_knowledge matches when the body uses spaces where old_content has a tab.
 
     expandtabs() normalises both sides before matching. "foo" is 3 chars so a tab
     at column 3 advances to column 8 (5 spaces): "foo\tbar" → "foo     bar".
@@ -265,38 +253,38 @@ def test_update_memory_tab_normalization(tmp_path: Path):
 
     slug = path.stem
     # old_content uses a tab; after expandtabs() it matches the body
-    asyncio.run(update_memory(ctx, slug, "foo\tbar", "replaced"))
+    asyncio.run(update_knowledge(ctx, slug, "foo\tbar", "replaced"))
 
     assert "replaced" in path.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
-# append_memory — add content to end of body
+# append_knowledge — add content to end of body
 # ---------------------------------------------------------------------------
 
 
-def test_append_memory_adds_to_end(tmp_path: Path):
-    """append_memory appends content as a new line at the end of the body."""
+def test_append_knowledge_adds_to_end(tmp_path: Path):
+    """append_knowledge appends content as a new line at the end of the body."""
     memory_dir = tmp_path / "memory"
     path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
-    asyncio.run(append_memory(ctx, slug, "Also uses coverage reports."))
+    asyncio.run(append_knowledge(ctx, slug, "Also uses coverage reports."))
 
     updated_text = path.read_text(encoding="utf-8")
     assert updated_text.rstrip("\n").endswith("Also uses coverage reports.")
     assert "User prefers pytest" in updated_text
 
 
-def test_append_memory_missing_slug_raises(tmp_path: Path):
-    """append_memory raises FileNotFoundError for an unknown slug."""
+def test_append_knowledge_missing_slug_raises(tmp_path: Path):
+    """append_knowledge raises FileNotFoundError for an unknown slug."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     with pytest.raises(FileNotFoundError, match="not found"):
-        asyncio.run(append_memory(ctx, "999-nonexistent", "extra line"))
+        asyncio.run(append_knowledge(ctx, "999-nonexistent", "extra line"))
 
 
 # ---------------------------------------------------------------------------
@@ -413,13 +401,12 @@ def test_load_soul_mindsets_from_role_path():
 
 
 # ---------------------------------------------------------------------------
-# update_memory / append_memory DB re-index round-trip
+# update_knowledge / append_knowledge DB re-index round-trip
 # ---------------------------------------------------------------------------
 
 
-def test_update_memory_reindexes_in_db(tmp_path: Path):
-    """update_memory must update the DB index so the new content is findable."""
-    from co_cli.tools.memory import update_memory
+def test_update_knowledge_reindexes_in_db(tmp_path: Path):
+    """update_knowledge must update the DB index so the new content is findable."""
 
     memory_dir = tmp_path / "memory"
     _write_memory(memory_dir, 1, "original-content-for-update-test")
@@ -432,20 +419,19 @@ def test_update_memory_reindexes_in_db(tmp_path: Path):
         ctx = _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx)
 
         asyncio.run(
-            update_memory(ctx, slug, "original-content-for-update-test", "updated-content-xyz")
+            update_knowledge(ctx, slug, "original-content-for-update-test", "updated-content-xyz")
         )
 
         results = idx.search("updated-content-xyz", source="knowledge", limit=5)
         assert any("updated-content-xyz" in r.snippet for r in results), (
-            "update_memory must re-index so the updated content is searchable"
+            "update_knowledge must re-index so the updated content is searchable"
         )
     finally:
         idx.close()
 
 
-def test_append_memory_reindexes_in_db(tmp_path: Path):
-    """append_memory must update the DB index so the appended content is findable."""
-    from co_cli.tools.memory import append_memory
+def test_append_knowledge_reindexes_in_db(tmp_path: Path):
+    """append_knowledge must update the DB index so the appended content is findable."""
 
     memory_dir = tmp_path / "memory"
     _write_memory(memory_dir, 1, "base-content-for-append-test")
@@ -457,11 +443,11 @@ def test_append_memory_reindexes_in_db(tmp_path: Path):
         idx.sync_dir("knowledge", memory_dir)
         ctx = _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx)
 
-        asyncio.run(append_memory(ctx, slug, "appended-unique-content-abc"))
+        asyncio.run(append_knowledge(ctx, slug, "appended-unique-content-abc"))
 
         results = idx.search("appended-unique-content-abc", source="knowledge", limit=5)
         assert any("appended-unique-content-abc" in r.snippet for r in results), (
-            "append_memory must re-index so the appended content is searchable"
+            "append_knowledge must re-index so the appended content is searchable"
         )
     finally:
         idx.close()

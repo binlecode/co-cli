@@ -15,7 +15,7 @@
 - Distributed tracing
 - Retention/pruning automation
 
-**Success criteria:** Every turn produces spans in `co-cli-logs.db`; WAL mode enables concurrent read; all three viewers work on the same DB.
+**Success criteria:** Every turn produces spans in `co-cli-logs.db` and `co-cli.jsonl`; WAL mode enables concurrent read; all three viewers work on the same DB.
 **Status:** Stable
 **Known gaps:** No retention/pruning policy — DB grows unbounded.
 
@@ -182,11 +182,11 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 | Span Name (v3) | Kind | Key Attributes |
 |----------------|------|----------------|
 | `co.turn` | INTERNAL | `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens` — root span for every user turn; emitted by `co-cli.orchestrate` tracer in `run_turn()`; all pydantic-ai child spans attach under this root automatically. On terminal `ModelHTTPError` (429/5xx or budget-exhausted 400), adds a `provider_error` event with `http.status_code` (int) and `error.body` (str, capped at 500 chars). |
-| `invoke_agent {name}` | INTERNAL | `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `pydantic_ai.all_messages` |
+| `invoke_agent {name}` | INTERNAL | `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `pydantic_ai.all_messages`, `final_result` |
 | `chat {model}` | CLIENT | `gen_ai.request.model`, `gen_ai.response.finish_reasons`, `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
 | `running tools` | INTERNAL | list of tool names |
 | `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`; enriched by `CoToolLifecycle.after_tool_execute` with `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.result_size` (int); `rag.backend` (`fts5`, `hybrid`, or `grep`) stamped by `search_memories` and `search_knowledge` to identify the active retrieval path |
-| `subagent_{role}` | INTERNAL | `subagent.role`, `subagent.model`, `subagent.request_limit`, `subagent.requests_used` — emitted by `co-cli.subagent` tracer; covers one sub-agent run including optional retry |
+| `{role}` | INTERNAL | `agent.role`, `agent.model`, `agent.request_limit`, `agent.requests_used` — emitted by `co-cli.agents` tracer (`_delegate_agent` in `agents.py`); covers one sub-agent run including optional retry (e.g. `research_web`, `analyze_knowledge`, `reason_about`) |
 | `background_task_execute` | INTERNAL | `task.command`, `task.description`, `task.cwd` — span ID passed to `spawn_task()` for cross-session task linkage |
 
 ### Trace HTML Viewer (`co traces`)
@@ -244,7 +244,10 @@ The HTML file is written to `~/.co-cli/traces.html` and auto-opened in the brows
 | model | `gen_ai.usage.input_tokens` → `in=…`, `gen_ai.usage.output_tokens` → `out=…` |
 | tool | `gen_ai.tool.name` → `tool=…`, `gen_ai.tool.call.arguments` → `args=…` (truncated to 80 chars) |
 
-**Verbose mode (`-v`):** after each model span, indented lines show the LLM's output content. Parsed from `gen_ai.output.messages` JSON (list of messages, each with `parts` of type `text` or `thinking`). Thinking blocks are prefixed with `[thinking]` in dim italic.
+**Verbose mode (`-v`):** expands each span with detailed content:
+- **agent**: shows the final output result via `[final]`.
+- **model**: shows the first line of the system prompt, the last user message, and the full response. Parsed from `gen_ai.input.messages` and `gen_ai.output.messages`. Thinking blocks are prefixed with `[thinking]` in dim italic.
+- **tool**: shows full arguments (pretty-printed JSON) and the full tool result.
 
 **Rich color scheme:**
 
@@ -278,8 +281,8 @@ FROM spans WHERE name LIKE 'invoke_agent%' GROUP BY model;
 
 -- Provider errors (429/5xx/budget-exhausted 400) with status code and body
 SELECT datetime(start_time/1e9, 'unixepoch', 'localtime') AS time,
-    json_extract(events, '$[0].attributes.http\\.status_code') AS status,
-    json_extract(events, '$[0].attributes.error\\.body') AS body
+    json_extract(events, '$[0].attributes."http.status_code"') AS status,
+    json_extract(events, '$[0].attributes."error.body"') AS body
 FROM spans WHERE name = 'co.turn' AND status_code = 'ERROR'
     AND json_extract(events, '$[0].name') = 'provider_error'
 ORDER BY start_time DESC;

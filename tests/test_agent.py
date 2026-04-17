@@ -106,7 +106,6 @@ def test_tool_index_visibility_policy_metadata():
         "web_search",
         "run_shell_command",
         "list_knowledge",
-        "list_memories",
         "session_search",
         "search_knowledge",
     ):

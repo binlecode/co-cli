@@ -77,7 +77,7 @@ def _make_deps(session_id: str) -> CoDeps:
         ),
         (
             "Do I have any memories about database preferences?",
-            "search_knowledge_or_list_memories",
+            "search_knowledge_or_list_knowledge",
             "query",
             "database preferences",
         ),
@@ -127,7 +127,7 @@ async def test_tool_selection_and_arg_extraction(
             last_details = "no tool call observed"
             continue
 
-        if expected_tool == "search_knowledge_or_list_memories":
+        if expected_tool == "search_knowledge_or_list_knowledge":
             if tool_name == "search_knowledge":
                 actual = str((args or {}).get("query", "")).lower()
                 if "database preferences" in actual:
@@ -146,7 +146,7 @@ async def test_tool_selection_and_arg_extraction(
                     f"'database preferences' in query={(args or {}).get('query')!r}"
                 )
                 continue
-            if tool_name in ("list_memories", "list_knowledge"):
+            if tool_name == "list_knowledge":
                 kind = (args or {}).get("kind")
                 if kind in (None, "memory"):
                     return
@@ -154,7 +154,7 @@ async def test_tool_selection_and_arg_extraction(
                 continue
             last_details = (
                 f"tool={tool_name!r}, expected one of "
-                f"('search_knowledge', 'search_memories', 'list_memories', 'list_knowledge'),"
+                f"('search_knowledge', 'search_memories', 'list_knowledge'),"
                 f" args={args!r}"
             )
             continue

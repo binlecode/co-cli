@@ -176,7 +176,7 @@ def render_knowledge_file(artifact: KnowledgeArtifact) -> str:
 def render_frontmatter(fm: dict[str, Any], body: str) -> str:
     """Serialize a frontmatter dict + body to .md text.
 
-    Used by in-place updates (``update_memory``, ``append_memory``) that already
+    Used by in-place updates (``update_knowledge``, ``append_knowledge``) that already
     hold a parsed frontmatter dict. For new writes, prefer
     ``render_knowledge_file(artifact)``.
     """
