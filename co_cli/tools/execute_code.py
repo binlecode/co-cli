@@ -31,17 +31,14 @@ async def execute_code(ctx: RunContext[CoDeps], cmd: str, timeout: int = 60) -> 
         raise ApprovalRequired(metadata={"cmd": cmd})
     effective = min(timeout, ctx.deps.config.shell.max_timeout)
     try:
-        output = await ctx.deps.shell.run_command(cmd, timeout=effective)
-        return tool_output(output, ctx=ctx)
+        exit_code, output = await ctx.deps.shell.run_command(cmd, timeout=effective)
+        if exit_code == 0:
+            return tool_output(output, ctx=ctx)
+        return tool_error(f"exit {exit_code}:\n{output}", ctx=ctx)
     except RuntimeError as e:
-        msg = str(e)
-        if "timed out" in msg.lower():
-            raise ModelRetry(
-                f"execute_code: timed out after {effective}s. "
-                f"Use a shorter command or increase timeout.\n{msg}"
-            ) from e
         raise ModelRetry(
-            f"execute_code: command failed ({e}). Check the command and try again."
+            f"execute_code: timed out after {effective}s. "
+            f"Use a shorter command or increase timeout."
         ) from e
     except Exception as e:
         raise ModelRetry(f"execute_code: unexpected error ({e}).") from e

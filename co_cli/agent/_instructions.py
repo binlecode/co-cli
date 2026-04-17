@@ -16,7 +16,12 @@ def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
     """Inject shell tool guidance when shell is available."""
     return (
         "Shell runs as subprocess. DENY-pattern commands are blocked before deferral. "
-        "Safe-prefix commands execute directly. All others require user approval."
+        "Safe-prefix commands execute directly. All others require user approval. "
+        "On non-zero exit, the tool returns the exit code and combined output as a "
+        "tool result — read the output to diagnose the failure (wrong flag, missing "
+        "binary, permission issue, syntax error) and retry with a corrected command. "
+        "Account for platform differences: macOS uses BSD utilities "
+        "(stat -f not -c; sed -i '' not -i; no GNU long-opts like --count)."
     )
 
 

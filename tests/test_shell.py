@@ -63,11 +63,12 @@ async def test_shell_safe_command_runs_without_deferred_approval():
 
 @pytest.mark.asyncio
 async def test_shell_nonzero_exit():
-    """Non-zero exits surface as ModelRetry for the model loop."""
+    """Non-zero exits return a tool_error with exit code and output for LLM reasoning."""
     ctx = _make_ctx()
-    with pytest.raises(ModelRetry, match="Shell: command failed"):
-        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await run_shell_command(ctx, "ls /nonexistent_path_xyz_subprocess")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "ls /nonexistent_path_xyz_subprocess")
+    assert result.metadata.get("error") is True
+    assert "exit 1" in result.return_value or "exit 2" in result.return_value
 
 
 @pytest.mark.asyncio

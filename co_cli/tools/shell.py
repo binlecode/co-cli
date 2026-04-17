@@ -33,6 +33,11 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
     Long-running commands are killed after timeout seconds (capped by
     shell_max_timeout).
 
+    On failure, the tool returns the exit code and combined output as a tool
+    result — read it to diagnose the failure (wrong flags, missing binary,
+    permission issue) and retry with a corrected command. Consider platform
+    differences: macOS uses BSD utilities (stat -f, not -c; sed -i '' not -i).
+
     Args:
         cmd: Shell command string (e.g. "git log --oneline -10",
              "python scripts/run.py", "uv run pytest").
@@ -55,23 +60,14 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
 
     effective = min(timeout, ctx.deps.config.shell.max_timeout)
     try:
-        output = await ctx.deps.shell.run_command(cmd, timeout=effective)
-        return tool_output(output, ctx=ctx)
+        exit_code, output = await ctx.deps.shell.run_command(cmd, timeout=effective)
+        if exit_code == 0:
+            return tool_output(output, ctx=ctx)
+        return tool_error(f"exit {exit_code}:\n{output}", ctx=ctx)
     except RuntimeError as e:
-        msg = str(e)
-        if "timed out" in msg.lower():
-            raise ModelRetry(
-                f"Shell: command timed out after {effective}s. "
-                f"Use a shorter command or increase timeout.\n{msg}"
-            ) from e
-        if "permission denied" in msg.lower():
-            return tool_error(
-                "Shell: permission denied. The current user may lack access. "
-                "Try a different path or approach.",
-                ctx=ctx,
-            )
         raise ModelRetry(
-            f"Shell: command failed ({e}). Check command syntax or try a different approach."
+            f"Shell: command timed out after {effective}s. "
+            f"Use a shorter command or increase timeout."
         ) from e
     except Exception as e:
         raise ModelRetry(f"Shell: unexpected error ({e}). Try a different approach.") from e

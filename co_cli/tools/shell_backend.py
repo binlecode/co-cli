@@ -15,11 +15,11 @@ class ShellBackend:
     def __init__(self, workspace_dir: str | None = None):
         self.workspace_dir = workspace_dir or os.getcwd()
 
-    async def run_command(self, cmd: str, timeout: int = 120) -> str:
+    async def run_command(self, cmd: str, timeout: int = 120) -> tuple[int, str]:
         """Execute a command as a subprocess with sanitized environment.
 
         Uses start_new_session=True for process group killing on timeout.
-        Raises RuntimeError on non-zero exit code or timeout.
+        Returns (exit_code, combined_output). Raises RuntimeError only on timeout.
         """
         proc = await asyncio.create_subprocess_exec(
             "sh",
@@ -48,9 +48,7 @@ class ShellBackend:
                 msg += f"\nPartial output:\n{partial_str}"
             raise RuntimeError(msg) from None
         decoded = stdout.decode("utf-8")
-        if proc.returncode != 0:
-            raise RuntimeError(f"exit code {proc.returncode}: {decoded.strip()}")
-        return decoded or "(no output)"
+        return proc.returncode, decoded or "(no output)"
 
     def cleanup(self) -> None:
         """No-op — subprocess backend has no persistent resources."""
