@@ -32,6 +32,7 @@ from co_cli.context._history import (
     _gather_compaction_context,
     _preserve_search_tool_breadcrumbs,
     _truncate_proportional,
+    append_recalled_memories,
     compact_assistant_responses,
     emergency_compact,
     group_by_turn,
@@ -1008,3 +1009,121 @@ def test_compact_assistant_responses_tool_return_untouched():
     user_part = first_request.parts[0]
     assert isinstance(user_part, UserPromptPart)
     assert user_part.content == big_user_text
+
+
+# ---------------------------------------------------------------------------
+# append_recalled_memories — append-only invariant (TASK-3)
+# ---------------------------------------------------------------------------
+
+
+def test_personality_memories_not_in_static_instructions():
+    """TASK-3: personality-context memories live in the tail, not the static prompt.
+
+    Populates the personality cache with a sentinel marker, asks ``build_static_instructions``
+    for the cacheable prefix, and asserts the marker is NOT present there. The marker must
+    appear only via ``append_recalled_memories`` at request time (covered by the next test).
+    """
+    from co_cli.prompts import _assembly as _assembly_module
+    from co_cli.prompts.personalities import _injector as _injector_module
+    from co_cli.prompts.personalities._injector import invalidate_personality_cache
+
+    sentinel = "## Learned Context\n\n- personality-memory-sentinel-ABC123"
+    invalidate_personality_cache()
+    try:
+        _injector_module._personality_cache = sentinel
+        config = make_settings().model_copy(update={"personality": "finch"})
+        prompt = _assembly_module.build_static_instructions(config=config)
+        assert "personality-memory-sentinel-ABC123" not in prompt, (
+            "personality memory content leaked into the cacheable static prompt"
+        )
+        assert "## Learned Context" not in prompt, (
+            "## Learned Context section must not appear in static instructions"
+        )
+    finally:
+        invalidate_personality_cache()
+
+
+@pytest.mark.asyncio
+async def test_append_recalled_memories_includes_personality_memories():
+    """TASK-3: when personality is set, append_recalled_memories emits the personality
+    block as a tail-appended SystemPromptPart.
+
+    Populates the personality cache with a sentinel so the injection has known content,
+    calls the processor, and asserts the sentinel appears in the appended ModelRequest's
+    SystemPromptPart.
+    """
+    from pydantic_ai.messages import SystemPromptPart
+
+    from co_cli.prompts.personalities import _injector as _injector_module
+    from co_cli.prompts.personalities._injector import invalidate_personality_cache
+
+    sentinel = "## Learned Context\n\n- personality-tail-sentinel-XYZ789"
+    invalidate_personality_cache()
+    try:
+        _injector_module._personality_cache = sentinel
+        deps = CoDeps(
+            shell=ShellBackend(),
+            config=make_settings().model_copy(update={"personality": "finch"}),
+            model=_LLM_MODEL,
+            session=CoSessionState(),
+        )
+        ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+        msgs = [_user("hello")]
+        result = await append_recalled_memories(ctx, msgs)
+
+        # Tail append — last message is a new ModelRequest
+        assert len(result) == len(msgs) + 1
+        tail_req = result[-1]
+        assert isinstance(tail_req, ModelRequest)
+        sys_contents = [
+            p.content
+            for p in tail_req.parts
+            if isinstance(p, SystemPromptPart) and isinstance(p.content, str)
+        ]
+        assert any("personality-tail-sentinel-XYZ789" in c for c in sys_contents), (
+            f"personality memories missing from tail injection; got: {sys_contents}"
+        )
+    finally:
+        invalidate_personality_cache()
+
+
+@pytest.mark.asyncio
+async def test_append_recalled_memories_tail_position():
+    """TASK-3 shape check: the injection is always the final message when present.
+
+    Uses no personality (empty cache) and no recallable knowledge — the current-date
+    injection still appends one ModelRequest at the tail per the unconditional date path.
+    """
+    from pydantic_ai.messages import SystemPromptPart
+
+    from co_cli.prompts.personalities._injector import invalidate_personality_cache
+
+    invalidate_personality_cache()
+    try:
+        deps = CoDeps(
+            shell=ShellBackend(),
+            config=make_settings().model_copy(update={"personality": None}),
+            model=_LLM_MODEL,
+            session=CoSessionState(),
+            knowledge_dir=Path("/nonexistent-test-dir"),
+        )
+        ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+        msgs = [_user("ping"), _assistant("pong"), _user("ping again")]
+        result = await append_recalled_memories(ctx, msgs)
+
+        # Exactly one tail-appended ModelRequest; earlier messages unchanged
+        assert len(result) == len(msgs) + 1
+        assert result[: len(msgs)] == msgs
+        tail_req = result[-1]
+        assert isinstance(tail_req, ModelRequest)
+        # Date SystemPromptPart present
+        date_parts = [
+            p
+            for p in tail_req.parts
+            if isinstance(p, SystemPromptPart)
+            and isinstance(p.content, str)
+            and p.content.startswith("Today is ")
+        ]
+        assert len(date_parts) == 1
+    finally:
+        invalidate_personality_cache()

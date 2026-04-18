@@ -1,15 +1,8 @@
 """Per-turn instruction builder functions for the orchestrator agent."""
 
-from datetime import date
-
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
-
-
-def add_current_date(ctx: RunContext[CoDeps]) -> str:
-    """Inject the current date so the model can reason about time."""
-    return f"Today is {date.today().isoformat()}."
 
 
 def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:

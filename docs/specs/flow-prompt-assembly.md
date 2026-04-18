@@ -244,18 +244,16 @@ At this boundary, two ordering rules matter:
 For co-cli, the instruction stack seen by the SDK is:
 
 1. the static string from `build_static_instructions()`
-2. `add_current_date`
-3. `add_shell_guidance`
-4. `add_category_awareness_prompt`
-5. any SDK/toolset-supplied dynamic instruction parts
+2. `add_shell_guidance`
+3. `add_category_awareness_prompt`
+4. any SDK/toolset-supplied dynamic instruction parts
 
 The dynamic layers contribute the following request-time text:
 
-- current date: `Today is YYYY-MM-DD.`
 - shell guidance: approval/reminder text for shell execution
 - category awareness: one short sentence listing deferred capability categories inferred from the current `tool_index`
 
-Personality memories (`## Learned Context` — the 5 most recent `personality-context` entries) are no longer in the instruction stack. They are appended at the message tail by `append_recalled_memories` (history processor #4) on every request. This avoids invalidating the provider's prompt-prefix cache when personality-context artifacts change mid-session.
+The current date (`Today is YYYY-MM-DD.`) and personality memories (`## Learned Context` — the 5 most recent `personality-context` entries) are not in the instruction stack. They are appended at the message tail by `append_recalled_memories` (history processor #4) on every request. This avoids invalidating the provider's prompt-prefix cache — the date can change at midnight, and personality-context artifacts can change mid-session.
 
 ### 2.7 History processors rewrite the request history immediately before send
 
@@ -284,7 +282,7 @@ What each processor contributes to prompt shape:
 - `truncate_tool_results`: clears old compactable tool outputs but preserves recent ones and the last user turn
 - `compact_assistant_responses`: shortens old assistant text/thinking parts without touching tool-call args
 - `detect_safety_issues`: injects warning text when repeated-tool or repeated-shell-failure patterns are detected
-- `append_recalled_memories`: looks at the current user message, recalls up to 3 relevant memories, caps the block by `memory.injection_max_chars`, and appends `Relevant memories:` as a trailing `SystemPromptPart`
+- `append_recalled_memories`: appends a trailing `ModelRequest` whose `SystemPromptPart`s carry (a) the current date on every request, (b) personality-context memories on every request when `config.personality` is set, and (c) up to 3 recalled knowledge artifacts on new user turns (capped by `memory.injection_max_chars`)
 - `summarize_history_window`: when the request exceeds 85% of the resolved budget, replaces the dropped middle region with a summary marker or static marker, preserves `search_tools` discovery breadcrumbs, and marks the turn as having replaced history for persistence
 
 Two details make the current-turn query visible to recall and compaction:

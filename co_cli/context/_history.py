@@ -734,6 +734,11 @@ async def append_recalled_memories(
 
     injection_parts: list[SystemPromptPart] = []
 
+    # Current date: on every request — can change at midnight; tail-append keeps it accurate
+    from datetime import date
+
+    injection_parts.append(SystemPromptPart(content=f"Today is {date.today().isoformat()}."))
+
     # Personality memories: on every request (append-only invariant — never in @agent.instructions)
     if ctx.deps.config.personality:
         from co_cli.prompts.personalities._injector import _load_personality_memories
@@ -761,9 +766,6 @@ async def append_recalled_memories(
                 )
         except Exception:
             log.debug("append_recalled_memories: _recall_for_context failed", exc_info=True)
-
-    if not injection_parts:
-        return messages
 
     return [*messages, ModelRequest(parts=injection_parts)]
 

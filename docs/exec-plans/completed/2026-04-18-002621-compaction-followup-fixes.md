@@ -336,3 +336,49 @@ All blocking findings (B1, B2, B3) and all minor findings have been resolved.
 
 **Overall: DELIVERED**
 All four tasks shipped: circuit breaker probe recovery, processor rename, personality memory cache fix + invariant, and proactive→overflow handoff doc. 626 tests pass; all independent review findings resolved.
+
+---
+
+## Implementation Review — 2026-04-18
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | `_CIRCUIT_BREAKER_PROBE_EVERY = 10` + probe logic + skip counting + probe-success reset + spec update | ✓ pass | `co_cli/context/_history.py:75-81` (constant + docstring); `:538-545` (probe branch: `skips_since_trip == 0 or skips_since_trip % N != 0` → skip + increment; else fall through to LLM); `:561` (success resets to 0); `:565` (failure increments); `docs/specs/compaction.md:452` + `:573` (spec table + constants row); `docs/specs/core-loop.md:262` (probe cadence described); tests at `tests/test_history.py:137-211` (first trip, non-probe skip, probe cadence) |
+| TASK-2 | Rename everywhere; grep returns zero live-code hits | ✓ pass | `co_cli/context/_history.py:707` (def `append_recalled_memories`); `co_cli/agent/_core.py:146` (registered as processor #4); `co_cli/prompts/personalities/_injector.py:32` (docstring updated); zero hits of `inject_opening_context` under `co_cli/`, `tests/`, `docs/specs/`, `evals/` (only permanent historical docs retain the old name: `docs/reference/RESEARCH-*`, `docs/REPORT-*`, `docs/exec-plans/completed/*` — policy-correct to preserve) |
+| TASK-3 | Personality memories out of `@agent.instructions`; folded into `append_recalled_memories`; append-only invariant in context.md | ✓ pass (after fix — see Issues Found) | `co_cli/agent/_instructions.py` (function removed); `co_cli/agent/_core.py:153-156` (registration removed); `co_cli/context/_history.py:742-748` (personality-memory injection via tail-appended `SystemPromptPart`); `docs/specs/context.md:100-106` (append-only invariant paragraph); `docs/specs/personality.md` + `docs/specs/flow-prompt-assembly.md:256` (per-turn injection via processor, not instruction stack). **Extension beyond plan:** `add_current_date` also moved out of `@agent.instructions` into `append_recalled_memories` (`_history.py:737-740`); specs and processor table updated accordingly. |
+| TASK-4 | §2.9 proactive→overflow handoff paragraph | ✓ pass | `docs/specs/compaction.md:550` — paragraph matches plan Change 4 text verbatim |
+
+### Issues Found & Fixed
+
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| TASK-3 done_when required two tests that were not written: (a) "static instructions block shows no personality-memory content"; (b) "`append_recalled_memories` correctly includes personality memories when `config.personality` is set". | tests/test_history.py | **blocking** | Added three tests after the existing suite: `test_personality_memories_not_in_static_instructions` (populates `_personality_cache` with a sentinel, asserts sentinel is absent from `build_static_instructions`); `test_append_recalled_memories_includes_personality_memories` (populates cache, calls processor with personality="finch", asserts sentinel in tail-appended `SystemPromptPart`); `test_append_recalled_memories_tail_position` (shape check — exactly one tail-appended `ModelRequest` containing a date `SystemPromptPart`, prior messages unchanged). All three pass. Sentinel-in-cache pattern follows `tests/test_personality_cache.py` precedent — real module state, not a mock. |
+| Dead branch after `add_current_date` folded into processor: `if not injection_parts: return messages` became unreachable because date is appended unconditionally (`_history.py:738-740`). | co_cli/context/_history.py:770 | minor | Removed the unreachable guard. |
+| `docs/specs/context.md` §2.2 processor description for `append_recalled_memories` listed only personality memories and knowledge recall — missed current date now carried by the same processor. | docs/specs/context.md:119 | minor | Updated description to include "current date" alongside personality and knowledge. |
+| `docs/specs/flow-prompt-assembly.md` §2.7 per-processor contribution summary only mentioned the knowledge-recall block; omitted date and personality. | docs/specs/flow-prompt-assembly.md:285 | minor | Rewrote to enumerate all three parts the processor contributes (date every request; personality every request when set; recalled knowledge on new user turns). |
+
+Independent-review adversarial notes from the delivery (already resolved in the commit): `evals/eval_*.py` stale imports (3 blocking — fixed pre-verdict), stale `personality.md` §2 + `flow-prompt-assembly.md` §2.6 (2 blocking — fixed pre-verdict), weak probe-cadence test assertion (1 minor, acknowledged — no-mocks policy makes "probe fired" unobservable at test boundary without bypassing production code).
+
+### Tests
+- Command: `uv run pytest -v`
+- Result: 629 passed, 0 failed
+- Log: `.pytest-logs/20260418-<ts>-review-impl-final.log`
+- Delta: +3 tests vs pre-review (626 → 629) from the TASK-3 coverage gap fix
+
+### Doc Sync
+- Scope: narrow — only `docs/specs/context.md` (§2.2 processor row) and `docs/specs/flow-prompt-assembly.md` (§2.7 contribution bullet) needed touching. All other specs were already consistent with the shipped state (including the `add_current_date` extension).
+- Result: fixed — see Issues Found.
+
+### Behavioral Verification
+- `uv run co config`: ✓ healthy — LLM Online (Ollama qwen3.5), MCP 1 ready, Database Active.
+- Direct processor smoke test: built real `CoDeps` with `personality=None`, invoked `append_recalled_memories` on a single-user-turn history, observed `len(result) == 2` (original message + tail injection) with `SystemPromptPart(content='Today is 2026-04-18.')` in the tail `ModelRequest.parts` — confirms the append-only invariant and the date-injection extension land as specified.
+- `success_signal` verification:
+  - TASK-1: "session that hits the breaker early can still recover automatically" — the probe branch at `_history.py:538-545` lets count=13, 23, 33… attempt the LLM; success resets to 0 (`:561`). Verified by `test_circuit_breaker_probes_at_cadence` which asserts count ∈ (0, 14) after probing from count=13. Known limitation: the test cannot distinguish "probe ran and failed" from "skip branch incorrectly ran" because both increment to 14 — acknowledged tradeoff of the no-mocks policy.
+  - TASK-2: "reading the processor name tells you where the injection lands" — verified: name `append_recalled_memories` + docstring "Append personality memories and recalled knowledge at the message tail".
+  - TASK-3: "modifying a personality-context memory mid-session no longer invalidates the prompt cache for the static prefix" — verified structurally: personality content is NOT reachable from `@agent.instructions` (removed at `_core.py:153-156`) and IS reachable via tail injection (confirmed by the new test `test_append_recalled_memories_includes_personality_memories`). Cache invalidation semantics are a provider-side property; structural guarantee is the shippable artifact here.
+  - TASK-4: "reader of `compaction.md` alone understands why `summarize_history_window` returns messages unchanged when the planner returns `None`" — verified: §2.9 paragraph at `compaction.md:550` explains the proactive→overflow handoff without forcing the reader to open `orchestrate.py`.
+
+### Overall: PASS
+
+Four-task delivery holds up end to end. The delivery already resolved its own independent-review findings (eval imports, personality.md, flow-prompt-assembly.md). This review found one additional blocking gap — the TASK-3 done_when required two tests that were never written — and three minor spec/code drifts introduced by the in-flight `add_current_date` extension. All four resolved; tests are 629 green; specs and code are consistent.

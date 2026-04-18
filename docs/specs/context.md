@@ -92,7 +92,6 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 
 | Layer | Condition | Content |
 | --- | --- | --- |
-| `add_current_date` | always | `Today is YYYY-MM-DD.` |
 | `add_shell_guidance` | always | shell approval/reminder text |
 | `add_category_awareness_prompt` | deferred tools registered in tool_index | category-level prompt listing available capabilities via `search_tools` (~100 tokens) |
 
@@ -100,11 +99,11 @@ These layers are not persisted into `message_history`.
 
 **Append-only invariant for dynamic content.**
 
-Any content that can vary within a single session MUST be appended to the tail of the message list via a history processor that returns `[*messages, injection]`. It MUST NOT be placed in `@agent.instructions` unless it is provably static within a session (example: `add_current_date` — changes once per day but not within a session in any practical case).
+Any content that can vary within a single session MUST be appended to the tail of the message list via a history processor that returns `[*messages, injection]`. It MUST NOT be placed in `@agent.instructions`.
 
 Rationale: `@agent.instructions` output is concatenated into the static system-prompt block pydantic-ai sends to the provider. Providers cache the system-prompt block as the prefix of every request. Any per-request variance in that block invalidates the cache for the entire prefix, including fixed tool schemas and soul assets.
 
-New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. `add_personality_memories` was moved from `@agent.instructions` to `append_recalled_memories` for this reason — personality-context memories can change mid-session, which would otherwise invalidate the cache on every write.
+New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date and personality memories both live in `append_recalled_memories` for this reason — the date can change at midnight, and personality-context memories can change mid-session.
 
 **Approval resume** — the SDK skips `ModelRequestNode` entirely on the `deferred_tool_results` path, so resume segments run on the main agent with zero additional tokens. No separate agent is needed.
 
@@ -117,7 +116,7 @@ Five history processors run in this exact order:
 | `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
 | `compact_assistant_responses` | caps older `TextPart`/`ThinkingPart` to 2,500 chars with 20/80 head/tail retention; uses `_find_last_turn_start()` boundary, not turn grouping |
 | `detect_safety_issues` | detects identical-tool-call streaks and shell-error streaks; injects system warning at threshold |
-| `append_recalled_memories` | on every request: appends `personality-context` memories as trailing `SystemPromptPart`; once per new user turn: also appends top-3 recalled knowledge artifacts |
+| `append_recalled_memories` | on every request: appends current date and `personality-context` memories as trailing `SystemPromptPart`s; once per new user turn: also appends top-3 recalled knowledge artifacts |
 | `summarize_history_window` | when history exceeds compaction threshold, keeps head + summary marker + tail; summarizer uses structured template (Goal, Key Decisions, Working Set, Progress, Next Steps) |
 
 **Compaction** is budget-driven and runs via `plan_compaction_boundaries()`, a shared planner used by both proactive compaction and overflow recovery. Budget comes from `resolve_compaction_budget()` (model context window, `llm.num_ctx` override, or 100K fallback). Triggers when `token_count > int(budget * PROACTIVE_COMPACTION_RATIO)` where `token_count = max(estimate, reported)` — the max-floor prevents a stale or missing provider report from suppressing the trigger. The planner walks groups from the end, targeting `TAIL_FRACTION * budget` tokens for the preserved tail; `min_groups_tail=1` guarantees the last turn group is always kept. `_gather_compaction_context()` enriches the summarizer with file paths from `ToolCallPart.args` in the dropped range, pending todos, and prior summary text (capped at 4K chars). See [compaction.md](compaction.md) for the full three-mechanism design, summarizer prompt, and circuit-breaker semantics.
