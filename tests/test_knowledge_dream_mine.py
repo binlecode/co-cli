@@ -1,9 +1,4 @@
-"""Tests for transcript mining (TASK-5.4).
-
-Covers ``build_transcript_window`` and ``_chunk_dream_window`` pure logic plus
-``_mine_transcripts`` end-to-end behavior. The integration test at the end
-runs a real LLM call through the dream miner agent (``@pytest.mark.local``).
-"""
+"""Tests for transcript-mining chunking and mining behavior."""
 
 from __future__ import annotations
 
@@ -15,8 +10,6 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
-    ToolCallPart,
-    ToolReturnPart,
     UserPromptPart,
 )
 from tests._settings import make_settings
@@ -24,7 +17,6 @@ from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.context.transcript import append_messages
 from co_cli.deps import CoDeps
-from co_cli.knowledge._distiller import build_transcript_window
 from co_cli.knowledge._dream import (
     DreamState,
     _chunk_dream_window,
@@ -41,59 +33,6 @@ def _req(text: str) -> ModelRequest:
 
 def _resp(text: str, model_name: str = "test-model") -> ModelResponse:
     return ModelResponse(parts=[TextPart(content=text)], model_name=model_name)
-
-
-def _tool_resp(name: str, content: str, model_name: str = "test-model") -> ModelResponse:
-    return ModelResponse(
-        parts=[ToolCallPart(tool_name=name, args={"arg": "value"})], model_name=model_name
-    )
-
-
-def _tool_return(name: str, content: str) -> ModelRequest:
-    return ModelRequest(parts=[ToolReturnPart(tool_name=name, content=content, tool_call_id="x")])
-
-
-# ---------------------------------------------------------------------------
-# build_transcript_window — pure logic
-# ---------------------------------------------------------------------------
-
-
-def test_build_transcript_window_interleaves_text_and_tool_in_order() -> None:
-    messages = [
-        _req("First user line"),
-        _resp("First assistant line"),
-        _tool_resp("search", "query"),
-        _tool_return("search", "short result."),
-        _resp("Follow-up assistant line"),
-    ]
-
-    window = build_transcript_window(messages)
-
-    lines = window.split("\n")
-    assert lines[0].startswith("User:")
-    assert lines[1].startswith("Co:")
-    assert lines[2].startswith("Tool(search):")
-    assert lines[3].startswith("Tool result (search):")
-    assert lines[4].startswith("Co:")
-
-
-def test_build_transcript_window_applies_independent_caps() -> None:
-    messages: list = []
-    for i in range(60):
-        messages.append(_req(f"user-line-{i}"))
-    for i in range(60):
-        messages.append(_tool_resp(f"tool-{i}", "args"))
-
-    window = build_transcript_window(messages, max_text=50, max_tool=50)
-    lines = window.split("\n")
-
-    assert len(lines) == 100
-    assert sum(1 for line in lines if line.startswith("User:")) == 50
-    assert sum(1 for line in lines if line.startswith("Tool(")) == 50
-
-
-def test_build_transcript_window_empty_messages_returns_empty_string() -> None:
-    assert build_transcript_window([]) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -195,26 +134,6 @@ async def test_mine_marks_empty_transcript_processed_without_llm(tmp_path: Path)
         assert state.processed_sessions == [empty_path.name]
     finally:
         store.close()
-
-
-def test_mine_session_save_cap_is_programmatic_five() -> None:
-    """Plan TASK-5.4 mandates a programmatic (not prompt-only) save cap.
-
-    The counter lives inside ``_mine_transcripts``; this tripwire guards against
-    accidental drift in either the constant value or the source-line location of
-    the between-chunks break.
-    """
-    import inspect
-
-    from co_cli.knowledge import _dream
-
-    assert _dream._MAX_MINE_SAVES_PER_SESSION == 5
-
-    source = inspect.getsource(_dream._mine_transcripts)
-    assert "_MAX_MINE_SAVES_PER_SESSION" in source, (
-        "_mine_transcripts must reference the per-session save cap constant"
-    )
-    assert "break" in source, "_mine_transcripts must break out of the chunk loop at cap"
 
 
 # ---------------------------------------------------------------------------

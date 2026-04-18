@@ -92,10 +92,3 @@ def test_recency_clearing_advisory_in_cacheable_prefix() -> None:
     # Key phrases that signal the model's expected mental model
     assert "cleared" in prompt.lower()
     assert "recent" in prompt.lower()
-
-
-def test_recency_advisory_built_from_constant() -> None:
-    """Advisory reflects the current value of COMPACTABLE_KEEP_RECENT at module-load time."""
-    # If the constant changes, the advisory text should change — this is static
-    # per process, not dynamic per turn.
-    assert f"The {COMPACTABLE_KEEP_RECENT} most recent" in RECENCY_CLEARING_ADVISORY

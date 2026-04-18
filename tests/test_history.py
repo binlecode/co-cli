@@ -10,6 +10,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -35,6 +36,7 @@ from co_cli.context._history import (
     append_recalled_memories,
     compact_assistant_responses,
     emergency_compact,
+    find_first_run_end,
     group_by_turn,
     groups_to_messages,
     plan_compaction_boundaries,
@@ -318,6 +320,20 @@ def test_group_by_turn_orphan_prevention():
     for msg in remaining:
         if isinstance(msg, ModelRequest):
             assert not any(isinstance(p, ToolReturnPart) for p in msg.parts)
+
+
+def test_find_first_run_end_accepts_thinking_only_response():
+    """Thinking-only first responses still define the preserved head run boundary."""
+    messages = [
+        _user("hello"),
+        ModelResponse(parts=[ThinkingPart(content="let me think...")]),
+        _user("follow up"),
+        ModelResponse(parts=[TextPart(content="answer")]),
+    ]
+
+    idx = find_first_run_end(messages)
+
+    assert idx == 1
 
 
 # ---------------------------------------------------------------------------

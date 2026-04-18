@@ -3,9 +3,13 @@
 import os
 from pathlib import Path
 
+import pytest
 import yaml
+from pydantic_ai.mcp import MCPServerStdio
+from pydantic_ai.toolsets import DeferredLoadingToolset
 from tests._settings import make_settings
 
+from co_cli.agent._mcp import discover_mcp_tools
 from co_cli.bootstrap.core import (
     _discover_knowledge_backend,
     _resolve_reranker,
@@ -65,6 +69,11 @@ def _write_knowledge_file(
         f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body}\n",
         encoding="utf-8",
     )
+
+
+# ---------------------------------------------------------------------------
+# Knowledge backend discovery and sync
+# ---------------------------------------------------------------------------
 
 
 def test_sync_knowledge_store_indexes_unified_knowledge(tmp_path: Path) -> None:
@@ -281,6 +290,11 @@ def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
     assert result == new_path, "restore_session() must pick the most recently dated session"
 
 
+# ---------------------------------------------------------------------------
+# Reranker resolution
+# ---------------------------------------------------------------------------
+
+
 def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
     """No reranker configured → config unchanged, no status messages."""
     config = make_settings(
@@ -298,56 +312,83 @@ def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
     assert statuses == []
 
 
-def test_resolve_reranker_tei_unavailable_nulls_url() -> None:
-    """TEI cross-encoder at a dead port → URL nulled, degradation status emitted."""
-    config = make_settings(
-        knowledge=make_settings().knowledge.model_copy(
-            update={
-                "cross_encoder_reranker_url": "http://127.0.0.1:19999",
-                "llm_reranker": None,
-            }
+@pytest.mark.parametrize(
+    ("config", "assert_degraded"),
+    [
+        (
+            make_settings(
+                knowledge=make_settings().knowledge.model_copy(
+                    update={
+                        "cross_encoder_reranker_url": "http://127.0.0.1:19999",
+                        "llm_reranker": None,
+                    }
+                ),
+            ),
+            lambda config, statuses: (
+                config.knowledge.cross_encoder_reranker_url is None
+                and any(
+                    "cross-encoder" in status.lower() or "tei" in status.lower()
+                    for status in statuses
+                )
+            ),
         ),
-    )
+        (
+            make_settings(
+                knowledge=make_settings().knowledge.model_copy(
+                    update={
+                        "cross_encoder_reranker_url": None,
+                        "llm_reranker": LlmModelSettings(
+                            provider="gemini",
+                            model="gemini-2.0-flash",
+                        ),
+                    }
+                ),
+                llm=make_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
+            ),
+            lambda config, statuses: (
+                config.knowledge.llm_reranker is None
+                and any(
+                    "llm" in status.lower() or "reranker" in status.lower() for status in statuses
+                )
+            ),
+        ),
+        (
+            make_settings(
+                knowledge=make_settings().knowledge.model_copy(
+                    update={
+                        "cross_encoder_reranker_url": None,
+                        "llm_reranker": LlmModelSettings(
+                            provider="ollama-openai",
+                            model="reranker-model",
+                        ),
+                    }
+                ),
+                llm=make_settings().llm.model_copy(
+                    update={"provider": "ollama-openai", "host": "http://localhost:1"}
+                ),
+            ),
+            lambda config, statuses: (
+                config.knowledge.llm_reranker is None
+                and any(
+                    "llm" in status.lower() or "reranker" in status.lower() for status in statuses
+                )
+            ),
+        ),
+    ],
+    ids=[
+        "tei_cross_encoder_unreachable",
+        "gemini_llm_reranker_without_api_key",
+        "ollama_llm_reranker_unreachable",
+    ],
+)
+def test_resolve_reranker_degrades_unavailable_dependencies(
+    config,
+    assert_degraded,
+) -> None:
+    """Unavailable reranker dependencies must degrade the affected path with an explicit status."""
     statuses: list[str] = []
     _resolve_reranker(config, statuses)
-    assert config.knowledge.cross_encoder_reranker_url is None
-    assert any("cross-encoder" in s.lower() or "tei" in s.lower() for s in statuses)
-
-
-def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
-    """LLM reranker with gemini provider but no API key → check_reranker_llm returns error → reranker nulled."""
-    config = make_settings(
-        knowledge=make_settings().knowledge.model_copy(
-            update={
-                "cross_encoder_reranker_url": None,
-                "llm_reranker": LlmModelSettings(provider="gemini", model="gemini-2.0-flash"),
-            }
-        ),
-        llm=make_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
-    )
-    statuses: list[str] = []
-    _resolve_reranker(config, statuses)
-    assert config.knowledge.llm_reranker is None
-    assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
-
-
-def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
-    """LLM reranker with Ollama provider but unreachable host → reranker nulled (warn != ok)."""
-    config = make_settings(
-        knowledge=make_settings().knowledge.model_copy(
-            update={
-                "cross_encoder_reranker_url": None,
-                "llm_reranker": LlmModelSettings(provider="ollama-openai", model="reranker-model"),
-            }
-        ),
-        llm=make_settings().llm.model_copy(
-            update={"provider": "ollama-openai", "host": "http://localhost:1"}
-        ),
-    )
-    statuses: list[str] = []
-    _resolve_reranker(config, statuses)
-    assert config.knowledge.llm_reranker is None
-    assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
+    assert assert_degraded(config, statuses)
 
 
 def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
@@ -366,6 +407,27 @@ def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
     assert config.knowledge.cross_encoder_reranker_url is None
     assert config.knowledge.llm_reranker is None
     assert len(statuses) == 2
+
+
+# ---------------------------------------------------------------------------
+# Discovery and session bootstrap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discover_mcp_tools_records_tool_prefix_for_missing_binary() -> None:
+    """Failed MCP discovery must report the failing tool_prefix for downstream diagnostics."""
+    server = MCPServerStdio(
+        "nonexistent-binary-xyz",
+        args=[],
+        tool_prefix="testprefix",
+    )
+    toolset = DeferredLoadingToolset(server)
+
+    _, errors, _ = await discover_mcp_tools([toolset], exclude=set())
+
+    assert errors, "errors dict must be non-empty when MCP server binary does not exist"
+    assert "testprefix" in errors, "Failed MCP discovery must preserve the configured tool_prefix"
 
 
 def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:

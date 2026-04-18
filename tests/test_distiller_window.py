@@ -1,4 +1,4 @@
-"""Tests for build_transcript_window() tool context expansion and cursor-based delta extraction."""
+"""Tests for per-turn extraction window shaping and cursor advancement."""
 
 import asyncio
 from pathlib import Path
@@ -7,6 +7,7 @@ import pytest
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
+    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -44,6 +45,39 @@ def test_tool_call_part_appears_in_window() -> None:
     ]
     window = build_transcript_window(messages)
     assert "Tool(list_dir)" in window
+
+
+def test_build_transcript_window_interleaves_text_and_tool_in_order() -> None:
+    """Window output must preserve original ordering across text and tool entries."""
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="First user line")]),
+        ModelResponse(parts=[TextPart(content="First assistant line")], model_name="test-model"),
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="search", args='{"q":"term"}', tool_call_id="call-1")],
+            model_name="test-model",
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="search",
+                    content="short result.",
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelResponse(
+            parts=[TextPart(content="Follow-up assistant line")], model_name="test-model"
+        ),
+    ]
+
+    window = build_transcript_window(messages)
+
+    lines = window.splitlines()
+    assert lines[0].startswith("User:")
+    assert lines[1].startswith("Co:")
+    assert lines[2].startswith("Tool(search):")
+    assert lines[3].startswith("Tool result (search):")
+    assert lines[4].startswith("Co:")
 
 
 def test_tool_return_truncated_at_300() -> None:
@@ -105,23 +139,29 @@ def test_large_read_tool_output_skipped() -> None:
     assert "Tool result (list_dir)" not in window_no_boundary
 
 
-def test_cursor_excludes_messages_before_start() -> None:
-    """Delta slice starting at cursor_start must not include messages before the cursor."""
-    all_messages = [
-        ModelRequest(parts=[UserPromptPart(content=f"question {idx}")]) for idx in range(5)
-    ]
-    # Set cursor to start at index 3 — delta is messages[3:]
-    delta = all_messages[3:]
-    window = build_transcript_window(delta)
+def test_build_transcript_window_applies_independent_caps() -> None:
+    """Text and tool caps apply independently before results are merged back in order."""
+    messages: list = []
+    for idx in range(60):
+        messages.append(ModelRequest(parts=[UserPromptPart(content=f"user-line-{idx}")]))
+    for idx in range(60):
+        messages.append(
+            ModelResponse(
+                parts=[ToolCallPart(tool_name=f"tool-{idx}", args='{"arg":"value"}')],
+                model_name="test-model",
+            )
+        )
 
-    # Only messages at index 3 and 4 should appear
-    assert "question 3" in window
-    assert "question 4" in window
+    window = build_transcript_window(messages, max_text=50, max_tool=50)
+    lines = window.splitlines()
 
-    # Messages before the cursor must not appear
-    assert "question 0" not in window
-    assert "question 1" not in window
-    assert "question 2" not in window
+    assert len(lines) == 100
+    assert sum(1 for line in lines if line.startswith("User:")) == 50
+    assert sum(1 for line in lines if line.startswith("Tool(")) == 50
+
+
+def test_build_transcript_window_empty_messages_returns_empty_string() -> None:
+    assert build_transcript_window([]) == ""
 
 
 @pytest.mark.asyncio

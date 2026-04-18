@@ -1,11 +1,14 @@
-"""Tests for approval subject resolution — display format and session-rule matching."""
+"""Tests for approval subject resolution and session approval persistence."""
 
 import pytest
+from pydantic_ai import DeferredToolResults
 
 from co_cli.config._core import settings
 from co_cli.context.tool_approvals import (
     ApprovalSubject,
     is_auto_approved,
+    record_approval_choice,
+    remember_tool_approval,
     resolve_approval_subject,
 )
 from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
@@ -145,6 +148,62 @@ def test_is_auto_approved_no_match_empty_rules():
     deps = _make_deps()
     subject = resolve_approval_subject("write_file", {"path": "src/foo.py", "content": "x"})
     assert not is_auto_approved(subject, deps)
+
+
+def test_remember_tool_approval_stores_rule_and_auto_approves():
+    """remember_tool_approval stores a session rule; subsequent is_auto_approved returns True."""
+    deps = _make_deps()
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
+    remember_tool_approval(subject, deps)
+    assert (
+        SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
+        in deps.session.session_approval_rules
+    )
+    assert is_auto_approved(subject, deps) is True
+
+
+def test_remember_tool_approval_is_idempotent():
+    """Calling remember_tool_approval twice does not duplicate the session rule."""
+    deps = _make_deps()
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
+    remember_tool_approval(subject, deps)
+    remember_tool_approval(subject, deps)
+    rule = SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
+    assert deps.session.session_approval_rules.count(rule) == 1
+
+
+def test_record_approval_choice_with_remember_stores_rule():
+    """record_approval_choice with remember=True stores a session rule via remember_tool_approval."""
+    deps = _make_deps()
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
+    approvals = DeferredToolResults()
+    record_approval_choice(
+        approvals,
+        tool_call_id="call-1",
+        approved=True,
+        subject=subject,
+        deps=deps,
+        remember=True,
+    )
+    assert approvals.approvals["call-1"] is True
+    assert is_auto_approved(subject, deps) is True
+
+
+def test_record_approval_choice_deny_does_not_store_rule():
+    """Denied approvals must not persist a session rule."""
+    deps = _make_deps()
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
+    approvals = DeferredToolResults()
+    record_approval_choice(
+        approvals,
+        tool_call_id="call-2",
+        approved=False,
+        subject=subject,
+        deps=deps,
+        remember=False,
+    )
+    assert is_auto_approved(subject, deps) is False
+    assert deps.session.session_approval_rules == []
 
 
 # --- subject kind/value/scope resolution ---

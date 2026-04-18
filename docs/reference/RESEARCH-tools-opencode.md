@@ -375,3 +375,36 @@ Observed in [agent.py](/Users/binle/workspace_genai/co-cli/co_cli/agent.py) and 
 - native Google integration tools: `search_drive_files`, `read_drive_file`, `list_gmail_emails`, `search_gmail_emails`, `create_gmail_draft`, `list_calendar_events`, `search_calendar_events`
 
 `opencode` can load custom and plugin tools dynamically, but those are outside the fixed native built-in list compared in this section.
+
+
+## 7.3 Tool Surface Gap
+
+This section details the built-in native tools observed in opencode based on `../opencode/packages/opencode/src/tool/registry.ts`.
+
+### Built-in Native opencode Tools
+
+The following tools are initialized and provided as built-ins in the `ToolRegistry` state:
+
+*   **`invalid` (`InvalidTool`)**: Handles invalid tool calls or unrecognized commands.
+*   **`bash` (`BashTool`)**: Executes shell commands.
+*   **`read` (`ReadTool`)**: Reads file contents.
+*   **`glob` (`GlobTool`)**: Performs glob-based file searches.
+*   **`grep` (`GrepTool`)**: Performs content searches using regular expressions (ripgrep).
+*   **`edit` (`EditTool`)**: Modifies file contents (string replacement). Note: filtered out in favor of `patch` for certain older GPT models.
+*   **`write` (`WriteTool`)**: Writes content to a file. Note: filtered out in favor of `patch` for certain older GPT models.
+*   **`task` (`TaskTool`)**: Orchestrates subagents for complex tasks. Description is dynamically injected with available subagents.
+*   **`fetch` (`WebFetchTool`)**: Fetches content from URLs.
+*   **`todo` (`TodoWriteTool`)**: Manages the structured task/todo list.
+*   **`search` (`WebSearchTool`)**: Performs web searches (conditional on provider or `OPENCODE_ENABLE_EXA`).
+*   **`code` (`CodeSearchTool`)**: Performs code-specific searches (conditional on provider or `OPENCODE_ENABLE_EXA`).
+*   **`skill` (`SkillTool`)**: Loads specialized domain instructions. Description is dynamically injected with available skills.
+*   **`patch` (`ApplyPatchTool`)**: Applies unified diff patches. Note: only active for certain older GPT models in place of `edit`/`write`.
+*   **`question` (`QuestionTool`)**: Asks the user explicit questions (conditional on `OPENCODE_CLIENT` or `OPENCODE_ENABLE_QUESTION_TOOL`).
+*   **`lsp` (`LspTool`)**: Language Server Protocol integration (conditional on `OPENCODE_EXPERIMENTAL_LSP_TOOL`).
+*   **`plan` (`PlanExitTool`)**: Exits plan mode (conditional on `OPENCODE_EXPERIMENTAL_PLAN_MODE` and CLI client).
+
+### Comparison with co-cli Native Tools
+
+*   **Common Tools:** Both systems implement `bash`, `read`, `glob`, `grep`, `edit`, `write`, `task` (subagents), `todo` (`todowrite`), `fetch` (`webfetch`), `question`, and `skill`.
+*   **opencode Only (Built-in):** `invalid`, `search` (web search), `code` (code search), `patch` (diff application), `lsp` (language server), `plan` (plan mode exit).
+*   **co-cli Only:** Knowledge/article tools, memory tools, background task controls, explicit role subagents (`run_coding_subagent`, etc.), Obsidian integration, and Google integration (Drive, Gmail, Calendar).

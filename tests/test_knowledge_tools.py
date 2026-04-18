@@ -1,4 +1,4 @@
-"""Tests for memory gravity — touch and dedup on recall."""
+"""Workflow tests for reusable knowledge tools and recall bookkeeping."""
 
 import asyncio
 from datetime import UTC, datetime
@@ -23,7 +23,6 @@ from co_cli.tools.knowledge import (
     save_knowledge,
     update_knowledge,
 )
-from co_cli.tools.memory import search_memory
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
@@ -289,20 +288,6 @@ def test_append_knowledge_missing_slug_raises(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# search_memory — episodic recall over session transcripts
-# ---------------------------------------------------------------------------
-
-
-def test_search_memory_delegates_to_session_search(tmp_path: Path):
-    """search_memory delegates to session_search — returns not-available when no memory index."""
-    ctx = _make_ctx(knowledge_dir=tmp_path / "knowledge")
-    result = asyncio.run(search_memory(ctx, "some query"))
-    # memory_index is None in test context → session_search returns its own not-available message
-    assert result.metadata["count"] == 0
-    assert "session" in result.return_value.lower()
-
-
-# ---------------------------------------------------------------------------
 # rag.backend OTel annotation
 # ---------------------------------------------------------------------------
 
@@ -376,29 +361,6 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         idx.close()
 
     assert otel_trace.get_tracer_provider() is _orig
-
-
-# ---------------------------------------------------------------------------
-# Self-contained personality role layout tests
-# ---------------------------------------------------------------------------
-
-
-def test_load_character_memories_from_system_path():
-    """Character memories load from souls/{role}/memories/, not memory_dir."""
-    from co_cli.prompts.personalities._loader import load_character_memories
-
-    result = load_character_memories("finch")
-    assert result.startswith("## Character")
-    assert len(result) > 100
-
-
-def test_load_soul_mindsets_from_role_path():
-    """Mindsets load from souls/{role}/mindsets/."""
-    from co_cli.prompts.personalities._loader import load_soul_mindsets
-
-    result = load_soul_mindsets("finch")
-    assert result.startswith("## Mindsets")
-    assert len(result) > 100
 
 
 # ---------------------------------------------------------------------------

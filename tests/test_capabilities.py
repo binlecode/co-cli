@@ -9,8 +9,9 @@ from tests._settings import make_settings
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
 from co_cli.agent._core import build_agent
-from co_cli.config._core import settings
-from co_cli.deps import CoDeps
+from co_cli.bootstrap.check import check_runtime
+from co_cli.config._core import MCPServerSettings, settings
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools.capabilities import check_capabilities
 from co_cli.tools.shell_backend import ShellBackend
@@ -18,13 +19,28 @@ from co_cli.tools.shell_backend import ShellBackend
 _AGENT = build_agent(config=settings)
 
 
+def _make_deps(**settings_overrides) -> CoDeps:
+    """Build runtime deps for doctor-style checks without test doubles."""
+    return CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(**settings_overrides),
+        session=CoSessionState(),
+    )
+
+
+def _make_ctx(deps: CoDeps) -> RunContext[CoDeps]:
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+
+# ---------------------------------------------------------------------------
+# Doctor tool workflow
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_new_runtime_fields_present() -> None:
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(),
-    )
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    deps = _make_deps()
+    ctx = _make_ctx(deps)
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         result = await check_capabilities(ctx)
     assert "tool_count" in result.metadata
@@ -36,12 +52,9 @@ async def test_new_runtime_fields_present() -> None:
 @pytest.mark.asyncio
 async def test_capabilities_emits_doctor_progress_updates() -> None:
     statuses: list[str] = []
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(),
-    )
+    deps = _make_deps()
     deps.runtime.tool_progress_callback = statuses.append
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    ctx = _make_ctx(deps)
 
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         await check_capabilities(ctx)
@@ -64,11 +77,11 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
     """
     frontend = TerminalFrontend()
     tool_id = "cap1"
-    deps = CoDeps(shell=ShellBackend(), config=make_settings(mcp_servers={}))
+    deps = _make_deps(mcp_servers={})
     deps.runtime.tool_progress_callback = lambda msg, _tid=tool_id: frontend.on_tool_progress(
         _tid, msg
     )
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    ctx = _make_ctx(deps)
 
     try:
         async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
@@ -81,3 +94,31 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
         )
     finally:
         frontend.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Runtime health probing dependencies
+# ---------------------------------------------------------------------------
+
+
+def test_check_runtime_mcp_probe_name_matches_config_key() -> None:
+    """Runtime checks must preserve the config key for each MCP probe result."""
+    result = check_runtime(
+        _make_deps(
+            mcp_servers={"mysvr": MCPServerSettings(command="ls")},
+        )
+    )
+
+    assert len(result.mcp_probes) == 1
+    assert result.mcp_probes[0][0] == "mysvr"
+
+
+def test_check_runtime_binary_probe_passes_when_command_on_path() -> None:
+    """Healthy MCP commands on PATH should not emit a degraded finding."""
+    result = check_runtime(
+        _make_deps(
+            mcp_servers={"mysvr": MCPServerSettings(command="ls")},
+        )
+    )
+
+    assert not any(finding["component"] == "mcp:mysvr" for finding in result.findings)

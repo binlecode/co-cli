@@ -12,6 +12,8 @@ from co_cli.commands._commands import (
     CommandContext,
     DelegateToAgent,
     LocalOnly,
+    ReplaceTranscript,
+    SkillConfig,
     _load_skills,
     dispatch,
 )
@@ -119,6 +121,17 @@ async def test_skills_install_local_registers_skill(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_skills_install_url_error(tmp_path: Path):
+    """/skills install with an unreachable URL stays local and fails gracefully."""
+    ctx = _make_ctx(tmp_path)
+    ctx.deps.skills_dir = tmp_path / "bundled-skills"
+
+    result = await dispatch("/skills install http://127.0.0.1:1/skill.md", ctx)
+
+    assert isinstance(result, LocalOnly)
+
+
+@pytest.mark.asyncio
 async def test_skill_upgrade_without_source_url_leaves_file_unchanged(tmp_path: Path):
     """/skills upgrade is a no-op when the skill was not installed from a URL."""
     user_skills_dir = tmp_path / "user-skills"
@@ -146,6 +159,37 @@ def test_load_skills_user_overrides_bundled(tmp_path: Path):
     assert loaded["shared-skill"].body == "User body"
 
 
+@pytest.mark.asyncio
+async def test_dispatch_skill_returns_delegate_to_agent(tmp_path: Path):
+    """Registered skills delegate to the agent with the original body."""
+    ctx = _make_ctx(tmp_path)
+    ctx.deps.skill_commands["test-boundary-skill"] = SkillConfig(
+        name="test-boundary-skill",
+        body="Do the thing.",
+        description="test",
+    )
+
+    result = await dispatch("/test-boundary-skill", ctx)
+
+    assert isinstance(result, DelegateToAgent)
+    assert result.delegated_input == "Do the thing."
+
+
+@pytest.mark.asyncio
+async def test_dispatch_builtin_takes_precedence_over_same_name_skill(tmp_path: Path):
+    """Built-in slash commands must not be shadowed by a user skill of the same name."""
+    ctx = _make_ctx(tmp_path)
+    ctx.message_history = ["msg"]
+    ctx.deps.skill_commands["clear"] = SkillConfig(
+        name="clear", body="skill body", description="t"
+    )
+
+    result = await dispatch("/clear", ctx)
+
+    assert isinstance(result, ReplaceTranscript)
+    assert result.history == []
+
+
 def test_load_skills_rejects_symlink_outside_root(tmp_path: Path):
     """Symlinks escaping the skills root are rejected."""
     skills_dir = tmp_path / "skills"
@@ -157,3 +201,18 @@ def test_load_skills_rejects_symlink_outside_root(tmp_path: Path):
     loaded = _load_skills(skills_dir, settings)
 
     assert "escaped" not in loaded
+
+
+def test_load_skills_collects_errors_for_malformed_skill_file(tmp_path: Path):
+    """Malformed skill files must report a load error instead of silently disappearing."""
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    bad_skill = skills_dir / "broken.md"
+    bad_skill.write_bytes(b"---\ndescription: test\n---\n\xff\xfe bad bytes")
+
+    errors: list[str] = []
+    result = _load_skills(skills_dir, errors=errors)
+
+    assert isinstance(result, dict)
+    assert len(errors) == 1
+    assert "broken.md" in errors[0]

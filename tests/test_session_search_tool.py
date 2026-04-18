@@ -1,4 +1,4 @@
-"""Functional tests for the session_search tool and its registration."""
+"""Functional tests for transcript-backed session search."""
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,7 +12,7 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.context.session import session_filename
 from co_cli.context.transcript import append_messages
-from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.deps import CoDeps
 from co_cli.memory._store import MemoryIndex
 from co_cli.tools.session_search import session_search
 from co_cli.tools.shell_backend import ShellBackend
@@ -113,22 +113,4 @@ async def test_session_search_graceful_when_index_none(tmp_path: Path) -> None:
     assert result.metadata is not None
     assert result.metadata["count"] == 0, (
         f"count must be 0 when index is None, got {result.metadata['count']}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 3: tool is registered with DEFERRED visibility
-# ---------------------------------------------------------------------------
-
-
-def test_search_memory_registered_with_always_visibility() -> None:
-    """search_memory is the episodic memory tool — must be ALWAYS visible."""
-    from co_cli.agent._core import build_tool_registry
-
-    registry = build_tool_registry(_CONFIG)
-    tool_index = registry.tool_index
-
-    assert "search_memory" in tool_index, "'search_memory' must be registered in tool_index"
-    assert tool_index["search_memory"].visibility == VisibilityPolicyEnum.ALWAYS, (
-        f"search_memory visibility must be ALWAYS, got {tool_index['search_memory'].visibility}"
     )

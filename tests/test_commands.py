@@ -1,4 +1,4 @@
-"""Functional tests for slash commands and approval flow.
+"""Functional tests for user-facing slash commands.
 
 All tests use real agent/deps — no mocks, no stubs.
 """
@@ -7,8 +7,8 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from pydantic_ai import Agent, DeferredToolResults
-from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+from pydantic_ai import Agent
+from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.result import DeferredToolRequests
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
@@ -17,24 +17,14 @@ from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.commands._commands import (
     CommandContext,
-    DelegateToAgent,
     LocalOnly,
     ReplaceTranscript,
-    SkillConfig,
-    _load_skills,
     dispatch,
 )
 from co_cli.config._core import settings
 from co_cli.config._llm import NOREASON_SETTINGS
-from co_cli.context.orchestrate import _build_interrupted_turn_result, _TurnState, run_turn
-from co_cli.context.skill_env import cleanup_skill_run_state
-from co_cli.context.tool_approvals import (
-    is_auto_approved,
-    record_approval_choice,
-    remember_tool_approval,
-    resolve_approval_subject,
-)
-from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
+from co_cli.context.orchestrate import run_turn
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import Frontend, console
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.llm._factory import build_model
@@ -109,15 +99,6 @@ async def test_cmd_clear():
     result = await dispatch("/clear", ctx)
     assert isinstance(result, ReplaceTranscript)
     assert result.history == []
-
-
-@pytest.mark.asyncio
-async def test_skills_install_url_error(tmp_path):
-    """/skills install with unreachable URL returns None (graceful failure)."""
-    ctx = _make_ctx()
-    ctx.deps.skills_dir = tmp_path / "bundled-skills"
-    result = await dispatch("/skills install http://127.0.0.1:1/skill.md", ctx)
-    assert isinstance(result, LocalOnly)
 
 
 @pytest.mark.asyncio
@@ -235,208 +216,11 @@ async def test_compact_noop_empty_history():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_skill_returns_delegate_to_agent():
-    """Skill dispatch must return DelegateToAgent."""
-    test_skill = SkillConfig(name="test-boundary-skill", body="Do the thing.", description="test")
-    ctx = _make_ctx()
-    ctx.deps.skill_commands["test-boundary-skill"] = test_skill
-    result = await dispatch("/test-boundary-skill", ctx)
-    assert isinstance(result, DelegateToAgent)
-    assert result.delegated_input == "Do the thing."
-
-
-@pytest.mark.asyncio
 async def test_dispatch_unknown_command_returns_local_only():
     """Unknown slash command returns LocalOnly — stays local, no agent turn."""
     ctx = _make_ctx()
     result = await dispatch("/xyzzy-no-such-command", ctx)
     assert isinstance(result, LocalOnly)
-
-
-@pytest.mark.asyncio
-async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
-    """Built-in command must win over a skill registered with the same name."""
-    # 'clear' is a builtin — registering a skill with the same name must not shadow it
-    test_skill = SkillConfig(name="clear", body="skill body", description="test")
-    ctx = _make_ctx(message_history=["msg"])
-    ctx.deps.skill_commands["clear"] = test_skill
-    result = await dispatch("/clear", ctx)
-    # Must route to builtin: ReplaceTranscript with cleared history
-    assert isinstance(result, ReplaceTranscript)
-    assert result.history == []
-
-
-# --- Approval subject scoping ---
-
-
-def test_remember_tool_approval_stores_rule_and_auto_approves():
-    """remember_tool_approval stores a session rule; subsequent is_auto_approved returns True."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(),
-        session=CoSessionState(),
-    )
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
-    remember_tool_approval(subject, deps)
-    assert (
-        SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
-        in deps.session.session_approval_rules
-    )
-    assert is_auto_approved(subject, deps) is True
-
-
-def test_remember_tool_approval_is_idempotent():
-    """Calling remember_tool_approval twice does not duplicate the session rule."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(),
-        session=CoSessionState(),
-    )
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
-    remember_tool_approval(subject, deps)
-    remember_tool_approval(subject, deps)
-    rule = SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
-    assert deps.session.session_approval_rules.count(rule) == 1
-
-
-def test_record_approval_choice_with_remember_stores_rule():
-    """record_approval_choice with remember=True stores a session rule via remember_tool_approval."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(),
-        session=CoSessionState(),
-    )
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
-    approvals = DeferredToolResults()
-    record_approval_choice(
-        approvals,
-        tool_call_id="call-1",
-        approved=True,
-        subject=subject,
-        deps=deps,
-        remember=True,
-    )
-    assert approvals.approvals["call-1"] is True
-    assert is_auto_approved(subject, deps) is True
-
-
-def test_record_approval_choice_deny_does_not_store_rule():
-    """Denied approvals must not persist a session rule."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(),
-        session=CoSessionState(),
-    )
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
-    approvals = DeferredToolResults()
-    record_approval_choice(
-        approvals,
-        tool_call_id="call-2",
-        approved=False,
-        subject=subject,
-        deps=deps,
-        remember=False,
-    )
-    assert is_auto_approved(subject, deps) is False
-    assert deps.session.session_approval_rules == []
-
-
-# --- Orchestration: interrupted turn result ---
-
-
-def test_build_interrupted_turn_result_drops_dangling_tool_call():
-    """_build_interrupted_turn_result drops the last ModelResponse when it has unanswered ToolCallParts.
-
-    The dangling tool call response is removed so history ends at a clean point,
-    and an abort marker is appended for the next turn.
-    """
-    clean_request = ModelRequest(parts=[UserPromptPart(content="run ls")])
-    dangling_response = ModelResponse(
-        parts=[
-            ToolCallPart(
-                tool_name="run_shell_command", args='{"cmd": "ls"}', tool_call_id="call-x"
-            )
-        ]
-    )
-    turn_state = _TurnState(
-        current_input=None,
-        current_history=[clean_request, dangling_response],
-    )
-
-    result = _build_interrupted_turn_result(turn_state)
-
-    assert result.interrupted is True
-    assert result.outcome == "continue"
-    assert dangling_response not in result.messages
-    # Abort marker must be the last message
-    last = result.messages[-1]
-    assert isinstance(last, ModelRequest)
-    assert any(
-        "interrupted" in part.content.lower()
-        for part in last.parts
-        if isinstance(part, UserPromptPart)
-    )
-
-
-def test_build_interrupted_turn_result_keeps_clean_history():
-    """_build_interrupted_turn_result preserves messages that have no dangling ToolCallParts."""
-    clean_request = ModelRequest(parts=[UserPromptPart(content="hello")])
-    clean_response = ModelResponse(parts=[])
-    turn_state = _TurnState(
-        current_input=None,
-        current_history=[clean_request, clean_response],
-    )
-
-    result = _build_interrupted_turn_result(turn_state)
-
-    assert result.interrupted is True
-    # Both original messages are retained — neither is a dangling tool call response
-    assert clean_request in result.messages
-    assert clean_response in result.messages
-
-
-# ---------------------------------------------------------------------------
-# cleanup_skill_run_state — env var restore and skill name clear
-# ---------------------------------------------------------------------------
-
-
-def test_cleanup_skill_restores_set_env_var():
-    """Key that was set before skill run is restored to its original value."""
-    import os
-
-    key = "TEST_CO_SKILL_RESTORE_KEY"
-    original = "original-value"
-    os.environ[key] = original
-    try:
-        os.environ[key] = "skill-injected-value"
-        deps = CoDeps(shell=ShellBackend(), config=make_settings())
-        cleanup_skill_run_state({key: original}, deps)
-        assert os.environ[key] == original
-    finally:
-        os.environ.pop(key, None)
-
-
-def test_cleanup_skill_removes_absent_env_var():
-    """Key that was absent before skill run is removed after cleanup."""
-    import os
-
-    key = "TEST_CO_SKILL_ABSENT_KEY"
-    os.environ.pop(key, None)
-    os.environ[key] = "skill-injected-value"
-    try:
-        deps = CoDeps(shell=ShellBackend(), config=make_settings())
-        cleanup_skill_run_state({key: None}, deps)
-        assert key not in os.environ
-    finally:
-        os.environ.pop(key, None)
-
-
-def test_cleanup_skill_clears_active_skill_name():
-    """active_skill_name is cleared to None after cleanup."""
-    deps = CoDeps(shell=ShellBackend(), config=make_settings())
-    deps.runtime.active_skill_name = "my-skill"
-    cleanup_skill_run_state({}, deps)
-    assert deps.runtime.active_skill_name is None
 
 
 # ---------------------------------------------------------------------------
@@ -701,27 +485,6 @@ async def test_cmd_memory_registered(tmp_path):
     ctx = _make_ctx(knowledge_dir=tmp_path)
     result = await dispatch("/memory list", ctx)
     assert isinstance(result, LocalOnly)
-
-
-# ---------------------------------------------------------------------------
-# _load_skills diagnostics
-# ---------------------------------------------------------------------------
-
-
-def test_load_skills_collects_errors_for_malformed_skill_file(tmp_path):
-    """Malformed skill file is reported via errors accumulator with file name."""
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    # Write a skill file with invalid UTF-8 bytes — triggers UnicodeDecodeError on read
-    bad_skill = skills_dir / "broken.md"
-    bad_skill.write_bytes(b"---\ndescription: test\n---\n\xff\xfe bad bytes")
-
-    errors: list[str] = []
-    result = _load_skills(skills_dir, errors=errors)
-
-    assert isinstance(result, dict)
-    assert len(errors) == 1
-    assert "broken.md" in errors[0]
 
 
 # ---------------------------------------------------------------------------

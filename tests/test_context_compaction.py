@@ -188,35 +188,54 @@ def test_budget_floor_prevents_negative():
 
 
 # ---------------------------------------------------------------------------
-# _build_summarizer_prompt() — pure function, 4 combinations
+# _build_summarizer_prompt() — pure function
 # ---------------------------------------------------------------------------
 
 
-def test_build_summarizer_prompt_no_context_no_personality():
-    """(a) context=None, personality_active=False → template unchanged."""
-    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
-    assert result == _SUMMARIZE_PROMPT
-
-
-def test_build_summarizer_prompt_with_context_no_personality():
-    """(b) context present, personality_active=False → template + Additional Context."""
-    ctx_text = "Files touched: /foo/bar.py"
+@pytest.mark.parametrize(
+    ("context", "personality_active", "expects_context", "expects_personality"),
+    [
+        (None, False, False, False),
+        ("Files touched: /foo/bar.py", False, True, False),
+        (None, True, False, True),
+        ("Active tasks:\n- [pending] fix bug", True, True, True),
+    ],
+    ids=[
+        "no_context_no_personality",
+        "context_only",
+        "personality_only",
+        "context_and_personality",
+    ],
+)
+def test_build_summarizer_prompt_variants(
+    context: str | None,
+    personality_active: bool,
+    expects_context: bool,
+    expects_personality: bool,
+) -> None:
+    """Prompt builder should append context and personality addenda only when requested."""
     result = _build_summarizer_prompt(
-        _SUMMARIZE_PROMPT, context=ctx_text, personality_active=False
+        _SUMMARIZE_PROMPT,
+        context=context,
+        personality_active=personality_active,
     )
-    assert result.startswith(_SUMMARIZE_PROMPT)
-    assert "## Additional Context" in result
-    assert ctx_text in result
-    # No personality addendum
-    assert _PERSONALITY_COMPACTION_ADDENDUM not in result
 
+    if not expects_context and not expects_personality:
+        assert result == _SUMMARIZE_PROMPT
+        return
 
-def test_build_summarizer_prompt_no_context_with_personality():
-    """(c) context=None, personality_active=True → template + personality addendum."""
-    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=True)
     assert result.startswith(_SUMMARIZE_PROMPT)
-    assert _PERSONALITY_COMPACTION_ADDENDUM in result
-    assert "## Additional Context" not in result
+    if expects_context:
+        assert "## Additional Context" in result
+        assert context is not None
+        assert context in result
+    else:
+        assert "## Additional Context" not in result
+
+    if expects_personality:
+        assert _PERSONALITY_COMPACTION_ADDENDUM in result
+    else:
+        assert _PERSONALITY_COMPACTION_ADDENDUM not in result
 
 
 # ---------------------------------------------------------------------------
@@ -285,15 +304,10 @@ async def test_trigger_uses_max_floor():
     assert len(result) < len(msgs), "max() floor should have triggered compaction"
 
 
-def test_build_summarizer_prompt_with_context_and_personality():
-    """(d) context + personality → template + context + personality (personality always last)."""
+def test_build_summarizer_prompt_keeps_personality_after_context() -> None:
+    """When both addenda are present, personality guidance must stay after context."""
     ctx_text = "Active tasks:\n- [pending] fix bug"
     result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=ctx_text, personality_active=True)
-    assert result.startswith(_SUMMARIZE_PROMPT)
-    assert "## Additional Context" in result
-    assert ctx_text in result
-    assert _PERSONALITY_COMPACTION_ADDENDUM in result
-    # Personality comes after context
     ctx_pos = result.index("## Additional Context")
     personality_pos = result.index("Additionally, preserve:")
     assert personality_pos > ctx_pos
