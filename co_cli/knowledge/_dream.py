@@ -11,6 +11,7 @@ for the lifecycle model.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -59,6 +60,7 @@ _MAX_CLUSTER_SIZE = 5
 _MERGED_BODY_MIN_CHARS = 20
 _MAX_DECAY_PER_CYCLE = 20
 _MAX_MINE_SAVES_PER_SESSION = 5
+_DREAM_CYCLE_TIMEOUT_SECS = 60
 
 
 class DreamStats(BaseModel):
@@ -465,18 +467,25 @@ class DreamResult:
     merged: int = 0
     decayed: int = 0
     errors: list[str] = field(default_factory=list)
+    timed_out: bool = False
 
     @property
     def any_changes(self) -> bool:
         return (self.extracted + self.merged + self.decayed) > 0
 
 
-async def run_dream_cycle(deps: CoDeps, dry_run: bool = False) -> DreamResult:
+async def run_dream_cycle(
+    deps: CoDeps,
+    dry_run: bool = False,
+    *,
+    timeout_secs: float = _DREAM_CYCLE_TIMEOUT_SECS,
+) -> DreamResult:
     """Execute a full dream cycle — mine transcripts, merge similar artifacts, decay stale.
 
     Each phase is independently try/except'd so one failure does not block the
-    others. On success, updates ``knowledge_dir/_dream_state.json`` with the
-    new ``last_dream_at`` timestamp and aggregated counters. When ``dry_run``
+    others. The whole cycle runs under an ``asyncio.timeout(timeout_secs)``
+    bound (default 60s); on timeout the partial result is returned with
+    ``timed_out=True`` and a marker appended to ``errors``. When ``dry_run``
     is True, no files are written, no originals are archived, and no state is
     persisted; ``result.merged`` reports the number of clusters that would be
     merged and ``result.decayed`` reports the number of artifacts that would
@@ -489,51 +498,63 @@ async def run_dream_cycle(deps: CoDeps, dry_run: bool = False) -> DreamResult:
 
     with tracer.start_as_current_span("co.dream.cycle") as cycle_span:
         cycle_span.set_attribute("dream.dry_run", dry_run)
+        cycle_span.set_attribute("dream.timeout_secs", timeout_secs)
 
-        if dry_run:
-            with tracer.start_as_current_span("co.dream.merge") as merge_span:
-                clusters = _identify_mergeable_clusters(deps)
-                result.merged = len(clusters)
-                merge_span.set_attribute("dream.merged", result.merged)
-            with tracer.start_as_current_span("co.dream.decay") as decay_span:
-                candidates = find_decay_candidates(deps.knowledge_dir, deps.config.knowledge)
-                result.decayed = min(len(candidates), _MAX_DECAY_PER_CYCLE)
-                decay_span.set_attribute("dream.decayed", result.decayed)
-        else:
-            try:
-                with tracer.start_as_current_span("co.dream.mine") as mine_span:
-                    result.extracted = await _mine_transcripts(deps, state)
-                    mine_span.set_attribute("dream.extracted", result.extracted)
-            except Exception as exc:
-                logger.warning("dream.cycle: mine failed", exc_info=True)
-                result.errors.append(f"mine: {exc}")
+        try:
+            async with asyncio.timeout(timeout_secs):
+                if dry_run:
+                    with tracer.start_as_current_span("co.dream.merge") as merge_span:
+                        clusters = _identify_mergeable_clusters(deps)
+                        result.merged = len(clusters)
+                        merge_span.set_attribute("dream.merged", result.merged)
+                    with tracer.start_as_current_span("co.dream.decay") as decay_span:
+                        candidates = find_decay_candidates(
+                            deps.knowledge_dir, deps.config.knowledge
+                        )
+                        result.decayed = min(len(candidates), _MAX_DECAY_PER_CYCLE)
+                        decay_span.set_attribute("dream.decayed", result.decayed)
+                else:
+                    try:
+                        with tracer.start_as_current_span("co.dream.mine") as mine_span:
+                            result.extracted = await _mine_transcripts(deps, state)
+                            mine_span.set_attribute("dream.extracted", result.extracted)
+                    except Exception as exc:
+                        logger.warning("dream.cycle: mine failed", exc_info=True)
+                        result.errors.append(f"mine: {exc}")
 
-            try:
-                with tracer.start_as_current_span("co.dream.merge") as merge_span:
-                    result.merged = await _merge_similar_artifacts(deps)
-                    merge_span.set_attribute("dream.merged", result.merged)
-            except Exception as exc:
-                logger.warning("dream.cycle: merge failed", exc_info=True)
-                result.errors.append(f"merge: {exc}")
+                    try:
+                        with tracer.start_as_current_span("co.dream.merge") as merge_span:
+                            result.merged = await _merge_similar_artifacts(deps)
+                            merge_span.set_attribute("dream.merged", result.merged)
+                    except Exception as exc:
+                        logger.warning("dream.cycle: merge failed", exc_info=True)
+                        result.errors.append(f"merge: {exc}")
 
-            try:
-                with tracer.start_as_current_span("co.dream.decay") as decay_span:
-                    result.decayed = _decay_sweep(deps)
-                    decay_span.set_attribute("dream.decayed", result.decayed)
-            except Exception as exc:
-                logger.warning("dream.cycle: decay failed", exc_info=True)
-                result.errors.append(f"decay: {exc}")
+                    try:
+                        with tracer.start_as_current_span("co.dream.decay") as decay_span:
+                            result.decayed = _decay_sweep(deps)
+                            decay_span.set_attribute("dream.decayed", result.decayed)
+                    except Exception as exc:
+                        logger.warning("dream.cycle: decay failed", exc_info=True)
+                        result.errors.append(f"decay: {exc}")
 
-            state.last_dream_at = datetime.now(UTC).isoformat()
-            state.stats.total_cycles += 1
-            state.stats.total_extracted += result.extracted
-            state.stats.total_merged += result.merged
-            state.stats.total_decayed += result.decayed
-            save_dream_state(deps.knowledge_dir, state)
+                    state.last_dream_at = datetime.now(UTC).isoformat()
+                    state.stats.total_cycles += 1
+                    state.stats.total_extracted += result.extracted
+                    state.stats.total_merged += result.merged
+                    state.stats.total_decayed += result.decayed
+                    save_dream_state(deps.knowledge_dir, state)
+        except TimeoutError:
+            logger.warning(
+                "dream.cycle: timeout after %ss — returning partial result", timeout_secs
+            )
+            result.timed_out = True
+            result.errors.append(f"timeout after {timeout_secs}s")
 
         cycle_span.set_attribute("dream.extracted", result.extracted)
         cycle_span.set_attribute("dream.merged", result.merged)
         cycle_span.set_attribute("dream.decayed", result.decayed)
         cycle_span.set_attribute("dream.errors", len(result.errors))
+        cycle_span.set_attribute("dream.timed_out", result.timed_out)
 
     return result

@@ -133,6 +133,21 @@ def test_knowledge_lifecycle_env_overrides(tmp_path):
     assert settings.knowledge.decay_after_days == 45
 
 
+def test_memory_extract_every_n_turns_env_override(tmp_path):
+    """CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS overrides the default extraction cadence."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _env={"CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS": "7"},
+    )
+    assert settings.memory.extract_every_n_turns == 7
+
+
+def test_memory_extract_every_n_turns_default(tmp_path):
+    """Without the env override, extract_every_n_turns keeps its documented default of 3."""
+    settings = load_config(_user_config_path=tmp_path / "nonexistent.json")
+    assert settings.memory.extract_every_n_turns == 3
+
+
 def test_knowledge_lifecycle_from_user_config(tmp_path):
     """knowledge lifecycle fields can be set via settings.json."""
     user_settings = tmp_path / "settings.json"

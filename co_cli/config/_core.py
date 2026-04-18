@@ -216,6 +216,7 @@ class Settings(BaseModel):
             "memory": {
                 "recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
                 "injection_max_chars": "CO_CLI_MEMORY_INJECTION_MAX_CHARS",
+                "extract_every_n_turns": "CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS",
             },
             "subagent": {
                 "scope_chars": "CO_CLI_SUBAGENT_SCOPE_CHARS",

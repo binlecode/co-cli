@@ -205,6 +205,42 @@ async def test_full_cycle_executes_all_phases_with_live_llm(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.local
+async def test_run_dream_cycle_enforces_timeout_bound(tmp_path: Path) -> None:
+    """A timeout smaller than any real LLM round-trip must return a partial
+    result with ``timed_out=True`` rather than hanging.
+
+    Seeds a real session so the mine phase actually enters an LLM await under
+    the timeout context. Requires a live model (``@pytest.mark.local``) —
+    without at least one async await inside the cycle there is nothing for
+    ``asyncio.timeout`` to interrupt.
+    """
+    deps, store = _make_deps(tmp_path, with_model=True)
+    try:
+        session_path = deps.sessions_dir / "2026-04-18-T100000Z-timeoutt.jsonl"
+        append_messages(
+            session_path,
+            [
+                ModelRequest(
+                    parts=[UserPromptPart(content="Remember: always prefer ruff for linting.")]
+                ),
+                ModelResponse(
+                    parts=[TextPart(content="Understood.")],
+                    model_name="test-model",
+                ),
+            ],
+        )
+
+        result = await run_dream_cycle(deps, timeout_secs=0.001)
+
+        assert result.timed_out is True
+        assert any("timeout" in err for err in result.errors)
+        assert result.any_changes is False
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_run_dream_cycle_accumulates_stats_across_cycles(tmp_path: Path) -> None:
     deps, store = _make_deps(tmp_path, with_model=False)
     try:
