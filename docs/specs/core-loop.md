@@ -255,8 +255,8 @@ Ordering rationale:
 Compaction behavior:
 
 - `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
-- it compacts when token count exceeds 85% of the budget
-- token count is the real provider-reported `input_tokens` from the latest `ModelResponse`; when no usage is available it falls back to a character-count estimate (`total_chars // 4`)
+- it compacts when token count exceeds `PROACTIVE_COMPACTION_RATIO` (0.85) of the budget
+- token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_failure_count`) skips the LLM call after 3 consecutive failures; on success the counter resets to 0
@@ -278,7 +278,7 @@ Error matrix:
 
 | Condition | Behavior |
 | --- | --- |
-| HTTP 400/413 with context-length body pattern (`_is_context_overflow`) | one-shot `recover_overflow_history()` — first materializes the pending user input into history, then keeps first + last turn groups with an LLM summary when available or a static marker otherwise. Retry on success; terminal if ≤2 groups or second overflow. Never falls through to 400 reformulation. |
+| HTTP 400/413 with context-length body pattern (`_is_context_overflow`) | one-shot `recover_overflow_history()` — first materializes the pending user input into history, then calls the shared `plan_compaction_boundaries()` (same `TAIL_FRACTION`, `min_groups_tail=1`) and replaces the dropped middle with an LLM summary when available or a static marker otherwise. Retry on success; terminal when the planner cannot find a boundary or on second overflow. Never falls through to 400 reformulation. |
 | HTTP 400 with reformat budget left (not context overflow) | append a reflection request describing the rejected tool call, set `current_input=None`, retry (app-level reformulation, not transport retry) |
 | HTTP 400 with budget exhausted, or other terminal HTTP errors | set `outcome='error'`; record `provider_error` span event (`http.status_code`, `error.body` capped at 500 chars) on the `co.turn` span; return `_build_error_turn_result()` |
 | `ModelAPIError` (network errors exhausted by SDK) | set `outcome='error'` and return `_build_error_turn_result()` |

@@ -71,7 +71,6 @@ from co_cli.context._history import (
     COMPACTABLE_KEEP_RECENT,
     FILE_TOOLS,
     OLDER_MSG_MAX_CHARS,
-    _compute_compaction_boundaries,
     _gather_compaction_context,
     _truncate_proportional,
     compact_assistant_responses,
@@ -80,6 +79,7 @@ from co_cli.context._history import (
     find_first_run_end,
     group_by_turn,
     inject_opening_context,
+    plan_compaction_boundaries,
     summarize_history_window,
     truncate_tool_results,
 )
@@ -88,6 +88,7 @@ from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
     _build_summarizer_prompt,
+    resolve_compaction_budget,
     summarize_messages,
 )
 from co_cli.deps import CoDeps, CoSessionState
@@ -783,7 +784,7 @@ def step_4_context_enrichment() -> bool:
         _assistant("done"),
     ]
     ctx = _make_ctx()
-    result = _gather_compaction_context(ctx, msgs, dropped=[])
+    result = _gather_compaction_context(ctx, dropped=msgs)
     if result is None or "/app/models.py" not in result or "/app/views.py" not in result:
         print("  FAIL: file paths not extracted from ToolCallPart.args")
         passed = False
@@ -791,27 +792,23 @@ def step_4_context_enrichment() -> bool:
         print("  PASS: Source 1 — file paths from ToolCallPart.args")
         print(f"    context: {_snippet(result, 120)}")
 
-    # 4b: Source 1 scans ALL messages (not just dropped)
-    head = [
-        _user("head"),
-        _tool_call("read_file", {"file_path": "/head.py"}, "h1"),
-        _tool_return("read_file", "x", "h1"),
-        _assistant("ok"),
+    # 4b: Source 1 is scoped to dropped only (Gap M) — head/tail paths MUST NOT duplicate
+    # /head.py and /tail.py exist only in the kept head/tail regions; only /mid.py is in dropped.
+    dropped_msgs: list[ModelMessage] = [
+        _user("mid"),
+        _tool_call("read_file", {"file_path": "/mid.py"}, "m1"),
+        _tool_return("read_file", "z", "m1"),
+        _assistant("mid"),
     ]
-    tail = [
-        _user("tail"),
-        _tool_call("read_file", {"file_path": "/tail.py"}, "t1"),
-        _tool_return("read_file", "y", "t1"),
-        _assistant("ok"),
-    ]
-    dropped_msgs: list[ModelMessage] = [_user("mid"), _assistant("mid")]
-    all_msgs = head + dropped_msgs + tail
-    result = _gather_compaction_context(ctx, all_msgs, dropped=dropped_msgs)
-    if result is None or "/head.py" not in result or "/tail.py" not in result:
-        print("  FAIL: file paths from head/tail missing — not scanning ALL messages")
+    result = _gather_compaction_context(ctx, dropped=dropped_msgs)
+    if result is None or "/mid.py" not in result:
+        print("  FAIL: /mid.py (in dropped) missing from enrichment")
+        passed = False
+    elif "/head.py" in result or "/tail.py" in result:
+        print("  FAIL: head/tail file paths leaked into enrichment — Gap M not fixed")
         passed = False
     else:
-        print("  PASS: Source 1 scans ALL messages (head + dropped + tail)")
+        print("  PASS: Source 1 scoped to dropped only (Gap M)")
 
     # 4c: Source 2 — session todos (pending only)
     todos = [
@@ -821,7 +818,7 @@ def step_4_context_enrichment() -> bool:
         {"content": "Cancel this", "status": "cancelled"},
     ]
     ctx = _make_ctx(session_todos=todos)
-    result = _gather_compaction_context(ctx, [_user("hi"), _assistant("hey")], dropped=[])
+    result = _gather_compaction_context(ctx, dropped=[])
     if result is None or "Update tests" not in result or "Write docs" not in result:
         print("  FAIL: pending todos missing")
         passed = False
@@ -849,7 +846,7 @@ def step_4_context_enrichment() -> bool:
             f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\nUser prefers concise responses.\n"
         )
         ctx = _make_ctx(memory_dir=mem_dir)
-        result = _gather_compaction_context(ctx, [_user("hi"), _assistant("hey")], dropped=[])
+        result = _gather_compaction_context(ctx, dropped=[])
         if result is None or "concise responses" not in result:
             print("  FAIL: always-on memory not loaded")
             passed = False
@@ -863,9 +860,7 @@ def step_4_context_enrichment() -> bool:
         _assistant("continuing..."),
     ]
     ctx = _make_ctx()
-    result = _gather_compaction_context(
-        ctx, [_user("hi"), _assistant("hey")], dropped=dropped_with_summary
-    )
+    result = _gather_compaction_context(ctx, dropped=dropped_with_summary)
     if result is None or "Prior summary" not in result or "Refactor auth module" not in result:
         print("  FAIL: prior summary not extracted from dropped messages")
         passed = False
@@ -875,7 +870,7 @@ def step_4_context_enrichment() -> bool:
 
     # 4f: Returns None when empty
     ctx = _make_ctx()
-    result = _gather_compaction_context(ctx, [_user("hi"), _assistant("hey")], dropped=[])
+    result = _gather_compaction_context(ctx, dropped=[])
     if result is not None:
         print(f"  FAIL: expected None when no sources, got: {result[:80]}")
         passed = False
@@ -899,7 +894,7 @@ def step_4_context_enrichment() -> bool:
         _assistant("done"),
     ]
     ctx = _make_ctx(session_todos=big_todos)
-    result = _gather_compaction_context(ctx, msgs_many_files, dropped=[])
+    result = _gather_compaction_context(ctx, dropped=msgs_many_files)
     if result is not None and len(result) > _CONTEXT_MAX_CHARS:
         print(f"  FAIL: context {len(result)} > {_CONTEXT_MAX_CHARS}")
         passed = False
@@ -1249,11 +1244,13 @@ async def step_6_full_chain() -> bool:
     # --- P5 ---
     print("\n  [P5] summarize_history_window (LLM)")
     # Preview the enrichment context that P5 will assemble (before the LLM call)
-    bounds = _compute_compaction_boundaries(msgs)
+    _p5_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
+    _p5_budget = resolve_compaction_budget(ctx.deps.config, _p5_ctx_window)
+    bounds = plan_compaction_boundaries(msgs, _p5_budget)
     if bounds is not None:
         head_end, tail_start, dropped_count = bounds
         dropped_preview = msgs[head_end:tail_start]
-        enrichment_preview = _gather_compaction_context(ctx, msgs, dropped_preview)
+        enrichment_preview = _gather_compaction_context(ctx, dropped_preview)
         print(
             f"    Boundaries: head_end={head_end}, tail_start={tail_start}, dropped={dropped_count}"
         )
@@ -1585,11 +1582,13 @@ async def step_7_multi_cycle() -> bool:
     # --- P5 ---
     print("\n  [P5] summarize_history_window (LLM)")
     # Preview enrichment context (same as Step 6)
-    bounds_7 = _compute_compaction_boundaries(msgs)
+    _p5b_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
+    _p5b_budget = resolve_compaction_budget(ctx.deps.config, _p5b_ctx_window)
+    bounds_7 = plan_compaction_boundaries(msgs, _p5b_budget)
     if bounds_7 is not None:
         head_end_7, tail_start_7, dropped_count_7 = bounds_7
         dropped_7 = msgs[head_end_7:tail_start_7]
-        enrichment_7 = _gather_compaction_context(ctx, msgs, dropped_7)
+        enrichment_7 = _gather_compaction_context(ctx, dropped_7)
         print(
             f"    Boundaries: head_end={head_end_7}, tail_start={tail_start_7}, dropped={dropped_count_7}"
         )
@@ -2110,7 +2109,7 @@ def step_11_edge_cases() -> bool:
         _user("more chat"),
         _assistant("ok"),
     ]
-    result = _gather_compaction_context(ctx, no_tools, dropped=[])
+    result = _gather_compaction_context(ctx, dropped=no_tools)
     if result is not None:
         print(f"  FAIL: 11c — enrichment should return None with no tools, got: {result[:60]}")
         passed = False
@@ -2182,7 +2181,9 @@ def step_11_edge_cases() -> bool:
             f"  PASS: 11f — single 60K message: P2 caps to {len(big_part[0].content) if big_part else '?'}"
         )
     # Compaction boundaries: with 2 groups, should return None
-    bounds = _compute_compaction_boundaries(massive)
+    _massive_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
+    _massive_budget = resolve_compaction_budget(ctx.deps.config, _massive_ctx_window)
+    bounds = plan_compaction_boundaries(massive, _massive_budget)
     if bounds is not None:
         print("  FAIL: 11f — compaction boundaries valid on 2-group history")
         passed = False
@@ -2284,7 +2285,7 @@ def step_11_edge_cases() -> bool:
     assert len(r) == 0
     ec = emergency_compact(empty)
     assert ec is None
-    bounds = _compute_compaction_boundaries(empty)
+    bounds = plan_compaction_boundaries(empty, 100_000)
     assert bounds is None
     print("  PASS: 11i — empty message list: all processors + helpers handle gracefully")
 

@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from co_cli.context._history import COMPACTABLE_KEEP_RECENT
+
 if TYPE_CHECKING:
     from co_cli.config._core import Settings
 
@@ -19,6 +21,23 @@ _PROMPTS_DIR = Path(__file__).parent
 _RULES_DIR = _PROMPTS_DIR / "rules"
 
 _RULE_FILENAME_RE = re.compile(r"^(?P<order>\d{2})_(?P<rule_id>[a-z0-9_]+)\.md$")
+
+
+RECENCY_CLEARING_ADVISORY = (
+    "## Tool result recency\n\n"
+    "Tool results may be automatically cleared from context to free space. "
+    f"The {COMPACTABLE_KEEP_RECENT} most recent results per tool type are always kept. "
+    "Note important information from tool results in your response — "
+    "the original output may be cleared on later turns."
+)
+"""Static, cacheable advisory describing the ``[tool result cleared…]`` placeholders.
+
+Built once at module-load time from ``COMPACTABLE_KEEP_RECENT`` (static per
+process). Gets injected verbatim into the static instruction scaffold by
+``build_static_instructions`` so it lives in the cacheable prefix — no
+per-turn interpolation, no dynamic gating. Borrowed pattern from
+``fork-claude-code`` (Gap G fix).
+"""
 
 
 def _collect_rule_files() -> list[tuple[int, str, Path]]:
@@ -68,11 +87,13 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
 def build_static_instructions(config: Settings) -> str:
     """Build the static instructions string for the given model and personality.
 
-    Assembles all six sections in explicit order:
+    Assembles sections in explicit order:
     1. Soul seed (identity anchor)
     2. Character memories
     3. Mindsets
     4. Behavioral rules (numbered, strict order)
+    4b. Recency-clearing advisory (explains the ``[tool result cleared…]``
+        placeholders that appear after ``truncate_tool_results`` runs)
     5. Soul examples
     6. Critique (self-assessment lens)
 
@@ -118,6 +139,10 @@ def build_static_instructions(config: Settings) -> str:
         content = rule_path.read_text(encoding="utf-8").strip()
         if content:
             parts.append(content)
+
+    # 4b. Recency-clearing advisory — static, cacheable; explains the
+    # ``[tool result cleared…]`` placeholders the model will encounter.
+    parts.append(RECENCY_CLEARING_ADVISORY)
 
     # 5. Soul examples — concrete trigger→response patterns, trailing rules
     if examples:

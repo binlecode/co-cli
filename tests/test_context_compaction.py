@@ -6,6 +6,8 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.usage import RequestUsage, RunUsage
@@ -19,6 +21,7 @@ from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
     _build_summarizer_prompt,
+    estimate_message_tokens,
     latest_response_input_tokens,
     resolve_compaction_budget,
 )
@@ -48,15 +51,21 @@ def _assistant(text: str, input_tokens: int = 0) -> ModelResponse:
     )
 
 
-def _make_messages(n: int, last_input_tokens: int = 0) -> list:
-    """Alternating user/assistant messages; last assistant has specified token usage."""
+def _make_messages(n: int, last_input_tokens: int = 0, body_chars: int = 0) -> list:
+    """Alternating user/assistant messages; last assistant has specified token usage.
+
+    ``body_chars`` — optional per-message padding so the planner's own estimator
+    sees real token weight (needed for compaction tests since the planner walks
+    groups by estimated size, not by message count).
+    """
     msgs = []
+    padding = "x" * body_chars if body_chars else ""
     for i in range(n // 2):
-        msgs.append(_user(f"user turn {i}"))
+        msgs.append(_user(f"user turn {i} {padding}"))
         tokens = last_input_tokens if i == (n // 2 - 1) else 0
-        msgs.append(_assistant(f"assistant turn {i}", input_tokens=tokens))
+        msgs.append(_assistant(f"assistant turn {i} {padding}", input_tokens=tokens))
     if n % 2:
-        msgs.append(_user(f"user turn {n // 2}"))
+        msgs.append(_user(f"user turn {n // 2} {padding}"))
     return msgs
 
 
@@ -67,14 +76,15 @@ def _make_messages(n: int, last_input_tokens: int = 0) -> list:
 
 @pytest.mark.asyncio
 async def test_compaction_triggers_on_real_input_tokens():
-    """ModelResponse with input_tokens=90_000 triggers compaction (> 85% of 100k budget).
+    """Reported input_tokens=90_000 triggers compaction; planner drops groups.
 
-    llm_provider must be non-Ollama to use _DEFAULT_TOKEN_BUDGET (100k).
-    With Ollama, the budget would be llm_num_ctx which may be much larger.
+    The planner walks groups by its own estimator, so the message bodies must
+    carry real char weight for the walk to find anything to drop. body_chars
+    ≈ 30_000 per message makes each group ≈ 15_000 tokens — more than one
+    group cannot fit under tail_fraction (0.40) * 100_000 = 40_000 tokens.
     """
-    # 90_000 > int(100_000 * 0.85) = 85_000 → must compact
-    msgs = _make_messages(10, last_input_tokens=90_000)
-    # Use a non-Ollama provider so budget = _DEFAULT_TOKEN_BUDGET (100k), not llm_num_ctx
+    # 90_000 > int(100_000 * 0.85) = 85_000 → trigger fires
+    msgs = _make_messages(10, last_input_tokens=90_000, body_chars=30_000)
     config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs)
@@ -113,12 +123,13 @@ async def test_compaction_fallback_when_no_usage_data():
 
 @pytest.mark.asyncio
 async def test_compaction_triggers_on_ollama_budget():
-    """Ollama: input_tokens=7_200 with llm_num_ctx=8192 triggers compaction (> 85% of 8192=6963).
+    """Ollama: input_tokens=7_200 with llm_num_ctx=8192 triggers compaction.
 
-    7_200 > int(8192 * 0.85) = 6963, but 7_200 < int(100_000 * 0.85) = 85_000.
-    Compaction must trigger against llm_num_ctx, not _DEFAULT_TOKEN_BUDGET.
+    budget = max(8192 - 16384, 8192 // 2) = 4096 (under-16K floor branch).
+    7_200 > int(4096 * 0.85) = 3481 → trigger fires. body_chars sized so each
+    group exceeds tail_fraction * 4096 = ~1638 tokens.
     """
-    msgs = _make_messages(10, last_input_tokens=7_200)
+    msgs = _make_messages(10, last_input_tokens=7_200, body_chars=3_000)
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 8192})
     )
@@ -206,6 +217,72 @@ def test_build_summarizer_prompt_no_context_with_personality():
     assert result.startswith(_SUMMARIZE_PROMPT)
     assert _PERSONALITY_COMPACTION_ADDENDUM in result
     assert "## Additional Context" not in result
+
+
+# ---------------------------------------------------------------------------
+# estimate_message_tokens — TASK-2 estimator hardening
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_counts_tool_call_args():
+    """ToolCallPart.args JSON is counted (Gap E). Tool-heavy transcripts now trigger accurately."""
+    big_args = {"query": "x" * 2000}
+    bare = [
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="grep", args={}, tool_call_id="c1")],
+        )
+    ]
+    with_args = [
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="grep", args=big_args, tool_call_id="c1")],
+        )
+    ]
+    assert estimate_message_tokens(with_args) > estimate_message_tokens(bare)
+
+
+def test_estimate_counts_list_tool_return():
+    """ToolReturnPart.content as list is JSON-serialized and counted (Gap E)."""
+    big_list = ["item " + "y" * 200 for _ in range(20)]
+    msgs_with_list = [
+        ModelRequest(
+            parts=[ToolReturnPart(tool_name="grep", content=big_list, tool_call_id="c1")],
+        )
+    ]
+    msgs_empty = [
+        ModelRequest(
+            parts=[ToolReturnPart(tool_name="grep", content=[], tool_call_id="c1")],
+        )
+    ]
+    assert estimate_message_tokens(msgs_with_list) > estimate_message_tokens(msgs_empty)
+    # Sanity: the list content really generates significant token weight.
+    assert estimate_message_tokens(msgs_with_list) > 500
+
+
+@pytest.mark.asyncio
+async def test_trigger_uses_max_floor():
+    """Stale low reported count cannot suppress trigger when estimate is higher (max-floor semantics).
+
+    Placing the huge body in a MIDDLE user turn so it's in the droppable range
+    (not the head). Old fallback logic (``reported if reported > 0 else estimate``)
+    would pick reported=100 → no trigger. max() floor picks estimate (~100K) →
+    trigger fires and planner drops the heavy middle group.
+    """
+    # Budget = 100K (anthropic). threshold = 85K. Middle body ~100K tokens.
+    big_body = "x" * 400_000
+    msgs = [
+        ModelRequest(parts=[UserPromptPart(content="turn 0")]),
+        ModelResponse(parts=[TextPart(content="reply 0")]),
+        ModelRequest(parts=[UserPromptPart(content=big_body + " turn 1")]),
+        ModelResponse(parts=[TextPart(content="reply 1")]),
+        ModelRequest(parts=[UserPromptPart(content="turn 2")]),
+        ModelResponse(parts=[TextPart(content="reply 2")]),
+        ModelRequest(parts=[UserPromptPart(content="turn 3")]),
+        ModelResponse(parts=[TextPart(content="reply 3")], usage=RequestUsage(input_tokens=100)),
+    ]
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
+    ctx = _make_ctx(config)
+    result = await summarize_history_window(ctx, msgs)
+    assert len(result) < len(msgs), "max() floor should have triggered compaction"
 
 
 def test_build_summarizer_prompt_with_context_and_personality():

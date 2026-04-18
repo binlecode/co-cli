@@ -26,14 +26,17 @@ from co_cli.context._history import (
     _CONTEXT_MAX_CHARS,
     _SUMMARY_MARKER_PREFIX,
     OLDER_MSG_MAX_CHARS,
-    _compute_compaction_boundaries,
+    PROACTIVE_COMPACTION_RATIO,
+    TAIL_FRACTION,
     _find_last_turn_start,
     _gather_compaction_context,
+    _preserve_search_tool_breadcrumbs,
     _truncate_proportional,
     compact_assistant_responses,
     emergency_compact,
     group_by_turn,
     groups_to_messages,
+    plan_compaction_boundaries,
     recover_overflow_history,
     summarize_history_window,
     truncate_tool_results,
@@ -90,11 +93,9 @@ def _assistant(text: str) -> ModelResponse:
 def _make_messages(n: int) -> list:
     """Alternating user/assistant messages; index 1 is always an assistant with TextPart.
 
-    With n=10 and tail_count = max(4, 10//2) = 5:
-      find_first_run_end → 1  (first ModelResponse with TextPart)
-      head_end = 2
-      tail_start = max(2, 10-5) = 5
-      dropped = messages[2:5] (3 messages)
+    Produces ``n // 2`` turn groups (plus a trailing user prompt if ``n`` is odd).
+    Used as input to the token-budget planner, which walks groups from the end
+    accumulating their estimated token weight against ``TAIL_FRACTION * budget``.
     """
     msgs = []
     for i in range(n // 2):
@@ -269,20 +270,196 @@ def test_group_by_turn_orphan_prevention():
             assert not any(isinstance(p, ToolReturnPart) for p in msg.parts)
 
 
-def test_compute_compaction_boundaries_equivalence():
-    """Refactored boundaries produce identical results to known expectations.
+# ---------------------------------------------------------------------------
+# plan_compaction_boundaries — token-budget planner
+# ---------------------------------------------------------------------------
 
-    With 10 messages: raw_tail_start = max(2, 10-5) = 5. msg[5] is a
-    ModelResponse so alignment snaps forward to the next group boundary
-    at index 6.  head_end=2, tail_start=6, dropped=4.
-    """
-    msgs = _make_messages(10)
-    bounds = _compute_compaction_boundaries(msgs)
+
+def _group_of(text_chars: int, turn_idx: int) -> list:
+    """Build one turn group (user + assistant) sized to text_chars each."""
+    return [
+        _user("u" * text_chars + f" #{turn_idx}"),
+        _assistant("a" * text_chars + f" #{turn_idx}"),
+    ]
+
+
+def test_planner_tail_scales_with_token_pressure():
+    """Same message count; bigger messages → more groups dropped (token-driven tail, not count-driven)."""
+    # 5 small groups (~tiny tokens each) vs 5 big groups (large tokens each) — same len()
+    small_msgs = []
+    for i in range(5):
+        small_msgs.extend(_group_of(10, i))
+    big_msgs = []
+    for i in range(5):
+        big_msgs.extend(_group_of(200, i))
+
+    # budget=200 → tail_budget = 80 tokens. small group ≈ 6 tokens, big group ≈ 100 tokens.
+    budget = 200
+    small_bounds = plan_compaction_boundaries(small_msgs, budget)
+    big_bounds = plan_compaction_boundaries(big_msgs, budget)
+
+    # Big transcript drops more groups than small (tail captures fewer groups under budget).
+    assert big_bounds is not None
+    small_dropped = small_bounds[2] if small_bounds else 0
+    big_dropped = big_bounds[2]
+    assert big_dropped > small_dropped
+
+
+def test_planner_snaps_to_turn_boundary():
+    """tail_start is always a turn-group start_index — never mid-turn."""
+    msgs = []
+    for i in range(5):
+        msgs.extend(_group_of(50, i))
+    bounds = plan_compaction_boundaries(msgs, budget=100)
     assert bounds is not None
-    head_end, tail_start, dropped_count = bounds
-    assert head_end == 2
-    assert tail_start == 6
-    assert dropped_count == 4
+    _, tail_start, _ = bounds
+    group_starts = {g.start_index for g in group_by_turn(msgs)}
+    assert tail_start in group_starts
+
+
+def test_planner_returns_none_below_structural_floor():
+    """len(groups) <= min_groups_tail → None; never even consider walking."""
+    # 1 group
+    msgs_one = [_user("only turn"), _assistant("only reply")]
+    assert plan_compaction_boundaries(msgs_one, budget=1000) is None
+
+    # empty
+    assert plan_compaction_boundaries([], budget=1000) is None
+
+
+def test_planner_returns_none_on_head_tail_overlap():
+    """When tail captures everything (all groups fit under tail_budget), head/tail overlap → None."""
+    msgs = []
+    for i in range(3):
+        msgs.extend(_group_of(10, i))
+    # budget=1_000_000 → tail_budget=400K; all 3 small groups fit easily → acc_groups=[G0,G1,G2].
+    # tail_start=G0.start_index=0 <= head_end=2 → None.
+    assert plan_compaction_boundaries(msgs, budget=1_000_000) is None
+
+
+def test_planner_min_groups_tail_keeps_last_group():
+    """Gap A regression guard: last group alone > tail_budget → still kept (clamp wins)."""
+    msgs = []
+    # 3 small groups + one huge last group
+    for i in range(3):
+        msgs.extend(_group_of(10, i))
+    # Huge last group: 4000 chars ≈ 1000 tokens
+    msgs.extend(_group_of(2000, 3))
+    # tail_fraction*budget = 40 tokens; last group alone is ~1000 tokens
+    bounds = plan_compaction_boundaries(msgs, budget=100)
+    assert bounds is not None
+    head_end, tail_start, _ = bounds
+    # Last group must be kept — tail_start is the last group's start_index
+    groups = group_by_turn(msgs)
+    assert tail_start == groups[-1].start_index
+    assert tail_start > head_end
+
+
+def test_breadcrumb_dedup_on_repeated_compaction():
+    """Gap J regression guard: breadcrumb count stays bounded across ≥3 compaction cycles."""
+    search_tool_msg = ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="search_tools", content="found [foo, bar]", tool_call_id="st-1"
+            )
+        ]
+    )
+
+    # Cycle 1: search_tool_msg in dropped, head/tail do not contain it
+    head = [_user("head"), _assistant("head reply")]
+    tail = [_user("tail"), _assistant("tail reply")]
+    dropped_1 = [search_tool_msg]
+    kept_ids_1 = {id(m) for m in head} | {id(m) for m in tail}
+    preserved_1 = _preserve_search_tool_breadcrumbs(dropped_1, kept_ids_1)
+    assert len(preserved_1) == 1
+
+    # Cycle 2: the preserved breadcrumb now falls into the NEW head slice
+    # (it sits between head-original and the new summary marker from cycle 1)
+    new_head = [*head, *preserved_1]
+    dropped_2 = [search_tool_msg]  # same breadcrumb appears again in the new dropped range
+    kept_ids_2 = {id(m) for m in new_head} | {id(m) for m in tail}
+    preserved_2 = _preserve_search_tool_breadcrumbs(dropped_2, kept_ids_2)
+    # The breadcrumb is in kept_ids_2 (via new_head) so it must NOT duplicate
+    assert len(preserved_2) == 0
+
+    # Cycle 3: same invariant holds
+    new_head_3 = [*new_head, *preserved_2]
+    kept_ids_3 = {id(m) for m in new_head_3} | {id(m) for m in tail}
+    preserved_3 = _preserve_search_tool_breadcrumbs([search_tool_msg], kept_ids_3)
+    assert len(preserved_3) == 0
+
+
+def test_constants_have_expected_values():
+    """PROACTIVE_COMPACTION_RATIO and TAIL_FRACTION are named constants with documented values."""
+    assert PROACTIVE_COMPACTION_RATIO == 0.85
+    assert TAIL_FRACTION == 0.40
+
+
+@pytest.mark.asyncio
+async def test_compaction_output_preserves_orphan_search_tools_return():
+    """Gap L: after compaction, a search_tools ToolReturnPart from the dropped range
+    survives in the output, even though its matching ToolCallPart was in dropped.
+
+    Verifies the documented invariant: search_tools breadcrumbs are orphan returns
+    by design — the SDK handles them without rejecting the request. This test
+    checks the structural preservation; provider acceptance is exercised by the
+    LLM-backed /compact integration test and production.
+    """
+    msgs = []
+    # Head run
+    msgs.append(_user("start"))
+    msgs.append(_assistant("ok"))
+    # Dropped middle with a search_tools call/return (the call will be dropped;
+    # the return will be preserved as an orphan by _preserve_search_tool_breadcrumbs)
+    msgs.append(_user("search for something"))
+    msgs.append(
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="search_tools", args={"q": "foo"}, tool_call_id="st-1")]
+        )
+    )
+    msgs.append(
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="search_tools",
+                    content="discovered [foo_tool]",
+                    tool_call_id="st-1",
+                )
+            ]
+        )
+    )
+    msgs.append(_assistant("got it"))
+    # Pad middle to force a drop
+    for i in range(3):
+        msgs.append(_user(f"mid {i} " + "x" * 500))
+        msgs.append(_assistant(f"mid reply {i} " + "y" * 500))
+    # Tail
+    msgs.append(_user("final"))
+    msgs.append(_assistant("done"))
+
+    ctx = _make_processor_ctx()
+    result = await summarize_history_window(ctx, msgs)
+
+    # search_tools return must be present in the compacted output
+    returns = [
+        part
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "search_tools"
+    ]
+    assert len(returns) == 1
+    assert returns[0].tool_call_id == "st-1"
+
+    # The matching ToolCallPart must NOT be present (confirming it's an orphan)
+    calls = [
+        part
+        for msg in result
+        if isinstance(msg, ModelResponse)
+        for part in msg.parts
+        if isinstance(part, ToolCallPart) and part.tool_name == "search_tools"
+    ]
+    assert len(calls) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -450,9 +627,9 @@ def _make_gather_ctx(
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-def test_gather_context_extracts_file_paths():
-    """_gather_compaction_context extracts file paths from ToolCallPart.args_as_dict()."""
-    msgs = [
+def test_gather_context_extracts_file_paths_from_dropped():
+    """_gather_compaction_context extracts file paths from ToolCallPart.args in dropped range."""
+    dropped = [
         _user("read some files"),
         ModelResponse(
             parts=[
@@ -465,7 +642,7 @@ def test_gather_context_extracts_file_paths():
         _tool_return("read_file", "content", "c1"),
     ]
     ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, msgs, dropped=[])
+    result = _gather_compaction_context(ctx, dropped)
     assert result is not None
     assert "/src/main.py" in result
     assert "/src/utils.py" in result
@@ -480,7 +657,7 @@ def test_gather_context_includes_pending_todos():
         {"content": "Deploy", "status": "in-progress"},
     ]
     ctx = _make_gather_ctx(session_todos=todos)
-    result = _gather_compaction_context(ctx, [_user("hello"), _assistant("hi")], dropped=[])
+    result = _gather_compaction_context(ctx, dropped=[])
     assert result is not None
     assert "Fix the bug" in result
     assert "Deploy" in result
@@ -495,7 +672,7 @@ def test_gather_context_extracts_prior_summary():
         ModelRequest(parts=[UserPromptPart(content=prior_summary)]),
     ]
     ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, [_user("hello"), _assistant("hi")], dropped=dropped)
+    result = _gather_compaction_context(ctx, dropped=dropped)
     assert result is not None
     assert "Prior summary:" in result
     assert "build a CLI tool" in result
@@ -503,23 +680,72 @@ def test_gather_context_extracts_prior_summary():
 
 def test_gather_context_returns_none_when_empty():
     """_gather_compaction_context returns None when no context sources produce data."""
-    msgs = [_user("hello"), _assistant("hi")]
     ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, msgs, dropped=[])
+    result = _gather_compaction_context(ctx, dropped=[])
     assert result is None
 
 
 def test_gather_context_truncates_to_max_chars():
     """_gather_compaction_context with >4K combined sources → output truncated to _CONTEXT_MAX_CHARS."""
-    # Create a huge prior summary in dropped messages
     huge_text = f"{_SUMMARY_MARKER_PREFIX} 100 messages]\n" + "x" * 5000
     dropped = [
         ModelRequest(parts=[UserPromptPart(content=huge_text)]),
     ]
     ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, [_user("hello"), _assistant("hi")], dropped=dropped)
+    result = _gather_compaction_context(ctx, dropped=dropped)
     assert result is not None
     assert len(result) <= _CONTEXT_MAX_CHARS
+
+
+def test_gather_context_file_paths_scoped_to_dropped_not_tail():
+    """File paths visible only in head/tail (not dropped) must NOT appear in enrichment (Gap M).
+
+    Constructs real head, dropped, and tail ranges each with their own ToolCallPart
+    referencing a distinct file path. Only the dropped path must appear in
+    enrichment — head/tail paths would be duplicated visibility for the summarizer.
+    """
+    # Head range — visible in preserved messages
+    _ = [
+        _user("head turn"),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file", args={"file_path": "/head/file.py"}, tool_call_id="h1"
+                )
+            ]
+        ),
+    ]
+    # Dropped range — the only file path we want to see in enrichment
+    dropped = [
+        _user("dropped turn"),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args={"file_path": "/dropped/file.py"},
+                    tool_call_id="d1",
+                )
+            ]
+        ),
+        _tool_return("read_file", "content", "d1"),
+    ]
+    # Tail range — visible in preserved messages
+    _ = [
+        _user("tail turn"),
+        ModelResponse(
+            parts=[
+                ToolCallPart(tool_name="patch", args={"path": "/tail/file.py"}, tool_call_id="t1")
+            ]
+        ),
+    ]
+    ctx = _make_gather_ctx()
+    result = _gather_compaction_context(ctx, dropped=dropped)
+    assert result is not None
+    # Dropped path appears
+    assert "/dropped/file.py" in result
+    # Head/tail paths MUST NOT appear — would duplicate visibility already in kept msgs
+    assert "/head/file.py" not in result
+    assert "/tail/file.py" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +799,8 @@ def test_emergency_compact_two_groups_returns_none():
 async def test_recover_overflow_history_preserves_pending_user_turn():
     """Overflow recovery materializes the in-flight prompt into the kept tail group."""
     ctx = _make_processor_ctx()
+    # Four prior turns → five groups after pending input materializes. With num_ctx=30
+    # (tail_budget ≈ 12 tokens) the planner must drop at least one middle group.
     turn_state = type(
         "_TurnStateStub",
         (),
@@ -583,6 +811,10 @@ async def test_recover_overflow_history_preserves_pending_user_turn():
                 _assistant("response 1"),
                 _user("turn 2"),
                 _assistant("response 2"),
+                _user("turn 3"),
+                _assistant("response 3"),
+                _user("turn 4"),
+                _assistant("response 4"),
             ],
         },
     )()

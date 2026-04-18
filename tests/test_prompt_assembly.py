@@ -1,7 +1,8 @@
 """Section-order gate for static instruction assembly."""
 
 from co_cli.config._core import settings
-from co_cli.prompts._assembly import build_static_instructions
+from co_cli.context._history import COMPACTABLE_KEEP_RECENT
+from co_cli.prompts._assembly import RECENCY_CLEARING_ADVISORY, build_static_instructions
 
 # Base config — personality overridden per test.
 _BASE_CONFIG = settings
@@ -72,3 +73,29 @@ def test_cutoff_awareness_in_static_instructions() -> None:
 
     assert "cutoff" in prompt, "Knowledge cutoff guidance missing from static instructions"
     assert "stale" in prompt, "Stale data guidance missing from static instructions"
+
+
+def test_recency_clearing_advisory_in_cacheable_prefix() -> None:
+    """Gap G: recency-clearing advisory is present in the static (cacheable) prefix.
+
+    The static instructions slice is the cacheable prefix sent to the provider.
+    The advisory describes the ``[tool result cleared…]`` placeholders that
+    appear after ``truncate_tool_results`` runs — the model must have a mental
+    model for them. Static per process (no per-turn interpolation) so it does
+    not break prompt cache hits.
+    """
+    config = _BASE_CONFIG.model_copy(update={"personality": None})
+    prompt = build_static_instructions(config=config)
+    assert RECENCY_CLEARING_ADVISORY in prompt
+    # The advisory must reference the actual COMPACTABLE_KEEP_RECENT value
+    assert str(COMPACTABLE_KEEP_RECENT) in RECENCY_CLEARING_ADVISORY
+    # Key phrases that signal the model's expected mental model
+    assert "cleared" in prompt.lower()
+    assert "recent" in prompt.lower()
+
+
+def test_recency_advisory_built_from_constant() -> None:
+    """Advisory reflects the current value of COMPACTABLE_KEEP_RECENT at module-load time."""
+    # If the constant changes, the advisory text should change — this is static
+    # per process, not dynamic per turn.
+    assert f"The {COMPACTABLE_KEEP_RECENT} most recent" in RECENCY_CLEARING_ADVISORY

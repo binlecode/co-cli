@@ -65,7 +65,35 @@ class TurnGroup:
 
 
 _CompactionBoundaries = tuple[int, int, int]
-"""(head_end, tail_start, dropped_count) — None when no valid boundary exists."""
+"""(head_end, tail_start, dropped_count) — planner callers receive ``| None`` when no valid boundary exists."""
+
+
+# ---------------------------------------------------------------------------
+# Compaction constants
+# ---------------------------------------------------------------------------
+
+PROACTIVE_COMPACTION_RATIO: float = 0.85
+"""Fraction of budget above which ``summarize_history_window`` fires.
+
+Trigger point for proactive compaction:
+``token_count > int(budget * PROACTIVE_COMPACTION_RATIO)``.
+
+The 15% headroom is a safety margin that absorbs estimator error (char/4
+heuristic) and the difference between "estimated input tokens" and what the
+provider will actually count (system prompt, tool schemas, etc.). Not
+settings-configurable — the right shape at this scale is a named constant.
+"""
+
+TAIL_FRACTION: float = 0.40
+"""Fraction of budget targeted for the preserved tail in ``plan_compaction_boundaries``.
+
+The walk-from-end accumulator stops before adding a group that would push
+accumulated tokens over ``TAIL_FRACTION * budget``, so the dropped middle
+plus summary marker stays within the remaining budget when the next request
+fires. Shared by proactive and overflow paths — when overflow happens it's
+because the estimate was wrong, and fixing the estimate (see
+``estimate_message_tokens``) keeps this single value workable for both.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -172,30 +200,62 @@ def _summary_marker(dropped_count: int, summary_text: str) -> ModelRequest:
 
 
 # ---------------------------------------------------------------------------
-# Shared boundary helper
+# Shared boundary planner
 # ---------------------------------------------------------------------------
 
 
-def _compute_compaction_boundaries(
+def plan_compaction_boundaries(
     messages: list[ModelMessage],
+    budget: int,
+    tail_fraction: float = TAIL_FRACTION,
+    *,
+    min_groups_tail: int = 1,
 ) -> _CompactionBoundaries | None:
-    """Compute head/tail boundary positions for a compaction pass.
+    """Plan ``(head_end, tail_start, dropped_count)`` for a compaction pass.
 
-    Returns ``(head_end, tail_start, dropped_count)`` or ``None`` when no
-    clean boundary exists or there is nothing to drop.
+    Algorithm:
+      1. ``head_end = find_first_run_end(messages) + 1``
+      2. ``groups = group_by_turn(messages)``; abort when
+         ``len(groups) < min_groups_tail + 1``.
+      3. Walk groups from the end, accumulating token estimates. Stop BEFORE
+         adding a group that would push accumulated tokens over
+         ``tail_fraction * budget``, UNLESS fewer than ``min_groups_tail``
+         groups have been accumulated (in which case the clamp wins over
+         the budget — at least one turn group is always preserved).
+      4. ``tail_start = accumulated_groups[0].start_index``.
+      5. Abort when ``tail_start <= head_end`` (head/tail overlap — nothing
+         to drop, or everything fit in the tail budget).
+
+    Shared between proactive compaction (``summarize_history_window``) and
+    overflow recovery (``recover_overflow_history``). ``min_groups_tail=1``
+    is a correctness guarantee: the last turn group is always kept even
+    when its tokens alone exceed the tail budget (Gap A regression guard).
     """
+    if not messages:
+        return None
+
     first_run_end = find_first_run_end(messages)
     head_end = first_run_end + 1
-    tail_count = max(4, len(messages) // 2)
-    raw_tail_start = max(head_end, len(messages) - tail_count)
-    # Snap to the nearest group boundary at or after raw_tail_start
+
     groups = group_by_turn(messages)
-    tail_start = len(messages)
-    for group in groups:
-        if group.start_index >= raw_tail_start:
-            tail_start = group.start_index
+    if len(groups) < min_groups_tail + 1:
+        return None
+
+    tail_budget = tail_fraction * budget
+    acc_groups: list[TurnGroup] = []
+    acc_tokens = 0
+    for group in reversed(groups):
+        gt = estimate_message_tokens(group.messages)
+        if len(acc_groups) >= min_groups_tail and acc_tokens + gt > tail_budget:
             break
-    if tail_start >= len(messages) or tail_start <= head_end:
+        acc_groups.insert(0, group)
+        acc_tokens += gt
+
+    if not acc_groups:
+        return None
+
+    tail_start = acc_groups[0].start_index
+    if tail_start <= head_end:
         return None
     return (head_end, tail_start, tail_start - head_end)
 
@@ -207,6 +267,15 @@ def _compute_compaction_boundaries(
 OLDER_MSG_MAX_CHARS = 2_500
 
 COMPACTABLE_KEEP_RECENT = 5
+"""Keep the N most-recent tool returns per compactable tool type; clear older.
+
+Borrowed from ``fork-claude-code/services/compact/timeBasedMCConfig.ts:33``
+(``keepRecent: 5``). Not convergent across peers — codex, hermes, and
+opencode do not have per-tool recency retention. Not tuned specifically for
+co-cli's tool surface; revisit via ``evals/eval_compaction_quality.py`` if a
+retention/fidelity tradeoff becomes measurable.
+"""
+
 _CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"
 
 
@@ -349,10 +418,16 @@ _CONTEXT_MAX_CHARS = 4_000
 _SUMMARY_MARKER_PREFIX = "This session is being continued from a previous conversation that ran out of context. The summary below"
 
 
-def _gather_file_paths(messages: list[ModelMessage]) -> str | None:
-    """Extract file working set from ToolCallPart.args (never truncated by processor #1)."""
+def _gather_file_paths(dropped: list[ModelMessage]) -> str | None:
+    """Extract file working set from ToolCallPart.args in the dropped range.
+
+    Scoped to ``dropped`` only — paths already visible in the preserved tail
+    would duplicate in the enrichment and waste summarizer attention
+    (Gap M regression guard). ``ToolCallPart.args`` is never truncated by
+    processor #1 so the args of dropped calls are still readable here.
+    """
     file_paths: set[str] = set()
-    for msg in messages:
+    for msg in dropped:
         if isinstance(msg, ModelResponse):
             for part in msg.parts:
                 if isinstance(part, ToolCallPart) and part.tool_name in FILE_TOOLS:
@@ -393,22 +468,21 @@ def _gather_prior_summaries(dropped: list[ModelMessage]) -> str | None:
 
 def _gather_compaction_context(
     ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
     dropped: list[ModelMessage],
 ) -> str | None:
     """Gather side-channel context for the summarizer from sources that survive truncation.
 
-    Sources:
-    1. File working set from ToolCallPart.args (never truncated by processor #1)
-    2. Pending session todos from ctx.deps.session
-    3. Prior-summary text from dropped messages
+    Sources, all scoped to the dropped range or session state:
+    1. File working set from ToolCallPart.args in ``dropped``
+    2. Pending session todos from ``ctx.deps.session``
+    3. Prior-summary text from ``dropped``
 
     Returns None when no context was gathered.
     """
     context_parts = [
         p
         for p in [
-            _gather_file_paths(messages),
+            _gather_file_paths(dropped),
             _gather_session_todos(ctx.deps.session.session_todos),
             _gather_prior_summaries(dropped),
         ]
@@ -444,7 +518,6 @@ def emergency_compact(messages: list[ModelMessage]) -> list[ModelMessage] | None
 
 async def _summarize_dropped_messages(
     ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
     dropped: list[ModelMessage],
     *,
     announce: bool,
@@ -464,7 +537,7 @@ async def _summarize_dropped_messages(
 
         console.print("[dim]Compacting conversation...[/dim]")
 
-    enrichment = _gather_compaction_context(ctx, messages, dropped)
+    enrichment = _gather_compaction_context(ctx, dropped)
     try:
         summary_text = await summarize_messages(
             dropped,
@@ -481,12 +554,23 @@ async def _summarize_dropped_messages(
         return None
 
 
-def _preserve_search_tool_breadcrumbs(dropped: list[ModelMessage]) -> list[ModelMessage]:
-    """Keep SDK search-tools discovery state across compaction boundaries."""
+def _preserve_search_tool_breadcrumbs(
+    dropped: list[ModelMessage],
+    kept_ids: set[int],
+) -> list[ModelMessage]:
+    """Keep SDK search-tools discovery state across compaction boundaries.
+
+    Skips any message whose ``id(msg)`` is already in ``kept_ids`` — prevents
+    quadratic accumulation when a prior compaction's preserved breadcrumb
+    falls into a later compaction's head or tail range (Gap J regression
+    guard). Callers build ``kept_ids`` from the head + tail slices before
+    invoking.
+    """
     return [
         msg
         for msg in dropped
-        if isinstance(msg, ModelRequest)
+        if id(msg) not in kept_ids
+        and isinstance(msg, ModelRequest)
         and any(isinstance(p, ToolReturnPart) and p.tool_name == "search_tools" for p in msg.parts)
     ]
 
@@ -495,35 +579,32 @@ async def recover_overflow_history(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage] | None:
-    """Recover from provider context overflow with LLM summary or static fallback.
+    """Recover from provider context overflow via the shared boundary planner.
 
-    Keeps the first turn group and last turn group, summarizing the middle when
-    possible. Returns None when there is no safe middle region to drop.
+    Calls ``plan_compaction_boundaries`` with the same ``TAIL_FRACTION`` as
+    proactive compaction and ``min_groups_tail=1`` — the last turn group is
+    always preserved. Returns None when no compaction boundary exists.
     """
-    groups = group_by_turn(messages)
-    if len(groups) <= 2:
+    ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
+    budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
+    bounds = plan_compaction_boundaries(messages, budget)
+    if bounds is None:
         return None
 
-    dropped = groups_to_messages(groups[1:-1])
-    dropped_count = len(dropped)
-    summary_text = await _summarize_dropped_messages(
-        ctx,
-        messages,
-        dropped,
-        announce=False,
-    )
+    head_end, tail_start, dropped_count = bounds
+    head = messages[:head_end]
+    tail = messages[tail_start:]
+    dropped = messages[head_end:tail_start]
+    kept_ids = {id(m) for m in head} | {id(m) for m in tail}
+
+    summary_text = await _summarize_dropped_messages(ctx, dropped, announce=False)
     marker = (
         _summary_marker(dropped_count, summary_text)
         if summary_text is not None
         else _static_marker(dropped_count)
     )
     ctx.deps.runtime.history_compaction_applied = True
-    return [
-        *groups_to_messages([groups[0]]),
-        marker,
-        *_preserve_search_tool_breadcrumbs(dropped),
-        *groups_to_messages([groups[-1]]),
-    ]
+    return [*head, marker, *_preserve_search_tool_breadcrumbs(dropped, kept_ids), *tail]
 
 
 # ---------------------------------------------------------------------------
@@ -537,11 +618,13 @@ async def summarize_history_window(
 ) -> list[ModelMessage]:
     """Drop middle messages when history exceeds the token budget threshold.
 
-    Triggers when estimated token count exceeds 85% of budget.
+    Triggers when ``token_count > int(budget * PROACTIVE_COMPACTION_RATIO)``.
+    Boundaries come from ``plan_compaction_boundaries`` — the same planner
+    used by overflow recovery.
 
     Keeps:
       - **head** — first run's messages (up to first TextPart response)
-      - **tail** — last N messages (most relevant recent context)
+      - **tail** — planner-selected suffix that fits under ``TAIL_FRACTION * budget``
     Drops:
       - everything in between, replaced by an inline LLM summary when
         possible, else a static marker (circuit-breaker fallback)
@@ -553,29 +636,27 @@ async def summarize_history_window(
 
     Registered as the last history processor.
     """
-    token_count = latest_response_input_tokens(messages)
-    if token_count == 0:
-        token_count = estimate_message_tokens(messages)
+    estimate = estimate_message_tokens(messages)
+    reported = latest_response_input_tokens(messages)
+    token_count = max(estimate, reported)
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
-    token_threshold = int(budget * 0.85)
+    token_threshold = int(budget * PROACTIVE_COMPACTION_RATIO)
 
     if token_count <= token_threshold:
         return messages
 
-    bounds = _compute_compaction_boundaries(messages)
+    bounds = plan_compaction_boundaries(messages, budget)
     if bounds is None:
         return messages
 
     head_end, tail_start, dropped_count = bounds
+    head = messages[:head_end]
+    tail = messages[tail_start:]
     dropped = messages[head_end:tail_start]
+    kept_ids = {id(m) for m in head} | {id(m) for m in tail}
 
-    summary_text = await _summarize_dropped_messages(
-        ctx,
-        messages,
-        dropped,
-        announce=True,
-    )
+    summary_text = await _summarize_dropped_messages(ctx, dropped, announce=True)
     if summary_text is not None:
         summary_marker = _summary_marker(dropped_count, summary_text)
         log.info("Sliding window: summarised %d messages inline", dropped_count)
@@ -583,8 +664,8 @@ async def summarize_history_window(
         summary_marker = _static_marker(dropped_count)
 
     ctx.deps.runtime.history_compaction_applied = True
-    preserved_discovery = _preserve_search_tool_breadcrumbs(dropped)
-    return [*messages[:head_end], summary_marker, *preserved_discovery, *messages[tail_start:]]
+    preserved_discovery = _preserve_search_tool_breadcrumbs(dropped, kept_ids)
+    return [*head, summary_marker, *preserved_discovery, *tail]
 
 
 # ---------------------------------------------------------------------------

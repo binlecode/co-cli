@@ -19,6 +19,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
+    ToolCallPart,
 )
 from pydantic_ai.settings import ModelSettings
 
@@ -35,8 +36,15 @@ log = logging.getLogger(__name__)
 def estimate_message_tokens(messages: list[ModelMessage]) -> int:
     """Rough token estimate: ~4 chars per token for English text.
 
-    Used for auto-compaction threshold. Accurate enough for triggering —
-    the LLM provider enforces the real limit.
+    Counts:
+      - str content on any part
+      - dict or list content (JSON-serialized length) — structured tool returns
+      - ToolCallPart.args via args_as_dict() + JSON (never truncated by processor #1,
+        load-bearing for trigger accuracy on tool-heavy transcripts — Gap E fix)
+
+    Used for the proactive compaction trigger. Used as a floor (via max())
+    against the provider-reported usage so a stale or missing report cannot
+    suppress the trigger.
     """
     total_chars = 0
     for msg in messages:
@@ -44,8 +52,12 @@ def estimate_message_tokens(messages: list[ModelMessage]) -> int:
             content = getattr(part, "content", None)
             if isinstance(content, str):
                 total_chars += len(content)
-            elif isinstance(content, dict):
+            elif isinstance(content, (dict, list)):
                 total_chars += len(json.dumps(content, ensure_ascii=False))
+            if isinstance(part, ToolCallPart):
+                args = part.args_as_dict()
+                if args:
+                    total_chars += len(json.dumps(args, ensure_ascii=False))
     return total_chars // 4
 
 
