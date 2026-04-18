@@ -5,7 +5,8 @@ from typing import Any
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.google._auth import _get_google_service
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
@@ -58,6 +59,14 @@ def _format_drive_results(
     return tool_output(display, ctx=ctx, page=page, has_more=has_more)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="google_drive",
+    requires_config="google_credentials_path",
+    retries=3,
+)
 def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
     """Search files in Google Drive by name or content. Returns up to 10
     results per page. Matches files whose name contains the query OR whose
@@ -116,6 +125,14 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
         return handle_google_api_error("Drive", e, ctx=ctx)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="google_drive",
+    requires_config="google_credentials_path",
+    retries=3,
+)
 def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
     """Fetch the content of a file from Google Drive and return it as text.
 

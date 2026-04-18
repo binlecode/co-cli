@@ -14,7 +14,8 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
 # Valid status and priority values
@@ -22,6 +23,7 @@ _VALID_STATUS = {"pending", "in_progress", "completed", "cancelled"}
 _VALID_PRIORITY = {"high", "medium", "low"}
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 def write_todos(
     ctx: RunContext[CoDeps],
     todos: list[dict[str, Any]],
@@ -131,6 +133,7 @@ def write_todos(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 def read_todos(
     ctx: RunContext[CoDeps],
 ) -> ToolReturn:

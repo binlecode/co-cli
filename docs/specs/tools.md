@@ -21,41 +21,24 @@
 
 > For system overview and approval boundary: [system.md](system.md). For the agent loop, orchestration, and approval flow: [core-loop.md](core-loop.md). For skill loading and slash-command dispatch: [skills.md](skills.md).
 
-## 1. Tool Tree & Architecture
+## 1. Tool Infrastructure
 
-The tool ecosystem is composed of core infrastructure for execution, lifecycle and approval, along with a suite of domain tools.
+The tool ecosystem relies on core infrastructure modules to handle execution routing, standard data structures, security restrictions, and user approvals.
 
-### Core Infrastructure
-- `co_cli/tools/tool_io.py` — `tool_output()`, `tool_output_raw()`, `tool_error()`, `ToolResultPayload`, HTTP error helpers, oversized-result persistence (>50k chars → content-addressed file)
-- `co_cli/tools/resource_lock.py` — in-process `ResourceLockStore` for async cross-agent concurrency
-- `co_cli/tools/background.py` — process-group management for long-running tasks
-- `co_cli/tools/shell_backend.py` — subprocess execution with output streaming
-- `co_cli/tools/_shell_policy.py`, `_shell_env.py` — command classification (ALLOW/DENY/APPROVE)
-- `co_cli/tools/google/_auth.py` — Google OAuth credential resolution; shared `_get_google_service()` factory (package-private)
-- `co_cli/tools/_agent_outputs.py` — typed `BaseModel` outputs for delegation agents
-- `co_cli/context/tool_display.py` — console rendering and truncation logic
-- `co_cli/context/tool_approvals.py` — approval subject resolution and loop logic
+- `co_cli/tools/tool_io.py`: Standard API outputs. Exposes `tool_output()`, `tool_output_raw()`, `tool_error()`, HTTP error parsers, and handles oversized result truncation (>50k chars offloaded to content-addressed storage).
+- `co_cli/tools/resource_lock.py`: In-process `ResourceLockStore` enabling safe async cross-agent concurrency, preventing race conditions on shared file paths and knowledge artifacts.
+- `co_cli/tools/background.py`: Process-group management and telemetry wrappers for background execution tasks.
+- `co_cli/tools/shell_backend.py`: Robust subprocess execution handling output streaming, encoding checks, and standard exit codes.
+- `co_cli/tools/_shell_policy.py` & `_shell_env.py`: Enforces strict execution safety by classifying shell commands (ALLOW, DENY, APPROVE) and controlling env injections.
+- `co_cli/context/tool_approvals.py`: Core logic for resolving target subjects, building user prompt strings, and processing user inputs (Y/N/A) for mutating operations.
+- `co_cli/context/tool_display.py`: Specialized console formatters for rendering inputs and outputs safely in the REPL.
+- `co_cli/tools/_agent_outputs.py`: Typed Pydantic `BaseModel` structures designed specifically for capturing subagent structured responses.
+- `co_cli/tools/google/_auth.py`: Centralized credentials fetching and a shared `_get_google_service()` factory method.
+- `co_cli/tools/_agent_tool.py`: `@agent_tool(...)` decorator — attaches `ToolInfo` policy metadata to native tool functions at definition site. Used by every native tool to declare visibility, approval, concurrency, and config-gate constraints.
 
-### Domain Tools
-- `co_cli/tools/files.py` — `glob`, `read_file`, `grep`, `write_file`, `patch`
-- `co_cli/tools/shell.py` — `run_shell_command`
-- `co_cli/tools/memory.py` — `search_memory` (episodic recall — delegates to `session_search` internal function)
-- `co_cli/tools/knowledge.py` — `save_knowledge` (extractor-only), `list_knowledge`, `search_knowledge`, `save_article`, `search_articles`, `read_article`, `update_knowledge`, `append_knowledge`, internal helpers: `grep_recall`, `filter_artifacts`, `_recall_for_context`, `_touch_recalled`, `_find_by_slug`
-- `co_cli/tools/web.py` — `web_search`, `web_fetch`
-- `co_cli/tools/task_control.py` — `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks`
-- `co_cli/tools/todo.py` — `write_todos`, `read_todos`
-- `co_cli/tools/capabilities.py` — `check_capabilities`
-- `co_cli/tools/session_search.py` — `session_search` (internal transcript FTS function; not registered as agent tool — used by `search_memory` in `tools/memory.py`)
-- `co_cli/tools/agents.py` — delegation: `research_web`, `analyze_knowledge`, `reason_about`
-- `co_cli/tools/execute_code.py` — `execute_code`
-- `co_cli/tools/obsidian.py` — `list_notes`, `search_notes`, `read_note`
-- `co_cli/tools/google/drive.py` — `search_drive_files`, `read_drive_file`
-- `co_cli/tools/google/gmail.py` — `list_gmail_emails`, `search_gmail_emails`, `create_gmail_draft`
-- `co_cli/tools/google/calendar.py` — `list_calendar_events`, `search_calendar_events`
+## 2. Tool Lifecycle, Approval, & Concurrency
 
-## 2. Tool Lifecycle & Concurrency
-
-### Lifecycle Hooks & Execution
+### Lifecycle Hooks & Execution Flow
 
 ```mermaid
 flowchart TD
@@ -85,87 +68,102 @@ only those + ALWAYS visible"]
     EX --> DONE([Turn complete])
 ```
 
-**CoToolLifecycle** (registered via `capabilities=[CoToolLifecycle()]` in `build_agent()`) intercepts execution:
-- `before_tool_execute` — resolves relative `path` args to absolute for file tools.
-- `after_tool_execute` — enriches the SDK's `execute_tool` OTel span with `co.tool.source`, `co.tool.requires_approval`, `co.tool.result_size`.
+**Execution Pipeline via CoToolLifecycle:**
+1. **`before_tool_execute`:** Intercepts invocations to resolve relative paths to absolute system paths.
+2. **`after_tool_execute`:** Enriches OpenTelemetry traces with custom tags (`co.tool.source`, `co.tool.requires_approval`, `co.tool.result_size`).
 
-**Error Contract:**
-- `tool_error(msg)` — Terminal (won't fix itself). Shown to model as `error=True`. No retries.
-- `ModelRetry(msg)` — Transient (bad params, rate limit). Retried up to `tool_retries`.
-- `ApprovalRequired(...)` — Interrupts execution, triggers UI prompt.
+**Approval & Errors:**
+- **Auto-Approve:** Executed directly via `FunctionToolset`.
+- **Requires-Approval:** Execution is preempted, user is prompted in TUI. If denied, a `ToolDenied` response is returned rather than an execution crash.
+- **Failures:** Hard failures trigger `tool_error(msg)` (no retry), while bad parameters return `ModelRetry(msg)` to let the model self-correct.
 
 ### Concurrency Safety
 
-Approval controls permission; resource locks control correctness. 
+Approval controls human permission; locks ensure structural correctness.
 
-**Within-turn serialization:** `write_file`, `patch`, and `execute_code` are registered with `is_concurrent_safe=False`, which causes `_register_tool()` to derive `sequential=True`. The SDK serializes the entire batch if any tool in it is marked sequential.
-**Cross-agent locking:** `ResourceLockStore` is an in-process `asyncio.Lock` shared via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately.
-- `write_file` & `patch` lock on the resolved absolute path to prevent read-modify-write races.
-**Staleness Guard:** `CoDeps.file_read_mtimes` records the disk mtime at read. `write_file` and `patch` verify it hasn't changed before writing.
-**Read-before-write enforcement:** `patch` requires a prior full `read_file` call — `CoDeps.file_partial_reads` tracks paths read with `start_line`/`end_line`; partial reads block patching until a full read clears the flag.
+- **Sequential Forced Flow:** Mutating actions (`write_file`, `patch`, `execute_code`) are registered with `is_concurrent_safe=False`. If they're in a multi-tool batch, the agent forces sequential execution.
+- **Cross-agent Path Locking:** Using `CoDeps.resource_locks`, attempts to write to a path locked by another background agent result in an immediate fail-fast `tool_error()`.
+- **Read-before-Write:** `patch` enforces that a file has been read in full prior to replacement. `CoDeps.file_partial_reads` prevents patching if the model only read a snippet.
+- **Staleness Tracking:** `CoDeps.file_read_mtimes` snapshots disk modification times at read. `write_file` and `patch` fail if the file on disk was modified before the write was committed.
 
-### Shell Policy
+## 3. Tool Catalog & Flow Tree
 
-Three-stage classification inside `run_shell_command` (`_shell_policy.py`):
-1. **DENY** — Control characters, heredoc injection (`<<`), env-injection (`VAR=$(...)`), absolute-path destruction.
-2. **ALLOW** — `_is_safe_command()` matches safe-prefix allowlist (e.g. `ls`, `git status`) + arg validation.
-3. **REQUIRE_APPROVAL** — Everything else.
+Tools are segmented functionally and separated into visibility tiers:
+- **ALWAYS Visible:** Loaded immediately (e.g., search, fetch).
+- **DEFERRED Visible:** Exposed dynamically through `search_tools` (e.g., destructive operations, integrations).
 
-## 3. Tool Registration & Catalog
+* **Workspace & File Tools**
+  * `read_file`, `glob`, `grep` *(ALWAYS, Auto)*
+  * `write_file`, `patch` *(DEFERRED, Approval Required, Locked)*
+* **Execution Environment**
+  * `run_shell_command` *(ALWAYS, Hybrid Approval Policy)*
+  * `execute_code` *(DEFERRED, Approval Required)*
+  * **Background Tasks:** `start_background_task` *(DEFERRED, Approval Required)* → `check_task_status`, `list_background_tasks`, `cancel_background_task` *(DEFERRED, Auto)*
+* **Cognition & Memory**
+  * **Recall:** `search_knowledge`, `list_knowledge`, `read_article`, `search_articles`, `search_memory` *(ALWAYS, Auto)*
+  * **Mutate:** `save_article`, `update_knowledge`, `append_knowledge` *(DEFERRED, Approval Required, Locked)*
+* **Delegation**
+  * `research_web`, `analyze_knowledge`, `reason_about` *(DEFERRED, Auto)*
+* **Web Integrations**
+  * `web_search`, `web_fetch` *(ALWAYS, Auto)*
+* **External Provider Integrations** *(Requires Provider Credentials/Config)*
+  * **Google:** `search_drive_files`, `read_drive_file`, `list_gmail_emails`, `search_gmail_emails`, `list_calendar_events`, `search_calendar_events` *(DEFERRED, Auto)* → `create_gmail_draft` *(DEFERRED, Approval Required)*
+  * **Obsidian:** `list_notes`, `search_notes`, `read_note` *(DEFERRED, Auto)*
+* **Introspection & Flow Tracking**
+  * `write_todos`, `read_todos`, `check_capabilities` *(ALWAYS, Auto)*
 
-Native tools are registered into a `FunctionToolset` via `_build_native_toolset()`. 
-MCP tools are loaded via `DeferredLoadingToolset` wrappers and normalized into `tool_index`.
+## 4. Tool API Definitions
 
-**Axes of Registration (ToolInfo):**
-- **Visibility:** `ALWAYS` (visible on turn one) vs `DEFERRED` (discovered dynamically via `search_tools`).
-- **Approval:** `auto` (silent execution) vs `deferred` (user must approve, interrupts execution).
-- **is_read_only:** `True` — tool never mutates any state. Implies `is_concurrent_safe=True`.
-- **is_concurrent_safe:** `True` — tool may run in parallel with others. Derived into SDK `sequential = not is_concurrent_safe`.
-- **Retries:** `1` (write-once), `3` (network reads), or `default` (`config.tool_retries`).
-- **Max Result Size:** Truncation threshold before spilling to storage (default 50k).
-- **Integration:** Gate tied to specific credentials/configs.
+### Workspace & Files
+- **`glob(path: str, pattern: str, max_entries: int)`**: Recursively list directory contents or find specific files matching standard glob patterns.
+- **`read_file(path: str, start_line: int, end_line: int)`**: Fetch contents of an absolute path for inspection. Bounded by an optional line range. Max result 80k.
+- **`grep(pattern: str, path: str, glob: str, case_insensitive: bool, output_mode: str, context_lines: int, head_limit: int, offset: int)`**: High-speed regex file searching using built-in Python parsing across the target directory constraint.
+- **`write_file(path: str, content: str)`**: Overwrite entirely or create a new system file with standard UTF-8 encoding.
+- **`patch(path: str, old_string: str, new_string: str, replace_all: bool)`**: Targeted snippet replacement. Fails if the `old_string` isn't found exactly, forcing precision context matching.
 
-### Tool Catalog
+### Execution Environment
+- **`run_shell_command(cmd: str, timeout: int)`**: Run blocking shell invocations. Checked dynamically: 'safe' prefixes (e.g. `ls`) execute automatically, mutations trigger user prompts, and destructive/injection sequences are outright denied.
+- **`execute_code(cmd: str, timeout: int)`**: Specialized arbitrary code evaluation. Output is captured entirely (both stdout and stderr combined).
+- **`start_background_task(command: str, description: str, working_directory: str)`**: Initiates an unblocked process group on the host OS. Returns a UUID `task_id` reference.
+- **`check_task_status(task_id: str, tail_lines: int)`**: Poll the stdout/stderr buffers of a background task and check its completion state.
+- **`cancel_background_task(task_id: str)`**: Terminates an identified process via SIGTERM, with SIGKILL escalation.
+- **`list_background_tasks(status_filter: str)`**: Discover actively running or completed UUID tasks for tracking or cleanup.
 
-**Core tools (28 tools)**
-| Tool | Visibility | Approval | Seq | Retries | Max Size | Notes |
-|------|------------|----------|-----|---------|----------|-------|
-| `check_capabilities` | ALWAYS | auto | no | default | 50k | Introspection for /doctor |
-| `write_todos`, `read_todos` | ALWAYS | auto | no | default | 50k | Session task list |
-| `search_knowledge` | ALWAYS | auto | no | default | 50k | Universal reusable-recall across all knowledge artifact kinds + Obsidian + Drive |
-| `list_knowledge` | ALWAYS | auto | no | default | 50k | Paginated artifact inventory with `artifact_kind` column |
-| `read_article` | ALWAYS | auto | no | default | 50k | Read full artifact body by slug |
-| `search_memory` | ALWAYS | auto | no | default | 50k | Episodic memory — FTS5 keyword search over past session transcripts |
-| `search_articles` | ALWAYS | auto | no | default | 50k | Article index search — canonical; required by the search → `read_article` slug-lookup workflow |
-| `update_knowledge` | DEFERRED | deferred | no | 1 | 50k | Surgical passage replacement in a knowledge artifact; slug-level resource lock |
-| `append_knowledge` | DEFERRED | deferred | no | 1 | 50k | Append content to end of a knowledge artifact; slug-level resource lock |
-| `glob`, `grep` | ALWAYS | auto | no | default | 50k | Workspace search |
-| `read_file` | ALWAYS | auto | no | default | 80k | Workspace read |
-| `web_search`, `web_fetch` | ALWAYS | auto | no | 3 | 50k | Network bounds/fetch |
-| `run_shell_command` | ALWAYS | auto*| no | default | 30k | *Checks policy inside tool body |
-| `write_file`, `patch` | DEFERRED | deferred | yes | 1 | 50k | Write with lock & staleness check |
-| `save_article` | DEFERRED | deferred | no | 1 | 50k | URL dedup |
-| `start_background_task` | DEFERRED | deferred | no | default | 50k | Async proc execution |
-| `check_task_status`, `list_background_tasks` | DEFERRED | auto | no | default | 50k | Read background state |
-| `cancel_background_task` | DEFERRED | auto | no | default | 50k | Kill proc tree |
-| `execute_code` | DEFERRED | auto* | yes | default | 50k | *Always requires approval (inline guard, no safe-prefix bypass) |
-| `research_web`, `analyze_knowledge`, `reason_about` | DEFERRED | auto | no | default | 50k | Isolated subagent spawning |
+### Cognition & Memory
+- **`search_knowledge(query: str)`**: Universal, BM25-based semantic index search spanning internal artifacts, rules, references, and synced directories.
+- **`list_knowledge(offset: int, limit: int, kind: str)`**: Paginate metadata of persistent agent knowledge artifacts.
+- **`search_articles(query: str, max_results: int, tags: list, tag_match_mode: str, created_after: str, created_before: str)`**: Filter the index specific to external reference texts cached locally.
+- **`read_article(slug: str)`**: Extract the full markdown body corresponding to a specific index slug.
+- **`save_article(content: str, title: str, origin_url: str, tags: list, related: list)`**: Transmute web content into a permanently readable local markdown artifact.
+- **`update_knowledge(slug: str, old_content: str, new_content: str)`**: Surgical replacement for specific sections of unified knowledge items without rewriting the file.
+- **`append_knowledge(slug: str, content: str)`**: Standard mechanism to drop new findings onto the end of a living knowledge artifact.
+- **`search_memory(query: str)`**: Run keyword matching directly against SQLite-persisted transcripts of *all* historic chat sessions for semantic episodic recall.
 
-**Integration tools (10 tools)**
-Excluded when the required credential or config path is absent.
-| Tool | Visibility | Approval | Seq | Retries | Max Size | Gate |
-|------|------------|----------|-----|---------|----------|------|
-| `list_notes`, `search_notes`, `read_note` | DEFERRED | auto | no | default | 50k | `obsidian_vault_path` |
-| `search_drive_files`, `read_drive_file` | DEFERRED | auto | no | 3 | 50k | `google_credentials_path` |
-| `list_gmail_emails`, `search_gmail_emails` | DEFERRED | auto | no | 3 | 50k | `google_credentials_path` |
-| `list_calendar_events`, `search_calendar_events`| DEFERRED | auto | no | 3 | 50k | `google_credentials_path` |
-| `create_gmail_draft` | DEFERRED | deferred | no | 1 | 50k | `google_credentials_path` |
+### Delegation
+- **`research_web(query: str, domains: list, max_requests: int)`**: Subagent focused on deep dive internet retrieval. Isolates web loops from code writing.
+- **`analyze_knowledge(question: str, inputs: dict, max_requests: int)`**: Subagent handling cross-indexing and deduction strictly on internal + Drive knowledge bounds.
+- **`reason_about(problem: str, max_requests: int)`**: Pure inference subagent. Isolated execution context with no API access, operating purely on deductive logic.
 
-### Default MCP Servers
-Configured in `settings.json`. MCP tools are normalized to `visibility=DEFERRED`.
-- `context7`: Context7 documentation provider (auto approval).
+### Web & Third-Party
+- **`web_search(query: str, max_results: int, domains: list)`**: Query the Brave API. Capable of filtering to specific explicit URL domains.
+- **`web_fetch(url: str)`**: Extract standard web HTML pages into synthesized markdown, handling HTTP status exceptions explicitly.
+- **`search_notes(query: str, limit: int, folder: str, tag: str)`**: Locate Obsidian vault concepts filtering by embedded tags or path subsets.
+- **`list_notes(tag: str, offset: int, limit: int)`**: Standard pagination through Obsidian markdown note paths.
+- **`read_note(filename: str)`**: Ingest Obsidian format raw text.
+- **`search_drive_files(query: str, page: int)`**: Uses Google's remote search engine for document location.
+- **`read_drive_file(file_id: str)`**: Render remote GSuite doc payloads into readable CLI text format.
+- **`list_gmail_emails(max_results: int)`**: Pull the latest messages from the authorized user's primary inbox.
+- **`search_gmail_emails(query: str, max_results: int)`**: Execute advanced Gmail search operators remotely to filter threads.
+- **`create_gmail_draft(to: str, subject: str, body: str)`**: Draft an outgoing message thread (does NOT automatically send).
+- **`list_calendar_events(days_back: int, days_ahead: int, max_results: int)`**: Timebox bounded query of Google Calendar scheduling.
+- **`search_calendar_events(query: str, days_back: int, days_ahead: int, max_results: int)`**: Deep text search of scheduling, descriptions, and venues.
 
-## 4. Config
+### Introspection
+- **`write_todos(todos: list)`**: State replacement for multi-turn checklist tracking.
+- **`read_todos()`**: Fetch the existing tracking list to audit progress.
+- **`check_capabilities()`**: Trigger runtime doctor checks against required binaries, integration auth states, and configuration variables.
+
+## 5. Config
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
@@ -176,8 +174,7 @@ Configured in `settings.json`. MCP tools are normalized to `visibility=DEFERRED`
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Required for `web_search` |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Registration gate for Obsidian |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google |
-| `knowledge_dir` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge/` | Unified knowledge artifact directory |
+| `knowledge_path` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge/` | Unified knowledge artifact directory |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | 2 defaults | MCP server definitions |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Default agent retry budget |
 | `subagent.max_requests_*` | `CO_CLI_SUBAGENT_MAX_REQUESTS_*` | var | Per-role request caps |
-

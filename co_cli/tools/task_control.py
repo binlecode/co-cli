@@ -13,7 +13,8 @@ from opentelemetry import trace as otel_trace
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.background import (
     BackgroundCleanupError,
     BackgroundTaskState,
@@ -24,6 +25,7 @@ from co_cli.tools.background import (
 from co_cli.tools.tool_io import tool_output
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, is_concurrent_safe=True)
 async def start_background_task(
     ctx: RunContext[CoDeps],
     command: str,
@@ -74,6 +76,7 @@ async def start_background_task(
     return tool_output(display, ctx=ctx, task_id=task_id, status="running")
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_read_only=True, is_concurrent_safe=True)
 async def check_task_status(
     ctx: RunContext[CoDeps],
     task_id: str,
@@ -138,6 +141,7 @@ async def check_task_status(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
 async def cancel_background_task(
     ctx: RunContext[CoDeps],
     task_id: str,
@@ -181,6 +185,7 @@ async def cancel_background_task(
     return tool_output(f"Task {task_id} cancelled.", ctx=ctx, task_id=task_id, status="cancelled")
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_read_only=True, is_concurrent_safe=True)
 async def list_background_tasks(
     ctx: RunContext[CoDeps],
     status_filter: str | None = None,

@@ -19,7 +19,8 @@ import httpx
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output, tool_output_raw
 
 # ---------------------------------------------------------------------------
@@ -415,6 +416,12 @@ async def _http_get_with_retries(
     return tool_output_raw(f"{tool_name} failed for {target}.", error=True)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    retries=3,
+)
 async def web_search(
     ctx: RunContext[CoDeps],
     query: str,
@@ -505,6 +512,12 @@ async def web_search(
     return tool_output(display, ctx=ctx, results=results, count=len(results))
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    retries=3,
+)
 async def web_fetch(
     ctx: RunContext[CoDeps],
     url: str,

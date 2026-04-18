@@ -10,8 +10,9 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli.config._llm import NOREASON_SETTINGS
-from co_cli.deps import CoDeps, fork_deps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum, fork_deps
 from co_cli.tools._agent_outputs import AgentOutput
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
 _TRACER = otel_trace.get_tracer("co-cli.agents")
@@ -159,6 +160,7 @@ def _reasoner_instructions(deps: CoDeps) -> str:
 # --- Delegation tools ---
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
 async def research_web(
     ctx: RunContext[CoDeps],
     query: str,
@@ -264,6 +266,7 @@ async def research_web(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
 async def analyze_knowledge(
     ctx: RunContext[CoDeps],
     question: str,
@@ -316,6 +319,7 @@ async def analyze_knowledge(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
 async def reason_about(
     ctx: RunContext[CoDeps],
     problem: str,

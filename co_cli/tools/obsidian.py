@@ -6,8 +6,9 @@ from pathlib import Path
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.knowledge._search_util import snippet_around
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
 
@@ -148,6 +149,13 @@ def _grep_search_notes(
     )
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="obsidian",
+    requires_config="obsidian_vault_path",
+)
 def search_notes(
     ctx: RunContext[CoDeps],
     query: str,
@@ -205,6 +213,13 @@ def search_notes(
     return _grep_search_notes(ctx, vault, search_root, keywords, tag, limit)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="obsidian",
+    requires_config="obsidian_vault_path",
+)
 def list_notes(
     ctx: RunContext[CoDeps],
     tag: str | None = None,
@@ -292,6 +307,13 @@ def list_notes(
     )
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="obsidian",
+    requires_config="obsidian_vault_path",
+)
 def read_note(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
     """Read the full markdown content of a note from the Obsidian vault.
 

@@ -85,6 +85,7 @@ class ToolInfo:
     is_read_only: bool = False
     is_concurrent_safe: bool = False
     retries: int | None = None
+    requires_config: str | None = None
 
 
 @dataclass

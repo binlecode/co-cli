@@ -8,10 +8,12 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.bootstrap.check import check_runtime
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolReturn:
     """Return a summary of active capabilities and integration health.
 

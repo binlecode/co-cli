@@ -3,13 +3,17 @@ import logging
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools._shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
 logger = logging.getLogger(__name__)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True, max_result_size=30_000
+)
 async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolReturn:
     """Execute a shell command and return combined stdout + stderr as text.
 

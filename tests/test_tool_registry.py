@@ -4,9 +4,10 @@ import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage
+from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent, build_tool_registry
-from co_cli.agent._native_toolset import _approval_resume_filter
+from co_cli.agent._native_toolset import _approval_resume_filter, _build_native_toolset
 from co_cli.config._core import settings
 from co_cli.context._deferred_tool_prompt import build_category_awareness_prompt
 from co_cli.deps import CoDeps, CoRuntimeState, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
@@ -308,3 +309,80 @@ def test_approval_resume_filter_hides_previously_discovered_deferred() -> None:
     assert (
         _approval_resume_filter(ctx, ToolDefinition(name="save_article", description="")) is False
     )
+
+
+# ---------------------------------------------------------------------------
+# TASK-6: requires_config gating + policy parity
+# ---------------------------------------------------------------------------
+
+
+def test_requires_config_gates_integration_tools() -> None:
+    """requires_config gates register/unregister integration tools correctly."""
+    # Permutation 1: no integrations — both obsidian and google absent
+    config_none = make_settings(obsidian_vault_path=None, google_credentials_path=None)
+    _, index_none = _build_native_toolset(config_none)
+    assert "list_notes" not in index_none
+    assert "search_notes" not in index_none
+    assert "read_note" not in index_none
+    assert "search_drive_files" not in index_none
+    assert "list_gmail_emails" not in index_none
+    assert "list_calendar_events" not in index_none
+
+    # Permutation 2: obsidian present, google absent
+    config_obs = make_settings(obsidian_vault_path="/tmp/vault", google_credentials_path=None)
+    _, index_obs = _build_native_toolset(config_obs)
+    assert "list_notes" in index_obs
+    assert "search_notes" in index_obs
+    assert "read_note" in index_obs
+    assert "search_drive_files" not in index_obs
+    assert "list_gmail_emails" not in index_obs
+
+    # Permutation 3: google present, obsidian absent
+    config_google = make_settings(
+        obsidian_vault_path=None, google_credentials_path="/tmp/creds.json"
+    )
+    _, index_google = _build_native_toolset(config_google)
+    assert "list_notes" not in index_google
+    assert "search_drive_files" in index_google
+    assert "list_gmail_emails" in index_google
+    assert "list_calendar_events" in index_google
+
+
+def test_tool_index_policies_match_expectation() -> None:
+    """Tool index contains correct non-default policy fields for representative tools."""
+    config = make_settings(obsidian_vault_path="/x", google_credentials_path="/y")
+    _, index = _build_native_toolset(config)
+
+    assert index["read_file"].max_result_size == 80_000
+    assert index["run_shell_command"].max_result_size == 30_000
+    assert index["write_file"].approval is True
+    assert index["write_file"].retries == 1
+    assert index["patch"].approval is True
+    assert index["patch"].retries == 1
+    assert index["web_search"].retries == 3
+    assert index["web_fetch"].retries == 3
+    assert index["create_gmail_draft"].approval is True
+    assert index["create_gmail_draft"].retries == 1
+    assert index["search_drive_files"].retries == 3
+
+
+def test_native_and_mcp_both_populate_tool_index() -> None:
+    """tool_index contains ToolSourceEnum.NATIVE entries from native path and accepts MCP entries."""
+    result = build_tool_registry(_CONFIG)
+    native_entries = [
+        info for info in result.tool_index.values() if info.source == ToolSourceEnum.NATIVE
+    ]
+    assert len(native_entries) >= 1
+
+    # Inject a synthetic MCP entry (mirrors the pattern from discover_mcp_tools)
+    result.tool_index["mcp_synthetic"] = ToolInfo(
+        name="mcp_synthetic",
+        description="synthetic mcp tool",
+        approval=False,
+        source=ToolSourceEnum.MCP,
+        visibility=VisibilityPolicyEnum.DEFERRED,
+        integration="test_server",
+    )
+    sources = {info.source for info in result.tool_index.values()}
+    assert ToolSourceEnum.NATIVE in sources
+    assert ToolSourceEnum.MCP in sources

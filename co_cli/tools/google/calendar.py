@@ -5,7 +5,8 @@ from datetime import UTC, datetime, timedelta
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.google._auth import _get_google_service
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
@@ -78,6 +79,14 @@ def _fetch_events(service, **kwargs) -> list[dict]:
     return all_events[:max_results]
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="google_calendar",
+    requires_config="google_credentials_path",
+    retries=3,
+)
 def list_calendar_events(
     ctx: RunContext[CoDeps],
     days_back: int = 0,
@@ -141,6 +150,14 @@ def list_calendar_events(
         return handle_google_api_error("Calendar", e, ctx=ctx)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="google_calendar",
+    requires_config="google_credentials_path",
+    retries=3,
+)
 def search_calendar_events(
     ctx: RunContext[CoDeps],
     query: str,

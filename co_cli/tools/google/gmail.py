@@ -6,7 +6,8 @@ from email.mime.text import MIMEText
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.google._auth import _get_google_service
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
@@ -46,6 +47,14 @@ def _format_messages(service, message_ids: list[dict]) -> str:
     return output
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="google_gmail",
+    requires_config="google_credentials_path",
+    retries=3,
+)
 def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolReturn:
     """List the most recent emails from the user's Gmail inbox.
 
@@ -78,6 +87,14 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
         return handle_google_api_error("Gmail", e, ctx=ctx)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    integration="google_gmail",
+    requires_config="google_credentials_path",
+    retries=3,
+)
 def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolReturn:
     """Search emails in Gmail using Gmail search syntax.
 
@@ -121,6 +138,14 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
         return handle_google_api_error("Gmail", e, ctx=ctx)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    approval=True,
+    is_concurrent_safe=True,
+    integration="google_gmail",
+    requires_config="google_credentials_path",
+    retries=1,
+)
 def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> ToolReturn:
     """Create a draft email in Gmail. Does NOT send — the user reviews and
     sends manually from Gmail.

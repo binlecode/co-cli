@@ -21,7 +21,7 @@ from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.knowledge._artifact import (
     ArtifactKindEnum,
     IndexSourceEnum,
@@ -37,6 +37,7 @@ from co_cli.knowledge._frontmatter import (
 from co_cli.knowledge._ranking import compute_confidence, detect_contradictions
 from co_cli.knowledge._similarity import find_similar_artifacts, is_content_superset
 from co_cli.knowledge.mutator import _atomic_write, _reindex_knowledge_file, _update_artifact_body
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.resource_lock import ResourceBusyError
 from co_cli.tools.tool_io import tool_error, tool_output
 
@@ -202,6 +203,7 @@ async def _recall_for_context(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def list_knowledge(
     ctx: RunContext[CoDeps],
     offset: int = 0,
@@ -485,6 +487,7 @@ def _post_process_knowledge_results(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def search_knowledge(
     ctx: RunContext[CoDeps],
     query: str,
@@ -564,6 +567,12 @@ async def search_knowledge(
     return _post_process_knowledge_results(ctx, query, results)
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    approval=True,
+    is_concurrent_safe=True,
+    retries=1,
+)
 async def save_article(
     ctx: RunContext[CoDeps],
     content: str,
@@ -774,6 +783,7 @@ def _grep_search_articles(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def search_articles(
     ctx: RunContext[CoDeps],
     query: str,
@@ -830,6 +840,7 @@ async def search_articles(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def read_article(
     ctx: RunContext[CoDeps],
     slug: str,
@@ -967,6 +978,12 @@ _LINE_PREFIX_RE = re.compile(r"(^|\n)\d+\u2192 ", re.MULTILINE)
 _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    approval=True,
+    is_concurrent_safe=True,
+    retries=1,
+)
 async def append_knowledge(
     ctx: RunContext[CoDeps],
     slug: str,
@@ -1022,6 +1039,12 @@ async def append_knowledge(
         )
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED,
+    approval=True,
+    is_concurrent_safe=True,
+    retries=1,
+)
 async def update_knowledge(
     ctx: RunContext[CoDeps],
     slug: str,

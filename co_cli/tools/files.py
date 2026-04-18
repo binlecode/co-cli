@@ -8,7 +8,8 @@ from pathlib import Path
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.tools._agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output
 
 
@@ -52,6 +53,7 @@ def _is_recursive_pattern(pattern: str) -> bool:
     return "**" in pattern or "/" in pattern
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def glob(
     ctx: RunContext[CoDeps],
     path: str = ".",
@@ -131,6 +133,12 @@ async def glob(
     )
 
 
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    max_result_size=80_000,
+)
 async def read_file(
     ctx: RunContext[CoDeps],
     path: str,
@@ -245,6 +253,7 @@ def _grep_format_file_matches(
     return [f"{rel_path}: {len(match_indices)}"]
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def grep(
     ctx: RunContext[CoDeps],
     pattern: str,
@@ -341,6 +350,7 @@ async def grep(
     )
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, retries=1)
 async def write_file(
     ctx: RunContext[CoDeps],
     path: str,
@@ -526,6 +536,7 @@ def _fuzzy_apply(
     return result, len(matches)
 
 
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, retries=1)
 async def patch(
     ctx: RunContext[CoDeps],
     path: str,
