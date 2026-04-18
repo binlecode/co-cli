@@ -236,8 +236,7 @@ prerequisites: [TASK-1, TASK-2, TASK-3]
 ```text
 files:
   - docs/specs/tools.md
-  - docs/specs/library.md
-  - docs/specs/context.md
+  - docs/specs/cognition.md
   - docs/reference/RESEARCH-peer-tool-surface-survey.md
   - other docs returned by repo-wide grep for search_articles
 

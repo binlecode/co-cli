@@ -128,8 +128,8 @@ return _personality_cache
 
 The cache is process-scoped (module-level `_personality_cache`). Call
 `invalidate_personality_cache()` after any tool write that adds or removes the
-`personality-context` tag. The memory extraction pipeline (in context.md) is responsible
-for tagging relevant observations as `personality-context`.
+`personality-context` tag. The memory extraction pipeline (in [cognition.md](cognition.md))
+is responsible for tagging relevant observations as `personality-context`.
 
 ### Personality Discovery and Validation
 

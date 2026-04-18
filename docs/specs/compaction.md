@@ -27,7 +27,7 @@
 - Summarizer failure falls back to a static marker; turn continues.
 - Prompt cache hit rate preserved (no per-turn churn in static sections).
 
-**Status:** Target design for the compaction-refactor-from-peer-survey plan. Current code implements a subset; see [docs/exec-plans/active/2026-04-17-163453-compaction-refactor-from-peer-survey.md](../exec-plans/active/2026-04-17-163453-compaction-refactor-from-peer-survey.md) for the delta.
+**Status:** Stable. Design landed via the compaction-refactor-from-peer-survey plan; see [docs/exec-plans/completed/2026-04-17-163453-compaction-refactor-from-peer-survey.md](../exec-plans/completed/2026-04-17-163453-compaction-refactor-from-peer-survey.md) and its followup [2026-04-18-002621-compaction-followup-fixes.md](../exec-plans/completed/2026-04-18-002621-compaction-followup-fixes.md).
 
 **Known gaps:**
 - Summarizer LLM calls are not merged into `turn_usage` — the user's turn token display omits summarizer cost. Deferred.
@@ -35,7 +35,7 @@
 
 ---
 
-Covers how co-cli keeps context bounded under pressure. Prompt context assembly and session persistence live in [context.md](context.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
+Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (including child-session branching after compaction) in [session.md](session.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
 
 ## 1. What & How
 
@@ -501,9 +501,11 @@ if _is_context_overflow(e):
 **Prompt template:** single `_SUMMARIZE_PROMPT` (no region variants). Markdown sections:
 - `## Goal` — what the user is trying to accomplish
 - `## Key Decisions` — decisions made, including rejected alternatives
+- `## User Corrections` — explicit corrections or redirections from the user
+- `## Errors & Fixes` — error signals encountered and how they were resolved
 - `## Working Set` — files, URLs, active tools
 - `## Progress` — done / in progress / remaining
-- `## Next Steps` — immediate next actions
+- `## Next Step` — immediate next action
 
 Integrates prior summary when one is present in the dropped range. Skips empty sections. Personality addendum is appended when `config.personality` is set.
 

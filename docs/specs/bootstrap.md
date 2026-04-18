@@ -41,7 +41,6 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ config = settings; paths = resolve_workspace_paths(config, cwd)
 │  ├─ config.llm.validate_config()
 │  ├─ [if ollama-openai] probe_ollama_context() → maybe overwrite llm.num_ctx
-│  ├─ config.mcp_servers = _resolve_mcp_env_tokens(config)
 │  ├─ build_model(config.llm)
 │  ├─ build_tool_registry(config)
 │  ├─ enter MCP toolsets on stack; discover_mcp_tools(); merge MCP tool_index
@@ -101,9 +100,9 @@ Bootstrap calls `config.llm.validate_config()` before building long-lived runtim
 
 If the provider is `ollama-openai`, bootstrap also probes the model's runtime `num_ctx`. When the runtime value differs from config, bootstrap overwrites `config.llm.num_ctx` so runtime state reflects the actual allocation. If the probed value is below the minimum supported agentic context, startup fails immediately.
 
-### Step 5. Resolve MCP env tokens and build the local registry
+### Step 5. Build the foreground model and local tool registry
 
-Bootstrap resolves env-derived MCP credentials, builds the foreground `LlmModel`, and constructs the tool registry. At this point there is still no `CoDeps`; bootstrap is still gathering the pieces that will go into it.
+Bootstrap builds the foreground `LlmModel` from the resolved LLM config and constructs the native tool registry. At this point there is still no `CoDeps`; bootstrap is still gathering the pieces that will go into it. MCP env-token expansion happens inside MCP toolset construction in the next step, not as a separate pass here.
 
 ### Step 6. Connect MCP servers and discover their tools
 
@@ -172,7 +171,7 @@ else:
     deps.session.session_path = new_session_path(deps.sessions_dir)  # path only, no file write
 ```
 
-No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing lifecycle are owned by [context.md](context.md).
+No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing lifecycle are owned by [session.md](session.md).
 
 ### Step 12b. Initialise the memory index
 
@@ -188,7 +187,7 @@ on failure:
     deps.memory_index = None  # graceful degradation; search_memory returns empty
 ```
 
-The index is derived and rebuildable: deleting `~/.co-cli/co-cli-search.db` and restarting rebuilds cleanly from `*.jsonl` files. Change detection is size-based (append-only transcripts).
+The session index is derived and rebuildable: deleting `~/.co-cli/session-index.db` and restarting rebuilds cleanly from `*.jsonl` files. Change detection is size-based (append-only transcripts). (The knowledge index at `~/.co-cli/co-cli-search.db` is separate — owned by Step 8/9 and rebuilt from `knowledge_dir/*.md`.)
 
 ### Step 13. Print startup status and enter the REPL boundary
 

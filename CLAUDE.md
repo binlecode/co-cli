@@ -37,7 +37,7 @@ See `docs/specs/system.md` for architecture, `CoDeps`, capability surface, and s
 
 ### Knowledge System
 
-All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/memory/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs in `search.db`. See `docs/specs/memory.md` for memory storage and recall, `docs/specs/library.md` for library/knowledge indexing, and `docs/specs/context.md` for prompt assembly and history governance.
+All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge artifacts (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db`. See `docs/specs/cognition.md` for the two-layer Memory + Knowledge model (extraction, retrieval, dreaming), `docs/specs/prompt-assembly.md` for how recall injects into the turn, and `docs/specs/session.md` for transcript persistence.
 
 ## Engineering Rules
 
@@ -75,8 +75,8 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Tool return type**: tools returning user-facing data must use the project's `tool_output()` helper for structured returns; use `tool_error()` for failures. Never return a raw `str`, bare `dict`, or `list[dict]` — raw returns silently omit tracing metadata and the structured fields the chat loop depends on.
 - **CoDeps**: flat dataclass — access service handles, config, and paths via `ctx.deps.*` (e.g. `ctx.deps.shell`, `ctx.deps.config.memory.max_count`).
 - **Sub-agent isolation**: use the subagent deps factory in `deps.py`. Do not manually field-copy.
-- **Config**: `Settings` uses nested Pydantic sub-models in `co_cli/config/` (one file per group). Add new fields to an existing group if it fits; only create a new nested group when it has meaningful cohesion. Config precedence: env vars > `.co-cli/settings.json` (project) > `~/.co-cli/settings.json` (user) > defaults.
-- **User-global paths**: `~/.co-cli/` (overridable via `CO_CLI_HOME`). Project-local: `.co-cli/`.
+- **Config**: `Settings` uses nested Pydantic sub-models in `co_cli/config/` (one file per group). Add new fields to an existing group if it fits; only create a new nested group when it has meaningful cohesion. Config precedence: env vars > `~/.co-cli/settings.json` > defaults. (No project-local `.co-cli/settings.json` layer exists today; all user state is user-global.)
+- **User-global paths**: `~/.co-cli/` (overridable via `CO_CLI_HOME`). No project-local state directory exists.
 - **Versioning**: `MAJOR.MINOR.PATCH`; patch odd = bugfix, even = feature. Bump only in `pyproject.toml`. Git history is the changelog; releases use GitHub Releases — tag `vX.Y.Z` and push to trigger `.github/workflows/release.yml`.
 - **No `.env` files**: use `settings.json` or env vars.
 
@@ -218,19 +218,21 @@ Never paste source code into specs. Use pseudocode to explain processing logic. 
 
 Specs index:
 - `docs/specs/mission.md` — product mission, strategic thesis, stage roadmap, non-goals
-- `docs/specs/system.md` — top-level runtime architecture, `CoDeps`, subsystem boundaries
-- `docs/specs/core-loop.md` — agent loop, turn orchestration, approval flow
-- `docs/specs/flow-bootstrap.md` — startup sequence from settings load to REPL entry
-- `docs/specs/context.md` — prompt context assembly, history governance, session persistence
-- `docs/specs/cognition.md` — two-layer cognitive architecture (Memory = transcripts, Knowledge = reusable artifacts), extraction, consolidation, retrieval
-- `docs/specs/tools.md` — tool registration, visibility tiers, approval model, tool catalog
+- `docs/specs/system.md` — top-level runtime architecture, `CoDeps`, subsystem boundaries, end-to-end request lifecycle
+- `docs/specs/bootstrap.md` — startup sequence from settings load to REPL entry
+- `docs/specs/core-loop.md` — agent loop, turn orchestration, approval flow, retries, interrupts
+- `docs/specs/prompt-assembly.md` — static + dynamic instruction layers, five history processors, append-only invariant
+- `docs/specs/session.md` — JSONL transcript persistence, `/resume`, `/new`, oversized-output spill
+- `docs/specs/compaction.md` — three-mechanism compaction, summarizer, circuit breaker, overflow recovery
+- `docs/specs/cognition.md` — two-layer Memory + Knowledge: schema, retrieval, extraction, consolidation ("dreaming")
+- `docs/specs/tools.md` — tool registration, visibility tiers, approval model, delegation, background tasks
 - `docs/specs/skills.md` — skill system, load order, dispatch, argument expansion
-- `docs/specs/llm-models.md` — single-model architecture, provider abstraction, model quirks
-- `docs/specs/observability.md` — OTel tracing, SQLite exporter, three viewer modes
 - `docs/specs/tui.md` — REPL loop, tab completion, slash command dispatch, reasoning display
 - `docs/specs/personality.md` — soul file layout, static prompt assembly, per-turn injection
+- `docs/specs/llm-models.md` — single-model architecture, provider abstraction, model quirks
+- `docs/specs/observability.md` — OTel tracing, SQLite exporter, three viewer modes
 
-`flow-*.md` specs are sequence-owning documents. Their `Core Logic` section must follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
+Sequence-owning specs (`bootstrap.md`, `core-loop.md`, and the processing diagrams inside `compaction.md`, `prompt-assembly.md`, `cognition.md`, `session.md`) follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
 
 `docs/reference/` is for research and background material (`RESEARCH-*`) and is not linked from specs.
 

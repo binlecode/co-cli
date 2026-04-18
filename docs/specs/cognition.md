@@ -25,7 +25,7 @@
 
 ---
 
-This spec defines the cognitive architecture of `co-cli`: what belongs in Memory vs Knowledge, how artifacts flow between layers, and how retrieval and lifecycle management work. Transcript persistence mechanics (append, branching, compaction, resume) live in [context.md](context.md). Startup sequencing in [flow-bootstrap.md](flow-bootstrap.md). Tool registration and approval in [tools.md](tools.md). Prompt assembly in [context.md](context.md).
+This spec defines the cognitive architecture of `co-cli`: what belongs in Memory vs Knowledge, how artifacts flow between layers, and how retrieval and lifecycle management work. Transcript persistence mechanics (append, branching, compaction, resume) live in [session.md](session.md). Startup sequencing in [bootstrap.md](bootstrap.md). Tool registration and approval in [tools.md](tools.md). Prompt assembly and per-turn recall injection in [prompt-assembly.md](prompt-assembly.md). Compaction mechanics in [compaction.md](compaction.md).
 
 ## 1. What & How
 
@@ -126,7 +126,7 @@ Every knowledge artifact is a `.md` file with YAML frontmatter:
 
 All reusable recall routes through the knowledge layer via two retrieval paths:
 
-**Turn-time recall** — on each new user turn, `append_recalled_memories` queries `search.db` for the top-N knowledge artifacts matching the user's message. Results are appended as a trailing `SystemPromptPart`. This surfaces both extracted facts and articles — anything reusable and relevant.
+**Turn-time recall** — on each new user turn, `append_recalled_memories` queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are appended as a trailing `SystemPromptPart`. This surfaces both extracted facts and articles — anything reusable and relevant.
 
 **Explicit search** — the agent calls `search_knowledge()` for on-demand retrieval. This is the universal reusable-recall tool covering all artifact kinds, Obsidian notes, and Drive documents.
 

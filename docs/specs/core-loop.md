@@ -20,7 +20,7 @@
 
 ---
 
-For top-level architecture and startup sequencing, see [system.md](system.md) and [flow-bootstrap.md](flow-bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Persistent context layers and storage live in [context.md](context.md).
+For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); transcript storage in [session.md](session.md); compaction mechanics in [compaction.md](compaction.md).
 
 ## 1. Foreground Turn Flow
 
@@ -340,7 +340,7 @@ The intentional simplification remains:
 
 ## 3. Config
 
-These settings most directly shape one-turn orchestration behavior. Context-storage and knowledge-index settings are documented in [context.md](context.md).
+These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); session settings in [session.md](session.md); knowledge-index settings in [cognition.md](cognition.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |

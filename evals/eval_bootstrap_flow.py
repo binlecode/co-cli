@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Eval: bootstrap flow — production startup boundary through the welcome banner.
 
-Validates the canonical startup path described in ``docs/specs/flow-bootstrap.md``:
+Validates the canonical startup path described in ``docs/specs/bootstrap.md``:
 
   create_deps() -> build_agent() -> restore_session() -> _init_memory_index()
   -> display_welcome_banner()
