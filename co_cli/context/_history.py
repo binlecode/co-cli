@@ -7,7 +7,7 @@ Public API (registered on the agent):
     truncate_tool_results        — sync, content-clears compactable tool results by recency
     compact_assistant_responses  — sync, caps large TextPart/ThinkingPart in older ModelResponse
     detect_safety_issues         — sync, doom-loop detection + shell reflection cap
-    inject_opening_context       — async, injects recalled memories on each new user turn
+    append_recalled_memories     — async, appends recalled memories at the message tail on each new user turn
     summarize_history_window     — async, summarizes middle messages via inline LLM or static marker
 """
 
@@ -71,6 +71,14 @@ _CompactionBoundaries = tuple[int, int, int]
 # ---------------------------------------------------------------------------
 # Compaction constants
 # ---------------------------------------------------------------------------
+
+_CIRCUIT_BREAKER_PROBE_EVERY: int = 10
+"""When the circuit breaker is tripped (failure_count >= 3), attempt the LLM anyway
+every Nth subsequent trigger. A success resets the counter to 0. Prevents
+permanent bypass from a transient provider hiccup that happened to hit 3 in a
+row early in the session. First probe fires at failure_count == 3 + N (i.e. after
+N skips), then every N skips thereafter.
+"""
 
 PROACTIVE_COMPACTION_RATIO: float = 0.85
 """Fraction of budget above which ``summarize_history_window`` fires.
@@ -526,11 +534,15 @@ async def _summarize_dropped_messages(
     if not ctx.deps.model:
         log.info("Compaction: model absent, using static marker")
         return None
-    if ctx.deps.runtime.compaction_failure_count >= 3:
-        log.warning(
-            "Compaction: circuit breaker active (>= 3 consecutive failures), using static marker"
-        )
-        return None
+
+    count = ctx.deps.runtime.compaction_failure_count
+    if count >= 3:
+        skips_since_trip = count - 3
+        if skips_since_trip == 0 or skips_since_trip % _CIRCUIT_BREAKER_PROBE_EVERY != 0:
+            log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
+            ctx.deps.runtime.compaction_failure_count += 1
+            return None
+        log.info("Compaction: circuit breaker probe (count=%d)", count)
 
     if announce:
         from co_cli.display._core import console
@@ -669,7 +681,7 @@ async def summarize_history_window(
 
 
 # ---------------------------------------------------------------------------
-# 4. inject_opening_context (async — memory recall, no LLM)
+# 4. append_recalled_memories (async — memory recall, no LLM)
 # ---------------------------------------------------------------------------
 
 
@@ -692,15 +704,18 @@ def _count_user_turns(messages: list[ModelMessage]) -> int:
     return count
 
 
-async def inject_opening_context(
+async def append_recalled_memories(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """Inject recalled memories on every new user turn.
+    """Append personality memories and recalled knowledge at the message tail.
 
-    Runs before every model request. Recall fires unconditionally on each
-    new user turn — no heuristic gate. _recall_for_context is FTS5/BM25 or grep
-    fallback — zero LLM cost in both cases. Returns empty when nothing matches.
+    Personality memories are injected on every request — moved out of
+    @agent.instructions to prevent static-prompt cache invalidation when
+    personality-context artifacts change mid-session.
+
+    Knowledge recall fires once per new user turn — no heuristic gate.
+    _recall_for_context is FTS5/BM25 or grep fallback — zero LLM cost.
 
     State is stored on ctx.deps.session.memory_recall_state.
     """
@@ -714,45 +729,43 @@ async def inject_opening_context(
     # Safety invariant: memory_recall_state is initialised fresh per session in
     # CoSessionState.__post_init__; it does not leak across sessions.
     state: MemoryRecallState = ctx.deps.session.memory_recall_state
-
     user_turn_count = _count_user_turns(messages)
-
-    # Find the current user message
     user_msg = _get_last_user_message(messages)
-    if not user_msg:
+
+    injection_parts: list[SystemPromptPart] = []
+
+    # Personality memories: on every request (append-only invariant — never in @agent.instructions)
+    if ctx.deps.config.personality:
+        from co_cli.prompts.personalities._injector import _load_personality_memories
+
+        personality_content = _load_personality_memories()
+        if personality_content:
+            injection_parts.append(SystemPromptPart(content=personality_content))
+
+    # Knowledge recall: only on new user turns
+    if user_msg and user_turn_count > state.last_recall_user_turn:
+        from co_cli.tools.knowledge import _recall_for_context
+
+        try:
+            result = await _recall_for_context(ctx, user_msg, max_results=3)
+            state.recall_count += 1
+            state.last_recall_user_turn = user_turn_count
+            # _recall_for_context always returns a str via tool_output(); cast narrows ToolReturnContent
+            if (result.metadata or {}).get("count", 0) > 0:
+                memory_content = cast("str", result.return_value)
+                max_chars = ctx.deps.config.memory.injection_max_chars
+                if len(memory_content) > max_chars:
+                    memory_content = memory_content[:max_chars]
+                injection_parts.append(
+                    SystemPromptPart(content=f"Relevant memories:\n{memory_content}")
+                )
+        except Exception:
+            log.debug("append_recalled_memories: _recall_for_context failed", exc_info=True)
+
+    if not injection_parts:
         return messages
 
-    if user_turn_count <= state.last_recall_user_turn:
-        return messages
-
-    # Recall memories for the current topic
-    from co_cli.tools.knowledge import _recall_for_context
-
-    try:
-        result = await _recall_for_context(ctx, user_msg, max_results=3)
-        state.recall_count += 1
-        state.last_recall_user_turn = user_turn_count
-    except Exception:
-        log.debug("inject_opening_context: _recall_for_context failed", exc_info=True)
-        return messages
-
-    if (result.metadata or {}).get("count", 0) == 0:
-        return messages
-
-    # Inject as a system message at the end of the message list
-    # _recall_for_context always returns a str via tool_output(); cast narrows ToolReturnContent
-    memory_content = cast("str", result.return_value)
-    max_chars = ctx.deps.config.memory.injection_max_chars
-    if len(memory_content) > max_chars:
-        memory_content = memory_content[:max_chars]
-    injection = ModelRequest(
-        parts=[
-            SystemPromptPart(
-                content=f"Relevant memories:\n{memory_content}",
-            ),
-        ]
-    )
-    return [*messages, injection]
+    return [*messages, ModelRequest(parts=injection_parts)]
 
 
 # ---------------------------------------------------------------------------

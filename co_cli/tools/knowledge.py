@@ -131,7 +131,7 @@ async def _recall_for_context(
     created_after: str | None = None,
     created_before: str | None = None,
 ) -> ToolReturn:
-    """Used by inject_opening_context to surface relevant artifacts before each model request.
+    """Used by append_recalled_memories to surface relevant artifacts before each model request.
 
     Uses FTS5/BM25 DB search via knowledge_store. Returns empty when knowledge_store
     is None (degraded mode — no crash).

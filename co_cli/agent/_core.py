@@ -13,9 +13,9 @@ from pydantic_ai.toolsets.combined import CombinedToolset
 
 from co_cli.config._core import Settings
 from co_cli.context._history import (
+    append_recalled_memories,
     compact_assistant_responses,
     detect_safety_issues,
-    inject_opening_context,
     summarize_history_window,
     truncate_tool_results,
 )
@@ -124,7 +124,6 @@ def build_agent(
         from co_cli.agent._instructions import (
             add_category_awareness_prompt,
             add_current_date,
-            add_personality_memories,
             add_shell_guidance,
         )
         from co_cli.prompts._assembly import build_static_instructions
@@ -144,7 +143,7 @@ def build_agent(
                 truncate_tool_results,
                 compact_assistant_responses,
                 detect_safety_issues,
-                inject_opening_context,
+                append_recalled_memories,
                 summarize_history_window,
             ],
             toolsets=[tool_registry.toolset],
@@ -154,7 +153,6 @@ def build_agent(
         # Conditional prompt layers — runtime-gated (fresh per turn, never accumulated)
         agent.instructions(add_current_date)
         agent.instructions(add_shell_guidance)
-        agent.instructions(add_personality_memories)
         agent.instructions(add_category_awareness_prompt)
 
         return agent

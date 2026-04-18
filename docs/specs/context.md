@@ -94,10 +94,17 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 | --- | --- | --- |
 | `add_current_date` | always | `Today is YYYY-MM-DD.` |
 | `add_shell_guidance` | always | shell approval/reminder text |
-| `add_personality_memories` | `config.personality` is set | top 5 `personality-context` memories as `## Learned Context` |
 | `add_category_awareness_prompt` | deferred tools registered in tool_index | category-level prompt listing available capabilities via `search_tools` (~100 tokens) |
 
 These layers are not persisted into `message_history`.
+
+**Append-only invariant for dynamic content.**
+
+Any content that can vary within a single session MUST be appended to the tail of the message list via a history processor that returns `[*messages, injection]`. It MUST NOT be placed in `@agent.instructions` unless it is provably static within a session (example: `add_current_date` — changes once per day but not within a session in any practical case).
+
+Rationale: `@agent.instructions` output is concatenated into the static system-prompt block pydantic-ai sends to the provider. Providers cache the system-prompt block as the prefix of every request. Any per-request variance in that block invalidates the cache for the entire prefix, including fixed tool schemas and soul assets.
+
+New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. `add_personality_memories` was moved from `@agent.instructions` to `append_recalled_memories` for this reason — personality-context memories can change mid-session, which would otherwise invalidate the cache on every write.
 
 **Approval resume** — the SDK skips `ModelRequestNode` entirely on the `deferred_tool_results` path, so resume segments run on the main agent with zero additional tokens. No separate agent is needed.
 
@@ -110,12 +117,12 @@ Five history processors run in this exact order:
 | `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
 | `compact_assistant_responses` | caps older `TextPart`/`ThinkingPart` to 2,500 chars with 20/80 head/tail retention; uses `_find_last_turn_start()` boundary, not turn grouping |
 | `detect_safety_issues` | detects identical-tool-call streaks and shell-error streaks; injects system warning at threshold |
-| `inject_opening_context` | once per new user turn, recalls top-3 knowledge artifacts matching user message as trailing `SystemPromptPart` |
+| `append_recalled_memories` | on every request: appends `personality-context` memories as trailing `SystemPromptPart`; once per new user turn: also appends top-3 recalled knowledge artifacts |
 | `summarize_history_window` | when history exceeds compaction threshold, keeps head + summary marker + tail; summarizer uses structured template (Goal, Key Decisions, Working Set, Progress, Next Steps) |
 
 **Compaction** is budget-driven and runs via `plan_compaction_boundaries()`, a shared planner used by both proactive compaction and overflow recovery. Budget comes from `resolve_compaction_budget()` (model context window, `llm.num_ctx` override, or 100K fallback). Triggers when `token_count > int(budget * PROACTIVE_COMPACTION_RATIO)` where `token_count = max(estimate, reported)` — the max-floor prevents a stale or missing provider report from suppressing the trigger. The planner walks groups from the end, targeting `TAIL_FRACTION * budget` tokens for the preserved tail; `min_groups_tail=1` guarantees the last turn group is always kept. `_gather_compaction_context()` enriches the summarizer with file paths from `ToolCallPart.args` in the dropped range, pending todos, and prior summary text (capped at 4K chars). See [compaction.md](compaction.md) for the full three-mechanism design, summarizer prompt, and circuit-breaker semantics.
 
-LLM summarization falls back to a static marker when the model registry is absent, the failure count ≥ 3 (circuit breaker), or the summarizer call fails.
+LLM summarization falls back to a static marker when the model registry is absent, the circuit breaker is tripped (failure count ≥ 3 and not a probe turn), or the summarizer call fails. The circuit breaker probes the LLM once every 10 skips — a successful probe resets the counter.
 
 **Overflow recovery** — `_is_context_overflow()` detects context-length errors by requiring both status 400/413 AND a body pattern match (coerces `e.body` via `str()` for OpenAI dict / Ollama str). On match, `run_turn()` first materializes the in-flight user prompt into history, then calls `recover_overflow_history()` which uses the same `plan_compaction_boundaries` as proactive compaction (same `TAIL_FRACTION`). Summarizes the middle when the summarizer is available, else falls back to the static trim marker. At most once per foreground turn; never falls through to the 400 reformulation handler.
 
@@ -176,7 +183,7 @@ Frontmatter fields: `id` (UUID), `kind: knowledge`, `artifact_kind`, `title`, `d
 All knowledge artifacts are indexed under a single `source="knowledge"` label across both `docs` and `chunks_fts` (plus `chunks_vec` in hybrid mode). `_recall_for_context` queries that source when a store is available and falls back to empty output when the store is `None`.
 
 ```text
-_recall_for_context(ctx, query)  ← internal, called by inject_opening_context only
+_recall_for_context(ctx, query)  ← internal, called by append_recalled_memories only
   -> if knowledge_store is None: return empty result
   -> knowledge_store.search(query, source="knowledge", ...)
   -> one-hop related slug expansion (up to 5 hops)
@@ -258,7 +265,7 @@ Bootstrap syncs the knowledge dir; Obsidian syncs lazily inside `search_knowledg
 
 | Entry point | Scope | Purpose |
 | --- | --- | --- |
-| `_recall_for_context()` | knowledge artifacts | Turn-time injection into `SystemPromptPart`; internal, called by `inject_opening_context` |
+| `_recall_for_context()` | knowledge artifacts | Turn-time injection into `SystemPromptPart`; internal, called by `append_recalled_memories` |
 | `search_knowledge()` | all artifact kinds + Obsidian + Drive | Universal reusable-recall; primary agent search tool |
 | `search_articles()` | article artifacts only | Transitional alias for `search_knowledge(artifact_kind="article")` |
 | `search_memory()` | transcript index | Episodic recall over past sessions |

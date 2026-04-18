@@ -29,7 +29,7 @@ def _load_personality_memories() -> str:
     ``personality-context``. Returns the top 5 (by recency) formatted as
     a ``## Learned Context`` section, or empty string if none found.
 
-    Called by ``add_personality_memories()`` in ``agent.py`` on every turn.
+    Called by ``append_recalled_memories()`` in ``context/_history.py`` on every request.
     Result is cached for the lifetime of the process; call
     ``invalidate_personality_cache()`` if a write tool adds or removes this tag.
     """

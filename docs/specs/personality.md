@@ -35,11 +35,12 @@ Personality enters the agent via two paths:
    construction. This is set once as `Agent(instructions=...)` and does not change
    within a session.
 
-2. **Per-turn** — `add_personality_memories()` is registered as an `@agent.instructions`
-   callback. It fires every turn, but `_load_personality_memories()` caches its result for the
-   process lifetime — the disk scan runs only once per session. The result injects the top-5
-   most recent memories tagged `personality-context` from `~/.co-cli/knowledge/`, letting
-   learned context about the user accumulate over sessions without modifying the soul files.
+2. **Per-turn** — `_load_personality_memories()` is called inside the `append_recalled_memories`
+   history processor on every request. The result injects the top-5 most recent memories tagged
+   `personality-context` from `~/.co-cli/knowledge/`, letting learned context about the user
+   accumulate over sessions without modifying the soul files. The disk scan result is cached for
+   the process lifetime; call `invalidate_personality_cache()` after any write that changes
+   `personality-context` tags.
 
 ```
 Session start
@@ -54,11 +55,11 @@ build_static_instructions(config)
     [6] review lens        — self-assessment frame
     → set as Agent.instructions (static, once per session)
 
-Each turn
+Each request
     ↓
-add_personality_memories()   — @agent.instructions callback
-    → loads top-5 "personality-context" memories from ~/.co-cli/knowledge/
-    → injected as ## Learned Context block
+append_recalled_memories()   — history processor (tail-appended SystemPromptPart)
+    → calls _load_personality_memories() → top-5 "personality-context" memories
+    → injected as ## Learned Context block at message tail
 ```
 
 ---
@@ -165,4 +166,4 @@ for missing mindset files.
 | `co_cli/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/_core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agent/_core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
-| `co_cli/agent/_instructions.py` | `add_personality_memories()` dynamic instruction callback |
+| `co_cli/context/_history.py` | `append_recalled_memories()` — tail-appended personality + knowledge recall processor |

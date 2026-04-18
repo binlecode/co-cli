@@ -17,7 +17,7 @@ Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
   Step 5 — P5 sub-component: prompt assembly (_build_summarizer_prompt)
            template sections, context+personality ordering
            [Outcome 1: structured template] [BC1: free-form fallback]
-  (P3 detect_safety_issues and P4 inject_opening_context are validated
+  (P3 detect_safety_issues and P4 append_recalled_memories are validated
    as passthrough within Steps 6/7 — no isolated step needed.)
 
   --- Full chain execution (real LLM calls) ---
@@ -73,12 +73,12 @@ from co_cli.context._history import (
     OLDER_MSG_MAX_CHARS,
     _gather_compaction_context,
     _truncate_proportional,
+    append_recalled_memories,
     compact_assistant_responses,
     detect_safety_issues,
     emergency_compact,
     find_first_run_end,
     group_by_turn,
-    inject_opening_context,
     plan_compaction_boundaries,
     summarize_history_window,
     truncate_tool_results,
@@ -1215,10 +1215,10 @@ async def step_6_full_chain() -> bool:
     print("    PASS")
 
     # --- P4 ---
-    print("\n  [P4] inject_opening_context")
+    print("\n  [P4] append_recalled_memories")
     recall_pre = ctx.deps.session.memory_recall_state.recall_count
     len_pre_p4 = len(msgs)
-    msgs = await inject_opening_context(ctx, msgs)
+    msgs = await append_recalled_memories(ctx, msgs)
     recall_post = ctx.deps.session.memory_recall_state.recall_count
     p4_injections = len(msgs) - len_pre_p4
     recall_fired = recall_post > recall_pre
@@ -1562,10 +1562,10 @@ async def step_7_multi_cycle() -> bool:
     print(f"    Injections: {len(msgs) - len_pre_p3}")
     print("    PASS")
 
-    print("\n  [P4] inject_opening_context")
+    print("\n  [P4] append_recalled_memories")
     recall_pre = ctx.deps.session.memory_recall_state.recall_count
     len_pre_p4 = len(msgs)
-    msgs = await inject_opening_context(ctx, msgs)
+    msgs = await append_recalled_memories(ctx, msgs)
     recall_post = ctx.deps.session.memory_recall_state.recall_count
     p4_injections = len(msgs) - len_pre_p4
     recall_fired = recall_post > recall_pre

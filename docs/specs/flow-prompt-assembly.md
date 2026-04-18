@@ -127,7 +127,7 @@ This step is deliberately separate from prompt text:
 
 - `instructions=static_instructions`
 - `model_settings=llm_model.settings`
-- `history_processors=[truncate_tool_results, compact_assistant_responses, detect_safety_issues, inject_opening_context, summarize_history_window]`
+- `history_processors=[truncate_tool_results, compact_assistant_responses, detect_safety_issues, append_recalled_memories, summarize_history_window]`
 - `toolsets=[filtered_combined_toolset]`
 
 The SDK later auto-adds its outer `ToolSearchToolset`, but co-cli's own build-time contributions are complete once `Agent(...)` returns.
@@ -246,18 +246,16 @@ For co-cli, the instruction stack seen by the SDK is:
 1. the static string from `build_static_instructions()`
 2. `add_current_date`
 3. `add_shell_guidance`
-4. `add_personality_memories`
-5. `add_category_awareness_prompt`
-6. any SDK/toolset-supplied dynamic instruction parts
+4. `add_category_awareness_prompt`
+5. any SDK/toolset-supplied dynamic instruction parts
 
 The dynamic layers contribute the following request-time text:
 
 - current date: `Today is YYYY-MM-DD.`
 - shell guidance: approval/reminder text for shell execution
-- personality memories: `## Learned Context` followed by the 5 most recent insight entries tagged `personality-context`
 - category awareness: one short sentence listing deferred capability categories inferred from the current `tool_index`
 
-These dynamic reads happen from disk or runtime state at request time, so they can change mid-session even though the static scaffold does not. The `personality-context` block is an adaptive overlay sourced from extracted insights; it does not replace the soul tree's static base memory layer from step 2.
+Personality memories (`## Learned Context` — the 5 most recent `personality-context` entries) are no longer in the instruction stack. They are appended at the message tail by `append_recalled_memories` (history processor #4) on every request. This avoids invalidating the provider's prompt-prefix cache when personality-context artifacts change mid-session.
 
 ### 2.7 History processors rewrite the request history immediately before send
 
@@ -266,7 +264,7 @@ Once the last `ModelRequest` has its joined instruction string, co-cli's history
 1. `truncate_tool_results`
 2. `compact_assistant_responses`
 3. `detect_safety_issues`
-4. `inject_opening_context`
+4. `append_recalled_memories`
 5. `summarize_history_window`
 
 Pseudocode:
@@ -286,12 +284,12 @@ What each processor contributes to prompt shape:
 - `truncate_tool_results`: clears old compactable tool outputs but preserves recent ones and the last user turn
 - `compact_assistant_responses`: shortens old assistant text/thinking parts without touching tool-call args
 - `detect_safety_issues`: injects warning text when repeated-tool or repeated-shell-failure patterns are detected
-- `inject_opening_context`: looks at the current user message, recalls up to 3 relevant memories, caps the block by `memory.injection_max_chars`, and appends `Relevant memories:` as a trailing `SystemPromptPart`
+- `append_recalled_memories`: looks at the current user message, recalls up to 3 relevant memories, caps the block by `memory.injection_max_chars`, and appends `Relevant memories:` as a trailing `SystemPromptPart`
 - `summarize_history_window`: when the request exceeds 85% of the resolved budget, replaces the dropped middle region with a summary marker or static marker, preserves `search_tools` discovery breadcrumbs, and marks the turn as having replaced history for persistence
 
 Two details make the current-turn query visible to recall and compaction:
 
-- the current `UserPromptPart` has already been appended before `inject_opening_context` runs
+- the current `UserPromptPart` has already been appended before `append_recalled_memories` runs
 - compaction sees the same in-flight history, including the current request and the processor-injected memory block
 
 When inline summarization triggers, it launches a separate no-tools summarizer call with:

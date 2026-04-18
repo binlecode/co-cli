@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Eval: memory recall injection — verify inject_opening_context fires per turn via FTS5 DB.
+"""Eval: memory recall injection — verify append_recalled_memories fires per turn via FTS5 DB.
 
 Pre-seeds memory files on disk, syncs them into a real KnowledgeStore, runs run_turn(),
-and checks for SystemPromptPart injection from inject_opening_context. Recall is NOT
+and checks for SystemPromptPart injection from append_recalled_memories. Recall is NOT
 visible as a ToolCallPart — the eval scans for SystemPromptPart containing
 "Relevant memories:".
 
 Target flow:
     seed_memory (disk) → KnowledgeStore.sync_dir (DB index)
-    → run_turn → inject_opening_context → _recall_for_context (FTS5 DB search)
+    → run_turn → append_recalled_memories → _recall_for_context (FTS5 DB search)
     → SystemPromptPart("Relevant memories: ...")
 
 Also tests the degraded path: when knowledge_store=None, no injection occurs and no

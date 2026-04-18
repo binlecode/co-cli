@@ -69,7 +69,7 @@ flowchart TD
         R1[truncate_tool_results<br/>M2a]
         R2[compact_assistant_responses<br/>M2b]
         R3[detect_safety_issues]
-        R4[inject_opening_context]
+        R4[append_recalled_memories]
         R5[summarize_history_window<br/>M3]
         R1 --> R2 --> R3 --> R4 --> R5
     end
@@ -400,8 +400,12 @@ kept_ids = {id(m) for m in head} | {id(m) for m in tail}
 
 enrichment = _gather_compaction_context(ctx, dropped)
 
-# Circuit breaker: bypass LLM if 3+ consecutive failures. First success resets.
-if ctx.deps.model is None or ctx.deps.runtime.compaction_failure_count >= 3:
+# Circuit breaker: skip or probe based on failure count.
+# count < 3: always attempt. count >= 3: skip unless probe turn (every 10 skips).
+count = ctx.deps.runtime.compaction_failure_count
+is_probe = count >= 3 and (count - 3) > 0 and (count - 3) % _CIRCUIT_BREAKER_PROBE_EVERY == 0
+if ctx.deps.model is None or (count >= 3 and not is_probe):
+    ctx.deps.runtime.compaction_failure_count += 1  # keep counting for probe cadence
     marker = _static_marker(dropped_count)
 else:
     try:
@@ -445,10 +449,10 @@ Prior-summary detection uses `startswith(_SUMMARY_MARKER_PREFIX)` with a shared 
 |---|---|
 | `compaction_failure_count == 0` (healthy) | Attempt summarizer; on success keep at 0; on failure fall back to static marker, increment to 1. |
 | `compaction_failure_count == 1 or 2` | Attempt summarizer; on success reset to 0; on failure fall back to static, increment. |
-| `compaction_failure_count >= 3` | Bypass summarizer entirely — static marker without LLM call. |
+| `compaction_failure_count >= 3` (tripped) | Skip summarizer; static marker; increment counter. Every `_CIRCUIT_BREAKER_PROBE_EVERY` (10) skips, attempt the LLM once — a probe. Probe success resets to 0; probe failure increments, next probe 10 skips later. |
 | Any success at any state | Reset counter to 0. |
 
-Rationale: a single transient provider hiccup shouldn't degrade every future compaction in the session to static markers, but persistent failures shouldn't burn LLM cost repeatedly. Three-strikes gives the summarizer enough retries to recover from transients while capping cost when the provider is genuinely broken.
+Rationale: three-strikes trips the breaker to avoid burning LLM cost when the provider is genuinely broken. The periodic probe recovers sessions that tripped the breaker early on a transient hiccup — without the probe, the session would remain on static markers for its lifetime.
 
 `ctx.deps.model is None` (sub-agent context without a configured model) is also a bypass condition — no LLM call attempted.
 
@@ -535,13 +539,15 @@ One successful compaction per pressure event per turn.
 | Failure mode | Fallback |
 |---|---|
 | Summarizer raises (transient) | Static marker for this request; warning logged; `compaction_failure_count += 1` |
-| Summarizer raises 3+ consecutive times | Circuit breaker trips; static markers bypass the LLM entirely until next success resets the counter |
+| Summarizer raises 3+ consecutive times | Circuit breaker trips; static markers used for most attempts; LLM probed once every 10 skips — probe success resets counter |
 | `ctx.deps.model is None` (sub-agent context) | Static marker without LLM attempt |
 | `plan_compaction_boundaries` returns `None` (proactive) | Return messages unchanged; next request re-checks |
 | `plan_compaction_boundaries` returns `None` (overflow) | `recover_overflow_history` returns `None` → terminal error |
 | Second overflow in same turn | Terminal error (gated by `overflow_recovery_attempted`) |
 | Processor re-fire after overflow recovery | Safe — planner returns `None` on overlap |
 | First-turn overflow (`len(groups) ≤ 1`) | Terminal — structural limit, not a bug |
+
+**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `_is_context_overflow` detects and `run_turn` routes to `recover_overflow_history`. The overflow planner runs with the same `TAIL_FRACTION` and `min_groups_tail=1`; if it also returns `None`, the turn is terminal with "Context overflow — unrecoverable." This is intentional: proactive and overflow share one planner — if the planner cannot help, letting the provider reject the request is the correct escalation. Do not add a retry loop at the proactive layer.
 
 ### 2.10 Security
 
@@ -564,6 +570,7 @@ One successful compaction per pressure event per turn.
 | `PROACTIVE_COMPACTION_RATIO` | `0.85` | Fraction of budget above which M3 fires |
 | `TAIL_FRACTION` | `0.40` | Fraction of budget for the preserved tail |
 | `COMPACTABLE_KEEP_RECENT` | `5` | M2: most-recent returns per tool to keep |
+| `_CIRCUIT_BREAKER_PROBE_EVERY` | `10` | Skips between probe attempts when circuit breaker is tripped |
 
 Per-tool `max_result_size` (M1) is a registration parameter in `co_cli/agent/_native_toolset.py`:
 

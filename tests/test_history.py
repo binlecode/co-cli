@@ -136,7 +136,7 @@ async def test_summarize_history_window_static_marker_when_no_model():
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_skips_llm_after_three_failures():
-    """compaction_failure_count >= 3 → static marker without LLM call."""
+    """compaction_failure_count == 4 (first non-probe skip) → static marker, count becomes 5."""
     msgs = _make_messages(10)
     deps = CoDeps(
         shell=ShellBackend(),
@@ -145,7 +145,8 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
         ),
         model=_LLM_MODEL,
     )
-    deps.runtime.compaction_failure_count = 3
+    # count=4: skips_since_trip=1, not a probe cadence point → skip
+    deps.runtime.compaction_failure_count = 4
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     result = await summarize_history_window(ctx, msgs)
     marker_texts = [
@@ -158,8 +159,56 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
     # Circuit breaker active → static marker, no LLM call
     assert any("This session is being continued" in t for t in marker_texts)
     assert len(result) < len(msgs)
-    # Failure count unchanged (no LLM attempt was made)
-    assert deps.runtime.compaction_failure_count == 3
+    # Skip increments count for probe cadence tracking
+    assert deps.runtime.compaction_failure_count == 5
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_first_trip_is_skip():
+    """compaction_failure_count == 3 (first trip) → skip (no probe), count becomes 4."""
+    msgs = _make_messages(10)
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(
+            llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+        ),
+        model=_LLM_MODEL,
+    )
+    # count=3: skips_since_trip=0 → skip (first probe not due until count==13)
+    deps.runtime.compaction_failure_count = 3
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    result = await summarize_history_window(ctx, msgs)
+    marker_texts = [
+        p.content
+        for m in result
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if hasattr(p, "content") and isinstance(p.content, str)
+    ]
+    assert any("This session is being continued" in t for t in marker_texts)
+    assert len(result) < len(msgs)
+    # count=3 is skipped; counter advances for cadence tracking
+    assert deps.runtime.compaction_failure_count == 4
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_probes_at_cadence():
+    """compaction_failure_count == 13 (3 + 10*1) → probe: LLM is attempted, count changes."""
+    msgs = _make_messages(10)
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(
+            llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+        ),
+        model=_LLM_MODEL,
+    )
+    # count=13: skips_since_trip=10 → probe cadence → LLM attempted
+    deps.runtime.compaction_failure_count = 13
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    await summarize_history_window(ctx, msgs)
+    # After a probe: success resets to 0, failure increments to 14.
+    # Count must be 0 or 14 — 13 would mean the skip branch ran (bug).
+    assert deps.runtime.compaction_failure_count in (0, 14)
 
 
 # ---------------------------------------------------------------------------

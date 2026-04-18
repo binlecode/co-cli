@@ -25,15 +25,6 @@ def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
     )
 
 
-def add_personality_memories(ctx: RunContext[CoDeps]) -> str:
-    """Inject personality-context memories for relationship continuity."""
-    if not ctx.deps.config.personality:
-        return ""
-    from co_cli.prompts.personalities._injector import _load_personality_memories
-
-    return _load_personality_memories()
-
-
 def add_category_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
     """Inject category-level awareness so the model discovers deferred tools via search_tools."""
     from co_cli.context._deferred_tool_prompt import build_category_awareness_prompt

@@ -121,7 +121,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `safety_state` | owned by history processors, not by the orchestrator |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
-| `compaction_failure_count` | cross-turn circuit breaker for inline compaction (>= 3 consecutive failures skips LLM) |
+| `compaction_failure_count` | cross-turn circuit breaker for inline compaction (>= 3 trips breaker; every 10 skips a probe is attempted) |
 | `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
 
 ### 2.2 Stream Segment Contract
@@ -232,7 +232,7 @@ The main agent is built with five history processors in this exact order:
 1. `truncate_tool_results`
 2. `compact_assistant_responses`
 3. `detect_safety_issues`
-4. `inject_opening_context`
+4. `append_recalled_memories`
 5. `summarize_history_window`
 
 Processor roles:
@@ -242,14 +242,14 @@ Processor roles:
 | `truncate_tool_results` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn (from last `UserPromptPart` onward) |
 | `compact_assistant_responses` | caps large `TextPart`/`ThinkingPart` in older `ModelResponse` messages at 2.5K chars with proportional head/tail truncation; protects the last turn (from last `UserPromptPart` onward); does not touch `ToolCallPart` args |
 | `detect_safety_issues` | injects guardrails for doom loops and repeated shell failures |
-| `inject_opening_context` | recalls memories and injects them as a trailing `SystemPromptPart` |
+| `append_recalled_memories` | appends recalled memories as a trailing `SystemPromptPart` |
 | `summarize_history_window` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 
 Ordering rationale:
 
 - **#1–2 before #5**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate. This keeps the working path simple while preserving a useful handoff summary.
 - **#3 before #5**: `detect_safety_issues` scans recent tool calls for doom loops and shell error streaks. Running it before summarization ensures it scans the full un-compacted history — if summarization drops the middle first, streak evidence in the dropped slice would be missed.
-- **#4 before #5**: `inject_opening_context` appends recalled memories at the tail, outside the summarizer's dropped slice. Placed before summarization to keep the costliest processor (LLM call) last.
+- **#4 before #5**: `append_recalled_memories` appends recalled memories at the tail, outside the summarizer's dropped slice. Placed before summarization to keep the costliest processor (LLM call) last.
 - **All sync processors (#1–3) before async (#4–5)**: sync processors run inline with zero overhead. Async processors are awaited directly on the event loop.
 
 Compaction behavior:
@@ -259,16 +259,16 @@ Compaction behavior:
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
-- a circuit breaker (`deps.runtime.compaction_failure_count`) skips the LLM call after 3 consecutive failures; on success the counter resets to 0
+- a circuit breaker (`deps.runtime.compaction_failure_count`) trips at 3 consecutive failures; tripped state uses static markers but probes the LLM once every `_CIRCUIT_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
 - successful history replacement sets `deps.runtime.history_compaction_applied`, which later tells `_finalize_turn()` to persist into a child transcript instead of appending into the parent transcript
 
 Memory recall is also per-turn, not sticky:
 
-- `inject_opening_context()` stores counters in `deps.session.memory_recall_state`
+- `append_recalled_memories()` stores counters in `deps.session.memory_recall_state`
 - it recalls only once per new user turn
 - failure to recall silently leaves history unchanged
-- the recall logic itself lives in `tools/knowledge.py::_recall_for_context()` (internal — called by `inject_opening_context`, not registered as an agent tool)
+- the recall logic itself lives in `tools/knowledge.py::_recall_for_context()` (internal — called by `append_recalled_memories`, not registered as an agent tool)
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 

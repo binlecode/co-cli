@@ -324,12 +324,12 @@ async def run_cadence_gate() -> dict[str, Any]:
 
 
 async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
-    """Full memory loop: turn 1 → extraction → DB index → inject_opening_context.
+    """Full memory loop: turn 1 → extraction → DB index → append_recalled_memories.
 
     Turn 1 (real LLM): user states a preference. fire_and_forget_extraction runs.
     After drain: extracted memory file is written and indexed in KnowledgeStore.
     Inject probe (no LLM): read actual extracted body, build a ModelRequest using
-    that content as the user message, call inject_opening_context directly, and
+    that content as the user message, call append_recalled_memories directly, and
     assert SystemPromptPart("Relevant memories: ...") is returned.
 
     Using the extracted body as the query guarantees a BM25 match regardless of
@@ -339,7 +339,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
     from pydantic_ai import RunContext as _RunContext
     from pydantic_ai.usage import RunUsage
 
-    from co_cli.context._history import inject_opening_context
+    from co_cli.context._history import append_recalled_memories
     from co_cli.knowledge._frontmatter import parse_frontmatter
 
     steps: list[dict[str, Any]] = []
@@ -528,7 +528,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
             }
         )
 
-        # Probe inject_opening_context directly — no second LLM call.
+        # Probe append_recalled_memories directly — no second LLM call.
         # Use the first word that hit the DB as the user message — a clean single-word
         # query that _recall_for_context BM25 is guaranteed to rank > 0.
         # Fresh deps: run_turn already set state.last_recall_user_turn = 1 on `deps`;
@@ -544,10 +544,10 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
         )
         ctx = _RunContext(deps=probe_deps, model=agent.model, usage=RunUsage())
         t = time.monotonic()
-        injected = await inject_opening_context(ctx, probe_messages)
+        injected = await append_recalled_memories(ctx, probe_messages)
         steps.append(
             {
-                "name": "inject_opening_context (direct probe)",
+                "name": "append_recalled_memories (direct probe)",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"returned {len(injected)} messages",
             }
@@ -577,7 +577,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
         elif injection is None:
             verdict, failure = (
                 "FAIL",
-                "inject_opening_context returned no SystemPromptPart — recall path broken",
+                "append_recalled_memories returned no SystemPromptPart — recall path broken",
             )
         else:
             verdict, failure = "PASS", None

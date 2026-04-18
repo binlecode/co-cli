@@ -47,7 +47,7 @@ flowchart TD
     end
 
     subgraph Retrieval["Retrieval Paths"]
-        TurnRecall["turn-time recall\n(inject_opening_context, top-N per turn)"]
+        TurnRecall["turn-time recall\n(append_recalled_memories, top-N per turn)"]
         ExplicitSearch["search_knowledge()\n(on-demand, all artifact kinds)"]
     end
 
@@ -119,7 +119,7 @@ Artifacts are split into overlapping chunks at index time (chunk size: 600 estim
 
 All reusable recall routes through the Knowledge layer via three paths:
 
-**Turn-time recall** — on each new user turn, `inject_opening_context` calls `_recall_for_context()` which queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are injected as a trailing `SystemPromptPart`. Both extracted facts and articles are eligible — any reusable, relevant artifact surfaces here.
+**Turn-time recall** — on each new user turn, `append_recalled_memories` calls `_recall_for_context()` which queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are appended as a trailing `SystemPromptPart`. Both extracted facts and articles are eligible — any reusable, relevant artifact surfaces here.
 
 **Explicit search** — the agent calls `search_knowledge()` for on-demand retrieval. This is the universal reusable-recall surface: covers all artifact kinds plus Obsidian notes and Drive documents. Default `source=None` searches the unified knowledge layer.
 
@@ -248,7 +248,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Safety bounds a
 | `co_cli/knowledge/_distiller.py` | Fire-and-forget extraction pipeline, `build_transcript_window()`, `_tag_messages()` (shared with dream miner), cursor tracking |
 | `co_cli/knowledge/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
-| `co_cli/context/_history.py` | `inject_opening_context` — per-turn knowledge recall into `SystemPromptPart` |
+| `co_cli/context/_history.py` | `append_recalled_memories` — per-turn knowledge recall into `SystemPromptPart` |
 ### Config
 
 | File | Purpose |
