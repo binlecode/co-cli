@@ -46,18 +46,33 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Python 3.12+** with type hints everywhere.
 - **Imports**: always explicit; never `from X import *`.
 - **Comments**: no trailing comments; put comments on the line above, not at end of code lines.
-- **`__init__.py`**: must be docstring-only (one-line module docstring or empty); never add imports, re-exports, or code. When converting a module to a package, all content goes into `_core.py` or named private submodules — never into `__init__.py`.
+- **`__init__.py`**: must be docstring-only (one-line module docstring or empty); never add imports, re-exports, or code. When converting a module to a package, all content goes into `_core.py` or named private submodules — never into `__init__.py`. Violating this causes circular imports and breaks the `_prefix.py` visibility contract.
 - **`_prefix.py` helpers**: leading-underscore modules are package-private. If imported outside the package, drop the underscore.
-- **Class naming**: names must reveal the class's role. Prefer established suffix conventions where they fit: `*State` (mutable lifecycle data), `*Result` (immutable pass/fail outcome), `*Output` (agent/pipeline payload), `*Settings` (persisted configuration — top-level `Settings` and any sub-model nested within it; maps to or loaded from `settings.json`), `*Config` (runtime configuration — in-memory descriptors constructed at runtime, not persisted; e.g. `SkillConfig` loaded from `.md` files); confirm with the user before introducing a new `*Config` name, `*Info` (read-only descriptor), `*Registry` (registration lookup table), `*Store` (persistent storage layer), `*Context` (input bag for a call), `*Event` (async/streaming event), `*Error` (exception class), `*Enum` (enumeration). Self-evident named concepts (e.g. `ShellBackend`, `AgentLoop`) do not need a suffix.
+- **Class naming**: names must reveal the class's role. Prefer the suffix conventions below where they fit. Self-evident named concepts (e.g. `ShellBackend`, `AgentLoop`) do not need a suffix.
+
+  | Suffix | Meaning |
+  |--------|---------|
+  | `*State` | Mutable lifecycle data |
+  | `*Result` | Immutable pass/fail outcome |
+  | `*Output` | Agent/pipeline payload |
+  | `*Settings` | Persisted configuration — top-level `Settings` and any nested submodel; maps to `settings.json` |
+  | `*Config` | Runtime configuration — in-memory, not persisted (e.g. `SkillConfig` loaded from `.md`); **confirm with the user before introducing a new `*Config` name** |
+  | `*Info` | Read-only descriptor |
+  | `*Registry` | Registration lookup table |
+  | `*Store` | Persistent storage layer |
+  | `*Context` | Input bag for a call |
+  | `*Event` | Async/streaming event |
+  | `*Error` | Exception class |
+  | `*Enum` | Enumeration |
 - **Variable and function naming**: use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
 - **Display**: use the project's shared `console` object for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Quality gates**: `scripts/quality-gate.sh` is the single source of truth for all automated checks. `lint` = ruff (pre-commit enforced), `full` = lint + pytest. Tool configs live in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
 
 ### Agents, Tools, and Config
 
-- **Tool pattern**: tools use `agent.tool()` with `RunContext[CoDeps]`, following pydantic-ai conventions (deferred approval, history processors). All runtime resources come from `ctx.deps` — never import settings directly, never hold module-level state, and never put approval prompts inside tools.
+- **Tool pattern**: tools use `agent.tool()` with `RunContext[CoDeps]`, following pydantic-ai conventions (deferred approval, history processors). All runtime resources come from `ctx.deps` — never import settings directly. Never hold module-level state in tool files: tool modules are imported once and shared across all runs in the same process, so mutable globals cause test interference and session bleed. Never put approval prompts inside tools — that bypasses the deferred-approval mechanism and breaks approval-resume.
 - **Tool approval**: tools that mutate system state (filesystem writes, shell execution, external service writes, process spawning) use `requires_approval=True`. Read-only operations do not. Approval UX lives in the chat loop.
-- **Tool return type**: tools returning user-facing data must use the project's `tool_output()` helper for structured returns. Never return a raw `str`, bare `dict`, or `list[dict]`.
+- **Tool return type**: tools returning user-facing data must use the project's `tool_output()` helper for structured returns; use `tool_error()` for failures. Never return a raw `str`, bare `dict`, or `list[dict]` — raw returns silently omit tracing metadata and the structured fields the chat loop depends on.
 - **CoDeps**: flat dataclass — access service handles, config, and paths via `ctx.deps.*` (e.g. `ctx.deps.shell`, `ctx.deps.config.memory.max_count`).
 - **Sub-agent isolation**: use the subagent deps factory in `deps.py`. Do not manually field-copy.
 - **Config**: `Settings` uses nested Pydantic sub-models in `co_cli/config/` (one file per group). Add new fields to an existing group if it fits; only create a new nested group when it has meaningful cohesion. Config precedence: env vars > `.co-cli/settings.json` (project) > `~/.co-cli/settings.json` (user) > defaults.
@@ -111,15 +126,15 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 
 - **Only pytest files in `tests/`**: `test_*.py` or `*_test.py`, using `pytest` + `pytest-asyncio`. Non-test scripts go in `scripts/`, evaluations in `evals/`.
 - **Real dependencies only — no fakes**: never use `monkeypatch`, `unittest.mock`, `pytest-mock`, or hand-assembled domain objects that bypass production code paths. Use real `CoDeps` with real services, real SQLite, real filesystem, real FTS5. If a behavior cannot be tested without fakes, the production API is wrong — fix the API. `conftest.py` must be limited to neutral pytest plumbing (e.g. session-scoped markers, asyncio mode) — never shadow config or inject substitutes.
+- **Behavior over structure**: tests must drive a production code path and assert on observable outcomes — return values, persisted state, emitted events, raised errors, side effects. Do not assert on facts Python or the import system already enforce: file/directory layout, module importability, class or attribute presence, registration tables, type annotations, or docstrings. If a test would still pass after gutting the function body to `pass` (or `return None`), it is structural — rewrite it to exercise behavior or delete it. The test name should describe *what the code does*, not *how it is arranged*.
 - **IO-bound timeouts**: wrap each individual `await` to external services (LLMs, network, subprocess) with `asyncio.timeout(N)` — including warmup and preflight awaits. Never wrap multiple sequential awaits in one block. Import constants from the test timeouts module — never hardcode inline. Never increase a timeout to make a test pass — a timeout violation means wrong role, wrong agent context, or wrong model config. Diagnose the root cause, fix the test or config.
 - **Suite hygiene**: every test must target a real failure mode — ask "if deleted, would a regression go undetected?" Tests must pass or fail (no skips except credential-gated external integrations via `pytest.mark.skipif`). Remove or update stale tests when changing public APIs — do not skip them. Any policy violation blocks the full run. `pyproject.toml` enforces `-x --durations=0`. Known anti-patterns that pass the deletion question but add no coverage:
   - *Fixture not wired*: `tmp_path` (or any injected fixture) in the signature but never passed to a production function — assertion trivially passes.
   - *Duplicate with trivial delta*: two tests dispatch the same function/command and assert the same invariant; the extra test adds only a trivially-true assertion (e.g. `result.flag is False` where False is the default).
-  - *Structural pre-empted by imports*: testing that a package directory exists when any `from co_cli.x import ...` failure surfaces first.
   - *Truthy-only assertion*: `assert result.version` instead of `assert re.fullmatch(r"\d+\.\d+\.\d+", result.version)` — passes even if the value is wrong.
   - *Subsumed file*: an entire test file whose every test is a strict subset of tests in another file covering the same module.
 - **Test data isolation**: use `tmp_path` for all filesystem writes. For shared stores, use `test-` prefix identifiers and delete in `try/finally` — cleanup failure must fail the test.
-- **Scope pytest during implementation**: run only affected test files during dev (`uv run pytest tests/test_foo.py`). Full suite before shipping only. Never dismiss a failure as flaky — stop, diagnose, then fix.
+- **Scope pytest during implementation**: run only affected test files during dev (`uv run pytest tests/test_foo.py`). Run the full suite only before shipping. Never dismiss a failure as flaky — stop, diagnose, then fix.
 - **Production config only — no overrides**: do not pass `model=` or `model_settings=` to `agent.run()` — use the production orchestration path or invoke the agent with no override. Do not strip personality in tests. Use non-thinking model settings for tool-calling, signal-detection, and orchestration tests. Cache module-level agents rather than rebuilding per call.
 - **Never copy inline logic into tests**: do not replicate display formatting or string construction in assertions.
 - **Google credentials**: never configure or inject — they resolve automatically via settings, `~/.co-cli/google_token.json`, or ADC.
@@ -141,18 +156,6 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 **DO NOT hardcode `~/.co-cli` or `Path.home() / ".co-cli"` in source code.**
 Use `USER_DIR` and derived constants (`SETTINGS_FILE`, `SEARCH_DB`, etc.) from `co_cli/config/_core.py`. Tests override `CO_CLI_HOME` to a temp dir — hardcoded paths bypass this and bleed state across test runs.
 
-**DO NOT put approval prompts or approval logic inside tool functions.**
-Use `requires_approval=True` at `_register_tool()` and let the chat loop handle the UX. Tools that implement their own approval checks bypass the deferred approval mechanism and break approval-resume flow.
-
-**DO NOT return a raw `str`, `dict`, or `list` from a tool.**
-Always use `tool_output()` for results and `tool_error()` for failures. Raw returns silently omit tracing metadata and structured fields the chat loop depends on.
-
-**DO NOT hold mutable module-level state in tool files.**
-Tool modules are imported once and shared across all agent runs in the same process. Mutable globals cause test interference and session bleed. All mutable state must live in `ctx.deps.*`.
-
-**DO NOT put imports, re-exports, or executable code in `__init__.py`.**
-Package `__init__.py` files must be docstring-only. When a module becomes a package, all content goes into `_core.py` or named private submodules. Violating this causes circular imports and breaks the `_prefix.py` visibility contract.
-
 ## Workflow
 
 ### Working with Claude Code
@@ -161,7 +164,6 @@ Package `__init__.py` files must be docstring-only. When a module becomes a pack
 - When asked to analyze or review, confirm the approach before searching, fetching, or writing.
 - When asked to append to an existing doc, never create a new file instead.
 - Never add unsolicited notes, reminders, or meta-commentary to outputs unless explicitly asked.
-- **Temporary Files**: Any temporary or scratch Python scripts created during your work must be placed in a `tmp/` folder at the repository root. Do not create `.py` script files directly in the repository root.
 - **Subagents**: declare tool permissions upfront (Read, Edit, Bash, Grep). Each subagent cleans up dead code before returning. After all finish, do an integration review for stale imports and orphaned references.
 
 ### Dev Workflow
@@ -251,7 +253,3 @@ Peer repos in `~/workspace_genai/` are used for design research. See `docs/refer
 | `gemini-cli` | Agent CLI, config patterns, tool design |
 | `opencode` | Agent CLI, tool patterns, config |
 | `opensouls` | CognitiveStep + MentalProcess chaining (TypeScript, near-stale) |
-
-### Research Rules
-
-- **Correct repo targeting**: when comparing peer repos, always use `fork-claude-code` (at `~/workspace_genai/fork-claude-code`), not the public `claude-code`. Confirm the exact path before reading anything. Do not proceed with analysis until repo paths are verified.
