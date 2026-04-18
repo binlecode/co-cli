@@ -194,6 +194,7 @@ These settings most directly affect top-level system assembly.
 | `docs/specs/memory.md` | Memory layer: session transcripts, session index, episodic recall |
 | `docs/specs/knowledge.md` | Knowledge layer: artifact schema, storage, retrieval, extraction, lifecycle |
 | `docs/specs/context.md` | Prompt context assembly, history governance, session persistence |
+| `docs/specs/compaction.md` | Three-mechanism compaction system, summarizer, circuit breaker, and overflow recovery |
 | `docs/specs/tools.md` | Tool surface, approval classes, and visibility |
 | `docs/specs/skills.md` | Skill loading and slash-command delegation |
 | `docs/specs/llm-models.md` | Provider and model selection rules |

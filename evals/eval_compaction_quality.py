@@ -12,7 +12,7 @@ Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
   Step 3 — P2 compact_assistant_responses: OLDER_MSG_MAX_CHARS=2500, proportional truncation
            [BC6: preserves tool results and user input] [BC7: in-place mutation]
   Step 4 — P5 sub-component: context enrichment (_gather_compaction_context)
-           4 sources, 4K cap, enrichment only on LLM path
+           3 sources (file paths, todos, prior summaries), 4K cap, enrichment only on LLM path
            [BC2: capped, never blocks] [BC3: from ToolCallPart.args not ToolReturnPart]
   Step 5 — P5 sub-component: prompt assembly (_build_summarizer_prompt)
            template sections, context+personality ordering
@@ -68,6 +68,7 @@ from co_cli.config._llm import NOREASON_SETTINGS, LlmSettings
 from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
     _CONTEXT_MAX_CHARS,
+    _SUMMARY_MARKER_PREFIX,
     COMPACTABLE_KEEP_RECENT,
     FILE_TOOLS,
     OLDER_MSG_MAX_CHARS,
@@ -387,12 +388,14 @@ def step_2_p1_truncate() -> bool:
 
     # 2a: COMPACTABLE_TOOLS constant matches spec
     expected_compactable = {
+        "glob",
+        "grep",
+        "read_article",
         "read_file",
+        "read_note",
         "run_shell_command",
-        "find_in_files",
-        "list_directory",
-        "web_search",
         "web_fetch",
+        "web_search",
     }
     from co_cli.context._history import COMPACTABLE_TOOLS
 
@@ -404,11 +407,11 @@ def step_2_p1_truncate() -> bool:
 
     # 2b: FILE_TOOLS constant matches spec
     expected_file_tools = {
+        "glob",
+        "grep",
+        "patch",
         "read_file",
         "write_file",
-        "edit_file",
-        "find_in_files",
-        "list_directory",
     }
     if expected_file_tools != FILE_TOOLS:
         print(f"  FAIL: FILE_TOOLS mismatch: {FILE_TOOLS}")
@@ -775,12 +778,13 @@ def step_4_context_enrichment() -> bool:
     passed = True
 
     # 4a: Source 1 — file paths from ToolCallPart.args [BC3: NOT from ToolReturnPart]
+    # Uses FILE_TOOLS members (read_file, patch) — both have file_path args
     msgs: list[ModelMessage] = [
         _user("work"),
         _tool_call("read_file", {"file_path": "/app/models.py"}, "c1"),
         _tool_return("read_file", "class User: ...", "c1"),
-        _tool_call("edit_file", {"file_path": "/app/views.py"}, "c2"),
-        _tool_return("edit_file", "ok", "c2"),
+        _tool_call("patch", {"file_path": "/app/views.py"}, "c2"),
+        _tool_return("patch", "ok", "c2"),
         _assistant("done"),
     ]
     ctx = _make_ctx()
@@ -829,7 +833,10 @@ def step_4_context_enrichment() -> bool:
         print("  PASS: Source 2 — pending todos included, completed/cancelled filtered")
         print(f"    context: {_snippet(result, 160)}")
 
-    # 4d: Source 3 — always-on memories from real files
+    # 4d: Always-on memories not in compaction context (architectural decision)
+    # Memories are injected separately by P4 (append_recalled_memories), not by
+    # _gather_compaction_context. This test verifies that memory files do NOT
+    # appear in compaction context, confirming the separation of concerns.
     with tempfile.TemporaryDirectory() as tmpdir:
         mem_dir = Path(tmpdir)
         fm = {
@@ -847,16 +854,30 @@ def step_4_context_enrichment() -> bool:
         )
         ctx = _make_ctx(memory_dir=mem_dir)
         result = _gather_compaction_context(ctx, dropped=[])
-        if result is None or "concise responses" not in result:
-            print("  FAIL: always-on memory not loaded")
+        if result is not None and "concise responses" in result:
+            print(
+                "  FAIL: always-on memories should not appear in compaction context (handled by P4)"
+            )
             passed = False
         else:
-            print("  PASS: Source 3 — always-on memories from real files")
-            print(f"    context: {_snippet(result, 120)}")
+            print(
+                "  PASS: Source 3 (memories) not in compaction context — injected separately by P4"
+            )
 
-    # 4e: Source 4 — prior-summary from dropped messages
+    # 4e: Source 3 — prior-summary from dropped messages (new marker format)
     dropped_with_summary: list[ModelMessage] = [
-        _user("[Summary of 15 earlier messages]\n## Goal\nRefactor auth module"),
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=(
+                        "This session is being continued from a previous conversation "
+                        "that ran out of context. The summary below covers the earlier "
+                        "portion (15 messages).\n\n## Goal\nRefactor auth module\n\n"
+                        "Recent messages are preserved verbatim."
+                    )
+                )
+            ]
+        ),
         _assistant("continuing..."),
     ]
     ctx = _make_ctx()
@@ -865,7 +886,7 @@ def step_4_context_enrichment() -> bool:
         print("  FAIL: prior summary not extracted from dropped messages")
         passed = False
     else:
-        print("  PASS: Source 4 — prior summary from dropped messages")
+        print("  PASS: Source 3 — prior summary from dropped messages")
         print(f"    context: {_snippet(result, 160)}")
 
     # 4f: Returns None when empty
@@ -904,32 +925,33 @@ def step_4_context_enrichment() -> bool:
         print("  PASS: context was None (sources below threshold)")
 
     # 4h: Enrichment only runs on LLM path (not static-marker fallback)
-    # Verify structurally: _gather_compaction_context appears in the source
-    # AFTER both the registry-None guard and the circuit-breaker guard.
-    # Uses line-number ordering (stable across renames/comments) rather than
-    # raw character offsets.
+    # Verify structurally: _gather_compaction_context appears in the source of
+    # _summarize_dropped_messages AFTER both the model-absence guard and the
+    # circuit-breaker guard.
     import inspect
 
-    source_lines = inspect.getsource(summarize_history_window).splitlines()
+    from co_cli.context._history import _summarize_dropped_messages
+
+    source_lines = inspect.getsource(_summarize_dropped_messages).splitlines()
 
     def _first_line(keyword: str) -> int | None:
-        for i, line in enumerate(source_lines):
+        for idx, line in enumerate(source_lines):
             if keyword in line:
-                return i
+                return idx
         return None
 
     enrichment_line = _first_line("_gather_compaction_context")
-    registry_line = _first_line("registry is None")
+    model_guard_line = _first_line("not ctx.deps.model")
     breaker_line = _first_line("compaction_failure_count")
-    if enrichment_line is None or registry_line is None or breaker_line is None:
+    if enrichment_line is None or model_guard_line is None or breaker_line is None:
         print(
             f"  FAIL: cannot locate enrichment (line {enrichment_line}), "
-            f"registry guard (line {registry_line}), or breaker (line {breaker_line}) in source"
+            f"model guard (line {model_guard_line}), or breaker (line {breaker_line}) in source"
         )
         passed = False
-    elif enrichment_line < registry_line:
+    elif enrichment_line < model_guard_line:
         print(
-            f"  FAIL: enrichment (L{enrichment_line}) runs BEFORE registry-None check (L{registry_line})"
+            f"  FAIL: enrichment (L{enrichment_line}) runs BEFORE model-absence guard (L{model_guard_line})"
         )
         passed = False
     elif enrichment_line < breaker_line:
@@ -939,7 +961,7 @@ def step_4_context_enrichment() -> bool:
         passed = False
     else:
         print(
-            f"  PASS: enrichment deferred to LLM branch (L{enrichment_line} after guards L{registry_line}, L{breaker_line})"
+            f"  PASS: enrichment deferred to LLM branch (L{enrichment_line} after guards L{model_guard_line}, L{breaker_line})"
         )
 
     return passed
@@ -954,7 +976,7 @@ def step_5_prompt_assembly() -> bool:
     """Validate _build_summarizer_prompt and template structure.
 
     Specs from TODO:
-    - Template has 5 sections: Goal, Key Decisions, Working Set, Progress, Next Steps
+    - Template has 7 sections: Goal, Key Decisions, User Corrections, Errors & Fixes, Working Set, Progress, Next Step
     - Prior-summary integration instruction in template
     - Assembly order: template + context (## Additional Context) + personality (always last)
     - summarize_messages() accepts context: str | None = None
@@ -963,20 +985,22 @@ def step_5_prompt_assembly() -> bool:
     print("\n--- Step 5: Prompt assembly [Outcome 1, BC1] ---")
     passed = True
 
-    # 5a: Template has all 5 sections
+    # 5a: Template has all 7 sections
     for section in (
         "## Goal",
         "## Key Decisions",
+        "## User Corrections",
+        "## Errors & Fixes",
         "## Working Set",
         "## Progress",
-        "## Next Steps",
+        "## Next Step",
     ):
         if section not in _SUMMARIZE_PROMPT:
             print(f"  FAIL: template missing {section}")
             passed = False
     if passed:
         print(
-            "  PASS: template has 5 sections (Goal, Key Decisions, Working Set, Progress, Next Steps)"
+            "  PASS: template has 7 template sections (Goal, Key Decisions, User Corrections, Errors & Fixes, Working Set, Progress, Next Step)"
         )
 
     # 5b: Prior-summary integration instruction in template
@@ -1291,10 +1315,10 @@ async def step_6_full_chain() -> bool:
         if isinstance(m, ModelRequest):
             for p in m.parts:
                 if isinstance(p, UserPromptPart) and isinstance(p.content, str):
-                    if "[Summary of" in p.content:
+                    if _SUMMARY_MARKER_PREFIX in p.content:
                         summary_text = p.content
                         marker_count_in_output += 1
-                    elif "Earlier conversation trimmed" in p.content:
+                    elif "earlier messages were removed" in p.content:
                         marker_count_in_output += 1
 
     if marker_count_in_output != 1:
@@ -1306,7 +1330,7 @@ async def step_6_full_chain() -> bool:
         return True
 
     # Marker count cross-validation
-    marker_match = re.search(r"\[Summary of (\d+) earlier messages\]", summary_text)
+    marker_match = re.search(r"portion \((\d+) messages\)", summary_text)
     if marker_match:
         marker_count = int(marker_match.group(1))
         if marker_count != actual_dropped:
@@ -1318,7 +1342,7 @@ async def step_6_full_chain() -> bool:
     # Structured sections
     sections = [
         s
-        for s in ("Goal", "Key Decisions", "Working Set", "Progress", "Next Steps")
+        for s in ("Goal", "Key Decisions", "Working Set", "Progress", "Next Step")
         if s.lower() in summary_text.lower()
     ]
     if len(sections) >= 2:
@@ -1628,10 +1652,10 @@ async def step_7_multi_cycle() -> bool:
         if isinstance(m, ModelRequest):
             for p in m.parts:
                 if isinstance(p, UserPromptPart) and isinstance(p.content, str):
-                    if "[Summary of" in p.content:
+                    if _SUMMARY_MARKER_PREFIX in p.content:
                         summary = p.content
                         marker_count_in_output += 1
-                    elif "Earlier conversation trimmed" in p.content:
+                    elif "earlier messages were removed" in p.content:
                         marker_count_in_output += 1
 
     if marker_count_in_output != 1:
@@ -1643,7 +1667,7 @@ async def step_7_multi_cycle() -> bool:
         return True
 
     # Marker count cross-validation
-    marker_match = re.search(r"\[Summary of (\d+) earlier messages\]", summary)
+    marker_match = re.search(r"portion \((\d+) messages\)", summary)
     if marker_match:
         marker_count = int(marker_match.group(1))
         if marker_count != actual_dropped:
@@ -1789,9 +1813,11 @@ def step_8_overflow() -> bool:
         for m in result:
             if isinstance(m, ModelRequest):
                 for p in m.parts:
-                    if isinstance(p, UserPromptPart) and "trimmed" in str(p.content):
+                    if isinstance(p, UserPromptPart) and "earlier messages were removed" in str(
+                        p.content
+                    ):
                         marker_text = str(p.content)
-        if marker_text and "6 messages" in marker_text:
+        if marker_text and "6 earlier messages were removed" in marker_text:
             print("  PASS: dropped_count = 6 (3 middle groups × 2 msgs)")
             print(f"    marker: {marker_text!r}")
         elif marker_text:
@@ -1877,13 +1903,13 @@ async def step_9_circuit_breaker() -> bool:
 
     # Verify static marker (not LLM summary)
     has_static = any(
-        isinstance(p, UserPromptPart) and "Earlier conversation trimmed" in str(p.content)
+        isinstance(p, UserPromptPart) and "earlier messages were removed" in str(p.content)
         for m in result
         if isinstance(m, ModelRequest)
         for p in m.parts
     )
     has_summary = any(
-        isinstance(p, UserPromptPart) and "[Summary of" in str(p.content)
+        isinstance(p, UserPromptPart) and _SUMMARY_MARKER_PREFIX in str(p.content)
         for m in result
         if isinstance(m, ModelRequest)
         for p in m.parts
@@ -1898,14 +1924,14 @@ async def step_9_circuit_breaker() -> bool:
     else:
         print("  PASS: static marker used (no LLM call)")
 
-    # Verify failure count unchanged (no LLM attempt was made)
-    if deps.runtime.compaction_failure_count != 3:
+    # Verify failure count incremented by 1 (circuit breaker tracks skip count)
+    if deps.runtime.compaction_failure_count != 4:
         print(
-            f"  FAIL: failure_count changed to {deps.runtime.compaction_failure_count} (should stay 3)"
+            f"  FAIL: failure_count should be 4 (3 + 1 skip increment), got {deps.runtime.compaction_failure_count}"
         )
         passed = False
     else:
-        print("  PASS: failure_count unchanged at 3 (no LLM attempt)")
+        print("  PASS: failure_count incremented to 4 (circuit breaker skip tracking)")
 
     # Verify compaction still reduces message count
     print(f"  PASS: messages reduced {len_pre} → {len(result)}")
@@ -2326,9 +2352,11 @@ async def step_12_prompt_composition() -> bool:
     for section in (
         "## Goal",
         "## Key Decisions",
+        "## User Corrections",
+        "## Errors & Fixes",
         "## Working Set",
         "## Progress",
-        "## Next Steps",
+        "## Next Step",
     ):
         pos = prompt.find(section)
         if pos == -1:
@@ -2337,17 +2365,31 @@ async def step_12_prompt_composition() -> bool:
         else:
             section_positions[section] = pos
 
-    if len(section_positions) == 5:
+    if len(section_positions) == 7:
         ordered = all(
             section_positions[a] < section_positions[b]
             for a, b in zip(
-                ["## Goal", "## Key Decisions", "## Working Set", "## Progress"],
-                ["## Key Decisions", "## Working Set", "## Progress", "## Next Steps"],
+                [
+                    "## Goal",
+                    "## Key Decisions",
+                    "## User Corrections",
+                    "## Errors & Fixes",
+                    "## Working Set",
+                    "## Progress",
+                ],
+                [
+                    "## Key Decisions",
+                    "## User Corrections",
+                    "## Errors & Fixes",
+                    "## Working Set",
+                    "## Progress",
+                    "## Next Step",
+                ],
                 strict=False,
             )
         )
         if ordered:
-            print("  PASS: 12a — 5 template sections present and in order")
+            print("  PASS: 12a — 7 template sections present and in order")
         else:
             print(f"  FAIL: 12a — sections out of order: {section_positions}")
             passed = False
@@ -2355,7 +2397,7 @@ async def step_12_prompt_composition() -> bool:
     # Context appears after template, before personality
     ctx_pos = prompt.find("## Additional Context")
     personality_pos = prompt.find("Additionally, preserve:")
-    template_end = prompt.find("## Next Steps") + len("## Next Steps")
+    template_end = prompt.find("## Next Step") + len("## Next Step")
 
     if ctx_pos == -1:
         print("  FAIL: 12a — context addendum missing")
@@ -2491,6 +2533,179 @@ async def step_12_prompt_composition() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Step 13: Prompt upgrade quality — verbatim anchor, corrections, error-feedback
+# ---------------------------------------------------------------------------
+
+
+def _extract_section(summary: str, section_name: str) -> str:
+    """Return text in ## {section_name} up to next ## heading or end-of-string."""
+    header = f"## {section_name}"
+    start = summary.find(header)
+    if start == -1:
+        return ""
+    content_start = summary.find("\n", start)
+    if content_start == -1:
+        return ""
+    content_start += 1
+    next_header = summary.find("\n## ", content_start)
+    content = summary[content_start:next_header] if next_header != -1 else summary[content_start:]
+    return content.strip()
+
+
+def _concat_last_n_message_texts(msgs: list[ModelMessage], n: int) -> str:
+    """Concatenate UserPromptPart and TextPart text from the last n messages."""
+    texts: list[str] = []
+    for msg in msgs[-n:]:
+        for part in msg.parts:
+            if (isinstance(part, UserPromptPart) and isinstance(part.content, str)) or isinstance(
+                part, TextPart
+            ):
+                texts.append(part.content)
+    return " ".join(texts)
+
+
+def _has_verbatim_anchor(summary_text: str, source_messages: list[ModelMessage]) -> bool:
+    """Return True when ## Next Step contains a ≥20-char verbatim substring from the last 3 messages."""
+    next_step = _extract_section(summary_text, "Next Step")
+    if not next_step:
+        return False
+    recent_content = _concat_last_n_message_texts(source_messages, n=3)
+    return any(
+        next_step[idx : idx + 20] in recent_content for idx in range(len(next_step) - 20 + 1)
+    )
+
+
+async def step_13_prompt_upgrade_quality() -> bool:
+    """Validate the three prompt upgrade mechanisms: verbatim anchor, corrections, error-feedback.
+
+    Three deterministic sub-gates, each using explicitly constructed fixture messages
+    that guarantee the trigger condition is present. Each gate passes or fails on a
+    single LLM run — no multi-run thresholds.
+    """
+    print(
+        "\n--- Step 13: Prompt upgrade quality (13a verbatim anchor, 13b corrections, 13c error-feedback) ---"
+    )
+    passed = True
+
+    # --- 13a: Verbatim anchor in ## Next Step ---
+    print("\n  [13a] Verbatim anchor in ## Next Step")
+    dropped_13a = [
+        _user("I need to migrate auth from sessions to JWT. Read the current implementation."),
+        _tool_call("read_file", {"file_path": "auth/views.py"}, "c1"),
+        _tool_return("read_file", "[session middleware code — 80 lines]", "c1"),
+        _assistant(
+            "I've read auth/views.py. The session middleware handles login at /auth/login."
+        ),
+        _user("Now edit auth/views.py to add JWT token generation on successful login."),
+        _assistant(
+            "I'll add a generate_jwt() call after the authenticate() check in the login view."
+        ),
+    ]
+    try:
+        async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
+            summary_13a = await summarize_messages(
+                dropped_13a, _LLM_MODEL.model, NOREASON_SETTINGS
+            )
+    except TimeoutError:
+        print("  FAIL: 13a — timed out")
+        return False
+
+    if _has_verbatim_anchor(summary_13a, dropped_13a):
+        print(
+            "  PASS: 13a — ## Next Step contains verbatim anchor (≥20 chars) from recent messages"
+        )
+    else:
+        next_step_text = _extract_section(summary_13a, "Next Step")
+        print(
+            "  FAIL: 13a — ## Next Step missing verbatim anchor (≥20 chars from last 3 messages)"
+        )
+        print(f"    Next Step section: {_snippet(next_step_text or '(empty)', 120)}")
+        passed = False
+
+    # --- 13b: User corrections preserved ---
+    print("\n  [13b] User corrections preserved in ## User Corrections")
+    msgs_13b = [
+        _user("Implement JWT auth."),
+        _assistant("I'll use PyJWT library for token generation."),
+        _user("no, use the built-in hmac module instead of PyJWT"),
+        _assistant("Switching to hmac. I'll implement sign_token() using hmac.new()."),
+        _user("wait, that's not what I wanted — use python-jose, not hmac"),
+        _assistant("Understood, switching to python-jose."),
+    ]
+    try:
+        async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
+            summary_13b = await summarize_messages(msgs_13b, _LLM_MODEL.model, NOREASON_SETTINGS)
+    except TimeoutError:
+        print("  FAIL: 13b — timed out")
+        return False
+
+    corrections_section = _extract_section(summary_13b, "User Corrections")
+    corrections_low = corrections_section.lower()
+    has_token = "hmac" in corrections_low or "python-jose" in corrections_low
+    if corrections_section and has_token:
+        print(
+            "  PASS: 13b — ## User Corrections exists and contains correction token (hmac/python-jose)"
+        )
+    elif not corrections_section:
+        print("  FAIL: 13b — ## User Corrections section absent from summary")
+        passed = False
+    else:
+        print("  FAIL: 13b — ## User Corrections exists but missing 'hmac'/'python-jose' tokens")
+        print(f"    Corrections: {_snippet(corrections_section, 200)}")
+        passed = False
+
+    # --- 13c: User feedback on error fix retained ---
+    print("\n  [13c] User feedback on error fix retained in ## Errors & Fixes")
+    msgs_13c = [
+        _user("Run the tests."),
+        _assistant("Running tests..."),
+        _tool_call("run_shell", {"cmd": "pytest"}, "s1"),
+        _tool_return(
+            "run_shell",
+            "FAILED: test_jwt_auth — AssertionError: token missing 'exp' claim",
+            "s1",
+        ),
+        _assistant("The test failed. I'll add the exp claim to the token payload."),
+        _tool_call("edit_file", {"file_path": "auth/tokens.py"}, "e1"),
+        _tool_return("edit_file", "Edited", "e1"),
+        _user(
+            "still failing — you added exp to the wrong method, it should be in create_token() not refresh_token()"
+        ),
+        _assistant("You're right. Adding exp to create_token() instead."),
+    ]
+    try:
+        async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
+            summary_13c = await summarize_messages(msgs_13c, _LLM_MODEL.model, NOREASON_SETTINGS)
+    except TimeoutError:
+        print("  FAIL: 13c — timed out")
+        return False
+
+    errors_section = _extract_section(summary_13c, "Errors & Fixes")
+    errors_low = errors_section.lower()
+    has_failure = "exp" in errors_low or "test_jwt_auth" in errors_low or "failed" in errors_low
+    has_correction = (
+        "create_token" in errors_low or "refresh_token" in errors_low or "wrong" in errors_low
+    )
+    if errors_section and has_failure and has_correction:
+        print(
+            "  PASS: 13c — ## Errors & Fixes exists with test failure and user-directed correction"
+        )
+    elif not errors_section:
+        print("  FAIL: 13c — ## Errors & Fixes section absent from summary")
+        passed = False
+    elif not has_failure:
+        print("  FAIL: 13c — ## Errors & Fixes missing test failure reference")
+        print(f"    Section: {_snippet(errors_section, 200)}")
+        passed = False
+    else:
+        print("  FAIL: 13c — ## Errors & Fixes missing user-directed correction reference")
+        print(f"    Section: {_snippet(errors_section, 200)}")
+        passed = False
+
+    return passed
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -2532,6 +2747,9 @@ async def _run_all() -> int:
     # --- Prompt composition ---
     results["Step 12: Prompt composition"] = await step_12_prompt_composition()
 
+    # --- Prompt upgrade quality ---
+    results["Step 13: Prompt upgrade quality"] = await step_13_prompt_upgrade_quality()
+
     # Summary
     print("\n" + "=" * 60)
     print("  Results")
@@ -2555,15 +2773,16 @@ _STEP_DESCRIPTIONS: dict[str, str] = {
     "Step 1": "Tool results exceeding 50K chars are persisted to disk with a 2K preview placeholder. Content-addressed files ensure idempotency.",
     "Step 2": "Older compactable tool results (beyond the 5 most recent per type) are cleared. Non-compactable tools and the last turn group are protected.",
     "Step 3": "Large assistant TextPart/ThinkingPart content in older messages is capped at 2500 chars with proportional head(20%)/tail(80%) truncation (aligned with gemini-cli). Tool args and returns are untouched.",
-    "Step 4": "Side-channel context is gathered from 4 sources (file paths from ToolCallPart.args, pending todos, always-on memories, prior summaries) and capped at 4K chars.",
-    "Step 5": "Summarizer prompt has 5 structured sections (Goal, Key Decisions, Working Set, Progress, Next Steps). Assembly order: template + context + personality.",
+    "Step 4": "Side-channel context is gathered from 3 sources (file paths from ToolCallPart.args, pending todos, prior summaries) and capped at 4K chars. Always-on memories are injected separately by P4.",
+    "Step 5": "Summarizer prompt has 7 structured sections (Goal, Key Decisions, User Corrections, Errors & Fixes, Working Set, Progress, Next Step). Assembly order: template + context + personality.",
     "Step 6": "Full P1-P5 chain on a 14-turn conversation with tool calls, producing an LLM summary. Validates numerical counts at each stage.",
     "Step 7": "Chain on history containing a prior compaction summary. Validates that both prior context and new work are preserved across cycles.",
     "Step 8": "Overflow detection (413/400 with context-length body), emergency compaction (keep first+last groups), and one-shot recovery guard.",
     "Step 9": "Circuit breaker degradation: after 3 consecutive LLM failures, compaction falls back to static marker without attempting an LLM call.",
     "Step 10": "A/B enrichment quality: compares LLM summaries with and without context enrichment. Verifies enrichment-only signals (file paths, todos) appear in the enriched summary.",
     "Step 11": "Edge case battery (no LLM): 1-2 turn history, no tools, static markers in history, all short responses, single massive message, tool-only first turn, mixed compactable/non-compactable parts, empty list.",
-    "Step 12": "Prompt composition: validates assembled prompt structure (section order, context placement, personality ordering), agent instructions (security guardrail), message_history content, prompt injection isolation, and no-context path.",
+    "Step 12": "Prompt composition: validates assembled prompt structure (7 sections in order: Goal, Key Decisions, User Corrections, Errors & Fixes, Working Set, Progress, Next Step; context placement; personality ordering), agent instructions (security guardrail), message_history content, prompt injection isolation, and no-context path.",
+    "Step 13": "Prompt upgrade quality: three deterministic single-run gates — (13a) ## Next Step contains a ≥20-char verbatim anchor from recent messages; (13b) ## User Corrections preserves explicit corrections; (13c) ## Errors & Fixes retains both the failure and user-directed fix guidance.",
 }
 
 # Noise patterns to filter from report output (library warnings, console prints)
