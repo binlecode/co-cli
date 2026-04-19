@@ -25,7 +25,7 @@ from co_cli.knowledge._frontmatter import (
 from co_cli.knowledge._similarity import find_similar_artifacts, is_content_superset
 from co_cli.knowledge.mutator import _atomic_write, _reindex_knowledge_file, _update_artifact_body
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.knowledge._helpers import (
+from co_cli.tools.knowledge.helpers import (
     _find_article_by_url,
     _find_by_slug,
     _slugify,

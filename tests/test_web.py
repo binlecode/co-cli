@@ -12,7 +12,8 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.web import _html_to_markdown, _is_content_type_allowed, web_fetch, web_search
+from co_cli.tools.web.fetch import _html_to_markdown, _is_content_type_allowed, web_fetch
+from co_cli.tools.web.search import web_search
 
 _AGENT = build_agent(config=settings)
 

@@ -9,7 +9,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.bootstrap.check import check_runtime
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.tools._agent_tool import agent_tool
+from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
 

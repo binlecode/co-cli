@@ -22,7 +22,7 @@ from co_cli.deps import ApprovalKindEnum, CoDeps
 from co_cli.display._core import Frontend, console
 from co_cli.knowledge._artifact import KnowledgeArtifact, load_knowledge_artifacts
 from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.tools.knowledge import grep_recall
+from co_cli.tools.knowledge.read import grep_recall
 
 logger = logging.getLogger(__name__)
 

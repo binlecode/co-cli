@@ -4,8 +4,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.tools._agent_tool import agent_tool
-from co_cli.tools.session_search import session_search
+from co_cli.tools.agent_tool import agent_tool
+from co_cli.tools.tool_io import tool_output
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
@@ -34,4 +34,45 @@ async def search_memory(
         query: FTS5 keyword query (see syntax above).
         limit: Max results to return (default 5).
     """
-    return await session_search(ctx, query, limit)
+    store = ctx.deps.memory_index
+    if store is None:
+        return tool_output(
+            "Session index is not available — no past sessions have been indexed yet.",
+            ctx=ctx,
+            count=0,
+            results=[],
+        )
+
+    results = store.search(query, limit=limit)
+    if not results:
+        return tool_output(
+            f"No past sessions matched '{query}'.",
+            ctx=ctx,
+            count=0,
+            results=[],
+        )
+
+    lines: list[str] = [f"Found {len(results)} session(s) matching '{query}':\n"]
+    for idx, result in enumerate(results, 1):
+        lines.append(
+            f"{idx}. [{result.created_at[:10]}] {result.session_id} ({result.role})\n"
+            f"   {result.snippet}\n"
+            f"   score={result.score:.3f} | path={result.session_path}"
+        )
+
+    return tool_output(
+        "\n".join(lines),
+        ctx=ctx,
+        count=len(results),
+        results=[
+            {
+                "session_id": r.session_id,
+                "session_path": r.session_path,
+                "created_at": r.created_at,
+                "role": r.role,
+                "snippet": r.snippet,
+                "score": r.score,
+            }
+            for r in results
+        ],
+    )

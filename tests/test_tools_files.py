@@ -11,15 +11,9 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
-from co_cli.tools.files import (
-    _enforce_workspace_boundary,
-    _is_recursive_pattern,
-    glob,
-    grep,
-    patch,
-    read_file,
-    write_file,
-)
+from co_cli.tools.files.helpers import _enforce_workspace_boundary, _is_recursive_pattern
+from co_cli.tools.files.read import glob, grep, read_file
+from co_cli.tools.files.write import patch, write_file
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
@@ -728,7 +722,7 @@ async def test_write_file_staleness_mtime_updated_after_write(tmp_path):
 @pytest.mark.asyncio
 async def test_patch_size_guard(tmp_path):
     """patch returns error when file exceeds _MAX_EDIT_BYTES."""
-    from co_cli.tools.files import _MAX_EDIT_BYTES
+    from co_cli.tools.files.write import _MAX_EDIT_BYTES
 
     target = tmp_path / "huge.txt"
     target.write_bytes(b"x" * (_MAX_EDIT_BYTES + 1))

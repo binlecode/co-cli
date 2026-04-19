@@ -747,7 +747,7 @@ async def append_recalled_memories(
 
     # Knowledge recall: only on new user turns
     if user_msg and user_turn_count > state.last_recall_user_turn:
-        from co_cli.tools.knowledge import _recall_for_context
+        from co_cli.tools.knowledge.read import _recall_for_context
 
         try:
             result = await _recall_for_context(ctx, user_msg, max_results=3)

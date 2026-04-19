@@ -25,7 +25,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.tools.knowledge import save_knowledge
+from co_cli.tools.knowledge.write import save_knowledge
 
 logger = logging.getLogger(__name__)
 

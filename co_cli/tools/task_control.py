@@ -14,7 +14,7 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.tools._agent_tool import agent_tool
+from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.background import (
     BackgroundCleanupError,
     BackgroundTaskState,

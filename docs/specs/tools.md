@@ -32,9 +32,9 @@ The tool ecosystem relies on core infrastructure modules to handle execution rou
 - `co_cli/tools/_shell_policy.py` & `_shell_env.py`: Enforces strict execution safety by classifying shell commands (ALLOW, DENY, APPROVE) and controlling env injections.
 - `co_cli/context/tool_approvals.py`: Core logic for resolving target subjects, building user prompt strings, and processing user inputs (Y/N/A) for mutating operations.
 - `co_cli/context/tool_display.py`: Specialized console formatters for rendering inputs and outputs safely in the REPL.
-- `co_cli/tools/_agent_outputs.py`: Typed Pydantic `BaseModel` structures designed specifically for capturing subagent structured responses.
+- `co_cli/tools/agents.py`: Delegation subagents (`research_web`, `analyze_knowledge`, `reason_about`) and the `AgentOutput` Pydantic model capturing structured subagent responses.
 - `co_cli/tools/google/_auth.py`: Centralized credentials fetching and a shared `_get_google_service()` factory method.
-- `co_cli/tools/_agent_tool.py`: `@agent_tool(...)` decorator — attaches `ToolInfo` policy metadata to native tool functions at definition site. Used by every native tool to declare visibility, approval, concurrency, and config-gate constraints.
+- `co_cli/tools/agent_tool.py`: `@agent_tool(...)` decorator — attaches `ToolInfo` policy metadata to native tool functions at definition site. Used by every native tool to declare visibility, approval, concurrency, and config-gate constraints.
 
 ## 2. Tool Lifecycle, Approval, & Concurrency
 
@@ -112,10 +112,9 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `search_knowledge` | A | — | — | — | BM25 full-text search across all knowledge artifacts |
+| `search_knowledge` | A | — | — | — | BM25 full-text search across all knowledge artifacts; pass `kind="article"` to restrict to article-index schema |
 | `list_knowledge` | A | — | — | — | Paginate knowledge artifact metadata |
 | `read_article` | A | — | — | — | Fetch full markdown for a cached article by slug |
-| `search_articles` | A | — | — | — | Filter-search externally-fetched reference texts |
 | `search_memory` | A | — | — | — | Keyword search across historic session transcripts |
 
 ### Workspace & Files — Read
@@ -197,7 +196,7 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 | `search_calendar_events` | D | — | — | ✓ | Full-text Calendar search |
 | `create_gmail_draft` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
 
-**Total: 38 tools** (15 ALWAYS · 23 DEFERRED · 8 require approval · 10 config-gated)
+**Total: 37 tools** (14 ALWAYS · 23 DEFERRED · 8 require approval · 10 config-gated)
 
 ## 4. Tool API Definitions
 
@@ -217,9 +216,8 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 - **`task_list(status_filter: str)`**: Discover actively running or completed UUID tasks for tracking or cleanup.
 
 ### Cognition & Memory
-- **`search_knowledge(query: str)`**: Universal, BM25-based semantic index search spanning internal artifacts, rules, references, and synced directories.
+- **`search_knowledge(query: str, kind: str, source: str, max_results: int)`**: Universal, BM25-based semantic index search spanning internal artifacts, rules, references, and synced directories. Pass `kind="article"` to retrieve article-index schema results (slug, article_id, origin_url, tags, snippet).
 - **`list_knowledge(offset: int, limit: int, kind: str)`**: Paginate metadata of persistent agent knowledge artifacts.
-- **`search_articles(query: str, max_results: int, tags: list, tag_match_mode: str, created_after: str, created_before: str)`**: Filter the index specific to external reference texts cached locally.
 - **`read_article(slug: str)`**: Extract the full markdown body corresponding to a specific index slug.
 - **`save_article(content: str, title: str, origin_url: str, tags: list, related: list)`**: Transmute web content into a permanently readable local markdown artifact.
 - **`update_knowledge(slug: str, old_content: str, new_content: str)`**: Surgical replacement for specific sections of unified knowledge items without rewriting the file.
@@ -228,7 +226,7 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 ### Delegation
 - **`research_web(query: str, domains: list, max_requests: int)`**: Subagent focused on deep dive internet retrieval. Isolates web loops from code writing.
-- **`analyze_knowledge(question: str, inputs: dict, max_requests: int)`**: Subagent handling cross-indexing and deduction strictly on internal + Drive knowledge bounds.
+- **`analyze_knowledge(question: str, inputs: list[str], max_requests: int)`**: Subagent handling cross-indexing and deduction strictly on internal + Drive knowledge bounds.
 - **`reason_about(problem: str, max_requests: int)`**: Pure inference subagent. Isolated execution context with no API access, operating purely on deductive logic.
 
 ### Web & Third-Party

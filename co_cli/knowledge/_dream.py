@@ -40,7 +40,8 @@ from co_cli.knowledge._frontmatter import render_knowledge_file
 from co_cli.knowledge._similarity import token_jaccard
 from co_cli.knowledge.mutator import _atomic_write
 from co_cli.llm._call import llm_call
-from co_cli.tools.knowledge import _slugify, save_knowledge
+from co_cli.tools.knowledge.helpers import _slugify
+from co_cli.tools.knowledge.write import save_knowledge
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
@@ -344,6 +345,8 @@ def _write_consolidated_artifact(
             created=merged_artifact.created,
             type=kind,
             description=None,
+            artifact_id=str(merged_artifact.id),
+            source_ref=None,
         )
         chunks = chunk_text(
             merged_body.strip(),

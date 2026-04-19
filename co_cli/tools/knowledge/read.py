@@ -19,7 +19,7 @@ from co_cli.knowledge._artifact import (
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._ranking import compute_confidence, detect_contradictions
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.knowledge._helpers import _touch_recalled
+from co_cli.tools.knowledge.helpers import _touch_recalled
 from co_cli.tools.tool_io import tool_output
 
 logger = logging.getLogger(__name__)

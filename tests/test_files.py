@@ -10,7 +10,8 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
-from co_cli.tools.files import patch, read_file
+from co_cli.tools.files.read import read_file
+from co_cli.tools.files.write import patch
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)

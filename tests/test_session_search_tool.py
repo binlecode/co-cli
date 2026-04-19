@@ -14,7 +14,7 @@ from co_cli.context.session import session_filename
 from co_cli.context.transcript import append_messages
 from co_cli.deps import CoDeps
 from co_cli.memory._store import MemoryIndex
-from co_cli.tools.session_search import session_search
+from co_cli.tools.memory import search_memory
 from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = make_settings()
@@ -79,7 +79,7 @@ async def test_session_search_returns_results_when_indexed(tmp_path: Path) -> No
         deps = _make_deps(tmp_path, memory_index=store)
         ctx = _make_ctx(deps)
 
-        result = await session_search(ctx, "asyncio event loop", limit=3)
+        result = await search_memory(ctx, "asyncio event loop", limit=3)
 
         assert result.return_value, "ToolReturn must have non-empty return_value"
         assert (
@@ -107,7 +107,7 @@ async def test_session_search_graceful_when_index_none(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path, memory_index=None)
     ctx = _make_ctx(deps)
 
-    result = await session_search(ctx, "anything")
+    result = await search_memory(ctx, "anything")
 
     assert result.return_value, "ToolReturn must have non-empty return_value"
     assert result.metadata is not None

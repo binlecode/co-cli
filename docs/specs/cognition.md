@@ -83,7 +83,7 @@ Memory is the session/event timeline. Its canonical storage is append-only `.jso
 
 A `MemoryIndex` (SQLite FTS5 in `session-index.db`) indexes user prompts and assistant text from past sessions for keyword search. The current session is excluded from indexing until it closes.
 
-**Episodic retrieval** uses `search_memory()` (the agent tool), which internally calls `session_search()` to query `session-index.db` for ranked excerpts across past conversations. This is the only search path into Memory — there is no semantic or vector retrieval over transcripts.
+**Episodic retrieval** uses `search_memory()` (the agent tool in `co_cli/tools/memory.py`), which queries `session-index.db` directly for ranked excerpts across past conversations. This is the only search path into Memory — there is no semantic or vector retrieval over transcripts.
 
 Memory is not curated, not consolidated, and not subject to lifecycle management. It is append-only and grows indefinitely (with optional session-level pruning when disk usage exceeds a threshold).
 
@@ -285,7 +285,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `co_cli/knowledge/_dream.py` | `DreamState`, `DreamResult`, `run_dream_cycle`, `_mine_transcripts`, `_merge_similar_artifacts`, `_decay_sweep` |
 | `co_cli/knowledge/prompts/dream_miner.md` | Retrospective transcript-miner sub-agent prompt |
 | `co_cli/knowledge/prompts/dream_merge.md` | Consolidation-merge sub-agent prompt |
-| `co_cli/tools/knowledge.py` | `save_knowledge()` (extractor-only), `list_knowledge()`, `search_knowledge()`, `save_article()` (writes `artifact_kind=article`), `search_articles()`, `read_article()`, `update_knowledge()`, `append_knowledge()` |
+| `co_cli/tools/knowledge.py` | `save_knowledge()` (extractor-only), `list_knowledge()`, `search_knowledge()` (supports `kind="article"` for article-index schema), `save_article()` (writes `artifact_kind=article`), `read_article()`, `update_knowledge()`, `append_knowledge()` |
 | `co_cli/tools/memory.py` | `search_memory()` — episodic recall over session transcripts |
 
 ### Memory Layer
@@ -295,7 +295,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `co_cli/context/transcript.py` | JSONL transcript append/load, session branching, compaction boundaries |
 | `co_cli/context/session.py` | Session path generation, latest-session discovery |
 | `co_cli/memory/_store.py` | `MemoryIndex` — FTS5 over past session transcripts |
-| `co_cli/tools/session_search.py` | `session_search()` — keyword search over transcript index |
+| `co_cli/tools/memory.py` | `search_memory()` — keyword search over transcript index |
 
 ### Extraction & Injection
 

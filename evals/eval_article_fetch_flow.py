@@ -2,10 +2,10 @@
 """Eval: article fetch flow — save → FTS5 index → search → read + URL consolidation.
 
 Validates the full article pipeline without an LLM turn:
-    save_article (new)       → DB index + chunk index → search_articles (FTS5) finds it
+    save_article (new)       → DB index + chunk index → search_knowledge(kind="article") finds it
     save_article (same URL)  → consolidation → 1 file, tags merged, action="consolidated"
     read_article             → full body returned by slug
-    search_articles          → grep fallback when knowledge_store=None
+    search_knowledge(kind="article") → grep fallback when knowledge_store=None
 
 These cover the storage and retrieval path that evals/eval_reranker_comparison.py
 skips (synthetic corpus, no article-specific write path tested).
@@ -33,7 +33,8 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.knowledge import read_article, save_article, search_articles
+from co_cli.tools.knowledge.read import read_article, search_knowledge
+from co_cli.tools.knowledge.write import save_article
 from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-article-fetch-flow.md"
@@ -72,7 +73,7 @@ def _make_ctx(
 
 
 async def run_fts5_save_search(tmp_dir: Path) -> dict[str, Any]:
-    """save_article indexes into FTS5; search_articles finds it by unique keyword."""
+    """save_article indexes into FTS5; search_knowledge(kind="article") finds it by unique keyword."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     library_dir = tmp_dir / "fts5-save-search" / "library"
@@ -100,12 +101,12 @@ async def run_fts5_save_search(tmp_dir: Path) -> dict[str, Any]:
         )
 
         t = time.monotonic()
-        search_result = await search_articles(ctx, _SENTINEL)
+        search_result = await search_knowledge(ctx, _SENTINEL, kind="article", source="knowledge")
         found_count = search_result.metadata.get("count", 0)
         found_results = search_result.metadata.get("results", [])
         steps.append(
             {
-                "name": "search_articles (FTS5)",
+                "name": "search_knowledge kind=article (FTS5)",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"count={found_count} results={[r.get('title') for r in found_results]}",
             }
@@ -128,7 +129,10 @@ async def run_fts5_save_search(tmp_dir: Path) -> dict[str, Any]:
                 f"expected action='saved', got {save_result.metadata.get('action')!r}",
             )
         elif found_count < 1:
-            verdict, failure = "FAIL", "search_articles returned 0 results after FTS5 save"
+            verdict, failure = (
+                "FAIL",
+                "search_knowledge(kind=article) returned 0 results after FTS5 save",
+            )
         elif len(db_results) < 1:
             verdict, failure = "FAIL", "KnowledgeStore.search found 0 results after index"
         else:
@@ -236,7 +240,7 @@ async def run_url_consolidation(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_read_full_body(tmp_dir: Path) -> dict[str, Any]:
-    """search_articles returns slug; read_article returns full body and metadata."""
+    """save_article writes file; read_article returns full body and metadata."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     library_dir = tmp_dir / "read-full-body" / "library"
@@ -295,7 +299,7 @@ async def run_read_full_body(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_grep_fallback(tmp_dir: Path) -> dict[str, Any]:
-    """search_articles falls back to grep when knowledge_store=None."""
+    """search_knowledge(kind="article") falls back to grep when knowledge_store=None."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     library_dir = tmp_dir / "grep-fallback" / "library"
@@ -321,11 +325,13 @@ async def run_grep_fallback(tmp_dir: Path) -> dict[str, Any]:
     )
 
     t = time.monotonic()
-    search_result = await search_articles(ctx, f"{_SENTINEL}-grep-marker")
+    search_result = await search_knowledge(
+        ctx, f"{_SENTINEL}-grep-marker", kind="article", source="knowledge"
+    )
     found_count = search_result.metadata.get("count", 0)
     steps.append(
         {
-            "name": "search_articles (grep fallback)",
+            "name": "search_knowledge kind=article (grep fallback)",
             "ms": (time.monotonic() - t) * 1000,
             "detail": f"count={found_count}",
         }

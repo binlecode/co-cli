@@ -1,6 +1,7 @@
 """Workflow tests for reusable knowledge tools and recall bookkeeping."""
 
 import asyncio
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,10 +15,12 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
-from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.knowledge import (
+from co_cli.knowledge._chunker import chunk_text
+from co_cli.knowledge._store import KnowledgeStore, SearchResult
+from co_cli.tools.knowledge.read import list_knowledge, search_knowledge
+from co_cli.tools.knowledge.write import (
     append_knowledge,
-    list_knowledge,
+    save_article,
     save_knowledge,
     update_knowledge,
 )
@@ -242,7 +245,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from co_cli.tools.knowledge import search_knowledge
+    from co_cli.tools.knowledge.read import search_knowledge
 
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir()
@@ -537,3 +540,146 @@ def test_save_knowledge_success_uses_ctx_path(tmp_path: Path) -> None:
     ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "save_knowledge")
     result = asyncio.run(save_knowledge(ctx, "some knowledge content to save", "preference"))
     assert PERSISTED_OUTPUT_TAG in result.return_value
+
+
+# ---------------------------------------------------------------------------
+# source_ref / artifact_id — identity fields on SearchResult
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_store_search_populates_source_ref_and_artifact_id(tmp_path: Path) -> None:
+    """store.search() returns SearchResult with source_ref and artifact_id for articles indexed via save_article."""
+    fts_cfg = make_settings(
+        knowledge=make_settings().knowledge.model_copy(update={"search_backend": "fts5"})
+    )
+    idx = KnowledgeStore(config=fts_cfg, knowledge_db_path=tmp_path / "search.db")
+    deps = CoDeps(
+        shell=ShellBackend(),
+        knowledge_store=idx,
+        config=fts_cfg,
+        knowledge_dir=tmp_path / "library",
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    try:
+        await save_article(
+            ctx,
+            content="xyloquartz-identity-field-unique content for identity test",
+            title="Identity Test Article",
+            origin_url="https://example.com/identity-test",
+            tags=["identity"],
+        )
+        results = idx.search("xyloquartz-identity-field-unique", source="knowledge")
+        assert len(results) >= 1
+        hit = results[0]
+        assert hit.source_ref == "https://example.com/identity-test"
+        assert hit.artifact_id is not None
+    finally:
+        idx.close()
+
+
+def test_search_result_to_tool_output_excludes_identity_fields() -> None:
+    """SearchResult.to_tool_output() does not expose source_ref or artifact_id."""
+    result = SearchResult(
+        source="knowledge",
+        kind="article",
+        path="/tmp/test.md",
+        title="Test",
+        snippet="snippet",
+        score=0.9,
+        tags=None,
+        category=None,
+        created=None,
+        updated=None,
+        source_ref="https://example.com",
+        artifact_id="abc-123",
+    )
+    output = result.to_tool_output()
+    assert "source_ref" not in output
+    assert "artifact_id" not in output
+    assert set(output.keys()) == {
+        "source",
+        "kind",
+        "title",
+        "snippet",
+        "score",
+        "path",
+        "confidence",
+        "conflict",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fts_article_search_tolerates_null_identity_fields(tmp_path: Path) -> None:
+    """Article-index FTS path emits origin_url='' and article_id=None for pre-migration rows."""
+    fts_cfg = make_settings(
+        knowledge=make_settings().knowledge.model_copy(update={"search_backend": "fts5"})
+    )
+    idx = KnowledgeStore(config=fts_cfg, knowledge_db_path=tmp_path / "search.db")
+    path_str = str(tmp_path / "legacy-article.md")
+    content = "xyloquartz-null-identity-unique legacy article content"
+    idx.index(
+        source="knowledge",
+        kind="article",
+        path=path_str,
+        title="Legacy Article",
+        content=content,
+    )
+    idx.index_chunks("knowledge", path_str, chunk_text(content, chunk_size=200, overlap=0))
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        knowledge_store=idx,
+        config=fts_cfg,
+        knowledge_dir=tmp_path / "library",
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    try:
+        result = await search_knowledge(
+            ctx, "xyloquartz-null-identity-unique", kind="article", source="knowledge"
+        )
+        assert result.metadata["count"] >= 1
+        hit = result.metadata["results"][0]
+        assert hit["origin_url"] == ""
+        assert hit["article_id"] is None
+    finally:
+        idx.close()
+
+
+def test_knowledge_store_migration_adds_new_columns_to_legacy_db(tmp_path: Path) -> None:
+    """KnowledgeStore adds source_ref and artifact_id to a DB created without them."""
+    db_path = tmp_path / "legacy.db"
+    con = sqlite3.connect(str(db_path))
+    con.executescript("""
+        CREATE TABLE docs (
+            source      TEXT NOT NULL,
+            kind        TEXT,
+            path        TEXT NOT NULL,
+            title       TEXT,
+            content     TEXT,
+            mtime       REAL,
+            hash        TEXT,
+            tags        TEXT,
+            category    TEXT,
+            created     TEXT,
+            updated     TEXT,
+            provenance  TEXT,
+            certainty   TEXT,
+            chunk_id    INTEGER DEFAULT 0,
+            type        TEXT,
+            description TEXT,
+            UNIQUE(source, path, chunk_id)
+        );
+    """)
+    con.commit()
+    con.close()
+
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=db_path)
+    idx.close()
+
+    con2 = sqlite3.connect(str(db_path))
+    col_names = {row[1] for row in con2.execute("PRAGMA table_info(docs)").fetchall()}
+    con2.close()
+
+    assert "source_ref" in col_names, "Migration must add source_ref column to legacy DB"
+    assert "artifact_id" in col_names, "Migration must add artifact_id column to legacy DB"

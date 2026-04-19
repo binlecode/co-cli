@@ -4,20 +4,26 @@ from copy import copy
 from typing import Any
 
 from opentelemetry import trace as otel_trace
+from pydantic import BaseModel
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum, fork_deps
-from co_cli.tools._agent_outputs import AgentOutput
-from co_cli.tools._agent_tool import agent_tool
+from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
 _TRACER = otel_trace.get_tracer("co-cli.agents")
 
 # Maximum delegation depth — safety rail against accidental recursive delegation.
 MAX_AGENT_DEPTH: int = 2
+
+
+class AgentOutput(BaseModel):
+    """Output from a delegation agent."""
+
+    result: str
 
 
 def _merge_turn_usage(ctx: RunContext[CoDeps], usage: RunUsage) -> None:
@@ -193,7 +199,8 @@ async def research_web(
         raise ModelRetry("Research agent is unavailable — handle this task directly.")
 
     from co_cli.agent._core import build_agent
-    from co_cli.tools.web import web_fetch, web_search
+    from co_cli.tools.web.fetch import web_fetch
+    from co_cli.tools.web.search import web_search
 
     budget = max_requests or ctx.deps.config.subagent.max_requests_research
     model_obj = ctx.deps.model.model
@@ -298,7 +305,7 @@ async def analyze_knowledge(
 
     from co_cli.agent._core import build_agent
     from co_cli.tools.google.drive import search_drive_files
-    from co_cli.tools.knowledge import search_knowledge
+    from co_cli.tools.knowledge.read import search_knowledge
 
     budget = max_requests or ctx.deps.config.subagent.max_requests_analysis
 
