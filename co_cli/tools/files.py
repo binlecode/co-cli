@@ -1,5 +1,7 @@
 """Native file system tools: list, read, find, write, patch."""
 
+import asyncio
+import difflib
 import fnmatch
 import re
 from collections.abc import Callable
@@ -147,8 +149,10 @@ async def read_file(
 ) -> ToolReturn:
     """Read a file's contents for targeted inspection, with optional line range.
 
-    Use for reading known files. Specify start_line/end_line when the relevant
-    region is already known to avoid loading the entire file.
+    Use for reading known files. Use start_line/end_line to read large files in
+    sections — if the response ends with a continuation hint, call read_file again
+    with start_line set to the indicated value. If the file is not found, the error
+    message includes similar filenames from the same directory to help correct typos.
 
     When NOT to use: when the file location is unknown — use glob or
     grep first to locate the file.
@@ -167,7 +171,13 @@ async def read_file(
         return tool_error(str(e), ctx=ctx)
 
     if not resolved.exists():
-        return tool_error(f"File not found: {path}", ctx=ctx)
+        error_msg = f"File not found: {path}"
+        if resolved.parent.exists():
+            names = [p.name for p in resolved.parent.iterdir()]
+            matches = difflib.get_close_matches(resolved.name, names, n=3, cutoff=0.6)
+            if matches:
+                error_msg += f"\nSimilar files: {', '.join(matches)}"
+        return tool_error(error_msg, ctx=ctx)
 
     if resolved.is_dir():
         return tool_error(f"Path is a directory: {path}", ctx=ctx)
@@ -193,11 +203,17 @@ async def read_file(
         hi = end_line if end_line is not None else total_line_count
         sliced = all_lines[lo:hi]
     else:
+        hi = total_line_count
         sliced = all_lines
 
     # cat -n style: right-justified 6-char line number + tab
     base = start_line if start_line is not None else 1
     display = "".join(f"{base + i:>6}\t{line}" for i, line in enumerate(sliced))
+
+    if end_line is not None and total_line_count > hi:
+        display += (
+            f"\n[{total_line_count - hi} more lines — use start_line={hi + 1} to continue reading]"
+        )
 
     return tool_output(
         display,
@@ -466,11 +482,111 @@ def _transform_escape_expanded(text: str) -> tuple[str, list[int]]:
     return "".join(result), offsets
 
 
+def _build_patch_display(
+    content: str,
+    updated: str,
+    path: str,
+    old_string: str,
+    new_string: str,
+    count: int,
+    strategy: str,
+    show_diff: bool,
+) -> str:
+    """Build the display string for a successful patch, optionally prepending a unified diff."""
+    old_preview = old_string[:120].replace("\n", "\\n")
+    new_preview = new_string[:120].replace("\n", "\\n")
+    suffix = (
+        f" ({count} replacement(s))"
+        if strategy == "exact"
+        else f" ({count} replacement(s), {strategy} strategy)"
+    )
+    body = f"Patched: {path}{suffix}\n  - {old_preview!r}\n  + {new_preview!r}"
+    if show_diff:
+        return f"{_make_diff_block(content, updated, path)}\n\n{body}"
+    return body
+
+
+def _make_diff_block(content: str, updated: str, path: str) -> str:
+    """Return a unified diff string prefixed with [Diff], or (no diff) when unchanged."""
+    diff_lines = list(
+        difflib.unified_diff(
+            content.splitlines(),
+            updated.splitlines(),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+            lineterm="",
+        )
+    )
+    diff_str = "\n".join(diff_lines) if diff_lines else "(no diff)"
+    return f"[Diff]\n{diff_str}"
+
+
 _FUZZY_STRATEGIES: list[tuple[str, Callable[[str], tuple[str, list[int]]]]] = [
     ("line-trimmed", _transform_line_trimmed),
     ("indent-stripped", _transform_indent_stripped),
     ("escape-expanded", _transform_escape_expanded),
 ]
+
+
+def _resolve_patch_strategies(
+    content: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool,
+    show_diff: bool,
+    path: str,
+) -> tuple[str, str, int, str] | str:
+    """Try all four patch strategies. Returns (updated, display, count, strategy) or error string."""
+    count = content.count(old_string)
+    if count > 0:
+        if count > 1 and not replace_all:
+            return (
+                f"Found {count} occurrences — provide more surrounding context to make "
+                "old_string unique, or use replace_all=True to replace all occurrences."
+            )
+        updated = content.replace(old_string, new_string)
+        display = _build_patch_display(
+            content, updated, path, old_string, new_string, count, "exact", show_diff
+        )
+        return updated, display, count, "exact"
+
+    for strategy_name, transform_fn in _FUZZY_STRATEGIES:
+        result = _fuzzy_apply(
+            content, old_string, new_string, replace_all, transform_fn, strategy_name
+        )
+        if isinstance(result, str):
+            return result
+        if result is not None:
+            updated, count = result
+            display = _build_patch_display(
+                content, updated, path, old_string, new_string, count, strategy_name, show_diff
+            )
+            return updated, display, count, strategy_name
+
+    return f"old_string not found in {path} — verify the text exists in the file"
+
+
+async def _run_lint_if_python(resolved: Path, display: str) -> str:
+    """Append ruff lint warnings to display for .py files; silent on timeout or missing ruff."""
+    if resolved.suffix != ".py":
+        return display
+    try:
+        async with asyncio.timeout(5):
+            proc = await asyncio.create_subprocess_exec(
+                "uv",
+                "run",
+                "ruff",
+                "check",
+                str(resolved),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return display + f"\n\n[Auto-Lint Warnings]\n{stdout.decode()}"
+    except (TimeoutError, FileNotFoundError):
+        pass
+    return display
 
 
 def _check_patch_preconditions(
@@ -526,8 +642,8 @@ def _fuzzy_apply(
 
     if len(matches) > 1 and not replace_all:
         return (
-            f"Found {len(matches)} occurrences using {strategy_name!r} strategy — "
-            "use replace_all=True to replace all"
+            f"Found {len(matches)} occurrences — provide more surrounding context to make "
+            "old_string unique, or use replace_all=True to replace all occurrences."
         )
 
     result = content
@@ -543,14 +659,15 @@ async def patch(
     old_string: str,
     new_string: str,
     replace_all: bool = False,
+    show_diff: bool = False,
 ) -> ToolReturn:
     """Edit a file by replacing old_string with new_string, with fuzzy matching fallback.
 
     Use for targeted modifications to existing files. You must call read_file
     at least once before patching — this tool will error if the file has not
-    been read. Use the smallest unique old_string that unambiguously identifies
-    the edit location. Set replace_all=True only when every occurrence should
-    be replaced.
+    been read. old_string must be unique in the file; if not found as-is, re-read
+    the file to confirm the text before retrying. Set replace_all=True only when
+    every occurrence should be replaced.
 
     Tries four matching strategies in order: exact, line-trimmed (whitespace
     per line), indent-stripped (leading whitespace), escape-expanded (\\n \\t \\r).
@@ -566,6 +683,8 @@ async def patch(
         old_string: String to replace (supports fuzzy matching).
         new_string: Replacement string (applied verbatim).
         replace_all: If True, replace all occurrences; otherwise requires exactly one.
+        show_diff: If True, prepend a unified diff of the change to the display output.
+                   Pass True when you need to verify the exact lines changed.
     """
     try:
         resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
@@ -590,64 +709,24 @@ async def patch(
                 )
             enc = _detect_encoding(resolved)
             content = resolved.read_text(encoding=enc)
-
-            # Strategy 1: exact match (fast path)
-            count = content.count(old_string)
-            if count > 0:
-                if count > 1 and not replace_all:
-                    return tool_error(
-                        f"Found {count} occurrences in {path} — use replace_all=True to replace all",
-                        ctx=ctx,
-                    )
-                updated = content.replace(old_string, new_string)
-                resolved.write_text(updated, encoding=enc)
-                ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
-                old_preview = old_string[:120].replace("\n", "\\n")
-                new_preview = new_string[:120].replace("\n", "\\n")
-                display = (
-                    f"Patched: {path} ({count} replacement(s))\n"
-                    f"  - {old_preview!r}\n"
-                    f"  + {new_preview!r}"
-                )
-                return tool_output(
-                    display,
-                    ctx=ctx,
-                    path=str(resolved),
-                    replacements=count,
-                    strategy="exact",
-                )
-
-            # Strategies 2-4: fuzzy matching
-            for strategy_name, transform_fn in _FUZZY_STRATEGIES:
-                result = _fuzzy_apply(
-                    content, old_string, new_string, replace_all, transform_fn, strategy_name
-                )
-                if isinstance(result, str):
-                    return tool_error(result, ctx=ctx)
-                if result is not None:
-                    updated, count = result
-                    resolved.write_text(updated, encoding=enc)
-                    ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
-                    old_preview = old_string[:120].replace("\n", "\\n")
-                    new_preview = new_string[:120].replace("\n", "\\n")
-                    display = (
-                        f"Patched: {path} ({count} replacement(s), {strategy_name} strategy)\n"
-                        f"  - {old_preview!r}\n"
-                        f"  + {new_preview!r}"
-                    )
-                    return tool_output(
-                        display,
-                        ctx=ctx,
-                        path=str(resolved),
-                        replacements=count,
-                        strategy=strategy_name,
-                    )
-
-            return tool_error(
-                f"old_string not found in {path} — verify the text exists in the file",
-                ctx=ctx,
+            resolution = _resolve_patch_strategies(
+                content, old_string, new_string, replace_all, show_diff, path
             )
+            if isinstance(resolution, str):
+                return tool_error(resolution, ctx=ctx)
+            updated, display, count, strategy = resolution
+            resolved.write_text(updated, encoding=enc)
+            ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
     except ResourceBusyError:
         return tool_error(
             f"File {path} is being modified by another tool call — retry next turn", ctx=ctx
         )
+
+    display = await _run_lint_if_python(resolved, display)
+    return tool_output(
+        display,
+        ctx=ctx,
+        path=str(resolved),
+        replacements=count,
+        strategy=strategy,
+    )

@@ -86,40 +86,117 @@ Approval controls human permission; locks ensure structural correctness.
 - **Read-before-Write:** `patch` enforces that a file has been read in full prior to replacement. `CoDeps.file_partial_reads` prevents patching if the model only read a snippet.
 - **Staleness Tracking:** `CoDeps.file_read_mtimes` snapshots disk modification times at read. `write_file` and `patch` fail if the file on disk was modified before the write was committed.
 
-## 3. Tool Catalog & Flow Tree
+## 3. Tool Catalog
 
-Tools are segmented functionally and separated into visibility tiers:
-- **ALWAYS Visible:** Loaded immediately (e.g., search, fetch).
-- **DEFERRED Visible:** Exposed dynamically through `search_tools` (e.g., destructive operations, integrations).
+Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
 
-* **Workspace & File Tools**
-  * `read_file`, `glob`, `grep` *(ALWAYS, Auto)*
-  * `write_file`, `patch` *(DEFERRED, Approval Required, Locked)*
-* **Execution Environment**
-  * `run_shell_command` *(ALWAYS, Hybrid Approval Policy)*
-  * `execute_code` *(DEFERRED, Approval Required)*
-  * **Background Tasks:** `start_background_task` *(DEFERRED, Approval Required)* → `check_task_status`, `list_background_tasks`, `cancel_background_task` *(DEFERRED, Auto)*
-* **Cognition & Memory**
-  * **Recall:** `search_knowledge`, `list_knowledge`, `read_article`, `search_articles`, `search_memory` *(ALWAYS, Auto)*
-  * **Mutate:** `save_article`, `update_knowledge`, `append_knowledge` *(DEFERRED, Approval Required, Locked)*
-* **Delegation**
-  * `research_web`, `analyze_knowledge`, `reason_about` *(DEFERRED, Auto)*
-* **Web Integrations**
-  * `web_search`, `web_fetch` *(ALWAYS, Auto)*
-* **External Provider Integrations** *(Requires Provider Credentials/Config)*
-  * **Google:** `search_drive_files`, `read_drive_file`, `list_gmail_emails`, `search_gmail_emails`, `list_calendar_events`, `search_calendar_events` *(DEFERRED, Auto)* → `create_gmail_draft` *(DEFERRED, Approval Required)*
-  * **Obsidian:** `list_notes`, `search_notes`, `read_note` *(DEFERRED, Auto)*
-* **Introspection & Flow Tracking**
-  * `write_todos`, `read_todos`, `check_capabilities` *(ALWAYS, Auto)*
+### Introspection & Flow Tracking
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `check_capabilities` | A | — | — | — | Runtime doctor: binary probes, auth states, config |
+| `write_todos` | A | — | — | — | Replace in-session multi-turn checklist |
+| `read_todos` | A | — | — | — | Fetch current checklist |
+
+### Cognition & Knowledge — Read
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `search_knowledge` | A | — | — | — | BM25 full-text search across all knowledge artifacts |
+| `list_knowledge` | A | — | — | — | Paginate knowledge artifact metadata |
+| `read_article` | A | — | — | — | Fetch full markdown for a cached article by slug |
+| `search_articles` | A | — | — | — | Filter-search externally-fetched reference texts |
+| `search_memory` | A | — | — | — | Keyword search across historic session transcripts |
+
+### Workspace & Files — Read
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `glob` | A | — | — | — | List directory or find files by pattern |
+| `read_file` | A | — | — | — | Read workspace file; pagination hint + fuzzy name suggestions |
+| `grep` | A | — | — | — | Regex content search across workspace |
+
+### Web
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `web_search` | A | — | — | — | Brave API search with optional domain filter |
+| `web_fetch` | A | — | — | — | Fetch URL and convert to markdown |
+
+### Shell Execution
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `run_shell_command` | A | hybrid | — | — | Run blocking shell command; safe-prefix auto-approves, mutations prompt, destructive denied |
+
+### Workspace & Files — Write
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `write_file` | D | ✓ | ✓ | — | Create or overwrite a file |
+| `patch` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
+
+### Cognition & Knowledge — Write
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `update_knowledge` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
+| `append_knowledge` | D | ✓ | — | — | Append to a knowledge artifact |
+| `save_article` | D | ✓ | — | — | Persist web content as a local markdown artifact |
+
+### Background Tasks
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `start_background_task` | D | ✓ | — | — | Spawn unblocked process group; returns `task_id` |
+| `check_task_status` | D | — | — | — | Poll stdout/stderr and completion state of a task |
+| `cancel_background_task` | D | — | — | — | SIGTERM → SIGKILL a background task |
+| `list_background_tasks` | D | — | — | — | Enumerate active/completed tasks |
+
+### Code Execution
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `execute_code` | D | — | ✓ | — | Evaluate arbitrary code; combined stdout+stderr |
+
+### Delegation (Subagents)
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `research_web` | D | — | — | — | Deep web retrieval subagent |
+| `analyze_knowledge` | D | — | — | — | Cross-index deduction on internal + Drive knowledge |
+| `reason_about` | D | — | — | — | Pure inference subagent; no external access |
+
+### External — Obsidian *(gate: `obsidian_vault_path`)*
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `list_notes` | D | — | — | ✓ | Paginate Obsidian note paths |
+| `search_notes` | D | — | — | ✓ | Search notes by tag or folder |
+| `read_note` | D | — | — | ✓ | Read raw Obsidian markdown note |
+
+### External — Google *(gate: `google_credentials_path`)*
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `search_drive_files` | D | — | — | ✓ | Google Drive file search |
+| `read_drive_file` | D | — | — | ✓ | Read a Drive document as text |
+| `list_gmail_emails` | D | — | — | ✓ | Fetch recent inbox messages |
+| `search_gmail_emails` | D | — | — | ✓ | Search Gmail with advanced operators |
+| `list_calendar_events` | D | — | — | ✓ | Time-bounded Calendar query |
+| `search_calendar_events` | D | — | — | ✓ | Full-text Calendar search |
+| `create_gmail_draft` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
+
+**Total: 37 tools** (14 ALWAYS · 23 DEFERRED · 8 require approval · 10 config-gated)
 
 ## 4. Tool API Definitions
 
 ### Workspace & Files
 - **`glob(path: str, pattern: str, max_entries: int)`**: Recursively list directory contents or find specific files matching standard glob patterns.
-- **`read_file(path: str, start_line: int, end_line: int)`**: Fetch contents of an absolute path for inspection. Bounded by an optional line range. Max result 80k.
+- **`read_file(path: str, start_line: int, end_line: int)`**: Fetch contents of a workspace-relative path for inspection. Bounded by an optional line range; when a partial read stops before EOF, the display includes a `start_line=N` continuation hint. Missing-file errors include similar filenames from the same directory. Max result 80k.
 - **`grep(pattern: str, path: str, glob: str, case_insensitive: bool, output_mode: str, context_lines: int, head_limit: int, offset: int)`**: High-speed regex file searching using built-in Python parsing across the target directory constraint.
 - **`write_file(path: str, content: str)`**: Overwrite entirely or create a new system file with standard UTF-8 encoding.
-- **`patch(path: str, old_string: str, new_string: str, replace_all: bool)`**: Targeted snippet replacement. Fails if the `old_string` isn't found exactly, forcing precision context matching.
+- **`patch(path: str, old_string: str, new_string: str, replace_all: bool, show_diff: bool)`**: Targeted snippet replacement with fuzzy fallback (line-trimmed, indent-stripped, escape-expanded). Returns an error with context-expansion guidance if `old_string` matches more than once. Pass `show_diff=True` to include a unified diff in the response for verification.
 
 ### Execution Environment
 - **`run_shell_command(cmd: str, timeout: int)`**: Run blocking shell invocations. Checked dynamically: 'safe' prefixes (e.g. `ls`) execute automatically, mutations trigger user prompts, and destructive/injection sequences are outright denied.
