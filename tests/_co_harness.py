@@ -160,6 +160,22 @@ def _span_detail(row: _SpanRow) -> str:
         if system:
             parts.append(f"system={system}")
 
+    if row.name.startswith("chat "):
+        in_tokens = row.attributes.get("gen_ai.usage.input_tokens")
+        out_tokens = row.attributes.get("gen_ai.usage.output_tokens")
+        finish_reasons = row.attributes.get("gen_ai.response.finish_reasons", [])
+        if isinstance(finish_reasons, str):
+            try:
+                finish_reasons = json.loads(finish_reasons)
+            except json.JSONDecodeError:
+                finish_reasons = [finish_reasons]
+        if in_tokens is not None:
+            parts.append(f"in_tokens={in_tokens}")
+        if out_tokens is not None:
+            parts.append(f"out_tokens={out_tokens}")
+        if finish_reasons:
+            parts.append(f"finish={finish_reasons[0]}")
+
     final_result = row.attributes.get("final_result")
     if isinstance(final_result, str) and final_result:
         excerpt = final_result.replace("\n", " ")

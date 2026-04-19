@@ -39,6 +39,10 @@ _SLOW_MS = 2000
 _SUMMARY_PAT = re.compile(r"^\[pytest-harness\] (\S+) \| (.*)")
 # Detail line: [pytest-harness]   <dur>s | chat <model> | ...
 _DETAIL_PAT = re.compile(r"^\[pytest-harness\]\s{3}([\d.]+)s \| (chat \S+)")
+# Optional token/finish fields appended to detail lines by _co_harness._span_detail()
+_DETAIL_IN_PAT = re.compile(r"\bin_tokens=(\d+)")
+_DETAIL_OUT_PAT = re.compile(r"\bout_tokens=(\d+)")
+_DETAIL_FINISH_PAT = re.compile(r"\bfinish=(\S+)")
 # Pytest session summary line
 _SESSION_PAT = re.compile(r"(\d+) passed in ([\d.]+)s")
 
@@ -56,6 +60,7 @@ class ChatSpan(NamedTuple):
     output_tokens: int | None
     input_chars: int | None
     output_chars: int | None
+    output_msgs: str | None
 
 
 def _parse_kv(tail: str) -> dict[str, str]:
@@ -102,16 +107,19 @@ def _infer_flow(test_id: str) -> str:
     return re.sub(r"^test_|\.py$", "", mod).replace("_", " ") or "unknown"
 
 
-def _parse_log(log_path: Path) -> tuple[list[tuple[str, float]], float, float]:
+_LogSpan = tuple[str, float, int | None, int | None, str | None]
+
+
+def _parse_log(log_path: Path) -> tuple[list[_LogSpan], float, float]:
     """
     Parse a pytest harness log.
 
     Returns:
-        log_spans: (test_id, chat_duration_ms) for each chat detail line found
+        log_spans: (test_id, chat_duration_ms, in_tokens, out_tokens, finish) per chat detail line
         run_start_ts: estimated unix timestamp of run start
         run_end_ts: estimated unix timestamp of run end
     """
-    log_spans: list[tuple[str, float]] = []
+    log_spans: list[_LogSpan] = []
     current_test: str | None = None
     run_total_s = 0.0
 
@@ -131,7 +139,18 @@ def _parse_log(log_path: Path) -> tuple[list[tuple[str, float]], float, float]:
         if line.startswith("[pytest-harness]   ") and current_test:
             m3 = _DETAIL_PAT.match(line)
             if m3 and not m3.group(2).startswith("chat function::"):
-                log_spans.append((current_test, float(m3.group(1)) * 1000))
+                in_tok_m = _DETAIL_IN_PAT.search(line)
+                out_tok_m = _DETAIL_OUT_PAT.search(line)
+                finish_m = _DETAIL_FINISH_PAT.search(line)
+                log_spans.append(
+                    (
+                        current_test,
+                        float(m3.group(1)) * 1000,
+                        int(in_tok_m.group(1)) if in_tok_m else None,
+                        int(out_tok_m.group(1)) if out_tok_m else None,
+                        finish_m.group(1) if finish_m else None,
+                    )
+                )
 
     mtime = log_path.stat().st_mtime
     # Parse start time from filename like 20260418-110642-*.log
@@ -187,14 +206,14 @@ def _build_api(attrs: dict) -> str | None:
 
 
 def _match_spans(
-    log_spans: list[tuple[str, float]],
+    log_spans: list[_LogSpan],
     db_spans: list[dict],
 ) -> list[ChatSpan]:
     """Fuzzy-match log chat spans to DB spans by duration and build ChatSpan list."""
     used: set[int] = set()
     result: list[ChatSpan] = []
 
-    for test_id, log_dur_ms in log_spans:
+    for test_id, log_dur_ms, log_in_tokens, log_out_tokens, log_finish in log_spans:
         flow = _infer_flow(test_id)
 
         # Find closest unmatched DB span within tolerance
@@ -221,7 +240,7 @@ def _match_spans(
                     finish_reasons = [finish_reasons]
 
             input_msgs = attrs.get("gen_ai.input.messages", "")
-            output_msgs = attrs.get("gen_ai.output.messages", "")
+            output_msgs_raw = attrs.get("gen_ai.output.messages")
 
             result.append(
                 ChatSpan(
@@ -236,10 +255,15 @@ def _match_spans(
                     input_tokens=attrs.get("gen_ai.usage.input_tokens"),
                     output_tokens=attrs.get("gen_ai.usage.output_tokens"),
                     input_chars=len(input_msgs) if isinstance(input_msgs, str) else None,
-                    output_chars=len(output_msgs) if isinstance(output_msgs, str) else None,
+                    output_chars=len(output_msgs_raw)
+                    if isinstance(output_msgs_raw, str)
+                    else None,
+                    output_msgs=output_msgs_raw if isinstance(output_msgs_raw, str) else None,
                 )
             )
         else:
+            # No DB match — use log-extracted token values as fallback
+            finish_reasons = [log_finish] if log_finish else []
             result.append(
                 ChatSpan(
                     test_id=test_id,
@@ -249,11 +273,12 @@ def _match_spans(
                     api=None,
                     provider=None,
                     system=None,
-                    finish_reasons=[],
-                    input_tokens=None,
-                    output_tokens=None,
+                    finish_reasons=finish_reasons,
+                    input_tokens=log_in_tokens,
+                    output_tokens=log_out_tokens,
                     input_chars=None,
                     output_chars=None,
+                    output_msgs=None,
                 )
             )
 
@@ -320,6 +345,134 @@ def _cut_finding(warn_spans: list[ChatSpan], small_stops: list[ChatSpan]) -> str
             "These appear to be intentional minimal acknowledgements, not truncation."
         )
     return "No suspiciously small `stop` outputs or `length` terminations detected."
+
+
+def _cost_section(spans: list[ChatSpan]) -> str:
+    """Build ## 5.5 Cost & Throughput section."""
+    total_in = sum(s.input_tokens for s in spans if s.input_tokens is not None)
+    total_out = sum(s.output_tokens for s in spans if s.output_tokens is not None)
+
+    by_flow: dict[str, list[ChatSpan]] = defaultdict(list)
+    for span in spans:
+        by_flow[span.flow].append(span)
+
+    flow_rows = []
+    for flow, fspans in sorted(by_flow.items()):
+        in_toks = [s.input_tokens for s in fspans if s.input_tokens is not None]
+        out_toks = [s.output_tokens for s in fspans if s.output_tokens is not None]
+        total_in_flow = sum(in_toks)
+        total_out_flow = sum(out_toks)
+        throughputs = [
+            s.output_tokens / s.duration_ms * 1000
+            for s in fspans
+            if s.output_tokens is not None and s.duration_ms > 0
+        ]
+        median_tps = f"{statistics.median(throughputs):.1f}" if throughputs else "—"
+        max_tps = f"{max(throughputs):.1f}" if throughputs else "—"
+        eff_ratio = (
+            f"{total_out_flow / total_in_flow:.3f}" if total_in_flow > 0 and out_toks else "—"
+        )
+        flow_rows.append(
+            f"| {flow} | {len(fspans)} "
+            f"| {total_in_flow if in_toks else '—'} "
+            f"| {total_out_flow if out_toks else '—'} "
+            f"| {median_tps} | {max_tps} | {eff_ratio} |"
+        )
+
+    table = (
+        "| Flow | Calls | Total In Tokens | Total Out Tokens"
+        " | Median Tokens/s | Max Tokens/s | Output/Input Ratio |\n"
+        "|---|---:|---:|---:|---:|---:|---:|\n" + "\n".join(flow_rows)
+    )
+
+    return f"""\
+## 5.5 Cost & Throughput
+
+> Dollar cost: N/A — local Ollama only. Throughput (tokens/s) is the cost proxy.
+
+- Total input tokens: `{total_in if total_in else "—"}`
+- Total output tokens: `{total_out if total_out else "—"}`
+
+{table}
+"""
+
+
+def _reasoning_section(spans: list[ChatSpan]) -> str:
+    """Build ## 5.6 Reasoning Signals section."""
+    matched = [s for s in spans if s.finish_reasons]
+    spans_with_thinking = 0
+    spans_without_thinking = 0
+    thinking_char_totals: list[float] = []
+
+    by_flow: dict[str, list[ChatSpan]] = defaultdict(list)
+    for span in matched:
+        by_flow[span.flow].append(span)
+
+    for span in matched:
+        if not span.output_msgs:
+            spans_without_thinking += 1
+            continue
+        try:
+            messages = json.loads(span.output_msgs)
+        except (json.JSONDecodeError, TypeError):
+            spans_without_thinking += 1
+            continue
+        if not isinstance(messages, list):
+            spans_without_thinking += 1
+            continue
+        # gen_ai.output.messages: [{role, parts: [{type, content, ...}]}]
+        thinking = [
+            part
+            for msg in messages
+            if isinstance(msg, dict)
+            for part in msg.get("parts", [])
+            if isinstance(part, dict) and part.get("type") == "thinking"
+        ]
+        if thinking:
+            spans_with_thinking += 1
+            total_chars = sum(len(p.get("content", "")) for p in thinking)
+            output_chars = span.output_chars or 1
+            thinking_char_totals.append(total_chars / output_chars)
+        else:
+            spans_without_thinking += 1
+
+    total_matched = spans_with_thinking + spans_without_thinking
+    presence_pct = (
+        f"{spans_with_thinking / total_matched * 100:.1f}%" if total_matched > 0 else "N/A"
+    )
+    mean_ratio = f"{statistics.mean(thinking_char_totals):.3f}" if thinking_char_totals else "—"
+
+    presence_warning = (
+        "\n> WARNING: 0% thinking presence. Verify that reasoning model settings"
+        " are active in the spans being audited (TASK-1 prerequisite).\n"
+        if spans_with_thinking == 0 and total_matched > 0
+        else ""
+    )
+
+    flow_rows = []
+    for flow, fspans in sorted(by_flow.items()):
+        tool_call_spans = sum(1 for s in fspans if "tool_call" in s.finish_reasons)
+        stop_spans = sum(1 for s in fspans if "stop" in s.finish_reasons)
+        depth = f"{tool_call_spans / len(fspans):.2f}" if fspans else "—"
+        flow_rows.append(
+            f"| {flow} | {len(fspans)} | {tool_call_spans} | {stop_spans} | {depth} |"
+        )
+
+    table = (
+        "| Flow | DB-Matched Spans | Tool-Call Finish | Stop Finish | Tool-Call Depth |\n"
+        "|---|---:|---:|---:|---:|\n" + "\n".join(flow_rows)
+    )
+
+    return f"""\
+## 5.6 Reasoning Signals
+
+> Proxy signals — not semantic verdicts.
+
+- Thinking presence: `{presence_pct}` ({spans_with_thinking}/{total_matched} DB-matched spans)
+- Mean thinking-char ratio: `{mean_ratio}`
+{presence_warning}
+{table}
+"""
 
 
 def _generate_report(
@@ -480,6 +633,9 @@ this threshold are excluded from this report.
 
 {latency_lines}
 """)
+
+    sections.append(_cost_section(spans))
+    sections.append(_reasoning_section(spans))
 
     return "\n".join(sections)
 
