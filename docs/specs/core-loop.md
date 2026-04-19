@@ -174,8 +174,13 @@ Approval deferral uses the native Pydantic-AI objects directly:
 - `_collect_deferred_tool_approvals()` turns those pending calls into `DeferredToolResults`
 - `_run_approval_loop()` feeds that decision payload into the next segment
 
-Approval collection sequence:
+Approval collection sequence (per pending call):
 
+0. read `output.metadata[tool_call_id]`; if `_kind == "question"`, take the question path:
+   - construct `QuestionPrompt(question, options)` from metadata
+   - call `frontend.prompt_question(prompt)` to get the user's answer
+   - encode `ToolApproved(override_args={"user_answer": answer})` — tool resumes with the injected answer
+   - skip steps 1–7
 1. decode tool arguments with `decode_tool_args()`
 2. resolve one `ApprovalSubject`
 3. check `deps.session.session_approval_rules` for an exact `kind + value` match
@@ -362,9 +367,9 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent/_core.py` | main agent factory |
 | `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
-| `co_cli/context/tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
+| `co_cli/context/tool_approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
-| `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, and approval prompts |
+| `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, approval prompts, and question prompting (`QuestionPrompt`, `prompt_question`) |
 | `co_cli/context/session.py` | session filename generation and latest-session discovery |
 | `co_cli/context/skill_env.py` | skill-run environment save/restore and active-skill-name cleanup |

@@ -213,3 +213,45 @@ async def test_intent_routing_observation_no_tool():
                 assert not isinstance(part, ToolCallPart), (
                     f"Expected no tool call for observation statement, got {part.tool_name!r}"
                 )
+
+
+@pytest.mark.asyncio
+async def test_request_user_input_handled_by_run_turn():
+    """run_turn handles a question-type deferred call: invokes prompt_question and injects answer."""
+    deps = _make_deps("test-request-user-input")
+    frontend = SilentFrontend(question_answer="Alice")
+
+    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
+    last_details = "no run executed"
+    max_attempts = 3
+    for _attempt in range(max_attempts):
+        frontend.last_question = None
+        try:
+            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
+                turn = await run_turn(
+                    agent=_AGENT_NOREASON,
+                    user_input=(
+                        "Call the request_user_input tool now with "
+                        "question='What is your name?' — do not answer without calling the tool."
+                    ),
+                    deps=deps,
+                    message_history=[],
+                    frontend=frontend,
+                )
+        except (ModelHTTPError, ModelAPIError, TimeoutError) as err:
+            last_details = f"run_turn error: {type(err).__name__}: {err}"
+            continue
+
+        if frontend.last_question is None:
+            last_details = "prompt_question was not called — LLM did not call request_user_input"
+            continue
+
+        if "Alice" not in str(turn.messages):
+            last_details = "answer 'Alice' not found in turn messages"
+            continue
+
+        return
+
+    pytest.fail(
+        f"request_user_input integration test failed after {max_attempts} attempts: {last_details}"
+    )

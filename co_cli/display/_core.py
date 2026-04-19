@@ -1,6 +1,7 @@
 """Themed terminal display — console, semantic styles, display helpers, Frontend, TerminalFrontend."""
 
 import signal
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from rich.console import Console, Group
@@ -169,6 +170,14 @@ def prompt_selection(
 # -- Frontend — abstraction for display + user interaction ----------
 
 
+@dataclass(frozen=True)
+class QuestionPrompt:
+    """Structured question prompt for mid-execution user input."""
+
+    question: str
+    options: list[str] | None = None
+
+
 @runtime_checkable
 class Frontend(Protocol):
     """Display and interaction contract for the orchestration layer."""
@@ -215,6 +224,10 @@ class Frontend(Protocol):
 
     def prompt_approval(self, subject: ApprovalSubject) -> str:
         """Prompt user for approval. Returns 'y', 'n', or 'a'."""
+        ...
+
+    def prompt_question(self, prompt: QuestionPrompt) -> str:
+        """Prompt user for a free-text or constrained answer. Returns the user's answer."""
         ...
 
     def prompt_confirm(self, message: str) -> bool:
@@ -480,6 +493,28 @@ class TerminalFrontend:
             signal.signal(signal.SIGINT, prev_handler)
 
         return choice
+
+    def prompt_question(self, prompt: QuestionPrompt) -> str:
+        """Prompt user for a constrained or free-text answer with SIGINT handler swap."""
+        self._clear_status_live()
+        if prompt.options:
+            body = f"[accent]{prompt.question}[/accent]\n[hint]Options: {' | '.join(prompt.options)}[/hint]"
+        else:
+            body = f"[accent]{prompt.question}[/accent]"
+        console.print(Panel(body, title="Question", border_style="info", title_align="left"))
+
+        prev_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            if prompt.options:
+                return Prompt.ask(
+                    "",
+                    choices=prompt.options,
+                    console=console,
+                )
+            return Prompt.ask("Answer", console=console)
+        finally:
+            signal.signal(signal.SIGINT, prev_handler)
 
     def prompt_confirm(self, message: str) -> bool:
         """Prompt user for a yes/no confirmation. Returns True if user types 'y'."""

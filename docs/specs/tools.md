@@ -42,30 +42,34 @@ The tool ecosystem relies on core infrastructure modules to handle execution rou
 
 ```mermaid
 flowchart TD
-    TURN([Per Turn]) --> FILTER["_approval_resume_filter"]
-    FILTER --> SEG[_execute_stream_segment]
-    SEG --> T{tool called?}
+    TURN([run_turn]) --> SEG["_execute_stream_segment\n(initial segment)"]
+    SEG --> T{output?}
 
-    T -->|auto| EX["Execute → tool_output() → ToolReturn"]
-    T -->|approval-required| PAUSE["Pause — DeferredToolRequests"]
+    T -->|str — done| DONE([Turn complete])
+    T -->|DeferredToolRequests| SETNAMES["_run_approval_loop:\nresume_tool_names = frozenset of pending tool names\n_approval_resume_filter narrows toolset on resume"]
 
-    PAUSE --> COLLECT["_collect_deferred_tool_approvals:
-1. decode_tool_args → resolve_approval_subject
-2. is_auto_approved? → approve silently
-3. prompt user: y / n / a"]
-    COLLECT --> NARROW["resume_tool_names = approved names;
-one-shot allowlist:
-only those + ALWAYS visible"]
-    NARROW --> AP{approved?}
-    AP -->|yes| RESUME["_execute_stream_segment
-(main agent)"]
-    AP -->|no| DENY["ToolDenied → model notified"]
-    RESUME --> MORE{more pending?}
-    DENY --> MORE
+    SETNAMES --> COLLECT["_collect_deferred_tool_approvals:\nfor each pending call →"]
+
+    COLLECT --> QK{_kind == 'question'?}
+    QK -->|yes| QANS["prompt user → ToolApproved\n(override_args={user_answer})"]
+    QK -->|no| STD["decode_tool_args\n→ resolve_approval_subject"]
+
+    STD --> AUTO{is_auto_approved?}
+    AUTO -->|yes| SILENT["approvals[id] = True\n(silent — session rule match)"]
+    AUTO -->|no| PROMPT["prompt user: y / n / a"]
+    PROMPT --> REC["record_approval_choice:\ny/a → approvals[id] = True\na also → remember_tool_approval\nn → approvals[id] = ToolDenied"]
+
+    QANS --> MORE{more calls?}
+    SILENT --> MORE
+    REC --> MORE
+
     MORE -->|yes| COLLECT
-    MORE -->|no| DONE
+    MORE -->|no| RESUME["_execute_stream_segment\n(deferred_tool_results=approvals)"]
 
-    EX --> DONE([Turn complete])
+    RESUME --> AGAIN{output?}
+    AGAIN -->|DeferredToolRequests| SETNAMES
+    AGAIN -->|str — done| CLEAR["resume_tool_names = None"]
+    CLEAR --> DONE
 ```
 
 **Execution Pipeline via CoToolLifecycle:**
@@ -89,6 +93,12 @@ Approval controls human permission; locks ensure structural correctness.
 ## 3. Tool Catalog
 
 Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
+
+### User Interaction
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `request_user_input` | A | — | — | — | Pause mid-execution to ask the user a clarifying question; resume with injected answer |
 
 ### Introspection & Flow Tracking
 
@@ -187,7 +197,7 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 | `search_calendar_events` | D | — | — | ✓ | Full-text Calendar search |
 | `create_gmail_draft` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
 
-**Total: 37 tools** (14 ALWAYS · 23 DEFERRED · 8 require approval · 10 config-gated)
+**Total: 38 tools** (15 ALWAYS · 23 DEFERRED · 8 require approval · 10 config-gated)
 
 ## 4. Tool API Definitions
 
@@ -234,6 +244,9 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 - **`create_gmail_draft(to: str, subject: str, body: str)`**: Draft an outgoing message thread (does NOT automatically send).
 - **`list_calendar_events(days_back: int, days_ahead: int, max_results: int)`**: Timebox bounded query of Google Calendar scheduling.
 - **`search_calendar_events(query: str, days_back: int, days_ahead: int, max_results: int)`**: Deep text search of scheduling, descriptions, and venues.
+
+### User Interaction
+- **`request_user_input(question: str, options: list[str] | None, user_answer: str | None)`**: Pause mid-execution to ask the user a clarifying question. Raises `QuestionRequired` (subclass of `ApprovalRequired`) on the first call; the orchestrator prompts the user via `frontend.prompt_question()` and resumes the same tool call with `ToolApproved(override_args={"user_answer": ...})`. Free-text or constrained (options list). Do not supply `user_answer` — it is injected by the orchestrator.
 
 ### Introspection
 - **`write_todos(todos: list)`**: State replacement for multi-turn checklist tracking.

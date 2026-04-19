@@ -3,19 +3,29 @@
 from typing import Any
 
 from co_cli.context.tool_approvals import ApprovalSubject
+from co_cli.display._core import QuestionPrompt
 
 
 class SilentFrontend:
     """No-op frontend for tests. Pass approval_response to control deferral behaviour:
     - "y" (default): auto-approve all deferred tools
     - "n": deny all deferred tools
+    Pass question_answer to control the response for prompt_question calls.
     """
 
-    def __init__(self, *, approval_response: str = "y", confirm_response: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        approval_response: str = "y",
+        confirm_response: bool = False,
+        question_answer: str = "",
+    ) -> None:
         self.statuses: list[str] = []
         self._approval_response = approval_response
         self._confirm_response = confirm_response
+        self._question_answer = question_answer
         self.last_approval_subject: ApprovalSubject | None = None
+        self.last_question: QuestionPrompt | None = None
 
     def on_text_delta(self, accumulated: str) -> None:
         pass
@@ -51,8 +61,18 @@ class SilentFrontend:
         self.last_approval_subject = subject
         return self._approval_response
 
+    def prompt_question(self, prompt: QuestionPrompt) -> str:
+        self.last_question = prompt
+        return self._question_answer
+
     def prompt_confirm(self, message: str) -> bool:
         return self._confirm_response
+
+    def clear_status(self) -> None:
+        pass
+
+    def set_input_active(self, active: bool) -> None:
+        pass
 
     def cleanup(self) -> None:
         pass

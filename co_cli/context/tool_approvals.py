@@ -13,9 +13,22 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from pydantic_ai import DeferredToolResults, ToolDenied
+from pydantic_ai import ApprovalRequired, DeferredToolResults, ToolDenied
 
 from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
+
+
+class QuestionRequired(ApprovalRequired):
+    """Raised by request_user_input to pause execution for a user-input question.
+
+    Subclasses ApprovalRequired so pydantic-ai's deferred tool mechanism handles it.
+    The orchestrator detects this variant via DeferredToolRequests.metadata["_kind"].
+    """
+
+    def __init__(self, *, question: str, options: list[str] | None = None) -> None:
+        super().__init__(metadata={"_kind": "question", "question": question, "options": options})
+        self.question = question
+        self.options = options
 
 
 @dataclass(frozen=True)

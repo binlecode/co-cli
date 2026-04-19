@@ -19,6 +19,7 @@ from pydantic_ai import (
     DeferredToolRequests,
     DeferredToolResults,
     RunContext,
+    ToolApproved,
 )
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
@@ -68,7 +69,7 @@ from co_cli.context.tool_approvals import (
 )
 from co_cli.context.tool_display import format_for_display, get_tool_start_args_display
 from co_cli.deps import CoDeps
-from co_cli.display._core import Frontend
+from co_cli.display._core import Frontend, QuestionPrompt
 from co_cli.display._stream_renderer import StreamRenderer
 
 type SessionAgent = Agent[CoDeps, str | DeferredToolRequests]
@@ -194,6 +195,21 @@ async def _collect_deferred_tool_approvals(
     approvals = DeferredToolResults()
 
     for call in output.approvals:
+        meta = output.metadata.get(call.tool_call_id, {})
+
+        # Question path — inject user answer via override_args instead of approval
+        if meta.get("_kind") == "question":
+            q_prompt = QuestionPrompt(
+                question=meta.get("question", ""),
+                options=meta.get("options"),
+            )
+            answer = frontend.prompt_question(q_prompt) if frontend is not None else ""
+            approvals.approvals[call.tool_call_id] = ToolApproved(
+                override_args={"user_answer": answer}
+            )
+            continue
+
+        # Standard approval path
         args = decode_tool_args(call.args)
         subject = resolve_approval_subject(call.tool_name, args)
 

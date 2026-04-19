@@ -40,10 +40,13 @@ from co_cli.tools.task_control import (
     start_background_task,
 )
 from co_cli.tools.todo import read_todos, write_todos
+from co_cli.tools.user_input import request_user_input
 from co_cli.tools.web import web_fetch, web_search
 
 # Flat explicit list — order is presentation order (no behavioral impact).
 NATIVE_TOOLS: tuple[Callable, ...] = (
+    # User interaction
+    request_user_input,
     # Introspection & todos
     check_capabilities,
     write_todos,
