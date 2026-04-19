@@ -1,14 +1,16 @@
-"""History processors for automatic context governance.
+"""History processors and preflight helpers for automatic context governance.
 
-Processors are chained via ``Agent(history_processors=[...])``. They run
+History processors are chained via ``Agent(history_processors=[...])``. They run
 before every model request and transform the message list in-place.
 
-Public API (registered on the agent):
+Registered processors (pure transformers — no deps mutation):
     truncate_tool_results        — sync, content-clears compactable tool results by recency
     compact_assistant_responses  — sync, caps large TextPart/ThinkingPart in older ModelResponse
-    detect_safety_issues         — sync, doom-loop detection + shell reflection cap
-    append_recalled_memories     — async, appends recalled memories at the message tail on each new user turn
     summarize_history_window     — async, summarizes middle messages via inline LLM or static marker
+
+Preflight callables (called explicitly by run_turn() before model-bound segments):
+    build_recall_injection       — async, returns date + personality + recall injection and recall-fired flag
+    build_safety_injection       — sync, returns doom-loop / shell-reflection injection messages and flags
 """
 
 from __future__ import annotations
@@ -679,7 +681,7 @@ async def summarize_history_window(
 
 
 # ---------------------------------------------------------------------------
-# 4. append_recalled_memories (async — memory recall, no LLM)
+# build_recall_injection — preflight callable (async — memory recall, no LLM)
 # ---------------------------------------------------------------------------
 
 
@@ -702,42 +704,34 @@ def _count_user_turns(messages: list[ModelMessage]) -> int:
     return count
 
 
-async def append_recalled_memories(
+async def build_recall_injection(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
-) -> list[ModelMessage]:
-    """Append personality memories and recalled knowledge at the message tail.
+    current_input: str | None = None,
+) -> tuple[ModelRequest, int, bool]:
+    """Return (injection_message, user_turn_count, recall_fired) for model-bound preflight.
 
-    Personality memories are injected on every request — moved out of
-    @agent.instructions to prevent static-prompt cache invalidation when
-    personality-context artifacts change mid-session.
+    Injects date, personality memories, and (conditionally) recalled knowledge.
+    ``current_input`` is the pending user message not yet in ``messages`` — used
+    to match the turn count the SDK would compute when running history processors.
 
-    Knowledge recall fires once per new user turn — no heuristic gate.
-    _recall_for_context is FTS5/BM25 or grep fallback — zero LLM cost.
-
-    State is stored on ctx.deps.session.memory_recall_state.
+    Caller updates memory_recall_state when recall_fired is True:
+      state.last_recall_user_turn = user_turn_count
+      state.recall_count += 1
     """
-    # INTENTIONAL DEVIATION from pydantic-ai's pure-transformer contract:
-    # This processor writes to ctx.deps.session.memory_recall_state
-    # (last_recall_user_turn, recall_count). Pure transformers should not mutate deps.
-    #
-    # Why state cannot be local: same reasoning as detect_safety_issues() — fresh
-    # call per request, state would not survive across segments.
-    #
-    # Safety invariant: memory_recall_state is initialised fresh per session in
-    # CoSessionState.__post_init__; it does not leak across sessions.
     state: MemoryRecallState = ctx.deps.session.memory_recall_state
-    user_turn_count = _count_user_turns(messages)
-    user_msg = _get_last_user_message(messages)
+    # Match the turn count the SDK sees (user_input appended before processors)
+    user_turn_count = _count_user_turns(messages) + (1 if current_input is not None else 0)
+    user_msg = current_input or _get_last_user_message(messages)
 
     injection_parts: list[SystemPromptPart] = []
 
-    # Current date: on every request — can change at midnight; tail-append keeps it accurate
+    # Current date: on every preflight — can change at midnight
     from datetime import date
 
     injection_parts.append(SystemPromptPart(content=f"Today is {date.today().isoformat()}."))
 
-    # Personality memories: on every request (append-only invariant — never in @agent.instructions)
+    # Personality memories: on every preflight (never in @agent.instructions — cache invalidation)
     if ctx.deps.config.personality:
         from co_cli.prompts.personalities._injector import _load_personality_memories
 
@@ -746,13 +740,13 @@ async def append_recalled_memories(
             injection_parts.append(SystemPromptPart(content=personality_content))
 
     # Knowledge recall: only on new user turns
+    recall_fired = False
     if user_msg and user_turn_count > state.last_recall_user_turn:
         from co_cli.tools.knowledge.read import _recall_for_context
 
         try:
             result = await _recall_for_context(ctx, user_msg, max_results=3)
-            state.recall_count += 1
-            state.last_recall_user_turn = user_turn_count
+            recall_fired = True
             # _recall_for_context always returns a str via tool_output(); cast narrows ToolReturnContent
             if (result.metadata or {}).get("count", 0) > 0:
                 memory_content = cast("str", result.return_value)
@@ -763,13 +757,13 @@ async def append_recalled_memories(
                     SystemPromptPart(content=f"Relevant memories:\n{memory_content}")
                 )
         except Exception:
-            log.debug("append_recalled_memories: _recall_for_context failed", exc_info=True)
+            log.debug("build_recall_injection: _recall_for_context failed", exc_info=True)
 
-    return [*messages, ModelRequest(parts=injection_parts)]
+    return ModelRequest(parts=injection_parts), user_turn_count, recall_fired
 
 
 # ---------------------------------------------------------------------------
-# 3. detect_safety_issues (sync — doom loop + shell reflection cap)
+# build_safety_injection — preflight callable (sync — doom loop + shell reflection cap)
 # ---------------------------------------------------------------------------
 
 
@@ -842,40 +836,33 @@ def _count_consecutive_shell_errors(messages: list[ModelMessage]) -> int:
     return count
 
 
-def detect_safety_issues(
-    ctx: RunContext[CoDeps],
+def build_safety_injection(
+    deps: CoDeps,
     messages: list[ModelMessage],
-) -> list[ModelMessage]:
-    """Scan recent tool calls for doom loops and shell error streaks.
+) -> tuple[list[ModelRequest], bool, bool]:
+    """Return (injections, doom_flagged, reflection_flagged) for model-bound preflight.
 
-    State is stored on ctx.deps.runtime.safety_state (turn-scoped, reset per turn).
-    Thresholds from ctx.deps.config.doom_loop_threshold and ctx.deps.config.max_reflections.
+    Scans for doom loops and shell error streaks. Returns empty list when no issues
+    detected or when the relevant flag is already set.
+
+    Caller updates safety_state flags when the corresponding bool is True:
+      if doom_flagged: state.doom_loop_injected = True
+      if reflection_flagged: state.reflection_injected = True
     """
-    # INTENTIONAL DEVIATION from pydantic-ai's pure-transformer contract:
-    # This processor writes to ctx.deps.runtime.safety_state (doom_loop_injected,
-    # reflection_injected). Pure transformers should not mutate deps.
-    #
-    # Why state cannot be local: pydantic-ai constructs a fresh processor call per
-    # model request. Local variables would not survive across segments within a
-    # single turn (e.g. initial segment + approval-resume segments).
-    #
-    # Safety invariant: safety_state is reset by reset_for_turn() at each foreground
-    # turn entry, so cross-turn state leakage cannot occur.
-    state: SafetyState | None = ctx.deps.runtime.safety_state
-    if state is None:
-        return messages
-    if state.doom_loop_injected and state.reflection_injected:
-        return messages
+    state: SafetyState | None = deps.runtime.safety_state
+    if state is None or (state.doom_loop_injected and state.reflection_injected):
+        return [], False, False
 
-    doom_threshold = ctx.deps.config.doom_loop_threshold
-    max_refl = ctx.deps.config.max_reflections
+    doom_threshold = deps.config.doom_loop_threshold
+    max_refl = deps.config.max_reflections
 
     consecutive_same = _count_consecutive_same_calls(messages)
     consecutive_shell_errors = _count_consecutive_shell_errors(messages)
 
-    injections: list[ModelMessage] = []
+    injections: list[ModelRequest] = []
+    doom_flagged = False
+    reflection_flagged = False
 
-    # Doom loop detection
     if not state.doom_loop_injected and consecutive_same >= doom_threshold:
         injections.append(
             ModelRequest(
@@ -889,10 +876,9 @@ def detect_safety_issues(
                 ]
             )
         )
-        state.doom_loop_injected = True
+        doom_flagged = True
         log.warning("Doom loop detected: %d identical tool calls", consecutive_same)
 
-    # Shell reflection cap
     if not state.reflection_injected and consecutive_shell_errors >= max_refl:
         injections.append(
             ModelRequest(
@@ -906,9 +892,7 @@ def detect_safety_issues(
                 ]
             )
         )
-        state.reflection_injected = True
+        reflection_flagged = True
         log.warning("Shell reflection cap: %d consecutive errors", consecutive_shell_errors)
 
-    if injections:
-        return messages + injections
-    return messages
+    return injections, doom_flagged, reflection_flagged

@@ -1,6 +1,8 @@
 """MCP toolset building and tool discovery."""
 
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 from pydantic_ai.toolsets import DeferredLoadingToolset
 
@@ -10,20 +12,37 @@ from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 logger = logging.getLogger(__name__)
 
 
-def _build_mcp_toolsets(config: Settings) -> list:
-    """Build MCP toolsets wrapped with DeferredLoadingToolset for SDK-native discovery."""
+@dataclass(frozen=True)
+class _MCPToolsetEntry:
+    """MCP toolset paired with its build-time policy and direct server reference.
+
+    ``server`` is the raw MCPServer (before approval_required() wrapping) so
+    ``list_tools()`` can be called directly without walking the wrapper chain.
+    ``approval`` and ``prefix`` are recorded at build time; discovery reads them
+    without inspecting wrapper topology.
+    """
+
+    toolset: DeferredLoadingToolset
+    server: Any  # MCPServer subclass — lazily imported; avoids top-level pydantic_ai.mcp import
+    approval: bool
+    prefix: str
+
+
+def _build_mcp_toolsets(config: Settings) -> list[_MCPToolsetEntry]:
+    """Build MCP toolsets and record their policy at construction time."""
     if not config.mcp_servers:
         return []
     from pydantic_ai.mcp import MCPServerSSE, MCPServerStdio, MCPServerStreamableHTTP
 
-    mcp_toolsets = []
+    entries: list[_MCPToolsetEntry] = []
     for name, cfg in config.mcp_servers.items():
         if cfg.url:
-            # HTTP transport — SSE when URL ends with /sse, else StreamableHTTP
             if cfg.url.rstrip("/").endswith("/sse"):
-                server = MCPServerSSE(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
+                mcp_server = MCPServerSSE(
+                    cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout
+                )
             else:
-                server = MCPServerStreamableHTTP(
+                mcp_server = MCPServerStreamableHTTP(
                     cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout
                 )
         else:
@@ -33,61 +52,53 @@ def _build_mcp_toolsets(config: Settings) -> list:
                 )
                 continue
             env = dict(cfg.env) if cfg.env else {}
-            server = MCPServerStdio(
+            mcp_server = MCPServerStdio(
                 cfg.command,
                 args=cfg.args,
                 timeout=cfg.timeout,
                 env=env or None,
                 tool_prefix=cfg.prefix or name,
             )
-        if cfg.approval == "ask":
-            server = server.approval_required()
-        mcp_toolsets.append(DeferredLoadingToolset(server))
-    return mcp_toolsets
+        approval = cfg.approval == "ask"
+        inner = mcp_server.approval_required() if approval else mcp_server
+        entries.append(
+            _MCPToolsetEntry(
+                toolset=DeferredLoadingToolset(inner),
+                server=mcp_server,
+                approval=approval,
+                prefix=cfg.prefix or name,
+            )
+        )
+    return entries
 
 
 async def discover_mcp_tools(
-    mcp_toolsets: list, exclude: set[str]
+    mcp_entries: list[_MCPToolsetEntry], exclude: set[str]
 ) -> tuple[list[str], dict[str, str], dict[str, ToolInfo]]:
     """Discover MCP tool names by connecting to servers and listing tools.
 
-    Each server self-connects on list_tools() (pydantic-ai lazy init).
-    Walks the .wrapped chain recursively to find MCPServer instances
-    (handles DeferredLoadingToolset and ApprovalRequiredToolset wrappers).
-    Returns (tool_names, errors, mcp_index) where errors maps server prefix to
-    the error string for each server where list_tools() failed, and mcp_index maps
-    tool name to ToolInfo metadata. Tool names exclude any in ``exclude``.
-    MCP tools are deferred by default (visibility=VisibilityPolicyEnum.DEFERRED).
+    Reads policy (approval, prefix) from the recorded ``_MCPToolsetEntry``; no
+    wrapper chain walking. Returns (tool_names, errors, mcp_index) where errors
+    maps server prefix to the error string for each server where list_tools()
+    failed, and mcp_index maps tool name to ToolInfo metadata. Tool names exclude
+    any in ``exclude``. MCP tools are deferred by default (DEFERRED visibility).
     """
-    from pydantic_ai.mcp import MCPServer
-
     mcp_tool_names: list[str] = []
     errors: dict[str, str] = {}
     mcp_index: dict[str, ToolInfo] = {}
 
-    for toolset in mcp_toolsets:
-        # Walk .wrapped chain recursively to find MCPServer
-        inner = toolset
-        wrapper_count = 0
-        while hasattr(inner, "wrapped"):
-            inner = inner.wrapped
-            wrapper_count += 1
-        if not isinstance(inner, MCPServer):
-            continue
-        prefix = inner.tool_prefix or ""
+    for entry in mcp_entries:
+        prefix = entry.prefix
         try:
-            tools = await inner.list_tools()
+            tools = await entry.server.list_tools()
             for t in tools:
                 name = f"{prefix}_{t.name}" if prefix else t.name
                 if name not in exclude:
                     mcp_tool_names.append(name)
-                    # DeferredLoadingToolset adds 1 wrapper level;
-                    # extra levels indicate an approval wrapper
-                    approval = wrapper_count > 1
                     mcp_index[name] = ToolInfo(
                         name=name,
                         description=t.description or "",
-                        approval=approval,
+                        approval=entry.approval,
                         source=ToolSourceEnum.MCP,
                         visibility=VisibilityPolicyEnum.DEFERRED,
                         integration=prefix or None,

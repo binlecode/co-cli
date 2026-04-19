@@ -22,11 +22,12 @@ class QuestionRequired(ApprovalRequired):
     """Raised by clarify to pause execution for a user-input question.
 
     Subclasses ApprovalRequired so pydantic-ai's deferred tool mechanism handles it.
-    The orchestrator detects this variant via DeferredToolRequests.metadata["_kind"].
+    The orchestrator discriminates this variant by checking for "question" in metadata
+    (present only on QuestionRequired, not on plain ApprovalRequired).
     """
 
     def __init__(self, *, question: str, options: list[str] | None = None) -> None:
-        super().__init__(metadata={"_kind": "question", "question": question, "options": options})
+        super().__init__(metadata={"question": question, "options": options})
         self.question = question
         self.options = options
 

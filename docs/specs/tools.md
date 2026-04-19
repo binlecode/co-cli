@@ -50,7 +50,7 @@ flowchart TD
 
     SETNAMES --> COLLECT["_collect_deferred_tool_approvals:\nfor each pending call →"]
 
-    COLLECT --> QK{_kind == 'question'?}
+    COLLECT --> QK{"question" in metadata?}
     QK -->|yes| QANS["prompt user → ToolApproved\n(override_args={user_answer})"]
     QK -->|no| STD["decode_tool_args\n→ resolve_approval_subject"]
 

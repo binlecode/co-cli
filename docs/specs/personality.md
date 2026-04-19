@@ -35,12 +35,12 @@ Personality enters the agent via two paths:
    construction. This is set once as `Agent(instructions=...)` and does not change
    within a session.
 
-2. **Per-turn** — `_load_personality_memories()` is called inside the `append_recalled_memories`
-   history processor on every request. The result injects the top-5 most recent memories tagged
-   `personality-context` from `~/.co-cli/knowledge/`, letting learned context about the user
-   accumulate over sessions without modifying the soul files. The disk scan result is cached for
-   the process lifetime; call `invalidate_personality_cache()` after any write that changes
-   `personality-context` tags.
+2. **Per-turn** — `_load_personality_memories()` is called inside the `build_recall_injection`
+   preflight callable before each model-bound segment. The result injects the top-5 most recent
+   memories tagged `personality-context` from `~/.co-cli/knowledge/`, letting learned context
+   about the user accumulate over sessions without modifying the soul files. The disk scan result
+   is cached for the process lifetime; call `invalidate_personality_cache()` after any write that
+   changes `personality-context` tags.
 
 ```
 Session start
@@ -57,7 +57,7 @@ build_static_instructions(config)
 
 Each request
     ↓
-append_recalled_memories()   — history processor (tail-appended SystemPromptPart)
+build_recall_injection()     — preflight callable (tail-appended SystemPromptPart)
     → calls _load_personality_memories() → top-5 "personality-context" memories
     → injected as ## Learned Context block at message tail
 ```
@@ -166,4 +166,4 @@ for missing mindset files.
 | `co_cli/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/_core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agent/_core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
-| `co_cli/context/_history.py` | `append_recalled_memories()` — tail-appended personality + knowledge recall processor |
+| `co_cli/context/_history.py` | `build_recall_injection()` — preflight callable for tail-appended personality + knowledge recall |

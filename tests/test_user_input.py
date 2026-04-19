@@ -87,10 +87,12 @@ async def test_request_user_input_returns_error_when_no_answer_on_resume() -> No
 
 
 @pytest.mark.asyncio
-async def test_question_required_metadata_has_correct_kind() -> None:
-    """QuestionRequired populates metadata with _kind=question for orchestrator detection."""
+async def test_question_required_metadata_has_question_discriminator() -> None:
+    """QuestionRequired populates metadata with 'question' key for orchestrator discrimination."""
     ctx = _make_ctx(tool_call_approved=False)
     with pytest.raises(QuestionRequired) as exc_info:
         await clarify(ctx, question="Pick one.", options=["a", "b"])
     exc = exc_info.value
-    assert exc.metadata == {"_kind": "question", "question": "Pick one.", "options": ["a", "b"]}
+    assert exc.metadata == {"question": "Pick one.", "options": ["a", "b"]}
+    assert "question" in exc.metadata
+    assert "_kind" not in exc.metadata

@@ -68,10 +68,8 @@ flowchart TD
     subgraph PerReq["M2 + M3 — per ModelRequestNode"]
         R1[truncate_tool_results<br/>M2a]
         R2[compact_assistant_responses<br/>M2b]
-        R3[detect_safety_issues]
-        R4[append_recalled_memories]
         R5[summarize_history_window<br/>M3]
-        R1 --> R2 --> R3 --> R4 --> R5
+        R1 --> R2 --> R5
     end
 
     subgraph Window["M3 — window compaction"]
@@ -117,7 +115,7 @@ sequenceDiagram
     U->>RT: user prompt
     RT->>RT: reset_for_turn()
     RT->>AG: run_stream_events (request #1)
-    AG->>HP: M2a, M2b, safety, recall, M3<br/>token_count ≤ threshold → fast path
+    AG->>HP: M2a, M2b, M3<br/>token_count ≤ threshold → fast path
     AG->>M: HTTP request
     M-->>AG: ToolCallPart(read_file)
     AG->>TL: execute tool
@@ -585,7 +583,7 @@ Per-tool `max_result_size` (M1) is a registration parameter in `co_cli/agent/_na
 
 | File | Purpose |
 |---|---|
-| `co_cli/context/_history.py` | All five history processors; `plan_compaction_boundaries` (shared planner); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `PROACTIVE_COMPACTION_RATIO`, `TAIL_FRACTION`, `COMPACTABLE_KEEP_RECENT`. |
+| `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `compact_assistant_responses`, `summarize_history_window`); `plan_compaction_boundaries` (shared planner); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `PROACTIVE_COMPACTION_RATIO`, `TAIL_FRACTION`, `COMPACTABLE_KEEP_RECENT`. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
 | `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry. |
 | `co_cli/context/tool_categories.py` | `COMPACTABLE_TOOLS` (M2 scope); `FILE_TOOLS` (enrichment file-path scope); `PATH_NORMALIZATION_TOOLS`. |

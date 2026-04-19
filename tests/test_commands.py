@@ -46,7 +46,7 @@ _AGENT = Agent(
     model_settings=_LLM_MODEL.settings_noreason,
     retries=_CONFIG_NO_MCP.tool_retries,
     output_type=[str, DeferredToolRequests],
-    toolsets=[_TOOL_REG.toolset, *_TOOL_REG.mcp_toolsets],
+    toolsets=[_TOOL_REG.toolset, *(e.toolset for e in _TOOL_REG.mcp_toolsets)],
 )
 
 

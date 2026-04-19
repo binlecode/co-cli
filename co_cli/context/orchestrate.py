@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
+from co_cli.context._history import build_recall_injection, build_safety_injection
 from co_cli.context.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -197,8 +198,8 @@ async def _collect_deferred_tool_approvals(
     for call in output.approvals:
         meta = output.metadata.get(call.tool_call_id, {})
 
-        # Question path — inject user answer via override_args instead of approval
-        if meta.get("_kind") == "question":
+        # Clarify path — "question" key is present only on QuestionRequired metadata
+        if "question" in meta:
             q_prompt = QuestionPrompt(
                 question=meta.get("question", ""),
                 options=meta.get("options"),
@@ -316,11 +317,14 @@ async def _execute_stream_segment(
     deps: CoDeps,
     model_settings: ModelSettings | None,
     frontend: Frontend,
+    message_history: list[ModelMessage] | None = None,
 ) -> None:
     """Run one stream segment and update turn state in-place.
 
-    Reads turn_state.current_input, current_history, tool_approval_decisions,
-    and latest_usage. After the call:
+    Uses ``message_history`` when provided (preflight-extended history from
+    _run_model_preflight); falls back to turn_state.current_history for
+    approval-resume segments. Reads turn_state.current_input,
+    tool_approval_decisions, and latest_usage. After the call:
     - latest_result holds the AgentRunResult
     - latest_streamed_text reflects whether text was streamed
     - latest_usage is updated from the result
@@ -337,7 +341,9 @@ async def _execute_stream_segment(
             async for event in agent.run_stream_events(
                 turn_state.current_input,
                 deps=deps,
-                message_history=turn_state.current_history,
+                message_history=message_history
+                if message_history is not None
+                else turn_state.current_history,
                 model_settings=model_settings,
                 usage=turn_state.latest_usage,
                 usage_limits=UsageLimits(request_limit=None),
@@ -526,6 +532,56 @@ def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessag
 
 
 # ---------------------------------------------------------------------------
+# _run_model_preflight — safety + recall injection before each model-bound segment
+# ---------------------------------------------------------------------------
+
+
+async def _run_model_preflight(
+    turn_state: _TurnState,
+    agent: SessionAgent,
+    deps: CoDeps,
+) -> list[ModelMessage]:
+    """Compute safety + recall injections for the next model-bound segment.
+
+    Returns the extended history to pass to _execute_stream_segment. Does not
+    mutate turn_state.current_history — injections are ephemeral, matching prior
+    history-processor behavior where pydantic-ai never persisted the processor
+    output back to the stored message list. Retry iterations start from the
+    clean turn_state.current_history without accumulated injections.
+    """
+    safety_msgs, doom_flagged, refl_flagged = build_safety_injection(
+        deps, turn_state.current_history
+    )
+    extended: list[ModelMessage] = (
+        [*turn_state.current_history, *safety_msgs]
+        if safety_msgs
+        else list(turn_state.current_history)
+    )
+    if doom_flagged and deps.runtime.safety_state:
+        deps.runtime.safety_state.doom_loop_injected = True
+    if refl_flagged and deps.runtime.safety_state:
+        deps.runtime.safety_state.reflection_injected = True
+
+    preflight_ctx = RunContext(
+        deps=deps,
+        model=agent.model,
+        usage=turn_state.latest_usage or RunUsage(),
+    )
+    recall_msg, recall_turn_count, recall_fired = await build_recall_injection(
+        preflight_ctx,
+        turn_state.current_history,
+        current_input=turn_state.current_input,
+    )
+    extended = [*extended, recall_msg]
+    if recall_fired:
+        mem_state = deps.session.memory_recall_state
+        mem_state.last_recall_user_turn = recall_turn_count
+        mem_state.recall_count += 1
+
+    return extended
+
+
+# ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
 
@@ -563,8 +619,15 @@ async def run_turn(
         try:
             while True:
                 try:
+                    preflight_history = await _run_model_preflight(turn_state, agent, deps)
+
                     await _execute_stream_segment(
-                        turn_state, agent, deps, model_settings, frontend
+                        turn_state,
+                        agent,
+                        deps,
+                        model_settings,
+                        frontend,
+                        message_history=preflight_history,
                     )
 
                     await _run_approval_loop(turn_state, agent, deps, model_settings, frontend)

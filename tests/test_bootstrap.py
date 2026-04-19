@@ -9,7 +9,7 @@ from pydantic_ai.mcp import MCPServerStdio
 from pydantic_ai.toolsets import DeferredLoadingToolset
 from tests._settings import make_settings
 
-from co_cli.agent._mcp import discover_mcp_tools
+from co_cli.agent._mcp import _MCPToolsetEntry, discover_mcp_tools
 from co_cli.bootstrap.core import (
     _discover_knowledge_backend,
     _resolve_reranker,
@@ -422,9 +422,14 @@ async def test_discover_mcp_tools_records_tool_prefix_for_missing_binary() -> No
         args=[],
         tool_prefix="testprefix",
     )
-    toolset = DeferredLoadingToolset(server)
+    entry = _MCPToolsetEntry(
+        toolset=DeferredLoadingToolset(server),
+        server=server,
+        approval=False,
+        prefix="testprefix",
+    )
 
-    _, errors, _ = await discover_mcp_tools([toolset], exclude=set())
+    _, errors, _ = await discover_mcp_tools([entry], exclude=set())
 
     assert errors, "errors dict must be non-empty when MCP server binary does not exist"
     assert "testprefix" in errors, "Failed MCP discovery must preserve the configured tool_prefix"

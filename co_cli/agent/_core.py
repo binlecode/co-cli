@@ -13,9 +13,7 @@ from pydantic_ai.toolsets.combined import CombinedToolset
 
 from co_cli.config._core import Settings
 from co_cli.context._history import (
-    append_recalled_memories,
     compact_assistant_responses,
-    detect_safety_issues,
     summarize_history_window,
     truncate_tool_results,
 )
@@ -35,7 +33,7 @@ class ToolRegistry:
     """
 
     toolset: AbstractToolset[CoDeps]
-    mcp_toolsets: list
+    mcp_toolsets: list  # list[_MCPToolsetEntry] — pydantic_ai.mcp type; avoid circular import
     tool_index: dict[str, ToolInfo]
 
 
@@ -50,16 +48,16 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
     from co_cli.agent._native_toolset import _approval_resume_filter, _build_native_toolset
 
     native_toolset, native_index = _build_native_toolset(config)
-    mcp_toolsets = _build_mcp_toolsets(config)
+    mcp_entries = _build_mcp_toolsets(config)
 
     # Combine all toolsets under one filter so approval-resume narrowing
     # applies uniformly to native and MCP tools.
-    combined = CombinedToolset([native_toolset, *mcp_toolsets])
+    combined = CombinedToolset([native_toolset, *(e.toolset for e in mcp_entries)])
     filtered = combined.filtered(_approval_resume_filter)
 
     return ToolRegistry(
         toolset=filtered,
-        mcp_toolsets=mcp_toolsets,
+        mcp_toolsets=mcp_entries,
         tool_index=native_index,
     )
 
@@ -141,8 +139,6 @@ def build_agent(
             history_processors=[
                 truncate_tool_results,
                 compact_assistant_responses,
-                detect_safety_issues,
-                append_recalled_memories,
                 summarize_history_window,
             ],
             toolsets=[tool_registry.toolset],

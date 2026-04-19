@@ -126,7 +126,7 @@ Every knowledge artifact is a `.md` file with YAML frontmatter:
 
 All reusable recall routes through the knowledge layer via two retrieval paths:
 
-**Turn-time recall** — on each new user turn, `append_recalled_memories` queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are appended as a trailing `SystemPromptPart`. This surfaces both extracted facts and articles — anything reusable and relevant.
+**Turn-time recall** — before each model-bound segment, `build_recall_injection` (preflight) queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are appended as a trailing `SystemPromptPart`. This surfaces both extracted facts and articles — anything reusable and relevant.
 
 **Explicit search** — the agent calls `search_knowledge()` for on-demand retrieval. This is the universal reusable-recall tool covering all artifact kinds, Obsidian notes, and Drive documents.
 
@@ -305,7 +305,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `co_cli/knowledge/mutator.py` | Atomic write helper (`_atomic_write`), unified FTS re-index (`_reindex_knowledge_file`), artifact body update (`_update_artifact_body`) |
 | `co_cli/knowledge/prompts/knowledge_extractor.md` | Extractor sub-agent system prompt |
 | `co_cli/main.py` | `_maybe_run_dream_cycle()` — session-end dream trigger gated by `consolidation_enabled` |
-| `co_cli/context/_history.py` | `append_recalled_memories` — per-turn knowledge recall into `SystemPromptPart` |
+| `co_cli/context/_history.py` | `build_recall_injection` — preflight callable for per-turn knowledge recall into `SystemPromptPart` |
 ### Config
 
 | File | Purpose |

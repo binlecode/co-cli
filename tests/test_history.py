@@ -25,7 +25,7 @@ from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
     OLDER_MSG_MAX_CHARS,
     _find_last_turn_start,
-    append_recalled_memories,
+    build_recall_injection,
     compact_assistant_responses,
     emergency_compact,
     find_first_run_end,
@@ -773,19 +773,13 @@ def test_compact_assistant_responses_tool_return_untouched():
 
 
 # ---------------------------------------------------------------------------
-# append_recalled_memories — append-only invariant (TASK-3)
+# build_recall_injection — preflight helper (replaces append_recalled_memories processor)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_append_recalled_memories_includes_personality_memories():
-    """TASK-3: when personality is set, append_recalled_memories emits the personality
-    block as a tail-appended SystemPromptPart.
-
-    Populates the personality cache with a sentinel so the injection has known content,
-    calls the processor, and asserts the sentinel appears in the appended ModelRequest's
-    SystemPromptPart.
-    """
+async def test_build_recall_injection_includes_personality_memories():
+    """When personality is set, build_recall_injection emits the personality block as SystemPromptPart."""
     from pydantic_ai.messages import SystemPromptPart
 
     from co_cli.prompts.personalities import _injector as _injector_module
@@ -803,31 +797,24 @@ async def test_append_recalled_memories_includes_personality_memories():
         )
         ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
         msgs = [_user("hello")]
-        result = await append_recalled_memories(ctx, msgs)
+        recall_msg, _, _ = await build_recall_injection(ctx, msgs, current_input="hello")
 
-        # Tail append — last message is a new ModelRequest
-        assert len(result) == len(msgs) + 1
-        tail_req = result[-1]
-        assert isinstance(tail_req, ModelRequest)
+        assert isinstance(recall_msg, ModelRequest)
         sys_contents = [
             p.content
-            for p in tail_req.parts
+            for p in recall_msg.parts
             if isinstance(p, SystemPromptPart) and isinstance(p.content, str)
         ]
         assert any("personality-tail-sentinel-XYZ789" in c for c in sys_contents), (
-            f"personality memories missing from tail injection; got: {sys_contents}"
+            f"personality memories missing from injection; got: {sys_contents}"
         )
     finally:
         invalidate_personality_cache()
 
 
 @pytest.mark.asyncio
-async def test_append_recalled_memories_tail_position():
-    """TASK-3 shape check: the injection is always the final message when present.
-
-    Uses no personality (empty cache) and no recallable knowledge — the current-date
-    injection still appends one ModelRequest at the tail per the unconditional date path.
-    """
+async def test_build_recall_injection_always_includes_date():
+    """build_recall_injection always returns a ModelRequest containing a date SystemPromptPart."""
     from pydantic_ai.messages import SystemPromptPart
 
     from co_cli.prompts.personalities._injector import invalidate_personality_cache
@@ -842,18 +829,13 @@ async def test_append_recalled_memories_tail_position():
             knowledge_dir=Path("/nonexistent-test-dir"),
         )
         ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-        msgs = [_user("ping"), _assistant("pong"), _user("ping again")]
-        result = await append_recalled_memories(ctx, msgs)
+        msgs = [_user("ping"), _assistant("pong")]
+        recall_msg, _, _ = await build_recall_injection(ctx, msgs, current_input="ping again")
 
-        # Exactly one tail-appended ModelRequest; earlier messages unchanged
-        assert len(result) == len(msgs) + 1
-        assert result[: len(msgs)] == msgs
-        tail_req = result[-1]
-        assert isinstance(tail_req, ModelRequest)
-        # Date SystemPromptPart present
+        assert isinstance(recall_msg, ModelRequest)
         date_parts = [
             p
-            for p in tail_req.parts
+            for p in recall_msg.parts
             if isinstance(p, SystemPromptPart)
             and isinstance(p.content, str)
             and p.content.startswith("Today is ")

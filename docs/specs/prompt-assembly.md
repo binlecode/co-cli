@@ -6,7 +6,7 @@
 **Functional areas:**
 - Static instruction assembly (soul + rules + examples + critique)
 - Dynamic instruction callbacks (`@agent.instructions`)
-- Five history processors (truncate, compact, safety, recall, summarize)
+- Three registered history processors (truncate, compact, summarize) plus two preflight callables (safety injection, recall injection)
 - Append-only invariant for dynamic content (cache hygiene)
 - Approval resume reusing the main agent
 
@@ -89,25 +89,28 @@ Any content that can vary within a single session MUST be appended to the tail o
 
 **Rationale:** `@agent.instructions` output is concatenated into the static system-prompt block pydantic-ai sends to the provider. Providers cache the system-prompt block as the prefix of every request. Any per-request variance in that block invalidates the cache for the entire prefix, including fixed tool schemas and soul assets.
 
-New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date and `personality-context` memories both live in `append_recalled_memories` for this reason — the date can change at midnight, and personality-context memories can change mid-session.
+New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date and `personality-context` memories both live in `build_recall_injection` (preflight) for this reason — the date can change at midnight, and personality-context memories can change mid-session.
 
-### 2.4 History Processors
+### 2.4 History Processors And Preflight
 
-Five processors run in this exact order (registered in `build_agent()`):
+Three pure-transformer processors run in this exact order (registered in `build_agent()`):
 
 | Processor | Behavior |
 | --- | --- |
 | `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
 | `compact_assistant_responses` | caps older `TextPart`/`ThinkingPart` to 2,500 chars with 20/80 head/tail retention; uses `_find_last_turn_start()` boundary, not turn grouping |
-| `detect_safety_issues` | detects identical-tool-call streaks and shell-error streaks; injects system warning at threshold |
-| `append_recalled_memories` | on every request: appends current date and `personality-context` memories as trailing `SystemPromptPart`s; once per new user turn: also appends top-3 recalled knowledge artifacts |
 | `summarize_history_window` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full three-mechanism design in [compaction.md](compaction.md) |
 
+Two preflight callables run before each model-bound segment (called explicitly by `run_turn()` — not registered as processors):
+
+| Preflight | Behavior |
+| --- | --- |
+| `build_safety_injection` | detects identical-tool-call streaks and shell-error streaks; returns injection messages and flags (caller writes flags to `deps.runtime.safety_state`) |
+| `build_recall_injection` | on every model-bound segment: appends current date and `personality-context` memories; once per new user turn: also appends top-3 recalled knowledge artifacts (caller writes counters to `deps.session.memory_recall_state`) |
+
 **Ordering rationale:**
-- **#1–2 before #5**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set, todos) to compensate.
-- **#3 before #5**: safety detection scans un-compacted history; running after summarization would miss streak evidence in the dropped slice.
-- **#4 before #5**: memory recall appends at the tail, outside the summarizer's dropped slice; placed before the LLM call to keep the costliest processor last.
-- **Sync (#1–3) before async (#4–5)**: zero-overhead sync passes first; async processors awaited after.
+- **#1–2 before #3**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set, todos) to compensate.
+- **Preflight before segment**: safety and recall run in `_run_model_preflight()` before `_execute_stream_segment()`; the extended history is passed directly to the segment without storing back to `turn_state.current_history`, so retry iterations start clean.
 
 ### 2.5 Approval Resume
 
@@ -135,6 +138,6 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/prompts/personalities/_loader.py` | soul seed, mindset, character memory, examples, critique loading |
 | `co_cli/prompts/personalities/_injector.py` | per-turn `personality-context` memory injection |
 | `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
-| `co_cli/context/_history.py` | five history processors; `append_recalled_memories`; safety detection; compaction trigger |
+| `co_cli/context/_history.py` | three registered history processors; `build_recall_injection` and `build_safety_injection` preflight callables; compaction trigger |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |

@@ -17,7 +17,7 @@ Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
   Step 5 — P5 sub-component: prompt assembly (_build_summarizer_prompt)
            template sections, context+personality ordering
            [Outcome 1: structured template] [BC1: free-form fallback]
-  (P3 detect_safety_issues and P4 append_recalled_memories are validated
+  (P3 build_safety_injection and P4 build_recall_injection are validated
    as passthrough within Steps 6/7 — no isolated step needed.)
 
   --- Full chain execution (real LLM calls) ---
@@ -74,9 +74,9 @@ from co_cli.context._history import (
     OLDER_MSG_MAX_CHARS,
     _gather_compaction_context,
     _truncate_proportional,
-    append_recalled_memories,
+    build_recall_injection,
+    build_safety_injection,
     compact_assistant_responses,
-    detect_safety_issues,
     emergency_compact,
     find_first_run_end,
     group_by_turn,
@@ -840,7 +840,7 @@ def step_4_context_enrichment() -> bool:
         print(f"    context: {_snippet(result, 160)}")
 
     # 4d: Always-on memories not in compaction context (architectural decision)
-    # Memories are injected separately by P4 (append_recalled_memories), not by
+    # Memories are injected separately by P4 (build_recall_injection), not by
     # _gather_compaction_context. This test verifies that memory files do NOT
     # appear in compaction context, confirming the separation of concerns.
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1237,18 +1237,28 @@ async def step_6_full_chain() -> bool:
         print("    PASS")
 
     # --- P3 ---
-    print("\n  [P3] detect_safety_issues")
+    print("\n  [P3] build_safety_injection")
     len_pre_p3 = len(msgs)
-    msgs = detect_safety_issues(ctx, msgs)
+    safety_msgs, doom_flagged, refl_flagged = build_safety_injection(ctx.deps, msgs)
+    msgs = [*msgs, *safety_msgs] if safety_msgs else msgs
+    if doom_flagged and ctx.deps.runtime.safety_state:
+        ctx.deps.runtime.safety_state.doom_loop_injected = True
+    if refl_flagged and ctx.deps.runtime.safety_state:
+        ctx.deps.runtime.safety_state.reflection_injected = True
     p3_injections = len(msgs) - len_pre_p3
     print(f"    Injections: {p3_injections} (clean history → no safety warnings)")
     print("    PASS")
 
     # --- P4 ---
-    print("\n  [P4] append_recalled_memories")
+    print("\n  [P4] build_recall_injection")
     recall_pre = ctx.deps.session.memory_recall_state.recall_count
     len_pre_p4 = len(msgs)
-    msgs = await append_recalled_memories(ctx, msgs)
+    recall_msg, recall_turn_count, recall_fired_flag = await build_recall_injection(ctx, msgs)
+    msgs = [*msgs, recall_msg]
+    if recall_fired_flag:
+        mem_state = ctx.deps.session.memory_recall_state
+        mem_state.last_recall_user_turn = recall_turn_count
+        mem_state.recall_count += 1
     recall_post = ctx.deps.session.memory_recall_state.recall_count
     p4_injections = len(msgs) - len_pre_p4
     recall_fired = recall_post > recall_pre
@@ -1586,16 +1596,26 @@ async def step_7_multi_cycle() -> bool:
         print("    PASS")
 
     # --- P3 + P4 ---
-    print("\n  [P3] detect_safety_issues")
+    print("\n  [P3] build_safety_injection")
     len_pre_p3 = len(msgs)
-    msgs = detect_safety_issues(ctx, msgs)
+    safety_msgs2, doom_flagged2, refl_flagged2 = build_safety_injection(ctx.deps, msgs)
+    msgs = [*msgs, *safety_msgs2] if safety_msgs2 else msgs
+    if doom_flagged2 and ctx.deps.runtime.safety_state:
+        ctx.deps.runtime.safety_state.doom_loop_injected = True
+    if refl_flagged2 and ctx.deps.runtime.safety_state:
+        ctx.deps.runtime.safety_state.reflection_injected = True
     print(f"    Injections: {len(msgs) - len_pre_p3}")
     print("    PASS")
 
-    print("\n  [P4] append_recalled_memories")
+    print("\n  [P4] build_recall_injection")
     recall_pre = ctx.deps.session.memory_recall_state.recall_count
     len_pre_p4 = len(msgs)
-    msgs = await append_recalled_memories(ctx, msgs)
+    recall_msg2, recall_turn_count2, recall_fired_flag2 = await build_recall_injection(ctx, msgs)
+    msgs = [*msgs, recall_msg2]
+    if recall_fired_flag2:
+        mem_state2 = ctx.deps.session.memory_recall_state
+        mem_state2.last_recall_user_turn = recall_turn_count2
+        mem_state2.recall_count += 1
     recall_post = ctx.deps.session.memory_recall_state.recall_count
     p4_injections = len(msgs) - len_pre_p4
     recall_fired = recall_post > recall_pre
@@ -2115,8 +2135,8 @@ def step_11_edge_cases() -> bool:
     if r is not one_turn:
         print("  FAIL: P2 modified 1-turn history")
         passed = False
-    r = detect_safety_issues(ctx, one_turn)
-    if len(r) != len(one_turn):
+    safety_msgs_p3a, _, _ = build_safety_injection(ctx.deps, one_turn)
+    if safety_msgs_p3a:
         print("  FAIL: P3 injected on 1-turn history")
         passed = False
     if passed:
@@ -2309,8 +2329,8 @@ def step_11_edge_cases() -> bool:
     assert r == [] or r is empty
     r = compact_assistant_responses(ctx, empty)
     assert r == [] or r is empty
-    r = detect_safety_issues(ctx, empty)
-    assert len(r) == 0
+    safety_msgs_empty, _, _ = build_safety_injection(ctx.deps, empty)
+    assert len(safety_msgs_empty) == 0
     ec = emergency_compact(empty)
     assert ec is None
     bounds = plan_compaction_boundaries(empty, 100_000)

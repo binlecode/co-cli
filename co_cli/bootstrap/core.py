@@ -233,11 +233,13 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     # Step 4: MCP connect + discovery
     degradations: dict[str, str] = {}
     if tool_registry.mcp_toolsets:
-        connected: list = []
-        for ts in tool_registry.mcp_toolsets:
+        from co_cli.agent._mcp import _MCPToolsetEntry
+
+        connected: list[_MCPToolsetEntry] = []
+        for entry in tool_registry.mcp_toolsets:
             try:
-                await stack.enter_async_context(ts)
-                connected.append(ts)
+                await stack.enter_async_context(entry.toolset)
+                connected.append(entry)
             except Exception as e:
                 frontend.on_status(f"MCP server failed to connect: {e}")
         if connected:

@@ -118,7 +118,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `deps.runtime` field | Why it is not in `_TurnState` |
 | --- | --- |
 | `turn_usage` | authoritative per-turn accumulator shared across foreground and sub-agent tool calls |
-| `safety_state` | owned by history processors, not by the orchestrator |
+| `safety_state` | updated by preflight (`build_safety_injection`) before each model-bound segment |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
 | `compaction_failure_count` | cross-turn circuit breaker for inline compaction (>= 3 trips breaker; every 10 skips a probe is attempted) |
@@ -176,7 +176,7 @@ Approval deferral uses the native Pydantic-AI objects directly:
 
 Approval collection sequence (per pending call):
 
-0. read `output.metadata[tool_call_id]`; if `_kind == "question"`, take the question path:
+0. read `output.metadata[tool_call_id]`; if `"question" in metadata`, take the clarify path:
    - construct `QuestionPrompt(question, options)` from metadata
    - call `frontend.prompt_question(prompt)` to get the user's answer
    - encode `ToolApproved(override_args={"user_answer": answer})` — tool resumes with the injected answer
@@ -230,15 +230,18 @@ Shell approval remains split correctly:
 - only the `REQUIRE_APPROVAL` path reaches deferred approval handling
 - denied shell commands never enter `_collect_deferred_tool_approvals()`
 
-### 2.4 History Processors And Inline Compaction
+### 2.4 History Processors, Preflight, And Inline Compaction
 
-The main agent is built with five history processors in this exact order:
+The main agent is built with three registered history processors (pure transformers) in this exact order:
 
 1. `truncate_tool_results`
 2. `compact_assistant_responses`
-3. `detect_safety_issues`
-4. `append_recalled_memories`
-5. `summarize_history_window`
+3. `summarize_history_window`
+
+Two additional callables run as preflight before each model-bound `_execute_stream_segment`, called explicitly by `run_turn()` via `_run_model_preflight()`:
+
+- `build_safety_injection` — doom-loop detection + shell reflection cap; returns injection messages and flags; caller writes flags to `deps.runtime.safety_state`
+- `build_recall_injection` — injects current date, personality-context memories, and (once per new user turn) top-3 recalled knowledge artifacts; caller writes recall counters to `deps.session.memory_recall_state`
 
 Processor roles:
 
@@ -246,16 +249,14 @@ Processor roles:
 | --- | --- |
 | `truncate_tool_results` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn (from last `UserPromptPart` onward) |
 | `compact_assistant_responses` | caps large `TextPart`/`ThinkingPart` in older `ModelResponse` messages at 2.5K chars with proportional head/tail truncation; protects the last turn (from last `UserPromptPart` onward); does not touch `ToolCallPart` args |
-| `detect_safety_issues` | injects guardrails for doom loops and repeated shell failures |
-| `append_recalled_memories` | appends recalled memories as a trailing `SystemPromptPart` |
 | `summarize_history_window` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
+
+Preflight is called before every model-bound segment but not on approval-resume segments (SDK skips `ModelRequestNode` on resume, so preflight would inject into a non-model path). Preflight injections are ephemeral — they are not stored back to `turn_state.current_history`, so retry iterations always start from the clean history without accumulated injections.
 
 Ordering rationale:
 
-- **#1–2 before #5**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate. This keeps the working path simple while preserving a useful handoff summary.
-- **#3 before #5**: `detect_safety_issues` scans recent tool calls for doom loops and shell error streaks. Running it before summarization ensures it scans the full un-compacted history — if summarization drops the middle first, streak evidence in the dropped slice would be missed.
-- **#4 before #5**: `append_recalled_memories` appends recalled memories at the tail, outside the summarizer's dropped slice. Placed before summarization to keep the costliest processor (LLM call) last.
-- **All sync processors (#1–3) before async (#4–5)**: sync processors run inline with zero overhead. Async processors are awaited directly on the event loop.
+- **#1–2 before #3**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate.
+- **Preflight before segment**: safety and recall run explicitly in `_run_model_preflight()` before each `_execute_stream_segment`. The extended history (with injections) is passed directly to the segment without mutating `turn_state.current_history`.
 
 Compaction behavior:
 
@@ -270,10 +271,10 @@ Compaction behavior:
 
 Memory recall is also per-turn, not sticky:
 
-- `append_recalled_memories()` stores counters in `deps.session.memory_recall_state`
+- `build_recall_injection()` (preflight) writes counters to `deps.session.memory_recall_state` via the caller (`_run_model_preflight`)
 - it recalls only once per new user turn
 - failure to recall silently leaves history unchanged
-- the recall logic itself lives in `tools/knowledge.py::_recall_for_context()` (internal — called by `append_recalled_memories`, not registered as an agent tool)
+- the recall logic itself lives in `tools/knowledge/read.py::_recall_for_context()` (internal — called by `build_recall_injection`, not registered as an agent tool)
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 
@@ -362,7 +363,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker |
+| `co_cli/context/_history.py` | three registered history processors (tool-output trim, response capping, sliding-window compaction) plus two preflight callables (`build_recall_injection`, `build_safety_injection`) |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent/_core.py` | main agent factory |
