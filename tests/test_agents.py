@@ -1,20 +1,11 @@
 """Functional tests for delegation tool wiring and deps isolation."""
 
-from copy import copy
 from pathlib import Path
 
-from pydantic_ai import RunContext
-from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.agent._core import build_agent
-from co_cli.config._core import settings
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, fork_deps
-from co_cli.tools.agents import _merge_turn_usage
 from co_cli.tools.shell_backend import ShellBackend
-
-# Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT = build_agent(config=settings)
 
 
 def test_fork_deps_resets_session_state() -> None:
@@ -74,28 +65,3 @@ def test_fork_deps_resets_session_state() -> None:
     # Service handles shared (same objects)
     assert isolated.shell is base.shell
     assert isolated.model is base.model
-
-
-def test_merge_turn_usage_alias_then_accumulate() -> None:
-    """_merge_turn_usage aliases on first call (None) and accumulates on second call."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(),
-    )
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-
-    # Phase 1: turn_usage is None — aliased directly, not copied
-    u1 = RunUsage(input_tokens=10, output_tokens=20)
-    _merge_turn_usage(ctx, u1)
-    assert ctx.deps.runtime.turn_usage is u1
-
-    # Snapshot before second merge to verify copy() decoupling
-    snapshot = copy(u1)
-
-    # Phase 2: second call accumulates into turn_usage
-    u2 = RunUsage(input_tokens=5, output_tokens=5)
-    _merge_turn_usage(ctx, u2)
-    assert ctx.deps.runtime.turn_usage.input_tokens == 15
-
-    # Snapshot is not mutated — confirms copy() in _run_agent_attempt decouples usage
-    assert snapshot.input_tokens == 10

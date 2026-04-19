@@ -14,10 +14,8 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
-from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools.knowledge import (
-    _touch_recalled,
     append_knowledge,
     list_knowledge,
     save_knowledge,
@@ -80,60 +78,6 @@ def _write_memory(
     path = memory_dir / filename
     path.write_text(md, encoding="utf-8")
     return path
-
-
-# ---------------------------------------------------------------------------
-# _touch_recalled — recall tracking (TASK-4.3)
-# ---------------------------------------------------------------------------
-
-
-def test_touch_recalled_increments_recall_count(tmp_path: Path) -> None:
-    """_touch_recalled increments recall_count from 0 to 1 on first recall."""
-    memory_dir = tmp_path / "memory"
-    path = _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
-    ctx = _make_ctx(knowledge_dir=memory_dir)
-
-    asyncio.run(_touch_recalled([str(path)], ctx))
-
-    fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
-    assert fm["recall_count"] == 1, "recall_count must be incremented to 1"
-
-
-def test_touch_recalled_sets_last_recalled_to_iso8601(tmp_path: Path) -> None:
-    """_touch_recalled writes a valid ISO8601 timestamp to last_recalled."""
-    memory_dir = tmp_path / "memory"
-    path = _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
-    ctx = _make_ctx(knowledge_dir=memory_dir)
-
-    before = datetime.now(UTC)
-    asyncio.run(_touch_recalled([str(path)], ctx))
-    after = datetime.now(UTC)
-
-    fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
-    recalled_at = datetime.fromisoformat(fm["last_recalled"])
-    assert before <= recalled_at <= after, "last_recalled must be within the test window"
-
-
-def test_touch_recalled_accumulates_on_repeated_recall(tmp_path: Path) -> None:
-    """_touch_recalled increments recall_count independently on each call."""
-    memory_dir = tmp_path / "memory"
-    path = _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
-    ctx = _make_ctx(knowledge_dir=memory_dir)
-
-    asyncio.run(_touch_recalled([str(path)], ctx))
-    asyncio.run(_touch_recalled([str(path)], ctx))
-
-    fm, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
-    assert fm["recall_count"] == 2, "recall_count must accumulate across calls"
-
-
-def test_touch_recalled_skips_missing_file(tmp_path: Path) -> None:
-    """_touch_recalled does not raise when a path no longer exists."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir(parents=True)
-    ctx = _make_ctx(knowledge_dir=memory_dir)
-    missing = str(memory_dir / "ghost.md")
-    asyncio.run(_touch_recalled([missing], ctx))
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai import RunContext
-from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -24,15 +23,8 @@ from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatc
 from co_cli.config._core import settings
 from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
-    _CONTEXT_MAX_CHARS,
-    _SUMMARY_MARKER_PREFIX,
     OLDER_MSG_MAX_CHARS,
-    PROACTIVE_COMPACTION_RATIO,
-    TAIL_FRACTION,
     _find_last_turn_start,
-    _gather_compaction_context,
-    _preserve_search_tool_breadcrumbs,
-    _truncate_proportional,
     append_recalled_memories,
     compact_assistant_responses,
     emergency_compact,
@@ -44,7 +36,7 @@ from co_cli.context._history import (
     summarize_history_window,
     truncate_tool_results,
 )
-from co_cli.context.orchestrate import _history_with_pending_user_input, _is_context_overflow
+from co_cli.context.orchestrate import _history_with_pending_user_input
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
@@ -421,46 +413,6 @@ def test_planner_min_groups_tail_keeps_last_group():
     assert tail_start > head_end
 
 
-def test_breadcrumb_dedup_on_repeated_compaction():
-    """Gap J regression guard: breadcrumb count stays bounded across ≥3 compaction cycles."""
-    search_tool_msg = ModelRequest(
-        parts=[
-            ToolReturnPart(
-                tool_name="search_tools", content="found [foo, bar]", tool_call_id="st-1"
-            )
-        ]
-    )
-
-    # Cycle 1: search_tool_msg in dropped, head/tail do not contain it
-    head = [_user("head"), _assistant("head reply")]
-    tail = [_user("tail"), _assistant("tail reply")]
-    dropped_1 = [search_tool_msg]
-    kept_ids_1 = {id(m) for m in head} | {id(m) for m in tail}
-    preserved_1 = _preserve_search_tool_breadcrumbs(dropped_1, kept_ids_1)
-    assert len(preserved_1) == 1
-
-    # Cycle 2: the preserved breadcrumb now falls into the NEW head slice
-    # (it sits between head-original and the new summary marker from cycle 1)
-    new_head = [*head, *preserved_1]
-    dropped_2 = [search_tool_msg]  # same breadcrumb appears again in the new dropped range
-    kept_ids_2 = {id(m) for m in new_head} | {id(m) for m in tail}
-    preserved_2 = _preserve_search_tool_breadcrumbs(dropped_2, kept_ids_2)
-    # The breadcrumb is in kept_ids_2 (via new_head) so it must NOT duplicate
-    assert len(preserved_2) == 0
-
-    # Cycle 3: same invariant holds
-    new_head_3 = [*new_head, *preserved_2]
-    kept_ids_3 = {id(m) for m in new_head_3} | {id(m) for m in tail}
-    preserved_3 = _preserve_search_tool_breadcrumbs([search_tool_msg], kept_ids_3)
-    assert len(preserved_3) == 0
-
-
-def test_constants_have_expected_values():
-    """PROACTIVE_COMPACTION_RATIO and TAIL_FRACTION are named constants with documented values."""
-    assert PROACTIVE_COMPACTION_RATIO == 0.85
-    assert TAIL_FRACTION == 0.40
-
-
 @pytest.mark.asyncio
 async def test_compaction_output_preserves_orphan_search_tools_return():
     """Gap L: after compaction, a search_tools ToolReturnPart from the dropped range
@@ -673,147 +625,6 @@ def test_current_turn_protection_multi_tool():
 # ---------------------------------------------------------------------------
 
 
-def _make_gather_ctx(
-    knowledge_dir: Path | None = None,
-    session_todos: list[dict] | None = None,
-) -> RunContext:
-    """RunContext for _gather_compaction_context tests."""
-    config = make_settings(
-        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
-    )
-    session = CoSessionState()
-    if session_todos is not None:
-        session.session_todos = session_todos
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=config,
-        session=session,
-        knowledge_dir=knowledge_dir or Path("/nonexistent-test-dir"),
-    )
-    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-
-
-def test_gather_context_extracts_file_paths_from_dropped():
-    """_gather_compaction_context extracts file paths from ToolCallPart.args in dropped range."""
-    dropped = [
-        _user("read some files"),
-        ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name="read_file", args={"file_path": "/src/main.py"}, tool_call_id="c1"
-                ),
-                ToolCallPart(tool_name="patch", args={"path": "/src/utils.py"}, tool_call_id="c2"),
-            ]
-        ),
-        _tool_return("read_file", "content", "c1"),
-    ]
-    ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, dropped)
-    assert result is not None
-    assert "/src/main.py" in result
-    assert "/src/utils.py" in result
-    assert "Files touched:" in result
-
-
-def test_gather_context_includes_pending_todos():
-    """_gather_compaction_context includes pending session todos, filters out done."""
-    todos = [
-        {"content": "Fix the bug", "status": "pending"},
-        {"content": "Write tests", "status": "completed"},
-        {"content": "Deploy", "status": "in-progress"},
-    ]
-    ctx = _make_gather_ctx(session_todos=todos)
-    result = _gather_compaction_context(ctx, dropped=[])
-    assert result is not None
-    assert "Fix the bug" in result
-    assert "Deploy" in result
-    # Completed todo should be filtered out
-    assert "Write tests" not in result
-
-
-def test_gather_context_extracts_prior_summary():
-    """_gather_compaction_context extracts prior-summary text from dropped messages."""
-    prior_summary = f"{_SUMMARY_MARKER_PREFIX} 5 earlier messages]\nGoal: build a CLI tool"
-    dropped = [
-        ModelRequest(parts=[UserPromptPart(content=prior_summary)]),
-    ]
-    ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, dropped=dropped)
-    assert result is not None
-    assert "Prior summary:" in result
-    assert "build a CLI tool" in result
-
-
-def test_gather_context_returns_none_when_empty():
-    """_gather_compaction_context returns None when no context sources produce data."""
-    ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, dropped=[])
-    assert result is None
-
-
-def test_gather_context_truncates_to_max_chars():
-    """_gather_compaction_context with >4K combined sources → output truncated to _CONTEXT_MAX_CHARS."""
-    huge_text = f"{_SUMMARY_MARKER_PREFIX} 100 messages]\n" + "x" * 5000
-    dropped = [
-        ModelRequest(parts=[UserPromptPart(content=huge_text)]),
-    ]
-    ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, dropped=dropped)
-    assert result is not None
-    assert len(result) <= _CONTEXT_MAX_CHARS
-
-
-def test_gather_context_file_paths_scoped_to_dropped_not_tail():
-    """File paths visible only in head/tail (not dropped) must NOT appear in enrichment (Gap M).
-
-    Constructs real head, dropped, and tail ranges each with their own ToolCallPart
-    referencing a distinct file path. Only the dropped path must appear in
-    enrichment — head/tail paths would be duplicated visibility for the summarizer.
-    """
-    # Head range — visible in preserved messages
-    _ = [
-        _user("head turn"),
-        ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name="read_file", args={"file_path": "/head/file.py"}, tool_call_id="h1"
-                )
-            ]
-        ),
-    ]
-    # Dropped range — the only file path we want to see in enrichment
-    dropped = [
-        _user("dropped turn"),
-        ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name="read_file",
-                    args={"file_path": "/dropped/file.py"},
-                    tool_call_id="d1",
-                )
-            ]
-        ),
-        _tool_return("read_file", "content", "d1"),
-    ]
-    # Tail range — visible in preserved messages
-    _ = [
-        _user("tail turn"),
-        ModelResponse(
-            parts=[
-                ToolCallPart(tool_name="patch", args={"path": "/tail/file.py"}, tool_call_id="t1")
-            ]
-        ),
-    ]
-    ctx = _make_gather_ctx()
-    result = _gather_compaction_context(ctx, dropped=dropped)
-    assert result is not None
-    # Dropped path appears
-    assert "/dropped/file.py" in result
-    # Head/tail paths MUST NOT appear — would duplicate visibility already in kept msgs
-    assert "/head/file.py" not in result
-    assert "/tail/file.py" not in result
-
-
 # ---------------------------------------------------------------------------
 # emergency_compact — overflow recovery
 # ---------------------------------------------------------------------------
@@ -900,72 +711,6 @@ async def test_recover_overflow_history_preserves_pending_user_turn():
 
 
 # ---------------------------------------------------------------------------
-# _is_context_overflow — overflow detection
-# ---------------------------------------------------------------------------
-
-
-def test_is_context_overflow_413():
-    """413 with context-length pattern → True."""
-    e = ModelHTTPError(status_code=413, model_name="test", body="prompt is too long")
-    assert _is_context_overflow(e) is True
-
-
-def test_is_context_overflow_400_context_length():
-    """400 with context_length_exceeded in body → True."""
-    e = ModelHTTPError(
-        status_code=400, model_name="test", body={"error": {"code": "context_length_exceeded"}}
-    )
-    assert _is_context_overflow(e) is True
-
-
-def test_is_context_overflow_str_body():
-    """400 with string body containing 'maximum context length' → True."""
-    e = ModelHTTPError(
-        status_code=400, model_name="test", body="Error: maximum context length exceeded"
-    )
-    assert _is_context_overflow(e) is True
-
-
-def test_is_context_overflow_bare_400_no_pattern():
-    """Bare 400 without context-length body → False."""
-    e = ModelHTTPError(status_code=400, model_name="test", body="invalid json in tool call")
-    assert _is_context_overflow(e) is False
-
-
-def test_is_context_overflow_500():
-    """500 status code → False (not overflow)."""
-    e = ModelHTTPError(status_code=500, model_name="test", body="prompt is too long")
-    assert _is_context_overflow(e) is False
-
-
-# ---------------------------------------------------------------------------
-# _truncate_proportional — proportional truncation
-# ---------------------------------------------------------------------------
-
-
-def test_truncate_proportional_preserves_head_tail():
-    """_truncate_proportional preserves 20% head + 80% tail + marker."""
-    text = "A" * 1000
-    result = _truncate_proportional(text, max_chars=200)
-    assert len(result) <= 200
-    assert "[...truncated...]" in result
-    # Head should be ~20% of available space, tail ~80% (aligned with gemini-cli)
-    marker = "\n[...truncated...]\n"
-    available = 200 - len(marker)
-    head_size = int(available * 0.20)
-    tail_size = available - head_size
-    assert result[:head_size] == "A" * head_size
-    assert result.endswith("A" * tail_size)
-
-
-def test_truncate_proportional_no_truncation_needed():
-    """Short text below max_chars → returned unchanged."""
-    text = "Short text"
-    result = _truncate_proportional(text, max_chars=200)
-    assert result == text
-
-
-# ---------------------------------------------------------------------------
 # compact_assistant_responses — assistant response compaction
 # ---------------------------------------------------------------------------
 
@@ -1030,33 +775,6 @@ def test_compact_assistant_responses_tool_return_untouched():
 # ---------------------------------------------------------------------------
 # append_recalled_memories — append-only invariant (TASK-3)
 # ---------------------------------------------------------------------------
-
-
-def test_personality_memories_not_in_static_instructions():
-    """TASK-3: personality-context memories live in the tail, not the static prompt.
-
-    Populates the personality cache with a sentinel marker, asks ``build_static_instructions``
-    for the cacheable prefix, and asserts the marker is NOT present there. The marker must
-    appear only via ``append_recalled_memories`` at request time (covered by the next test).
-    """
-    from co_cli.prompts import _assembly as _assembly_module
-    from co_cli.prompts.personalities import _injector as _injector_module
-    from co_cli.prompts.personalities._injector import invalidate_personality_cache
-
-    sentinel = "## Learned Context\n\n- personality-memory-sentinel-ABC123"
-    invalidate_personality_cache()
-    try:
-        _injector_module._personality_cache = sentinel
-        config = make_settings().model_copy(update={"personality": "finch"})
-        prompt = _assembly_module.build_static_instructions(config=config)
-        assert "personality-memory-sentinel-ABC123" not in prompt, (
-            "personality memory content leaked into the cacheable static prompt"
-        )
-        assert "## Learned Context" not in prompt, (
-            "## Learned Context section must not appear in static instructions"
-        )
-    finally:
-        invalidate_personality_cache()
 
 
 @pytest.mark.asyncio

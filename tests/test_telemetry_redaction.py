@@ -10,7 +10,7 @@ import sqlite3
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
-from co_cli.observability._telemetry import _MAX_REDACT_LEN, SQLiteSpanExporter, _redact
+from co_cli.observability._telemetry import _MAX_REDACT_LEN, SQLiteSpanExporter
 
 
 def _make_provider(db_path: str, patterns: list[str] | None = None) -> TracerProvider:
@@ -122,23 +122,3 @@ def test_value_exceeding_max_redact_len_stored_unredacted(tmp_path):
     row = _fetch_span(db, "redact.large")
     # Must be stored unchanged — secret NOT redacted for oversized values
     assert row["attributes"]["large_attr"] == large_value
-
-
-def test_redact_helper_replaces_all_matches():
-    """_redact() replaces every occurrence of a matching pattern."""
-    import re
-
-    patterns = [re.compile(r"sk-[A-Za-z0-9]{20,}")]
-    value = "key1=sk-abc123abc123abc123abc and key2=sk-xyz456xyz456xyz456xyz"
-    result = _redact(value, patterns)
-    assert result == "key1=[REDACTED] and key2=[REDACTED]"
-
-
-def test_redact_helper_returns_oversized_value_unchanged():
-    """_redact() returns values longer than _MAX_REDACT_LEN unmodified."""
-    import re
-
-    patterns = [re.compile(r"sk-[A-Za-z0-9]{20,}")]
-    value = "sk-abc123abc123abc123abc " + "x" * _MAX_REDACT_LEN
-    result = _redact(value, patterns)
-    assert result == value

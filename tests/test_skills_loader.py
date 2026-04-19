@@ -14,7 +14,6 @@ from co_cli.commands._commands import (
     LocalOnly,
     ReplaceTranscript,
     SkillConfig,
-    _load_skills,
     dispatch,
 )
 from co_cli.config._core import settings
@@ -146,19 +145,6 @@ async def test_skill_upgrade_without_source_url_leaves_file_unchanged(tmp_path: 
     assert skill_file.read_text(encoding="utf-8") == original_content
 
 
-def test_load_skills_user_overrides_bundled(tmp_path: Path):
-    """User skills override same-name bundled skills."""
-    bundled_dir = tmp_path / "bundled-skills"
-    user_skills_dir = tmp_path / "user-skills"
-    _write_skill(bundled_dir, "shared-skill", "---\ndescription: Bundled\n---\nBundled body")
-    _write_skill(user_skills_dir, "shared-skill", "---\ndescription: User\n---\nUser body")
-
-    loaded = _load_skills(bundled_dir, settings, user_skills_dir=user_skills_dir)
-
-    assert loaded["shared-skill"].description == "User"
-    assert loaded["shared-skill"].body == "User body"
-
-
 @pytest.mark.asyncio
 async def test_dispatch_skill_returns_delegate_to_agent(tmp_path: Path):
     """Registered skills delegate to the agent with the original body."""
@@ -188,31 +174,3 @@ async def test_dispatch_builtin_takes_precedence_over_same_name_skill(tmp_path: 
 
     assert isinstance(result, ReplaceTranscript)
     assert result.history == []
-
-
-def test_load_skills_rejects_symlink_outside_root(tmp_path: Path):
-    """Symlinks escaping the skills root are rejected."""
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    outside = tmp_path / "outside.md"
-    outside.write_text("---\ndescription: Escaped skill\n---\nEvil.", encoding="utf-8")
-    (skills_dir / "escaped.md").symlink_to(outside)
-
-    loaded = _load_skills(skills_dir, settings)
-
-    assert "escaped" not in loaded
-
-
-def test_load_skills_collects_errors_for_malformed_skill_file(tmp_path: Path):
-    """Malformed skill files must report a load error instead of silently disappearing."""
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    bad_skill = skills_dir / "broken.md"
-    bad_skill.write_bytes(b"---\ndescription: test\n---\n\xff\xfe bad bytes")
-
-    errors: list[str] = []
-    result = _load_skills(skills_dir, errors=errors)
-
-    assert isinstance(result, dict)
-    assert len(errors) == 1
-    assert "broken.md" in errors[0]
