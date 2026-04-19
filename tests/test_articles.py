@@ -1,4 +1,4 @@
-"""Functional tests for article tools (save_article, search_articles, read_article)."""
+"""Functional tests for article tools (save_article, search_knowledge article-index, read_article)."""
 
 from pathlib import Path
 
@@ -12,7 +12,8 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.knowledge import read_article, save_article, search_articles, search_knowledge
+from co_cli.tools.knowledge._read import read_article, search_knowledge
+from co_cli.tools.knowledge._write import save_article
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)
@@ -112,12 +113,12 @@ async def test_save_article_indexes_into_fts(tmp_path: Path):
     idx.close()
 
 
-# --- search_articles ---
+# --- search_knowledge article-index mode ---
 
 
 @pytest.mark.asyncio
-async def test_search_articles_grep_fallback(tmp_path: Path):
-    """search_articles grep fallback finds articles by keyword."""
+async def test_search_knowledge_article_grep_fallback(tmp_path: Path):
+    """search_knowledge(kind='article') grep path returns article-index schema."""
     ctx = _make_ctx(tmp_path)
     await save_article(
         ctx,
@@ -127,18 +128,75 @@ async def test_search_articles_grep_fallback(tmp_path: Path):
         tags=["reference"],
     )
 
-    result = await search_articles(ctx, "xyloquartz-article-grep-unique")
+    result = await search_knowledge(
+        ctx, "xyloquartz-article-grep-unique", kind="article", source="knowledge"
+    )
     assert result.metadata["count"] >= 1
-    assert result.metadata["results"][0]["origin_url"] == "https://example.com/grep"
+    hit = result.metadata["results"][0]
+    assert hit["origin_url"] == "https://example.com/grep"
+    assert "slug" in hit
+    assert "article_id" in hit
+    assert "title" in hit
+    assert "tags" in hit
+    assert "snippet" in hit
 
 
 @pytest.mark.asyncio
-async def test_search_articles_no_match(tmp_path: Path):
-    """search_articles returns zero count when nothing matches."""
+async def test_search_knowledge_article_no_match(tmp_path: Path):
+    """search_knowledge(kind='article') returns zero count when nothing matches."""
     ctx = _make_ctx(tmp_path)
-    result = await search_articles(ctx, "zzz_no_match_ever_xyz")
+    result = await search_knowledge(
+        ctx, "zzz_no_match_ever_xyz", kind="article", source="knowledge"
+    )
     assert result.metadata["count"] == 0
     assert result.metadata["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_article_fts_path(tmp_path: Path):
+    """search_knowledge(kind='article') FTS path returns article-index schema."""
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
+    ctx = _make_ctx(tmp_path, knowledge_store=idx, knowledge_search_backend="fts5")
+
+    await save_article(
+        ctx,
+        content="xyloquartz-article-fts-index-unique content for article-index test",
+        title="FTS Index Article",
+        origin_url="https://example.com/fts-index",
+        tags=["fts"],
+    )
+
+    result = await search_knowledge(
+        ctx, "xyloquartz-article-fts-index-unique", kind="article", source="knowledge"
+    )
+    assert result.metadata["count"] >= 1
+    hit = result.metadata["results"][0]
+    assert hit["origin_url"] == "https://example.com/fts-index"
+    assert "slug" in hit
+    assert hit["article_id"] is not None
+    idx.close()
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_non_article_kind_returns_generic_schema(tmp_path: Path):
+    """search_knowledge with a non-article kind returns the generic cross-source schema."""
+    ctx = _make_ctx(tmp_path)
+    await save_article(
+        ctx,
+        content="xyloquartz-crosssource-schema-guard content",
+        title="Schema Guard",
+        origin_url="https://example.com/schema-guard",
+    )
+
+    result = await search_knowledge(ctx, "xyloquartz-crosssource-schema-guard")
+    assert result.metadata["count"] >= 1
+    hit = result.metadata["results"][0]
+    # Generic schema must have source/kind/score/path — not article-index fields
+    assert "source" in hit
+    assert "kind" in hit
+    assert "score" in hit
+    assert "path" in hit
+    assert "slug" not in hit
 
 
 # --- read_article ---

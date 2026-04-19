@@ -9,7 +9,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from co_cli.config._core import Settings
 from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
-from co_cli.tools._agent_tool import AGENT_TOOL_ATTR
+from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
 from co_cli.tools.agents import (
     analyze_knowledge,
     reason_about,
@@ -17,19 +17,13 @@ from co_cli.tools.agents import (
 )
 from co_cli.tools.capabilities import check_capabilities
 from co_cli.tools.execute_code import execute_code
-from co_cli.tools.files import glob, grep, patch, read_file, write_file
+from co_cli.tools.files._read import glob, grep, read_file
+from co_cli.tools.files._write import patch, write_file
 from co_cli.tools.google.calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.google.drive import read_drive_file, search_drive_files
 from co_cli.tools.google.gmail import create_gmail_draft, list_gmail_emails, search_gmail_emails
-from co_cli.tools.knowledge import (
-    append_knowledge,
-    list_knowledge,
-    read_article,
-    save_article,
-    search_articles,
-    search_knowledge,
-    update_knowledge,
-)
+from co_cli.tools.knowledge._read import list_knowledge, read_article, search_knowledge
+from co_cli.tools.knowledge._write import append_knowledge, save_article, update_knowledge
 from co_cli.tools.memory import search_memory
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
 from co_cli.tools.shell import shell
@@ -41,7 +35,8 @@ from co_cli.tools.task_control import (
 )
 from co_cli.tools.todo import todo_read, todo_write
 from co_cli.tools.user_input import clarify
-from co_cli.tools.web import web_fetch, web_search
+from co_cli.tools.web._fetch import web_fetch
+from co_cli.tools.web._search import web_search
 
 # Flat explicit list — order is presentation order (no behavioral impact).
 NATIVE_TOOLS: tuple[Callable, ...] = (
@@ -56,7 +51,6 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     list_knowledge,
     read_article,
     search_memory,
-    search_articles,
     # Workspace reads
     glob,
     read_file,

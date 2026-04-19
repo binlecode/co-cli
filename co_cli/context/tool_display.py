@@ -22,7 +22,6 @@ TOOL_START_DISPLAY_ARG: dict[str, str] = {
     "grep": "pattern",
     "glob": "path",
     "save_article": "content",
-    "search_articles": "query",
     "search_knowledge": "query",
     "search_memory": "query",
     "search_notes": "query",
