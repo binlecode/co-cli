@@ -32,9 +32,10 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.config._core import settings as _settings
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.context.summarization import summarize_messages
+from co_cli.deps import CoDeps
 from co_cli.llm._factory import LlmModel, build_model
+from co_cli.tools.shell_backend import ShellBackend
 
 _THINK_MODEL = "qwen3.5:35b-a3b-think"
 _SYSTEM = (
@@ -272,6 +273,11 @@ async def _check_summarization_pipeline() -> None:
     llm_model = _build_llm_model()
     assert llm_model.model is not None
 
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=_settings,
+        model=llm_model,
+    )
     messages: list[ModelMessage] = [
         ModelRequest(
             parts=[UserPromptPart(content="Docker is a container runtime and packaging tool.")]
@@ -279,7 +285,7 @@ async def _check_summarization_pipeline() -> None:
         ModelRequest(parts=[UserPromptPart(content="Summarize in one short sentence.")]),
     ]
     async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-        summary = await summarize_messages(messages, llm_model.model, NOREASON_SETTINGS)
+        summary = await summarize_messages(deps, messages)
 
     assert summary is not None, "Summarization pipeline returned None"
     assert summary.strip(), "Summarization pipeline returned empty content"

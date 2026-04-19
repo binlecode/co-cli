@@ -86,7 +86,7 @@ def test_category_awareness_prompt_includes_representative_tool_names() -> None:
     prompt = build_category_awareness_prompt(result.tool_index)
     assert "write_file" in prompt
     assert "patch" in prompt
-    assert "start_background_task" in prompt
+    assert "task_start" in prompt
     assert "execute_code" in prompt
     assert "analyze_code" not in prompt
 
@@ -242,11 +242,11 @@ async def test_write_tools_are_sequential() -> None:
 async def test_excluded_tools_are_not_sequential() -> None:
     """Tools explicitly excluded from sequential=True in the plan must not be marked sequential.
 
-    These tools (save_article, run_shell_command, write_todos) were excluded because:
+    These tools (save_article, shell, todo_write) were excluded because:
     - save_article: UUID keys — no shared-path conflict possible
-    - run_shell_command: each call spawns an independent subprocess; serializing would
+    - shell: each call spawns an independent subprocess; serializing would
       unnecessarily block shell+read batches
-    - write_todos: writes session-scoped in-memory state, not filesystem paths
+    - todo_write: writes session-scoped in-memory state, not filesystem paths
     """
     from co_cli.agent._native_toolset import _build_native_toolset
 
@@ -254,11 +254,11 @@ async def test_excluded_tools_are_not_sequential() -> None:
     ctx = _make_ctx(_make_deps())
     tools = await toolset.get_tools(ctx)
     assert tools["save_article"].tool_def.sequential is False
-    assert tools["run_shell_command"].tool_def.sequential is False
-    assert tools["write_todos"].tool_def.sequential is False
+    assert tools["shell"].tool_def.sequential is False
+    assert tools["todo_write"].tool_def.sequential is False
     assert native_index["save_article"].is_concurrent_safe is True
-    assert native_index["run_shell_command"].is_concurrent_safe is True
-    assert native_index["write_todos"].is_concurrent_safe is True
+    assert native_index["shell"].is_concurrent_safe is True
+    assert native_index["todo_write"].is_concurrent_safe is True
 
 
 def test_toolinfo_read_only_tools() -> None:
@@ -354,7 +354,7 @@ def test_tool_index_policies_match_expectation() -> None:
     _, index = _build_native_toolset(config)
 
     assert index["read_file"].max_result_size == 80_000
-    assert index["run_shell_command"].max_result_size == 30_000
+    assert index["shell"].max_result_size == 30_000
     assert index["write_file"].approval is True
     assert index["write_file"].retries == 1
     assert index["patch"].approval is True

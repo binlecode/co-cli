@@ -1,4 +1,4 @@
-"""request_user_input tool — pause execution to prompt the user for a clarifying answer."""
+"""clarify tool — pause execution to prompt the user for a clarifying answer."""
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
@@ -10,7 +10,7 @@ from co_cli.tools.tool_io import tool_error, tool_output
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
-async def request_user_input(
+async def clarify(
     ctx: RunContext[CoDeps],
     question: str,
     options: list[str] | None = None,

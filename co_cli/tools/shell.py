@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True, max_result_size=30_000
 )
-async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolReturn:
+async def shell(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolReturn:
     """Execute a shell command and return combined stdout + stderr as text.
 
     Use for git commands, package managers, builds, scripts, and system info.
@@ -27,7 +27,7 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
     - search_notes / read_note instead of grep/cat on the Obsidian vault
     - search_drive_files / read_drive_file instead of manual API calls
     - write_file / patch instead of shell redirection for workspace file creation or editing
-    - start_background_task instead of shell for detached long-running work
+    - task_start instead of shell for detached long-running work
 
     Commands run in the project working directory. DENY-pattern commands are
     blocked. Safe-prefix commands execute directly. All others require user
@@ -53,7 +53,7 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
     if policy.decision == ShellDecisionEnum.DENY:
         logger.debug(
             "tool_denied tool_name=%s subject_kind=%s subject_value=%s",
-            "run_shell_command",
+            "shell",
             "shell",
             cmd.split()[0] if cmd.strip() else "",
         )

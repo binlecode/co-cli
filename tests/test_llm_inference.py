@@ -1,7 +1,7 @@
 """Tests for LLM inference settings resolution — model quirks contract.
 
 Covers: normalize_model_name, _merge_inference, resolve_reasoning_inference,
-_MODEL_REASONING_DEFAULTS, NOREASON_SETTINGS, LlmSettings inference methods.
+_MODEL_REASONING_DEFAULTS, resolve_noreason_inference, LlmSettings inference methods.
 
 These are pure-logic tests (no IO, no model construction) that verify the
 config/runtime contract documented in docs/specs/llm-models.md.
@@ -15,12 +15,12 @@ from co_cli.config._llm import (
     DEFAULT_OLLAMA_MAX_TOKENS,
     DEFAULT_OLLAMA_TEMPERATURE,
     DEFAULT_OLLAMA_TOP_P,
-    NOREASON_SETTINGS,
     LlmSettings,
     NoReasonSettings,
     ReasoningSettings,
     _merge_inference,
     normalize_model_name,
+    resolve_noreason_inference,
     resolve_reasoning_inference,
 )
 
@@ -171,21 +171,6 @@ def test_resolve_explicit_context_window_beats_model_default() -> None:
 
 
 # ---------------------------------------------------------------------------
-# NOREASON_SETTINGS constant values match DEFAULT_NOREASON_* constants
-# ---------------------------------------------------------------------------
-
-
-def test_noreason_settings_match_constants() -> None:
-    assert NOREASON_SETTINGS.get("temperature") == DEFAULT_NOREASON_TEMPERATURE
-    assert NOREASON_SETTINGS.get("top_p") == DEFAULT_NOREASON_TOP_P
-    assert NOREASON_SETTINGS.get("max_tokens") == DEFAULT_NOREASON_MAX_TOKENS
-    extra = NOREASON_SETTINGS.get("extra_body") or {}
-    assert extra.get("reasoning_effort") == "none"
-    for key, value in DEFAULT_NOREASON_EXTRA_BODY.items():
-        assert extra.get(key) == value, f"NOREASON_SETTINGS.extra_body[{key!r}] mismatch"
-
-
-# ---------------------------------------------------------------------------
 # LlmSettings.reasoning_model_settings() and reasoning_context_window()
 # ---------------------------------------------------------------------------
 
@@ -212,14 +197,131 @@ def test_reasoning_context_window_gemini_flash() -> None:
 
 
 # ---------------------------------------------------------------------------
-# NoReasonSettings default values match DEFAULT_NOREASON_* constants
+# NoReasonSettings is a pure-override model — all fields default to None/empty
 # ---------------------------------------------------------------------------
 
 
 def test_noreason_settings_model_defaults_match_constants() -> None:
     ns = NoReasonSettings()
-    assert ns.temperature == DEFAULT_NOREASON_TEMPERATURE
-    assert ns.top_p == DEFAULT_NOREASON_TOP_P
-    assert ns.max_tokens == DEFAULT_NOREASON_MAX_TOKENS
+    assert ns.temperature is None
+    assert ns.top_p is None
+    assert ns.max_tokens is None
+    assert ns.extra_body == {}
+
+
+# ---------------------------------------------------------------------------
+# resolve_noreason_inference — provider defaults
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_noreason_ollama_yields_full_key_set() -> None:
+    llm = LlmSettings.model_construct(
+        provider="ollama-openai", model="qwen3.5:35b-a3b-think", noreason=NoReasonSettings()
+    )
+    inference = resolve_noreason_inference(llm)
+    assert inference["temperature"] == DEFAULT_NOREASON_TEMPERATURE
+    assert inference["top_p"] == DEFAULT_NOREASON_TOP_P
+    assert inference["max_tokens"] == DEFAULT_NOREASON_MAX_TOKENS
+    assert inference.get("extra_body", {}).get("reasoning_effort") == "none"
+
+
+def test_resolve_noreason_ollama_extra_body_matches_constant() -> None:
+    llm = LlmSettings.model_construct(
+        provider="ollama-openai", model="qwen3.5:35b-a3b-think", noreason=NoReasonSettings()
+    )
+    inference = resolve_noreason_inference(llm)
     for key, value in DEFAULT_NOREASON_EXTRA_BODY.items():
-        assert ns.extra_body.get(key) == value, f"NoReasonSettings.extra_body[{key!r}] mismatch"
+        assert inference.get("extra_body", {}).get(key) == value, f"extra_body[{key!r}] mismatch"
+
+
+def test_resolve_noreason_gemini_flash_thinking_level_minimal() -> None:
+    llm = LlmSettings.model_construct(
+        provider="gemini", model="gemini-3-flash-preview", noreason=NoReasonSettings()
+    )
+    inference = resolve_noreason_inference(llm)
+    assert inference.get("thinking_config") == {"thinking_level": "minimal"}
+
+
+def test_resolve_noreason_gemini_pro_thinking_level_low() -> None:
+    llm = LlmSettings.model_construct(
+        provider="gemini", model="gemini-3-pro-preview", noreason=NoReasonSettings()
+    )
+    inference = resolve_noreason_inference(llm)
+    assert inference.get("thinking_config") == {"thinking_level": "low"}
+
+
+def test_resolve_noreason_gemini_25flash_thinking_budget_zero() -> None:
+    llm = LlmSettings.model_construct(
+        provider="gemini", model="gemini-2.5-flash", noreason=NoReasonSettings()
+    )
+    inference = resolve_noreason_inference(llm)
+    assert inference.get("thinking_config") == {"thinking_budget": 0}
+
+
+def test_resolve_noreason_gemini_25flash_lite_thinking_budget_zero() -> None:
+    llm = LlmSettings.model_construct(
+        provider="gemini", model="gemini-2.5-flash-lite", noreason=NoReasonSettings()
+    )
+    inference = resolve_noreason_inference(llm)
+    assert inference.get("thinking_config") == {"thinking_budget": 0}
+
+
+def test_resolve_noreason_user_explicit_temperature_wins() -> None:
+    llm = LlmSettings.model_construct(
+        provider="ollama-openai",
+        model="qwen3.5:35b-a3b-think",
+        noreason=NoReasonSettings(temperature=0.3),
+    )
+    inference = resolve_noreason_inference(llm)
+    assert inference["temperature"] == 0.3
+    # Provider defaults still apply for other fields
+    assert inference["top_p"] == DEFAULT_NOREASON_TOP_P
+
+
+def test_resolve_noreason_user_explicit_extra_body_wins() -> None:
+    llm = LlmSettings.model_construct(
+        provider="ollama-openai",
+        model="qwen3.5:35b-a3b-think",
+        noreason=NoReasonSettings(extra_body={"custom": 1}),
+    )
+    inference = resolve_noreason_inference(llm)
+    assert inference.get("extra_body", {}).get("custom") == 1
+    # Provider defaults still layer under
+    assert inference.get("extra_body", {}).get("reasoning_effort") == "none"
+
+
+# ---------------------------------------------------------------------------
+# LlmSettings.noreason_model_settings() — provider-aware construction
+# ---------------------------------------------------------------------------
+
+
+def test_noreason_model_settings_ollama_has_extra_body_no_thinking_config() -> None:
+    llm = LlmSettings.model_construct(
+        provider="ollama-openai", model="qwen3.5:35b-a3b-think", noreason=NoReasonSettings()
+    )
+    ms = llm.noreason_model_settings()
+    assert ms.get("extra_body", {}).get("reasoning_effort") == "none"
+    assert "google_thinking_config" not in (ms or {})
+
+
+def test_noreason_model_settings_gemini_flash_has_google_thinking_config() -> None:
+    llm = LlmSettings.model_construct(
+        provider="gemini",
+        model="gemini-3-flash-preview",
+        noreason=NoReasonSettings(),
+        api_key="test",
+    )
+    ms = llm.noreason_model_settings()
+    assert ms.get("google_thinking_config") == {"thinking_level": "minimal"}
+    assert "extra_body" not in (ms or {})
+
+
+def test_noreason_model_settings_ollama_matches_noreason_settings_constant() -> None:
+    llm = LlmSettings.model_construct(
+        provider="ollama-openai", model="qwen3.5:35b-a3b-think", noreason=NoReasonSettings()
+    )
+    ms = llm.noreason_model_settings()
+    assert ms.get("temperature") == DEFAULT_NOREASON_TEMPERATURE
+    assert ms.get("top_p") == DEFAULT_NOREASON_TOP_P
+    assert ms.get("max_tokens") == DEFAULT_NOREASON_MAX_TOKENS
+    assert ms.get("extra_body") == DEFAULT_NOREASON_EXTRA_BODY

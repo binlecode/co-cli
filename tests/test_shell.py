@@ -13,7 +13,7 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.tools._shell_policy import ShellDecisionEnum, evaluate_shell_command
-from co_cli.tools.shell import run_shell_command
+from co_cli.tools.shell import shell
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)
@@ -48,7 +48,7 @@ async def test_shell_basic_exec():
     """run_shell_command executes a basic shell command and returns stdout."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "echo hello")
+        result = await shell(ctx, "echo hello")
     assert "hello" in result.return_value
 
 
@@ -57,7 +57,7 @@ async def test_shell_safe_command_runs_without_deferred_approval():
     """Safe-prefix commands execute even when orchestration approval is absent."""
     ctx = _make_ctx(tool_call_approved=False, shell_safe_commands=["pwd"])
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "pwd")
+        result = await shell(ctx, "pwd")
     assert result.return_value.strip()
 
 
@@ -66,7 +66,7 @@ async def test_shell_nonzero_exit():
     """Non-zero exits return a tool_error with exit code and output for LLM reasoning."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "ls /nonexistent_path_xyz_subprocess")
+        result = await shell(ctx, "ls /nonexistent_path_xyz_subprocess")
     assert result.metadata.get("error") is True
     assert "exit 1" in result.return_value or "exit 2" in result.return_value
 
@@ -77,7 +77,7 @@ async def test_shell_timeout():
     ctx = _make_ctx()
     with pytest.raises(ModelRetry, match="Shell: command timed out"):
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await run_shell_command(ctx, "sleep 30", timeout=2)
+            await shell(ctx, "sleep 30", timeout=2)
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_shell_timeout_clamped():
     ctx = _make_ctx(shell_max_timeout=2)
     with pytest.raises(ModelRetry, match="Shell: command timed out"):
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await run_shell_command(ctx, "sleep 30", timeout=300)
+            await shell(ctx, "sleep 30", timeout=300)
 
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_shell_pipe():
     """Pipes execute through the real shell backend."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "echo hello world | wc -w")
+        result = await shell(ctx, "echo hello world | wc -w")
     assert result.return_value.strip() == "2"
 
 
@@ -104,7 +104,7 @@ async def test_shell_requires_deferred_approval_for_unknown_command():
     ctx = _make_ctx(tool_call_approved=False)
     with pytest.raises(ApprovalRequired):
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await run_shell_command(ctx, "echo hello world | wc -w")
+            await shell(ctx, "echo hello world | wc -w")
 
 
 @pytest.mark.asyncio
@@ -112,11 +112,11 @@ async def test_shell_env_sanitized():
     """Dangerous pager-related env vars are normalized for subprocesses."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        pager = await run_shell_command(ctx, "echo $PAGER")
+        pager = await shell(ctx, "echo $PAGER")
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        git_pager = await run_shell_command(ctx, "echo $GIT_PAGER")
+        git_pager = await shell(ctx, "echo $GIT_PAGER")
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        unbuffered = await run_shell_command(ctx, "echo $PYTHONUNBUFFERED")
+        unbuffered = await shell(ctx, "echo $PYTHONUNBUFFERED")
     assert pager.return_value.strip() == "cat"
     assert git_pager.return_value.strip() == "cat"
     assert unbuffered.return_value.strip() == "1"
@@ -130,7 +130,7 @@ async def test_shell_dangerous_env_blocked():
     try:
         ctx = _make_ctx()
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            result = await run_shell_command(ctx, "echo ${LD_PRELOAD:-unset}")
+            result = await shell(ctx, "echo ${LD_PRELOAD:-unset}")
         assert result.return_value.strip() == "unset"
     finally:
         if old is None:
@@ -144,7 +144,7 @@ async def test_shell_stderr_merged():
     """stderr is merged into stdout for downstream model visibility."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "echo 'err msg' >&2; echo 'ok'")
+        result = await shell(ctx, "echo 'err msg' >&2; echo 'ok'")
     assert "err msg" in result.return_value
     assert "ok" in result.return_value
 
@@ -154,7 +154,7 @@ async def test_shell_cwd_is_host_cwd():
     """Default shell working directory is the current repository root."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "test -f pyproject.toml && echo exists")
+        result = await shell(ctx, "test -f pyproject.toml && echo exists")
     assert "exists" in result.return_value
 
 
@@ -163,7 +163,7 @@ async def test_shell_variable_expansion():
     """The shell backend preserves normal shell expansion semantics."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "X=42 && echo val=$X")
+        result = await shell(ctx, "X=42 && echo val=$X")
     assert "val=42" in result.return_value
 
 
@@ -172,7 +172,7 @@ async def test_shell_deny_pattern_returns_terminal_error():
     """Denied commands return a terminal error payload without execution."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "rm -rf /")
+        result = await shell(ctx, "rm -rf /")
     assert result.metadata.get("error") is True
 
 
@@ -182,7 +182,7 @@ async def test_shell_deny_control_character():
     ctx = _make_ctx()
     # U+0001 (SOH) is a control character below 0x20 and not \t or \n
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "echo \x01hello")
+        result = await shell(ctx, "echo \x01hello")
     assert result.metadata.get("error") is True
 
 
@@ -191,7 +191,7 @@ async def test_shell_deny_heredoc():
     """Commands containing the heredoc operator << are rejected before execution."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "cat <<EOF\nhello\nEOF")
+        result = await shell(ctx, "cat <<EOF\nhello\nEOF")
     assert result.metadata.get("error") is True
 
 
@@ -200,7 +200,7 @@ async def test_shell_deny_env_injection():
     """Commands using VAR=$(...) env-injection pattern are rejected before execution."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "EVIL=$(whoami) && echo $EVIL")
+        result = await shell(ctx, "EVIL=$(whoami) && echo $EVIL")
     assert result.metadata.get("error") is True
 
 
@@ -209,7 +209,7 @@ async def test_shell_workspace_dir_param():
     """ShellBackend honors an explicit workspace_dir."""
     ctx = _make_ctx(shell=ShellBackend(workspace_dir="/tmp"))
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await run_shell_command(ctx, "pwd")
+        result = await shell(ctx, "pwd")
     assert "tmp" in result.return_value
 
 
@@ -219,9 +219,9 @@ async def test_shell_deny_emits_structured_log(caplog):
     ctx = _make_ctx()
     with caplog.at_level("DEBUG", logger="co_cli.tools.shell"):
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await run_shell_command(ctx, "rm -rf /")
+            await shell(ctx, "rm -rf /")
     assert any(
-        "tool_denied tool_name=run_shell_command subject_kind=shell subject_value=rm" in r.message
+        "tool_denied tool_name=shell subject_kind=shell subject_value=rm" in r.message
         for r in caplog.records
         if r.levelname == "DEBUG"
     )

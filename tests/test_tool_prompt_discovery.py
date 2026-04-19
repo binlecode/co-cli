@@ -11,7 +11,7 @@ from co_cli.agent._native_toolset import _build_native_toolset
 from co_cli.config._core import settings
 from co_cli.deps import VisibilityPolicyEnum
 from co_cli.prompts._assembly import build_static_instructions
-from co_cli.tools.shell import run_shell_command
+from co_cli.tools.shell import shell
 
 _NATIVE_TOOLSET, _NATIVE_INDEX = _build_native_toolset(settings)
 
@@ -42,13 +42,13 @@ def test_file_write_tools_discoverable_by_keywords() -> None:
 def test_background_task_tools_discoverable_by_keywords() -> None:
     """Background task tools surface for background/long-running queries."""
     descs = _deferred_descriptions()
-    assert "background" in descs["start_background_task"]
-    assert "long-running" in descs["start_background_task"]
-    assert "background" in descs["check_task_status"]
-    assert "status" in descs["check_task_status"]
-    assert "cancel" in descs["cancel_background_task"]
-    assert "background" in descs["cancel_background_task"]
-    assert "background" in descs["list_background_tasks"]
+    assert "background" in descs["task_start"]
+    assert "long-running" in descs["task_start"]
+    assert "background" in descs["task_status"]
+    assert "status" in descs["task_status"]
+    assert "cancel" in descs["task_cancel"]
+    assert "background" in descs["task_cancel"]
+    assert "background" in descs["task_list"]
 
 
 def test_execute_code_tool_discoverable_by_keywords() -> None:
@@ -128,16 +128,16 @@ def test_shell_tool_description_redirects_file_operations() -> None:
     Regression: if these redirects are dropped, the model uses shell redirection
     (echo >>, cat <<EOF) instead of the dedicated write/edit tools.
     """
-    doc = (run_shell_command.__doc__ or "").lower()
+    doc = (shell.__doc__ or "").lower()
     assert "write_file" in doc
     assert "patch" in doc
 
 
 def test_shell_tool_description_redirects_background_tasks() -> None:
-    """Shell tool docstring must redirect detached long-running work to start_background_task.
+    """Shell tool docstring must redirect detached long-running work to task_start.
 
     Regression: if this redirect is dropped, the model backgrounds processes with
     & or nohup via shell instead of using the managed background task tool.
     """
-    doc = run_shell_command.__doc__ or ""
-    assert "start_background_task" in doc
+    doc = shell.__doc__ or ""
+    assert "task_start" in doc

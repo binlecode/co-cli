@@ -26,7 +26,7 @@ from co_cli.tools.tool_io import tool_output
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, is_concurrent_safe=True)
-async def start_background_task(
+async def task_start(
     ctx: RunContext[CoDeps],
     command: str,
     description: str,
@@ -77,7 +77,7 @@ async def start_background_task(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_read_only=True, is_concurrent_safe=True)
-async def check_task_status(
+async def task_status(
     ctx: RunContext[CoDeps],
     task_id: str,
     tail_lines: int = 20,
@@ -86,14 +86,14 @@ async def check_task_status(
 
     Use for targeted inspection of a known task — returns status, duration,
     exit code, and the last N lines of output. Prefer this over
-    list_background_tasks when the task ID is already known.
+    task_list when the task ID is already known.
 
     Do not poll repeatedly without reason; the surrounding workflow notifies
     on task completion. Check only when you need to inspect progress or
     retrieve output for a decision.
 
     Args:
-        task_id: The task ID returned by start_background_task.
+        task_id: The task ID returned by task_start.
         tail_lines: Number of output lines to return (default 20).
     """
     state = ctx.deps.session.background_tasks.get(task_id)
@@ -142,7 +142,7 @@ async def check_task_status(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
-async def cancel_background_task(
+async def task_cancel(
     ctx: RunContext[CoDeps],
     task_id: str,
 ) -> ToolReturn:
@@ -186,14 +186,14 @@ async def cancel_background_task(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_read_only=True, is_concurrent_safe=True)
-async def list_background_tasks(
+async def task_list(
     ctx: RunContext[CoDeps],
     status_filter: str | None = None,
 ) -> ToolReturn:
     """List all background tasks to discover active work or recover a task ID.
 
     Use to find task IDs or get a quick overview of running and completed work.
-    Prefer check_task_status for detailed inspection of one known task —
+    Prefer task_status for detailed inspection of one known task —
     listing is for discovery, not deep status checks.
 
     Args:

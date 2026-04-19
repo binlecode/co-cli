@@ -25,7 +25,7 @@ def test_build_agent_registers_all_tools():
     assert len(tool_names) == len(set(tool_names)), "Duplicate tool registration"
 
     # Core tools always present
-    for tool in ("run_shell_command", "check_capabilities", "web_search", "search_memory"):
+    for tool in ("shell", "check_capabilities", "web_search", "search_memory"):
         assert tool in result.tool_index, f"Expected core tool '{tool}' to be registered"
 
 
@@ -34,14 +34,14 @@ def test_approval_tools_flagged():
     result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
 
     # These tools must require approval at the agent layer
-    for name in ("start_background_task", "save_article", "write_file", "patch"):
+    for name in ("task_start", "save_article", "write_file", "patch"):
         assert result.tool_index[name].approval is True, (
             f"Tool '{name}' should require approval but doesn't"
         )
 
     # Shell approval is intra-tool (raises ApprovalRequired); agent layer must be False
-    assert result.tool_index["run_shell_command"].approval is False, (
-        "run_shell_command agent-layer approval must be False (approval handled inside tool)"
+    assert result.tool_index["shell"].approval is False, (
+        "shell agent-layer approval must be False (approval handled inside tool)"
     )
 
     # Read-only tools must not require approval
@@ -77,7 +77,7 @@ def test_build_agent_excludes_domain_tools_when_config_absent():
     assert "search_drive_files" not in result.tool_index
     # Core tools always registered
     assert "check_capabilities" in result.tool_index
-    assert "run_shell_command" in result.tool_index
+    assert "shell" in result.tool_index
     assert "web_search" in result.tool_index
 
 
@@ -104,7 +104,7 @@ def test_tool_index_visibility_policy_metadata():
         "check_capabilities",
         "read_file",
         "web_search",
-        "run_shell_command",
+        "shell",
         "list_knowledge",
         "search_memory",
         "search_knowledge",
@@ -112,7 +112,7 @@ def test_tool_index_visibility_policy_metadata():
         assert idx[name].visibility == VisibilityPolicyEnum.ALWAYS, f"{name} should be ALWAYS"
 
     # Spot-check deferred tools
-    for name in ("patch", "write_file", "save_article", "start_background_task"):
+    for name in ("patch", "write_file", "save_article", "task_start"):
         assert idx[name].visibility == VisibilityPolicyEnum.DEFERRED, f"{name} should be DEFERRED"
 
     # Connector integration metadata
@@ -121,11 +121,11 @@ def test_tool_index_visibility_policy_metadata():
     assert idx["search_drive_files"].integration == "google_drive"
 
     # Per-tool max_result_size overrides
-    assert idx["run_shell_command"].max_result_size == 30_000
+    assert idx["shell"].max_result_size == 30_000
     assert idx["read_file"].max_result_size == 80_000
     # All others should have the default (50,000)
     for name, tc in idx.items():
-        if name not in ("run_shell_command", "read_file"):
+        if name not in ("shell", "read_file"):
             assert tc.max_result_size == 50_000, (
                 f"{name}: expected default max_result_size=50000, got {tc.max_result_size}"
             )

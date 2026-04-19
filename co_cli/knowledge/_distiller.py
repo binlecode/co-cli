@@ -25,7 +25,6 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.tools.knowledge import save_knowledge
 
 logger = logging.getLogger(__name__)
@@ -109,12 +108,16 @@ def build_transcript_window(messages: list, *, max_text: int = 10, max_tool: int
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "knowledge_extractor.md"
 
-# Module-level knowledge extractor agent — tool-calling pattern.
-# No model at init; model passed at .run() time (same as prior _extraction_agent pattern).
-_knowledge_extractor_agent: Agent["CoDeps", str] = Agent(
-    instructions=_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-    tools=[save_knowledge],
-)
+
+def build_knowledge_extractor_agent() -> "Agent[CoDeps, str]":
+    """Create a fresh knowledge extractor agent for a single extraction call.
+
+    Instance lifetime is one .run() invocation — no shared state between calls.
+    """
+    return Agent(
+        instructions=_PROMPT_PATH.read_text(encoding="utf-8").strip(),
+        tools=[save_knowledge],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +134,7 @@ async def _run_extraction_async(
     *,
     cursor_start: int,
 ) -> None:
-    """Background extraction: run _knowledge_extractor_agent on the delta window.
+    """Background extraction: build and run a knowledge extractor agent on the delta window.
 
     Advances deps.session.last_extracted_message_idx on success only.
     Handles CancelledError for clean shutdown.
@@ -146,10 +149,9 @@ async def _run_extraction_async(
             deps.session.last_extracted_message_idx = cursor_start + len(delta)
             return
         _model = deps.model.model if deps.model else None
+        agent = build_knowledge_extractor_agent()
         with tracer.start_as_current_span("co.memory.extraction"):
-            await _knowledge_extractor_agent.run(
-                window, deps=deps, model=_model, model_settings=NOREASON_SETTINGS
-            )
+            await agent.run(window, deps=deps, model=_model)
         deps.session.last_extracted_message_idx = cursor_start + len(delta)
     except asyncio.CancelledError:
         logger.debug("Background memory extraction cancelled")

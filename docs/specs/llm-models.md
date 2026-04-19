@@ -2,10 +2,10 @@
 
 ## Product Intent
 
-**Goal:** Define the single-model architecture, provider abstraction, and per-call settings suppression.
+**Goal:** Define the single-model architecture, provider abstraction, and per-call settings resolution.
 **Functional areas:**
 - Model factory (`build_model`) and provider selection
-- Explicit reasoning settings resolution plus per-call `NOREASON_SETTINGS` suppression
+- Explicit reasoning settings resolution plus provider-aware noreason settings resolved at build time
 - Provider-specific runtime settings (Ollama `num_ctx`, Gemini defaults)
 - Model dependency checks at startup
 
@@ -23,11 +23,10 @@
 
 Co CLI supports two providers (`ollama-openai`, `gemini`) and a single-model architecture:
 `llm.model` names the one model used for all tasks. `create_deps()` calls
-`build_model(config.llm)` once to produce an `LlmModel` (model object + base settings +
-context window), stored on `CoDeps.model`. The main agent uses config-derived reasoning
-settings resolved from `llm.reasoning` plus provider/model defaults. Non-reasoning helper
-calls (subagents, compaction, memory extraction) still use the static `NOREASON_SETTINGS`
-constant from `co_cli/config/_llm.py`.
+`build_model(config.llm)` once to produce an `LlmModel` (model object + reasoning settings +
+noreason settings + context window), stored on `CoDeps.model`. The main agent uses
+config-derived reasoning settings from `deps.model.settings`. Functional (non-tool-loop) calls
+— summarizer, dream merge — use `deps.model.settings_noreason` via the `llm_call()` primitive.
 
 ```
 build_model(config.llm) → LlmModel
@@ -36,7 +35,7 @@ build_model(config.llm) → LlmModel
     │       (num_ctx baked from resolved model settings when available)
     └── provider == "gemini"
         └── GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-    → LlmModel(model, settings, context_window)
+    → LlmModel(model, settings, settings_noreason, context_window)
 
 deps.model → LlmModel (session-scoped, read-only)
 ```
@@ -63,7 +62,7 @@ All subagent tools are always registered.
 
 ### LlmModel and build_model
 
-`LlmModel` is a dataclass pairing a pre-built model object (`Any`) with its base `ModelSettings | None` and an optional `context_window: int | None` from resolved model settings. It is built once at session start via `build_model(config.llm)` and stored on `deps.model`. Agent factories and summarization functions receive the raw model object and settings separately.
+`LlmModel` is a dataclass pairing a pre-built model object (`Any`) with its reasoning `ModelSettings | None` (`settings`), its noreason `ModelSettings | None` (`settings_noreason`), and an optional `context_window: int | None` from resolved model settings. It is built once at session start via `build_model(config.llm)` and stored on `deps.model`.
 
 `build_model()` in `co_cli/llm/_factory.py` is provider-aware:
 
@@ -75,7 +74,7 @@ All subagent tools are always registered.
 
 ### Per-Call Settings
 
-The main agent uses the config-derived base `ModelSettings` from `deps.model.settings`. All non-reasoning calls use `NOREASON_SETTINGS` (from `co_cli/config/_llm.py`) — a static `ModelSettings` constant that suppresses reasoning via `reasoning_effort="none"` in `extra_body`. A typed `llm.noreason` settings model exists in config, but current helper-call sites still import the constant rather than constructing per-session overrides. Callers pass `model=deps.model.model` and `model_settings=NOREASON_SETTINGS` separately. Provider-specific extra_body keys (Ollama) are silently ignored by Gemini's GoogleProvider.
+The main agent uses the config-derived base `ModelSettings` from `deps.model.settings`. Functional (non-tool-loop) calls use `deps.model.settings_noreason` — resolved at build time from provider defaults, model-specific overrides, and user explicit config via `resolve_noreason_inference()`. `noreason_model_settings()` branches by provider: Ollama gets a standard `ModelSettings` with `extra_body.reasoning_effort="none"` (and other Ollama-specific keys); Gemini gets a `GoogleModelSettings` with `google_thinking_config` (model-specific thinking level or budget). Functional callers (summarizer, dream merge) use `llm_call()` in `co_cli/llm/_call.py`, which defaults to `deps.model.settings_noreason`.
 
 ### Model Dependency Checks
 
@@ -102,77 +101,53 @@ Settings load order is `env > ~/.co-cli/settings.json > defaults`.
 | `llm.ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
 | `llm.api_key` | `LLM_API_KEY` | `None` | LLM API key (required when `llm.provider=gemini`) |
 | `llm.reasoning.temperature/top_p/max_tokens/num_ctx/context_window/extra_body` | — | unset | Optional explicit overrides for the main agent's reasoning model settings; merged over provider/model defaults |
-| `llm.noreason.temperature/top_p/max_tokens/extra_body` | — | static defaults in `NoReasonSettings` | Typed non-reasoning settings model defined in config; current helper-call code paths still use `NOREASON_SETTINGS` directly |
+| `llm.noreason.temperature/top_p/max_tokens/extra_body` | — | `None` / `{}` (resolved from provider defaults at build time) | Pure-override noreason settings model; all fields default to `None`/`{}` — non-`None` values win over provider/model defaults in `resolve_noreason_inference()` |
 
 ## 4. Provider Runtime Settings
 
-### Thinking-capable Models — `api_params` Override
+### Thinking-capable Models — Noreason Settings Resolution
 
 Some Ollama MoE models, including `qwen3.5:35b-a3b-think`, default to reasoning mode. For
-non-reasoning work such as compaction, subagents, and memory extraction, the repo does not swap
-to a second `-instruct` model. It keeps the same `-think` weights resident and changes the
-request body via per-call `ModelSettings`.
+functional (non-tool-loop) work — compaction, memory extraction, dream merge — the repo does not
+swap to a second `-instruct` model. It keeps the same `-think` weights resident and suppresses
+reasoning via per-provider `ModelSettings` resolved at session start.
 
-Supported non-reason path for this repo:
+`build_model()` calls `llm.noreason_model_settings()` which calls `resolve_noreason_inference()`.
+The resolution layers three tiers:
 
-- provider: `ollama-openai`
-- model: `qwen3.5:35b-a3b-think`
-- per-call override: `NOREASON_SETTINGS` with `reasoning_effort = "none"` in `extra_body`
-
-`NOREASON_SETTINGS` shape (from `co_cli/config/_llm.py`):
-
-```yaml
-temperature: 0.7
-top_p: 0.8
-max_tokens: 16384
-extra_body:
-  reasoning_effort: none
-  top_k: 20
-  min_p: 0.0
-  presence_penalty: 1.5
-  repeat_penalty: 1.0
-  num_ctx: 131072
-  num_predict: 16384
 ```
+1. provider defaults (_PROVIDER_NOREASON_DEFAULTS) — e.g. ollama: extra_body.reasoning_effort="none", top_k, min_p; gemini: thinking_config.thinking_level="minimal"
+2. model-specific overrides (_MODEL_NOREASON_DEFAULTS) — e.g. gemini-3-pro: thinking_level="low"; gemini-2.5-flash: thinking_budget=0
+3. user explicit overrides (llm.noreason settings) — any non-None field wins over tiers 1+2
+```
+
+Provider branching in `noreason_model_settings()`:
+
+- **Ollama** → `ModelSettings(temperature, top_p, max_tokens, extra_body={reasoning_effort="none", top_k, min_p, presence_penalty, repeat_penalty, num_ctx, num_predict})`
+- **Gemini flash** → `GoogleModelSettings(google_thinking_config={"thinking_level": "minimal"})`
+- **Gemini pro** → `GoogleModelSettings(google_thinking_config={"thinking_level": "low"})`
+- **Gemini 2.5 flash / flash-lite** → `GoogleModelSettings(google_thinking_config={"thinking_budget": 0})`
 
 Application flow:
 
 ```text
 build_model(config.llm)
-  resolved defaults → base ModelSettings
-  → LlmModel(model, settings, context_window)
+  → resolve_reasoning_inference() → settings (reasoning)
+  → resolve_noreason_inference() → settings_noreason (functional)
+  → LlmModel(model, settings, settings_noreason, context_window)
   → stored on deps.model
 
-Non-reasoning call (subagent, compaction, memory extraction):
-  model=deps.model.model, model_settings=NOREASON_SETTINGS
-  → pydantic-ai request
-  → POST {llm_host}/v1/chat/completions with extra_body merged into the API call
+Functional call (compaction, dream merge, extraction):
+  llm_call(deps, prompt, ...) → agent.run(..., model_settings=deps.model.settings_noreason)
 
 Reasoning call (main agent turn):
-  model=deps.model.model, model_settings=deps.model.settings (config-derived base)
+  agent.run(..., model_settings=deps.model.settings)
 ```
 
-Practical rule:
+Important backend distinction for Ollama:
 
-- The main agent uses config-derived base settings from `build_model()`.
-- All non-reasoning calls pass `NOREASON_SETTINGS` as the `model_settings` argument.
-- `NOREASON_SETTINGS` includes all Ollama-specific extra_body keys; provider-specific keys
-  are silently ignored by Gemini's GoogleProvider.
-
-Observed behavior behind this design:
-
-- default `qwen3.5:35b-a3b-think` can spend its output budget on reasoning and return empty visible
-  `content`
-- `qwen3.5:35b-a3b-think` with `reasoning_effort="none"` returns direct-answer content on the same
-  resident model
-
-Important backend distinction:
-
-- For the active Ollama OpenAI-compatible path in this repo, `reasoning_effort="none"` is the
-  supported request-level control for suppressing reasoning on `qwen3.5:35b-a3b-think`.
-- For generic OpenAI-compatible Qwen3.5 servers outside Ollama, upstream Qwen documents a different
-  control path: `chat_template_kwargs.enable_thinking=false` in the extra request body.
-- These control surfaces are not interchangeable; this repo documents and relies on the Ollama one.
+- `reasoning_effort="none"` is the Ollama request-level control for suppressing reasoning on `qwen3.5:35b-a3b-think`.
+- For generic OpenAI-compatible Qwen3.5 servers outside Ollama, a different control path exists: `chat_template_kwargs.enable_thinking=false`. Not interchangeable.
 
 Validate with: `uv run python scripts/validate_ollama_models.py`
 
@@ -231,10 +206,11 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | `co_cli/deps.py` | `CoDeps` with `config: Settings`; `model: LlmModel \| None` as top-level field |
 | `co_cli/bootstrap/check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent/_core.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
-| `co_cli/commands/_commands.py` | Uses `deps.model.model` + `NOREASON_SETTINGS` for `/compact` and `/new` |
-| `co_cli/context/summarization.py` | `summarize_messages(messages, model, model_settings, ...)` — bare Agent summariser; `resolve_compaction_budget(config, context_window)` — reads `context_window` from `LlmModel` to set compaction token budget |
-| `co_cli/llm/_factory.py` | `LlmModel` — pre-built model + settings + context_window container; `build_model(llm: LlmSettings)` — builds provider-aware model from flat settings |
-| `co_cli/config/_llm.py` | `NOREASON_SETTINGS` — static `ModelSettings` for all non-reasoning calls (subagents, compaction, memory extraction) |
+| `co_cli/commands/_commands.py` | Uses `deps.model` for `/compact` and `/new` via `summarize_messages(deps, ...)` |
+| `co_cli/context/summarization.py` | `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `resolve_compaction_budget(config, context_window)` — reads `context_window` from `LlmModel` to set compaction token budget |
+| `co_cli/llm/_factory.py` | `LlmModel` — pre-built model + reasoning settings + noreason settings + context_window; `build_model(llm: LlmSettings)` — builds provider-aware model with both settings resolved |
+| `co_cli/llm/_call.py` | `llm_call(deps, prompt, *, instructions, message_history, output_type, model_settings)` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
+| `co_cli/config/_llm.py` | `LlmSettings`, `NoReasonSettings`, `ReasoningSettings`; `resolve_reasoning_inference()`, `resolve_noreason_inference()`; `_PROVIDER_NOREASON_DEFAULTS`, `_MODEL_NOREASON_DEFAULTS`; `DEFAULT_NOREASON_*` constants |
 | `ollama/Modelfile.qwen3.5-35b-a3b-think` | Primary reasoning model — thinking enabled |
 | `ollama/Modelfile.qwen3.5-35b-a3b-code` | Coding sub-agent — deterministic params |
 | `scripts/validate_ollama_models.py` | Standalone dev tool: validates shipped custom Ollama model tags against their baked Modelfile params and directives; not invoked at startup |

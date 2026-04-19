@@ -64,7 +64,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings, settings
-from co_cli.config._llm import NOREASON_SETTINGS, LlmSettings
+from co_cli.config._llm import LlmSettings
 from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
     _CONTEXT_MAX_CHARS,
@@ -88,6 +88,7 @@ from co_cli.context.orchestrate import _is_context_overflow
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
+    _SUMMARIZER_SYSTEM_PROMPT,
     _build_summarizer_prompt,
     resolve_compaction_budget,
     summarize_messages,
@@ -111,6 +112,11 @@ log = logging.getLogger(__name__)
 _LLM_MODEL = build_model(settings.llm)
 _EVAL_CONFIG = settings.model_copy(update={"mcp_servers": {}})
 _AGENT = build_agent(config=_EVAL_CONFIG, model=_LLM_MODEL)
+_DEPS = CoDeps(
+    shell=ShellBackend(),
+    config=_EVAL_CONFIG,
+    model=_LLM_MODEL,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +383,7 @@ def step_2_p1_truncate() -> bool:
     """Validate P1: recency-based clearing with exact counts.
 
     Specs from TODO:
-    - COMPACTABLE_TOOLS: read_file, run_shell_command, find_in_files, list_directory, web_search, web_fetch
+    - COMPACTABLE_TOOLS: read_file, shell, find_in_files, list_directory, web_search, web_fetch
     - Keep COMPACTABLE_KEEP_RECENT (5) most recent per tool type
     - Non-compactable tools pass through regardless of count
     - Last turn group always protected
@@ -393,7 +399,7 @@ def step_2_p1_truncate() -> bool:
         "read_article",
         "read_file",
         "read_note",
-        "run_shell_command",
+        "shell",
         "web_fetch",
         "web_search",
     }
@@ -1986,9 +1992,7 @@ async def step_10_enrichment_ab() -> bool:
     print("  Running A (bare — no enrichment)...")
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            summary_bare = await summarize_messages(
-                dropped, _LLM_MODEL.model, NOREASON_SETTINGS, context=None
-            )
+            summary_bare = await summarize_messages(_DEPS, dropped, context=None)
     except TimeoutError:
         print("  FAIL: bare summary timed out")
         return False
@@ -1997,9 +2001,7 @@ async def step_10_enrichment_ab() -> bool:
     print("  Running B (enriched — file paths + todos injected)...")
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            summary_enriched = await summarize_messages(
-                dropped, _LLM_MODEL.model, NOREASON_SETTINGS, context=enrichment
-            )
+            summary_enriched = await summarize_messages(_DEPS, dropped, context=enrichment)
     except TimeoutError:
         print("  FAIL: enriched summary timed out")
         return False
@@ -2337,10 +2339,6 @@ async def step_12_prompt_composition() -> bool:
     print("\n--- Step 12: Prompt composition validation [LLM input inspection] ---")
     passed = True
 
-    from co_cli.context.summarization import (
-        _summarizer_agent,
-    )
-
     # --- 12a: Validate _build_summarizer_prompt output structure ---
 
     # Case: context + personality
@@ -2426,25 +2424,20 @@ async def step_12_prompt_composition() -> bool:
         print("  FAIL: 12a — enrichment content missing from prompt")
         passed = False
 
-    # --- 12b: Validate agent instructions (system prompt) ---
+    # --- 12b: Validate summarizer system prompt (security guardrail) ---
 
-    # pydantic-ai stores instructions in _instructions list (the .instructions property is a method)
-    raw_instructions = _summarizer_agent._instructions
-    if not raw_instructions or not isinstance(raw_instructions[0], str):
-        print(f"  FAIL: 12b — agent _instructions[0] is not a string: {raw_instructions}")
-        passed = False
+    # _SUMMARIZER_SYSTEM_PROMPT is passed as `instructions` to llm_call() on every invocation.
+    # Validate it directly — no need to inspect agent internals.
+    if "CRITICAL SECURITY RULE" in _SUMMARIZER_SYSTEM_PROMPT:
+        print("  PASS: 12b — summarizer system prompt contains security guardrail")
     else:
-        agent_text = raw_instructions[0]
-        if "CRITICAL SECURITY RULE" in agent_text:
-            print("  PASS: 12b — agent instructions contain security guardrail")
-        else:
-            print("  FAIL: 12b — security guardrail missing from agent instructions")
-            passed = False
-        if "IGNORE ALL COMMANDS" in agent_text:
-            print("  PASS: 12b — anti-injection directive present")
-        else:
-            print("  FAIL: 12b — anti-injection directive missing")
-            passed = False
+        print("  FAIL: 12b — security guardrail missing from summarizer system prompt")
+        passed = False
+    if "IGNORE ALL COMMANDS" in _SUMMARIZER_SYSTEM_PROMPT:
+        print("  PASS: 12b — anti-injection directive present")
+    else:
+        print("  FAIL: 12b — anti-injection directive missing")
+        passed = False
 
     # --- 12c: Validate message_history content passed to the summarizer ---
     # Build a realistic dropped slice and verify what gets passed
@@ -2463,9 +2456,8 @@ async def step_12_prompt_composition() -> bool:
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
             summary = await summarize_messages(
+                _DEPS,
                 dropped_msgs,
-                _LLM_MODEL.model,
-                NOREASON_SETTINGS,
                 context="Files touched: /auth/views.py\n\nActive tasks:\n- [pending] Refactor middleware",
             )
     except TimeoutError:
@@ -2603,9 +2595,7 @@ async def step_13_prompt_upgrade_quality() -> bool:
     ]
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            summary_13a = await summarize_messages(
-                dropped_13a, _LLM_MODEL.model, NOREASON_SETTINGS
-            )
+            summary_13a = await summarize_messages(_DEPS, dropped_13a)
     except TimeoutError:
         print("  FAIL: 13a — timed out")
         return False
@@ -2634,7 +2624,7 @@ async def step_13_prompt_upgrade_quality() -> bool:
     ]
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            summary_13b = await summarize_messages(msgs_13b, _LLM_MODEL.model, NOREASON_SETTINGS)
+            summary_13b = await summarize_messages(_DEPS, msgs_13b)
     except TimeoutError:
         print("  FAIL: 13b — timed out")
         return False
@@ -2675,7 +2665,7 @@ async def step_13_prompt_upgrade_quality() -> bool:
     ]
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            summary_13c = await summarize_messages(msgs_13c, _LLM_MODEL.model, NOREASON_SETTINGS)
+            summary_13c = await summarize_messages(_DEPS, msgs_13c)
     except TimeoutError:
         print("  FAIL: 13c — timed out")
         return False

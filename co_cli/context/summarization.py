@@ -13,17 +13,16 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
-from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
     ToolCallPart,
 )
-from pydantic_ai.settings import ModelSettings
 
 from co_cli.config._core import Settings
+from co_cli.deps import CoDeps
+from co_cli.llm._call import llm_call
 
 log = logging.getLogger(__name__)
 
@@ -192,30 +191,27 @@ def _build_summarizer_prompt(
     return "".join(parts)
 
 
-_summarizer_agent: Agent[None, str] = Agent(
-    output_type=str,
-    instructions=_SUMMARIZER_SYSTEM_PROMPT,
-)
-
-
 async def summarize_messages(
+    deps: CoDeps,
     messages: list[ModelMessage],
-    model: Any,
-    model_settings: ModelSettings | None = None,
+    *,
     prompt: str = _SUMMARIZE_PROMPT,
     personality_active: bool = False,
     context: str | None = None,
 ) -> str:
-    """Summarise *messages* via the module-level summariser Agent (no tools).
+    """Summarise *messages* via a single LLM call (no tools, no agent loop).
+
+    Uses ``deps.model`` as the authoritative model handle and
+    ``deps.model.settings_noreason`` as the model settings — the only correct
+    choice for this functional call.
 
     Used by both the sliding-window processor and ``/compact``.
     Returns the summary text, or raises on failure (caller handles fallback).
     """
     final_prompt = _build_summarizer_prompt(prompt, context, personality_active)
-    result = await _summarizer_agent.run(
+    return await llm_call(
+        deps,
         final_prompt,
+        instructions=_SUMMARIZER_SYSTEM_PROMPT,
         message_history=messages,
-        model=model,
-        model_settings=model_settings,
     )
-    return result.output

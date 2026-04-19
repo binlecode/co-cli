@@ -11,9 +11,9 @@ valid — the behavioral goal is specialist tool over shell, not a specific
 discovery mechanism.
 
 Four cases:
-  background_task_positive  — model uses start_background_task (not shell bg)
+  background_task_positive  — model uses task_start (not shell bg)
   file_create_competition   — model uses write_file (not shell redirection alone)
-  shell_negative_control    — model calls run_shell_command directly for git
+  shell_negative_control    — model calls shell directly for git
   unsupported_capability    — model does NOT loop search_tools > once on no-match
 
 Prerequisites: settings.llm.provider == "ollama-openai"
@@ -81,7 +81,7 @@ def _build_eval_agent_and_deps():
 
 
 async def run_background_task_positive() -> dict[str, Any]:
-    """Model must use start_background_task (not shell backgrounding)."""
+    """Model must use task_start (not shell backgrounding)."""
     case_id = "background_task_positive"
     t0 = time.monotonic()
 
@@ -99,10 +99,10 @@ async def run_background_task_positive() -> dict[str, Any]:
 
     tool_calls = _extract_tool_calls(result.messages)
     # Pass: specialist tool used (via direct call or search_tools discovery)
-    has_bg_task = "start_background_task" in tool_calls
+    has_bg_task = "task_start" in tool_calls
 
     verdict = "PASS" if has_bg_task else "FAIL"
-    failure = None if has_bg_task else f"start_background_task not called; tool_calls={tool_calls}"
+    failure = None if has_bg_task else f"task_start not called; tool_calls={tool_calls}"
 
     return {
         "id": case_id,
@@ -136,7 +136,7 @@ async def run_file_create_competition() -> dict[str, Any]:
     tool_calls = _extract_tool_calls(result.messages)
     has_write_file = "write_file" in tool_calls
     # Fail if model solved via shell redirection without ever calling write_file
-    shell_only = "run_shell_command" in tool_calls and not has_write_file
+    shell_only = "shell" in tool_calls and not has_write_file
 
     # Pass: specialist tool used (via direct call or search_tools discovery)
     passed = has_write_file and not shell_only
@@ -153,7 +153,7 @@ async def run_file_create_competition() -> dict[str, Any]:
 
 
 async def run_shell_negative_control() -> dict[str, Any]:
-    """run_shell_command called directly — search_tools must NOT precede it."""
+    """shell called directly — search_tools must NOT precede it."""
     case_id = "shell_negative_control"
     t0 = time.monotonic()
 
@@ -170,12 +170,12 @@ async def run_shell_negative_control() -> dict[str, Any]:
         )
 
     tool_calls = _extract_tool_calls(result.messages)
-    has_shell = "run_shell_command" in tool_calls
-    # search_tools must NOT appear before run_shell_command (or at all for this simple task)
+    has_shell = "shell" in tool_calls
+    # search_tools must NOT appear before shell (or at all for this simple task)
     search_before_shell = (
         "search_tools" in tool_calls
         and has_shell
-        and tool_calls.index("search_tools") < tool_calls.index("run_shell_command")
+        and tool_calls.index("search_tools") < tool_calls.index("shell")
     )
 
     passed = has_shell and not search_before_shell

@@ -32,25 +32,25 @@ from co_cli.tools.knowledge import (
 )
 from co_cli.tools.memory import search_memory
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
-from co_cli.tools.shell import run_shell_command
+from co_cli.tools.shell import shell
 from co_cli.tools.task_control import (
-    cancel_background_task,
-    check_task_status,
-    list_background_tasks,
-    start_background_task,
+    task_cancel,
+    task_list,
+    task_start,
+    task_status,
 )
-from co_cli.tools.todo import read_todos, write_todos
-from co_cli.tools.user_input import request_user_input
+from co_cli.tools.todo import todo_read, todo_write
+from co_cli.tools.user_input import clarify
 from co_cli.tools.web import web_fetch, web_search
 
 # Flat explicit list — order is presentation order (no behavioral impact).
 NATIVE_TOOLS: tuple[Callable, ...] = (
     # User interaction
-    request_user_input,
+    clarify,
     # Introspection & todos
     check_capabilities,
-    write_todos,
-    read_todos,
+    todo_write,
+    todo_read,
     # Knowledge reads
     search_knowledge,
     list_knowledge,
@@ -65,7 +65,7 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     web_search,
     web_fetch,
     # Execution
-    run_shell_command,
+    shell,
     # File writes (deferred)
     write_file,
     patch,
@@ -74,10 +74,10 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     append_knowledge,
     save_article,
     # Background tasks (deferred)
-    start_background_task,
-    check_task_status,
-    cancel_background_task,
-    list_background_tasks,
+    task_start,
+    task_status,
+    task_cancel,
+    task_list,
     # Code execution (deferred)
     execute_code,
     # Delegation (deferred)

@@ -33,7 +33,6 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
@@ -552,9 +551,8 @@ async def _summarize_dropped_messages(
     enrichment = _gather_compaction_context(ctx, dropped)
     try:
         summary_text = await summarize_messages(
+            ctx.deps,
             dropped,
-            model=ctx.deps.model.model,
-            model_settings=NOREASON_SETTINGS,
             personality_active=bool(ctx.deps.config.personality),
             context=enrichment,
         )
@@ -821,7 +819,7 @@ def _is_shell_error_return(part: ToolReturnPart) -> bool:
     else:
         str_is_error = False
     return (isinstance(part.metadata, dict) and bool(part.metadata.get("error"))) or (
-        isinstance(content, str) and part.tool_name == "run_shell_command" and str_is_error
+        isinstance(content, str) and part.tool_name == "shell" and str_is_error
     )
 
 
@@ -837,7 +835,7 @@ def _count_consecutive_shell_errors(messages: list[ModelMessage]) -> int:
         for part in msg.parts:
             if not isinstance(part, ToolReturnPart):
                 continue
-            if _is_shell_error_return(part) and part.tool_name == "run_shell_command":
+            if _is_shell_error_return(part) and part.tool_name == "shell":
                 count += 1
             else:
                 return count

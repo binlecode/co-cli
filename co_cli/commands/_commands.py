@@ -18,7 +18,6 @@ from pydantic_ai.messages import ModelRequest
 
 from co_cli.commands._skill_types import SkillConfig
 from co_cli.config._core import VALID_REASONING_DISPLAY_MODES
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.deps import ApprovalKindEnum, CoDeps
 from co_cli.display._core import Frontend, console
 from co_cli.knowledge._artifact import KnowledgeArtifact, load_knowledge_artifacts
@@ -282,7 +281,7 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
             "research_web",
             "analyze_knowledge",
             "reason_about",
-            "start_background_task",
+            "task_start",
         }
     )
 
@@ -343,11 +342,14 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         console.print("[dim]Nothing to compact — history is empty.[/dim]")
         return None
 
+    if not ctx.deps.model:
+        console.print("[dim]Cannot compact — no model available.[/dim]")
+        return None
+
     console.print("[dim]Compacting conversation...[/dim]")
-    _model = ctx.deps.model.model if ctx.deps.model else None
     pre_tokens = estimate_message_tokens(ctx.message_history)
     try:
-        summary = await summarize_messages(ctx.message_history, _model, NOREASON_SETTINGS)
+        summary = await summarize_messages(ctx.deps, ctx.message_history)
     except (ModelHTTPError, ModelAPIError) as e:
         logger.warning("Compact summarization failed: %s", e)
         summary = None

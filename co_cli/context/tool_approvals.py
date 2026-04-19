@@ -19,7 +19,7 @@ from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 
 
 class QuestionRequired(ApprovalRequired):
-    """Raised by request_user_input to pause execution for a user-input question.
+    """Raised by clarify to pause execution for a user-input question.
 
     Subclasses ApprovalRequired so pydantic-ai's deferred tool mechanism handles it.
     The orchestrator detects this variant via DeferredToolRequests.metadata["_kind"].
@@ -35,7 +35,7 @@ class QuestionRequired(ApprovalRequired):
 class ApprovalSubject:
     """Resolved representation of what is being approved.
 
-    tool_name:    the registered tool name (e.g. "run_shell_command")
+    tool_name:    the registered tool name (e.g. "shell")
     kind:         category matching SessionApprovalRule.kind
     value:        the scoped key used for session rule matching
     display:      human-readable description shown in the approval prompt
@@ -84,14 +84,14 @@ def resolve_approval_subject(
     """Map a deferred tool call to its approval subject.
 
     Resolution order:
-      run_shell_command → shell subject (utility = first token)
+      shell → shell subject (utility = first token)
       write_file / patch → path subject (parent directory)
       web_fetch → domain subject (parsed hostname)
       everything else → tool subject (can_remember=True)
     """
     # Shell branch: scope to the utility (first token of cmd) so "always" approval
     # covers all future invocations of the same utility, not just the exact command.
-    if tool_name == "run_shell_command":
+    if tool_name == "shell":
         cmd = args.get("cmd", "")
         tokens = cmd.split()
         utility = tokens[0] if tokens else cmd
@@ -100,9 +100,7 @@ def resolve_approval_subject(
             tool_name=tool_name,
             kind=ApprovalKindEnum.SHELL,
             value=utility,
-            display=f"run_shell_command(cmd={cmd!r})\n  {hint}"
-            if hint
-            else f"run_shell_command(cmd={cmd!r})",
+            display=f"shell(cmd={cmd!r})\n  {hint}" if hint else f"shell(cmd={cmd!r})",
             can_remember=bool(utility),
         )
 

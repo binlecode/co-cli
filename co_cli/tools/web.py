@@ -532,7 +532,7 @@ async def web_fetch(
     from tool output. Never guess or fabricate URLs yourself.
 
     Shell fallback: if fetch returns 403 or is blocked by Cloudflare, retry
-    with run_shell_command: curl -sL <url>. Use the shell fallback only for
+    with shell: curl -sL <url>. Use the shell fallback only for
     fetch failures or site-specific blocking, not as the default path.
 
     Returns a dict with:

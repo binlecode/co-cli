@@ -1,5 +1,6 @@
 """Functional tests for native file tools."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,39 @@ async def test_glob_shallow_truncation(tmp_path):
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3
     assert result.metadata["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_glob_recursive_includes_directories(tmp_path):
+    """Recursive glob preserves directory entries for patterns that match them."""
+    nested_dir = tmp_path / "src" / "pkg"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "module.py").write_text("x = 1\n")
+
+    result = await glob(_make_ctx(tmp_path), path=".", pattern="**/*")
+
+    assert not result.metadata.get("error")
+    entries = result.metadata["entries"]
+    assert any(entry["name"] == "src" and entry["type"] == "dir" for entry in entries)
+    assert any(entry["name"] == "src/pkg" and entry["type"] == "dir" for entry in entries)
+    assert any(
+        entry["name"] == "src/pkg/module.py" and entry["type"] == "file" for entry in entries
+    )
+
+
+@pytest.mark.asyncio
+async def test_glob_recursive_scoped_pattern_respected(tmp_path):
+    """Recursive glob keeps parent path constraints in scoped patterns."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "other").mkdir()
+    (tmp_path / "src" / "inside.py").write_text("x = 1\n")
+    (tmp_path / "other" / "outside.py").write_text("x = 2\n")
+
+    result = await glob(_make_ctx(tmp_path), path=".", pattern="src/**/*.py")
+
+    assert not result.metadata.get("error")
+    names = [entry["name"] for entry in result.metadata["entries"]]
+    assert names == ["src/inside.py"]
 
 
 def test_is_recursive_pattern():
@@ -849,6 +883,47 @@ async def test_grep_head_limit_and_offset(tmp_path):
     # First result_limited entry must not appear in result_offset
     first_line = result_limited.return_value.splitlines()[0]
     assert first_line not in result_offset.return_value
+
+
+@pytest.mark.asyncio
+async def test_grep_searches_hidden_and_gitignored_files(tmp_path):
+    """grep preserves the Python search surface for hidden and gitignored files."""
+    hidden_dir = tmp_path / ".hidden"
+    hidden_dir.mkdir()
+    (hidden_dir / "secret.txt").write_text("TOKEN\n")
+    (tmp_path / ".gitignore").write_text("ignored/\n")
+    ignored_dir = tmp_path / "ignored"
+    ignored_dir.mkdir()
+    (ignored_dir / "ignored.txt").write_text("TOKEN\n")
+    ctx = _make_ctx(tmp_path)
+
+    result = await grep(ctx, pattern="TOKEN")
+
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 2
+    assert ".hidden/secret.txt" in result.return_value
+    assert "ignored/ignored.txt" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_grep_without_rg_falls_back_to_python(tmp_path):
+    """grep falls back to the Python engine when ripgrep is unavailable."""
+    target = tmp_path / "sample.txt"
+    target.write_text("TARGET\n")
+    ctx = _make_ctx(tmp_path)
+    original_path = os.environ.get("PATH")
+    os.environ["PATH"] = ""
+    try:
+        result = await grep(ctx, pattern="TARGET")
+    finally:
+        if original_path is None:
+            del os.environ["PATH"]
+        else:
+            os.environ["PATH"] = original_path
+
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 1
+    assert "sample.txt" in result.return_value
 
 
 # ---------------------------------------------------------------------------

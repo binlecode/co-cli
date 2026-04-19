@@ -289,7 +289,7 @@ uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-ci.log
 
 | Module | Description | Tools |
 | :--- | :--- | :--- |
-| **Shell** | Approval-gated command execution | `run_shell_command` |
+| **Shell** | Approval-gated command execution | `shell` |
 | **Notes** | RAG over local Obsidian vault | `search_notes`, `list_notes`, `read_note` |
 | **Drive** | Google Drive search and reading | `search_drive_files`, `read_drive_file` |
 | **Gmail** | Inbox, search, and draft | `list_emails`, `search_emails`, `create_email_draft` |

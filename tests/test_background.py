@@ -230,19 +230,19 @@ async def test_kill_already_completed_task():
 
 
 @pytest.mark.asyncio
-async def test_tool_start_background_task_signature():
-    """start_background_task returns ToolReturn with task_id and status keys."""
+async def test_tool_task_start_signature():
+    """task_start returns ToolReturn with task_id and status keys."""
     from tests._settings import make_settings
 
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import start_background_task
+    from co_cli.tools.task_control import task_start
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await start_background_task(ctx, "echo tool_test", "test task")
+        result = await task_start(ctx, "echo tool_test", "test task")
 
     assert "task_id" in result.metadata
     assert result.metadata["status"] == "running"
@@ -262,23 +262,23 @@ async def test_tool_start_background_task_signature():
 
 
 @pytest.mark.asyncio
-async def test_tool_check_task_status_signature():
-    """check_task_status returns ToolReturn with expected keys."""
+async def test_tool_task_status_signature():
+    """task_status returns ToolReturn with expected keys."""
     from tests._settings import make_settings
 
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import check_task_status, start_background_task
+    from co_cli.tools.task_control import task_start, task_status
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        start_result = await start_background_task(ctx, "echo check_test", "check test")
+        start_result = await task_start(ctx, "echo check_test", "check test")
     task_id = start_result.metadata["task_id"]
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await check_task_status(ctx, task_id, tail_lines=5)
+        result = await task_status(ctx, task_id, tail_lines=5)
 
     assert result.metadata["task_id"] == task_id
     assert "status" in result.metadata
@@ -297,37 +297,37 @@ async def test_tool_check_task_status_signature():
 
 
 @pytest.mark.asyncio
-async def test_tool_check_task_status_not_found():
-    """check_task_status returns not_found for unknown task_id."""
+async def test_tool_task_status_not_found():
+    """task_status returns not_found for unknown task_id."""
     from tests._settings import make_settings
 
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import check_task_status
+    from co_cli.tools.task_control import task_status
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await check_task_status(ctx, "nonexistent_id_xyz")
+        result = await task_status(ctx, "nonexistent_id_xyz")
 
     assert result.metadata["status"] == "not_found"
 
 
 @pytest.mark.asyncio
-async def test_tool_cancel_background_task_signature():
-    """cancel_background_task returns ToolReturn with cancelled status."""
+async def test_tool_task_cancel_signature():
+    """task_cancel returns ToolReturn with cancelled status."""
     from tests._settings import make_settings
 
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import cancel_background_task, start_background_task
+    from co_cli.tools.task_control import task_cancel, task_start
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
 
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        start_result = await start_background_task(ctx, "sleep 60", "sleep task")
+        start_result = await task_start(ctx, "sleep 60", "sleep task")
     task_id = start_result.metadata["task_id"]
 
     # Wait for running
@@ -339,7 +339,7 @@ async def test_tool_cancel_background_task_signature():
                 break
 
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        result = await cancel_background_task(ctx, task_id)
+        result = await task_cancel(ctx, task_id)
 
     assert result.metadata["task_id"] == task_id
     assert result.metadata["status"] == "cancelled"
@@ -351,27 +351,27 @@ async def test_tool_cancel_background_task_signature():
 
 
 @pytest.mark.asyncio
-async def test_tool_list_background_tasks_signature():
-    """list_background_tasks returns ToolReturn with tasks and count keys."""
+async def test_tool_task_list_signature():
+    """task_list returns ToolReturn with tasks and count keys."""
     from tests._settings import make_settings
 
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import list_background_tasks, start_background_task
+    from co_cli.tools.task_control import task_list, task_start
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result_empty = await list_background_tasks(ctx)
+        result_empty = await task_list(ctx)
     assert result_empty.metadata["count"] == 0
     assert result_empty.metadata["tasks"] == []
 
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        await start_background_task(ctx, "sleep 10", "list test")
+        await task_start(ctx, "sleep 10", "list test")
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await list_background_tasks(ctx)
+        result = await task_list(ctx)
 
     assert result.metadata["count"] == 1
     rows = result.metadata["tasks"]
@@ -506,7 +506,7 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     from co_cli.config._core import settings
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import check_task_status
+    from co_cli.tools.task_control import task_status
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings())
     agent = build_agent(config=settings)
@@ -526,7 +526,7 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
         await spawn_task(state, deps.session)
         await asyncio.sleep(0.3)
-        result = await check_task_status(ctx, state.task_id)
+        result = await task_status(ctx, state.task_id)
 
     assert (result.metadata or {}).get("description") == task_description
     assert (result.metadata or {}).get("started_at") is not None
@@ -541,7 +541,7 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
     from co_cli.config._core import settings
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import list_background_tasks
+    from co_cli.tools.task_control import task_list
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings())
     agent = build_agent(config=settings)
@@ -561,7 +561,7 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
     async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
         await spawn_task(state, deps.session)
         await asyncio.sleep(0.3)
-        result = await list_background_tasks(ctx)
+        result = await task_list(ctx)
 
     assert result.metadata["count"] == 1
     assert result.metadata["tasks"][0]["description"] == task_description

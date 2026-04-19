@@ -42,7 +42,7 @@ web_fetch to verify before citing.
 When the needed capability is not visible in the current tool set, call
 `search_tools` with 2–4 concrete keywords likely to match a tool name or
 description. Prefer a dedicated tool discovered this way over
-`run_shell_command` when it clearly fits the task. If `search_tools` returns no
+`shell` when it clearly fits the task. If `search_tools` returns no
 match, do not retry it — pivot or explain the limitation.
 
 ## Memory

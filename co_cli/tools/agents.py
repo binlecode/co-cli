@@ -9,7 +9,6 @@ from pydantic_ai.messages import ToolReturn
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage, UsageLimits
 
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.deps import CoDeps, VisibilityPolicyEnum, fork_deps
 from co_cli.tools._agent_outputs import AgentOutput
 from co_cli.tools._agent_tool import agent_tool
@@ -226,7 +225,7 @@ async def research_web(
             scoped_prompt,
             ctx,
             budget,
-            NOREASON_SETTINGS,
+            ctx.deps.model.settings,
             "Research agent failed — handle this task directly.",
             child_deps,
         )
@@ -244,7 +243,7 @@ async def research_web(
                 retry_query,
                 ctx,
                 remaining,
-                NOREASON_SETTINGS,
+                ctx.deps.model.settings,
                 "Research agent retry failed — handle this task directly.",
                 child_deps,
             )
@@ -260,7 +259,7 @@ async def research_web(
         query,
         agent,
         budget,
-        NOREASON_SETTINGS,
+        ctx.deps.model.settings,
         "research_web",
         _precomputed=(output, requests_used, run_id),
     )
@@ -315,7 +314,7 @@ async def analyze_knowledge(
         output_type=AgentOutput,
     )
     return await _delegate_agent(
-        ctx, scoped_prompt, agent, budget, NOREASON_SETTINGS, "analyze_knowledge"
+        ctx, scoped_prompt, agent, budget, ctx.deps.model.settings, "analyze_knowledge"
     )
 
 

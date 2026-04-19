@@ -22,7 +22,6 @@ from co_cli.commands._commands import (
     dispatch,
 )
 from co_cli.config._core import settings
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import Frontend, console
@@ -44,7 +43,7 @@ _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 _AGENT = Agent(
     _LLM_MODEL.model,
     deps_type=CoDeps,
-    model_settings=NOREASON_SETTINGS,
+    model_settings=_LLM_MODEL.settings_noreason,
     retries=_CONFIG_NO_MCP.tool_retries,
     output_type=[str, DeferredToolRequests],
     toolsets=[_TOOL_REG.toolset, *_TOOL_REG.mcp_toolsets],
@@ -124,7 +123,7 @@ async def test_cmd_approvals_routing_and_clear(tmp_path):
 # --- Approval flow (programmatic, no TTY) ---
 
 _PROMPT_SHELL = (
-    "Use the run_shell_command tool to execute: git rev-parse --is-inside-work-tree\n"
+    "Use the shell tool to execute: git rev-parse --is-inside-work-tree\n"
     "Do NOT describe what you would do — call the tool now."
 )
 
@@ -161,7 +160,7 @@ async def test_approval_approve():
             if isinstance(msg, ModelResponse)
             for part in msg.parts
         )
-        assert tool_called, "Expected run_shell_command to be called and approved"
+        assert tool_called, "Expected shell to be called and approved"
         assert isinstance(turn.output, str)
         assert len(turn.messages) > 0
     finally:

@@ -21,7 +21,6 @@ from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent._core import build_tool_registry
 from co_cli.config._core import settings
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import build_model
@@ -42,7 +41,7 @@ _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 _AGENT_NOREASON = Agent(
     _LLM_MODEL.model,
     deps_type=CoDeps,
-    model_settings=NOREASON_SETTINGS,
+    model_settings=_LLM_MODEL.settings_noreason,
     retries=_CONFIG_NO_MCP.tool_retries,
     output_type=[str, DeferredToolRequests],
     toolsets=[_TOOL_REG.toolset],
@@ -64,8 +63,8 @@ def _make_deps(session_id: str) -> CoDeps:
     ("prompt", "expected_tool", "arg_key", "arg_contains"),
     [
         (
-            "Use the run_shell_command tool to execute: git status\nDo NOT describe what you would do — call the tool now.",
-            "run_shell_command",
+            "Use the shell tool to execute: git status\nDo NOT describe what you would do — call the tool now.",
+            "shell",
             "cmd",
             "git status",
         ),
@@ -216,9 +215,9 @@ async def test_intent_routing_observation_no_tool():
 
 
 @pytest.mark.asyncio
-async def test_request_user_input_handled_by_run_turn():
+async def test_clarify_handled_by_run_turn():
     """run_turn handles a question-type deferred call: invokes prompt_question and injects answer."""
-    deps = _make_deps("test-request-user-input")
+    deps = _make_deps("test-clarify")
     frontend = SilentFrontend(question_answer="Alice")
 
     await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
@@ -231,7 +230,7 @@ async def test_request_user_input_handled_by_run_turn():
                 turn = await run_turn(
                     agent=_AGENT_NOREASON,
                     user_input=(
-                        "Call the request_user_input tool now with "
+                        "Call the clarify tool now with "
                         "question='What is your name?' — do not answer without calling the tool."
                     ),
                     deps=deps,
@@ -243,7 +242,7 @@ async def test_request_user_input_handled_by_run_turn():
             continue
 
         if frontend.last_question is None:
-            last_details = "prompt_question was not called — LLM did not call request_user_input"
+            last_details = "prompt_question was not called — LLM did not call clarify"
             continue
 
         if "Alice" not in str(turn.messages):
@@ -252,6 +251,4 @@ async def test_request_user_input_handled_by_run_turn():
 
         return
 
-    pytest.fail(
-        f"request_user_input integration test failed after {max_attempts} attempts: {last_details}"
-    )
+    pytest.fail(f"clarify integration test failed after {max_attempts} attempts: {last_details}")

@@ -94,7 +94,7 @@ def test_patch_display_includes_scope_hint():
 
 def test_shell_hint_uses_noun_phrase():
     """Shell approval hint is a noun phrase, not bracket notation."""
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
+    subject = resolve_approval_subject("shell", {"cmd": "git status"})
     assert "[always → session:" not in subject.display
     assert "this session" in subject.display
 
@@ -129,7 +129,7 @@ def test_is_auto_approved_matches_stored_shell_rule():
     deps.session.session_approval_rules.append(
         SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
     )
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
+    subject = resolve_approval_subject("shell", {"cmd": "git status"})
     assert is_auto_approved(subject, deps)
 
 
@@ -139,7 +139,7 @@ def test_is_auto_approved_no_match_different_utility():
     deps.session.session_approval_rules.append(
         SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
     )
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "rm -rf /"})
+    subject = resolve_approval_subject("shell", {"cmd": "rm -rf /"})
     assert not is_auto_approved(subject, deps)
 
 
@@ -153,7 +153,7 @@ def test_is_auto_approved_no_match_empty_rules():
 def test_remember_tool_approval_stores_rule_and_auto_approves():
     """remember_tool_approval stores a session rule; subsequent is_auto_approved returns True."""
     deps = _make_deps()
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
+    subject = resolve_approval_subject("shell", {"cmd": "git log"})
     remember_tool_approval(subject, deps)
     assert (
         SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
@@ -165,7 +165,7 @@ def test_remember_tool_approval_stores_rule_and_auto_approves():
 def test_remember_tool_approval_is_idempotent():
     """Calling remember_tool_approval twice does not duplicate the session rule."""
     deps = _make_deps()
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
+    subject = resolve_approval_subject("shell", {"cmd": "git status"})
     remember_tool_approval(subject, deps)
     remember_tool_approval(subject, deps)
     rule = SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
@@ -175,7 +175,7 @@ def test_remember_tool_approval_is_idempotent():
 def test_record_approval_choice_with_remember_stores_rule():
     """record_approval_choice with remember=True stores a session rule via remember_tool_approval."""
     deps = _make_deps()
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
+    subject = resolve_approval_subject("shell", {"cmd": "git push"})
     approvals = DeferredToolResults()
     record_approval_choice(
         approvals,
@@ -192,7 +192,7 @@ def test_record_approval_choice_with_remember_stores_rule():
 def test_record_approval_choice_deny_does_not_store_rule():
     """Denied approvals must not persist a session rule."""
     deps = _make_deps()
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
+    subject = resolve_approval_subject("shell", {"cmd": "git push"})
     approvals = DeferredToolResults()
     record_approval_choice(
         approvals,
@@ -211,7 +211,7 @@ def test_record_approval_choice_deny_does_not_store_rule():
 
 def test_resolve_approval_subject_shell_scopes_to_utility():
     """Shell subject resolves to the first token of the command."""
-    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status --short"})
+    subject = resolve_approval_subject("shell", {"cmd": "git status --short"})
     assert subject.kind == ApprovalKindEnum.SHELL
     assert subject.value == "git"
     assert subject.can_remember is True

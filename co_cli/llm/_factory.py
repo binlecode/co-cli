@@ -32,6 +32,7 @@ class LlmModel:
 
     model: Any
     settings: ModelSettings | None
+    settings_noreason: ModelSettings | None = None
     context_window: int | None = None
 
 
@@ -73,6 +74,7 @@ def build_model(llm: LlmSettings) -> LlmModel:
         return LlmModel(
             model=model,
             settings=model_settings,
+            settings_noreason=llm.noreason_model_settings(),
             context_window=inference.get("context_window"),
         )
 
@@ -82,6 +84,7 @@ def build_model(llm: LlmSettings) -> LlmModel:
         return LlmModel(
             model=google_model,
             settings=model_settings,
+            settings_noreason=llm.noreason_model_settings(),
             context_window=inference.get("context_window"),
         )
 

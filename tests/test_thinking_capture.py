@@ -2,7 +2,7 @@
 
 Two paths tested:
 - Reasoning enabled (no reasoning_effort override): ThinkingPart present in response.
-- NOREASON_SETTINGS (reasoning_effort=none): ThinkingPart absent (control).
+- Noreason settings (reasoning_effort=none): ThinkingPart absent (control).
 """
 
 import asyncio
@@ -14,12 +14,12 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import make_settings
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
 
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.llm._factory import build_model
 
 _CONFIG = make_settings(mcp_servers={})
 _MODEL = build_model(_CONFIG.llm)
 _REASON_SETTINGS = _CONFIG.llm.reasoning_model_settings()
+_NOREASON_SETTINGS = _CONFIG.llm.noreason_model_settings()
 _MODEL_NAME = _CONFIG.llm.model
 
 
@@ -54,7 +54,7 @@ async def test_thinking_part_absent_when_reasoning_disabled():
     await ensure_ollama_warm(_MODEL_NAME, _CONFIG.llm.host)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await agent.run(
-            "Reply with exactly one word: yes", model_settings=NOREASON_SETTINGS
+            "Reply with exactly one word: yes", model_settings=_NOREASON_SETTINGS
         )
     thinking_parts = [
         part

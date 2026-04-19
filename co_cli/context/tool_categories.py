@@ -32,7 +32,7 @@ FILE_TOOLS: frozenset[str] = frozenset(
 COMPACTABLE_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
-        "run_shell_command",
+        "shell",
         "grep",
         "glob",
         "web_search",

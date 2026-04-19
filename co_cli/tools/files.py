@@ -4,6 +4,8 @@ import asyncio
 import difflib
 import fnmatch
 import re
+import shlex
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -50,6 +52,224 @@ def _detect_encoding(path: Path) -> str:
     return "utf-8"
 
 
+def _has_command(cmd: str) -> bool:
+    """Return True when a command is available on PATH."""
+    return shutil.which(cmd) is not None
+
+
+async def _glob_python(
+    resolved: Path, workspace_root: Path, pattern: str, max_entries: int
+) -> tuple[list[dict[str, str]], bool]:
+    entries = []
+    truncated = False
+    if _is_recursive_pattern(pattern):
+        raw = sorted(resolved.glob(pattern), key=_safe_mtime, reverse=True)
+        for entry in raw:
+            kind = "dir" if entry.is_dir() else "file"
+            try:
+                rel = str(entry.relative_to(workspace_root))
+            except ValueError:
+                rel = str(entry)
+            entries.append({"name": rel, "type": kind})
+            if len(entries) >= max_entries:
+                truncated = True
+                break
+    else:
+        for entry in sorted(resolved.iterdir()):
+            if not fnmatch.fnmatch(entry.name, pattern):
+                continue
+            kind = "dir" if entry.is_dir() else "file"
+            entries.append({"name": entry.name, "type": kind})
+            if len(entries) >= max_entries:
+                truncated = True
+                break
+    return entries, truncated
+
+
+def _relativize_output_path(path_str: str, workspace_root: Path) -> str:
+    """Return a workspace-relative path when possible."""
+    try:
+        return str(Path(path_str).relative_to(workspace_root))
+    except ValueError:
+        return path_str
+
+
+def _parse_grep_count_output(lines: list[str], workspace_root: Path) -> tuple[list[str], int]:
+    """Parse ripgrep count-mode output into display lines and total match count."""
+    total_match_count = 0
+    all_output: list[str] = []
+    for line in lines:
+        if ":" not in line:
+            continue
+        path_str, count_str = line.rsplit(":", 1)
+        try:
+            count = int(count_str)
+        except ValueError:
+            continue
+        total_match_count += count
+        rel_path = _relativize_output_path(path_str, workspace_root)
+        all_output.append(f"{rel_path}: {count}")
+    return all_output, total_match_count
+
+
+def _parse_grep_content_output(lines: list[str], workspace_root: Path) -> tuple[list[str], int]:
+    """Parse ripgrep content-mode output into the tool's legacy display format."""
+    match_re = re.compile(r"^([A-Za-z]:)?(.*?):(\d+):(.*)$")
+    context_re = re.compile(r"^([A-Za-z]:)?(.*?)-(\d+)-(.*)$")
+    total_match_count = 0
+    all_output: list[str] = []
+    for line in lines:
+        if not line or line == "--":
+            all_output.append("--")
+            continue
+        match = match_re.match(line)
+        if match:
+            path_str = (match.group(1) or "") + match.group(2)
+            rel_path = _relativize_output_path(path_str, workspace_root)
+            all_output.append(f"{rel_path}:{match.group(3)}: {match.group(4)}")
+            total_match_count += 1
+            continue
+        context_match = context_re.match(line)
+        if context_match:
+            path_str = (context_match.group(1) or "") + context_match.group(2)
+            rel_path = _relativize_output_path(path_str, workspace_root)
+            all_output.append(f"{rel_path}:{context_match.group(3)}- {context_match.group(4)}")
+
+    filtered_output: list[str] = []
+    for entry in all_output:
+        if entry == "--" and (not filtered_output or filtered_output[-1] == "--"):
+            continue
+        filtered_output.append(entry)
+    if filtered_output and filtered_output[-1] == "--":
+        filtered_output.pop()
+    return filtered_output, total_match_count
+
+
+def _build_grep_shell_command(
+    resolved: Path,
+    pattern: str,
+    glob_pat: str,
+    case_insensitive: bool,
+    output_mode: str,
+    context_lines: int,
+) -> str:
+    """Build a ripgrep command line that preserves the tool's search surface."""
+    cmd_parts = [
+        "rg",
+        "--line-number",
+        "--no-heading",
+        "--with-filename",
+        "--hidden",
+        "--no-ignore",
+    ]
+    if case_insensitive:
+        cmd_parts.append("-i")
+    if context_lines > 0:
+        cmd_parts.extend(["-C", str(context_lines)])
+    if glob_pat:
+        cmd_parts.extend(["--glob", shlex.quote(glob_pat)])
+    if output_mode == "files_with_matches":
+        cmd_parts.append("-l")
+    elif output_mode == "count":
+        cmd_parts.append("-c")
+    cmd_parts.append(shlex.quote(pattern))
+    cmd_parts.append(shlex.quote(str(resolved)))
+    return " ".join(cmd_parts)
+
+
+def _parse_grep_shell_output(
+    lines: list[str], workspace_root: Path, output_mode: str
+) -> tuple[list[str], int]:
+    """Parse shell grep output according to the requested display mode."""
+    if output_mode == "files_with_matches":
+        all_output = [_relativize_output_path(line, workspace_root) for line in lines if line]
+        return all_output, len(all_output)
+    if output_mode == "count":
+        return _parse_grep_count_output(lines, workspace_root)
+    return _parse_grep_content_output(lines, workspace_root)
+
+
+async def _grep_shell(
+    resolved: Path,
+    workspace_root: Path,
+    pattern: str,
+    glob_pat: str,
+    case_insensitive: bool,
+    output_mode: str,
+    context_lines: int,
+    head_limit: int,
+    offset: int,
+) -> tuple[list[str], int, bool] | str | None:
+    cmd = _build_grep_shell_command(
+        resolved, pattern, glob_pat, case_insensitive, output_mode, context_lines
+    )
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await proc.communicate()
+        if proc.returncode not in (0, 1):
+            return None
+        lines = stdout.decode().strip().split("\n")
+        if not lines or not lines[0]:
+            return [], 0, False
+        all_output, total_match_count = _parse_grep_shell_output(
+            lines, workspace_root, output_mode
+        )
+
+        paginated = (
+            all_output[offset : offset + head_limit] if head_limit > 0 else all_output[offset:]
+        )
+        truncated = len(all_output) - offset > len(paginated)
+        return paginated, total_match_count, truncated
+    except Exception:
+        return None
+
+
+async def _grep_python(
+    search_root: Path,
+    workspace_root: Path,
+    pattern: str,
+    glob_pat: str,
+    case_insensitive: bool,
+    output_mode: str,
+    context_lines: int,
+    head_limit: int,
+    offset: int,
+) -> tuple[list[str], int, bool] | str:
+    flags = re.IGNORECASE if case_insensitive else 0
+    try:
+        compiled = re.compile(pattern, flags)
+    except re.error:
+        return f"Invalid regex: {pattern}"
+    all_output: list[str] = []
+    total_match_count = 0
+    for file_path in search_root.glob(glob_pat):
+        if not file_path.is_file():
+            continue
+        try:
+            text = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        rel_path = str(file_path.relative_to(workspace_root))
+        file_lines = text.splitlines()
+        match_indices = [idx for idx, line in enumerate(file_lines) if compiled.search(line)]
+        if not match_indices:
+            continue
+        total_match_count += len(match_indices)
+        all_output.extend(
+            _grep_format_file_matches(
+                rel_path, file_lines, match_indices, output_mode, context_lines
+            )
+        )
+    paginated = all_output[offset : offset + head_limit] if head_limit > 0 else all_output[offset:]
+    truncated = len(all_output) - offset > len(paginated)
+    return paginated, total_match_count, truncated
+
+
 def _is_recursive_pattern(pattern: str) -> bool:
     """Return True when the glob pattern requires recursive traversal."""
     return "**" in pattern or "/" in pattern
@@ -90,35 +310,7 @@ async def glob(
     workspace_root = ctx.deps.workspace_root
     truncated = False
 
-    if _is_recursive_pattern(pattern):
-        # Recursive glob — sorted by mtime (newest first), paths relative to workspace
-        raw = sorted(
-            resolved.glob(pattern),
-            key=_safe_mtime,
-            reverse=True,
-        )
-        entries: list[dict[str, str]] = []
-        for entry in raw:
-            kind = "dir" if entry.is_dir() else "file"
-            try:
-                rel = str(entry.relative_to(workspace_root))
-            except ValueError:
-                rel = str(entry)
-            entries.append({"name": rel, "type": kind})
-            if len(entries) >= max_entries:
-                truncated = True
-                break
-    else:
-        # Shallow listing — sorted alphabetically by name
-        entries = []
-        for entry in sorted(resolved.iterdir()):
-            if not fnmatch.fnmatch(entry.name, pattern):
-                continue
-            kind = "dir" if entry.is_dir() else "file"
-            entries.append({"name": entry.name, "type": kind})
-            if len(entries) >= max_entries:
-                truncated = True
-                break
+    entries, truncated = await _glob_python(resolved, workspace_root, pattern, max_entries)
 
     lines = [f"[{e['type']}] {e['name']}" for e in entries]
     if truncated:
@@ -314,7 +506,7 @@ async def grep(
 
     flags = re.IGNORECASE if case_insensitive else 0
     try:
-        compiled = re.compile(pattern, flags)
+        re.compile(pattern, flags)
     except re.error:
         return tool_error(f"Invalid regex: {pattern}", ctx=ctx)
 
@@ -326,34 +518,37 @@ async def grep(
     if not search_root.is_dir():
         return tool_error(f"Not a directory: {path}", ctx=ctx)
 
-    all_output: list[str] = []
-    total_match_count = 0
-
-    for file_path in search_root.glob(glob):
-        if not file_path.is_file():
-            continue
-        try:
-            text = file_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-
-        rel_path = str(file_path.relative_to(workspace_root))
-        file_lines = text.splitlines()
-        match_indices = [idx for idx, line in enumerate(file_lines) if compiled.search(line)]
-
-        if not match_indices:
-            continue
-
-        total_match_count += len(match_indices)
-
-        all_output.extend(
-            _grep_format_file_matches(
-                rel_path, file_lines, match_indices, output_mode, context_lines
-            )
+    result = None
+    if _has_command("rg"):
+        result = await _grep_shell(
+            search_root,
+            workspace_root,
+            pattern,
+            glob,
+            case_insensitive,
+            output_mode,
+            context_lines,
+            head_limit,
+            offset,
         )
 
-    paginated = all_output[offset : offset + head_limit] if head_limit > 0 else all_output[offset:]
-    truncated = len(all_output) - offset > len(paginated)
+    if result is None:
+        result = await _grep_python(
+            search_root,
+            workspace_root,
+            pattern,
+            glob,
+            case_insensitive,
+            output_mode,
+            context_lines,
+            head_limit,
+            offset,
+        )
+
+    if isinstance(result, str):
+        return tool_error(result, ctx=ctx)
+
+    paginated, total_match_count, truncated = result
     display = "\n".join(paginated) if paginated else "(no matches)"
 
     return tool_output(

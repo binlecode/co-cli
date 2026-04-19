@@ -10,7 +10,7 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MODELS: dict[str, str] = {
-    "gemini": "gemini-2.0-flash",
+    "gemini": "gemini-3.1-flash-preview",
     "ollama": "qwen2.5:3b",
 }
 

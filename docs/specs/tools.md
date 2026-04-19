@@ -98,15 +98,15 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `request_user_input` | A | — | — | — | Pause mid-execution to ask the user a clarifying question; resume with injected answer |
+| `clarify` | A | — | — | — | Pause mid-execution to ask the user a clarifying question; resume with injected answer |
 
 ### Introspection & Flow Tracking
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
 | `check_capabilities` | A | — | — | — | Runtime doctor: binary probes, auth states, config |
-| `write_todos` | A | — | — | — | Replace in-session multi-turn checklist |
-| `read_todos` | A | — | — | — | Fetch current checklist |
+| `todo_write` | A | — | — | — | Replace in-session multi-turn checklist |
+| `todo_read` | A | — | — | — | Fetch current checklist |
 
 ### Cognition & Knowledge — Read
 
@@ -137,7 +137,7 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `run_shell_command` | A | hybrid | — | — | Run blocking shell command; safe-prefix auto-approves, mutations prompt, destructive denied |
+| `shell` | A | hybrid | — | — | Run blocking shell command; safe-prefix auto-approves, mutations prompt, destructive denied |
 
 ### Workspace & Files — Write
 
@@ -158,10 +158,10 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `start_background_task` | D | ✓ | — | — | Spawn unblocked process group; returns `task_id` |
-| `check_task_status` | D | — | — | — | Poll stdout/stderr and completion state of a task |
-| `cancel_background_task` | D | — | — | — | SIGTERM → SIGKILL a background task |
-| `list_background_tasks` | D | — | — | — | Enumerate active/completed tasks |
+| `task_start` | D | ✓ | — | — | Spawn unblocked process group; returns `task_id` |
+| `task_status` | D | — | — | — | Poll stdout/stderr and completion state of a task |
+| `task_cancel` | D | — | — | — | SIGTERM → SIGKILL a background task |
+| `task_list` | D | — | — | — | Enumerate active/completed tasks |
 
 ### Code Execution
 
@@ -209,12 +209,12 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 - **`patch(path: str, old_string: str, new_string: str, replace_all: bool, show_diff: bool)`**: Targeted snippet replacement with fuzzy fallback (line-trimmed, indent-stripped, escape-expanded). Returns an error with context-expansion guidance if `old_string` matches more than once. Pass `show_diff=True` to include a unified diff in the response for verification.
 
 ### Execution Environment
-- **`run_shell_command(cmd: str, timeout: int)`**: Run blocking shell invocations. Checked dynamically: 'safe' prefixes (e.g. `ls`) execute automatically, mutations trigger user prompts, and destructive/injection sequences are outright denied.
+- **`shell(cmd: str, timeout: int)`**: Run blocking shell invocations. Checked dynamically: 'safe' prefixes (e.g. `ls`) execute automatically, mutations trigger user prompts, and destructive/injection sequences are outright denied.
 - **`execute_code(cmd: str, timeout: int)`**: Specialized arbitrary code evaluation. Output is captured entirely (both stdout and stderr combined).
-- **`start_background_task(command: str, description: str, working_directory: str)`**: Initiates an unblocked process group on the host OS. Returns a UUID `task_id` reference.
-- **`check_task_status(task_id: str, tail_lines: int)`**: Poll the stdout/stderr buffers of a background task and check its completion state.
-- **`cancel_background_task(task_id: str)`**: Terminates an identified process via SIGTERM, with SIGKILL escalation.
-- **`list_background_tasks(status_filter: str)`**: Discover actively running or completed UUID tasks for tracking or cleanup.
+- **`task_start(command: str, description: str, working_directory: str)`**: Initiates an unblocked process group on the host OS. Returns a UUID `task_id` reference.
+- **`task_status(task_id: str, tail_lines: int)`**: Poll the stdout/stderr buffers of a background task and check its completion state.
+- **`task_cancel(task_id: str)`**: Terminates an identified process via SIGTERM, with SIGKILL escalation.
+- **`task_list(status_filter: str)`**: Discover actively running or completed UUID tasks for tracking or cleanup.
 
 ### Cognition & Memory
 - **`search_knowledge(query: str)`**: Universal, BM25-based semantic index search spanning internal artifacts, rules, references, and synced directories.
@@ -246,11 +246,11 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 - **`search_calendar_events(query: str, days_back: int, days_ahead: int, max_results: int)`**: Deep text search of scheduling, descriptions, and venues.
 
 ### User Interaction
-- **`request_user_input(question: str, options: list[str] | None, user_answer: str | None)`**: Pause mid-execution to ask the user a clarifying question. Raises `QuestionRequired` (subclass of `ApprovalRequired`) on the first call; the orchestrator prompts the user via `frontend.prompt_question()` and resumes the same tool call with `ToolApproved(override_args={"user_answer": ...})`. Free-text or constrained (options list). Do not supply `user_answer` — it is injected by the orchestrator.
+- **`clarify(question: str, options: list[str] | None, user_answer: str | None)`**: Pause mid-execution to ask the user a clarifying question. Raises `QuestionRequired` (subclass of `ApprovalRequired`) on the first call; the orchestrator prompts the user via `frontend.prompt_question()` and resumes the same tool call with `ToolApproved(override_args={"user_answer": ...})`. Free-text or constrained (options list). Do not supply `user_answer` — it is injected by the orchestrator.
 
 ### Introspection
-- **`write_todos(todos: list)`**: State replacement for multi-turn checklist tracking.
-- **`read_todos()`**: Fetch the existing tracking list to audit progress.
+- **`todo_write(todos: list)`**: State replacement for multi-turn checklist tracking.
+- **`todo_read()`**: Fetch the existing tracking list to audit progress.
 - **`check_capabilities()`**: Trigger runtime doctor checks against required binaries, integration auth states, and configuration variables.
 
 ## 5. Config

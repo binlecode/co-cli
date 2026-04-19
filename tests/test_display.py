@@ -98,7 +98,7 @@ def test_build_approval_panel_includes_tool_name_and_preview() -> None:
 def test_build_approval_panel_no_preview_block_when_preview_is_none() -> None:
     """Approval panel renders only display text when preview is None — no separator shown."""
     subject = resolve_approval_subject(
-        "run_shell_command",
+        "shell",
         {"cmd": "git status"},
     )
     assert subject.preview is None
@@ -112,7 +112,7 @@ def test_build_approval_panel_no_preview_block_when_preview_is_none() -> None:
     finally:
         frontend.cleanup()
 
-    assert "run_shell_command" in output
+    assert "shell" in output
     assert "git status" in output
 
 

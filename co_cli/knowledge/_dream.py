@@ -26,7 +26,6 @@ from opentelemetry import trace as otel_trace
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from co_cli.config._llm import NOREASON_SETTINGS
 from co_cli.knowledge._archive import archive_artifacts
 from co_cli.knowledge._artifact import (
     IndexSourceEnum,
@@ -40,6 +39,7 @@ from co_cli.knowledge._distiller import build_transcript_window
 from co_cli.knowledge._frontmatter import render_knowledge_file
 from co_cli.knowledge._similarity import token_jaccard
 from co_cli.knowledge.mutator import _atomic_write
+from co_cli.llm._call import llm_call
 from co_cli.tools.knowledge import _slugify, save_knowledge
 
 if TYPE_CHECKING:
@@ -115,10 +115,12 @@ def save_dream_state(knowledge_dir: Path, state: DreamState) -> None:
 # ---------------------------------------------------------------------------
 
 
-_dream_miner_agent: Agent[CoDeps, str] = Agent(
-    instructions=_DREAM_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-    tools=[save_knowledge],
-)
+def build_dream_miner_agent() -> Agent[CoDeps, str]:
+    """Build a dream miner agent. Hoist outside the chunk loop; call .run() per chunk."""
+    return Agent(
+        instructions=_DREAM_PROMPT_PATH.read_text(encoding="utf-8").strip(),
+        tools=[save_knowledge],
+    )
 
 
 def _chunk_dream_window(
@@ -196,13 +198,13 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState) -> int:
         before_count = _count_active_artifacts(deps.knowledge_dir)
         # initialize before loop — covers zero-chunk case where saves_so_far is never assigned
         saves_so_far = 0
+        miner_agent = build_dream_miner_agent()
         try:
             for chunk in _chunk_dream_window(window):
-                await _dream_miner_agent.run(
+                await miner_agent.run(
                     chunk,
                     deps=deps,
                     model=model_obj,
-                    model_settings=NOREASON_SETTINGS,
                 )
                 saves_so_far = _count_active_artifacts(deps.knowledge_dir) - before_count
                 if saves_so_far >= _MAX_MINE_SAVES_PER_SESSION:
@@ -238,9 +240,7 @@ def _count_active_artifacts(knowledge_dir: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-_dream_merge_agent: Agent[CoDeps, str] = Agent(
-    instructions=_DREAM_MERGE_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-)
+_DREAM_MERGE_PROMPT: str = _DREAM_MERGE_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 def _is_merge_immune(artifact: KnowledgeArtifact) -> bool:
@@ -363,12 +363,8 @@ async def _merge_cluster(
     Returns the new artifact on success; returns ``None`` when the sub-agent
     output is too short or empty to trust (caller will skip archive).
     """
-    model_obj = deps.model.model if deps.model else None
     prompt = _render_merge_prompt(cluster)
-    result = await _dream_merge_agent.run(
-        prompt, deps=deps, model=model_obj, model_settings=NOREASON_SETTINGS
-    )
-    merged_body = (result.output or "").strip()
+    merged_body = (await llm_call(deps, prompt, instructions=_DREAM_MERGE_PROMPT) or "").strip()
     if len(merged_body) < _MERGED_BODY_MIN_CHARS:
         logger.warning(
             "dream.merge: merged body too short (%d chars); skipping cluster",

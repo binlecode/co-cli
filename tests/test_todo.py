@@ -1,4 +1,4 @@
-"""Functional tests for session-scoped todo tools (write_todos, read_todos)."""
+"""Functional tests for session-scoped todo tools (todo_write, todo_read)."""
 
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
@@ -8,7 +8,7 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.todo import read_todos, write_todos
+from co_cli.tools.todo import todo_read, todo_write
 
 _AGENT = build_agent(config=settings)
 
@@ -28,7 +28,7 @@ def _make_ctx() -> RunContext:
 def test_write_todos_stores_and_returns_counts():
     """write_todos stores items in session and returns correct counts."""
     ctx = _make_ctx()
-    result = write_todos(
+    result = todo_write(
         ctx,
         [
             {"content": "Step 1", "status": "pending"},
@@ -46,10 +46,10 @@ def test_write_todos_stores_and_returns_counts():
 def test_write_todos_replaces_previous_list():
     """write_todos replaces the entire list — not additive."""
     ctx = _make_ctx()
-    write_todos(ctx, [{"content": "First", "status": "pending"}])
+    todo_write(ctx, [{"content": "First", "status": "pending"}])
     assert len(ctx.deps.session.session_todos) == 1
 
-    write_todos(ctx, [{"content": "Replaced", "status": "completed"}])
+    todo_write(ctx, [{"content": "Replaced", "status": "completed"}])
     assert len(ctx.deps.session.session_todos) == 1
     assert ctx.deps.session.session_todos[0]["content"] == "Replaced"
 
@@ -57,7 +57,7 @@ def test_write_todos_replaces_previous_list():
 def test_write_todos_defaults_priority_to_medium():
     """Items without explicit priority default to medium."""
     ctx = _make_ctx()
-    write_todos(ctx, [{"content": "No priority", "status": "pending"}])
+    todo_write(ctx, [{"content": "No priority", "status": "pending"}])
 
     assert ctx.deps.session.session_todos[0]["priority"] == "medium"
 
@@ -65,7 +65,7 @@ def test_write_todos_defaults_priority_to_medium():
 def test_write_todos_rejects_invalid_status():
     """Invalid status produces validation error, list NOT saved."""
     ctx = _make_ctx()
-    result = write_todos(ctx, [{"content": "Bad", "status": "bogus"}])
+    result = todo_write(ctx, [{"content": "Bad", "status": "bogus"}])
 
     assert result.metadata["count"] == 0
     assert "errors" in result.metadata
@@ -75,7 +75,7 @@ def test_write_todos_rejects_invalid_status():
 def test_write_todos_rejects_invalid_priority():
     """Invalid priority produces validation error."""
     ctx = _make_ctx()
-    result = write_todos(ctx, [{"content": "Bad", "status": "pending", "priority": "urgent"}])
+    result = todo_write(ctx, [{"content": "Bad", "status": "pending", "priority": "urgent"}])
 
     assert result.metadata["count"] == 0
     assert "errors" in result.metadata
@@ -84,7 +84,7 @@ def test_write_todos_rejects_invalid_priority():
 def test_write_todos_rejects_empty_content():
     """Empty content string produces validation error."""
     ctx = _make_ctx()
-    result = write_todos(ctx, [{"content": "", "status": "pending"}])
+    result = todo_write(ctx, [{"content": "", "status": "pending"}])
 
     assert result.metadata["count"] == 0
     assert "errors" in result.metadata
@@ -93,7 +93,7 @@ def test_write_todos_rejects_empty_content():
 def test_write_todos_rejects_non_dict_item():
     """Non-dict items produce validation error."""
     ctx = _make_ctx()
-    result = write_todos(ctx, ["not a dict"])
+    result = todo_write(ctx, ["not a dict"])
 
     assert result.metadata["count"] == 0
     assert "errors" in result.metadata
@@ -105,7 +105,7 @@ def test_write_todos_rejects_non_dict_item():
 def test_read_todos_empty_session():
     """read_todos on empty session returns zero count."""
     ctx = _make_ctx()
-    result = read_todos(ctx)
+    result = todo_read(ctx)
 
     assert result.metadata["count"] == 0
     assert result.metadata["todos"] == []
@@ -114,7 +114,7 @@ def test_read_todos_empty_session():
 def test_read_todos_reflects_written_state():
     """read_todos returns what write_todos stored."""
     ctx = _make_ctx()
-    write_todos(
+    todo_write(
         ctx,
         [
             {"content": "Task A", "status": "pending", "priority": "high"},
@@ -122,7 +122,7 @@ def test_read_todos_reflects_written_state():
         ],
     )
 
-    result = read_todos(ctx)
+    result = todo_read(ctx)
 
     assert result.metadata["count"] == 2
     assert result.metadata["pending"] == 1
@@ -134,8 +134,8 @@ def test_read_todos_reflects_written_state():
 def test_read_todos_all_complete_message():
     """read_todos display says 'All items completed' when none pending."""
     ctx = _make_ctx()
-    write_todos(ctx, [{"content": "Done", "status": "completed"}])
+    todo_write(ctx, [{"content": "Done", "status": "completed"}])
 
-    result = read_todos(ctx)
+    result = todo_read(ctx)
 
     assert "All items completed" in result.return_value

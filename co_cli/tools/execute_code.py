@@ -19,7 +19,7 @@ async def execute_code(ctx: RunContext[CoDeps], cmd: str, timeout: int = 60) -> 
     Examples: "python main.py", "node index.js", "uv run script.py",
               "npx ts-node app.ts", "ruby script.rb"
 
-    Do not use for git, builds, or system queries — use run_shell_command instead.
+    Do not use for git, builds, or system queries — use shell instead.
 
     Args:
         cmd: Interpreter command to run (e.g. "python main.py").

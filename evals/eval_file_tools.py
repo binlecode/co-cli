@@ -13,12 +13,12 @@ Validates two behavioral hypotheses from the hardening2 delivery:
 Five cases:
 
   H1:
-    glob_over_shell      — file listing task → model calls glob, not run_shell_command alone
-    grep_over_shell      — content search task → model calls grep, not run_shell_command alone
+    glob_over_shell      — file listing task → model calls glob, not shell alone
+    grep_over_shell      — content search task → model calls grep, not shell alone
     shell_git_negative   — git task → shell called directly, search_tools NOT searched first
 
   H2:
-    patch_over_shell     — targeted line edit → model calls patch, not run_shell_command
+    patch_over_shell     — targeted line edit → model calls patch, not shell
     patch_e2e_verified   — model reads file, patches it, file content confirmed changed
 
 Runs against any configured provider.
@@ -65,7 +65,7 @@ def _build_eval_agent_and_deps() -> tuple[Any, Any]:
 
 
 async def run_glob_over_shell() -> dict[str, Any]:
-    """Model should call glob (not run_shell_command alone) to list Python files."""
+    """Model should call glob (not shell alone) to list Python files."""
     case_id = "glob_over_shell"
     t0 = time.monotonic()
 
@@ -82,7 +82,7 @@ async def run_glob_over_shell() -> dict[str, Any]:
 
     calls = tool_names(result.messages)
     has_glob = "glob" in calls
-    shell_without_glob = "run_shell_command" in calls and not has_glob
+    shell_without_glob = "shell" in calls and not has_glob
 
     passed = has_glob and not shell_without_glob
     verdict = "PASS" if passed else "FAIL"
@@ -98,7 +98,7 @@ async def run_glob_over_shell() -> dict[str, Any]:
 
 
 async def run_grep_over_shell() -> dict[str, Any]:
-    """Model should call grep (not run_shell_command alone) to search file contents."""
+    """Model should call grep (not shell alone) to search file contents."""
     case_id = "grep_over_shell"
     t0 = time.monotonic()
 
@@ -115,7 +115,7 @@ async def run_grep_over_shell() -> dict[str, Any]:
 
     calls = tool_names(result.messages)
     has_grep = "grep" in calls
-    shell_without_grep = "run_shell_command" in calls and not has_grep
+    shell_without_grep = "shell" in calls and not has_grep
 
     passed = has_grep and not shell_without_grep
     verdict = "PASS" if passed else "FAIL"
@@ -131,7 +131,7 @@ async def run_grep_over_shell() -> dict[str, Any]:
 
 
 async def run_shell_git_negative() -> dict[str, Any]:
-    """run_shell_command should be called directly for git — search_tools must NOT precede it."""
+    """shell should be called directly for git — search_tools must NOT precede it."""
     case_id = "shell_git_negative"
     t0 = time.monotonic()
 
@@ -147,11 +147,11 @@ async def run_shell_git_negative() -> dict[str, Any]:
     )
 
     calls = tool_names(result.messages)
-    has_shell = "run_shell_command" in calls
+    has_shell = "shell" in calls
     search_before_shell = (
         "search_tools" in calls
         and has_shell
-        and calls.index("search_tools") < calls.index("run_shell_command")
+        and calls.index("search_tools") < calls.index("shell")
     )
 
     passed = has_shell and not search_before_shell
@@ -209,7 +209,7 @@ async def run_patch_over_shell() -> dict[str, Any]:
             calls = tool_names(result.messages)
             content_after = (tmp_path / "greet.py").read_text(encoding="utf-8")
     finally:
-        # run_shell_command uses CWD (project root), not deps.workspace_root.
+        # shell uses CWD (project root), not deps.workspace_root.
         # Remove any file the model may have written there via shell.
         Path("greet.py").unlink(missing_ok=True)
 
