@@ -288,5 +288,5 @@ class LlmSettings(BaseModel):
         if not self.model:
             return "No model configured — set llm.model in settings.json"
         if self.uses_gemini() and not self.api_key:
-            return "LLM_API_KEY not set — required for Gemini provider"
+            return "Set GEMINI_API_KEY or LLM_API_KEY — required for Gemini provider"
         return None

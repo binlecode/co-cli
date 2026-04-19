@@ -21,6 +21,7 @@ def test_chat_startup_failure_exits_cleanly_without_traceback(tmp_path: Path) ->
     env = _base_env(tmp_path)
     env["LLM_PROVIDER"] = "gemini"
     env.pop("LLM_API_KEY", None)
+    env.pop("GEMINI_API_KEY", None)
 
     proc = subprocess.run(
         [
@@ -33,6 +34,7 @@ def test_chat_startup_failure_exits_cleanly_without_traceback(tmp_path: Path) ->
         env=env,
         capture_output=True,
         text=True,
+        timeout=10,
     )
 
     combined = proc.stdout + proc.stderr
@@ -50,6 +52,7 @@ def test_default_startup_path_exits_cleanly_without_reasoning_display_error(
     env = _base_env(tmp_path)
     env["LLM_PROVIDER"] = "gemini"
     env.pop("LLM_API_KEY", None)
+    env.pop("GEMINI_API_KEY", None)
 
     proc = subprocess.run(
         [
@@ -61,6 +64,7 @@ def test_default_startup_path_exits_cleanly_without_reasoning_display_error(
         env=env,
         capture_output=True,
         text=True,
+        timeout=10,
     )
 
     combined = proc.stdout + proc.stderr

@@ -17,7 +17,7 @@ from pydantic import (
 )
 
 from co_cli.config._knowledge import KnowledgeSettings
-from co_cli.config._llm import LlmSettings
+from co_cli.config._llm import DEFAULT_LLM_PROVIDER, LlmSettings
 from co_cli.config._memory import MemorySettings
 from co_cli.config._observability import ObservabilitySettings
 from co_cli.config._shell import ShellSettings
@@ -193,7 +193,6 @@ class Settings(BaseModel):
         # Nested fields
         nested_env_map: dict[str, dict[str, str]] = {
             "llm": {
-                "api_key": "LLM_API_KEY",
                 "provider": "LLM_PROVIDER",
                 "host": "LLM_HOST",
                 "model": "CO_LLM_MODEL",
@@ -247,6 +246,23 @@ class Settings(BaseModel):
                 val = env_source.get(env_var)
                 if val:
                     data.setdefault(group, {})[field] = val
+
+        # Provider-aware api_key resolution: prefer provider-specific env var, fall back to LLM_API_KEY.
+        _PROVIDER_API_KEY_VARS: dict[str, str] = {
+            "gemini": "GEMINI_API_KEY",
+        }
+        _llm_data = data.get("llm", {})
+        _provider = (
+            env_source.get("LLM_PROVIDER")
+            or (_llm_data.get("provider") if isinstance(_llm_data, dict) else None)
+            or DEFAULT_LLM_PROVIDER
+        )
+        _specific_var = _PROVIDER_API_KEY_VARS.get(_provider)
+        _api_key_val = (_specific_var and env_source.get(_specific_var)) or env_source.get(
+            "LLM_API_KEY"
+        )
+        if _api_key_val:
+            data.setdefault("llm", {})["api_key"] = _api_key_val
 
         # MCP servers (flat — env override)
         mcp_env = env_source.get("CO_CLI_MCP_SERVERS")

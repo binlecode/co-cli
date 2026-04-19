@@ -99,7 +99,7 @@ Settings load order is `env > ~/.co-cli/settings.json > defaults`.
 | `llm.num_ctx` | `LLM_NUM_CTX` | `262144` | Context size hint (ignored by Ollama API — set in Modelfile) |
 | `llm.ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Warn threshold for context ratio |
 | `llm.ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
-| `llm.api_key` | `LLM_API_KEY` | `None` | LLM API key (required when `llm.provider=gemini`) |
+| `llm.api_key` | `GEMINI_API_KEY` (when `provider=gemini`), else `LLM_API_KEY` | `None` | Provider API key; `GEMINI_API_KEY` takes precedence for Gemini, `LLM_API_KEY` is the generic fallback |
 | `llm.reasoning.temperature/top_p/max_tokens/num_ctx/context_window/extra_body` | — | unset | Optional explicit overrides for the main agent's reasoning model settings; merged over provider/model defaults |
 | `llm.noreason.temperature/top_p/max_tokens/extra_body` | — | `None` / `{}` (resolved from provider defaults at build time) | Pure-override noreason settings model; all fields default to `None`/`{}` — non-`None` values win over provider/model defaults in `resolve_noreason_inference()` |
 
