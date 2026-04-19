@@ -187,18 +187,17 @@ def _tool_ctx(tool_defs: str | None) -> str:
 
 async def _judge_span(
     span: ChatSpan, model: Any, idx: int = 0, total: int = 0
-) -> tuple[JudgeResult | None, float]:
-    """Return (JudgeResult | None, elapsed_seconds). Prints per-call trace to stdout."""
+) -> JudgeResult | None:
+    """Return JudgeResult or None. None when span lacks output_msgs or finish_reason."""
     label = f"[{idx}/{total}]" if total else ""
+    test_frag = (span.test_id or "").split("::")[-1][:30]
     if span.output_msgs is None or not span.finish_reasons:
-        print(
-            f"  {label} SKIP {span.flow} / {span.test_id.split('::')[-1][:30]} — no output_msgs or finish_reason"
-        )
-        return None, 0.0
+        print(f"  {label} SKIP {span.flow} / {test_frag} — no output_msgs or finish_reason")
+        return None
 
     parts = _parse_output_parts(span.output_msgs)
     if parts is None:
-        return None, 0.0
+        return None
     thinking_parts, tool_parts, text_parts = parts
 
     prompt = (
@@ -213,7 +212,7 @@ async def _judge_span(
     )
 
     print(
-        f"  {label} CALL {span.flow} / {span.test_id.split('::')[-1][:30]}"
+        f"  {label} CALL {span.flow} / {test_frag}"
         f" finish={','.join(span.finish_reasons)} prompt={len(prompt)}c ...",
         flush=True,
     )
@@ -233,7 +232,7 @@ async def _judge_span(
 
     scores = f"tool={jr.tool_score} resp={jr.response_score} think={jr.thinking_score}"
     print(f"         → {elapsed:.1f}s  {scores}  notes={jr.notes[:60]!r}")
-    return jr, elapsed
+    return jr
 
 
 def _parse_kv(tail: str) -> dict[str, str]:
@@ -661,7 +660,7 @@ async def _judge_all_spans(
     t_wall = time.perf_counter()
 
     async def _call(idx: int, span: ChatSpan) -> tuple[ChatSpan, JudgeResult | None]:
-        jr, _ = await _judge_span(span, model, idx=idx, total=total)
+        jr = await _judge_span(span, model, idx=idx, total=total)
         return span, jr
 
     pairs = await asyncio.gather(*[_call(i, s) for i, s in enumerate(spans, 1)])
