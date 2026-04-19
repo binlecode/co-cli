@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "hybrid"
 DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "tei"
@@ -15,12 +15,25 @@ DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
 
 
+# Default reranker model per provider — single source of truth, overridable via settings.json.
+_RERANKER_DEFAULT_MODEL: dict[str, str] = {
+    "gemini": "gemini-3.1-flash-preview",
+    "ollama-openai": "qwen2.5:3b",
+}
+
+
 class LlmModelSettings(BaseModel):
     """A model+provider bundle for auxiliary model references (e.g. LLM reranker)."""
 
-    model: str
+    model: str = Field(default="")
     api_params: dict[str, Any] = Field(default_factory=dict)
     provider: Literal["ollama-openai", "gemini"]
+
+    @model_validator(mode="after")
+    def _fill_model_default(self) -> "LlmModelSettings":
+        if not self.model:
+            self.model = _RERANKER_DEFAULT_MODEL.get(self.provider, "")
+        return self
 
 
 class KnowledgeSettings(BaseModel):

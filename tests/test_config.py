@@ -182,6 +182,39 @@ def test_knowledge_consolidation_trigger_invalid(tmp_path):
         load_config(_user_config_path=user_settings)
 
 
+def test_llm_reranker_gemini_model_default_resolved(tmp_path):
+    """LlmModelSettings fills gemini model from _RERANKER_DEFAULT_MODEL when omitted."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(json.dumps({"knowledge": {"llm_reranker": {"provider": "gemini"}}}))
+    settings = load_config(_user_config_path=user_settings)
+    assert settings.knowledge.llm_reranker is not None
+    assert settings.knowledge.llm_reranker.model == "gemini-3.1-flash-preview"
+
+
+def test_llm_reranker_ollama_model_default_resolved(tmp_path):
+    """LlmModelSettings fills ollama-openai model from _RERANKER_DEFAULT_MODEL when omitted."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(
+        json.dumps({"knowledge": {"llm_reranker": {"provider": "ollama-openai"}}})
+    )
+    settings = load_config(_user_config_path=user_settings)
+    assert settings.knowledge.llm_reranker is not None
+    assert settings.knowledge.llm_reranker.model == "qwen2.5:3b"
+
+
+def test_llm_reranker_explicit_model_preserved(tmp_path):
+    """Explicit model in settings.json is not overwritten by the default."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(
+        json.dumps(
+            {"knowledge": {"llm_reranker": {"provider": "gemini", "model": "gemini-2.5-flash"}}}
+        )
+    )
+    settings = load_config(_user_config_path=user_settings)
+    assert settings.knowledge.llm_reranker is not None
+    assert settings.knowledge.llm_reranker.model == "gemini-2.5-flash"
+
+
 def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     """build_agent() must not rewrite GEMINI_API_KEY when config provides llm_api_key."""
     user_settings = tmp_path / "settings.json"

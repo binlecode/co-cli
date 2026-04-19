@@ -9,11 +9,6 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODELS: dict[str, str] = {
-    "gemini": "gemini-3.1-flash-preview",
-    "ollama": "qwen2.5:3b",
-}
-
 
 def _parse_ranked_indices(parsed: object, n: int) -> list[int]:
     """Extract 1-based ranked indices from JSON output."""
@@ -86,12 +81,11 @@ def build_llm_reranker(
 
     Returns identity order [1..n] for unknown providers.
     provider: 'ollama' or 'gemini'
-    model: reranker model name; if empty, filled by provider default here.
+    model: reranker model name — caller must pass a resolved non-empty value.
     """
-    effective_model = model or _DEFAULT_MODELS.get(provider, "qwen2.5:3b")
     return _RerankerCallable(
         provider=provider,
         ollama_host=ollama_host,
-        model=effective_model,
+        model=model,
         api_key=api_key,
     )
