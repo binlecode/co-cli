@@ -22,7 +22,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-from _audit_utils import FlowChatSpan, _match_spans, _parse_log, _query_db_spans
+from _audit_utils import FlowChatSpan, _default_log_path, _match_spans, _parse_log, _query_db_spans
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parent
@@ -510,8 +510,9 @@ def main() -> None:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_path = out_dir / f"REPORT-llm-audit-performance-{stamp}.md"
-    if args.log:
-        log_path = args.log.resolve()
+    log_arg = args.log or _default_log_path()
+    if log_arg:
+        log_path = log_arg.resolve()
         if not log_path.exists():
             print(f"WARNING: --log path not found: {log_path} — skipping per-flow sections")
         else:

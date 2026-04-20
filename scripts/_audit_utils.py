@@ -14,6 +14,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+
+
+def _default_log_path() -> Path | None:
+    """Return the most recently modified *.log in .pytest-logs/, or None."""
+    logs_dir = _REPO_ROOT / ".pytest-logs"
+    if not logs_dir.exists():
+        return None
+    logs = sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime)
+    return logs[-1] if logs else None
+
+
 # Duration tolerance (ms) for fuzzy matching log spans to DB spans.
 _DURATION_TOLERANCE_MS = 150.0
 

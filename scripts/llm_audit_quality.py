@@ -24,6 +24,7 @@ from typing import Any
 from _audit_utils import (
     _DURATION_TOLERANCE_MS,
     FlowChatSpan,
+    _default_log_path,
     _match_spans,
     _parse_log,
     _query_db_spans,
@@ -628,7 +629,12 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--log", required=True, type=Path, help="pytest log file")
+    parser.add_argument(
+        "--log",
+        type=Path,
+        default=None,
+        help="pytest log file (default: most recent in .pytest-logs/)",
+    )
     parser.add_argument(
         "--db",
         type=Path,
@@ -662,7 +668,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    log_path = args.log.resolve()
+    log_arg = args.log or _default_log_path()
+    if not log_arg:
+        raise SystemExit("No log specified and no .pytest-logs/*.log found. Use --log <path>.")
+    log_path = log_arg.resolve()
     db_path = args.db.resolve()
     out_dir = args.out.resolve()
 
