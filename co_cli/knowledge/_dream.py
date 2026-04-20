@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from co_cli.deps import CoDeps
 
 logger = logging.getLogger(__name__)
+_TRACER = otel_trace.get_tracer("co.dream")
 
 _DREAM_STATE_FILENAME = "_dream_state.json"
 _DREAM_PROMPT_PATH = Path(__file__).parent / "prompts" / "dream_miner.md"
@@ -202,11 +203,15 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState) -> int:
         miner_agent = build_dream_miner_agent()
         try:
             for chunk in _chunk_dream_window(window):
-                await miner_agent.run(
-                    chunk,
-                    deps=deps,
-                    model=model_obj,
-                )
+                with _TRACER.start_as_current_span(
+                    "invoke_agent _dream_miner_agent"
+                ) as agent_span:
+                    agent_span.set_attribute("agent.role", "dream_miner")
+                    await miner_agent.run(
+                        chunk,
+                        deps=deps,
+                        model=model_obj,
+                    )
                 saves_so_far = _count_active_artifacts(deps.knowledge_dir) - before_count
                 if saves_so_far >= _MAX_MINE_SAVES_PER_SESSION:
                     logger.info(
@@ -491,22 +496,21 @@ async def run_dream_cycle(
     be archived. Mining is skipped in dry-run mode (requires an LLM call to
     predict).
     """
-    tracer = otel_trace.get_tracer("co.dream")
     result = DreamResult()
     state = load_dream_state(deps.knowledge_dir)
 
-    with tracer.start_as_current_span("co.dream.cycle") as cycle_span:
+    with _TRACER.start_as_current_span("co.dream.cycle") as cycle_span:
         cycle_span.set_attribute("dream.dry_run", dry_run)
         cycle_span.set_attribute("dream.timeout_secs", timeout_secs)
 
         try:
             async with asyncio.timeout(timeout_secs):
                 if dry_run:
-                    with tracer.start_as_current_span("co.dream.merge") as merge_span:
+                    with _TRACER.start_as_current_span("co.dream.merge") as merge_span:
                         clusters = _identify_mergeable_clusters(deps)
                         result.merged = len(clusters)
                         merge_span.set_attribute("dream.merged", result.merged)
-                    with tracer.start_as_current_span("co.dream.decay") as decay_span:
+                    with _TRACER.start_as_current_span("co.dream.decay") as decay_span:
                         candidates = find_decay_candidates(
                             deps.knowledge_dir, deps.config.knowledge
                         )
@@ -514,7 +518,7 @@ async def run_dream_cycle(
                         decay_span.set_attribute("dream.decayed", result.decayed)
                 else:
                     try:
-                        with tracer.start_as_current_span("co.dream.mine") as mine_span:
+                        with _TRACER.start_as_current_span("co.dream.mine") as mine_span:
                             result.extracted = await _mine_transcripts(deps, state)
                             mine_span.set_attribute("dream.extracted", result.extracted)
                     except Exception as exc:
@@ -522,7 +526,7 @@ async def run_dream_cycle(
                         result.errors.append(f"mine: {exc}")
 
                     try:
-                        with tracer.start_as_current_span("co.dream.merge") as merge_span:
+                        with _TRACER.start_as_current_span("co.dream.merge") as merge_span:
                             result.merged = await _merge_similar_artifacts(deps)
                             merge_span.set_attribute("dream.merged", result.merged)
                     except Exception as exc:
@@ -530,7 +534,7 @@ async def run_dream_cycle(
                         result.errors.append(f"merge: {exc}")
 
                     try:
-                        with tracer.start_as_current_span("co.dream.decay") as decay_span:
+                        with _TRACER.start_as_current_span("co.dream.decay") as decay_span:
                             result.decayed = _decay_sweep(deps)
                             decay_span.set_attribute("dream.decayed", result.decayed)
                     except Exception as exc:

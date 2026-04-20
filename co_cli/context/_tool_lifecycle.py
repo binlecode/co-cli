@@ -36,10 +36,11 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     ) -> Any:
         span = otel_trace.get_current_span()
         info = ctx.deps.tool_index.get(call.tool_name)
-        if span.is_recording() and info:
-            span.set_attribute("co.tool.source", info.source.value)
-            span.set_attribute("co.tool.requires_approval", info.approval)
+        if span.is_recording():
             span.set_attribute("co.tool.result_size", len(str(result)))
+            if info:
+                span.set_attribute("co.tool.source", info.source.value)
+                span.set_attribute("co.tool.requires_approval", info.approval)
         logger.debug("tool_executed tool_name=%s", call.tool_name)
         return result
 

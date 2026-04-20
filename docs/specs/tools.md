@@ -99,7 +99,7 @@ Resume segments execute on the main agent with `deferred_tool_results=...`; on t
 
 **Execution Pipeline via CoToolLifecycle:**
 1. **`before_tool_execute`:** Intercepts invocations to resolve relative paths to absolute system paths.
-2. **`after_tool_execute`:** Enriches OpenTelemetry traces with custom tags (`co.tool.source`, `co.tool.requires_approval`, `co.tool.result_size`).
+2. **`after_tool_execute`:** Enriches OpenTelemetry traces: `co.tool.result_size` (all tool spans, including delegation); `co.tool.source` and `co.tool.requires_approval` set for native tools only (present in `tool_index`).
 
 **Approval & Errors:**
 - **Auto-Approve:** `_collect_deferred_tool_approvals()` writes `True` into `DeferredToolResults`; the actual tool call runs only after the resumed segment starts.

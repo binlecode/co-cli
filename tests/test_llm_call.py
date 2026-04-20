@@ -19,7 +19,7 @@ from co_cli.llm._call import llm_call
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
-_CONFIG = make_settings(mcp_servers={})
+_CONFIG = make_settings()
 _MODEL = build_model(_CONFIG.llm)
 _MODEL_NAME = _CONFIG.llm.model
 

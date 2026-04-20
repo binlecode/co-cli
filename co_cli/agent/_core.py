@@ -159,6 +159,7 @@ def build_agent(
             output_type=output_type,
             instructions=instructions,
             retries=config.tool_retries,
+            capabilities=[CoToolLifecycle()],
         )
         for fn in tool_fns or []:
             delegation_agent.tool(fn, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match

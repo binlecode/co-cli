@@ -75,13 +75,13 @@ def _make_deps(session_id: str) -> CoDeps:
             "fastapi authentication tutorial",
         ),
         (
-            "Do I have any memories about database preferences?",
-            "search_knowledge_or_list_knowledge",
+            "What did we talk about regarding database preferences in past sessions?",
+            "memory_search",
             "query",
-            "database preferences",
+            "database",
         ),
     ],
-    ids=["shell_git_status", "web_search_fastapi", "search_knowledge_db"],
+    ids=["shell_git_status", "web_search_fastapi", "memory_search_past_sessions"],
 )
 async def test_tool_selection_and_arg_extraction(
     prompt: str,
@@ -124,38 +124,6 @@ async def test_tool_selection_and_arg_extraction(
 
         if tool_name is None:
             last_details = "no tool call observed"
-            continue
-
-        if expected_tool == "search_knowledge_or_list_knowledge":
-            if tool_name == "knowledge_search":
-                actual = str((args or {}).get("query", "")).lower()
-                if "database preferences" in actual:
-                    return
-                last_details = (
-                    f"tool={tool_name!r}, missing arg fragment "
-                    f"'database preferences' in query={(args or {}).get('query')!r}"
-                )
-                continue
-            if tool_name == "memory_search":
-                actual = str((args or {}).get("query", "")).lower()
-                if "database preferences" in actual:
-                    return
-                last_details = (
-                    f"tool={tool_name!r}, missing arg fragment "
-                    f"'database preferences' in query={(args or {}).get('query')!r}"
-                )
-                continue
-            if tool_name == "knowledge_list":
-                kind = (args or {}).get("kind")
-                if kind in (None, "memory"):
-                    return
-                last_details = f"tool={tool_name!r}, unexpected kind={kind!r}, args={args!r}"
-                continue
-            last_details = (
-                f"tool={tool_name!r}, expected one of "
-                f"('knowledge_search', 'memory_search', 'knowledge_list'),"
-                f" args={args!r}"
-            )
             continue
 
         if tool_name != expected_tool:

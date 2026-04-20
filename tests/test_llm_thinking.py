@@ -16,7 +16,7 @@ from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_REASONING_TIMEOU
 
 from co_cli.llm._factory import build_model
 
-_CONFIG = make_settings(mcp_servers={})
+_CONFIG = make_settings()
 _MODEL = build_model(_CONFIG.llm)
 _REASON_SETTINGS = _CONFIG.llm.reasoning_model_settings()
 _NOREASON_SETTINGS = _CONFIG.llm.noreason_model_settings()

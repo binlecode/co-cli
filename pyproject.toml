@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.7.238"
+version = "0.7.240"
 description = "Co — personal AI assistant CLI with approval-gated shell, Google Drive/Gmail/Calendar, Obsidian, and OTel tracing"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -76,7 +76,7 @@ max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
 "evals/**/*.py" = ["T201", "C901"]  # evals use print intentionally; test scenarios are inherently complex
-"scripts/**/*.py" = ["T201"]        # scripts use print intentionally
+"scripts/**/*.py" = ["T201", "C901"]  # scripts use print intentionally; audit scripts have inherently complex report builders
 "tests/**/*.py" = ["C901"]          # comprehensive test functions naturally exceed complexity limits
 "tests/_*.py" = ["T201"]            # test infrastructure helpers use print for progress output
 "strip_audit_log.py" = ["T201"]     # root-level one-off script, print is intentional

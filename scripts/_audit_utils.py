@@ -2,7 +2,7 @@
 """Shared helpers for co-cli LLM audit scripts.
 
 Provides log-parsing and log+DB correlation utilities consumed by
-llm_audit_quality.py and llm_audit_performance.py.
+llm_audit_quality.py and llm_audit_runtime.py.
 """
 
 from __future__ import annotations

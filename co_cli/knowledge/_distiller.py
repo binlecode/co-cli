@@ -150,7 +150,8 @@ async def _run_extraction_async(
             return
         _model = deps.model.model if deps.model else None
         agent = build_knowledge_extractor_agent()
-        with tracer.start_as_current_span("co.memory.extraction"):
+        with tracer.start_as_current_span("co.memory.extraction") as span:
+            span.set_attribute("agent.role", "memory_extractor")
             await agent.run(window, deps=deps, model=_model)
         deps.session.last_extracted_message_idx = cursor_start + len(delta)
     except asyncio.CancelledError:

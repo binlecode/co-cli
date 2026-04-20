@@ -300,7 +300,7 @@ def _cut_finding(
 
 
 def _thinking_presence_section(spans: list[FlowChatSpan]) -> str:
-    """Build ## 5.4 Thinking Presence section."""
+    """Build ### 5.4 Thinking Presence section."""
     matched = [s for s in spans if s.finish_reasons]
     spans_with_thinking = 0
     spans_without_thinking = 0
@@ -347,7 +347,7 @@ def _thinking_presence_section(spans: list[FlowChatSpan]) -> str:
     )
 
     return f"""\
-## 5.4 Thinking Presence
+### 5.4 Thinking Presence
 
 > Proxy signals — not semantic verdicts.
 
@@ -448,7 +448,7 @@ def _eval_section(eval_pairs: list[tuple[FlowChatSpan, JudgeResult | None]]) -> 
     )
 
     return f"""\
-## 5.5 Semantic Evaluation
+## 6. Semantic Evaluation
 
 > Proxy signals — not verified verdicts. Known biases: length, self-evaluation, non-determinism.
 
@@ -456,11 +456,11 @@ Evaluated {scored_count}/{total_count} spans (spans without output_msgs or finis
 
 {span_table}
 
-### Per-Flow Score Summary
+### 6.1 Per-Flow Score Summary
 
 {flow_table}
 
-### Key Findings
+### 6.2 Key Findings
 
 {findings}
 """
@@ -741,6 +741,8 @@ def main() -> None:
             )
             eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model))
             report += "\n" + _eval_section(eval_pairs)
+        else:
+            report += "\n## 6. Semantic Evaluation\n\n> Semantic evaluation skipped (--no-eval).\n"
         out_path.write_text(report)
 
     warn_count = sum(1 for s in spans if "WARN" in _verdict(s))
