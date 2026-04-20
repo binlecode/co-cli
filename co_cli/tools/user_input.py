@@ -18,18 +18,33 @@ async def clarify(
 ) -> ToolReturn:
     """Ask the user a clarifying question mid-execution and return their answer.
 
-    Use when the current task is ambiguous and the answer will meaningfully affect
-    which actions to take. Do not use for confirmation of planned steps — only for
-    unresolvable ambiguity that cannot be resolved from context. Prefer making a
-    reasonable default choice yourself when the decision is low-stakes.
+    Use when:
+    - the task is ambiguous and the answer will meaningfully affect which actions to take
+    - there are multiple reasonable approaches with real tradeoffs and the user should choose
+    - you need a missing preference, constraint, or decision that cannot be inferred from context
+    - you want the user to pick between concrete options rather than forcing a guess
 
-    The user's answer is returned directly in the tool result — use it immediately,
-    do not call clarify again for the same question.
+    Do NOT use for:
+    - approval or confirmation of dangerous actions (that is handled separately)
+    - low-stakes choices where a reasonable default is fine
+    - questions that can be answered by reading the workspace or using other tools first
+
+    Prefer concise multiple-choice options when the decision can be enumerated; use an
+    open-ended question only when free-form input is actually needed.
+
+    CRITICAL — one call only:
+    - Call clarify exactly ONCE for a given question.
+    - The tool result IS the user's answer — read it from the ToolReturnPart and
+      use it immediately in your response.
+    - Do NOT call clarify again after receiving the result. Do NOT pass user_answer
+      yourself — it is always injected by the system and must be omitted entirely.
 
     Args:
         question: The question to ask the user.
-        options: Optional list of valid answers. When provided, the user must pick one.
-        user_answer: Injected by the orchestrator after the user responds — do not supply this.
+        options: Optional list of valid answer strings (e.g. ["yes", "no"]). When
+            provided, the user must pick one of these exact strings.
+        user_answer: System-injected after the user responds. NEVER supply this
+            argument — leave it out of every call you make.
     """
     # Always raise on the first (unapproved) call — this covers both the expected case
     # (user_answer absent) and the LLM escape-hatch case (model pre-supplies user_answer).
