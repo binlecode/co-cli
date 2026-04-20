@@ -309,9 +309,9 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | Setting | Env Var | Default | Description |
 |---------|--------|---------|-------------|
-| `observability.log_level` | `CO_CLI_LOG_LEVEL` | `INFO` | Minimum level written to `co-cli.jsonl` (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
-| `observability.log_max_size_mb` | `CO_CLI_LOG_MAX_SIZE_MB` | `5` | Max file size in MB before rotation (1–500) |
-| `observability.log_backup_count` | `CO_CLI_LOG_BACKUP_COUNT` | `3` | Rotated backup files to keep per log file (0–20) |
+| `observability.log_level` | `CO_LOG_LEVEL` | `INFO` | Minimum level written to `co-cli.jsonl` (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
+| `observability.log_max_size_mb` | `CO_LOG_MAX_SIZE_MB` | `5` | Max file size in MB before rotation (1–500) |
+| `observability.log_backup_count` | `CO_LOG_BACKUP_COUNT` | `3` | Rotated backup files to keep per log file (0–20) |
 | `observability.redact_patterns` | — | 6 default patterns | Regex list applied to span attribute strings before SQLite storage; extend via `settings.json` for custom secret formats |
 
 ### `co tail` Flags

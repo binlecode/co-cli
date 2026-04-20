@@ -200,7 +200,7 @@ def _check_gemini_key(api_key: str | None) -> CheckResult:
     return CheckResult(
         ok=False,
         status="error",
-        detail="LLM_API_KEY not set — required for Gemini provider",
+        detail="CO_LLM_API_KEY not set — required for Gemini provider",
     )
 
 

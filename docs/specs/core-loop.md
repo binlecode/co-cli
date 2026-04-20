@@ -350,12 +350,12 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Per-tool retry count baked into agent/tool registration |
-| `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
-| `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
-| `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio warning threshold |
-| `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
-| `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |
+| `tool_retries` | `CO_TOOL_RETRIES` | `3` | Per-tool retry count baked into agent/tool registration |
+| `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
+| `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
+| `ctx_warn_threshold` | `CO_LLM_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio warning threshold |
+| `ctx_overflow_threshold` | `CO_LLM_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
+| `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |
 
 ## 4. Files
 

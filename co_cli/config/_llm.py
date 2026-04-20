@@ -42,15 +42,16 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
                     "repeat_penalty": 1.0,
                 },
             },
-            # think=false disables thinking for noreason calls — reasoning_effort="none"
-            # may not be supported on all Ollama versions.
+            # think=false is the authoritative noreason control for qwen3.5 via Ollama.
+            # reasoning_effort="none" is a secondary hint — honored by Ollama versions that
+            # map it to think=false, silently ignored by versions that do not.
             "noreason": {
                 "temperature": 0.7,
                 "top_p": 0.8,
                 "max_tokens": 16384,
                 "extra_body": {
-                    "reasoning_effort": "none",
                     "think": False,
+                    "reasoning_effort": "none",
                     "top_k": 20,
                     "min_p": 0.0,
                     "presence_penalty": 1.5,
@@ -230,7 +231,7 @@ class LlmSettings(BaseModel):
         if not self.model:
             return "No model configured — set llm.model in settings.json"
         if self.uses_gemini() and not self.api_key:
-            return "Set GEMINI_API_KEY or LLM_API_KEY — required for Gemini provider"
+            return "Set GEMINI_API_KEY or CO_LLM_API_KEY — required for Gemini provider"
         model_key = self.model.split(":")[0]
         known = _INFERENCE_DEFAULTS.get(self.provider, {})
         if model_key not in known:

@@ -21,7 +21,7 @@ def test_env_overrides_user_config(tmp_path):
 
     settings = load_config(
         _user_config_path=user_settings,
-        _env={"CO_CLI_THEME": "light"},
+        _env={"CO_THEME": "light"},
     )
     assert settings.theme == "light"
 
@@ -134,10 +134,10 @@ def test_knowledge_lifecycle_env_overrides(tmp_path):
 
 
 def test_memory_extract_every_n_turns_env_override(tmp_path):
-    """CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS overrides the default extraction cadence."""
+    """CO_MEMORY_EXTRACT_EVERY_N_TURNS overrides the default extraction cadence."""
     settings = load_config(
         _user_config_path=tmp_path / "nonexistent.json",
-        _env={"CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS": "7"},
+        _env={"CO_MEMORY_EXTRACT_EVERY_N_TURNS": "7"},
     )
     assert settings.memory.extract_every_n_turns == 7
 
@@ -194,9 +194,7 @@ def test_llm_reranker_gemini_model_default_resolved(tmp_path):
 def test_llm_reranker_ollama_model_default_resolved(tmp_path):
     """LlmModelSettings fills ollama model from _RERANKER_DEFAULT_MODEL when omitted."""
     user_settings = tmp_path / "settings.json"
-    user_settings.write_text(
-        json.dumps({"knowledge": {"llm_reranker": {"provider": "ollama"}}})
-    )
+    user_settings.write_text(json.dumps({"knowledge": {"llm_reranker": {"provider": "ollama"}}}))
     settings = load_config(_user_config_path=user_settings)
     assert settings.knowledge.llm_reranker is not None
     assert settings.knowledge.llm_reranker.model == "qwen2.5:3b"
@@ -219,7 +217,15 @@ def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     """build_agent() must not rewrite GEMINI_API_KEY when config provides llm_api_key."""
     user_settings = tmp_path / "settings.json"
     user_settings.write_text(
-        json.dumps({"llm": {"provider": "gemini", "model": "gemini-3.1-flash-preview", "api_key": "settings-key-wins"}})
+        json.dumps(
+            {
+                "llm": {
+                    "provider": "gemini",
+                    "model": "gemini-3.1-flash-preview",
+                    "api_key": "settings-key-wins",
+                }
+            }
+        )
     )
 
     env = os.environ.copy()

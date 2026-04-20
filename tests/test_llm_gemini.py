@@ -1,6 +1,6 @@
 """Functional tests for Gemini reasoning and noreason inference.
 
-Requires GEMINI_API_KEY (or LLM_API_KEY) env var set to a valid Gemini API key.
+Requires GEMINI_API_KEY (or CO_LLM_API_KEY) env var set to a valid Gemini API key.
 Tests verify that:
 - noreason settings (thinking_level=low) return a valid response
 - reasoning settings return a valid response
@@ -14,13 +14,13 @@ import os
 
 import pytest
 from pydantic_ai import Agent
-from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
+from tests._timeouts import LLM_GEMINI_NOREASON_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
 
 from co_cli.config._llm import LlmSettings
 from co_cli.llm._factory import build_model
 
 _GEMINI_MODEL = "gemini-3.1-pro-preview"
-_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("LLM_API_KEY")
+_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("CO_LLM_API_KEY")
 _has_api_key = bool(_API_KEY)
 
 pytestmark = pytest.mark.skipif(
@@ -45,7 +45,7 @@ async def test_gemini_noreason_returns_response() -> None:
     """Noreason settings (thinking_level=low) return a valid non-empty response."""
     m = _build()
     agent = Agent(m.model, output_type=str)
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+    async with asyncio.timeout(LLM_GEMINI_NOREASON_TIMEOUT_SECS):
         result = await agent.run(
             "Reply with exactly one word: yes",
             model_settings=m.settings_noreason,
@@ -72,7 +72,7 @@ async def test_gemini_noreason_faster_than_reasoning() -> None:
     m = _build()
     agent = Agent(m.model, output_type=str)
 
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+    async with asyncio.timeout(LLM_GEMINI_NOREASON_TIMEOUT_SECS):
         noreason_result = await agent.run(
             "Reply with exactly one word: yes",
             model_settings=m.settings_noreason,

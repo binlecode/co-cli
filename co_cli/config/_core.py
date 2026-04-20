@@ -26,8 +26,10 @@ from co_cli.config._web import WebSettings
 
 APP_NAME = "co-cli"
 
-# Canonical user-global root: ~/.co-cli (overridable via CO_CLI_HOME)
-USER_DIR = Path(os.getenv("CO_CLI_HOME", Path.home() / ".co-cli"))
+# Canonical user-global root: ~/.co-cli (overridable via CO_HOME).
+# Module-level constant: USER_DIR must resolve before Settings is constructed
+# (it sets SETTINGS_FILE, SEARCH_DB, etc.) — cannot be moved into fill_from_env.
+USER_DIR = Path(os.getenv("CO_HOME", Path.home() / ".co-cli"))
 GOOGLE_TOKEN_PATH = USER_DIR / "google_token.json"
 ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
 SETTINGS_FILE = USER_DIR / "settings.json"
@@ -177,13 +179,13 @@ class Settings(BaseModel):
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
-            "knowledge_path": "CO_KNOWLEDGE_DIR",
-            "theme": "CO_CLI_THEME",
-            "reasoning_display": "CO_CLI_REASONING_DISPLAY",
-            "personality": "CO_CLI_PERSONALITY",
-            "tool_retries": "CO_CLI_TOOL_RETRIES",
-            "doom_loop_threshold": "CO_CLI_DOOM_LOOP_THRESHOLD",
-            "max_reflections": "CO_CLI_MAX_REFLECTIONS",
+            "knowledge_path": "CO_KNOWLEDGE_PATH",
+            "theme": "CO_THEME",
+            "reasoning_display": "CO_REASONING_DISPLAY",
+            "personality": "CO_PERSONALITY",
+            "tool_retries": "CO_TOOL_RETRIES",
+            "doom_loop_threshold": "CO_DOOM_LOOP_THRESHOLD",
+            "max_reflections": "CO_MAX_REFLECTIONS",
         }
         for field, env_var in flat_env_map.items():
             val = env_source.get(env_var)
@@ -193,12 +195,12 @@ class Settings(BaseModel):
         # Nested fields
         nested_env_map: dict[str, dict[str, str]] = {
             "llm": {
-                "provider": "LLM_PROVIDER",
-                "host": "LLM_HOST",
+                "provider": "CO_LLM_PROVIDER",
+                "host": "CO_LLM_HOST",
                 "model": "CO_LLM_MODEL",
-                "num_ctx": "LLM_NUM_CTX",
-                "ctx_warn_threshold": "CO_CTX_WARN_THRESHOLD",
-                "ctx_overflow_threshold": "CO_CTX_OVERFLOW_THRESHOLD",
+                "num_ctx": "CO_LLM_NUM_CTX",
+                "ctx_warn_threshold": "CO_LLM_CTX_WARN_THRESHOLD",
+                "ctx_overflow_threshold": "CO_LLM_CTX_OVERFLOW_THRESHOLD",
             },
             "knowledge": {
                 "search_backend": "CO_KNOWLEDGE_SEARCH_BACKEND",
@@ -207,38 +209,38 @@ class Settings(BaseModel):
                 "embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
                 "cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
                 "embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
-                "chunk_size": "CO_CLI_KNOWLEDGE_CHUNK_SIZE",
-                "chunk_overlap": "CO_CLI_KNOWLEDGE_CHUNK_OVERLAP",
+                "chunk_size": "CO_KNOWLEDGE_CHUNK_SIZE",
+                "chunk_overlap": "CO_KNOWLEDGE_CHUNK_OVERLAP",
                 "consolidation_enabled": "CO_KNOWLEDGE_CONSOLIDATION_ENABLED",
                 "decay_after_days": "CO_KNOWLEDGE_DECAY_AFTER_DAYS",
             },
             "memory": {
                 "recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
-                "injection_max_chars": "CO_CLI_MEMORY_INJECTION_MAX_CHARS",
-                "extract_every_n_turns": "CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS",
+                "injection_max_chars": "CO_MEMORY_INJECTION_MAX_CHARS",
+                "extract_every_n_turns": "CO_MEMORY_EXTRACT_EVERY_N_TURNS",
             },
             "subagent": {
-                "scope_chars": "CO_CLI_SUBAGENT_SCOPE_CHARS",
-                "max_requests_research": "CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH",
-                "max_requests_analysis": "CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS",
-                "max_requests_thinking": "CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING",
+                "scope_chars": "CO_SUBAGENT_SCOPE_CHARS",
+                "max_requests_research": "CO_SUBAGENT_MAX_REQUESTS_RESEARCH",
+                "max_requests_analysis": "CO_SUBAGENT_MAX_REQUESTS_ANALYSIS",
+                "max_requests_thinking": "CO_SUBAGENT_MAX_REQUESTS_THINKING",
             },
             "shell": {
-                "max_timeout": "CO_CLI_SHELL_MAX_TIMEOUT",
-                "safe_commands": "CO_CLI_SHELL_SAFE_COMMANDS",
+                "max_timeout": "CO_SHELL_MAX_TIMEOUT",
+                "safe_commands": "CO_SHELL_SAFE_COMMANDS",
             },
             "web": {
-                "fetch_allowed_domains": "CO_CLI_WEB_FETCH_ALLOWED_DOMAINS",
-                "fetch_blocked_domains": "CO_CLI_WEB_FETCH_BLOCKED_DOMAINS",
-                "http_max_retries": "CO_CLI_WEB_HTTP_MAX_RETRIES",
-                "http_backoff_base_seconds": "CO_CLI_WEB_HTTP_BACKOFF_BASE_SECONDS",
-                "http_backoff_max_seconds": "CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS",
-                "http_jitter_ratio": "CO_CLI_WEB_HTTP_JITTER_RATIO",
+                "fetch_allowed_domains": "CO_WEB_FETCH_ALLOWED_DOMAINS",
+                "fetch_blocked_domains": "CO_WEB_FETCH_BLOCKED_DOMAINS",
+                "http_max_retries": "CO_WEB_HTTP_MAX_RETRIES",
+                "http_backoff_base_seconds": "CO_WEB_HTTP_BACKOFF_BASE_SECONDS",
+                "http_backoff_max_seconds": "CO_WEB_HTTP_BACKOFF_MAX_SECONDS",
+                "http_jitter_ratio": "CO_WEB_HTTP_JITTER_RATIO",
             },
             "observability": {
-                "log_level": "CO_CLI_LOG_LEVEL",
-                "log_max_size_mb": "CO_CLI_LOG_MAX_SIZE_MB",
-                "log_backup_count": "CO_CLI_LOG_BACKUP_COUNT",
+                "log_level": "CO_LOG_LEVEL",
+                "log_max_size_mb": "CO_LOG_MAX_SIZE_MB",
+                "log_backup_count": "CO_LOG_BACKUP_COUNT",
             },
         }
         for group, fields in nested_env_map.items():
@@ -247,25 +249,25 @@ class Settings(BaseModel):
                 if val:
                     data.setdefault(group, {})[field] = val
 
-        # Provider-aware api_key resolution: prefer provider-specific env var, fall back to LLM_API_KEY.
+        # Provider-aware api_key resolution: prefer provider-specific env var, fall back to CO_LLM_API_KEY.
         _PROVIDER_API_KEY_VARS: dict[str, str] = {
             "gemini": "GEMINI_API_KEY",
         }
         _llm_data = data.get("llm", {})
         _provider = (
-            env_source.get("LLM_PROVIDER")
+            env_source.get("CO_LLM_PROVIDER")
             or (_llm_data.get("provider") if isinstance(_llm_data, dict) else None)
             or DEFAULT_LLM_PROVIDER
         )
         _specific_var = _PROVIDER_API_KEY_VARS.get(_provider)
         _api_key_val = (_specific_var and env_source.get(_specific_var)) or env_source.get(
-            "LLM_API_KEY"
+            "CO_LLM_API_KEY"
         )
         if _api_key_val:
             data.setdefault("llm", {})["api_key"] = _api_key_val
 
         # MCP servers (flat — env override)
-        mcp_env = env_source.get("CO_CLI_MCP_SERVERS")
+        mcp_env = env_source.get("CO_MCP_SERVERS")
         if mcp_env:
             data["mcp_servers"] = json.loads(mcp_env)
 

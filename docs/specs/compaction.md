@@ -558,7 +558,7 @@ One successful compaction per pressure event per turn.
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `llm.num_ctx` | `CO_CLI_LLM_NUM_CTX` | `262144` | Ollama context window override; supersedes `ctx_window` for budget resolution. |
+| `llm.num_ctx` | `CO_LLM_NUM_CTX` | `262144` | Ollama context window override; supersedes `ctx_window` for budget resolution. |
 | `llm.ctx_overflow_threshold` | — | `1.0` | Ratio at which `run_turn` warns of imminent Ollama truncation. |
 | `llm.ctx_warn_threshold` | — | `0.85` | Ratio at which `run_turn` surfaces "consider /compact". |
 

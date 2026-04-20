@@ -14,10 +14,10 @@ Usage::
 
 # LLM inference
 LLM_NON_REASONING_TIMEOUT_SECS: int = 10
-"""Non-thinking model calls (noreason settings, reasoning_effort=none).
+"""Non-thinking model calls (noreason settings: think=false, reasoning_effort=none).
 
 >10s means the model is reasoning when it should not be — a bug in model
-config or api_params (e.g. missing reasoning_effort=none).
+config or api_params (e.g. think=false not honored by Ollama for this model).
 Use only for bare-context calls (summarizer, signal detector, compaction) — no
 registered tools in the agent.
 """
@@ -31,6 +31,14 @@ Processing 10K schema tokens without reasoning takes ~12s on this hardware (conf
 reasoning_effort=none verified in request, no thinking output, pure KV-fill cost).
 Use for tool-selection tests (test_tool_calling_functional) and approval-flow tests
 (test_commands) that require the production tool set.
+"""
+
+LLM_GEMINI_NOREASON_TIMEOUT_SECS: int = 30
+"""Gemini cloud noreason calls (thinking_level=low for Pro, thinking_budget=0 for Flash).
+
+Gemini Pro minimum is thinking_level=low — not truly no-thinking like Ollama's think=false.
+Network round-trip + minimal thinking trace exceeds the 10s Ollama budget.
+30s allows for API latency variance without masking runaway thinking.
 """
 
 LLM_REASONING_TIMEOUT_SECS: int = 60

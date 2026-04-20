@@ -122,10 +122,10 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `personality` | `CO_CLI_PERSONALITY` | `tars` | personality for static prompt assembly and memory injection |
-| `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | identical-tool-call streak for warning injection |
-| `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | shell-error streak for reflection-cap injection |
-| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for recalled artifact injection |
+| `personality` | `CO_PERSONALITY` | `tars` | personality for static prompt assembly and memory injection |
+| `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | identical-tool-call streak for warning injection |
+| `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | shell-error streak for reflection-cap injection |
+| `memory.injection_max_chars` | `CO_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for recalled artifact injection |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in turn-time recall scoring |
 
 ## 4. Files

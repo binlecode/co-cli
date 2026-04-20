@@ -9,7 +9,7 @@ from pathlib import Path
 def _base_env(tmp_path: Path) -> dict[str, str]:
     """Build isolated env so the subprocess does not read user machine config."""
     env = os.environ.copy()
-    env["CO_CLI_HOME"] = str(tmp_path / "co-cli-home")
+    env["CO_HOME"] = str(tmp_path / "co-cli-home")
     env["PYTHONPATH"] = str(Path.cwd())
     return env
 

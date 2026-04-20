@@ -145,7 +145,7 @@ non-blocking warning strings. Startup prints any warnings but does not abort.
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `personality` | `CO_CLI_PERSONALITY` | `tars` | Active personality role; must be in `VALID_PERSONALITIES` (auto-discovered from `souls/`) |
+| `personality` | `CO_PERSONALITY` | `tars` | Active personality role; must be in `VALID_PERSONALITIES` (auto-discovered from `souls/`) |
 
 Personality is validated at config load time (`_validate_personality_name` field validator)
 and again at startup via `validate_personality_files()` which issues non-blocking warnings

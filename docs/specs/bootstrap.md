@@ -214,16 +214,16 @@ These settings most directly affect bootstrap behavior.
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `llm.provider` | `LLM_PROVIDER` | `ollama-openai` | Selects provider-specific bootstrap checks and model wiring |
-| `llm.host` | `LLM_HOST` | `http://localhost:11434` | Host used by Ollama checks and runtime model calls |
+| `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Selects provider-specific bootstrap checks and model wiring |
+| `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Host used by Ollama checks and runtime model calls |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
-| `llm.num_ctx` | `LLM_NUM_CTX` | provider default | Context window target; may be overwritten by the Ollama runtime probe |
+| `llm.num_ctx` | `CO_LLM_NUM_CTX` | provider default | Context window target; may be overwritten by the Ollama runtime probe |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
 | `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
-| `knowledge_path` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge` | User-global knowledge artifact directory synced during bootstrap (extracted facts, articles, notes) |
-| `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled defaults | MCP server definitions connected during startup |
-| `personality` | `CO_CLI_PERSONALITY` | `tars` | Personality selected before agent instruction assembly |
-| `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Default reasoning-display mode at startup; CLI flags can override it before REPL entry |
+| `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge` | User-global knowledge artifact directory synced during bootstrap (extracted facts, articles, notes) |
+| `mcp_servers` | `CO_MCP_SERVERS` | bundled defaults | MCP server definitions connected during startup |
+| `personality` | `CO_PERSONALITY` | `tars` | Personality selected before agent instruction assembly |
+| `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Default reasoning-display mode at startup; CLI flags can override it before REPL entry |
 
 ## 4. Files
 

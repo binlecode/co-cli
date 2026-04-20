@@ -238,8 +238,8 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `knowledge.embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Embedding vector dimensions |
 | `knowledge.embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `http://127.0.0.1:8283` | Embedding service URL |
 | `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI reranker URL |
-| `knowledge.chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | Chunk size (estimated tokens) |
-| `knowledge.chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Overlap between chunks |
+| `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | Chunk size (estimated tokens) |
+| `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Overlap between chunks |
 | `knowledge.consolidation_enabled` | `CO_KNOWLEDGE_CONSOLIDATION_ENABLED` | `false` | Enable dream cycle and dedup |
 | `knowledge.consolidation_trigger` | — | `session_end` | `session_end` or `manual` |
 | `knowledge.consolidation_lookback_sessions` | — | `5` | Sessions to mine per dream cycle |
@@ -252,14 +252,14 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life for confidence decay scoring |
-| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars for recalled knowledge injection |
-| `memory.extract_every_n_turns` | `CO_CLI_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | Extraction cadence (0 = disabled) |
+| `memory.injection_max_chars` | `CO_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars for recalled knowledge injection |
+| `memory.extract_every_n_turns` | `CO_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | Extraction cadence (0 = disabled) |
 
 ### Paths
 
 | Path | Env Var | Default | Description |
 |------|---------|---------|-------------|
-| `knowledge_dir` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge/` | All knowledge artifacts |
+| `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | All knowledge artifacts |
 | `sessions_dir` | — | `~/.co-cli/sessions/` | Session transcripts (JSONL) |
 | `knowledge_db_path` | — | `~/.co-cli/co-cli-search.db` | FTS5/hybrid search index |
 | Session index | — | `~/.co-cli/session-index.db` | Transcript FTS5 index |

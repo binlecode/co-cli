@@ -192,7 +192,7 @@ Delegation agent turns inherit the mode via `fork_deps()`, which copies
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Initial reasoning display mode; overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
+| `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Initial reasoning display mode; overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
 
 The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 

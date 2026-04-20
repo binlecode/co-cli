@@ -6,7 +6,7 @@
 **Functional areas:**
 - Config-gated tool registration
 - Visibility tiers (always-registered vs deferred/discoverable)
-- Three approval classes (auto-approve, requires-approval, deferred)
+- Approval handling (session auto-approve rules, explicit prompts, shell policy-driven prompts)
 - Shell policy and resource locks
 - MCP integration and native tool catalog (37 built-in tools)
 
@@ -23,62 +23,88 @@
 
 ## 1. Tool Infrastructure
 
-The tool ecosystem relies on core infrastructure modules to handle execution routing, standard data structures, security restrictions, and user approvals.
+Section 2 owns the execution flow. This section only names the files that own the tool system.
 
-- `co_cli/tools/tool_io.py`: Standard API outputs. Exposes `tool_output()`, `tool_output_raw()`, `tool_error()`, HTTP error parsers, and handles oversized result truncation (>50k chars offloaded to content-addressed storage).
-- `co_cli/tools/resource_lock.py`: In-process `ResourceLockStore` enabling safe async cross-agent concurrency, preventing race conditions on shared file paths and knowledge artifacts.
-- `co_cli/tools/background.py`: Process-group management and telemetry wrappers for background execution tasks.
-- `co_cli/tools/shell_backend.py`: Robust subprocess execution handling output streaming, encoding checks, and standard exit codes.
-- `co_cli/tools/_shell_policy.py` & `_shell_env.py`: Enforces strict execution safety by classifying shell commands (ALLOW, DENY, APPROVE) and controlling env injections.
-- `co_cli/context/tool_approvals.py`: Core logic for resolving target subjects, building user prompt strings, and processing user inputs (Y/N/A) for mutating operations.
-- `co_cli/context/tool_display.py`: Specialized console formatters for rendering inputs and outputs safely in the REPL.
-- `co_cli/tools/agents.py`: Delegation subagents (`web_research`, `knowledge_analyze`, `reason`) and the `AgentOutput` Pydantic model capturing structured subagent responses.
-- `co_cli/tools/google/_auth.py`: Centralized credentials fetching and a shared `_get_google_service()` factory method.
-- `co_cli/tools/agent_tool.py`: `@agent_tool(...)` decorator — attaches `ToolInfo` policy metadata to native tool functions at definition site. Used by every native tool to declare visibility, approval, concurrency, and config-gate constraints.
+```text
+co_cli/agent/_core.py
+  -> build_tool_registry(), build_agent()
+co_cli/agent/_native_toolset.py
+  -> NATIVE_TOOLS, _build_native_toolset(), _approval_resume_filter()
+co_cli/agent/_mcp.py
+  -> _build_mcp_toolsets(), discover_mcp_tools()
+co_cli/context/_tool_lifecycle.py
+  -> before_tool_execute(), after_tool_execute()
+co_cli/context/_deferred_tool_prompt.py
+  -> category awareness prompt for DEFERRED tools
+co_cli/context/tool_approvals.py
+  -> approval subject resolution and remembered session rules
+co_cli/tools/agent_tool.py
+  -> @agent_tool metadata attachment
+co_cli/tools/tool_io.py
+  -> tool_output(), tool_output_raw(), tool_error()
+co_cli/tools/_shell_policy.py
+  -> shell/code_execute approval policy
+co_cli/tools/files/read.py
+co_cli/tools/files/write.py
+co_cli/tools/knowledge/read.py
+co_cli/tools/knowledge/write.py
+```
 
 ## 2. Tool Lifecycle, Approval, & Concurrency
 
 ### Lifecycle Hooks & Execution Flow
 
-```mermaid
-flowchart TD
-    TURN([run_turn]) --> SEG["_execute_stream_segment\n(initial segment)"]
-    SEG --> T{output?}
-
-    T -->|str — done| DONE([Turn complete])
-    T -->|DeferredToolRequests| SETNAMES["_run_approval_loop:\nresume_tool_names = frozenset of pending tool names\n_approval_resume_filter narrows toolset on resume"]
-
-    SETNAMES --> COLLECT["_collect_deferred_tool_approvals:\nfor each pending call →"]
-
-    COLLECT --> QK{"question" in metadata?}
-    QK -->|yes| QANS["prompt user → ToolApproved\n(override_args={user_answer})"]
-    QK -->|no| STD["decode_tool_args\n→ resolve_approval_subject"]
-
-    STD --> AUTO{is_auto_approved?}
-    AUTO -->|yes| SILENT["approvals[id] = True\n(silent — session rule match)"]
-    AUTO -->|no| PROMPT["prompt user: y / n / a"]
-    PROMPT --> REC["record_approval_choice:\ny/a → approvals[id] = True\na also → remember_tool_approval\nn → approvals[id] = ToolDenied"]
-
-    QANS --> MORE{more calls?}
-    SILENT --> MORE
-    REC --> MORE
-
-    MORE -->|yes| COLLECT
-    MORE -->|no| RESUME["_execute_stream_segment\n(deferred_tool_results=approvals)"]
-
-    RESUME --> AGAIN{output?}
-    AGAIN -->|DeferredToolRequests| SETNAMES
-    AGAIN -->|str — done| CLEAR["resume_tool_names = None"]
-    CLEAR --> DONE
+```text
+run_turn()
+  -> _execute_stream_segment(initial)
+     -> agent.run_stream_events(...)
+     -> turn_state.latest_result = SessionRunResult
+  -> latest_result.output
+     -> str
+        -> turn complete
+     -> DeferredToolRequests
+        -> _run_approval_loop()
+           -> deps.runtime.resume_tool_names =
+              frozenset(call.tool_name for call in output.approvals)
+           -> _collect_deferred_tool_approvals(latest_result, deps, frontend)
+              -> for call in output.approvals
+                 -> meta = output.metadata[tool_call_id]
+                 -> if "question" in meta
+                    -> frontend.prompt_question(...)
+                    -> approvals[id] =
+                       ToolApproved(override_args={"user_answer": answer})
+                 -> else
+                    -> decode_tool_args(call.args)
+                    -> resolve_approval_subject(...)
+                    -> is_auto_approved(subject, deps)
+                       -> yes: approvals[id] = True
+                       -> no
+                          -> frontend.prompt_approval(subject)
+                          -> record_approval_choice(...)
+                             -> approved: approvals[id] = True
+                             -> denied: approvals[id] = ToolDenied(...)
+                             -> choice == "a": remember session rule
+           -> turn_state.current_input = None
+           -> turn_state.current_history = latest_result.all_messages()
+           -> turn_state.tool_approval_decisions = approvals
+           -> _execute_stream_segment(resume, deferred_tool_results=approvals)
+           -> latest_result.output
+              -> DeferredToolRequests: loop again
+              -> anything else
+                 -> deps.runtime.resume_tool_names = None
+                 -> exit approval loop
 ```
+
+Resume segments execute on the main agent with `deferred_tool_results=...`; on that path the SDK skips `ModelRequestNode`, so the approval-resume loop does not send a new model prompt just to execute approved tools.
 
 **Execution Pipeline via CoToolLifecycle:**
 1. **`before_tool_execute`:** Intercepts invocations to resolve relative paths to absolute system paths.
 2. **`after_tool_execute`:** Enriches OpenTelemetry traces with custom tags (`co.tool.source`, `co.tool.requires_approval`, `co.tool.result_size`).
 
 **Approval & Errors:**
-- **Auto-Approve:** Executed directly via `FunctionToolset`.
-- **Requires-Approval:** Execution is preempted, user is prompted in TUI. If denied, a `ToolDenied` response is returned rather than an execution crash.
+- **Auto-Approve:** `_collect_deferred_tool_approvals()` writes `True` into `DeferredToolResults`; the actual tool call runs only after the resumed segment starts.
+- **Requires-Approval:** Deferred calls are collected first, then resumed with `deferred_tool_results=...`. If denied, the resume payload carries `ToolDenied(...)` rather than crashing the turn.
+- **Clarify:** `clarify` uses the same deferred-resume mechanism, but stores `ToolApproved(override_args={"user_answer": ...})` instead of a plain boolean approval.
 - **Failures:** Hard failures trigger `tool_error(msg)` (no retry), while bad parameters return `ModelRetry(msg)` to let the model self-correct.
 
 ### Concurrency Safety
@@ -92,179 +118,126 @@ Approval controls human permission; locks ensure structural correctness.
 
 ## 3. Tool Catalog
 
-Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
+Legend: **Tool** shows the callable signature · **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
 
-The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/_mcp.py`, are always DEFERRED, and are not included in the 37-tool native total. `shell` is the one special case: it is not decorator-marked `approval=True`, but `_shell_policy.py` can still force an interactive approval prompt at execution time.
+The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/_mcp.py`, are always DEFERRED, and are not included in the 37-tool native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface.
 
 ### User Interaction
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `clarify` | A | — | — | — | Pause mid-execution to ask the user a clarifying question; resume with injected answer |
+| `clarify(question, options=None, user_answer=None)` | A | — | — | — | Pause mid-execution to ask the user a clarifying question; resume with injected answer |
 
 ### Introspection & Flow Tracking
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `capabilities_check` | A | — | — | — | Runtime doctor: binary probes, auth states, config |
-| `todo_write` | A | — | — | — | Replace in-session multi-turn checklist |
-| `todo_read` | A | — | — | — | Fetch current checklist |
+| `capabilities_check()` | A | — | — | — | Runtime doctor: binary probes, auth states, config |
+| `todo_write(todos)` | A | — | — | — | Replace in-session multi-turn checklist |
+| `todo_read()` | A | — | — | — | Fetch current checklist |
 
 ### Cognition & Knowledge — Read
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `knowledge_search` | A | — | — | — | Unified search across local knowledge, Obsidian, and Drive; `kind="article"` returns article slugs for `knowledge_article_read` |
-| `knowledge_list` | A | — | — | — | Paginate knowledge artifact metadata |
-| `knowledge_article_read` | A | — | — | — | Fetch full markdown for a cached article by slug |
-| `memory_search` | A | — | — | — | Keyword search across historic session transcripts |
+| `knowledge_search(query, *, kind=None, source=None, limit=10, tags=None, tag_match_mode="any", created_after=None, created_before=None)` | A | — | — | — | Unified search across local knowledge, Obsidian, and Drive; `kind="article"` returns article slugs for `knowledge_article_read` |
+| `knowledge_list(offset=0, limit=20, kind=None)` | A | — | — | — | Paginate knowledge artifact metadata |
+| `knowledge_article_read(slug)` | A | — | — | — | Fetch full markdown for a cached article by slug |
+| `memory_search(query, *, limit=5)` | A | — | — | — | Keyword search across historic session transcripts |
 
 ### Workspace & Files — Read
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `file_glob` | A | — | — | — | List directory or find files by pattern |
-| `file_read` | A | — | — | — | Read workspace file; pagination hint + fuzzy name suggestions |
-| `file_grep` | A | — | — | — | Regex content search across workspace |
+| `file_glob(path=".", pattern="*", max_entries=200)` | A | — | — | — | List directory or find files by pattern |
+| `file_read(path, start_line=None, end_line=None)` | A | — | — | — | Read workspace file; pagination hint + fuzzy name suggestions |
+| `file_grep(pattern, path=".", glob="**/*", case_insensitive=False, output_mode="content", context_lines=0, head_limit=250, offset=0)` | A | — | — | — | Regex content search across workspace |
 
 ### Web
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `web_search` | A | — | — | — | Brave API search with optional domain filter |
-| `web_fetch` | A | — | — | — | Fetch URL and convert to markdown |
+| `web_search(query, max_results=5, domains=None)` | A | — | — | — | Brave API search with optional domain filter |
+| `web_fetch(url)` | A | — | — | — | Fetch URL and convert to markdown |
 
 ### Shell Execution
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `shell` | A | hybrid | — | — | Run blocking shell command; safe-prefix auto-approves, mutations prompt, destructive denied |
+| `shell(cmd, timeout=120)` | A | hybrid | — | — | Run blocking shell command; safe-prefix auto-approves, mutations prompt, destructive denied |
 
 ### Workspace & Files — Write
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `file_write` | D | ✓ | ✓ | — | Create or overwrite a file |
-| `file_patch` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
+| `file_write(path, content)` | D | ✓ | ✓ | — | Create or overwrite a file |
+| `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
 
 ### Cognition & Knowledge — Write
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `knowledge_update` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
-| `knowledge_append` | D | ✓ | — | — | Append to a knowledge artifact |
-| `knowledge_article_save` | D | ✓ | — | — | Persist web content as a local markdown artifact |
+| `knowledge_update(slug, old_content, new_content)` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
+| `knowledge_append(slug, content)` | D | ✓ | — | — | Append to a knowledge artifact |
+| `knowledge_article_save(content, title, origin_url, tags=None, related=None)` | D | ✓ | — | — | Persist web content as a local markdown artifact |
 
 ### Background Tasks
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `task_start` | D | ✓ | — | — | Spawn unblocked process group; returns `task_id` |
-| `task_status` | D | — | — | — | Poll stdout/stderr and completion state of a task |
-| `task_cancel` | D | — | — | — | SIGTERM → SIGKILL a background task |
-| `task_list` | D | — | — | — | Enumerate active/completed tasks |
+| `task_start(command, description, working_directory=None)` | D | ✓ | — | — | Spawn unblocked process group; returns `task_id` |
+| `task_status(task_id, tail_lines=20)` | D | — | — | — | Poll stdout/stderr and completion state of a task |
+| `task_cancel(task_id)` | D | — | — | — | SIGTERM → SIGKILL a background task |
+| `task_list(status_filter=None)` | D | — | — | — | Enumerate active/completed tasks |
 
 ### Code Execution
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `code_execute` | D | — | ✓ | — | Evaluate arbitrary code; combined stdout+stderr |
+| `code_execute(cmd, timeout=60)` | D | hybrid | ✓ | — | Run an interpreter command; command policy denies unsafe forms and otherwise prompts before execution |
 
 ### Delegation (Subagents)
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `web_research` | D | — | — | — | Deep web retrieval subagent |
-| `knowledge_analyze` | D | — | — | — | Cross-index deduction on internal + Drive knowledge |
-| `reason` | D | — | — | — | Pure inference subagent; no external access |
+| `web_research(query, domains=None, max_requests=0)` | D | — | — | — | Deep web retrieval subagent |
+| `knowledge_analyze(question, inputs=None, max_requests=0)` | D | — | — | — | Cross-index deduction on internal + Drive knowledge |
+| `reason(problem, max_requests=0)` | D | — | — | — | Pure inference subagent; no external access |
 
 ### External — Obsidian *(gate: `obsidian_vault_path`)*
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `obsidian_list` | D | — | — | ✓ | Paginate Obsidian note paths |
-| `obsidian_search` | D | — | — | ✓ | Search note content by keyword, optionally narrowed by folder or tag |
-| `obsidian_read` | D | — | — | ✓ | Read raw Obsidian markdown note |
+| `obsidian_list(tag=None, offset=0, limit=20)` | D | — | — | ✓ | Paginate Obsidian note paths |
+| `obsidian_search(query, limit=10, folder=None, tag=None)` | D | — | — | ✓ | Search note content by keyword, optionally narrowed by folder or tag |
+| `obsidian_read(filename)` | D | — | — | ✓ | Read raw Obsidian markdown note |
 
 ### External — Google *(gate: `google_credentials_path`)*
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `drive_search` | D | — | — | ✓ | Search Google Drive by filename or indexed text |
-| `drive_read` | D | — | — | ✓ | Read a Google Drive file as text |
-| `gmail_list` | D | — | — | ✓ | Fetch recent inbox messages |
-| `gmail_search` | D | — | — | ✓ | Search Gmail with advanced operators |
-| `calendar_list` | D | — | — | ✓ | List primary-calendar events in a bounded window around today |
-| `calendar_search` | D | — | — | ✓ | Search primary-calendar events by keyword |
-| `gmail_draft` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
+| `drive_search(query, page=1)` | D | — | — | ✓ | Search Google Drive by filename or indexed text |
+| `drive_read(file_id)` | D | — | — | ✓ | Read a Google Drive file as text |
+| `gmail_list(max_results=5)` | D | — | — | ✓ | Fetch recent inbox messages |
+| `gmail_search(query, max_results=5)` | D | — | — | ✓ | Search Gmail with advanced operators |
+| `calendar_list(days_back=0, days_ahead=1, max_results=25)` | D | — | — | ✓ | List primary-calendar events in a bounded window around today |
+| `calendar_search(query, days_back=0, days_ahead=30, max_results=25)` | D | — | — | ✓ | Search primary-calendar events by keyword |
+| `gmail_draft(to, subject, body)` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
 
-**Total: 37 native tools** (14 ALWAYS · 23 DEFERRED · 7 explicit approval-gated · 10 config-gated; `shell` may also prompt dynamically)
+**Total: 37 native tools** (14 ALWAYS · 23 DEFERRED · 7 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically)
 
-## 4. Tool API Definitions
-
-### Workspace & Files
-- **`file_glob(path: str, pattern: str, max_entries: int)`**: Recursively list directory contents or find specific files matching standard glob patterns.
-- **`file_read(path: str, start_line: int, end_line: int)`**: Fetch contents of a workspace-relative path for inspection. Bounded by an optional line range; when a partial read stops before EOF, the display includes a `start_line=N` continuation hint. Missing-file errors include similar filenames from the same directory. Max result 80k.
-- **`file_grep(pattern: str, path: str, glob: str, case_insensitive: bool, output_mode: str, context_lines: int, head_limit: int, offset: int)`**: High-speed regex file searching using built-in Python parsing across the target directory constraint.
-- **`file_write(path: str, content: str)`**: Overwrite entirely or create a new system file with standard UTF-8 encoding.
-- **`file_patch(path: str, old_string: str, new_string: str, replace_all: bool, show_diff: bool)`**: Targeted snippet replacement with fuzzy fallback (line-trimmed, indent-stripped, escape-expanded). Returns an error with context-expansion guidance if `old_string` matches more than once. Pass `show_diff=True` to include a unified diff in the response for verification.
-
-### Execution Environment
-- **`shell(cmd: str, timeout: int)`**: Run blocking shell invocations. Checked dynamically: 'safe' prefixes (e.g. `ls`) execute automatically, mutations trigger user prompts, and destructive/injection sequences are outright denied.
-- **`code_execute(cmd: str, timeout: int)`**: Specialized arbitrary code evaluation. Output is captured entirely (both stdout and stderr combined).
-- **`task_start(command: str, description: str, working_directory: str)`**: Initiates an unblocked process group on the host OS. Returns a UUID `task_id` reference.
-- **`task_status(task_id: str, tail_lines: int)`**: Poll the stdout/stderr buffers of a background task and check its completion state.
-- **`task_cancel(task_id: str)`**: Terminates an identified process via SIGTERM, with SIGKILL escalation.
-- **`task_list(status_filter: str | None)`**: Discover background tasks, optionally filtered by status, for tracking or cleanup.
-
-### Cognition & Memory
-- **`knowledge_search(query: str, kind: str | None, source: str | None, limit: int, tags: list[str] | None, tag_match_mode: str, created_after: str | None, created_before: str | None)`**: Unified knowledge search across local artifacts plus synced Obsidian and Drive indexes. Pass `kind="article"` to retrieve the article-continuation schema for `knowledge_article_read`.
-- **`knowledge_list(offset: int, limit: int, kind: str)`**: Paginate metadata of persistent agent knowledge artifacts.
-- **`knowledge_article_read(slug: str)`**: Extract the full markdown body corresponding to a specific index slug.
-- **`knowledge_article_save(content: str, title: str, origin_url: str, tags: list, related: list)`**: Transmute web content into a permanently readable local markdown artifact.
-- **`knowledge_update(slug: str, old_content: str, new_content: str)`**: Surgical replacement for specific sections of unified knowledge items without rewriting the file.
-- **`knowledge_append(slug: str, content: str)`**: Standard mechanism to drop new findings onto the end of a living knowledge artifact.
-- **`memory_search(query: str, limit: int)`**: Run keyword matching directly against SQLite-persisted transcripts of past sessions in the current project and return ranked excerpts.
-
-### Delegation
-- **`web_research(query: str, domains: list, max_requests: int)`**: Subagent focused on deep dive internet retrieval. Isolates web loops from code writing.
-- **`knowledge_analyze(question: str, inputs: list[str], max_requests: int)`**: Subagent handling cross-indexing and deduction strictly on internal + Drive knowledge bounds.
-- **`reason(problem: str, max_requests: int)`**: Pure inference subagent. Isolated execution context with no API access, operating purely on deductive logic.
-
-### Web & Third-Party
-- **`web_search(query: str, max_results: int, domains: list)`**: Query the Brave API. Capable of filtering to specific explicit URL domains.
-- **`web_fetch(url: str)`**: Extract standard web HTML pages into synthesized markdown, handling HTTP status exceptions explicitly.
-- **`obsidian_search(query: str, limit: int, folder: str, tag: str)`**: Locate Obsidian vault concepts filtering by embedded tags or path subsets.
-- **`obsidian_list(tag: str, offset: int, limit: int)`**: Standard pagination through Obsidian markdown note paths.
-- **`obsidian_read(filename: str)`**: Ingest Obsidian format raw text.
-- **`drive_search(query: str, page: int)`**: Uses Google's remote search engine for document location.
-- **`drive_read(file_id: str)`**: Render remote GSuite doc payloads into readable CLI text format.
-- **`gmail_list(max_results: int)`**: Pull the latest messages from the authorized user's primary inbox.
-- **`gmail_search(query: str, max_results: int)`**: Execute advanced Gmail search operators remotely to filter threads.
-- **`gmail_draft(to: str, subject: str, body: str)`**: Draft an outgoing message thread (does NOT automatically send).
-- **`calendar_list(days_back: int, days_ahead: int, max_results: int)`**: Timebox bounded query of Google Calendar scheduling.
-- **`calendar_search(query: str, days_back: int, days_ahead: int, max_results: int)`**: Deep text search of scheduling, descriptions, and venues.
-
-### User Interaction
-- **`clarify(question: str, options: list[str] | None, user_answer: str | None)`**: Pause mid-execution to ask the user a clarifying question. Raises `QuestionRequired` (subclass of `ApprovalRequired`) on the first call; the orchestrator prompts the user via `frontend.prompt_question()` and resumes the same tool call with `ToolApproved(override_args={"user_answer": ...})`. Free-text or constrained (options list). Do not supply `user_answer` — it is injected by the orchestrator.
-
-### Introspection
-- **`todo_write(todos: list)`**: State replacement for multi-turn checklist tracking.
-- **`todo_read()`**: Fetch the existing tracking list to audit progress.
-- **`capabilities_check()`**: Trigger runtime doctor checks against required binaries, integration auth states, and configuration variables.
-
-## 5. Config
+## 4. Config
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `shell.max_timeout` | `CO_CLI_SHELL_MAX_TIMEOUT` | `600` | Hard cap for shell timeout (sec) |
-| `shell.safe_commands` | `CO_CLI_SHELL_SAFE_COMMANDS` | built-in list | Safe-prefix auto-approval allowlist |
-| `web.fetch_allowed_domains` | `CO_CLI_WEB_FETCH_ALLOWED_DOMAINS` | `[]` | Domain allowlist (optional) |
-| `web.fetch_blocked_domains` | `CO_CLI_WEB_FETCH_BLOCKED_DOMAINS` | `[]` | Domain blocklist |
+| `shell.max_timeout` | `CO_SHELL_MAX_TIMEOUT` | `600` | Hard cap for shell timeout (sec) |
+| `shell.safe_commands` | `CO_SHELL_SAFE_COMMANDS` | built-in list | Safe-prefix auto-approval allowlist |
+| `web.fetch_allowed_domains` | `CO_WEB_FETCH_ALLOWED_DOMAINS` | `[]` | Domain allowlist (optional) |
+| `web.fetch_blocked_domains` | `CO_WEB_FETCH_BLOCKED_DOMAINS` | `[]` | Domain blocklist |
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Required for `web_search` |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Registration gate for Obsidian |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google |
-| `knowledge_path` | `CO_KNOWLEDGE_DIR` | `~/.co-cli/knowledge/` | Unified knowledge artifact directory |
-| `mcp_servers` | `CO_CLI_MCP_SERVERS` | 2 defaults | MCP server definitions |
-| `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Default agent retry budget |
-| `subagent.max_requests_*` | `CO_CLI_SUBAGENT_MAX_REQUESTS_*` | var | Per-role request caps |
+| `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | Unified knowledge artifact directory |
+| `mcp_servers` | `CO_MCP_SERVERS` | 2 defaults | MCP server definitions |
+| `tool_retries` | `CO_TOOL_RETRIES` | `3` | Default agent retry budget |
+| `subagent.max_requests_*` | `CO_SUBAGENT_MAX_REQUESTS_*` | var | Per-role request caps |
