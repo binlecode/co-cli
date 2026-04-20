@@ -9,7 +9,7 @@ from co_cli.tools.tool_io import tool_output
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def search_memory(
+async def memory_search(
     ctx: RunContext[CoDeps],
     query: str,
     *,
@@ -28,7 +28,7 @@ async def search_memory(
 
     Search syntax (FTS5): keywords joined with OR for broad recall (auth OR login OR session), phrases for exact match ("connection pool"), boolean (python NOT java), prefix (deploy*). IMPORTANT: FTS5 defaults to AND between terms — use explicit OR for broader matches. If a broad OR query returns nothing, try individual keywords.
 
-    Do NOT use for saved preferences, rules, project conventions, or reusable knowledge artifacts — use search_knowledge for those. This tool searches what was SAID in past conversations; search_knowledge searches what was DISTILLED from them.
+    Do NOT use for saved preferences, rules, project conventions, or reusable knowledge artifacts — use knowledge_search for those. This tool searches what was SAID in past conversations; knowledge_search searches what was DISTILLED from them.
 
     Args:
         query: FTS5 keyword query (see syntax above).

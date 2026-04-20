@@ -7,23 +7,23 @@ Import from here in all modules that gate on tool names to avoid string drift.
 # Used by CoToolLifecycle.before_tool_execute.
 PATH_NORMALIZATION_TOOLS: frozenset[str] = frozenset(
     {
-        "read_file",
-        "write_file",
-        "patch",
-        "glob",
+        "file_read",
+        "file_write",
+        "file_patch",
+        "file_glob",
     }
 )
 
 # Tools whose call args (path) are tracked for compaction working-set context.
-# Superset of PATH_NORMALIZATION_TOOLS — includes grep whose pattern
+# Superset of PATH_NORMALIZATION_TOOLS — includes file_grep whose pattern
 # arg identifies a workspace scope even though it is not a single path.
 FILE_TOOLS: frozenset[str] = frozenset(
     {
-        "read_file",
-        "write_file",
-        "patch",
-        "grep",
-        "glob",
+        "file_read",
+        "file_write",
+        "file_patch",
+        "file_grep",
+        "file_glob",
     }
 )
 
@@ -31,13 +31,13 @@ FILE_TOOLS: frozenset[str] = frozenset(
 # per-tool returns. Keeps context window lean for high-volume read tools.
 COMPACTABLE_TOOLS: frozenset[str] = frozenset(
     {
-        "read_file",
+        "file_read",
         "shell",
-        "grep",
-        "glob",
+        "file_grep",
+        "file_glob",
         "web_search",
         "web_fetch",
-        "read_article",
-        "read_note",
+        "knowledge_article_read",
+        "obsidian_read",
     }
 )

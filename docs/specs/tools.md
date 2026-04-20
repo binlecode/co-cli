@@ -2,13 +2,13 @@
 
 ## Product Intent
 
-**Goal:** Define tool registration, visibility policy, approval model, and the complete tool surface.
+**Goal:** Define tool registration, visibility policy, approval model, and the built-in tool surface plus MCP discovery model.
 **Functional areas:**
 - Config-gated tool registration
 - Visibility tiers (always-registered vs deferred/discoverable)
 - Three approval classes (auto-approve, requires-approval, deferred)
 - Shell policy and resource locks
-- MCP integration and tool catalog (37 tools)
+- MCP integration and native tool catalog (37 built-in tools)
 
 **Non-goals:**
 - Parallel MCP execution across servers
@@ -32,7 +32,7 @@ The tool ecosystem relies on core infrastructure modules to handle execution rou
 - `co_cli/tools/_shell_policy.py` & `_shell_env.py`: Enforces strict execution safety by classifying shell commands (ALLOW, DENY, APPROVE) and controlling env injections.
 - `co_cli/context/tool_approvals.py`: Core logic for resolving target subjects, building user prompt strings, and processing user inputs (Y/N/A) for mutating operations.
 - `co_cli/context/tool_display.py`: Specialized console formatters for rendering inputs and outputs safely in the REPL.
-- `co_cli/tools/agents.py`: Delegation subagents (`research_web`, `analyze_knowledge`, `reason_about`) and the `AgentOutput` Pydantic model capturing structured subagent responses.
+- `co_cli/tools/agents.py`: Delegation subagents (`web_research`, `knowledge_analyze`, `reason`) and the `AgentOutput` Pydantic model capturing structured subagent responses.
 - `co_cli/tools/google/_auth.py`: Centralized credentials fetching and a shared `_get_google_service()` factory method.
 - `co_cli/tools/agent_tool.py`: `@agent_tool(...)` decorator — attaches `ToolInfo` policy metadata to native tool functions at definition site. Used by every native tool to declare visibility, approval, concurrency, and config-gate constraints.
 
@@ -85,14 +85,16 @@ flowchart TD
 
 Approval controls human permission; locks ensure structural correctness.
 
-- **Sequential Forced Flow:** Mutating actions (`write_file`, `patch`, `execute_code`) are registered with `is_concurrent_safe=False`. If they're in a multi-tool batch, the agent forces sequential execution.
+- **Sequential Forced Flow:** Mutating actions (`file_write`, `file_patch`, `code_execute`) are registered with `is_concurrent_safe=False`. If they're in a multi-tool batch, the agent forces sequential execution.
 - **Cross-agent Path Locking:** Using `CoDeps.resource_locks`, attempts to write to a path locked by another background agent result in an immediate fail-fast `tool_error()`.
-- **Read-before-Write:** `patch` enforces that a file has been read in full prior to replacement. `CoDeps.file_partial_reads` prevents patching if the model only read a snippet.
-- **Staleness Tracking:** `CoDeps.file_read_mtimes` snapshots disk modification times at read. `write_file` and `patch` fail if the file on disk was modified before the write was committed.
+- **Read-before-Write:** `file_patch` enforces that a file has been read in full prior to replacement. `CoDeps.file_partial_reads` prevents patching if the model only read a snippet.
+- **Staleness Tracking:** `CoDeps.file_read_mtimes` snapshots disk modification times at read. `file_write` and `file_patch` fail if the file on disk was modified before the write was committed.
 
 ## 3. Tool Catalog
 
 Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
+
+The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/_mcp.py`, are always DEFERRED, and are not included in the 37-tool native total. `shell` is the one special case: it is not decorator-marked `approval=True`, but `_shell_policy.py` can still force an interactive approval prompt at execution time.
 
 ### User Interaction
 
@@ -104,7 +106,7 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `check_capabilities` | A | — | — | — | Runtime doctor: binary probes, auth states, config |
+| `capabilities_check` | A | — | — | — | Runtime doctor: binary probes, auth states, config |
 | `todo_write` | A | — | — | — | Replace in-session multi-turn checklist |
 | `todo_read` | A | — | — | — | Fetch current checklist |
 
@@ -112,18 +114,18 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `search_knowledge` | A | — | — | — | BM25 full-text search across all knowledge artifacts; pass `kind="article"` to restrict to article-index schema |
-| `list_knowledge` | A | — | — | — | Paginate knowledge artifact metadata |
-| `read_article` | A | — | — | — | Fetch full markdown for a cached article by slug |
-| `search_memory` | A | — | — | — | Keyword search across historic session transcripts |
+| `knowledge_search` | A | — | — | — | Unified search across local knowledge, Obsidian, and Drive; `kind="article"` returns article slugs for `knowledge_article_read` |
+| `knowledge_list` | A | — | — | — | Paginate knowledge artifact metadata |
+| `knowledge_article_read` | A | — | — | — | Fetch full markdown for a cached article by slug |
+| `memory_search` | A | — | — | — | Keyword search across historic session transcripts |
 
 ### Workspace & Files — Read
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `glob` | A | — | — | — | List directory or find files by pattern |
-| `read_file` | A | — | — | — | Read workspace file; pagination hint + fuzzy name suggestions |
-| `grep` | A | — | — | — | Regex content search across workspace |
+| `file_glob` | A | — | — | — | List directory or find files by pattern |
+| `file_read` | A | — | — | — | Read workspace file; pagination hint + fuzzy name suggestions |
+| `file_grep` | A | — | — | — | Regex content search across workspace |
 
 ### Web
 
@@ -142,16 +144,16 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `write_file` | D | ✓ | ✓ | — | Create or overwrite a file |
-| `patch` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
+| `file_write` | D | ✓ | ✓ | — | Create or overwrite a file |
+| `file_patch` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
 
 ### Cognition & Knowledge — Write
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `update_knowledge` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
-| `append_knowledge` | D | ✓ | — | — | Append to a knowledge artifact |
-| `save_article` | D | ✓ | — | — | Persist web content as a local markdown artifact |
+| `knowledge_update` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
+| `knowledge_append` | D | ✓ | — | — | Append to a knowledge artifact |
+| `knowledge_article_save` | D | ✓ | — | — | Persist web content as a local markdown artifact |
 
 ### Background Tasks
 
@@ -166,82 +168,82 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `execute_code` | D | — | ✓ | — | Evaluate arbitrary code; combined stdout+stderr |
+| `code_execute` | D | — | ✓ | — | Evaluate arbitrary code; combined stdout+stderr |
 
 ### Delegation (Subagents)
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `research_web` | D | — | — | — | Deep web retrieval subagent |
-| `analyze_knowledge` | D | — | — | — | Cross-index deduction on internal + Drive knowledge |
-| `reason_about` | D | — | — | — | Pure inference subagent; no external access |
+| `web_research` | D | — | — | — | Deep web retrieval subagent |
+| `knowledge_analyze` | D | — | — | — | Cross-index deduction on internal + Drive knowledge |
+| `reason` | D | — | — | — | Pure inference subagent; no external access |
 
 ### External — Obsidian *(gate: `obsidian_vault_path`)*
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `list_notes` | D | — | — | ✓ | Paginate Obsidian note paths |
-| `search_notes` | D | — | — | ✓ | Search notes by tag or folder |
-| `read_note` | D | — | — | ✓ | Read raw Obsidian markdown note |
+| `obsidian_list` | D | — | — | ✓ | Paginate Obsidian note paths |
+| `obsidian_search` | D | — | — | ✓ | Search note content by keyword, optionally narrowed by folder or tag |
+| `obsidian_read` | D | — | — | ✓ | Read raw Obsidian markdown note |
 
 ### External — Google *(gate: `google_credentials_path`)*
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `search_drive_files` | D | — | — | ✓ | Google Drive file search |
-| `read_drive_file` | D | — | — | ✓ | Read a Drive document as text |
-| `list_gmail_emails` | D | — | — | ✓ | Fetch recent inbox messages |
-| `search_gmail_emails` | D | — | — | ✓ | Search Gmail with advanced operators |
-| `list_calendar_events` | D | — | — | ✓ | Time-bounded Calendar query |
-| `search_calendar_events` | D | — | — | ✓ | Full-text Calendar search |
-| `create_gmail_draft` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
+| `drive_search` | D | — | — | ✓ | Search Google Drive by filename or indexed text |
+| `drive_read` | D | — | — | ✓ | Read a Google Drive file as text |
+| `gmail_list` | D | — | — | ✓ | Fetch recent inbox messages |
+| `gmail_search` | D | — | — | ✓ | Search Gmail with advanced operators |
+| `calendar_list` | D | — | — | ✓ | List primary-calendar events in a bounded window around today |
+| `calendar_search` | D | — | — | ✓ | Search primary-calendar events by keyword |
+| `gmail_draft` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
 
-**Total: 37 tools** (14 ALWAYS · 23 DEFERRED · 8 require approval · 10 config-gated)
+**Total: 37 native tools** (14 ALWAYS · 23 DEFERRED · 7 explicit approval-gated · 10 config-gated; `shell` may also prompt dynamically)
 
 ## 4. Tool API Definitions
 
 ### Workspace & Files
-- **`glob(path: str, pattern: str, max_entries: int)`**: Recursively list directory contents or find specific files matching standard glob patterns.
-- **`read_file(path: str, start_line: int, end_line: int)`**: Fetch contents of a workspace-relative path for inspection. Bounded by an optional line range; when a partial read stops before EOF, the display includes a `start_line=N` continuation hint. Missing-file errors include similar filenames from the same directory. Max result 80k.
-- **`grep(pattern: str, path: str, glob: str, case_insensitive: bool, output_mode: str, context_lines: int, head_limit: int, offset: int)`**: High-speed regex file searching using built-in Python parsing across the target directory constraint.
-- **`write_file(path: str, content: str)`**: Overwrite entirely or create a new system file with standard UTF-8 encoding.
-- **`patch(path: str, old_string: str, new_string: str, replace_all: bool, show_diff: bool)`**: Targeted snippet replacement with fuzzy fallback (line-trimmed, indent-stripped, escape-expanded). Returns an error with context-expansion guidance if `old_string` matches more than once. Pass `show_diff=True` to include a unified diff in the response for verification.
+- **`file_glob(path: str, pattern: str, max_entries: int)`**: Recursively list directory contents or find specific files matching standard glob patterns.
+- **`file_read(path: str, start_line: int, end_line: int)`**: Fetch contents of a workspace-relative path for inspection. Bounded by an optional line range; when a partial read stops before EOF, the display includes a `start_line=N` continuation hint. Missing-file errors include similar filenames from the same directory. Max result 80k.
+- **`file_grep(pattern: str, path: str, glob: str, case_insensitive: bool, output_mode: str, context_lines: int, head_limit: int, offset: int)`**: High-speed regex file searching using built-in Python parsing across the target directory constraint.
+- **`file_write(path: str, content: str)`**: Overwrite entirely or create a new system file with standard UTF-8 encoding.
+- **`file_patch(path: str, old_string: str, new_string: str, replace_all: bool, show_diff: bool)`**: Targeted snippet replacement with fuzzy fallback (line-trimmed, indent-stripped, escape-expanded). Returns an error with context-expansion guidance if `old_string` matches more than once. Pass `show_diff=True` to include a unified diff in the response for verification.
 
 ### Execution Environment
 - **`shell(cmd: str, timeout: int)`**: Run blocking shell invocations. Checked dynamically: 'safe' prefixes (e.g. `ls`) execute automatically, mutations trigger user prompts, and destructive/injection sequences are outright denied.
-- **`execute_code(cmd: str, timeout: int)`**: Specialized arbitrary code evaluation. Output is captured entirely (both stdout and stderr combined).
+- **`code_execute(cmd: str, timeout: int)`**: Specialized arbitrary code evaluation. Output is captured entirely (both stdout and stderr combined).
 - **`task_start(command: str, description: str, working_directory: str)`**: Initiates an unblocked process group on the host OS. Returns a UUID `task_id` reference.
 - **`task_status(task_id: str, tail_lines: int)`**: Poll the stdout/stderr buffers of a background task and check its completion state.
 - **`task_cancel(task_id: str)`**: Terminates an identified process via SIGTERM, with SIGKILL escalation.
-- **`task_list(status_filter: str)`**: Discover actively running or completed UUID tasks for tracking or cleanup.
+- **`task_list(status_filter: str | None)`**: Discover background tasks, optionally filtered by status, for tracking or cleanup.
 
 ### Cognition & Memory
-- **`search_knowledge(query: str, kind: str, source: str, max_results: int)`**: Universal, BM25-based semantic index search spanning internal artifacts, rules, references, and synced directories. Pass `kind="article"` to retrieve article-index schema results (slug, article_id, origin_url, tags, snippet).
-- **`list_knowledge(offset: int, limit: int, kind: str)`**: Paginate metadata of persistent agent knowledge artifacts.
-- **`read_article(slug: str)`**: Extract the full markdown body corresponding to a specific index slug.
-- **`save_article(content: str, title: str, origin_url: str, tags: list, related: list)`**: Transmute web content into a permanently readable local markdown artifact.
-- **`update_knowledge(slug: str, old_content: str, new_content: str)`**: Surgical replacement for specific sections of unified knowledge items without rewriting the file.
-- **`append_knowledge(slug: str, content: str)`**: Standard mechanism to drop new findings onto the end of a living knowledge artifact.
-- **`search_memory(query: str)`**: Run keyword matching directly against SQLite-persisted transcripts of *all* historic chat sessions for semantic episodic recall.
+- **`knowledge_search(query: str, kind: str | None, source: str | None, limit: int, tags: list[str] | None, tag_match_mode: str, created_after: str | None, created_before: str | None)`**: Unified knowledge search across local artifacts plus synced Obsidian and Drive indexes. Pass `kind="article"` to retrieve the article-continuation schema for `knowledge_article_read`.
+- **`knowledge_list(offset: int, limit: int, kind: str)`**: Paginate metadata of persistent agent knowledge artifacts.
+- **`knowledge_article_read(slug: str)`**: Extract the full markdown body corresponding to a specific index slug.
+- **`knowledge_article_save(content: str, title: str, origin_url: str, tags: list, related: list)`**: Transmute web content into a permanently readable local markdown artifact.
+- **`knowledge_update(slug: str, old_content: str, new_content: str)`**: Surgical replacement for specific sections of unified knowledge items without rewriting the file.
+- **`knowledge_append(slug: str, content: str)`**: Standard mechanism to drop new findings onto the end of a living knowledge artifact.
+- **`memory_search(query: str, limit: int)`**: Run keyword matching directly against SQLite-persisted transcripts of past sessions in the current project and return ranked excerpts.
 
 ### Delegation
-- **`research_web(query: str, domains: list, max_requests: int)`**: Subagent focused on deep dive internet retrieval. Isolates web loops from code writing.
-- **`analyze_knowledge(question: str, inputs: list[str], max_requests: int)`**: Subagent handling cross-indexing and deduction strictly on internal + Drive knowledge bounds.
-- **`reason_about(problem: str, max_requests: int)`**: Pure inference subagent. Isolated execution context with no API access, operating purely on deductive logic.
+- **`web_research(query: str, domains: list, max_requests: int)`**: Subagent focused on deep dive internet retrieval. Isolates web loops from code writing.
+- **`knowledge_analyze(question: str, inputs: list[str], max_requests: int)`**: Subagent handling cross-indexing and deduction strictly on internal + Drive knowledge bounds.
+- **`reason(problem: str, max_requests: int)`**: Pure inference subagent. Isolated execution context with no API access, operating purely on deductive logic.
 
 ### Web & Third-Party
 - **`web_search(query: str, max_results: int, domains: list)`**: Query the Brave API. Capable of filtering to specific explicit URL domains.
 - **`web_fetch(url: str)`**: Extract standard web HTML pages into synthesized markdown, handling HTTP status exceptions explicitly.
-- **`search_notes(query: str, limit: int, folder: str, tag: str)`**: Locate Obsidian vault concepts filtering by embedded tags or path subsets.
-- **`list_notes(tag: str, offset: int, limit: int)`**: Standard pagination through Obsidian markdown note paths.
-- **`read_note(filename: str)`**: Ingest Obsidian format raw text.
-- **`search_drive_files(query: str, page: int)`**: Uses Google's remote search engine for document location.
-- **`read_drive_file(file_id: str)`**: Render remote GSuite doc payloads into readable CLI text format.
-- **`list_gmail_emails(max_results: int)`**: Pull the latest messages from the authorized user's primary inbox.
-- **`search_gmail_emails(query: str, max_results: int)`**: Execute advanced Gmail search operators remotely to filter threads.
-- **`create_gmail_draft(to: str, subject: str, body: str)`**: Draft an outgoing message thread (does NOT automatically send).
-- **`list_calendar_events(days_back: int, days_ahead: int, max_results: int)`**: Timebox bounded query of Google Calendar scheduling.
-- **`search_calendar_events(query: str, days_back: int, days_ahead: int, max_results: int)`**: Deep text search of scheduling, descriptions, and venues.
+- **`obsidian_search(query: str, limit: int, folder: str, tag: str)`**: Locate Obsidian vault concepts filtering by embedded tags or path subsets.
+- **`obsidian_list(tag: str, offset: int, limit: int)`**: Standard pagination through Obsidian markdown note paths.
+- **`obsidian_read(filename: str)`**: Ingest Obsidian format raw text.
+- **`drive_search(query: str, page: int)`**: Uses Google's remote search engine for document location.
+- **`drive_read(file_id: str)`**: Render remote GSuite doc payloads into readable CLI text format.
+- **`gmail_list(max_results: int)`**: Pull the latest messages from the authorized user's primary inbox.
+- **`gmail_search(query: str, max_results: int)`**: Execute advanced Gmail search operators remotely to filter threads.
+- **`gmail_draft(to: str, subject: str, body: str)`**: Draft an outgoing message thread (does NOT automatically send).
+- **`calendar_list(days_back: int, days_ahead: int, max_results: int)`**: Timebox bounded query of Google Calendar scheduling.
+- **`calendar_search(query: str, days_back: int, days_ahead: int, max_results: int)`**: Deep text search of scheduling, descriptions, and venues.
 
 ### User Interaction
 - **`clarify(question: str, options: list[str] | None, user_answer: str | None)`**: Pause mid-execution to ask the user a clarifying question. Raises `QuestionRequired` (subclass of `ApprovalRequired`) on the first call; the orchestrator prompts the user via `frontend.prompt_question()` and resumes the same tool call with `ToolApproved(override_args={"user_answer": ...})`. Free-text or constrained (options list). Do not supply `user_answer` — it is injected by the orchestrator.
@@ -249,7 +251,7 @@ Legend: **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user ap
 ### Introspection
 - **`todo_write(todos: list)`**: State replacement for multi-turn checklist tracking.
 - **`todo_read()`**: Fetch the existing tracking list to audit progress.
-- **`check_capabilities()`**: Trigger runtime doctor checks against required binaries, integration auth states, and configuration variables.
+- **`capabilities_check()`**: Trigger runtime doctor checks against required binaries, integration auth states, and configuration variables.
 
 ## 5. Config
 

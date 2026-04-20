@@ -87,7 +87,7 @@ def test_tool_return_truncated_at_300() -> None:
         ModelRequest(
             parts=[
                 ToolReturnPart(
-                    tool_name="read_file",
+                    tool_name="file_read",
                     content=long_content,
                     tool_call_id="call-2",
                 ),
@@ -95,11 +95,11 @@ def test_tool_return_truncated_at_300() -> None:
         ),
     ]
     window = build_transcript_window(messages)
-    # The line is: "Tool result (read_file): " + content[:300]
-    assert "Tool result (read_file):" in window
-    result_line = next(line for line in window.splitlines() if "Tool result (read_file)" in line)
-    # Content portion: everything after "Tool result (read_file): "
-    prefix = "Tool result (read_file): "
+    # The line is: "Tool result (file_read): " + content[:300]
+    assert "Tool result (file_read):" in window
+    result_line = next(line for line in window.splitlines() if "Tool result (file_read)" in line)
+    # Content portion: everything after "Tool result (file_read): "
+    prefix = "Tool result (file_read): "
     content_in_line = result_line[len(prefix) :]
     assert len(content_in_line) == 300
 
@@ -112,7 +112,7 @@ def test_large_read_tool_output_skipped() -> None:
         ModelRequest(
             parts=[
                 ToolReturnPart(
-                    tool_name="read_file",
+                    tool_name="file_read",
                     content=read_tool_content,
                     tool_call_id="call-3",
                 ),
@@ -120,7 +120,7 @@ def test_large_read_tool_output_skipped() -> None:
         ),
     ]
     window = build_transcript_window(messages)
-    assert "Tool result (read_file)" not in window
+    assert "Tool result (file_read)" not in window
 
     # Also test: >1000 chars with no sentence boundary in first 200 chars
     no_boundary_content = "a" * 1100

@@ -45,7 +45,7 @@ def test_round_trip_various_part_types(tmp_path: Path) -> None:
         ModelResponse(
             parts=[
                 ToolCallPart(
-                    tool_name="read_file",
+                    tool_name="file_read",
                     args='{"path": "utils.py"}',
                     tool_call_id="call-1",
                 ),
@@ -55,7 +55,7 @@ def test_round_trip_various_part_types(tmp_path: Path) -> None:
         ModelRequest(
             parts=[
                 ToolReturnPart(
-                    tool_name="read_file",
+                    tool_name="file_read",
                     content="def helper(): pass",
                     tool_call_id="call-1",
                 ),

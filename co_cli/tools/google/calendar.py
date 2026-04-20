@@ -87,7 +87,7 @@ def _fetch_events(service, **kwargs) -> list[dict]:
     requires_config="google_credentials_path",
     retries=3,
 )
-def list_calendar_events(
+def calendar_list(
     ctx: RunContext[CoDeps],
     days_back: int = 0,
     days_ahead: int = 1,
@@ -97,7 +97,7 @@ def list_calendar_events(
     internally — all matching events up to max_results are returned in one call.
 
     Use this for schedule overviews (today, this week). For keyword search
-    across events, use search_calendar_events instead.
+    across events, use calendar_search instead.
 
     Returns a dict with:
     - display: pre-formatted event list with times, title, location, attendees,
@@ -158,7 +158,7 @@ def list_calendar_events(
     requires_config="google_credentials_path",
     retries=3,
 )
-def search_calendar_events(
+def calendar_search(
     ctx: RunContext[CoDeps],
     query: str,
     days_back: int = 0,
@@ -170,7 +170,7 @@ def search_calendar_events(
     returned in one call.
 
     Use this when looking for specific meetings or topics. For a general
-    schedule overview, use list_calendar_events instead.
+    schedule overview, use calendar_list instead.
 
     Returns a dict with:
     - display: pre-formatted event list with times, title, location, attendees,

@@ -156,7 +156,7 @@ def _grep_search_notes(
     integration="obsidian",
     requires_config="obsidian_vault_path",
 )
-def search_notes(
+def obsidian_search(
     ctx: RunContext[CoDeps],
     query: str,
     limit: int = 10,
@@ -167,14 +167,14 @@ def search_notes(
     (AND logic, whole words, case-insensitive). Returns matching filenames
     with text snippets around the first match.
 
-    To read the full content of a matched note, pass its filename to read_note.
+    To read the full content of a matched note, pass its filename to obsidian_read.
 
     Narrow results with folder or tag filters when the vault is large or the
     query is broad.
 
     This tool searches the user's Obsidian note vault (local markdown files).
-    For stored preferences and decisions, use search_knowledge instead. For cloud
-    documents, use search_drive_files.
+    For stored preferences and decisions, use knowledge_search instead. For cloud
+    documents, use drive_search.
 
     Returns a dict with:
     - display: pre-formatted results with filenames and snippets — show
@@ -220,7 +220,7 @@ def search_notes(
     integration="obsidian",
     requires_config="obsidian_vault_path",
 )
-def list_notes(
+def obsidian_list(
     ctx: RunContext[CoDeps],
     tag: str | None = None,
     offset: int = 0,
@@ -230,8 +230,8 @@ def list_notes(
     at a time (default 20 per page).
 
     Use this for a directory overview or to discover note paths before calling
-    read_note. For keyword search within note content, use search_notes
-    instead. For stored preferences and decisions, use list_knowledge.
+    obsidian_read. For keyword search within note content, use obsidian_search
+    instead. For stored preferences and decisions, use knowledge_list.
 
     Keep paginating until has_more is false when you need a complete listing.
 
@@ -314,10 +314,10 @@ def list_notes(
     integration="obsidian",
     requires_config="obsidian_vault_path",
 )
-def read_note(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
+def obsidian_read(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
     """Read the full markdown content of a note from the Obsidian vault.
 
-    Use filenames from search_notes or list_notes results. Do not guess paths.
+    Use filenames from obsidian_search or obsidian_list results. Do not guess paths.
 
     Returns the raw markdown text including any YAML frontmatter.
 
@@ -328,7 +328,7 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
 
     Args:
         filename: Relative path within the vault (e.g. "Work/Project X.md").
-                  Use exact paths from search_notes or list_notes.
+                  Use exact paths from obsidian_search or obsidian_list.
     """
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
@@ -346,7 +346,7 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
         available = [str(n.relative_to(vault)) for n in vault.rglob("*.md")][:10]
         raise ModelRetry(
             f"Note '{filename}' not found. "
-            f"Available notes: {available}. Use exact path from list_notes."
+            f"Available notes: {available}. Use exact path from obsidian_list."
         )
 
     try:

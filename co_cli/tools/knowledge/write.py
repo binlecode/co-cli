@@ -42,7 +42,7 @@ _LINE_PREFIX_RE = re.compile(r"(^|\n)\d+\u2192 ", re.MULTILINE)
 _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
 
 
-async def save_knowledge(
+async def knowledge_save(
     ctx: RunContext[CoDeps],
     content: str,
     artifact_kind: str,
@@ -53,7 +53,7 @@ async def save_knowledge(
     """Save a reusable knowledge artifact (preference, rule, feedback, decision, article, reference, note).
 
     Writes a canonical kind=knowledge markdown file under ctx.deps.knowledge_dir
-    and indexes it under source='knowledge' so search_knowledge can retrieve it.
+    and indexes it under source='knowledge' so knowledge_search can retrieve it.
 
     When consolidation_enabled=True, a similarity check runs before writing:
     near-identical content (>0.9 Jaccard) is skipped; overlapping content is
@@ -212,7 +212,7 @@ def _consolidate_and_reindex(
     is_concurrent_safe=True,
     retries=1,
 )
-async def save_article(
+async def knowledge_article_save(
     ctx: RunContext[CoDeps],
     content: str,
     title: str,
@@ -297,7 +297,7 @@ async def save_article(
     is_concurrent_safe=True,
     retries=1,
 )
-async def append_knowledge(
+async def knowledge_append(
     ctx: RunContext[CoDeps],
     slug: str,
     content: str,
@@ -305,10 +305,10 @@ async def append_knowledge(
     """Append content to the end of an existing knowledge artifact.
 
     Use when new information extends an artifact rather than replacing it.
-    Safer than update_knowledge when you don't have an exact passage to match.
+    Safer than knowledge_update when you don't have an exact passage to match.
 
     *slug* is the full file stem, e.g. "001-dont-use-trailing-comments".
-    Use list_knowledge to find it.
+    Use knowledge_list to find it.
 
     Returns a dict with:
     - display: confirmation message
@@ -358,18 +358,18 @@ async def append_knowledge(
     is_concurrent_safe=True,
     retries=1,
 )
-async def update_knowledge(
+async def knowledge_update(
     ctx: RunContext[CoDeps],
     slug: str,
     old_content: str,
     new_content: str,
 ) -> ToolReturn:
     """Surgically replace a specific passage in a saved knowledge artifact without
-    rewriting the entire body. Safer than save_knowledge for targeted edits —
+    rewriting the entire body. Safer than knowledge_save for targeted edits —
     no dedup path, no full-body replacement.
 
     *slug* is the full file stem, e.g. "001-dont-use-trailing-comments".
-    Use list_knowledge to find it.
+    Use knowledge_list to find it.
 
     Guards applied before any I/O:
     - Rejects old_content / new_content that contain Read-tool line-number
@@ -394,7 +394,7 @@ async def update_knowledge(
         if _LINE_PREFIX_RE.search(s) or _LINE_NUM_RE.search(s):
             raise ValueError(
                 f"{name} contains line-number prefixes (e.g. '1\u2192 ' or 'Line N: '). "
-                "Strip them before calling update_knowledge."
+                "Strip them before calling knowledge_update."
             )
 
     try:

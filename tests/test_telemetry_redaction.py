@@ -76,13 +76,13 @@ def test_non_sensitive_value_passes_through_unchanged(tmp_path):
     tracer = provider.get_tracer("test")
 
     with tracer.start_as_current_span("redact.clean") as span:
-        span.set_attribute("tool_name", "search_memory")
+        span.set_attribute("tool_name", "memory_search")
         span.set_attribute("result_count", 5)
 
     provider.force_flush()
 
     row = _fetch_span(db, "redact.clean")
-    assert row["attributes"]["tool_name"] == "search_memory"
+    assert row["attributes"]["tool_name"] == "memory_search"
     assert row["attributes"]["result_count"] == 5
 
 

@@ -194,7 +194,7 @@ Approval subject scopes:
 | Tool shape | Subject kind | Remembered value |
 | --- | --- | --- |
 | `run_shell_command` | `shell` | first token of `cmd` |
-| `write_file`, `patch` | `path` | parent directory |
+| `file_write`, `file_patch` | `path` | parent directory |
 | `web_fetch` | `domain` | parsed hostname |
 | everything else, including MCP tools | `tool` | tool name |
 

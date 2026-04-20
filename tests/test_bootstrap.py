@@ -358,13 +358,13 @@ def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
                     update={
                         "cross_encoder_reranker_url": None,
                         "llm_reranker": LlmModelSettings(
-                            provider="ollama-openai",
+                            provider="ollama",
                             model="reranker-model",
                         ),
                     }
                 ),
                 llm=make_settings().llm.model_copy(
-                    update={"provider": "ollama-openai", "host": "http://localhost:1"}
+                    update={"provider": "ollama", "host": "http://localhost:1"}
                 ),
             ),
             lambda config, statuses: (

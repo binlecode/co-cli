@@ -53,8 +53,8 @@ class ApprovalSubject:
     preview: str | None = None
 
 
-def _build_write_file_preview(content: str | None) -> str | None:
-    """Build a preview string for write_file content.
+def _build_file_write_preview(content: str | None) -> str | None:
+    """Build a preview string for file_write content.
 
     Returns None when content is missing, non-string, or empty.
     Caps at 30 lines and 4000 chars; appends '... (+N more lines)' when truncated.
@@ -86,7 +86,7 @@ def resolve_approval_subject(
 
     Resolution order:
       shell → shell subject (utility = first token)
-      write_file / patch → path subject (parent directory)
+      file_write / file_patch → path subject (parent directory)
       web_fetch → domain subject (parsed hostname)
       everything else → tool subject (can_remember=True)
     """
@@ -106,18 +106,18 @@ def resolve_approval_subject(
         )
 
     # File-path branch: scope to the parent directory so "always" approval covers
-    # all writes/edits within the same directory.  Both write_file and patch
+    # all writes/edits within the same directory.  Both file_write and file_patch
     # resolve to the same bare parent_dir value so cross-tool approval is intentional.
-    if tool_name in ("write_file", "patch"):
+    if tool_name in ("file_write", "file_patch"):
         path = args.get("path", "")
         parent = str(Path(path).parent) if path else ""
         hint = f"(allow all writes to {parent}/ this session?)" if parent else ""
 
-        if tool_name == "write_file":
+        if tool_name == "file_write":
             content = args.get("content", "")
             byte_count = len(content.encode()) if isinstance(content, str) else 0
-            lines = [f"write_file(path={path!r}, {byte_count} bytes)"]
-            preview = _build_write_file_preview(content)
+            lines = [f"file_write(path={path!r}, {byte_count} bytes)"]
+            preview = _build_file_write_preview(content)
         else:
             old_string = args.get("old_string", "")
             new_string = args.get("new_string", "")
@@ -125,7 +125,7 @@ def resolve_approval_subject(
             old_snip = (old_string[:400] + "…") if len(old_string) > 400 else old_string
             new_snip = (new_string[:400] + "…") if len(new_string) > 400 else new_string
             lines = [
-                f"patch(path={path!r})",
+                f"file_patch(path={path!r})",
                 f"  old_string:  {old_snip!r}",
                 f"  new_string:  {new_snip!r}",
                 f"  replace_all: {replace_all}",

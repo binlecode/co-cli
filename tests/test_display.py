@@ -77,7 +77,7 @@ def test_stream_renderer_summary_mode_empty_buffer_emits_nothing() -> None:
 def test_build_approval_panel_includes_tool_name_and_preview() -> None:
     """Approval panel contains tool_name as title and preview content when present."""
     subject = resolve_approval_subject(
-        "write_file",
+        "file_write",
         {"path": "src/foo.py", "content": "def hello():\n    return 'world'\n"},
     )
     assert subject.preview is not None
@@ -91,7 +91,7 @@ def test_build_approval_panel_includes_tool_name_and_preview() -> None:
     finally:
         frontend.cleanup()
 
-    assert "write_file" in output
+    assert "file_write" in output
     assert "def hello" in output
 
 

@@ -1,4 +1,4 @@
-"""Read-only file system tools: glob, read_file, grep."""
+"""Read-only file system tools: file_glob, file_read, file_grep."""
 
 import asyncio
 import difflib
@@ -287,7 +287,7 @@ def _grep_format_file_matches(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def glob(
+async def file_glob(
     ctx: RunContext[CoDeps],
     path: str = ".",
     pattern: str = "*",
@@ -299,7 +299,7 @@ async def glob(
     exist or find files by extension/name pattern. Use "**/*.ext" for recursive
     search by name (results sorted by modification time, newest first).
 
-    When NOT to use: for content search inside files — use grep instead.
+    When NOT to use: for content search inside files — use file_grep instead.
 
     Args:
         path: Directory path relative to the workspace root (default: current directory).
@@ -344,7 +344,7 @@ async def glob(
     is_concurrent_safe=True,
     max_result_size=80_000,
 )
-async def read_file(
+async def file_read(
     ctx: RunContext[CoDeps],
     path: str,
     start_line: int | None = None,
@@ -353,12 +353,12 @@ async def read_file(
     """Read a file's contents for targeted inspection, with optional line range.
 
     Use for reading known files. Use start_line/end_line to read large files in
-    sections — if the response ends with a continuation hint, call read_file again
+    sections — if the response ends with a continuation hint, call file_read again
     with start_line set to the indicated value. If the file is not found, the error
     message includes similar filenames from the same directory to help correct typos.
 
-    When NOT to use: when the file location is unknown — use glob or
-    grep first to locate the file.
+    When NOT to use: when the file location is unknown — use file_glob or
+    file_grep first to locate the file.
 
     Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
     the full file is returned.
@@ -427,7 +427,7 @@ async def read_file(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def grep(
+async def file_grep(
     ctx: RunContext[CoDeps],
     pattern: str,
     path: str = ".",
@@ -443,7 +443,7 @@ async def grep(
     Use for content search — finding text, symbols, or patterns inside files.
     Prefer this over shell grep/rg for workspace content search.
 
-    When NOT to use: for file-name discovery — use glob with a pattern instead.
+    When NOT to use: for file-name discovery — use file_glob with a pattern instead.
 
     Skips binary files.
 

@@ -60,10 +60,10 @@ def test_category_awareness_prompt_includes_representative_tool_names() -> None:
     """
     result = build_tool_registry(_CONFIG)
     prompt = build_category_awareness_prompt(result.tool_index)
-    assert "write_file" in prompt
-    assert "patch" in prompt
+    assert "file_write" in prompt
+    assert "file_patch" in prompt
     assert "task_start" in prompt
-    assert "execute_code" in prompt
+    assert "code_execute" in prompt
     assert "analyze_code" not in prompt
 
 

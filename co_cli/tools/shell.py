@@ -20,13 +20,13 @@ async def shell(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolRe
     Use for git commands, package managers, builds, scripts, and system info.
 
     Do not use shell for file reads, content search, or tasks with dedicated tools:
-    - read_file instead of cat/head/tail
-    - grep instead of grep/rg
-    - glob instead of ls/find
+    - file_read instead of cat/head/tail
+    - file_grep instead of grep/rg
+    - file_glob instead of ls/find
     - web_fetch instead of curl for web pages
-    - search_notes / read_note instead of grep/cat on the Obsidian vault
-    - search_drive_files / read_drive_file instead of manual API calls
-    - write_file / patch instead of shell redirection for workspace file creation or editing
+    - obsidian_search / obsidian_read instead of grep/cat on the Obsidian vault
+    - drive_search / drive_read instead of manual API calls
+    - file_write / file_patch instead of shell redirection for workspace file creation or editing
     - task_start instead of shell for detached long-running work
 
     Commands run in the project working directory. DENY-pattern commands are

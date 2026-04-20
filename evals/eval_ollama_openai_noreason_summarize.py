@@ -259,7 +259,7 @@ def _build_llm_model() -> LlmModel:
 
 
 def _check_build_model_produces_openai_model() -> None:
-    """build_model() must produce an OpenAIChatModel for an ollama-openai provider."""
+    """build_model() must produce an OpenAIChatModel for an ollama provider."""
     llm_model = _build_llm_model()
     assert llm_model.model is not None, "build_model() returned no model"
     assert type(llm_model.model).__name__ == "OpenAIChatModel", (
@@ -297,7 +297,7 @@ async def _check_summarization_pipeline() -> None:
 
 
 def _require_ollama_provider() -> bool:
-    if _settings.llm.provider != "ollama-openai":
+    if _settings.llm.provider != "ollama":
         print("SKIP: Ollama not configured")
         return False
     return True

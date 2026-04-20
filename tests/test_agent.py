@@ -25,7 +25,7 @@ def test_build_agent_registers_all_tools():
     assert len(tool_names) == len(set(tool_names)), "Duplicate tool registration"
 
     # Core tools always present
-    for tool in ("shell", "check_capabilities", "web_search", "search_memory"):
+    for tool in ("shell", "capabilities_check", "web_search", "memory_search"):
         assert tool in result.tool_index, f"Expected core tool '{tool}' to be registered"
 
 
@@ -34,7 +34,7 @@ def test_approval_tools_flagged():
     result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
 
     # These tools must require approval at the agent layer
-    for name in ("task_start", "save_article", "write_file", "patch"):
+    for name in ("task_start", "knowledge_article_save", "file_write", "file_patch"):
         assert result.tool_index[name].approval is True, (
             f"Tool '{name}' should require approval but doesn't"
         )
@@ -45,7 +45,7 @@ def test_approval_tools_flagged():
     )
 
     # Read-only tools must not require approval
-    for name in ("check_capabilities", "read_file", "search_knowledge"):
+    for name in ("capabilities_check", "file_read", "knowledge_search"):
         assert result.tool_index[name].approval is False, (
             f"Tool '{name}' should NOT require approval but does"
         )
@@ -72,11 +72,11 @@ def test_build_agent_excludes_domain_tools_when_config_absent():
     result = build_tool_registry(
         make_settings(obsidian_vault_path=None, google_credentials_path=None)
     )
-    assert "list_notes" not in result.tool_index
-    assert "list_gmail_emails" not in result.tool_index
-    assert "search_drive_files" not in result.tool_index
+    assert "obsidian_list" not in result.tool_index
+    assert "gmail_list" not in result.tool_index
+    assert "drive_search" not in result.tool_index
     # Core tools always registered
-    assert "check_capabilities" in result.tool_index
+    assert "capabilities_check" in result.tool_index
     assert "shell" in result.tool_index
     assert "web_search" in result.tool_index
 
@@ -101,31 +101,31 @@ def test_tool_index_visibility_policy_metadata():
     # Spot-check always-visible tools
     # search_tools is not in tool_index — it is the SDK's built-in ToolSearchToolset (BC-6)
     for name in (
-        "check_capabilities",
-        "read_file",
+        "capabilities_check",
+        "file_read",
         "web_search",
         "shell",
-        "list_knowledge",
-        "search_memory",
-        "search_knowledge",
+        "knowledge_list",
+        "memory_search",
+        "knowledge_search",
     ):
         assert idx[name].visibility == VisibilityPolicyEnum.ALWAYS, f"{name} should be ALWAYS"
 
     # Spot-check deferred tools
-    for name in ("patch", "write_file", "save_article", "task_start"):
+    for name in ("file_patch", "file_write", "knowledge_article_save", "task_start"):
         assert idx[name].visibility == VisibilityPolicyEnum.DEFERRED, f"{name} should be DEFERRED"
 
     # Connector integration metadata
-    assert idx["list_notes"].integration == "obsidian"
-    assert idx["list_gmail_emails"].integration == "google_gmail"
-    assert idx["search_drive_files"].integration == "google_drive"
+    assert idx["obsidian_list"].integration == "obsidian"
+    assert idx["gmail_list"].integration == "google_gmail"
+    assert idx["drive_search"].integration == "google_drive"
 
     # Per-tool max_result_size overrides
     assert idx["shell"].max_result_size == 30_000
-    assert idx["read_file"].max_result_size == 80_000
+    assert idx["file_read"].max_result_size == 80_000
     # All others should have the default (50,000)
     for name, tc in idx.items():
-        if name not in ("shell", "read_file"):
+        if name not in ("shell", "file_read"):
             assert tc.max_result_size == 50_000, (
                 f"{name}: expected default max_result_size=50000, got {tc.max_result_size}"
             )

@@ -211,7 +211,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 
     # Step 2b: Ollama context probe — fail-fast on undersized models,
     # override num_ctx with runtime Modelfile value when they differ.
-    if config.llm.uses_ollama_openai():
+    if config.llm.uses_ollama():
         from co_cli.bootstrap.check import probe_ollama_context
 
         ctx_probe = probe_ollama_context(config.llm.host, config.llm.model)

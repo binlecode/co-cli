@@ -258,6 +258,10 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
         yield
         return
     provider = _ensure_telemetry()
+    # Re-assert pydantic-ai instrumentation before each test. Test-module imports
+    # (e.g. `from co_cli.main import ...`) can call Agent.instrument_all with the
+    # production "co-cli" provider during collection, overriding the harness setup.
+    Agent.instrument_all(InstrumentationSettings(tracer_provider=provider, version=3))
     start = time.perf_counter()
     before_rowid = _db_high_water_mark()
     try:

@@ -77,7 +77,7 @@ async def _delegate_agent(
     """Run a delegation agent with shared orchestration: OTel span, fork_deps, usage merge.
 
     Pass _precomputed=(output, requests_used, run_id) to skip agent execution and
-    format a pre-computed result (used by research_web's retry path, which
+    format a pre-computed result (used by web_research's retry path, which
     manages its own span to cover both the primary attempt and any retry).
     """
     scope = task[: ctx.deps.config.subagent.scope_chars]
@@ -166,7 +166,7 @@ def _reasoner_instructions(deps: CoDeps) -> str:
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
-async def research_web(
+async def web_research(
     ctx: RunContext[CoDeps],
     query: str,
     domains: list[str] | None = None,
@@ -180,7 +180,7 @@ async def research_web(
     self-contained research question.
 
     When NOT to use: a single URL fetch or a factual question you can answer
-    from memory or the knowledge base — use web_fetch or search_knowledge
+    from memory or the knowledge base — use web_fetch or knowledge_search
     directly instead.
 
     Returns the agent's findings as a text result. Automatically retries once
@@ -223,7 +223,7 @@ async def research_web(
     child_deps.runtime.tool_progress_callback = ctx.deps.runtime.tool_progress_callback
 
     # Researcher manages its own span to cover both the primary attempt and any retry.
-    with _TRACER.start_as_current_span("research_web") as span:
+    with _TRACER.start_as_current_span("web_research") as span:
         span.set_attribute("agent.role", "researcher")
         span.set_attribute("agent.model", str(model_obj))
         span.set_attribute("agent.request_limit", budget)
@@ -267,13 +267,13 @@ async def research_web(
         agent,
         budget,
         ctx.deps.model.settings,
-        "research_web",
+        "web_research",
         _precomputed=(output, requests_used, run_id),
     )
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
-async def analyze_knowledge(
+async def knowledge_analyze(
     ctx: RunContext[CoDeps],
     question: str,
     inputs: list[str] | None = None,
@@ -287,7 +287,7 @@ async def analyze_knowledge(
     context via inputs when the agent needs prior results to reason over.
 
     When NOT to use: a single keyword search against the knowledge base —
-    use search_knowledge directly instead.
+    use knowledge_search directly instead.
 
     Returns the agent's findings as a text result.
 
@@ -304,8 +304,8 @@ async def analyze_knowledge(
         raise ModelRetry("Analysis agent is unavailable — handle this task directly.")
 
     from co_cli.agent._core import build_agent
-    from co_cli.tools.google.drive import search_drive_files
-    from co_cli.tools.knowledge.read import search_knowledge
+    from co_cli.tools.google.drive import drive_search
+    from co_cli.tools.knowledge.read import knowledge_search
 
     budget = max_requests or ctx.deps.config.subagent.max_requests_analysis
 
@@ -317,16 +317,16 @@ async def analyze_knowledge(
         config=ctx.deps.config,
         model=ctx.deps.model.model,
         instructions=_analyst_instructions(ctx.deps),
-        tool_fns=[search_knowledge, search_drive_files],
+        tool_fns=[knowledge_search, drive_search],
         output_type=AgentOutput,
     )
     return await _delegate_agent(
-        ctx, scoped_prompt, agent, budget, ctx.deps.model.settings, "analyze_knowledge"
+        ctx, scoped_prompt, agent, budget, ctx.deps.model.settings, "knowledge_analyze"
     )
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
-async def reason_about(
+async def reason(
     ctx: RunContext[CoDeps],
     problem: str,
     max_requests: int = 0,
@@ -367,4 +367,4 @@ async def reason_about(
         tool_fns=None,
         output_type=AgentOutput,
     )
-    return await _delegate_agent(ctx, problem, agent, budget, task_settings, "reason_about")
+    return await _delegate_agent(ctx, problem, agent, budget, task_settings, "reason")

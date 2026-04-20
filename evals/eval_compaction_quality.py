@@ -165,7 +165,7 @@ def _make_ctx(
 ) -> RunContext:
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
-            provider="ollama-openai",
+            provider="ollama",
             num_ctx=llm_num_ctx,
             model=settings.llm.model,
             host=settings.llm.host,
@@ -1187,7 +1187,7 @@ async def step_6_full_chain() -> bool:
     # Build ctx with todos for enrichment
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
-            provider="ollama-openai",
+            provider="ollama",
             num_ctx=30,
             model=settings.llm.model,
             host=settings.llm.host,
@@ -1548,7 +1548,7 @@ async def step_7_multi_cycle() -> bool:
 
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
-            provider="ollama-openai",
+            provider="ollama",
             num_ctx=30,
             model=settings.llm.model,
             host=settings.llm.host,
@@ -1903,7 +1903,7 @@ async def step_9_circuit_breaker() -> bool:
     # Set compaction_failure_count = 3 → circuit breaker active
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
-            provider="ollama-openai",
+            provider="ollama",
             num_ctx=30,
             model=settings.llm.model,
             host=settings.llm.host,

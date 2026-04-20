@@ -16,7 +16,7 @@ Four cases:
   shell_negative_control    — model calls shell directly for git
   unsupported_capability    — model does NOT loop search_tools > once on no-match
 
-Prerequisites: settings.llm.provider == "ollama-openai"
+Prerequisites: settings.llm.provider == "ollama"
 
 Skip: non-ollama providers exit 0 with a SKIPPED message.
 
@@ -233,10 +233,10 @@ async def run_unsupported_capability_boundary() -> dict[str, Any]:
 
 
 async def main() -> int:
-    if settings.llm.provider != "ollama-openai":
+    if settings.llm.provider != "ollama":
         print(
             f"SKIPPED: provider is '{settings.llm.provider}', "
-            "not 'ollama-openai' — Ollama tool-search eval requires Ollama."
+            "not 'ollama' — Ollama tool-search eval requires Ollama."
         )
         return 0
 

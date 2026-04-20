@@ -57,8 +57,8 @@ flowchart TD
     end
 
     subgraph Recall["Retrieval"]
-        EpisodicSearch["search_memory (transcript FTS)"]
-        KnowledgeSearch["search_knowledge (unified reusable-recall)"]
+        EpisodicSearch["memory_search (transcript FTS)"]
+        KnowledgeSearch["knowledge_search (unified reusable-recall)"]
         TurnRecall["turn-time recall (top-N injection)"]
     end
 
@@ -83,7 +83,7 @@ Memory is the session/event timeline. Its canonical storage is append-only `.jso
 
 A `MemoryIndex` (SQLite FTS5 in `session-index.db`) indexes user prompts and assistant text from past sessions for keyword search. The current session is excluded from indexing until it closes.
 
-**Episodic retrieval** uses `search_memory()` (the agent tool in `co_cli/tools/memory.py`), which queries `session-index.db` directly for ranked excerpts across past conversations. This is the only search path into Memory — there is no semantic or vector retrieval over transcripts.
+**Episodic retrieval** uses `memory_search()` (the agent tool in `co_cli/tools/memory.py`), which queries `session-index.db` directly for ranked excerpts across past conversations. This is the only search path into Memory — there is no semantic or vector retrieval over transcripts.
 
 Memory is not curated, not consolidated, and not subject to lifecycle management. It is append-only and grows indefinitely (with optional session-level pruning when disk usage exceeds a threshold).
 
@@ -128,7 +128,7 @@ All reusable recall routes through the knowledge layer via two retrieval paths:
 
 **Turn-time recall** — before each model-bound segment, `build_recall_injection` (preflight) queries `search.db` for the top-3 knowledge artifacts matching the user's message. Results are appended as a trailing `SystemPromptPart`. This surfaces both extracted facts and articles — anything reusable and relevant.
 
-**Explicit search** — the agent calls `search_knowledge()` for on-demand retrieval. This is the universal reusable-recall tool covering all artifact kinds, Obsidian notes, and Drive documents.
+**Explicit search** — the agent calls `knowledge_search()` for on-demand retrieval. This is the universal reusable-recall tool covering all artifact kinds, Obsidian notes, and Drive documents.
 
 **Search backends (three-tier fallback):**
 
@@ -160,7 +160,7 @@ _finalize_turn (clean turn, cadence check passes)
      -> build_transcript_window(delta) — format recent turns as plain text
         (cap: 10 text + 10 tool entries, interleaved in original order)
      -> extractor sub-agent.run(window)
-        -> calls save_knowledge() 0–3 times per window
+        -> calls knowledge_save() 0–3 times per window
            -> dedup check against existing artifacts (token Jaccard)
            -> write .md file to knowledge_dir
            -> index into search.db
@@ -182,7 +182,7 @@ Extraction is always additive — the extractor writes to the knowledge layer, n
 
 Batch lifecycle management for the knowledge layer. Runs at session end (when enabled) or via manual command. Three operations in sequence:
 
-**Transcript mining** — reads recent session transcripts that the per-turn extractor may have missed patterns in. Uses a wider window (50 text + 50 tool entries) and a retrospective prompt focused on cross-turn patterns, implicit preferences, and corrections. Writes to knowledge via the same dedup-protected `save_knowledge()` path.
+**Transcript mining** — reads recent session transcripts that the per-turn extractor may have missed patterns in. Uses a wider window (50 text + 50 tool entries) and a retrospective prompt focused on cross-turn patterns, implicit preferences, and corrections. Writes to knowledge via the same dedup-protected `knowledge_save()` path.
 
 **Knowledge merge** — loads all active artifacts, groups by `artifact_kind`, computes pairwise similarity within groups, identifies clusters above threshold. A consolidation sub-agent merges each cluster into a single higher-density artifact. Originals are archived (never deleted).
 
@@ -204,13 +204,13 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 
 | Tool | Layer | Visibility | Purpose |
 |------|-------|-----------|---------|
-| `search_knowledge()` | Knowledge | ALWAYS | Universal reusable-recall across all artifact kinds + Obsidian + Drive |
-| `search_memory()` | Memory | ALWAYS | Episodic recall — FTS5 keyword search over past session transcripts |
-| `list_knowledge()` | Knowledge | ALWAYS | Paginated artifact inventory with `artifact_kind` column |
-| `read_article()` | Knowledge | ALWAYS | Read full artifact body by slug |
-| `save_article()` | Knowledge | DEFERRED | Write article/reference artifact (dedup by `source_ref`) |
+| `knowledge_search()` | Knowledge | ALWAYS | Universal reusable-recall across all artifact kinds + Obsidian + Drive |
+| `memory_search()` | Memory | ALWAYS | Episodic recall — FTS5 keyword search over past session transcripts |
+| `knowledge_list()` | Knowledge | ALWAYS | Paginated artifact inventory with `artifact_kind` column |
+| `knowledge_article_read()` | Knowledge | ALWAYS | Read full artifact body by slug |
+| `knowledge_article_save()` | Knowledge | DEFERRED | Write article/reference artifact (dedup by `source_ref`) |
 
-`save_knowledge()` is the extractor sub-agent's write tool — not registered on the main agent.
+`knowledge_save()` is the extractor sub-agent's write tool — not registered on the main agent.
 
 ### 2.7 REPL Commands
 
@@ -285,8 +285,9 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `co_cli/knowledge/_dream.py` | `DreamState`, `DreamResult`, `run_dream_cycle`, `_mine_transcripts`, `_merge_similar_artifacts`, `_decay_sweep` |
 | `co_cli/knowledge/prompts/dream_miner.md` | Retrospective transcript-miner sub-agent prompt |
 | `co_cli/knowledge/prompts/dream_merge.md` | Consolidation-merge sub-agent prompt |
-| `co_cli/tools/knowledge.py` | `save_knowledge()` (extractor-only), `list_knowledge()`, `search_knowledge()` (supports `kind="article"` for article-index schema), `save_article()` (writes `artifact_kind=article`), `read_article()`, `update_knowledge()`, `append_knowledge()` |
-| `co_cli/tools/memory.py` | `search_memory()` — episodic recall over session transcripts |
+| `co_cli/tools/knowledge/read.py` | `knowledge_search()` (supports `kind="article"` for article-index schema), `knowledge_list()`, `knowledge_article_read()` |
+| `co_cli/tools/knowledge/write.py` | `knowledge_save()` (extractor-only), `knowledge_article_save()` (writes `artifact_kind=article`), `knowledge_update()`, `knowledge_append()` |
+| `co_cli/tools/memory.py` | `memory_search()` — episodic recall over session transcripts |
 
 ### Memory Layer
 
@@ -295,7 +296,7 @@ All archived artifacts are recoverable via `/knowledge restore`. Artifacts with 
 | `co_cli/context/transcript.py` | JSONL transcript append/load, session branching, compaction boundaries |
 | `co_cli/context/session.py` | Session path generation, latest-session discovery |
 | `co_cli/memory/_store.py` | `MemoryIndex` — FTS5 over past session transcripts |
-| `co_cli/tools/memory.py` | `search_memory()` — keyword search over transcript index |
+| `co_cli/tools/memory.py` | `memory_search()` — keyword search over transcript index |
 
 ### Extraction & Injection
 

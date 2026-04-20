@@ -488,13 +488,13 @@ def build_index(
     from co_cli.config._llm import LlmSettings
 
     llm_reranker = (
-        LlmModelSettings(provider="ollama-openai", model=reranker_model)
+        LlmModelSettings(provider="ollama", model=reranker_model)
         if reranker_model
         else None
     )
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
-            provider="ollama-openai",
+            provider="ollama",
             host=ollama_host,
             model="dummy",
         ),

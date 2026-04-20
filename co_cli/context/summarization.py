@@ -76,10 +76,6 @@ def latest_response_input_tokens(messages: list[ModelMessage]) -> int:
 # Budget resolution
 # ---------------------------------------------------------------------------
 
-# Conservative default when model spec and config are both unavailable.
-_DEFAULT_TOKEN_BUDGET = 100_000
-
-
 def resolve_compaction_budget(
     config: Settings,
     context_window: int | None,
@@ -89,24 +85,23 @@ def resolve_compaction_budget(
     Resolution order (first match wins):
     1. context_window (from LlmModel settings) minus estimated output reserve.
        For Ollama, config.llm.num_ctx overrides the spec (user's Modelfile is truth).
-    2. Ollama config: config.llm.num_ctx when provider is ollama-openai.
-    3. Fallback: _DEFAULT_TOKEN_BUDGET (100K).
+    2. Ollama config: config.llm.num_ctx when provider is ollama.
+    3. Fallback: config.llm.ctx_token_budget.
 
     The 85% multiplier is NOT applied here — callers apply their own trigger policy.
     """
     if context_window is not None and context_window > 0:
         # For Ollama: user-configured llm_num_ctx overrides spec
         # (real limit is baked in the Modelfile, not the declared spec)
-        if config.llm.uses_ollama_openai() and config.llm.num_ctx > 0:
+        if config.llm.uses_ollama() and config.llm.num_ctx > 0:
             context_window = config.llm.num_ctx
-        # Reserve ~16K for output (conservative estimate)
-        return max(context_window - 16384, context_window // 2)
+        return max(context_window - config.llm.ctx_output_reserve, context_window // 2)
 
     # Ollama config fallback (no model spec but llm_num_ctx configured)
-    if config.llm.uses_ollama_openai() and config.llm.num_ctx > 0:
+    if config.llm.uses_ollama() and config.llm.num_ctx > 0:
         return config.llm.num_ctx
 
-    return _DEFAULT_TOKEN_BUDGET
+    return config.llm.ctx_token_budget
 
 
 # ---------------------------------------------------------------------------
@@ -122,10 +117,12 @@ _SUMMARIZE_PROMPT = (
     "## Key Decisions\n"
     "Important decisions made and why. Include rejected alternatives if relevant.\n\n"
     "## User Corrections\n"
-    "User messages where the user redirected, corrected, or overrode a prior\n"
-    "approach. Include the correction verbatim or near-verbatim. These are\n"
-    "high-signal — they represent explicit intent changes and must survive\n"
-    "compaction. Omit this section only if no corrections occurred.\n\n"
+    "Conditional — only write this section when the conversation contains actual\n"
+    "user corrections. If none occurred, skip this section entirely: do not write\n"
+    "the heading, do not write 'None', do not write 'No corrections occurred'.\n"
+    "When present: include verbatim or near-verbatim quotes from user messages\n"
+    "where the user redirected, corrected, or overrode a prior approach. These\n"
+    "are high-signal — explicit intent changes that must survive compaction.\n\n"
     "Examples of what belongs here:\n"
     '- "no, do X instead"\n'
     '- "stop, that\'s not what I wanted"\n'

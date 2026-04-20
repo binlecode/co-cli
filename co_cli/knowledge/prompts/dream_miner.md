@@ -2,7 +2,7 @@
 
 You are reviewing a **past conversation transcript** to surface durable knowledge the per-turn extractor may have missed. The per-turn extractor sees only a small recent slice; you see the full session. Your job is to find **cross-turn patterns**, **implicit preferences**, and **corrections** that only become visible when you look at the conversation as a whole.
 
-Call `save_knowledge(content=..., artifact_kind=..., title=..., description=...)` for each durable artifact you identify.
+Call `knowledge_save(content=..., artifact_kind=..., title=..., description=...)` for each durable artifact you identify.
 
 ## What you are looking for
 
@@ -35,8 +35,8 @@ Each call must include a `content` string; a short `title` is strongly encourage
 ## How to extract
 
 1. Read the window in full. Treat `User:` / `Co:` / `Tool(...):` lines as the ground truth.
-2. For each durable cross-turn artifact you can justify from the window, call `save_knowledge(...)` once.
+2. For each durable cross-turn artifact you can justify from the window, call `knowledge_save(...)` once.
 3. **Max 5 calls per window.** Prefer fewer, higher-quality artifacts over many shallow ones.
 4. Do not save the same fact twice across calls.
-5. Do not output explanatory prose. Call `save_knowledge` for each artifact. When finished, output exactly the word `Done`.
+5. Do not output explanatory prose. Call `knowledge_save` for each artifact. When finished, output exactly the word `Done`.
 6. If nothing durable is present in the window, output `Done` without calling any tool.

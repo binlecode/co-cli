@@ -73,10 +73,10 @@ def test_invalid_personality_raises_value_error(tmp_path):
         load_config(_user_config_path=user_settings)
 
 
-def test_default_provider_is_ollama_openai(tmp_path):
-    """When no llm_provider is set, the default must be 'ollama-openai' (P1 rename)."""
+def test_default_provider_is_ollama(tmp_path):
+    """When no llm_provider is set, the default must be 'ollama'."""
     settings = load_config(_user_config_path=tmp_path / "nonexistent.json")
-    assert settings.llm.provider == "ollama-openai"
+    assert settings.llm.provider == "ollama"
 
 
 def test_llm_model_loaded_from_user_config(tmp_path):
@@ -88,18 +88,18 @@ def test_llm_model_loaded_from_user_config(tmp_path):
 
 
 def test_ollama_native_provider_rejected(tmp_path):
-    """'ollama-native' is no longer a supported provider."""
+    """'ollama-native' is not a supported provider."""
     user_settings = tmp_path / "settings.json"
     user_settings.write_text(json.dumps({"llm": {"provider": "ollama-native"}}))
-    with pytest.raises(Exception, match=r"ollama-openai.*gemini|literal_error"):
+    with pytest.raises(Exception, match=r"ollama.*gemini|literal_error"):
         load_config(_user_config_path=user_settings)
 
 
-def test_old_ollama_provider_string_rejected(tmp_path):
-    """The bare 'ollama' discriminator is rejected after P1 rename."""
+def test_ollama_openai_provider_string_rejected(tmp_path):
+    """The old 'ollama-openai' provider name is no longer supported; use 'ollama'."""
     user_settings = tmp_path / "settings.json"
-    user_settings.write_text(json.dumps({"llm": {"provider": "ollama"}}))
-    with pytest.raises(Exception, match=r"ollama-openai.*gemini|literal_error"):
+    user_settings.write_text(json.dumps({"llm": {"provider": "ollama-openai"}}))
+    with pytest.raises(Exception, match=r"ollama.*gemini|literal_error"):
         load_config(_user_config_path=user_settings)
 
 
@@ -192,10 +192,10 @@ def test_llm_reranker_gemini_model_default_resolved(tmp_path):
 
 
 def test_llm_reranker_ollama_model_default_resolved(tmp_path):
-    """LlmModelSettings fills ollama-openai model from _RERANKER_DEFAULT_MODEL when omitted."""
+    """LlmModelSettings fills ollama model from _RERANKER_DEFAULT_MODEL when omitted."""
     user_settings = tmp_path / "settings.json"
     user_settings.write_text(
-        json.dumps({"knowledge": {"llm_reranker": {"provider": "ollama-openai"}}})
+        json.dumps({"knowledge": {"llm_reranker": {"provider": "ollama"}}})
     )
     settings = load_config(_user_config_path=user_settings)
     assert settings.knowledge.llm_reranker is not None
@@ -219,7 +219,7 @@ def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     """build_agent() must not rewrite GEMINI_API_KEY when config provides llm_api_key."""
     user_settings = tmp_path / "settings.json"
     user_settings.write_text(
-        json.dumps({"llm": {"provider": "gemini", "api_key": "settings-key-wins"}})
+        json.dumps({"llm": {"provider": "gemini", "model": "gemini-3.1-flash-preview", "api_key": "settings-key-wins"}})
     )
 
     env = os.environ.copy()

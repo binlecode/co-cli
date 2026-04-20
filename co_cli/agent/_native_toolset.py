@@ -11,21 +11,21 @@ from co_cli.config._core import Settings
 from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
 from co_cli.tools.agents import (
-    analyze_knowledge,
-    reason_about,
-    research_web,
+    knowledge_analyze,
+    reason,
+    web_research,
 )
-from co_cli.tools.capabilities import check_capabilities
-from co_cli.tools.execute_code import execute_code
-from co_cli.tools.files.read import glob, grep, read_file
-from co_cli.tools.files.write import patch, write_file
-from co_cli.tools.google.calendar import list_calendar_events, search_calendar_events
-from co_cli.tools.google.drive import read_drive_file, search_drive_files
-from co_cli.tools.google.gmail import create_gmail_draft, list_gmail_emails, search_gmail_emails
-from co_cli.tools.knowledge.read import list_knowledge, read_article, search_knowledge
-from co_cli.tools.knowledge.write import append_knowledge, save_article, update_knowledge
-from co_cli.tools.memory import search_memory
-from co_cli.tools.obsidian import list_notes, read_note, search_notes
+from co_cli.tools.capabilities import capabilities_check
+from co_cli.tools.execute_code import code_execute
+from co_cli.tools.files.read import file_glob, file_grep, file_read
+from co_cli.tools.files.write import file_patch, file_write
+from co_cli.tools.google.calendar import calendar_list, calendar_search
+from co_cli.tools.google.drive import drive_read, drive_search
+from co_cli.tools.google.gmail import gmail_draft, gmail_list, gmail_search
+from co_cli.tools.knowledge.read import knowledge_article_read, knowledge_list, knowledge_search
+from co_cli.tools.knowledge.write import knowledge_append, knowledge_article_save, knowledge_update
+from co_cli.tools.memory import memory_search
+from co_cli.tools.obsidian import obsidian_list, obsidian_read, obsidian_search
 from co_cli.tools.shell import shell
 from co_cli.tools.task_control import (
     task_cancel,
@@ -43,53 +43,53 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     # User interaction
     clarify,
     # Introspection & todos
-    check_capabilities,
+    capabilities_check,
     todo_write,
     todo_read,
     # Knowledge reads
-    search_knowledge,
-    list_knowledge,
-    read_article,
-    search_memory,
+    knowledge_search,
+    knowledge_list,
+    knowledge_article_read,
+    memory_search,
     # Workspace reads
-    glob,
-    read_file,
-    grep,
+    file_glob,
+    file_read,
+    file_grep,
     # Web
     web_search,
     web_fetch,
     # Execution
     shell,
     # File writes (deferred)
-    write_file,
-    patch,
+    file_write,
+    file_patch,
     # Knowledge writes (deferred)
-    update_knowledge,
-    append_knowledge,
-    save_article,
+    knowledge_update,
+    knowledge_append,
+    knowledge_article_save,
     # Background tasks (deferred)
     task_start,
     task_status,
     task_cancel,
     task_list,
     # Code execution (deferred)
-    execute_code,
+    code_execute,
     # Delegation (deferred)
-    research_web,
-    analyze_knowledge,
-    reason_about,
+    web_research,
+    knowledge_analyze,
+    reason,
     # Obsidian (requires obsidian_vault_path)
-    list_notes,
-    search_notes,
-    read_note,
+    obsidian_list,
+    obsidian_search,
+    obsidian_read,
     # Google (requires google_credentials_path)
-    search_drive_files,
-    read_drive_file,
-    list_gmail_emails,
-    search_gmail_emails,
-    list_calendar_events,
-    search_calendar_events,
-    create_gmail_draft,
+    drive_search,
+    drive_read,
+    gmail_list,
+    gmail_search,
+    calendar_list,
+    calendar_search,
+    gmail_draft,
 )
 
 

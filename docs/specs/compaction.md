@@ -117,14 +117,14 @@ sequenceDiagram
     RT->>AG: run_stream_events (request #1)
     AG->>HP: M2a, M2b, M3<br/>token_count ≤ threshold → fast path
     AG->>M: HTTP request
-    M-->>AG: ToolCallPart(read_file)
+    M-->>AG: ToolCallPart(file_read)
     AG->>TL: execute tool
     TL->>TL: M1: size &gt; 80K → persist
     TL-->>AG: ToolReturnPart(&lt;persisted-output&gt;)
     AG->>HP: chain (request #2 prep)<br/>token_count &gt; threshold → M3 fires
     Note over HP: plan_compaction_boundaries<br/>→ head, tail, dropped<br/>summarize_messages (LLM)<br/>assemble marker
     AG->>M: HTTP request (compacted history)
-    M-->>AG: ToolCallPart(grep)
+    M-->>AG: ToolCallPart(file_grep)
     AG->>TL: execute tool
     TL-->>AG: ToolReturnPart
     AG->>HP: chain (request #3 prep)<br/>fast path (compacted)
@@ -185,37 +185,37 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     subgraph Before["before truncate_tool_results"]
-        B1[read_file #1]
-        B2[read_file #2]
-        B3[grep #1]
-        B4[read_file #3]
-        B5[read_file #4]
+        B1[file_read #1]
+        B2[file_read #2]
+        B3[file_grep #1]
+        B4[file_read #3]
+        B5[file_read #4]
         B6[web_search #1]
-        B7[read_file #5]
-        B8[read_file #6]
-        B9[read_file #7]
-        B10[grep #2]
+        B7[file_read #5]
+        B8[file_read #6]
+        B9[file_read #7]
+        B10[file_grep #2]
         B11[UserPromptPart<br/>current turn]
     end
 
     subgraph After["after — protect last turn"]
-        A1[read_file #1<br/>CLEARED]
-        A2[read_file #2<br/>CLEARED]
-        A3[grep #1<br/>kept]
-        A4[read_file #3<br/>kept — last 5]
-        A5[read_file #4<br/>kept — last 5]
+        A1[file_read #1<br/>CLEARED]
+        A2[file_read #2<br/>CLEARED]
+        A3[file_grep #1<br/>kept]
+        A4[file_read #3<br/>kept — last 5]
+        A5[file_read #4<br/>kept — last 5]
         A6[web_search #1<br/>kept]
-        A7[read_file #5<br/>kept — last 5]
-        A8[read_file #6<br/>kept — last 5]
-        A9[read_file #7<br/>kept — last 5]
-        A10[grep #2<br/>kept]
+        A7[file_read #5<br/>kept — last 5]
+        A8[file_read #6<br/>kept — last 5]
+        A9[file_read #7<br/>kept — last 5]
+        A10[file_grep #2<br/>kept]
         A11[UserPromptPart<br/>current turn]
     end
 
     Before --> After
 ```
 
-For `read_file` (7 returns), keep last 5 (#3–#7), clear #1 and #2. For `grep` (2), keep both. For `web_search` (1), keep. Tool-call args are never touched (load-bearing for enrichment).
+For `file_read` (7 returns), keep last 5 (#3–#7), clear #1 and #2. For `file_grep` (2), keep both. For `web_search` (1), keep. Tool-call args are never touched (load-bearing for enrichment).
 
 ### Diagram 5: Boundary planner — walk from end
 
@@ -307,7 +307,7 @@ M3 fires at request 2 (token pressure builds up). Requests 3 and 4 see the compa
 | Tool | `max_result_size` |
 |---|---|
 | Default | `50_000` chars |
-| `read_file` | `80_000` chars |
+| `file_read` | `80_000` chars |
 | `run_shell_command` | `30_000` chars |
 
 **Logic:**
@@ -321,14 +321,14 @@ write content to path (if not exists)
 return "<persisted-output>tool: … file: … size: … preview: first 2000 chars</persisted-output>"
 ```
 
-Model pages the full content via `read_file(path, start_line=, end_line=)`. Persistence is once, irreversible, and independent of context pressure.
+Model pages the full content via `file_read(path, start_line=, end_line=)`. Persistence is once, irreversible, and independent of context pressure.
 
 ### 2.2 M2 — Prepass recency clearing
 
 Two sync processors; no LLM calls.
 
 **`truncate_tool_results`.** Protects the last user turn (everything from the last `UserPromptPart` onward). For the region before:
-- For each tool in `COMPACTABLE_TOOLS` = `{read_file, run_shell_command, grep, glob, web_search, web_fetch, read_article, read_note}`, keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
+- For each tool in `COMPACTABLE_TOOLS` = `{file_read, shell, file_grep, file_glob, web_search, web_fetch, knowledge_article_read, obsidian_read}`, keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
 - Older compactable returns: `content ← "[tool result cleared — older than 5 most recent calls]"`.
 - `tool_name` and `tool_call_id` are preserved (call/return pairing intact).
 - Non-compactable tools (writes, approvals) are never cleared.
@@ -459,7 +459,7 @@ Rationale: three-strikes trips the breaker to avoid burning LLM cost when the pr
 
 | Source | Scope | Why it survives M2 |
 |---|---|---|
-| `ToolCallPart.args` for `FILE_TOOLS = {read_file, write_file, patch, grep, glob}` → `_gather_file_paths(dropped)` | **Dropped range only** | `truncate_tool_results` only touches return content, never call args. Scoped to `dropped` to avoid duplicating paths already visible in the preserved tail. |
+| `ToolCallPart.args` for `FILE_TOOLS = {file_read, file_write, file_patch, file_grep, file_glob}` → `_gather_file_paths(dropped)` | **Dropped range only** | `truncate_tool_results` only touches return content, never call args. Scoped to `dropped` to avoid duplicating paths already visible in the preserved tail. |
 | `ctx.deps.session.session_todos` → `_gather_session_todos` | Session state | Orthogonal to message history. |
 | Prior compaction summaries in `dropped` → `_gather_prior_summaries` | Dropped range only | Detected via prefix-match on `_SUMMARY_MARKER_PREFIX` shared constant. |
 
@@ -576,7 +576,7 @@ Per-tool `max_result_size` (M1) is a registration parameter in `co_cli/agent/_na
 | Tool | `max_result_size` |
 |---|---|
 | Default | `50_000` chars |
-| `read_file` | `80_000` chars |
+| `file_read` | `80_000` chars |
 | `run_shell_command` | `30_000` chars |
 
 ## 4. Files

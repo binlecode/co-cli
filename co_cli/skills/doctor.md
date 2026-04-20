@@ -4,11 +4,11 @@ user-invocable: true
 disable-model-invocation: false
 ---
 
-Run `check_capabilities` to get the full runtime picture: capabilities, session state, findings, and active fallbacks.
+Run `capabilities_check` to get the full runtime picture: capabilities, session state, findings, and active fallbacks.
 
 Review the result against any prior context in this conversation (what the user was trying to do, what failed). Identify the most relevant degraded or blocking condition.
 
-If more information is needed to diagnose, run one targeted read-only follow-up (e.g. `read_file` to inspect a credential or config path, `web_search` to look up a tool's requirements). Do not call `check_capabilities` a second time.
+If more information is needed to diagnose, run one targeted read-only follow-up (e.g. `file_read` to inspect a credential or config path, `web_search` to look up a tool's requirements). Do not call `capabilities_check` a second time.
 
 Respond with this exact structure:
 

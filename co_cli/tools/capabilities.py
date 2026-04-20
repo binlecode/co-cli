@@ -14,7 +14,7 @@ from co_cli.tools.tool_io import tool_output
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolReturn:
+async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
     """Return a summary of active capabilities and integration health.
 
     Returns a ToolReturn with display (formatted summary string) and metadata:

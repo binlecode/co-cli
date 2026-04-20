@@ -1,4 +1,4 @@
-"""Functional tests for check_capabilities tool."""
+"""Functional tests for capabilities_check tool."""
 
 import asyncio
 
@@ -13,7 +13,7 @@ from co_cli.bootstrap.check import check_runtime
 from co_cli.config._core import MCPServerSettings, settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import TerminalFrontend
-from co_cli.tools.capabilities import check_capabilities
+from co_cli.tools.capabilities import capabilities_check
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)
@@ -42,7 +42,7 @@ async def test_new_runtime_fields_present() -> None:
     deps = _make_deps()
     ctx = _make_ctx(deps)
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
-        result = await check_capabilities(ctx)
+        result = await capabilities_check(ctx)
     assert "tool_count" in result.metadata
     assert "mcp_mode" in result.metadata
     assert result.metadata["mcp_mode"] in ("mcp", "native-only")
@@ -57,7 +57,7 @@ async def test_capabilities_emits_doctor_progress_updates() -> None:
     ctx = _make_ctx(deps)
 
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
-        await check_capabilities(ctx)
+        await capabilities_check(ctx)
 
     assert statuses[0] == "Doctor: starting runtime diagnostics..."
     assert "Doctor: checking provider and model availability..." in statuses
@@ -85,12 +85,12 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
 
     try:
         async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
-            result = await check_capabilities(ctx)
+            result = await capabilities_check(ctx)
         assert frontend.active_surface() == "tool"
         assert frontend.active_tool_messages(), "Expected tool progress to be rendered"
         assert frontend.active_tool_messages()[0] == "Doctor: checking loaded skills..."
         assert result.return_value, (
-            "return_value missing or empty in check_capabilities ToolReturn"
+            "return_value missing or empty in capabilities_check ToolReturn"
         )
     finally:
         frontend.cleanup()

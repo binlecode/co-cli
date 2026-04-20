@@ -342,7 +342,12 @@ def _parse_log(log_path: Path) -> tuple[list[_LogSpan], float, float]:
 
 
 def _query_db_spans(db_path: Path, run_start: float, run_end: float) -> list[dict]:
-    """Query co-cli-pytest chat spans from DB within an expanded time window."""
+    """Query co-cli chat spans from DB within an expanded time window.
+
+    Accepts both 'co-cli-pytest' and 'co-cli' resources: test-module imports of
+    co_cli.main can override pydantic-ai instrumentation to the production provider,
+    landing chat spans under 'co-cli' rather than 'co-cli-pytest'.
+    """
     if not db_path.exists():
         return []
     window_start_ns = int((run_start - _WINDOW_BUFFER_S) * 1_000_000_000)
@@ -353,7 +358,8 @@ def _query_db_spans(db_path: Path, run_start: float, run_end: float) -> list[dic
             SELECT duration_ms, attributes
             FROM spans
             WHERE name LIKE 'chat %'
-              AND resource LIKE '%co-cli-pytest%'
+              AND (resource LIKE '%co-cli-pytest%' OR resource LIKE '%"service.name": "co-cli"%')
+              AND resource NOT LIKE '%co-cli-eval%'
               AND start_time BETWEEN ? AND ?
             ORDER BY start_time
             """,
@@ -947,6 +953,11 @@ def main() -> None:
         help="run LLM-as-judge semantic evaluation on matched spans",
     )
     parser.add_argument(
+        "--eval-only",
+        action="store_true",
+        help="skip full report — run only the LLM-as-judge eval and write a standalone eval report",
+    )
+    parser.add_argument(
         "--judge-model",
         default="qwen3.5:35b-a3b",
         metavar="MODEL",
@@ -1000,10 +1011,8 @@ def main() -> None:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_path = out_dir / f"REPORT-llm-call-audit-{now}.md"
-    report = _generate_report(spans, log_path, db_path, len(db_spans), matched_count)
 
-    if args.eval:
+    if args.eval_only:
         ollama_host = _resolve_ollama_host(args.ollama_host)
         print(f"Evaluating {len(spans)} spans via {args.judge_model} at {ollama_host}...")
         judge_model = OpenAIChatModel(
@@ -1011,16 +1020,35 @@ def main() -> None:
             provider=OllamaProvider(base_url=f"{ollama_host}/v1"),
         )
         eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model))
-        report += "\n" + _eval_section(eval_pairs)
-
-    out_path.write_text(report)
+        out_path = out_dir / f"REPORT-llm-eval-{now}.md"
+        out_path.write_text(
+            f"# LLM Semantic Eval — {log_path.name}\n\n"
+            f"**Date:** {date.today().isoformat()}\n"
+            f"**Log:** `{log_path}`\n"
+            f"**Spans:** {len(spans)} parsed, {matched_count} DB-matched\n\n"
+            + _eval_section(eval_pairs)
+        )
+    else:
+        out_path = out_dir / f"REPORT-llm-call-audit-{now}.md"
+        report = _generate_report(spans, log_path, db_path, len(db_spans), matched_count)
+        if args.eval:
+            ollama_host = _resolve_ollama_host(args.ollama_host)
+            print(f"Evaluating {len(spans)} spans via {args.judge_model} at {ollama_host}...")
+            judge_model = OpenAIChatModel(
+                args.judge_model,
+                provider=OllamaProvider(base_url=f"{ollama_host}/v1"),
+            )
+            eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model))
+            report += "\n" + _eval_section(eval_pairs)
+        out_path.write_text(report)
 
     warn_count = sum(1 for s in spans if "WARN" in _verdict(s))
     print(f"\nReport → {out_path}")
-    print(
-        f"TL;DR: {len(spans)} spans audited, {matched_count} DB-matched, "
-        f"{warn_count} warnings{'.' if not warn_count else ' — check report.'}"
-    )
+    if not args.eval_only:
+        print(
+            f"TL;DR: {len(spans)} spans audited, {matched_count} DB-matched, "
+            f"{warn_count} warnings{'.' if not warn_count else ' — check report.'}"
+        )
 
 
 if __name__ == "__main__":

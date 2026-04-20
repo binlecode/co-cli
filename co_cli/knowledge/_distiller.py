@@ -2,7 +2,7 @@
 
 Scans the post-turn message history (including tool calls and results) for
 reusable artifacts across four categories — preferences, feedback, rules,
-references — and calls ``save_knowledge`` for each. Cursor-based delta
+references — and calls ``knowledge_save`` for each. Cursor-based delta
 prevents re-scanning already-extracted turns.
 """
 
@@ -25,7 +25,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.tools.knowledge.write import save_knowledge
+from co_cli.tools.knowledge.write import knowledge_save
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +116,7 @@ def build_knowledge_extractor_agent() -> "Agent[CoDeps, str]":
     """
     return Agent(
         instructions=_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-        tools=[save_knowledge],
+        tools=[knowledge_save],
     )
 
 

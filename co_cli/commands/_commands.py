@@ -278,9 +278,9 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
 
     _DELEGATION_TOOLS = frozenset(
         {
-            "research_web",
-            "analyze_knowledge",
-            "reason_about",
+            "web_research",
+            "knowledge_analyze",
+            "reason",
             "task_start",
         }
     )

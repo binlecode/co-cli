@@ -2,211 +2,135 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.settings import ModelSettings
 
 # ---------------------------------------------------------------------------
-# LLM defaults
+# LLM defaults  (used as LlmSettings field defaults — must stay named)
 # ---------------------------------------------------------------------------
 
-DEFAULT_LLM_PROVIDER = "ollama-openai"
+DEFAULT_LLM_PROVIDER = "ollama"
 DEFAULT_LLM_HOST = "http://localhost:11434"
 DEFAULT_LLM_MODEL = "qwen3.5:35b-a3b-think"
-DEFAULT_OLLAMA_NUM_CTX = 262144
-DEFAULT_CTX_WARN_THRESHOLD = 0.85
-DEFAULT_CTX_OVERFLOW_THRESHOLD = 1.0
 
 
 # ---------------------------------------------------------------------------
-# Inference settings
+# Inference defaults tree
+#
+# Structure: provider → model → {reasoning?, noreason?}
+# "_default" is the fallback for any unlisted model.
+# Each entry is complete for the modes it defines — no merging between
+# _default and model entries; one or the other is used as the base.
+# Resolution: model entry (or _default fallback) → merge user explicit config.
 # ---------------------------------------------------------------------------
 
-DEFAULT_OLLAMA_TEMPERATURE = 0.7
-DEFAULT_OLLAMA_TOP_P = 1.0
-DEFAULT_OLLAMA_MAX_TOKENS = 16384
-
-DEFAULT_GEMINI_TEMPERATURE = 1.0
-DEFAULT_GEMINI_TOP_P = 0.95
-DEFAULT_GEMINI_MAX_TOKENS = 65536
-
-DEFAULT_NOREASON_TEMPERATURE = 0.7
-DEFAULT_NOREASON_TOP_P = 0.8
-DEFAULT_NOREASON_MAX_TOKENS = 16384
-
-DEFAULT_NOREASON_EXTRA_BODY: dict[str, Any] = {
-    "reasoning_effort": "none",
-    "top_k": 20,
-    "min_p": 0.0,
-    "presence_penalty": 1.5,
-    "repeat_penalty": 1.0,
-    "num_ctx": 131072,
-    "num_predict": 16384,
+_INFERENCE_DEFAULTS: dict[str, Any] = {
+    "ollama": {
+        # Settings sourced from ollama/Modelfile.qwen3.5-35b-a3b-think
+        "qwen3.5": {
+            "reasoning": {
+                "temperature": 1.0,
+                "top_p": 0.95,
+                "max_tokens": 32768,
+                "context_window": 131072,
+                "extra_body": {
+                    "top_k": 20,
+                    "min_p": 0.0,
+                    "presence_penalty": 1.5,
+                    "repeat_penalty": 1.0,
+                },
+            },
+            # think=false disables thinking for noreason calls — reasoning_effort="none"
+            # may not be supported on all Ollama versions.
+            "noreason": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "max_tokens": 16384,
+                "extra_body": {
+                    "reasoning_effort": "none",
+                    "think": False,
+                    "top_k": 20,
+                    "min_p": 0.0,
+                    "presence_penalty": 1.5,
+                    "repeat_penalty": 1.0,
+                    "num_ctx": 131072,
+                    "num_predict": 16384,
+                },
+            },
+        },
+    },
+    "gemini": {
+        "gemini-3.1-flash-preview": {
+            "reasoning": {
+                "temperature": 1.0,
+                "top_p": 0.95,
+                "max_tokens": 65536,
+                "context_window": 1048576,
+            },
+            # Flash supports "minimal" thinking level.
+            "noreason": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "max_tokens": 16384,
+                "thinking_config": {"thinking_level": "minimal"},
+            },
+        },
+        "gemini-3.1-pro-preview": {
+            "reasoning": {
+                "temperature": 1.0,
+                "top_p": 0.95,
+                "max_tokens": 65536,
+                "context_window": 1048576,
+            },
+            # Pro does not support "minimal"; "low" is the minimum (per Google docs).
+            "noreason": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "max_tokens": 16384,
+                "thinking_config": {"thinking_level": "low"},
+            },
+        },
+        # Gemini 2.5 Flash/Flash-Lite: noreason-only — thinking_budget=0 disables thinking.
+        # Cannot be used as the main reasoning model (no reasoning entry).
+        "gemini-2.5-flash": {
+            "noreason": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "max_tokens": 16384,
+                "thinking_config": {"thinking_budget": 0},
+            },
+        },
+        "gemini-2.5-flash-lite": {
+            "noreason": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "max_tokens": 16384,
+                "thinking_config": {"thinking_budget": 0},
+            },
+        },
+    },
 }
 
 
-class ModelInference(TypedDict, total=False):
-    """Resolved model inference parameters used at runtime."""
-
-    temperature: float
-    top_p: float
-    max_tokens: int
-    num_ctx: int
-    context_window: int
-    extra_body: dict[str, Any]
-    thinking_config: dict[str, Any]
+# ---------------------------------------------------------------------------
+# Settings override models
+# ---------------------------------------------------------------------------
 
 
-class ReasoningSettings(BaseModel):
-    """Optional explicit overrides for the main reasoning model."""
+class InferenceOverride(BaseModel):
+    """User-configurable overrides applied on top of per-model inference defaults.
+
+    Only provider-agnostic scalar params are exposed — provider-specific fields
+    (extra_body, thinking_config, num_ctx, etc.) belong in _INFERENCE_DEFAULTS.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     temperature: float | None = Field(default=None)
     top_p: float | None = Field(default=None)
     max_tokens: int | None = Field(default=None)
-    num_ctx: int | None = Field(default=None)
-    context_window: int | None = Field(default=None)
-    extra_body: dict[str, Any] = Field(default_factory=dict)
-
-
-class NoReasonSettings(BaseModel):
-    """Optional explicit overrides for non-reasoning helper calls."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    temperature: float | None = Field(default=None)
-    top_p: float | None = Field(default=None)
-    max_tokens: int | None = Field(default=None)
-    extra_body: dict[str, Any] = Field(default_factory=dict)
-
-
-_PROVIDER_REASONING_DEFAULTS: dict[str, ModelInference] = {
-    "ollama-openai": {
-        "temperature": DEFAULT_OLLAMA_TEMPERATURE,
-        "top_p": DEFAULT_OLLAMA_TOP_P,
-        "max_tokens": DEFAULT_OLLAMA_MAX_TOKENS,
-    },
-    "gemini": {
-        "temperature": DEFAULT_GEMINI_TEMPERATURE,
-        "top_p": DEFAULT_GEMINI_TOP_P,
-        "max_tokens": DEFAULT_GEMINI_MAX_TOKENS,
-    },
-}
-
-_MODEL_REASONING_DEFAULTS: dict[tuple[str, str], ModelInference] = {
-    ("gemini", "gemini-3.1-flash-preview"): {
-        "temperature": 1.0,
-        "top_p": 0.95,
-        "max_tokens": 65536,
-        "context_window": 1048576,
-    },
-    ("gemini", "gemini-3.1-pro-preview"): {
-        "temperature": 1.0,
-        "top_p": 0.95,
-        "max_tokens": 65536,
-        "context_window": 1048576,
-    },
-    ("ollama-openai", "qwen3"): {
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "max_tokens": 32768,
-        "num_ctx": 262144,
-        "context_window": 262144,
-        "extra_body": {
-            "top_k": 20,
-            "repeat_penalty": 1.0,
-        },
-    },
-    ("ollama-openai", "qwen3.5"): {
-        "temperature": 1.0,
-        "top_p": 0.95,
-        "max_tokens": 32768,
-        "context_window": 262144,
-        "extra_body": {
-            "top_k": 20,
-            "min_p": 0,
-            "presence_penalty": 1.5,
-        },
-    },
-}
-
-_PROVIDER_NOREASON_DEFAULTS: dict[str, ModelInference] = {
-    "ollama-openai": {
-        "temperature": DEFAULT_NOREASON_TEMPERATURE,
-        "top_p": DEFAULT_NOREASON_TOP_P,
-        "max_tokens": DEFAULT_NOREASON_MAX_TOKENS,
-        "extra_body": dict(DEFAULT_NOREASON_EXTRA_BODY),
-    },
-    "gemini": {
-        "temperature": DEFAULT_NOREASON_TEMPERATURE,
-        "top_p": DEFAULT_NOREASON_TOP_P,
-        "max_tokens": DEFAULT_NOREASON_MAX_TOKENS,
-        # Gemini 3 Flash-class default. Goes into GoogleModelSettings
-        # google_thinking_config (not ModelSettings.extra_body — Gemini
-        # uses the native path, not the OpenAI-compat channel).
-        "thinking_config": {"thinking_level": "minimal"},
-    },
-}
-
-# Model-specific noreason overrides — Gemini 3.1 Pro does not support
-# "minimal"; "low" is the minimum reasoning setting (per Google docs).
-# Gemini 2.5 Flash/Flash-Lite use thinking_budget=0 instead of thinking_level.
-_MODEL_NOREASON_DEFAULTS: dict[tuple[str, str], ModelInference] = {
-    ("gemini", "gemini-3.1-pro-preview"): {
-        "thinking_config": {"thinking_level": "low"},
-    },
-    ("gemini", "gemini-2.5-flash"): {
-        "thinking_config": {"thinking_budget": 0},
-    },
-    ("gemini", "gemini-2.5-flash-lite"): {
-        "thinking_config": {"thinking_budget": 0},
-    },
-}
-
-
-def normalize_model_name(model_name: str) -> str:
-    """Normalize model name for model-default lookup by stripping quantization tags."""
-    return model_name.split(":")[0]
-
-
-def _merge_inference(base: ModelInference, override: ModelInference) -> ModelInference:
-    """Merge two model inference dicts, combining extra_body shallowly."""
-    merged: ModelInference = dict(base)
-    base_extra = dict(base.get("extra_body", {}))
-    override_extra = dict(override.get("extra_body", {}))
-    for key, value in override.items():
-        if key == "extra_body":
-            continue
-        merged[key] = value
-    combined_extra = base_extra
-    combined_extra.update(override_extra)
-    if combined_extra:
-        merged["extra_body"] = combined_extra
-    elif "extra_body" in merged:
-        del merged["extra_body"]
-    return merged
-
-
-def resolve_reasoning_inference(llm: LlmSettings) -> ModelInference:
-    """Resolve the effective reasoning-model inference settings."""
-    normalized_model = normalize_model_name(llm.model)
-    provider_defaults = _PROVIDER_REASONING_DEFAULTS.get(llm.provider, {})
-    model_defaults = _MODEL_REASONING_DEFAULTS.get((llm.provider, normalized_model), {})
-    resolved = _merge_inference(provider_defaults, model_defaults)
-    explicit = llm.reasoning.model_dump(exclude_defaults=True, exclude_none=True)
-    return _merge_inference(resolved, explicit)
-
-
-def resolve_noreason_inference(llm: LlmSettings) -> ModelInference:
-    """Resolve the effective noreason inference settings — symmetric with resolve_reasoning_inference."""
-    normalized_model = normalize_model_name(llm.model)
-    provider_defaults = _PROVIDER_NOREASON_DEFAULTS.get(llm.provider, {})
-    model_defaults = _MODEL_NOREASON_DEFAULTS.get((llm.provider, normalized_model), {})
-    resolved = _merge_inference(provider_defaults, model_defaults)
-    explicit = llm.noreason.model_dump(exclude_defaults=True, exclude_none=True)
-    return _merge_inference(resolved, explicit)
 
 
 # ---------------------------------------------------------------------------
@@ -220,36 +144,54 @@ class LlmSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     api_key: str | None = Field(default=None)
-    provider: Literal["ollama-openai", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)
+    provider: Literal["ollama", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)
     host: str = Field(default=DEFAULT_LLM_HOST)
     model: str = Field(default=DEFAULT_LLM_MODEL)
-    # IMPORTANT: Use -agentic Modelfile variants for models that need custom num_ctx.
-    # Ollama's OpenAI-compatible API ignores num_ctx from request params — it MUST
-    # be baked into the Modelfile via PARAMETER num_ctx.
-    num_ctx: int = Field(default=DEFAULT_OLLAMA_NUM_CTX)
-    ctx_warn_threshold: float = Field(default=DEFAULT_CTX_WARN_THRESHOLD)
-    ctx_overflow_threshold: float = Field(default=DEFAULT_CTX_OVERFLOW_THRESHOLD)
-    reasoning: ReasoningSettings = Field(default_factory=ReasoningSettings)
-    noreason: NoReasonSettings = Field(default_factory=NoReasonSettings)
+    # User/bootstrap override for Ollama context window. 0 = unset (use model spec).
+    # Bootstrap sets this from the runtime probe; user can also set it in settings.json.
+    num_ctx: int = Field(default=0)
+    ctx_token_budget: int = Field(default=100_000)
+    ctx_output_reserve: int = Field(default=16_384)
+    ctx_warn_threshold: float = Field(default=0.85)
+    ctx_overflow_threshold: float = Field(default=1.0)
+    reasoning: InferenceOverride = Field(default_factory=InferenceOverride)
+    noreason: InferenceOverride = Field(default_factory=InferenceOverride)
 
-    def uses_ollama_openai(self) -> bool:
+    def uses_ollama(self) -> bool:
         """Return True when the session LLM backend is Ollama's OpenAI-compatible API."""
-        return self.provider == "ollama-openai"
+        return self.provider == "ollama"
 
     def uses_gemini(self) -> bool:
         """Return True when the session LLM backend is Gemini."""
         return self.provider == "gemini"
 
+    def effective_num_ctx(self) -> int:
+        """Return the effective Ollama context window size.
+
+        Resolution order: explicit num_ctx override (user/bootstrap) → model spec
+        context_window → 0 (unknown).
+        """
+        if self.num_ctx > 0:
+            return self.num_ctx
+        return self.reasoning_context_window() or 0
+
     def supports_context_ratio_tracking(self) -> bool:
         """Return True when input/output usage can be compared against an Ollama context budget."""
-        return self.uses_ollama_openai() and self.num_ctx > 0
+        return self.uses_ollama() and self.effective_num_ctx() > 0
+
+    def _inference(self, mode: str) -> dict[str, Any]:
+        model_key = self.model.split(":")[0]
+        base = _INFERENCE_DEFAULTS.get(self.provider, {}).get(model_key, {}).get(mode, {})
+        override = (self.reasoning if mode == "reasoning" else self.noreason).model_dump(
+            exclude_defaults=True, exclude_none=True
+        )
+        return {**base, **override}
 
     def reasoning_model_settings(self) -> ModelSettings:
         """Return ModelSettings for the main reasoning model."""
-        inference = resolve_reasoning_inference(self)
+        inference = self._inference("reasoning")
         extra_body = dict(inference.get("extra_body", {}))
-        num_ctx = inference.get("num_ctx")
-        if num_ctx is not None and "num_ctx" not in extra_body:
+        if (num_ctx := inference.get("num_ctx")) is not None and "num_ctx" not in extra_body:
             extra_body["num_ctx"] = num_ctx
         return ModelSettings(
             temperature=inference["temperature"],
@@ -260,11 +202,11 @@ class LlmSettings(BaseModel):
 
     def reasoning_context_window(self) -> int | None:
         """Return the configured or model-default context window for the main model."""
-        return resolve_reasoning_inference(self).get("context_window")
+        return self._inference("reasoning").get("context_window")
 
     def noreason_model_settings(self) -> ModelSettings:
         """Return ModelSettings for non-reasoning helper calls (provider-aware)."""
-        inference = resolve_noreason_inference(self)
+        inference = self._inference("noreason")
         if self.uses_gemini():
             from pydantic_ai.models.google import GoogleModelSettings
 
@@ -289,4 +231,10 @@ class LlmSettings(BaseModel):
             return "No model configured — set llm.model in settings.json"
         if self.uses_gemini() and not self.api_key:
             return "Set GEMINI_API_KEY or LLM_API_KEY — required for Gemini provider"
+        model_key = self.model.split(":")[0]
+        known = _INFERENCE_DEFAULTS.get(self.provider, {})
+        if model_key not in known:
+            return f"Model {model_key!r} has no inference defaults for provider {self.provider!r}. Known: {', '.join(known)}"
+        if "reasoning" not in known[model_key]:
+            return f"Model {model_key!r} is noreason-only and cannot be used as the main model"
         return None

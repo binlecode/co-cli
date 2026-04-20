@@ -3,7 +3,7 @@
 The SDK's ToolSearchToolset handles per-tool deferred visibility. This module
 provides a category-level prompt so the model knows which capability domains
 are available via search_tools. Native categories include representative tool
-names (e.g. "file editing (write_file, patch)") to reduce keyword-formation
+names (e.g. "file editing (file_write, file_patch)") to reduce keyword-formation
 burden for local models; integration categories are listed by label only.
 """
 
@@ -11,29 +11,29 @@ from co_cli.deps import ToolInfo, VisibilityPolicyEnum
 
 # Native deferred tool → category label
 _NATIVE_CATEGORIES: dict[str, str] = {
-    "write_file": "file editing",
-    "patch": "file editing",
-    "save_article": "memory management",
+    "file_write": "file editing",
+    "file_patch": "file editing",
+    "knowledge_article_save": "memory management",
     "task_start": "background tasks",
     "task_status": "background tasks",
     "task_cancel": "background tasks",
     "task_list": "background tasks",
-    "execute_code": "code execution",
-    "research_web": "sub-agents",
-    "analyze_knowledge": "sub-agents",
-    "reason_about": "sub-agents",
+    "code_execute": "code execution",
+    "web_research": "sub-agents",
+    "knowledge_analyze": "sub-agents",
+    "reason": "sub-agents",
 }
 
 # Representative tool names for each native category (for keyword-formation hints)
 _NATIVE_CATEGORY_REPS: dict[str, list[str]] = {
-    "file editing": ["write_file", "patch"],
+    "file editing": ["file_write", "file_patch"],
     "background tasks": ["task_start"],
-    "memory management": ["save_article"],
-    "code execution": ["execute_code"],
+    "memory management": ["knowledge_article_save"],
+    "code execution": ["code_execute"],
     "sub-agents": [
-        "research_web",
-        "analyze_knowledge",
-        "reason_about",
+        "web_research",
+        "knowledge_analyze",
+        "reason",
     ],
 }
 

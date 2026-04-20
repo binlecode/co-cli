@@ -1,4 +1,4 @@
-"""Functional tests for the execute_code tool."""
+"""Functional tests for the code_execute tool."""
 
 import asyncio
 
@@ -11,7 +11,7 @@ from tests._timeouts import SUBPROCESS_TIMEOUT_SECS
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
-from co_cli.tools.execute_code import execute_code
+from co_cli.tools.execute_code import code_execute
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)
@@ -35,7 +35,7 @@ async def test_execute_code_deny_pattern_returns_error() -> None:
     """DENY-pattern commands are blocked and return a terminal error, not raised."""
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await execute_code(ctx, "rm -rf /")
+        result = await code_execute(ctx, "rm -rf /")
     assert result.metadata.get("error") is True
 
 
@@ -45,7 +45,7 @@ async def test_execute_code_requires_approval_when_not_approved() -> None:
     ctx = _make_ctx(tool_call_approved=False)
     with pytest.raises(ApprovalRequired):
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await execute_code(ctx, "python --version")
+            await code_execute(ctx, "python --version")
 
 
 @pytest.mark.asyncio
@@ -53,5 +53,5 @@ async def test_execute_code_approved_runs_command() -> None:
     """Approved execute_code calls shell.run_command and returns tool_output."""
     ctx = _make_ctx(tool_call_approved=True)
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await execute_code(ctx, "echo hello")
+        result = await code_execute(ctx, "echo hello")
     assert "hello" in result.return_value

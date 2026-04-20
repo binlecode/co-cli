@@ -11,7 +11,7 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
-from co_cli.tools.files.write import patch
+from co_cli.tools.files.write import file_patch
 from co_cli.tools.resource_lock import ResourceBusyError, ResourceLockStore
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -103,7 +103,7 @@ async def test_patch_same_path_contention(tmp_path: Path):
     await acquired.wait()
 
     # patch should fail with tool error (lock held)
-    result = await patch(ctx, "target.txt", "hello", "goodbye")
+    result = await file_patch(ctx, "target.txt", "hello", "goodbye")
     assert result.metadata.get("error") is True
     assert "being modified" in result.return_value
 
@@ -127,8 +127,8 @@ async def test_patch_different_paths_no_contention(tmp_path: Path):
     ctx.deps.file_read_mtimes[str(file_b)] = file_b.stat().st_mtime
 
     result_a, result_b = await asyncio.gather(
-        patch(ctx, "a.txt", "aaa", "AAA"),
-        patch(ctx, "b.txt", "bbb", "BBB"),
+        file_patch(ctx, "a.txt", "aaa", "AAA"),
+        file_patch(ctx, "b.txt", "bbb", "BBB"),
     )
 
     assert result_a.metadata.get("error") is not True

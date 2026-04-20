@@ -9,7 +9,7 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools.obsidian import list_notes, read_note, search_notes
+from co_cli.tools.obsidian import obsidian_list, obsidian_read, obsidian_search
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)
@@ -36,25 +36,25 @@ def test_search_notes(tmp_path):
     )
 
     # Single keyword - word boundary (should NOT match "projector")
-    result = search_notes(ctx, "project")
+    result = obsidian_search(ctx, "project")
     assert result.metadata["count"] == 2
     assert "meeting.md" in result.return_value
     assert "todo.md" in result.return_value
     assert "projector.md" not in result.return_value  # Word boundary check
 
     # Multi-keyword AND logic
-    result = search_notes(ctx, "project team")
+    result = obsidian_search(ctx, "project team")
     assert result.metadata["count"] == 1
     assert "meeting.md" in result.return_value  # Has both "project" and "team"
     assert "todo.md" not in result.return_value  # Has "project" but not "team"
 
     # Limit parameter with has_more
-    result = search_notes(ctx, "project", limit=1)
+    result = obsidian_search(ctx, "project", limit=1)
     assert result.metadata["count"] == 1
     assert result.metadata["has_more"] is True
 
     # Limit higher than total matches — has_more should be False
-    result = search_notes(ctx, "project", limit=10)
+    result = obsidian_search(ctx, "project", limit=10)
     assert result.metadata["count"] == 2
     assert result.metadata["has_more"] is False
 
@@ -77,11 +77,11 @@ def test_search_notes_folder_filter(tmp_path):
     )
 
     # Without folder — finds both
-    result = search_notes(ctx, "project")
+    result = obsidian_search(ctx, "project")
     assert result.metadata["count"] == 2
 
     # With folder — only Work
-    result = search_notes(ctx, "project", folder="Work")
+    result = obsidian_search(ctx, "project", folder="Work")
     assert result.metadata["count"] == 1
     assert "Work/standup.md" in result.return_value
     assert "Personal" not in result.return_value
@@ -107,7 +107,7 @@ def test_search_notes_tag_filter(tmp_path):
     )
 
     # Filter by frontmatter tag
-    result = search_notes(ctx, "project", tag="#active")
+    result = obsidian_search(ctx, "project", tag="#active")
     assert result.metadata["count"] == 2
     assert "active.md" in result.return_value
     assert "inline.md" in result.return_value
@@ -115,7 +115,7 @@ def test_search_notes_tag_filter(tmp_path):
     assert "untagged.md" not in result.return_value
 
     # Tag without # prefix — should normalize
-    result = search_notes(ctx, "project", tag="archived")
+    result = obsidian_search(ctx, "project", tag="archived")
     assert result.metadata["count"] == 1
     assert "archived.md" in result.return_value
 
@@ -134,7 +134,7 @@ def test_list_notes_pagination(tmp_path):
     )
 
     # Page 1: offset=0, limit=2
-    r1 = list_notes(ctx, offset=0, limit=2)
+    r1 = obsidian_list(ctx, offset=0, limit=2)
     assert r1.metadata["count"] == 2
     assert r1.metadata["total"] == 5
     assert r1.metadata["offset"] == 0
@@ -147,7 +147,7 @@ def test_list_notes_pagination(tmp_path):
     assert "note-03.md" not in r1.return_value
 
     # Page 3: offset=4, limit=2 — partial last page
-    r3 = list_notes(ctx, offset=4, limit=2)
+    r3 = obsidian_list(ctx, offset=4, limit=2)
     assert r3.metadata["count"] == 1
     assert r3.metadata["total"] == 5
     assert r3.metadata["has_more"] is False
@@ -172,19 +172,19 @@ def test_obsidian_list_and_read(tmp_path):
     )
 
     # Test list_notes
-    notes = list_notes(ctx)
+    notes = obsidian_list(ctx)
     assert notes.metadata["count"] == 2
     assert "Project.md" in notes.return_value
     assert "Archive/Old.md" in notes.return_value
 
     # Test list_notes with tag filter
-    tagged = list_notes(ctx, "#work")
+    tagged = obsidian_list(ctx, "#work")
     assert tagged.metadata["count"] == 1
     assert "Project.md" in tagged.return_value
     assert "Archive/Old.md" not in tagged.return_value
 
     # Test read_note
-    result = read_note(ctx, "Project.md")
+    result = obsidian_read(ctx, "Project.md")
     assert "# Project" in result.return_value
     assert "#work" in result.return_value
     assert result.metadata["path"] == "Project.md"
@@ -219,7 +219,7 @@ def test_fts_folder_filter_excludes_siblings(tmp_path):
         )
     )
 
-    result = search_notes(ctx, keyword, folder="Work")
+    result = obsidian_search(ctx, keyword, folder="Work")
 
     assert result.metadata["count"] == 1, (
         f"Expected 1 result (Work only), got {result.metadata['count']}"
@@ -255,7 +255,7 @@ def test_fts_folder_filter_excludes_common_prefix_sibling(tmp_path):
         )
     )
 
-    result = search_notes(ctx, keyword, folder="Work")
+    result = obsidian_search(ctx, keyword, folder="Work")
 
     assert result.metadata["count"] == 1, (
         f"Expected 1 result (Work only), got {result.metadata['count']}: {result.return_value}"
@@ -289,7 +289,7 @@ def test_fts_tag_filter_works_with_index(tmp_path):
         )
     )
 
-    result = search_notes(ctx, "xylofts-tag-test", tag="#active")
+    result = obsidian_search(ctx, "xylofts-tag-test", tag="#active")
 
     assert result.metadata["count"] == 1, (
         f"Expected 1 result (active tag only), got {result.metadata['count']}: {result.return_value}"
@@ -314,7 +314,7 @@ def test_read_note_missing_file_raises_model_retry(tmp_path):
         )
     )
     with pytest.raises(ModelRetry, match="not found"):
-        read_note(ctx, "nonexistent.md")
+        obsidian_read(ctx, "nonexistent.md")
 
 
 def test_read_note_path_traversal_blocked(tmp_path):
@@ -327,4 +327,4 @@ def test_read_note_path_traversal_blocked(tmp_path):
         )
     )
     with pytest.raises(ModelRetry, match="outside the vault"):
-        read_note(ctx, "../../etc/passwd")
+        obsidian_read(ctx, "../../etc/passwd")

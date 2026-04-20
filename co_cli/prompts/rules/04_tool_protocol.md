@@ -47,5 +47,5 @@ match, do not retry it — pivot or explain the limitation.
 
 ## Memory
 Character base memories and user experience memories are both loaded in the
-system prompt before the first turn — do not call search_memory at turn start.
-Use search_memory mid-conversation to look up specific facts relevant to the current task.
+system prompt before the first turn — do not call memory_search at turn start.
+Use memory_search mid-conversation to look up specific facts relevant to the current task.

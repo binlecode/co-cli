@@ -15,7 +15,7 @@ def detect_model_tag() -> str:
     model = settings.llm.model
     if provider == "gemini":
         return f"gemini-{model}" if model else "gemini"
-    if provider == "ollama-openai":
+    if provider == "ollama":
         return f"ollama-{model}" if model else "ollama"
     return provider
 

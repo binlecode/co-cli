@@ -56,7 +56,7 @@ def _make_processor_ctx() -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -136,7 +136,7 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
         ),
         model=_LLM_MODEL,
     )
@@ -165,7 +165,7 @@ async def test_circuit_breaker_first_trip_is_skip():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
         ),
         model=_LLM_MODEL,
     )
@@ -187,20 +187,22 @@ async def test_circuit_breaker_first_trip_is_skip():
 
 
 @pytest.mark.asyncio
+@pytest.mark.local
 async def test_circuit_breaker_probes_at_cadence():
     """compaction_failure_count == 13 (3 + 10*1) → probe: LLM is attempted, count changes."""
     msgs = _make_messages(10)
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
         ),
         model=_LLM_MODEL,
     )
     # count=13: skips_since_trip=10 → probe cadence → LLM attempted
     deps.runtime.compaction_failure_count = 13
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    await summarize_history_window(ctx, msgs)
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        await summarize_history_window(ctx, msgs)
     # After a probe: success resets to 0, failure increments to 14.
     # Count must be 0 or 14 — 13 would mean the skip branch ran (bug).
     assert deps.runtime.compaction_failure_count in (0, 14)
@@ -269,8 +271,8 @@ def test_group_by_turn_multi_tool_turn_stays_one_group():
     """Multiple tool calls within one user turn stay in one group."""
     msgs = [
         _user("do stuff"),
-        _tool_call("read_file", "c1"),
-        _tool_return("read_file", "file content", "c1"),
+        _tool_call("file_read", "c1"),
+        _tool_return("file_read", "file content", "c1"),
         _tool_call("grep", "c2"),
         _tool_return("grep", "search results", "c2"),
         _assistant("done"),
@@ -284,8 +286,8 @@ def test_group_by_turn_orphan_prevention():
     """Dropping a whole group never leaves a ToolReturnPart without its ToolCallPart."""
     msgs = [
         _user("turn 1"),
-        _tool_call("read_file", "c1"),
-        _tool_return("read_file", "content", "c1"),
+        _tool_call("file_read", "c1"),
+        _tool_return("file_read", "content", "c1"),
         _assistant("got it"),
         _user("turn 2"),
         _assistant("ok"),
@@ -496,12 +498,12 @@ def _make_tool_conversation(n_read_file: int, n_save_memory: int = 0) -> list:
         cid = f"rf{call_id}"
         msgs.append(_user(f"read file {i}"))
         msgs.append(
-            ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)])
+            ModelResponse(parts=[ToolCallPart(tool_name="file_read", args={}, tool_call_id=cid)])
         )
         msgs.append(
             ModelRequest(
                 parts=[
-                    ToolReturnPart(tool_name="read_file", content=f"content {i}", tool_call_id=cid)
+                    ToolReturnPart(tool_name="file_read", content=f"content {i}", tool_call_id=cid)
                 ]
             )
         )
@@ -539,7 +541,7 @@ def test_compactable_older_than_5_cleared():
     for msg in result:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
-                if isinstance(part, ToolReturnPart) and part.tool_name == "read_file":
+                if isinstance(part, ToolReturnPart) and part.tool_name == "file_read":
                     read_file_contents.append(part.content)
 
     # 8 total, 5 most recent kept, 3 cleared (last group is protected so
@@ -576,12 +578,12 @@ def test_current_turn_protection_multi_tool():
         cid = f"rf{i}"
         msgs.append(_user(f"read file {i}"))
         msgs.append(
-            ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)])
+            ModelResponse(parts=[ToolCallPart(tool_name="file_read", args={}, tool_call_id=cid)])
         )
         msgs.append(
             ModelRequest(
                 parts=[
-                    ToolReturnPart(tool_name="read_file", content=f"content {i}", tool_call_id=cid)
+                    ToolReturnPart(tool_name="file_read", content=f"content {i}", tool_call_id=cid)
                 ]
             )
         )
@@ -591,13 +593,13 @@ def test_current_turn_protection_multi_tool():
     for i in range(3):
         cid = f"final{i}"
         msgs.append(
-            ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)])
+            ModelResponse(parts=[ToolCallPart(tool_name="file_read", args={}, tool_call_id=cid)])
         )
         msgs.append(
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="read_file", content=f"final content {i}", tool_call_id=cid
+                        tool_name="file_read", content=f"final content {i}", tool_call_id=cid
                     )
                 ]
             )
@@ -742,10 +744,10 @@ def test_compact_assistant_responses_tool_return_untouched():
     big_user_text = "z" * 50_000
     msgs = [
         ModelRequest(parts=[UserPromptPart(content=big_user_text)]),
-        ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id="c1")]),
+        ModelResponse(parts=[ToolCallPart(tool_name="file_read", args={}, tool_call_id="c1")]),
         ModelRequest(
             parts=[
-                ToolReturnPart(tool_name="read_file", content=big_tool_return, tool_call_id="c1")
+                ToolReturnPart(tool_name="file_read", content=big_tool_return, tool_call_id="c1")
             ]
         ),
         ModelResponse(parts=[TextPart(content="done")]),

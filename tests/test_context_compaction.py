@@ -17,7 +17,6 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings, settings
 from co_cli.context._history import summarize_history_window
 from co_cli.context.summarization import (
-    _DEFAULT_TOKEN_BUDGET,
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
     _build_summarizer_prompt,
@@ -109,7 +108,7 @@ async def test_compaction_fallback_when_no_usage_data():
 
     # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 25
     config = make_settings(
-        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
     )
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs_no_usage)
@@ -131,9 +130,9 @@ async def test_compaction_triggers_on_ollama_budget():
     """
     msgs = _make_messages(10, last_input_tokens=7_200, body_chars=3_000)
     config = make_settings(
-        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 8192})
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 8192})
     )
-    assert config.llm.uses_ollama_openai()
+    assert config.llm.uses_ollama()
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs)
     assert len(result) < len(msgs)
@@ -155,7 +154,7 @@ def test_budget_gemini_model_spec():
 def test_budget_ollama_llm_num_ctx_overrides_spec():
     """Ollama: llm_num_ctx overrides context_window from spec (Modelfile is truth)."""
     config = make_settings(
-        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 32_768})
     )
     budget = resolve_compaction_budget(config, 262_144)
     # llm_num_ctx (32768) overrides spec (262144), so effective ctx_window = 32768
@@ -166,17 +165,17 @@ def test_budget_ollama_llm_num_ctx_overrides_spec():
 def test_budget_ollama_no_spec_falls_back_to_llm_num_ctx():
     """Ollama with no resolved context_window → falls back to llm_num_ctx."""
     config = make_settings(
-        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 32_768})
     )
     budget = resolve_compaction_budget(config, None)
     assert budget == 32_768
 
 
 def test_budget_no_context_window_returns_default():
-    """No context_window (sub-agent/test path) → _DEFAULT_TOKEN_BUDGET."""
+    """No context_window and no num_ctx → config.llm.ctx_token_budget."""
     config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "gemini"}))
     budget = resolve_compaction_budget(config, None)
-    assert budget == _DEFAULT_TOKEN_BUDGET
+    assert budget == config.llm.ctx_token_budget
 
 
 def test_budget_floor_prevents_negative():
@@ -248,12 +247,12 @@ def test_estimate_counts_tool_call_args():
     big_args = {"query": "x" * 2000}
     bare = [
         ModelResponse(
-            parts=[ToolCallPart(tool_name="grep", args={}, tool_call_id="c1")],
+            parts=[ToolCallPart(tool_name="file_grep", args={}, tool_call_id="c1")],
         )
     ]
     with_args = [
         ModelResponse(
-            parts=[ToolCallPart(tool_name="grep", args=big_args, tool_call_id="c1")],
+            parts=[ToolCallPart(tool_name="file_grep", args=big_args, tool_call_id="c1")],
         )
     ]
     assert estimate_message_tokens(with_args) > estimate_message_tokens(bare)
@@ -264,12 +263,12 @@ def test_estimate_counts_list_tool_return():
     big_list = ["item " + "y" * 200 for _ in range(20)]
     msgs_with_list = [
         ModelRequest(
-            parts=[ToolReturnPart(tool_name="grep", content=big_list, tool_call_id="c1")],
+            parts=[ToolReturnPart(tool_name="file_grep", content=big_list, tool_call_id="c1")],
         )
     ]
     msgs_empty = [
         ModelRequest(
-            parts=[ToolReturnPart(tool_name="grep", content=[], tool_call_id="c1")],
+            parts=[ToolReturnPart(tool_name="file_grep", content=[], tool_call_id="c1")],
         )
     ]
     assert estimate_message_tokens(msgs_with_list) > estimate_message_tokens(msgs_empty)

@@ -127,7 +127,7 @@ async def test_tool_selection_and_arg_extraction(
             continue
 
         if expected_tool == "search_knowledge_or_list_knowledge":
-            if tool_name == "search_knowledge":
+            if tool_name == "knowledge_search":
                 actual = str((args or {}).get("query", "")).lower()
                 if "database preferences" in actual:
                     return
@@ -136,7 +136,7 @@ async def test_tool_selection_and_arg_extraction(
                     f"'database preferences' in query={(args or {}).get('query')!r}"
                 )
                 continue
-            if tool_name == "search_memory":
+            if tool_name == "memory_search":
                 actual = str((args or {}).get("query", "")).lower()
                 if "database preferences" in actual:
                     return
@@ -145,7 +145,7 @@ async def test_tool_selection_and_arg_extraction(
                     f"'database preferences' in query={(args or {}).get('query')!r}"
                 )
                 continue
-            if tool_name == "list_knowledge":
+            if tool_name == "knowledge_list":
                 kind = (args or {}).get("kind")
                 if kind in (None, "memory"):
                     return
@@ -153,7 +153,7 @@ async def test_tool_selection_and_arg_extraction(
                 continue
             last_details = (
                 f"tool={tool_name!r}, expected one of "
-                f"('search_knowledge', 'search_memory', 'list_knowledge'),"
+                f"('knowledge_search', 'memory_search', 'knowledge_list'),"
                 f" args={args!r}"
             )
             continue

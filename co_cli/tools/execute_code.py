@@ -1,4 +1,4 @@
-"""execute_code — thin shell tool for running code interpreter commands."""
+"""code_execute — thin shell tool for running code interpreter commands."""
 
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
@@ -10,7 +10,7 @@ from co_cli.tools.tool_io import tool_error, tool_output
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED)
-async def execute_code(ctx: RunContext[CoDeps], cmd: str, timeout: int = 60) -> ToolReturn:
+async def code_execute(ctx: RunContext[CoDeps], cmd: str, timeout: int = 60) -> ToolReturn:
     """Run a code interpreter command and return combined stdout + stderr.
 
     Use to run a code file or one-liner via an interpreter. The agent
@@ -39,8 +39,8 @@ async def execute_code(ctx: RunContext[CoDeps], cmd: str, timeout: int = 60) -> 
         return tool_error(f"exit {exit_code}:\n{output}", ctx=ctx)
     except RuntimeError as e:
         raise ModelRetry(
-            f"execute_code: timed out after {effective}s. "
+            f"code_execute: timed out after {effective}s. "
             f"Use a shorter command or increase timeout."
         ) from e
     except Exception as e:
-        raise ModelRetry(f"execute_code: unexpected error ({e}).") from e
+        raise ModelRetry(f"code_execute: unexpected error ({e}).") from e

@@ -41,7 +41,7 @@ from co_cli.knowledge._similarity import token_jaccard
 from co_cli.knowledge.mutator import _atomic_write
 from co_cli.llm._call import llm_call
 from co_cli.tools.knowledge.helpers import _slugify
-from co_cli.tools.knowledge.write import save_knowledge
+from co_cli.tools.knowledge.write import knowledge_save
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
@@ -120,7 +120,7 @@ def build_dream_miner_agent() -> Agent[CoDeps, str]:
     """Build a dream miner agent. Hoist outside the chunk loop; call .run() per chunk."""
     return Agent(
         instructions=_DREAM_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-        tools=[save_knowledge],
+        tools=[knowledge_save],
     )
 
 

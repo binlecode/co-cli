@@ -17,12 +17,12 @@ from co_cli.config._core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.knowledge._chunker import chunk_text
 from co_cli.knowledge._store import KnowledgeStore, SearchResult
-from co_cli.tools.knowledge.read import list_knowledge, search_knowledge
+from co_cli.tools.knowledge.read import knowledge_list, knowledge_search
 from co_cli.tools.knowledge.write import (
-    append_knowledge,
-    save_article,
-    save_knowledge,
-    update_knowledge,
+    knowledge_append,
+    knowledge_article_save,
+    knowledge_save,
+    knowledge_update,
 )
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
@@ -97,7 +97,7 @@ def test_list_knowledge_pagination(tmp_path: Path):
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     # Page 1: offset=0, limit=2
-    r1 = asyncio.run(list_knowledge(ctx, offset=0, limit=2))
+    r1 = asyncio.run(knowledge_list(ctx, offset=0, limit=2))
     assert r1.metadata["count"] == 2
     assert r1.metadata["total"] == 5
     assert r1.metadata["offset"] == 0
@@ -107,13 +107,13 @@ def test_list_knowledge_pagination(tmp_path: Path):
     assert r1.metadata["memories"][1]["id"] == "2"
 
     # Page 2: offset=2, limit=2
-    r2 = asyncio.run(list_knowledge(ctx, offset=2, limit=2))
+    r2 = asyncio.run(knowledge_list(ctx, offset=2, limit=2))
     assert r2.metadata["count"] == 2
     assert r2.metadata["total"] == 5
     assert r2.metadata["has_more"] is True
 
     # Page 3: offset=4, limit=2 — partial last page
-    r3 = asyncio.run(list_knowledge(ctx, offset=4, limit=2))
+    r3 = asyncio.run(knowledge_list(ctx, offset=4, limit=2))
     assert r3.metadata["count"] == 1
     assert r3.metadata["total"] == 5
     assert r3.metadata["has_more"] is False
@@ -131,7 +131,7 @@ def test_update_knowledge_replaces_exact_match(tmp_path: Path):
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
-    asyncio.run(update_knowledge(ctx, slug, "pytest over unittest", "pytest over all others"))
+    asyncio.run(knowledge_update(ctx, slug, "pytest over unittest", "pytest over all others"))
 
     updated_text = path.read_text(encoding="utf-8")
     assert "pytest over all others" in updated_text
@@ -145,7 +145,7 @@ def test_update_knowledge_raises_not_found(tmp_path: Path):
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     with pytest.raises(FileNotFoundError, match="not found"):
-        asyncio.run(update_knowledge(ctx, "999-nonexistent", "old", "new"))
+        asyncio.run(knowledge_update(ctx, "999-nonexistent", "old", "new"))
 
 
 def test_update_knowledge_raises_zero_occurrences(tmp_path: Path):
@@ -157,7 +157,7 @@ def test_update_knowledge_raises_zero_occurrences(tmp_path: Path):
     slug = path.stem
 
     with pytest.raises(ValueError, match="not found"):
-        asyncio.run(update_knowledge(ctx, slug, "unittest", "mocha"))
+        asyncio.run(knowledge_update(ctx, slug, "unittest", "mocha"))
 
 
 def test_update_knowledge_raises_ambiguous(tmp_path: Path):
@@ -169,7 +169,7 @@ def test_update_knowledge_raises_ambiguous(tmp_path: Path):
     slug = path.stem
 
     with pytest.raises(ValueError, match="2 times"):
-        asyncio.run(update_knowledge(ctx, slug, "pytest", "mocha"))
+        asyncio.run(knowledge_update(ctx, slug, "pytest", "mocha"))
 
 
 def test_update_knowledge_rejects_line_prefix(tmp_path: Path):
@@ -182,7 +182,7 @@ def test_update_knowledge_rejects_line_prefix(tmp_path: Path):
 
     # Simulate Read tool artifact: "1→ User prefers pytest"
     with pytest.raises(ValueError, match="line-number prefixes"):
-        asyncio.run(update_knowledge(ctx, slug, "1\u2192 User prefers pytest", "new"))
+        asyncio.run(knowledge_update(ctx, slug, "1\u2192 User prefers pytest", "new"))
 
 
 def test_update_knowledge_tab_normalization(tmp_path: Path):
@@ -200,7 +200,7 @@ def test_update_knowledge_tab_normalization(tmp_path: Path):
 
     slug = path.stem
     # old_content uses a tab; after expandtabs() it matches the body
-    asyncio.run(update_knowledge(ctx, slug, "foo\tbar", "replaced"))
+    asyncio.run(knowledge_update(ctx, slug, "foo\tbar", "replaced"))
 
     assert "replaced" in path.read_text(encoding="utf-8")
 
@@ -217,7 +217,7 @@ def test_append_knowledge_adds_to_end(tmp_path: Path):
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
-    asyncio.run(append_knowledge(ctx, slug, "Also uses coverage reports."))
+    asyncio.run(knowledge_append(ctx, slug, "Also uses coverage reports."))
 
     updated_text = path.read_text(encoding="utf-8")
     assert updated_text.rstrip("\n").endswith("Also uses coverage reports.")
@@ -231,7 +231,7 @@ def test_append_knowledge_missing_slug_raises(tmp_path: Path):
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     with pytest.raises(FileNotFoundError, match="not found"):
-        asyncio.run(append_knowledge(ctx, "999-nonexistent", "extra line"))
+        asyncio.run(knowledge_append(ctx, "999-nonexistent", "extra line"))
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from co_cli.tools.knowledge.read import search_knowledge
+    from co_cli.tools.knowledge.read import knowledge_search
 
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir()
@@ -298,11 +298,11 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         tracer = _orig.get_tracer("test.rag_backend")
         with tracer.start_as_current_span("execute_tool test") as parent_span:
             # (1) search_knowledge FTS path
-            asyncio.run(search_knowledge(fts_know_ctx, "rag-backend-annotation-fts-test"))
+            asyncio.run(knowledge_search(fts_know_ctx, "rag-backend-annotation-fts-test"))
             assert parent_span.attributes.get("rag.backend") in ("fts5", "hybrid")
 
             # (2) search_knowledge grep path
-            asyncio.run(search_knowledge(grep_know_ctx, "rag-backend-annotation-fts-test"))
+            asyncio.run(knowledge_search(grep_know_ctx, "rag-backend-annotation-fts-test"))
             assert parent_span.attributes.get("rag.backend") == "grep"
     finally:
         idx.close()
@@ -329,7 +329,7 @@ def test_update_knowledge_reindexes_in_db(tmp_path: Path):
         ctx = _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx)
 
         asyncio.run(
-            update_knowledge(ctx, slug, "original-content-for-update-test", "updated-content-xyz")
+            knowledge_update(ctx, slug, "original-content-for-update-test", "updated-content-xyz")
         )
 
         results = idx.search("updated-content-xyz", source="knowledge", limit=5)
@@ -353,7 +353,7 @@ def test_append_knowledge_reindexes_in_db(tmp_path: Path):
         idx.sync_dir("knowledge", memory_dir)
         ctx = _make_ctx(knowledge_dir=memory_dir, knowledge_store=idx)
 
-        asyncio.run(append_knowledge(ctx, slug, "appended-unique-content-abc"))
+        asyncio.run(knowledge_append(ctx, slug, "appended-unique-content-abc"))
 
         results = idx.search("appended-unique-content-abc", source="knowledge", limit=5)
         assert any("appended-unique-content-abc" in r.snippet for r in results), (
@@ -390,7 +390,7 @@ class TestSaveKnowledgeDedup:
         knowledge_dir = tmp_path / "knowledge"
         _write_memory(knowledge_dir, 1, "completely unrelated existing entry", tags=[])
         ctx = _make_dedup_ctx(knowledge_dir)
-        result = asyncio.run(save_knowledge(ctx, "user prefers pytest for testing", "preference"))
+        result = asyncio.run(knowledge_save(ctx, "user prefers pytest for testing", "preference"))
         files = list(knowledge_dir.glob("*.md"))
         assert len(files) == 2, "distinct content must produce a second file"
         assert result.metadata["action"] == "saved"
@@ -401,7 +401,7 @@ class TestSaveKnowledgeDedup:
         _write_memory(knowledge_dir, 1, "user prefers pytest over unittest", tags=[])
         ctx = _make_dedup_ctx(knowledge_dir, threshold=0.5)
         result = asyncio.run(
-            save_knowledge(ctx, "user prefers pytest over unittest", "preference")
+            knowledge_save(ctx, "user prefers pytest over unittest", "preference")
         )
         files = list(knowledge_dir.glob("*.md"))
         assert len(files) == 1, "no new file must be written on skip"
@@ -413,7 +413,7 @@ class TestSaveKnowledgeDedup:
         existing = _write_memory(knowledge_dir, 1, "user prefers pytest", tags=[])
         ctx = _make_dedup_ctx(knowledge_dir, threshold=0.3)
         result = asyncio.run(
-            save_knowledge(
+            knowledge_save(
                 ctx, "user prefers pytest over unittest framework for testing", "preference"
             )
         )
@@ -428,7 +428,7 @@ class TestSaveKnowledgeDedup:
         knowledge_dir = tmp_path / "knowledge"
         existing = _write_memory(knowledge_dir, 1, "user prefers pytest ruff", tags=[])
         ctx = _make_dedup_ctx(knowledge_dir, threshold=0.2)
-        result = asyncio.run(save_knowledge(ctx, "user prefers pytest mypy checks", "preference"))
+        result = asyncio.run(knowledge_save(ctx, "user prefers pytest mypy checks", "preference"))
         files = list(knowledge_dir.glob("*.md"))
         assert len(files) == 1, "append must not create a new file"
         assert result.metadata["action"] == "appended"
@@ -443,7 +443,7 @@ class TestSaveKnowledgeDedup:
         _write_memory(knowledge_dir, 1, "user prefers pytest over unittest", tags=[])
         ctx = _make_ctx(knowledge_dir=knowledge_dir)  # consolidation_enabled defaults to False
         result = asyncio.run(
-            save_knowledge(ctx, "user prefers pytest over unittest", "preference")
+            knowledge_save(ctx, "user prefers pytest over unittest", "preference")
         )
         files = list(knowledge_dir.glob("*.md"))
         assert len(files) == 2, "disabled dedup must allow duplicate writes"
@@ -486,7 +486,7 @@ async def test_append_knowledge_busy_error_uses_ctx_path(tmp_path: Path) -> None
     knowledge_dir = tmp_path / "knowledge"
     path = _write_memory(knowledge_dir, 1, "test content for lock", tags=["test"])
     slug = path.stem
-    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "append_knowledge")
+    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "knowledge_append")
 
     acquired = asyncio.Event()
     release = asyncio.Event()
@@ -499,7 +499,7 @@ async def test_append_knowledge_busy_error_uses_ctx_path(tmp_path: Path) -> None
     task = asyncio.create_task(hold_lock())
     await acquired.wait()
 
-    result = await append_knowledge(ctx, slug, "extra content")
+    result = await knowledge_append(ctx, slug, "extra content")
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
     release.set()
@@ -512,7 +512,7 @@ async def test_update_knowledge_busy_error_uses_ctx_path(tmp_path: Path) -> None
     knowledge_dir = tmp_path / "knowledge"
     path = _write_memory(knowledge_dir, 1, "test content for update lock", tags=["test"])
     slug = path.stem
-    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "update_knowledge")
+    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "knowledge_update")
 
     acquired = asyncio.Event()
     release = asyncio.Event()
@@ -525,7 +525,7 @@ async def test_update_knowledge_busy_error_uses_ctx_path(tmp_path: Path) -> None
     task = asyncio.create_task(hold_lock())
     await acquired.wait()
 
-    result = await update_knowledge(ctx, slug, "test content for update lock", "new content")
+    result = await knowledge_update(ctx, slug, "test content for update lock", "new content")
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
     release.set()
@@ -537,8 +537,8 @@ def test_save_knowledge_success_uses_ctx_path(tmp_path: Path) -> None:
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir(parents=True, exist_ok=True)
     # consolidation_enabled=False by default — isolates the final-save return path
-    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "save_knowledge")
-    result = asyncio.run(save_knowledge(ctx, "some knowledge content to save", "preference"))
+    ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "knowledge_save")
+    result = asyncio.run(knowledge_save(ctx, "some knowledge content to save", "preference"))
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
 
@@ -562,7 +562,7 @@ async def test_store_search_populates_source_ref_and_artifact_id(tmp_path: Path)
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     try:
-        await save_article(
+        await knowledge_article_save(
             ctx,
             content="xyloquartz-identity-field-unique content for identity test",
             title="Identity Test Article",
@@ -635,7 +635,7 @@ async def test_fts_article_search_tolerates_null_identity_fields(tmp_path: Path)
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     try:
-        result = await search_knowledge(
+        result = await knowledge_search(
             ctx, "xyloquartz-null-identity-unique", kind="article", source="knowledge"
         )
         assert result.metadata["count"] >= 1

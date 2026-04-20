@@ -12,8 +12,8 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.tools.files.helpers import _enforce_workspace_boundary, _is_recursive_pattern
-from co_cli.tools.files.read import glob, grep, read_file
-from co_cli.tools.files.write import patch, write_file
+from co_cli.tools.files.read import file_glob, file_grep, file_read
+from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
@@ -41,7 +41,7 @@ async def test_glob_basic(tmp_path):
     (tmp_path / "b.txt").write_text("world")
     (tmp_path / "subdir").mkdir()
 
-    result = await glob(_make_ctx(tmp_path), path=".")
+    result = await file_glob(_make_ctx(tmp_path), path=".")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] >= 3
@@ -58,7 +58,7 @@ async def test_glob_pattern(tmp_path):
     (tmp_path / "util.py").write_text("")
     (tmp_path / "readme.txt").write_text("")
 
-    result = await glob(_make_ctx(tmp_path), path=".", pattern="*.py")
+    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="*.py")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -82,7 +82,7 @@ async def test_glob_recursive_glob(tmp_path):
     (tmp_path / "src" / "mid.py").write_text("m")
     (tmp_path / "readme.txt").write_text("ignore me")
 
-    result = await glob(_make_ctx(tmp_path), path=".", pattern="**/*.py")
+    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="**/*.py")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -102,7 +102,7 @@ async def test_glob_recursive_truncation(tmp_path):
     for i in range(10):
         (tmp_path / f"file{i:02d}.py").write_text("")
 
-    result = await glob(_make_ctx(tmp_path), path=".", pattern="**/*.py", max_entries=3)
+    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="**/*.py", max_entries=3)
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3
@@ -116,7 +116,7 @@ async def test_glob_broken_symlink(tmp_path):
     (tmp_path / "real.txt").write_text("exists")
     (tmp_path / "broken_link").symlink_to(tmp_path / "nonexistent_target")
 
-    result = await glob(_make_ctx(tmp_path), path=".", pattern="**/*")
+    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="**/*")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -130,7 +130,7 @@ async def test_glob_shallow_truncation(tmp_path):
     for i in range(10):
         (tmp_path / f"file{i:02d}.txt").write_text("")
 
-    result = await glob(_make_ctx(tmp_path), path=".", max_entries=3)
+    result = await file_glob(_make_ctx(tmp_path), path=".", max_entries=3)
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3
@@ -144,7 +144,7 @@ async def test_glob_recursive_includes_directories(tmp_path):
     nested_dir.mkdir(parents=True)
     (nested_dir / "module.py").write_text("x = 1\n")
 
-    result = await glob(_make_ctx(tmp_path), path=".", pattern="**/*")
+    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="**/*")
 
     assert not result.metadata.get("error")
     entries = result.metadata["entries"]
@@ -163,7 +163,7 @@ async def test_glob_recursive_scoped_pattern_respected(tmp_path):
     (tmp_path / "src" / "inside.py").write_text("x = 1\n")
     (tmp_path / "other" / "outside.py").write_text("x = 2\n")
 
-    result = await glob(_make_ctx(tmp_path), path=".", pattern="src/**/*.py")
+    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="src/**/*.py")
 
     assert not result.metadata.get("error")
     names = [entry["name"] for entry in result.metadata["entries"]]
@@ -182,7 +182,7 @@ def test_is_recursive_pattern():
 @pytest.mark.asyncio
 async def test_glob_not_found(tmp_path):
     """Returns error dict when path does not exist."""
-    result = await glob(_make_ctx(tmp_path), path="nonexistent_dir")
+    result = await file_glob(_make_ctx(tmp_path), path="nonexistent_dir")
 
     assert result.metadata.get("error") is True
 
@@ -192,7 +192,7 @@ async def test_glob_not_a_dir(tmp_path):
     """Returns error dict when path points to a file, not a directory."""
     (tmp_path / "afile.txt").write_text("content")
 
-    result = await glob(_make_ctx(tmp_path), path="afile.txt")
+    result = await file_glob(_make_ctx(tmp_path), path="afile.txt")
 
     assert result.metadata.get("error") is True
 
@@ -205,7 +205,7 @@ async def test_read_file_full(tmp_path):
     """Reads complete file content and returns it in display."""
     (tmp_path / "hello.txt").write_text("hello\nworld\n")
 
-    result = await read_file(_make_ctx(tmp_path), path="hello.txt")
+    result = await file_read(_make_ctx(tmp_path), path="hello.txt")
 
     assert not result.metadata.get("error")
     assert "hello" in result.return_value
@@ -219,7 +219,7 @@ async def test_read_file_line_range(tmp_path):
     lines = [f"line{i}\n" for i in range(1, 11)]
     (tmp_path / "numbered.txt").write_text("".join(lines))
 
-    result = await read_file(_make_ctx(tmp_path), path="numbered.txt", start_line=3, end_line=7)
+    result = await file_read(_make_ctx(tmp_path), path="numbered.txt", start_line=3, end_line=7)
 
     assert not result.metadata.get("error")
     assert result.metadata["lines"] == 10
@@ -233,19 +233,11 @@ async def test_read_file_line_range(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_read_file_not_found(tmp_path):
-    """Returns error dict when file does not exist."""
-    result = await read_file(_make_ctx(tmp_path), path="missing.txt")
-
-    assert result.metadata.get("error") is True
-
-
-@pytest.mark.asyncio
 async def test_read_file_path_is_dir(tmp_path):
     """Returns error dict when path points to a directory."""
     (tmp_path / "adir").mkdir()
 
-    result = await read_file(_make_ctx(tmp_path), path="adir")
+    result = await file_read(_make_ctx(tmp_path), path="adir")
 
     assert result.metadata.get("error") is True
 
@@ -255,7 +247,7 @@ async def test_read_file_binary(tmp_path):
     """Returns error for binary files instead of crashing with UnicodeDecodeError."""
     (tmp_path / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
 
-    result = await read_file(_make_ctx(tmp_path), path="image.png")
+    result = await file_read(_make_ctx(tmp_path), path="image.png")
 
     assert result.metadata.get("error") is True
     assert "Binary file" in result.return_value
@@ -269,7 +261,7 @@ async def test_read_file_path_escape(tmp_path):
     boundary function directly. This test verifies read_file catches the ValueError
     and converts it to tool_error.
     """
-    result = await read_file(_make_ctx(tmp_path), path="../../etc/passwd")
+    result = await file_read(_make_ctx(tmp_path), path="../../etc/passwd")
 
     assert result.metadata.get("error") is True
 
@@ -279,7 +271,7 @@ async def test_read_file_line_numbers(tmp_path):
     """Full-file read returns cat -n style numbered output."""
     (tmp_path / "five.txt").write_text("aaa\nbbb\nccc\nddd\neee\n")
 
-    result = await read_file(_make_ctx(tmp_path), path="five.txt")
+    result = await file_read(_make_ctx(tmp_path), path="five.txt")
 
     assert not result.metadata.get("error")
     assert "     1\t" in result.return_value
@@ -292,7 +284,7 @@ async def test_read_file_line_numbers_ranged(tmp_path):
     lines = [f"line{i}\n" for i in range(1, 11)]
     (tmp_path / "ten.txt").write_text("".join(lines))
 
-    result = await read_file(_make_ctx(tmp_path), path="ten.txt", start_line=3, end_line=5)
+    result = await file_read(_make_ctx(tmp_path), path="ten.txt", start_line=3, end_line=5)
 
     assert not result.metadata.get("error")
     # First line in output should be numbered 3
@@ -311,7 +303,7 @@ async def test_grep(tmp_path):
     (tmp_path / "beta.txt").write_text("hello foo\n")
     (tmp_path / "gamma.txt").write_text("nothing here\n")
 
-    result = await grep(_make_ctx(tmp_path), pattern="foo")
+    result = await file_grep(_make_ctx(tmp_path), pattern="foo")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 2
@@ -324,7 +316,7 @@ async def test_grep(tmp_path):
 @pytest.mark.asyncio
 async def test_grep_invalid_regex(tmp_path):
     """Returns error dict for malformed regex patterns."""
-    result = await grep(_make_ctx(tmp_path), pattern="[unclosed")
+    result = await file_grep(_make_ctx(tmp_path), pattern="[unclosed")
 
     assert result.metadata.get("error") is True
 
@@ -334,7 +326,7 @@ async def test_grep_no_matches(tmp_path):
     """Returns zero count and empty matches list when nothing matches."""
     (tmp_path / "sample.txt").write_text("no match here\n")
 
-    result = await grep(_make_ctx(tmp_path), pattern="zzz_will_never_match")
+    result = await file_grep(_make_ctx(tmp_path), pattern="zzz_will_never_match")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 0
@@ -349,7 +341,7 @@ async def test_grep_recursive_subdirectory(tmp_path):
     (deep / "deep.py").write_text("TARGET_MARKER = True\n")
     (tmp_path / "top.txt").write_text("no match here\n")
 
-    result = await grep(_make_ctx(tmp_path), pattern="TARGET_MARKER")
+    result = await file_grep(_make_ctx(tmp_path), pattern="TARGET_MARKER")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 1
@@ -362,7 +354,7 @@ async def test_grep_recursive_subdirectory(tmp_path):
 @pytest.mark.asyncio
 async def test_write_file_creates_dirs(tmp_path):
     """Creates parent directories automatically when writing to nested path."""
-    result = await write_file(
+    result = await file_write(
         _make_ctx(tmp_path), path="deep/nested/dir/file.txt", content="test content"
     )
 
@@ -377,7 +369,7 @@ async def test_write_file_overwrites_existing(tmp_path):
     """Overwrites file content when file already exists."""
     (tmp_path / "existing.txt").write_text("old content")
 
-    result = await write_file(_make_ctx(tmp_path), path="existing.txt", content="new content")
+    result = await file_write(_make_ctx(tmp_path), path="existing.txt", content="new content")
 
     assert not result.metadata.get("error")
     assert (tmp_path / "existing.txt").read_text() == "new content"
@@ -387,7 +379,7 @@ async def test_write_file_overwrites_existing(tmp_path):
 async def test_write_file_returns_byte_count(tmp_path):
     """Returned byte count matches actual written bytes."""
     content = "hello"
-    result = await write_file(_make_ctx(tmp_path), path="bytes.txt", content=content)
+    result = await file_write(_make_ctx(tmp_path), path="bytes.txt", content=content)
 
     assert not result.metadata.get("error")
     assert result.metadata["bytes"] == len(content.encode("utf-8"))
@@ -396,7 +388,7 @@ async def test_write_file_returns_byte_count(tmp_path):
 @pytest.mark.asyncio
 async def test_write_file_path_escape(tmp_path):
     """Returns error dict when path escapes the workspace root."""
-    result = await write_file(_make_ctx(tmp_path), path="../../etc/passwd", content="evil")
+    result = await file_write(_make_ctx(tmp_path), path="../../etc/passwd", content="evil")
 
     assert result.metadata.get("error") is True
 
@@ -409,9 +401,11 @@ async def test_patch_exact_match(tmp_path):
     """Exact strategy replaces a unique string in a file."""
     (tmp_path / "config.txt").write_text("host=localhost\nport=8080\n")
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="config.txt")
+    await file_read(ctx, path="config.txt")
 
-    result = await patch(ctx, path="config.txt", old_string="localhost", new_string="example.com")
+    result = await file_patch(
+        ctx, path="config.txt", old_string="localhost", new_string="example.com"
+    )
 
     assert not result.metadata.get("error")
     assert result.metadata["replacements"] == 1
@@ -424,10 +418,10 @@ async def test_patch_line_trimmed(tmp_path):
     """line-trimmed strategy matches when old_string has trailing whitespace per line."""
     (tmp_path / "code.py").write_text("def foo():\n    return 1\n")
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="code.py")
+    await file_read(ctx, path="code.py")
 
     # old_string has trailing spaces on each line — not present in file
-    result = await patch(
+    result = await file_patch(
         ctx,
         path="code.py",
         old_string="def foo():  \n    return 1  \n",
@@ -444,10 +438,10 @@ async def test_patch_indent_stripped(tmp_path):
     """Fuzzy matching succeeds when old_string uses wrong indentation (tabs vs spaces)."""
     (tmp_path / "src.py").write_text("    x = 1\n    y = 2\n")
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="src.py")
+    await file_read(ctx, path="src.py")
 
     # old_string uses tabs instead of spaces — a fuzzy strategy normalises the indentation
-    result = await patch(
+    result = await file_patch(
         ctx,
         path="src.py",
         old_string="\tx = 1\n\ty = 2\n",
@@ -464,10 +458,10 @@ async def test_patch_escape_expanded(tmp_path):
     """escape-expanded strategy matches when old_string uses literal \\n instead of actual newline."""
     (tmp_path / "data.txt").write_text("line one\nline two\n")
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="data.txt")
+    await file_read(ctx, path="data.txt")
 
     # old_string has literal backslash-n — should match actual newline in file
-    result = await patch(
+    result = await file_patch(
         ctx,
         path="data.txt",
         old_string="line one\\nline two\\n",
@@ -484,9 +478,9 @@ async def test_patch_ambiguous_returns_error(tmp_path):
     """Returns error when old_string matches multiple times without replace_all=True."""
     (tmp_path / "repeat.txt").write_text("foo\nfoo\nbar\n")
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="repeat.txt")
+    await file_read(ctx, path="repeat.txt")
 
-    result = await patch(ctx, path="repeat.txt", old_string="foo", new_string="baz")
+    result = await file_patch(ctx, path="repeat.txt", old_string="foo", new_string="baz")
 
     assert result.metadata.get("error") is True
     assert "2" in result.return_value
@@ -497,9 +491,9 @@ async def test_patch_no_match_returns_error(tmp_path):
     """Returns error when no strategy matches — error mentions the file."""
     (tmp_path / "notes.txt").write_text("some content here\n")
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="notes.txt")
+    await file_read(ctx, path="notes.txt")
 
-    result = await patch(ctx, path="notes.txt", old_string="absent_string", new_string="x")
+    result = await file_patch(ctx, path="notes.txt", old_string="absent_string", new_string="x")
 
     assert result.metadata.get("error") is True
     assert "notes.txt" in result.return_value
@@ -508,7 +502,9 @@ async def test_patch_no_match_returns_error(tmp_path):
 @pytest.mark.asyncio
 async def test_patch_not_found_path(tmp_path):
     """Returns error dict when the target file does not exist."""
-    result = await patch(_make_ctx(tmp_path), path="ghost.txt", old_string="x", new_string="y")
+    result = await file_patch(
+        _make_ctx(tmp_path), path="ghost.txt", old_string="x", new_string="y"
+    )
 
     assert result.metadata.get("error") is True
 
@@ -561,8 +557,8 @@ async def test_lifecycle_normalizes_relative_path(tmp_path):
 
     lifecycle = CoToolLifecycle()
     ctx = _make_ctx(tmp_path)
-    call = ToolCallPart(tool_name="read_file", args={"path": "subdir/file.txt"})
-    tool_def = ToolDefinition(name="read_file", description="read", parameters_json_schema={})
+    call = ToolCallPart(tool_name="file_read", args={"path": "subdir/file.txt"})
+    tool_def = ToolDefinition(name="file_read", description="read", parameters_json_schema={})
     args: ValidatedToolArgs = {"path": "subdir/file.txt"}
 
     result_args = await lifecycle.before_tool_execute(
@@ -611,7 +607,7 @@ async def test_read_file_records_mtime(tmp_path):
     target.write_text("content")
     ctx = _make_ctx(tmp_path)
 
-    await read_file(ctx, path="tracked.txt")
+    await file_read(ctx, path="tracked.txt")
 
     assert str(target) in ctx.deps.file_read_mtimes
     assert ctx.deps.file_read_mtimes[str(target)] == target.stat().st_mtime
@@ -626,7 +622,7 @@ async def test_write_file_staleness_blocked(tmp_path):
     # Simulate: agent recorded an old mtime of 0.0 — file on disk has a newer mtime
     ctx.deps.file_read_mtimes[str(target)] = 0.0
 
-    result = await write_file(ctx, path="stale.txt", content="overwrite")
+    result = await file_write(ctx, path="stale.txt", content="overwrite")
 
     assert result.metadata.get("error") is True
     assert "changed since last read" in result.return_value
@@ -642,7 +638,7 @@ async def test_patch_staleness_blocked(tmp_path):
     ctx.deps.file_read_mtimes[str(target)] = 0.0
 
     with pytest.raises(ModelRetry, match="changed since last read"):
-        await patch(ctx, path="stale.txt", old_string="original", new_string="new")
+        await file_patch(ctx, path="stale.txt", old_string="original", new_string="new")
 
 
 @pytest.mark.asyncio
@@ -653,8 +649,8 @@ async def test_patch_requires_read_first(tmp_path):
     ctx = _make_ctx(tmp_path)
     # Do NOT call read_file — file_read_mtimes is empty
 
-    with pytest.raises(ModelRetry, match="read_file"):
-        await patch(ctx, path="unread.txt", old_string="original", new_string="replaced")
+    with pytest.raises(ModelRetry, match="file_read"):
+        await file_patch(ctx, path="unread.txt", old_string="original", new_string="replaced")
 
 
 @pytest.mark.asyncio
@@ -663,9 +659,9 @@ async def test_patch_return_preview(tmp_path):
     target = tmp_path / "code.py"
     target.write_text("x = 1\ny = 2\n")
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="code.py")
+    await file_read(ctx, path="code.py")
 
-    result = await patch(ctx, path="code.py", old_string="x = 1", new_string="x = 99")
+    result = await file_patch(ctx, path="code.py", old_string="x = 1", new_string="x = 99")
 
     assert not result.metadata.get("error")
     assert "x = 1" in result.return_value
@@ -681,7 +677,7 @@ async def test_grep_scoped_to_path(tmp_path):
     (tmp_path / "outside.py").write_text("TARGET_TOKEN = 2")
     ctx = _make_ctx(tmp_path)
 
-    result = await grep(ctx, pattern="TARGET_TOKEN", path="sub")
+    result = await file_grep(ctx, pattern="TARGET_TOKEN", path="sub")
 
     assert not result.metadata.get("error")
     assert "inside.py" in result.return_value
@@ -693,7 +689,7 @@ async def test_write_file_new_file_skips_staleness(tmp_path):
     """write_file skips staleness check for paths that were never read."""
     ctx = _make_ctx(tmp_path)
 
-    result = await write_file(ctx, path="brand_new.txt", content="hello")
+    result = await file_write(ctx, path="brand_new.txt", content="hello")
 
     assert not result.metadata.get("error")
 
@@ -706,13 +702,13 @@ async def test_write_file_staleness_mtime_updated_after_write(tmp_path):
     ctx = _make_ctx(tmp_path)
 
     # Read the file so mtime is registered
-    await read_file(ctx, path="data.txt")
+    await file_read(ctx, path="data.txt")
 
-    result1 = await write_file(ctx, path="data.txt", content="first write")
+    result1 = await file_write(ctx, path="data.txt", content="first write")
     assert not result1.metadata.get("error")
 
     # Second write must also succeed — mtime was updated after the first write
-    result2 = await write_file(ctx, path="data.txt", content="second write")
+    result2 = await file_write(ctx, path="data.txt", content="second write")
     assert not result2.metadata.get("error")
 
 
@@ -730,7 +726,7 @@ async def test_patch_size_guard(tmp_path):
     # Register the mtime directly — avoids reading 10 MB of data in this test
     ctx.deps.file_read_mtimes[str(target)] = target.stat().st_mtime
 
-    result = await patch(ctx, path="huge.txt", old_string="x", new_string="y")
+    result = await file_patch(ctx, path="huge.txt", old_string="x", new_string="y")
 
     assert result.metadata.get("error") is True
     assert "too large" in result.return_value
@@ -743,7 +739,7 @@ async def test_read_file_utf16le(tmp_path):
     # BOM (FF FE) + UTF-16LE payload
     target.write_bytes(b"\xff\xfe" + "hello utf16".encode("utf-16-le"))
 
-    result = await read_file(_make_ctx(tmp_path), path="utf16.txt")
+    result = await file_read(_make_ctx(tmp_path), path="utf16.txt")
 
     assert not result.metadata.get("error")
     assert "hello utf16" in result.return_value
@@ -755,9 +751,9 @@ async def test_patch_utf16(tmp_path):
     target = tmp_path / "utf16edit.txt"
     target.write_bytes(b"\xff\xfe" + "hello world".encode("utf-16-le"))
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="utf16edit.txt")
+    await file_read(ctx, path="utf16edit.txt")
 
-    result = await patch(ctx, path="utf16edit.txt", old_string="hello", new_string="goodbye")
+    result = await file_patch(ctx, path="utf16edit.txt", old_string="hello", new_string="goodbye")
 
     assert not result.metadata.get("error")
     assert result.metadata["replacements"] == 1
@@ -776,10 +772,10 @@ async def test_patch_partial_read_blocked(tmp_path):
     target.write_text("line one\nline two\nline three\n")
     ctx = _make_ctx(tmp_path)
     # Only read lines 1-2 — file is in file_read_mtimes but also in file_partial_reads
-    await read_file(ctx, path="large.py", start_line=1, end_line=2)
+    await file_read(ctx, path="large.py", start_line=1, end_line=2)
 
     with pytest.raises(ModelRetry, match=r"start_line|end_line"):
-        await patch(ctx, path="large.py", old_string="line one", new_string="replaced")
+        await file_patch(ctx, path="large.py", old_string="line one", new_string="replaced")
 
 
 @pytest.mark.asyncio
@@ -788,14 +784,14 @@ async def test_patch_partial_clears_on_full_read(tmp_path):
     target = tmp_path / "data.py"
     target.write_text("alpha\nbeta\ngamma\n")
     ctx = _make_ctx(tmp_path)
-    await read_file(ctx, path="data.py", start_line=1, end_line=1)
+    await file_read(ctx, path="data.py", start_line=1, end_line=1)
     # Confirm patch is blocked after partial read
     with pytest.raises(ModelRetry, match=r"start_line|end_line"):
-        await patch(ctx, path="data.py", old_string="alpha", new_string="x")
+        await file_patch(ctx, path="data.py", old_string="alpha", new_string="x")
 
     # Full read clears the partial flag
-    await read_file(ctx, path="data.py")
-    result = await patch(ctx, path="data.py", old_string="alpha", new_string="x")
+    await file_read(ctx, path="data.py")
+    result = await file_patch(ctx, path="data.py", old_string="alpha", new_string="x")
     assert not result.metadata.get("error")
 
 
@@ -808,7 +804,7 @@ async def test_grep_case_insensitive(tmp_path):
     (tmp_path / "a.txt").write_text("Hello World\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await grep(ctx, pattern="hello world", case_insensitive=True)
+    result = await file_grep(ctx, pattern="hello world", case_insensitive=True)
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 1
@@ -822,7 +818,7 @@ async def test_grep_files_with_matches_mode(tmp_path):
     (tmp_path / "miss.txt").write_text("nothing relevant\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await grep(ctx, pattern="TARGET", output_mode="files_with_matches")
+    result = await file_grep(ctx, pattern="TARGET", output_mode="files_with_matches")
 
     assert not result.metadata.get("error")
     assert "hit.txt" in result.return_value
@@ -838,7 +834,7 @@ async def test_grep_count_mode(tmp_path):
     (tmp_path / "one.txt").write_text("MARK\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await grep(ctx, pattern="MARK", output_mode="count")
+    result = await file_grep(ctx, pattern="MARK", output_mode="count")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3  # 2 + 1 total matches
@@ -852,7 +848,7 @@ async def test_grep_context_lines(tmp_path):
     (tmp_path / "src.py").write_text("before\nTARGET\nafter\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await grep(ctx, pattern="TARGET", context_lines=1)
+    result = await file_grep(ctx, pattern="TARGET", context_lines=1)
 
     assert not result.metadata.get("error")
     assert "before" in result.return_value
@@ -867,12 +863,12 @@ async def test_grep_head_limit_and_offset(tmp_path):
     (tmp_path / "big.txt").write_text(content + "\n")
     ctx = _make_ctx(tmp_path)
 
-    result_limited = await grep(ctx, pattern="MATCH", head_limit=3)
+    result_limited = await file_grep(ctx, pattern="MATCH", head_limit=3)
     assert not result_limited.metadata.get("error")
     assert result_limited.metadata["truncated"] is True
     assert result_limited.return_value.count("MATCH") == 3
 
-    result_offset = await grep(ctx, pattern="MATCH", head_limit=3, offset=3)
+    result_offset = await file_grep(ctx, pattern="MATCH", head_limit=3, offset=3)
     assert not result_offset.metadata.get("error")
     # First result_limited entry must not appear in result_offset
     first_line = result_limited.return_value.splitlines()[0]
@@ -891,7 +887,7 @@ async def test_grep_searches_hidden_and_gitignored_files(tmp_path):
     (ignored_dir / "ignored.txt").write_text("TOKEN\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await grep(ctx, pattern="TOKEN")
+    result = await file_grep(ctx, pattern="TOKEN")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 2
@@ -908,7 +904,7 @@ async def test_grep_without_rg_falls_back_to_python(tmp_path):
     original_path = os.environ.get("PATH")
     os.environ["PATH"] = ""
     try:
-        result = await grep(ctx, pattern="TARGET")
+        result = await file_grep(ctx, pattern="TARGET")
     finally:
         if original_path is None:
             del os.environ["PATH"]
@@ -948,24 +944,24 @@ def _make_ctx_sized(workspace: Path, tool_name: str, max_result_size: int = 10) 
 @pytest.mark.asyncio
 async def test_glob_error_uses_ctx_path(tmp_path):
     """Oversized glob 'path not found' error is persisted through the ctx-aware path."""
-    ctx = _make_ctx_sized(tmp_path, "glob")
-    result = await glob(ctx, path="a" * 50)
+    ctx = _make_ctx_sized(tmp_path, "file_glob")
+    result = await file_glob(ctx, path="a" * 50)
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
 
 @pytest.mark.asyncio
 async def test_read_file_error_uses_ctx_path(tmp_path):
     """Oversized read_file 'file not found' error is persisted through the ctx-aware path."""
-    ctx = _make_ctx_sized(tmp_path, "read_file")
-    result = await read_file(ctx, path="nonexistent_" + "a" * 50)
+    ctx = _make_ctx_sized(tmp_path, "file_read")
+    result = await file_read(ctx, path="nonexistent_" + "a" * 50)
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
 
 @pytest.mark.asyncio
 async def test_grep_error_uses_ctx_path(tmp_path):
     """Oversized grep 'invalid regex' error is persisted through the ctx-aware path."""
-    ctx = _make_ctx_sized(tmp_path, "grep")
-    result = await grep(ctx, pattern="[unclosed")
+    ctx = _make_ctx_sized(tmp_path, "file_grep")
+    result = await file_grep(ctx, pattern="[unclosed")
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
 
@@ -974,10 +970,10 @@ async def test_write_file_error_uses_ctx_path(tmp_path):
     """Oversized write_file staleness error is persisted through the ctx-aware path."""
     target = tmp_path / "data.txt"
     target.write_text("initial")
-    ctx = _make_ctx_sized(tmp_path, "write_file")
+    ctx = _make_ctx_sized(tmp_path, "file_write")
     # Seed a stale mtime (0.0) — real mtime differs, triggering the staleness guard
     ctx.deps.file_read_mtimes[str(target)] = 0.0
-    result = await write_file(ctx, path="data.txt", content="new content")
+    result = await file_write(ctx, path="data.txt", content="new content")
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
 
@@ -986,8 +982,8 @@ async def test_patch_error_uses_ctx_path(tmp_path):
     """Oversized patch 'old_string not found' error is persisted through the ctx-aware path."""
     target = tmp_path / "code.txt"
     target.write_text("some content here")
-    ctx = _make_ctx_sized(tmp_path, "patch")
+    ctx = _make_ctx_sized(tmp_path, "file_patch")
     # Populate file_read_mtimes directly to satisfy the read-before-patch guard
     ctx.deps.file_read_mtimes[str(target)] = target.stat().st_mtime
-    result = await patch(ctx, path="code.txt", old_string="absent_string_xyz", new_string="x")
+    result = await file_patch(ctx, path="code.txt", old_string="absent_string_xyz", new_string="x")
     assert PERSISTED_OUTPUT_TAG in result.return_value

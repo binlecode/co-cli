@@ -67,7 +67,7 @@ def _format_drive_results(
     requires_config="google_credentials_path",
     retries=3,
 )
-def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
+def drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
     """Search files in Google Drive by name or content. Returns up to 10
     results per page. Matches files whose name contains the query OR whose
     full text body contains the query.
@@ -77,7 +77,7 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
     complete results (counts, summaries, exhaustive listings). Pages must be
     requested sequentially — you cannot skip to page 3 without fetching page 2.
 
-    To read a file's content, pass its id to read_drive_file.
+    To read a file's content, pass its id to drive_read.
 
     Returns a dict with:
     - display: pre-formatted results with clickable URLs — show directly to user
@@ -133,13 +133,13 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
     requires_config="google_credentials_path",
     retries=3,
 )
-def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
+def drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
     """Fetch the content of a file from Google Drive and return it as text.
 
     Google Workspace documents (Docs, Sheets, Slides) are exported as plain
     text. Other files are downloaded as-is and decoded as UTF-8.
 
-    Use file IDs from search_drive_files results. Do not guess file IDs.
+    Use file IDs from drive_search results. Do not guess file IDs.
 
     Returns the file content as a ToolReturn — show directly to the user
     or pass to further processing.
@@ -149,7 +149,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
     - Large files may be slow or truncated by API limits
 
     Args:
-        file_id: The Google Drive file ID (from search_drive_files results,
+        file_id: The Google Drive file ID (from drive_search results,
                  e.g. "1e2ijrBd74oruWB0b-xGTiQvSwxGO6KK9HPTGaXnmOtI").
     """
     service, err = _get_google_service(ctx, "drive", "v3", _DRIVE_NOT_CONFIGURED)

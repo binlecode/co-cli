@@ -480,19 +480,20 @@ def _check_output_limits(
             "Response may be truncated (hit output token limit). Use /continue to extend."
         )
     if deps.runtime.turn_usage is not None and deps.config.llm.supports_context_ratio_tracking():
-        ratio = deps.runtime.turn_usage.input_tokens / deps.config.llm.num_ctx
+        effective_ctx = deps.config.llm.effective_num_ctx()
+        ratio = deps.runtime.turn_usage.input_tokens / effective_ctx
         with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
             ctx_span.set_attribute("ctx.input_tokens", deps.runtime.turn_usage.input_tokens)
-            ctx_span.set_attribute("ctx.num_ctx", deps.config.llm.num_ctx)
+            ctx_span.set_attribute("ctx.num_ctx", effective_ctx)
             ctx_span.set_attribute("ctx.ratio", ratio)
             if ratio >= deps.config.llm.ctx_overflow_threshold:
                 frontend.on_status(
-                    f"Context limit reached ({deps.runtime.turn_usage.input_tokens:,} / {deps.config.llm.num_ctx:,} tokens)"
+                    f"Context limit reached ({deps.runtime.turn_usage.input_tokens:,} / {effective_ctx:,} tokens)"
                     " — Ollama likely truncated the prompt. Use /compact or /new."
                 )
             elif ratio >= deps.config.llm.ctx_warn_threshold:
                 frontend.on_status(
-                    f"Context {ratio:.0%} full ({deps.runtime.turn_usage.input_tokens:,} / {deps.config.llm.num_ctx:,} tokens)."
+                    f"Context {ratio:.0%} full ({deps.runtime.turn_usage.input_tokens:,} / {effective_ctx:,} tokens)."
                     " Consider /compact to free space."
                 )
 

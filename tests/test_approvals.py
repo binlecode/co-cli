@@ -28,7 +28,7 @@ def _make_deps() -> CoDeps:
 def test_write_file_display_includes_path_and_byte_count():
     """write_file approval shows path and byte count derived from content."""
     content = "hello world"
-    subject = resolve_approval_subject("write_file", {"path": "src/foo.py", "content": content})
+    subject = resolve_approval_subject("file_write", {"path": "src/foo.py", "content": content})
     assert "src/foo.py" in subject.display
     assert str(len(content.encode())) in subject.display
     assert "bytes" in subject.display
@@ -36,7 +36,7 @@ def test_write_file_display_includes_path_and_byte_count():
 
 def test_write_file_display_includes_scope_hint():
     """write_file approval includes user-legible scope hint."""
-    subject = resolve_approval_subject("write_file", {"path": "src/foo.py", "content": "x"})
+    subject = resolve_approval_subject("file_write", {"path": "src/foo.py", "content": "x"})
     assert "allow all writes" in subject.display
     assert "this session" in subject.display
 
@@ -47,7 +47,7 @@ def test_write_file_display_includes_scope_hint():
 def test_patch_display_includes_path_and_snippets():
     """patch approval shows path, old_string snippet, and new_string snippet."""
     subject = resolve_approval_subject(
-        "patch",
+        "file_patch",
         {
             "path": "src/bar.py",
             "old_string": "old text",
@@ -64,7 +64,7 @@ def test_patch_display_truncates_long_old_string():
     """patch approval truncates old_string/new_string longer than 400 chars."""
     long_old = "x" * 500
     subject = resolve_approval_subject(
-        "patch",
+        "file_patch",
         {"path": "a.py", "old_string": long_old, "new_string": "short"},
     )
     assert "…" in subject.display
@@ -73,7 +73,7 @@ def test_patch_display_truncates_long_old_string():
 def test_patch_display_includes_replace_all():
     """patch approval shows replace_all flag."""
     subject = resolve_approval_subject(
-        "patch",
+        "file_patch",
         {"path": "a.py", "old_string": "x", "new_string": "y", "replace_all": True},
     )
     assert "True" in subject.display
@@ -82,7 +82,7 @@ def test_patch_display_includes_replace_all():
 def test_patch_display_includes_scope_hint():
     """patch approval includes user-legible scope hint."""
     subject = resolve_approval_subject(
-        "patch",
+        "file_patch",
         {"path": "src/bar.py", "old_string": "x", "new_string": "y"},
     )
     assert "allow all writes" in subject.display
@@ -101,7 +101,7 @@ def test_shell_hint_uses_noun_phrase():
 
 def test_path_hint_uses_noun_phrase():
     """Path approval hint is a noun phrase, not bracket notation."""
-    subject = resolve_approval_subject("write_file", {"path": "src/foo.py", "content": ""})
+    subject = resolve_approval_subject("file_write", {"path": "src/foo.py", "content": ""})
     assert "[always → session:" not in subject.display
     assert "this session" in subject.display
 
@@ -146,7 +146,7 @@ def test_is_auto_approved_no_match_different_utility():
 def test_is_auto_approved_no_match_empty_rules():
     """No stored rules means no auto-approval."""
     deps = _make_deps()
-    subject = resolve_approval_subject("write_file", {"path": "src/foo.py", "content": "x"})
+    subject = resolve_approval_subject("file_write", {"path": "src/foo.py", "content": "x"})
     assert not is_auto_approved(subject, deps)
 
 
@@ -219,7 +219,7 @@ def test_resolve_approval_subject_shell_scopes_to_utility():
 
 def test_resolve_approval_subject_path_scopes_to_parent_dir():
     """File-write subject resolves to the parent directory of the target path."""
-    subject = resolve_approval_subject("write_file", {"path": "/home/user/project/file.txt"})
+    subject = resolve_approval_subject("file_write", {"path": "/home/user/project/file.txt"})
     assert subject.kind == ApprovalKindEnum.PATH
     assert subject.value == "/home/user/project"
     assert subject.can_remember is True
@@ -237,11 +237,9 @@ def test_resolve_approval_subject_domain_scopes_to_hostname():
 
 def test_resolve_approval_subject_generic_tool_fallback():
     """Unknown tools fall through to the generic-tool branch, keyed by tool name."""
-    subject = resolve_approval_subject(
-        "create_gmail_draft", {"to": "test@example.com", "subject": "hi"}
-    )
+    subject = resolve_approval_subject("gmail_draft", {"to": "test@example.com", "subject": "hi"})
     assert subject.kind == ApprovalKindEnum.TOOL
-    assert subject.value == "create_gmail_draft"
+    assert subject.value == "gmail_draft"
     assert subject.can_remember is True
 
 
@@ -251,7 +249,7 @@ def test_resolve_approval_subject_generic_tool_fallback():
 def test_write_file_preview_populated():
     """write_file subject has preview containing content lines when content is non-empty."""
     content = "line one\nline two\nline three"
-    subject = resolve_approval_subject("write_file", {"path": "f.py", "content": content})
+    subject = resolve_approval_subject("file_write", {"path": "f.py", "content": content})
     assert subject.preview is not None
     assert "line one" in subject.preview
     assert "line two" in subject.preview
@@ -260,7 +258,7 @@ def test_write_file_preview_populated():
 def test_write_file_preview_truncated():
     """write_file preview is capped at 30 lines with a truncation marker when exceeded."""
     content = "line\n" * 50
-    subject = resolve_approval_subject("write_file", {"path": "f.py", "content": content})
+    subject = resolve_approval_subject("file_write", {"path": "f.py", "content": content})
     assert subject.preview is not None
     assert "... (" in subject.preview
     assert subject.preview.count("\n") < 50
@@ -268,7 +266,7 @@ def test_write_file_preview_truncated():
 
 def test_write_file_preview_none_for_empty_content():
     """write_file subject has preview=None when content is an empty string."""
-    subject = resolve_approval_subject("write_file", {"path": "f.py", "content": ""})
+    subject = resolve_approval_subject("file_write", {"path": "f.py", "content": ""})
     assert subject.preview is None
 
 
@@ -288,7 +286,7 @@ async def test_collect_deferred_approvals_passes_subject_to_frontend() -> None:
     frontend = SilentFrontend(approval_response="y")
 
     call = ToolCallPart(
-        tool_name="write_file",
+        tool_name="file_write",
         args={"path": "src/foo.py", "content": "print('hello')\n"},
         tool_call_id="call-001",
     )

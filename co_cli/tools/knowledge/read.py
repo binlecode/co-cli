@@ -146,7 +146,7 @@ async def _recall_for_context(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def list_knowledge(
+async def knowledge_list(
     ctx: RunContext[CoDeps],
     offset: int = 0,
     limit: int = 20,
@@ -156,8 +156,8 @@ async def list_knowledge(
     Returns one page at a time (default 20 per page).
 
     Covers all artifact kinds: preferences, decisions, rules, feedback, articles,
-    references, and notes. For targeted lookup by keyword, use search_knowledge.
-    For personal notes, use list_notes. For cloud documents, use search_drive_files.
+    references, and notes. For targeted lookup by keyword, use knowledge_search.
+    For personal notes, use obsidian_list. For cloud documents, use drive_search.
 
     Returns a dict with:
     - display: formatted inventory — show directly to the user
@@ -442,7 +442,7 @@ def _grep_search_articles(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def search_knowledge(
+async def knowledge_search(
     ctx: RunContext[CoDeps],
     query: str,
     *,
@@ -469,9 +469,9 @@ async def search_knowledge(
     Drive require FTS — results are local-artifact-only in fallback mode.
 
     Article-index mode: when kind="article" is requested, returns the continuation
-    schema needed by read_article() — {article_id, title, origin_url, tags, snippet,
+    schema needed by knowledge_article_read() — {article_id, title, origin_url, tags, snippet,
     slug} — instead of the generic cross-source schema. Use this to discover articles
-    before calling read_article(slug=...).
+    before calling knowledge_article_read(slug=...).
 
     Returns a dict with:
     - display: formatted ranked results — show directly to the user
@@ -483,7 +483,7 @@ async def search_knowledge(
     Args:
         query: Free-text search query.
         kind: Filter by artifact_kind — "preference", "article", "rule", etc. None = all.
-              When kind="article", returns article-index continuation schema for read_article().
+              When kind="article", returns article-index continuation schema for knowledge_article_read().
         source: Filter by source — "knowledge", "obsidian", or "drive". None = all.
         limit: Max results to return (default 10).
         tags: Tag filter list. None = no filter.
@@ -543,7 +543,7 @@ async def search_knowledge(
             limit=limit,
         )
     except Exception as e:
-        logger.warning(f"search_knowledge FTS error: {e}")
+        logger.warning(f"knowledge_search FTS error: {e}")
         return tool_output(f"Search error: {e}", ctx=ctx, count=0, results=[])
 
     if not results:
@@ -553,18 +553,18 @@ async def search_knowledge(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def read_article(
+async def knowledge_article_read(
     ctx: RunContext[CoDeps],
     slug: str,
 ) -> ToolReturn:
     """Load the full markdown body of a saved article on demand.
 
-    Always call search_knowledge(query=..., kind="article", source="knowledge")
-    first to find the slug, then call read_article to get the full body. This
+    Always call knowledge_search(query=..., kind="article", source="knowledge")
+    first to find the slug, then call knowledge_article_read to get the full body. This
     two-step approach keeps recall responses compact.
 
     Does NOT summarize — returns full content as stored.
-    The slug comes from the search_knowledge(kind="article") result
+    The slug comes from the knowledge_search(kind="article") result
     (e.g. "042-python-asyncio-guide").
 
     Returns a dict with:
@@ -575,7 +575,7 @@ async def read_article(
     - content: full markdown body
 
     Args:
-        slug: File stem from search_knowledge(kind="article") result
+        slug: File stem from knowledge_search(kind="article") result
               (e.g. "042-python-asyncio-guide").
     """
     knowledge_dir = ctx.deps.knowledge_dir

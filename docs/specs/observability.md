@@ -180,8 +180,8 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 | `invoke_agent {name}` | INTERNAL | `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `pydantic_ai.all_messages`, `final_result` |
 | `chat {model}` | CLIENT | `gen_ai.request.model`, `gen_ai.response.finish_reasons`, `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
 | `running tools` | INTERNAL | list of tool names |
-| `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`; enriched by `CoToolLifecycle.after_tool_execute` with `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.result_size` (int); `rag.backend` (`fts5`, `hybrid`, or `grep`) stamped by `search_memory` and `search_knowledge` to identify the active retrieval path |
-| `{role}` | INTERNAL | `agent.role`, `agent.model`, `agent.request_limit`, `agent.requests_used` — emitted by `co-cli.agents` tracer (`_delegate_agent` in `agents.py`); covers one sub-agent run including optional retry (e.g. `research_web`, `analyze_knowledge`, `reason_about`) |
+| `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`; enriched by `CoToolLifecycle.after_tool_execute` with `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.result_size` (int); `rag.backend` (`fts5`, `hybrid`, or `grep`) stamped by `memory_search` and `knowledge_search` to identify the active retrieval path |
+| `{role}` | INTERNAL | `agent.role`, `agent.model`, `agent.request_limit`, `agent.requests_used` — emitted by `co-cli.agents` tracer (`_delegate_agent` in `agents.py`); covers one sub-agent run including optional retry (e.g. `web_research`, `knowledge_analyze`, `reason`) |
 | `background_task_execute` | INTERNAL | `task.command`, `task.description`, `task.cwd` — span ID passed to `spawn_task()` for cross-session task linkage |
 
 ### Trace HTML Viewer (`co traces`)
@@ -218,7 +218,7 @@ The HTML file is written to `~/.co-cli/traces.html` and auto-opened in the brows
 ```
 14:23:05  model  chat qwen3:30b-a3b-thinking-2507-q8_0     in=3745 out=25  5.26s
            │ [thinking] Let me search the notes for that topic.
-14:23:06  tool   execute_tool search_notes      tool=search_notes  args={"query":"test"}…  120ms
+14:23:06  tool   execute_tool obsidian_search   tool=obsidian_search  args={"query":"test"}…  120ms
 14:23:08  agent  invoke_agent agent             model=qwen3:30b-a3b-thinking-2507-q8_0  tokens=7877→4502  255.72s
 ```
 

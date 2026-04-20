@@ -116,9 +116,9 @@ Tool results that exceeded the 50,000-char threshold are stored as `<persisted-o
 
 ### 2.6 Oversized Tool Output Spill
 
-When a tool result's display text exceeds `ToolInfo.max_result_size` (default 50,000 chars; per-tool overrides at registration — `read_file` 80,000, `run_shell_command` 30,000), `persist_if_oversized()` in `co_cli/tools/tool_io.py` writes the full content to `~/.co-cli/tool-results/{sha256[:16]}.txt` (content-addressed; same content → same file, idempotent).
+When a tool result's display text exceeds `ToolInfo.max_result_size` (default 50,000 chars; per-tool overrides at registration — `file_read` 80,000, `shell` 30,000), `persist_if_oversized()` in `co_cli/tools/tool_io.py` writes the full content to `~/.co-cli/tool-results/{sha256[:16]}.txt` (content-addressed; same content → same file, idempotent).
 
-The model receives a `<persisted-output>` XML placeholder containing the tool name, file path, total size in chars, and a 2,000-char preview — never the full content. The file persists on disk across sessions; no TTL or pruning policy. The model pages the full content via `read_file(path, start_line=, end_line=)`.
+The model receives a `<persisted-output>` XML placeholder containing the tool name, file path, total size in chars, and a 2,000-char preview — never the full content. The file persists on disk across sessions; no TTL or pruning policy. The model pages the full content via `file_read(path, start_line=, end_line=)`.
 
 ### 2.7 Security
 

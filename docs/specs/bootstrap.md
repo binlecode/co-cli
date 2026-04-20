@@ -184,7 +184,7 @@ deps.memory_index = store
 
 on failure:
     log warning
-    deps.memory_index = None  # graceful degradation; search_memory returns empty
+    deps.memory_index = None  # graceful degradation; memory_search returns empty
 ```
 
 The session index is derived and rebuildable: deleting `~/.co-cli/session-index.db` and restarting rebuilds cleanly from `*.jsonl` files. Change detection is size-based (append-only transcripts). (The knowledge index at `~/.co-cli/co-cli-search.db` is separate — owned by Step 8/9 and rebuilt from `knowledge_dir/*.md`.)
@@ -205,7 +205,7 @@ Everything from `create_deps()` through banner display runs inside `_chat_loop()
 | Knowledge backend construction fails | degrade `hybrid → fts5 → grep` |
 | Knowledge sync fails | close the store and continue without indexed retrieval |
 | Session restore fails to find usable state | create a new session |
-| Session index fails to open or sync | `deps.memory_index = None`; `search_memory` returns empty; startup continues |
+| Session index fails to open or sync | `deps.memory_index = None`; `memory_search` returns empty; startup continues |
 | One skill file fails to load | skip that file and continue loading others |
 
 ## 3. Config

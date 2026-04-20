@@ -55,11 +55,11 @@ def _format_messages(service, message_ids: list[dict]) -> str:
     requires_config="google_credentials_path",
     retries=3,
 )
-def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolReturn:
+def gmail_list(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolReturn:
     """List the most recent emails from the user's Gmail inbox.
 
     Use this for a quick inbox overview. For targeted queries (by sender,
-    date range, subject, read status), use search_gmail_emails instead.
+    date range, subject, read status), use gmail_search instead.
 
     Returns a dict with:
     - display: pre-formatted email list with sender, subject, date, preview,
@@ -95,7 +95,7 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
     requires_config="google_credentials_path",
     retries=3,
 )
-def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolReturn:
+def gmail_search(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolReturn:
     """Search emails in Gmail using Gmail search syntax.
 
     Supports the full Gmail query language. Common operators:
@@ -146,7 +146,7 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
     requires_config="google_credentials_path",
     retries=1,
 )
-def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> ToolReturn:
+def gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> ToolReturn:
     """Create a draft email in Gmail. Does NOT send — the user reviews and
     sends manually from Gmail.
 

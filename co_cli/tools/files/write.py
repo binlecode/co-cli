@@ -1,4 +1,4 @@
-"""Write file system tools: write_file, patch."""
+"""Write file system tools: file_write, file_patch."""
 
 import asyncio
 import difflib
@@ -249,16 +249,16 @@ def _check_patch_preconditions(
 ) -> str | None:
     """Return an error message if patch write preconditions fail, else None."""
     if path_key not in ctx.deps.file_read_mtimes:
-        return f"Read the file with read_file before patching: {path}"
+        return f"Read the file with file_read before patching: {path}"
     if path_key in ctx.deps.file_partial_reads:
-        return f"Only part of this file was read — call read_file without start_line/end_line before patching: {path}"
+        return f"Only part of this file was read — call file_read without start_line/end_line before patching: {path}"
     if _safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]:
         return "File changed since last read — re-read before writing"
     return None
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, retries=1)
-async def write_file(
+async def file_write(
     ctx: RunContext[CoDeps],
     path: str,
     content: str,
@@ -267,7 +267,7 @@ async def write_file(
 
     Use ONLY for creating new files or deliberate full rewrites. Never call this
     after patch on the same file — patch already wrote the change. For targeted
-    edits to existing files, use patch instead.
+    edits to existing files, use file_patch instead.
 
     Creates parent directories as needed. Overwrites the file if it already exists.
 
@@ -307,7 +307,7 @@ async def write_file(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, retries=1)
-async def patch(
+async def file_patch(
     ctx: RunContext[CoDeps],
     path: str,
     old_string: str,
@@ -317,7 +317,7 @@ async def patch(
 ) -> ToolReturn:
     """Edit a file by replacing old_string with new_string, with fuzzy matching fallback.
 
-    Use for targeted modifications to existing files. You must call read_file
+    Use for targeted modifications to existing files. You must call file_read
     at least once before patching — this tool will error if the file has not
     been read. old_string must be unique in the file; if not found as-is, re-read
     the file to confirm the text before retrying. Set replace_all=True only when
@@ -330,7 +330,7 @@ async def patch(
     are found without replace_all=True.
 
     When NOT to use: for creating new files or complete rewrites — use
-    write_file instead.
+    file_write instead.
 
     Args:
         path: File path relative to the workspace root.

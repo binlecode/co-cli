@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS docs (
     chunk_id    INTEGER DEFAULT 0,
     type        TEXT,
     description TEXT,
+    source_ref  TEXT,
+    artifact_id TEXT,
     UNIQUE(source, path, chunk_id)
 );
 
@@ -136,7 +138,8 @@ SELECT c.source, c.doc_path AS path,
        snippet(chunks_fts, 0, '>', '<', '...', 40) AS snippet,
        bm25(chunks_fts) AS rank,
        c.chunk_index, c.start_line, c.end_line,
-       d.kind, d.title, d.tags, d.category, d.created, d.updated, d.provenance, d.certainty
+       d.kind, d.title, d.tags, d.category, d.created, d.updated, d.provenance, d.certainty,
+       d.source_ref, d.artifact_id
   FROM chunks_fts
   JOIN chunks c ON c.rowid = chunks_fts.rowid
   JOIN docs d ON d.source = c.source AND d.path = c.doc_path AND d.chunk_id = 0
@@ -175,6 +178,8 @@ class SearchResult:
     end_line: int | None = None
     type: str | None = None
     description: str | None = None
+    source_ref: str | None = None
+    artifact_id: str | None = None
 
     def to_tool_output(self, *, conflict: bool = False) -> dict:
         """Return the standard tool output dict for this search result."""
@@ -245,7 +250,7 @@ class KnowledgeStore:
             _p = self._llm_reranker.provider
             self._reranker_provider = (
                 "ollama"
-                if _p in ("ollama-openai", "ollama")
+                if _p == "ollama"
                 else ("gemini" if _p == "gemini" else "none")
             )
         else:
@@ -265,7 +270,7 @@ class KnowledgeStore:
             _p = self._llm_reranker.provider
             _llm_rerank_provider = (
                 "ollama"
-                if _p in ("ollama-openai", "ollama")
+                if _p == "ollama"
                 else ("gemini" if _p == "gemini" else "none")
             )
             _llm_rerank_model = self._llm_reranker.model
@@ -283,6 +288,19 @@ class KnowledgeStore:
         self._conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
+
+        try:
+            _existing_cols = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(docs)").fetchall()
+            }
+            for _col in ("source_ref", "artifact_id"):
+                if _col not in _existing_cols:
+                    self._conn.execute(f"ALTER TABLE docs ADD COLUMN {_col} TEXT")
+                    logger.info("KnowledgeStore: migrated docs table — added column %s", _col)
+            self._conn.commit()
+        except Exception as _e:
+            self._conn.close()
+            raise RuntimeError("KnowledgeStore: schema migration failed") from _e
 
         if self._backend == "hybrid":
             try:
@@ -340,6 +358,8 @@ class KnowledgeStore:
         updated: str | None = None,
         type: str | None = None,
         description: str | None = None,
+        source_ref: str | None = None,
+        artifact_id: str | None = None,
         **_kwargs: object,
     ) -> None:
         """Insert or update a document in the index.
@@ -362,8 +382,8 @@ class KnowledgeStore:
         self._conn.execute(
             """INSERT INTO docs
                    (source, kind, path, title, content, mtime, hash, tags, category,
-                    created, updated, type, description, chunk_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                    created, updated, type, description, source_ref, artifact_id, chunk_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
             (
                 source,
                 kind,
@@ -378,6 +398,8 @@ class KnowledgeStore:
                 updated,
                 type,
                 description,
+                source_ref,
+                artifact_id,
             ),
         )
         self._conn.commit()
@@ -656,6 +678,8 @@ class KnowledgeStore:
                     end_line=row["end_line"],
                     type=None,
                     description=None,
+                    source_ref=row["source_ref"],
+                    artifact_id=row["artifact_id"],
                 )
             )
 
@@ -768,6 +792,8 @@ class KnowledgeStore:
                 end_line=row["end_line"],
                 type=None,
                 description=None,
+                source_ref=row["source_ref"],
+                artifact_id=row["artifact_id"],
             )
 
         return [_build(row) for row, _leg in chunk_rows]
@@ -843,7 +869,8 @@ class KnowledgeStore:
         doc_ph = ",".join("?" * len(doc_paths))
         doc_sql = (
             f"SELECT source, kind, path, title, tags, category, created, updated, "
-            f"provenance, certainty, type, description FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
+            f"provenance, certainty, type, description, source_ref, artifact_id"
+            f" FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
         )
         doc_params: list[Any] = doc_paths
         if kind is not None:
@@ -894,6 +921,8 @@ class KnowledgeStore:
                     end_line=c["end_line"],
                     type=None,
                     description=None,
+                    source_ref=meta["source_ref"],
+                    artifact_id=meta["artifact_id"],
                 )
             )
         return results
@@ -1201,6 +1230,8 @@ class KnowledgeStore:
                     updated=fm.get("updated"),
                     type=artifact_kind,
                     description=fm.get("description"),
+                    source_ref=fm.get("source_ref"),
+                    artifact_id=str(fm["id"]) if fm.get("id") is not None else None,
                 )
                 text_chunks = _chunk_text(
                     body.strip(),

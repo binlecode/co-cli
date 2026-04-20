@@ -22,7 +22,7 @@ _CONFIG = settings
 _AGENT = build_agent(config=_CONFIG)
 
 
-def _make_ctx(tmp_path: Path, tool_name: str = "read_file") -> RunContext[CoDeps]:
+def _make_ctx(tmp_path: Path, tool_name: str = "file_read") -> RunContext[CoDeps]:
     """Build a RunContext with tool_results_dir pointing at tmp_path."""
     deps = CoDeps(
         shell=ShellBackend(),
@@ -132,7 +132,7 @@ def test_tool_output_persists_oversized_content(tmp_path: Path) -> None:
 
     display = result.return_value
     assert display.startswith(PERSISTED_OUTPUT_TAG)
-    assert "read_file" in display
+    assert "file_read" in display
     results_dir = tmp_path / "tool-results"
     assert results_dir.exists()
     files = list(results_dir.iterdir())
@@ -146,10 +146,10 @@ def test_persist_if_oversized_idempotent(tmp_path: Path) -> None:
     results_dir = tmp_path / "tool-results"
     content = "z" * (TOOL_RESULT_MAX_SIZE + 1)
 
-    result1 = persist_if_oversized(content, results_dir, "read_file")
+    result1 = persist_if_oversized(content, results_dir, "file_read")
     files_after_first = list(results_dir.iterdir())
 
-    result2 = persist_if_oversized(content, results_dir, "read_file")
+    result2 = persist_if_oversized(content, results_dir, "file_read")
     files_after_second = list(results_dir.iterdir())
 
     assert result1 == result2

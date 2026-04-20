@@ -35,8 +35,8 @@ def _reindex_knowledge_file(
 
     Both legs must stay in sync when the file body changes: docs_fts serves
     non-chunks queries, chunks_fts serves chunk-level queries. sync_dir normally
-    handles both at once, but callers that mutate a single file (e.g. update_knowledge,
-    append_knowledge, _update_artifact_body) need to refresh the DB inline.
+    handles both at once, but callers that mutate a single file (e.g. knowledge_update,
+    knowledge_append, _update_artifact_body) need to refresh the DB inline.
     """
     store = ctx.deps.knowledge_store
     if store is None:
@@ -55,6 +55,8 @@ def _reindex_knowledge_file(
         created=fm.get("created"),
         type=artifact_kind,
         description=fm.get("description"),
+        source_ref=fm.get("source_ref"),
+        artifact_id=str(fm["id"]) if fm.get("id") is not None else None,
     )
     chunks = chunk_text(
         body.strip(),
