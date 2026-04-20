@@ -2,7 +2,7 @@
 """Audit LLM API calls from a pytest run.
 
 Reads a pytest log (--log) and the OTel trace DB (--db), correlates chat spans
-by duration to their test contexts, and writes docs/REPORT-llm-call-audit-YYYYMMDD-HHMMSS.md.
+by duration to their test contexts, and writes docs/REPORT-llm-audit-eval-YYYYMMDD-HHMMSS.md.
 
 Usage:
     uv run python scripts/llm_call_audit.py --log .pytest-logs/20260418-110642-full-flow-audit.log
@@ -167,7 +167,8 @@ def _parse_output_parts(
             elif part_type in ("tool-use", "tool_call"):
                 tool.append(str(part)[:500])
             elif part_type == "text":
-                text.append(part.get("content", "")[:500])
+                # 2000 chars — tight limits caused mid-word cuts that the judge flagged as truncated responses
+                text.append(part.get("content", "")[:2000])
     return thinking, tool, text
 
 
@@ -799,7 +800,7 @@ def _generate_report(
     sections: list[str] = []
 
     sections.append(f"""\
-# REPORT: LLM Call Audit from Pytest Run
+# REPORT: LLM Audit Eval from Pytest Run
 
 **Date:** {today}
 **Log Source:** `{log_path}`
@@ -1020,7 +1021,7 @@ def main() -> None:
             provider=OllamaProvider(base_url=f"{ollama_host}/v1"),
         )
         eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model))
-        out_path = out_dir / f"REPORT-llm-eval-{now}.md"
+        out_path = out_dir / f"REPORT-llm-audit-eval-{now}.md"
         out_path.write_text(
             f"# LLM Semantic Eval — {log_path.name}\n\n"
             f"**Date:** {date.today().isoformat()}\n"
@@ -1029,7 +1030,7 @@ def main() -> None:
             + _eval_section(eval_pairs)
         )
     else:
-        out_path = out_dir / f"REPORT-llm-call-audit-{now}.md"
+        out_path = out_dir / f"REPORT-llm-audit-eval-{now}.md"
         report = _generate_report(spans, log_path, db_path, len(db_spans), matched_count)
         if args.eval:
             ollama_host = _resolve_ollama_host(args.ollama_host)

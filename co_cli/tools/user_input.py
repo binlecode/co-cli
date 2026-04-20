@@ -20,7 +20,11 @@ async def clarify(
 
     Use when the current task is ambiguous and the answer will meaningfully affect
     which actions to take. Do not use for confirmation of planned steps — only for
-    unresolvable ambiguity that cannot be resolved from context.
+    unresolvable ambiguity that cannot be resolved from context. Prefer making a
+    reasonable default choice yourself when the decision is low-stakes.
+
+    The user's answer is returned directly in the tool result — use it immediately,
+    do not call clarify again for the same question.
 
     Args:
         question: The question to ask the user.

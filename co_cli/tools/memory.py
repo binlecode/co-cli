@@ -23,6 +23,7 @@ async def memory_search(
     - The user references a project, person, decision, or concept that seems familiar but isn't in the current session
     - You want to check if a similar problem has been solved before
     - The user asks "what did we do about X?" or "how did we fix Y?"
+    - The user asks "what did we talk about regarding X?" — even if X is a preference or convention topic
 
     Don't hesitate — search is local FTS5 (BM25), fast, zero LLM cost. Better to search and confirm than to guess or ask the user to repeat themselves.
 

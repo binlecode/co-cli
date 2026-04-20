@@ -76,6 +76,7 @@ def latest_response_input_tokens(messages: list[ModelMessage]) -> int:
 # Budget resolution
 # ---------------------------------------------------------------------------
 
+
 def resolve_compaction_budget(
     config: Settings,
     context_window: int | None,
@@ -110,24 +111,13 @@ def resolve_compaction_budget(
 
 _SUMMARIZE_PROMPT = (
     "Distill the conversation history into a structured handoff summary.\n"
-    "Write from the user's perspective. Start with 'I asked you...'\n\n"
+    "REQUIRED: Write from the user's perspective. Your first sentence MUST start with 'I asked you...' "
+    "— starting any other way breaks the handoff contract for the continuation model.\n\n"
     "Use these sections:\n\n"
     "## Goal\n"
     "What the user is trying to accomplish. Include constraints and preferences.\n\n"
     "## Key Decisions\n"
     "Important decisions made and why. Include rejected alternatives if relevant.\n\n"
-    "## User Corrections\n"
-    "Conditional — only write this section when the conversation contains actual\n"
-    "user corrections. If none occurred, skip this section entirely: do not write\n"
-    "the heading, do not write 'None', do not write 'No corrections occurred'.\n"
-    "When present: include verbatim or near-verbatim quotes from user messages\n"
-    "where the user redirected, corrected, or overrode a prior approach. These\n"
-    "are high-signal — explicit intent changes that must survive compaction.\n\n"
-    "Examples of what belongs here:\n"
-    '- "no, do X instead"\n'
-    '- "stop, that\'s not what I wanted"\n'
-    '- "actually let\'s try a different approach"\n'
-    "- explicit preferences stated mid-session\n\n"
     "## Errors & Fixes\n"
     "Errors encountered during the work, how they were resolved, and **any\n"
     "user feedback that shaped the fix**. When the user told you to try a\n"
@@ -145,6 +135,14 @@ _SUMMARIZE_PROMPT = (
     "the most recent user or assistant message to anchor the resumed turn\n"
     "against drift. If the task was just completed and no continuation is\n"
     "explicit, state that — do not invent next steps.\n\n"
+    "USER CORRECTIONS (conditional): Scan the conversation for explicit user\n"
+    "corrections — phrases like 'no, do X instead', 'stop, that's not what I\n"
+    "wanted', 'actually let's try a different approach', explicit mid-session\n"
+    "preference changes. If you find any: insert a '## User Corrections' section\n"
+    "immediately after '## Key Decisions', with verbatim or near-verbatim quotes\n"
+    "of each correction — these are high-signal intent changes that must survive\n"
+    "compaction. If you find none: do NOT add '## User Corrections' at all —\n"
+    "not the heading, not 'None', not any placeholder. Its absence is the answer.\n\n"
     "If a prior summary exists in the conversation, integrate its content —\n"
     "do not discard it. Update sections with new information.\n"
     "Skip sections that have no content — do not generate filler.\n\n"
