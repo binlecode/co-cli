@@ -84,19 +84,19 @@ def resolve_compaction_budget(
     """Resolve the token budget used as the compaction trigger baseline.
 
     Resolution order (first match wins):
-    1. context_window (from LlmModel settings) minus estimated output reserve.
+    1. Raw context_window from model spec.
        For Ollama, config.llm.num_ctx overrides the spec (user's Modelfile is truth).
     2. Ollama config: config.llm.num_ctx when provider is ollama.
     3. Fallback: config.llm.ctx_token_budget.
 
-    The 85% multiplier is NOT applied here — callers apply their own trigger policy.
+    The ratio multiplier is NOT applied here — callers apply their own trigger policy.
     """
     if context_window is not None and context_window > 0:
         # For Ollama: user-configured llm_num_ctx overrides spec
         # (real limit is baked in the Modelfile, not the declared spec)
         if config.llm.uses_ollama() and config.llm.num_ctx > 0:
             context_window = config.llm.num_ctx
-        return max(context_window - config.llm.ctx_output_reserve, context_window // 2)
+        return context_window
 
     # Ollama config fallback (no model spec but llm_num_ctx configured)
     if config.llm.uses_ollama() and config.llm.num_ctx > 0:

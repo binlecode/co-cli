@@ -82,7 +82,7 @@ async def test_compaction_triggers_on_real_input_tokens():
     ≈ 30_000 per message makes each group ≈ 15_000 tokens — more than one
     group cannot fit under tail_fraction (0.40) * 100_000 = 40_000 tokens.
     """
-    # 90_000 > int(100_000 * 0.85) = 85_000 → trigger fires
+    # 90_000 > int(100_000 * 0.75) = 75_000 → trigger fires
     msgs = _make_messages(10, last_input_tokens=90_000, body_chars=30_000)
     config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
     ctx = _make_ctx(config)
@@ -101,7 +101,7 @@ async def test_compaction_fallback_when_no_usage_data():
     and compaction still triggers correctly via the char-estimate fallback.
 
     Uses a tiny Ollama budget (llm_num_ctx=30) so the char-estimate
-    (~33 tokens from 10 messages) exceeds int(30 * 0.85) = 25.
+    (~33 tokens from 10 messages) exceeds int(30 * 0.75) = 22.
     """
     msgs_no_usage = _make_messages(10, last_input_tokens=0)
     assert latest_response_input_tokens(msgs_no_usage) == 0
@@ -124,9 +124,9 @@ async def test_compaction_fallback_when_no_usage_data():
 async def test_compaction_triggers_on_ollama_budget():
     """Ollama: input_tokens=7_200 with llm_num_ctx=8192 triggers compaction.
 
-    budget = max(8192 - 16384, 8192 // 2) = 4096 (under-16K floor branch).
-    7_200 > int(4096 * 0.85) = 3481 → trigger fires. body_chars sized so each
-    group exceeds tail_fraction * 4096 = ~1638 tokens.
+    budget = 8192 (raw context_window, no reserve subtraction).
+    7_200 > int(8192 * 0.75) = 6144 → trigger fires. body_chars sized so each
+    group exceeds tail_fraction * 8192 = ~3276 tokens.
     """
     msgs = _make_messages(10, last_input_tokens=7_200, body_chars=3_000)
     config = make_settings(
@@ -144,11 +144,10 @@ async def test_compaction_triggers_on_ollama_budget():
 
 
 def test_budget_gemini_model_spec():
-    """Gemini model with context_window=1M → budget = 1M - 16384 output reserve."""
+    """Gemini model with context_window=1M → budget = raw 1M (no reserve subtraction)."""
     config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "gemini"}))
     budget = resolve_compaction_budget(config, 1_048_576)
-    # max(1_048_576 - 16384, 1_048_576 // 2) = 1_032_192
-    assert budget == 1_048_576 - 16_384
+    assert budget == 1_048_576
 
 
 def test_budget_ollama_llm_num_ctx_overrides_spec():
@@ -157,9 +156,8 @@ def test_budget_ollama_llm_num_ctx_overrides_spec():
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 32_768})
     )
     budget = resolve_compaction_budget(config, 262_144)
-    # llm_num_ctx (32768) overrides spec (262144), so effective ctx_window = 32768
-    # max(32768 - 16384, 32768 // 2) = max(16384, 16384) = 16384
-    assert budget == 32_768 // 2
+    # llm_num_ctx (32768) overrides spec (262144) → raw 32768
+    assert budget == 32_768
 
 
 def test_budget_ollama_no_spec_falls_back_to_llm_num_ctx():
@@ -178,12 +176,11 @@ def test_budget_no_context_window_returns_default():
     assert budget == config.llm.ctx_token_budget
 
 
-def test_budget_floor_prevents_negative():
-    """Small context_window → floor at context_window//2."""
+def test_budget_small_context_window_returns_raw():
+    """Small context_window → returns raw value (no reserve subtraction or floor)."""
     config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "gemini"}))
-    # context_window=20000: max(20000 - 16384, 10000) = max(3616, 10000) = 10000
     budget = resolve_compaction_budget(config, 20_000)
-    assert budget == 10_000
+    assert budget == 20_000
 
 
 # ---------------------------------------------------------------------------

@@ -173,7 +173,6 @@ class LlmSettings(BaseModel):
     # Bootstrap sets this from the runtime probe; user can also set it in settings.json.
     num_ctx: int = Field(default=0)
     ctx_token_budget: int = Field(default=100_000)
-    ctx_output_reserve: int = Field(default=16_384)
     ctx_warn_threshold: float = Field(default=0.85)
     ctx_overflow_threshold: float = Field(default=1.0)
     reasoning: InferenceSettings = Field(default_factory=InferenceSettings)

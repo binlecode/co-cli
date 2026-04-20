@@ -6,7 +6,7 @@
 **Functional areas:**
 - Static instruction assembly (soul + rules + examples + critique)
 - Dynamic instruction callbacks (`@agent.instructions`)
-- Three registered history processors (truncate, compact, summarize) plus two preflight callables (safety injection, recall injection)
+- Four registered history processors (truncate, batch-budget, compact, summarize) plus two preflight callables (safety injection, recall injection)
 - Append-only invariant for dynamic content (cache hygiene)
 - Approval resume reusing the main agent
 
@@ -93,13 +93,14 @@ New dynamic surfaces go in the tail. Audit every new `@agent.instructions` regis
 
 ### 2.4 History Processors And Preflight
 
-Three pure-transformer processors run in this exact order (registered in `build_agent()`):
+Four pure-transformer processors run in this exact order (registered in `build_agent()`):
 
 | Processor | Behavior |
 | --- | --- |
 | `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
+| `enforce_batch_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `config.tools.batch_spill_chars`; fails open |
 | `compact_assistant_responses` | caps older `TextPart`/`ThinkingPart` to 2,500 chars with 20/80 head/tail retention; uses `_find_last_turn_start()` boundary, not turn grouping |
-| `summarize_history_window` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full three-mechanism design in [compaction.md](compaction.md) |
+| `summarize_history_window` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full design in [compaction.md](compaction.md) |
 
 Two preflight callables run before each model-bound segment (called explicitly by `run_turn()` — not registered as processors):
 
@@ -138,6 +139,6 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/prompts/personalities/_loader.py` | soul seed, mindset, character memory, examples, critique loading |
 | `co_cli/prompts/personalities/_injector.py` | per-turn `personality-context` memory injection |
 | `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
-| `co_cli/context/_history.py` | three registered history processors; `build_recall_injection` and `build_safety_injection` preflight callables; compaction trigger |
+| `co_cli/context/_history.py` | four registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `compact_assistant_responses`, `summarize_history_window`); `build_recall_injection` and `build_safety_injection` preflight callables; compaction trigger |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |

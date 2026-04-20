@@ -28,6 +28,7 @@ from co_cli.context._history import (
     build_recall_injection,
     compact_assistant_responses,
     emergency_compact,
+    enforce_batch_budget,
     find_first_run_end,
     group_by_turn,
     groups_to_messages,
@@ -40,6 +41,7 @@ from co_cli.context.orchestrate import _history_with_pending_user_input
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 _CONFIG = settings
 _LLM_MODEL = build_model(_CONFIG.llm)
@@ -51,7 +53,7 @@ def _make_processor_ctx() -> RunContext:
     """Real RunContext for history processor tests (no LLM call).
 
     Uses a tiny Ollama budget (llm_num_ctx=30) so the char-estimate
-    from _make_messages(10) (~33 tokens) exceeds int(30 * 0.85) = 25.
+    from _make_messages(10) (~33 tokens) exceeds int(30 * 0.75) = 22.
     """
     deps = CoDeps(
         shell=ShellBackend(),
@@ -845,3 +847,134 @@ async def test_build_recall_injection_always_includes_date():
         assert len(date_parts) == 1
     finally:
         invalidate_personality_cache()
+
+
+# ---------------------------------------------------------------------------
+# enforce_batch_budget — per-batch aggregate spill
+# ---------------------------------------------------------------------------
+
+
+def _make_batch_ctx(tmp_path: Path, batch_spill_chars: int) -> RunContext:
+    """RunContext with a controlled batch_spill_chars and tmp tool_results_dir."""
+    config = make_settings(
+        tools=make_settings().tools.model_copy(update={"batch_spill_chars": batch_spill_chars})
+    )
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=config,
+        tool_results_dir=tmp_path / "tool-results",
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+
+def _tool_call_msg(name: str, call_id: str) -> ModelResponse:
+    return ModelResponse(parts=[ToolCallPart(tool_name=name, args={}, tool_call_id=call_id)])
+
+
+def _tool_return_msg(name: str, content: str, call_id: str) -> ModelRequest:
+    return ModelRequest(
+        parts=[ToolReturnPart(tool_name=name, content=content, tool_call_id=call_id)]
+    )
+
+
+def test_enforce_batch_budget_under_cap_unchanged(tmp_path: Path) -> None:
+    """enforce_batch_budget returns messages unchanged when aggregate is below threshold."""
+    content = "x" * 100
+    msgs = [
+        _user("go"),
+        _tool_call_msg("tool_a", "c1"),
+        _tool_return_msg("tool_a", content, "c1"),
+    ]
+    ctx = _make_batch_ctx(tmp_path, batch_spill_chars=500)
+    result = enforce_batch_budget(ctx, msgs)
+    part = result[2].parts[0]
+    assert part.content == content
+    assert not (tmp_path / "tool-results").exists()
+
+
+def test_enforce_batch_budget_over_cap_single_spilled(tmp_path: Path) -> None:
+    """enforce_batch_budget spills the largest tool return when aggregate exceeds threshold."""
+    big = "y" * 10_000
+    msgs = [
+        _user("read"),
+        _tool_call_msg("read_file", "c1"),
+        _tool_return_msg("read_file", big, "c1"),
+    ]
+    ctx = _make_batch_ctx(tmp_path, batch_spill_chars=100)
+    result = enforce_batch_budget(ctx, msgs)
+    part = result[2].parts[0]
+    assert PERSISTED_OUTPUT_TAG in part.content
+
+
+def test_enforce_batch_budget_evicts_largest_first(tmp_path: Path) -> None:
+    """enforce_batch_budget evicts the largest tool return first until under threshold."""
+    big = "y" * 10_000
+    small = "z" * 1_000
+    call_msg = ModelResponse(
+        parts=[
+            ToolCallPart(tool_name="tool_a", args={}, tool_call_id="c1"),
+            ToolCallPart(tool_name="tool_b", args={}, tool_call_id="c2"),
+        ]
+    )
+    ret_msg = ModelRequest(
+        parts=[
+            ToolReturnPart(tool_name="tool_a", content=big, tool_call_id="c1"),
+            ToolReturnPart(tool_name="tool_b", content=small, tool_call_id="c2"),
+        ]
+    )
+    msgs = [_user("go"), call_msg, ret_msg]
+    # threshold=5_000 → aggregate=11_000 > 5_000; evict big (10K) → aggregate falls below 5K
+    ctx = _make_batch_ctx(tmp_path, batch_spill_chars=5_000)
+    result = enforce_batch_budget(ctx, msgs)
+    parts = result[2].parts
+    assert PERSISTED_OUTPUT_TAG in parts[0].content
+    assert parts[1].content == small
+
+
+def test_enforce_batch_budget_skips_already_persisted(tmp_path: Path) -> None:
+    """enforce_batch_budget skips tool returns that already contain PERSISTED_OUTPUT_TAG."""
+    already_persisted = f"{PERSISTED_OUTPUT_TAG}\ntool: read_file\nfile: /tmp/x.txt\n..."
+    msgs = [
+        _user("go"),
+        _tool_call_msg("read_file", "c1"),
+        _tool_return_msg("read_file", already_persisted, "c1"),
+    ]
+    ctx = _make_batch_ctx(tmp_path, batch_spill_chars=10)
+    result = enforce_batch_budget(ctx, msgs)
+    part = result[2].parts[0]
+    # Already-persisted content must not be modified
+    assert part.content == already_persisted
+
+
+def test_enforce_batch_budget_no_batch_unchanged(tmp_path: Path) -> None:
+    """enforce_batch_budget is a no-op when no ToolCallPart exists in history."""
+    msgs = [_user("hello"), _assistant("world")]
+    ctx = _make_batch_ctx(tmp_path, batch_spill_chars=10)
+    result = enforce_batch_budget(ctx, msgs)
+    assert result is msgs
+
+
+def test_enforce_batch_budget_fail_open_on_oserror(tmp_path: Path) -> None:
+    """enforce_batch_budget returns original messages when persist fails (fail-open)."""
+    big = "y" * 10_000
+    msgs = [
+        _user("go"),
+        _tool_call_msg("tool_a", "c1"),
+        _tool_return_msg("tool_a", big, "c1"),
+    ]
+    # Place a file at tool_results_dir path so mkdir() raises FileExistsError (OSError subclass)
+    bad_dir = tmp_path / "tool-results"
+    bad_dir.write_text("blocking file")
+    config = make_settings(
+        tools=make_settings().tools.model_copy(update={"batch_spill_chars": 100})
+    )
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=config,
+        tool_results_dir=bad_dir,
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    result = enforce_batch_budget(ctx, msgs)
+    # Fail-open: persist failed → content unchanged
+    part = result[2].parts[0]
+    assert part.content == big

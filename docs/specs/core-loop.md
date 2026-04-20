@@ -232,11 +232,12 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-The main agent is built with three registered history processors (pure transformers) in this exact order:
+The main agent is built with four registered history processors (pure transformers) in this exact order:
 
 1. `truncate_tool_results`
-2. `compact_assistant_responses`
-3. `summarize_history_window`
+2. `enforce_batch_budget`
+3. `compact_assistant_responses`
+4. `summarize_history_window`
 
 Two additional callables run as preflight before each model-bound `_execute_stream_segment`, called explicitly by `run_turn()` via `_run_model_preflight()`:
 
@@ -248,6 +249,7 @@ Processor roles:
 | Processor | Role |
 | --- | --- |
 | `truncate_tool_results` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn (from last `UserPromptPart` onward) |
+| `enforce_batch_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `config.tools.batch_spill_chars`; fails open |
 | `compact_assistant_responses` | caps large `TextPart`/`ThinkingPart` in older `ModelResponse` messages at 2.5K chars with proportional head/tail truncation; protects the last turn (from last `UserPromptPart` onward); does not touch `ToolCallPart` args |
 | `summarize_history_window` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 
@@ -261,7 +263,7 @@ Ordering rationale:
 Compaction behavior:
 
 - `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
-- it compacts when token count exceeds `PROACTIVE_COMPACTION_RATIO` (0.85) of the budget
+- it compacts when token count exceeds `PROACTIVE_COMPACTION_RATIO` (0.75) of the budget
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
@@ -363,7 +365,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/_history.py` | three registered history processors (tool-output trim, response capping, sliding-window compaction) plus two preflight callables (`build_recall_injection`, `build_safety_injection`) |
+| `co_cli/context/_history.py` | four registered history processors (tool-output trim, batch-budget cap, response capping, sliding-window compaction) plus two preflight callables (`build_recall_injection`, `build_safety_injection`) |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent/_core.py` | main agent factory |

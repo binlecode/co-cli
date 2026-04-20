@@ -22,6 +22,7 @@ from co_cli.config._memory import MemorySettings
 from co_cli.config._observability import ObservabilitySettings
 from co_cli.config._shell import ShellSettings
 from co_cli.config._subagent import SubagentSettings
+from co_cli.config._tools import ToolsSettings
 from co_cli.config._web import WebSettings
 
 APP_NAME = "co-cli"
@@ -132,6 +133,7 @@ class Settings(BaseModel):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     shell: ShellSettings = Field(default_factory=ShellSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+    tools: ToolsSettings = Field(default_factory=ToolsSettings)
 
     # Flat — integration paths
     obsidian_vault_path: str | None = Field(default=None)
@@ -241,6 +243,10 @@ class Settings(BaseModel):
                 "log_level": "CO_LOG_LEVEL",
                 "log_max_size_mb": "CO_LOG_MAX_SIZE_MB",
                 "log_backup_count": "CO_LOG_BACKUP_COUNT",
+            },
+            "tools": {
+                "result_persist_chars": "CO_TOOLS_RESULT_PERSIST_CHARS",
+                "batch_spill_chars": "CO_TOOLS_BATCH_SPILL_CHARS",
             },
         }
         for group, fields in nested_env_map.items():

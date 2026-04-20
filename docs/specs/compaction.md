@@ -67,9 +67,10 @@ flowchart TD
 
     subgraph PerReq["M2 + M3 — per ModelRequestNode"]
         R1[truncate_tool_results<br/>M2a]
-        R2[compact_assistant_responses<br/>M2b]
+        R1b[enforce_batch_budget<br/>M2b]
+        R2[compact_assistant_responses<br/>M2c]
         R5[summarize_history_window<br/>M3]
-        R1 --> R2 --> R5
+        R1 --> R1b --> R2 --> R5
     end
 
     subgraph Window["M3 — window compaction"]
@@ -115,13 +116,13 @@ sequenceDiagram
     U->>RT: user prompt
     RT->>RT: reset_for_turn()
     RT->>AG: run_stream_events (request #1)
-    AG->>HP: M2a, M2b, M3<br/>token_count ≤ threshold → fast path
+    AG->>HP: M2a, M2b, M2c, M3<br/>token_count ≤ threshold → fast path
     AG->>M: HTTP request
     M-->>AG: ToolCallPart(file_read)
     AG->>TL: execute tool
-    TL->>TL: M1: size &gt; 80K → persist
+    TL->>TL: M1: size &gt; max_result_size → persist
     TL-->>AG: ToolReturnPart(&lt;persisted-output&gt;)
-    AG->>HP: chain (request #2 prep)<br/>token_count &gt; threshold → M3 fires
+    AG->>HP: chain (request #2 prep)<br/>M2a,M2b,M2c; token_count &gt; threshold → M3 fires
     Note over HP: plan_compaction_boundaries<br/>→ head, tail, dropped<br/>summarize_messages (LLM)<br/>assemble marker
     AG->>M: HTTP request (compacted history)
     M-->>AG: ToolCallPart(file_grep)
@@ -304,30 +305,34 @@ M3 fires at request 2 (token pressure builds up). Requests 3 and 4 see the compa
 
 **Per-tool thresholds** (registered at build-time in `co_cli/agent/_native_toolset.py`):
 
-| Tool | `max_result_size` |
-|---|---|
-| Default | `50_000` chars |
-| `file_read` | `80_000` chars |
-| `run_shell_command` | `30_000` chars |
+| Tool | `max_result_size` | Notes |
+|---|---|---|
+| Default (`None`) | `config.tools.result_persist_chars` (default 50,000) | falls through to config |
+| `file_read` | `math.inf` | never persists — prevents persist→read→persist recursion |
+| `shell` | `30,000` chars | explicit override |
 
 **Logic:**
 ```
+threshold = tool_info.max_result_size if tool_info.max_result_size is not None
+            else config.tools.result_persist_chars
 content = tool return value
-if len(content) <= max_result_size:
+if len(content) <= threshold:
     return content
 sha = sha256(content)[:16]
 path = .co-cli/tool-results/<sha>.txt
 write content to path (if not exists)
-return "<persisted-output>tool: … file: … size: … preview: first 2000 chars</persisted-output>"
+size_human = KB or MB depending on size
+return "<persisted-output>tool: … file: … size: N chars (X KB/MB)\n
+        preview: first 2000 chars [elision if more]\n</persisted-output>"
 ```
 
 Model pages the full content via `file_read(path, start_line=, end_line=)`. Persistence is once, irreversible, and independent of context pressure.
 
 ### 2.2 M2 — Prepass recency clearing
 
-Two sync processors; no LLM calls.
+Three sync processors in order; no LLM calls.
 
-**`truncate_tool_results`.** Protects the last user turn (everything from the last `UserPromptPart` onward). For the region before:
+**`truncate_tool_results` (M2a).** Protects the last user turn (everything from the last `UserPromptPart` onward). For the region before:
 - For each tool in `COMPACTABLE_TOOLS` = `{file_read, shell, file_grep, file_glob, web_search, web_fetch, knowledge_article_read, obsidian_read}`, keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
 - Older compactable returns: `content ← "[tool result cleared — older than 5 most recent calls]"`.
 - `tool_name` and `tool_call_id` are preserved (call/return pairing intact).
@@ -335,7 +340,9 @@ Two sync processors; no LLM calls.
 
 `COMPACTABLE_KEEP_RECENT = 5` is borrowed verbatim from `fork-claude-code/services/compact/timeBasedMCConfig.ts:33` (`keepRecent: 5`). Not convergent across peers — codex, hermes, opencode have no per-tool recency retention. Not tuned for co-cli's tool surface; revisit via `evals/eval_compaction_quality.py` if retention/fidelity tradeoff becomes measurable.
 
-**`compact_assistant_responses`.** Same region. For each older `ModelResponse`:
+**`enforce_batch_budget` (M2b).** Fires on the current batch — the `ToolReturnPart`s that follow the last `ModelResponse` with a `ToolCallPart`. If the aggregate size of that batch exceeds `config.tools.batch_spill_chars`, spills the largest non-persisted returns via `persist_if_oversized(max_size=0)`, largest-first, until the aggregate fits. Skips already-persisted parts (those containing `<persisted-output>`). Fails open: if persist raises `OSError`, the candidate is skipped. Operates only on the current batch — no cross-turn state mutation.
+
+**`compact_assistant_responses` (M2c).** Same region as M2a. For each older `ModelResponse`:
 - `TextPart` / `ThinkingPart` with `len(content) > 2500` → proportional truncate (20% head + `\n[...truncated...]\n` + 80% tail).
 - `ToolCallPart.args` is never touched (load-bearing for enrichment).
 - `ToolReturnPart` is never touched (owned by `truncate_tool_results`).
@@ -357,9 +364,9 @@ if token_count <= threshold:
 ```
 
 **Budget resolution** (`resolve_compaction_budget`):
-1. If `ctx_window` from `LlmModel` is known and `> 0`: `budget = max(ctx_window - 16_384, ctx_window // 2)` (16K output reserve).
-2. For Ollama: `config.llm.num_ctx` overrides spec (user's Modelfile is truth).
-3. Fallback when neither available: `100_000`.
+1. If `ctx_window` from `LlmModel` is known and `> 0`: `budget = ctx_window` (raw, no output reserve subtracted). For Ollama: `config.llm.num_ctx` overrides the spec (user's Modelfile is truth).
+2. Ollama fallback (no model spec but `num_ctx` configured): `budget = config.llm.num_ctx`.
+3. Final fallback: `budget = config.llm.ctx_token_budget` (default 100,000).
 
 **Token estimator** (`estimate_message_tokens`): `total_chars // 4` over:
 - Text-bearing parts: `content` as str OR JSON-serialized `dict` / `list`.
@@ -566,29 +573,37 @@ One successful compaction per pressure event per turn.
 
 | Constant | Value | Purpose |
 |---|---|---|
-| `PROACTIVE_COMPACTION_RATIO` | `0.85` | Fraction of budget above which M3 fires |
+| `PROACTIVE_COMPACTION_RATIO` | `0.75` | Fraction of raw context_window above which M3 fires |
 | `TAIL_FRACTION` | `0.40` | Fraction of budget for the preserved tail |
-| `COMPACTABLE_KEEP_RECENT` | `5` | M2: most-recent returns per tool to keep |
+| `COMPACTABLE_KEEP_RECENT` | `5` | M2a: most-recent returns per tool to keep |
 | `_CIRCUIT_BREAKER_PROBE_EVERY` | `10` | Skips between probe attempts when circuit breaker is tripped |
 
-Per-tool `max_result_size` (M1) is a registration parameter in `co_cli/agent/_native_toolset.py`:
+**M2b batch spill and M1 per-tool cap thresholds** are settings (not named constants) in `co_cli/config/_tools.py`:
 
-| Tool | `max_result_size` |
-|---|---|
-| Default | `50_000` chars |
-| `file_read` | `80_000` chars |
-| `run_shell_command` | `30_000` chars |
+| Setting | Env Var | Default | Description |
+|---|---|---|---|
+| `tools.result_persist_chars` | `CO_TOOLS_RESULT_PERSIST_CHARS` | `50,000` | M1 default per-tool emit-time persist threshold |
+| `tools.batch_spill_chars` | `CO_TOOLS_BATCH_SPILL_CHARS` | `200,000` | M2b aggregate batch budget before spill |
+
+Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cli/agent/_native_toolset.py`:
+
+| Tool | `max_result_size` | Notes |
+|---|---|---|
+| Default | `None` (→ `config.tools.result_persist_chars`) | falls through to config |
+| `file_read` | `math.inf` | never persists |
+| `shell` | `30,000` chars | explicit override |
 
 ## 4. Files
 
 | File | Purpose |
 |---|---|
-| `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `compact_assistant_responses`, `summarize_history_window`); `plan_compaction_boundaries` (shared planner); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `PROACTIVE_COMPACTION_RATIO`, `TAIL_FRACTION`, `COMPACTABLE_KEEP_RECENT`. |
+| `co_cli/context/_history.py` | Four registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `compact_assistant_responses`, `summarize_history_window`); `plan_compaction_boundaries` (shared planner); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `PROACTIVE_COMPACTION_RATIO`, `TAIL_FRACTION`, `COMPACTABLE_KEEP_RECENT`. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
 | `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry. |
 | `co_cli/context/tool_categories.py` | `COMPACTABLE_TOOLS` (M2 scope); `FILE_TOOLS` (enrichment file-path scope); `PATH_NORMALIZATION_TOOLS`. |
-| `co_cli/tools/tool_io.py` | `tool_output`; `persist_if_oversized` (M1 disk spill); `check_tool_results_size`; `TOOL_RESULT_MAX_SIZE`, `TOOL_RESULT_PREVIEW_SIZE`. |
+| `co_cli/tools/tool_io.py` | `tool_output`; `persist_if_oversized` (M1 disk spill, requires explicit `max_size`); `_generate_preview` (newline-aware preview truncation); `check_tool_results_size`; `TOOL_RESULT_PREVIEW_SIZE`, `PERSISTED_OUTPUT_TAG`, `PERSISTED_OUTPUT_CLOSING_TAG`. |
 | `co_cli/agent/_native_toolset.py` | Per-tool `max_result_size` registration. |
+| `co_cli/config/_tools.py` | `ToolsSettings` with `result_persist_chars` and `batch_spill_chars`; env var wiring in `_core.py`. |
 | `co_cli/config/_llm.py` | `num_ctx`, `ctx_overflow_threshold`, `ctx_warn_threshold`. |
 | `co_cli/prompts/…` | Base system prompt assembly; static recency-clearing advisory. |
 | `evals/eval_compaction_quality.py` | Compaction fidelity regression: M2 clearing correctness, file-set retention, pending-task retention. |

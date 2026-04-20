@@ -14,6 +14,7 @@ from pydantic_ai.toolsets.combined import CombinedToolset
 from co_cli.config._core import Settings
 from co_cli.context._history import (
     compact_assistant_responses,
+    enforce_batch_budget,
     summarize_history_window,
     truncate_tool_results,
 )
@@ -138,6 +139,7 @@ def build_agent(
             output_type=[str, DeferredToolRequests],
             history_processors=[
                 truncate_tool_results,
+                enforce_batch_budget,
                 compact_assistant_responses,
                 summarize_history_window,
             ],

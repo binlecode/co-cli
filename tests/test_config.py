@@ -253,6 +253,42 @@ def test_llm_api_key_absent_when_no_env_set(tmp_path):
     assert settings.llm.api_key is None
 
 
+def test_tools_settings_defaults(tmp_path):
+    """ToolsSettings has correct defaults when not configured."""
+    settings = load_config(_user_config_path=tmp_path / "nonexistent.json")
+    assert settings.tools.result_persist_chars == 50_000
+    assert settings.tools.batch_spill_chars == 200_000
+
+
+def test_tools_result_persist_chars_env_override(tmp_path):
+    """CO_TOOLS_RESULT_PERSIST_CHARS env var overrides result_persist_chars."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _env={"CO_TOOLS_RESULT_PERSIST_CHARS": "80000"},
+    )
+    assert settings.tools.result_persist_chars == 80_000
+
+
+def test_tools_batch_spill_chars_env_override(tmp_path):
+    """CO_TOOLS_BATCH_SPILL_CHARS env var overrides batch_spill_chars."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _env={"CO_TOOLS_BATCH_SPILL_CHARS": "300000"},
+    )
+    assert settings.tools.batch_spill_chars == 300_000
+
+
+def test_tools_settings_from_user_config(tmp_path):
+    """tools fields can be set via settings.json."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(
+        json.dumps({"tools": {"result_persist_chars": 75_000, "batch_spill_chars": 500_000}})
+    )
+    settings = load_config(_user_config_path=user_settings)
+    assert settings.tools.result_persist_chars == 75_000
+    assert settings.tools.batch_spill_chars == 500_000
+
+
 def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     """build_agent() must not rewrite GEMINI_API_KEY when config provides llm_api_key."""
     user_settings = tmp_path / "settings.json"
@@ -293,3 +329,19 @@ def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     )
 
     assert proc.stdout.strip() == "stale-key-from-env"
+
+
+def test_tools_result_persist_chars_below_minimum_raises(tmp_path):
+    """result_persist_chars below ge=1_000 must be rejected by the validator."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(json.dumps({"tools": {"result_persist_chars": 500}}))
+    with pytest.raises(ValueError, match=r"result_persist_chars|greater_than_equal"):
+        load_config(_user_config_path=user_settings)
+
+
+def test_tools_batch_spill_chars_below_minimum_raises(tmp_path):
+    """batch_spill_chars below ge=10_000 must be rejected by the validator."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(json.dumps({"tools": {"batch_spill_chars": 1_000}}))
+    with pytest.raises(ValueError, match=r"batch_spill_chars|greater_than_equal"):
+        load_config(_user_config_path=user_settings)

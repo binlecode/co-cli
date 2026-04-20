@@ -1,5 +1,7 @@
 """Functional tests for agent factory — tool registration, approval wiring, and visibility policy."""
 
+import math
+
 from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent, build_tool_registry
@@ -122,12 +124,13 @@ def test_tool_index_visibility_policy_metadata():
 
     # Per-tool max_result_size overrides
     assert idx["shell"].max_result_size == 30_000
-    assert idx["file_read"].max_result_size == 80_000
-    # All others should have the default (50,000)
+    # file_read is pinned to math.inf to prevent persist→read→persist recursion
+    assert idx["file_read"].max_result_size == math.inf
+    # All others should have None (fall through to config.tools.result_persist_chars)
     for name, tc in idx.items():
         if name not in ("shell", "file_read"):
-            assert tc.max_result_size == 50_000, (
-                f"{name}: expected default max_result_size=50000, got {tc.max_result_size}"
+            assert tc.max_result_size is None, (
+                f"{name}: expected max_result_size=None, got {tc.max_result_size}"
             )
 
 

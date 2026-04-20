@@ -5,6 +5,7 @@ before every model request and transform the message list in-place.
 
 Registered processors (pure transformers — no deps mutation):
     truncate_tool_results        — sync, content-clears compactable tool results by recency
+    enforce_batch_budget         — sync, spills largest non-persisted tool returns when batch aggregate exceeds threshold
     compact_assistant_responses  — sync, caps large TextPart/ThinkingPart in older ModelResponse
     summarize_history_window     — async, summarizes middle messages via inline LLM or static marker
 
@@ -81,16 +82,19 @@ row early in the session. First probe fires at failure_count == 3 + N (i.e. afte
 N skips), then every N skips thereafter.
 """
 
-PROACTIVE_COMPACTION_RATIO: float = 0.85
-"""Fraction of budget above which ``summarize_history_window`` fires.
+PROACTIVE_COMPACTION_RATIO: float = 0.75
+"""Fraction of raw context_window above which ``summarize_history_window`` fires.
 
 Trigger point for proactive compaction:
 ``token_count > int(budget * PROACTIVE_COMPACTION_RATIO)``.
 
-The 15% headroom is a safety margin that absorbs estimator error (char/4
-heuristic) and the difference between "estimated input tokens" and what the
-provider will actually count (system prompt, tool schemas, etc.). Not
-settings-configurable — the right shape at this scale is a named constant.
+Applied to raw context_window (single model-proportional knob). The 25%
+headroom absorbs estimator error (char/4 heuristic), system prompt, and
+tool schemas. Portable across all supported model sizes — on qwen3.5 131K
+lands within ~0.8% of the old reserve-adjusted trigger; on smaller-context
+models produces a meaningful 75% fraction instead of the degenerate
+reserve-dominated value. Not settings-configurable — right shape at this
+scale is a named constant.
 """
 
 TAIL_FRACTION: float = 0.40
@@ -416,6 +420,125 @@ def compact_assistant_responses(
             ):
                 part.content = _truncate_proportional(part.content, OLDER_MSG_MAX_CHARS)
 
+    return messages
+
+
+# ---------------------------------------------------------------------------
+# 3. enforce_batch_budget (sync — disk I/O via persist_if_oversized)
+# ---------------------------------------------------------------------------
+
+
+def _tool_return_part_size(part: ToolReturnPart) -> int:
+    """Return the serialized char size of a ToolReturnPart's content."""
+    if isinstance(part.content, str):
+        return len(part.content)
+    return len(json.dumps(part.content, default=str))
+
+
+def _collect_batch_parts(
+    messages: list[ModelMessage],
+) -> list[tuple[int, int, ToolReturnPart]]:
+    """Return (msg_idx, part_idx, part) for ToolReturnParts in the current batch.
+
+    The current batch starts immediately after the last ModelResponse containing
+    a ToolCallPart. Returns an empty list when no such response exists.
+    """
+    batch_start = len(messages)
+    for idx in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[idx], ModelResponse) and any(
+            isinstance(p, ToolCallPart) for p in messages[idx].parts
+        ):
+            batch_start = idx + 1
+            break
+    if batch_start >= len(messages):
+        return []
+    result: list[tuple[int, int, ToolReturnPart]] = []
+    for msg_idx in range(batch_start, len(messages)):
+        msg = messages[msg_idx]
+        if isinstance(msg, ModelRequest):
+            for part_idx, part in enumerate(msg.parts):
+                if isinstance(part, ToolReturnPart):
+                    result.append((msg_idx, part_idx, part))
+    return result
+
+
+def _apply_batch_replacements(
+    messages: list[ModelMessage],
+    replacements: dict[int, dict[int, str]],
+) -> None:
+    """Rebuild parts lists for messages in replacements, mutating messages in-place."""
+    for msg_idx, part_replacements in replacements.items():
+        msg = messages[msg_idx]
+        if not isinstance(msg, ModelRequest):
+            continue
+        new_parts = []
+        for part_idx, part in enumerate(msg.parts):
+            if part_idx in part_replacements and isinstance(part, ToolReturnPart):
+                new_parts.append(
+                    ToolReturnPart(
+                        tool_name=part.tool_name,
+                        content=part_replacements[part_idx],
+                        tool_call_id=part.tool_call_id,
+                    )
+                )
+            else:
+                new_parts.append(part)
+        msg.parts = new_parts
+
+
+def enforce_batch_budget(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage]:
+    """Per-batch aggregate spill: evict largest non-persisted tool returns
+    when aggregate content exceeds config.tools.batch_spill_chars.
+
+    Identifies the current batch as the ToolReturnParts that follow the last
+    ModelResponse with a ToolCallPart. Spills candidates largest-first via
+    persist_if_oversized(max_size=0) until aggregate fits or no eligible
+    candidates remain. Fails open: if persist_if_oversized returns unchanged
+    content (OSError fallback), that candidate is skipped.
+
+    Registered between truncate_tool_results and compact_assistant_responses.
+    Not added to delegation sub-agent chains (short-lived, unnecessary overhead).
+    """
+    from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, persist_if_oversized
+
+    threshold = ctx.deps.config.tools.batch_spill_chars
+    batch_parts = _collect_batch_parts(messages)
+    if not batch_parts:
+        return messages
+
+    aggregate = sum(_tool_return_part_size(part) for _, _, part in batch_parts)
+    if aggregate <= threshold:
+        return messages
+
+    candidates = [
+        (msg_idx, part_idx, part)
+        for msg_idx, part_idx, part in batch_parts
+        if isinstance(part.content, str) and PERSISTED_OUTPUT_TAG not in part.content
+    ]
+    candidates.sort(key=lambda t: _tool_return_part_size(t[2]), reverse=True)
+
+    replacements: dict[int, dict[int, str]] = {}
+    for msg_idx, part_idx, part in candidates:
+        if aggregate <= threshold:
+            break
+        old_size = _tool_return_part_size(part)
+        spilled = persist_if_oversized(
+            str(part.content),
+            ctx.deps.tool_results_dir,
+            part.tool_name,
+            max_size=0,
+        )
+        if spilled != part.content:
+            replacements.setdefault(msg_idx, {})[part_idx] = spilled
+            aggregate -= old_size - len(spilled)
+
+    if not replacements:
+        return messages
+
+    _apply_batch_replacements(messages, replacements)
     return messages
 
 

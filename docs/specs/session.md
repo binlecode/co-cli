@@ -116,7 +116,7 @@ Tool results that exceeded the 50,000-char threshold are stored as `<persisted-o
 
 ### 2.6 Oversized Tool Output Spill
 
-When a tool result's display text exceeds `ToolInfo.max_result_size` (default 50,000 chars; per-tool overrides at registration — `file_read` 80,000, `shell` 30,000), `persist_if_oversized()` in `co_cli/tools/tool_io.py` writes the full content to `~/.co-cli/tool-results/{sha256[:16]}.txt` (content-addressed; same content → same file, idempotent).
+When a tool result's display text exceeds the effective threshold — `ToolInfo.max_result_size` when set (e.g. `shell` = 30,000; `file_read` = `math.inf` never persists), otherwise `config.tools.result_persist_chars` (default 50,000) — `persist_if_oversized()` in `co_cli/tools/tool_io.py` writes the full content to `~/.co-cli/tool-results/{sha256[:16]}.txt` (content-addressed; same content → same file, idempotent).
 
 The model receives a `<persisted-output>` XML placeholder containing the tool name, file path, total size in chars, and a 2,000-char preview — never the full content. The file persists on disk across sessions; no TTL or pruning policy. The model pages the full content via `file_read(path, start_line=, end_line=)`.
 
@@ -144,7 +144,7 @@ The 8-char UUID suffix (`session_path.stem[-8:]`) is carried in OTel spans, agen
 | `co_cli/context/session.py` | session filename generation, latest-session discovery, new-path factory |
 | `co_cli/context/transcript.py` | JSONL transcript: append, load, compact boundary, parent/child session metadata |
 | `co_cli/context/session_browser.py` | `list_sessions()` — interactive picker for `/resume` |
-| `co_cli/tools/tool_io.py` | `persist_if_oversized()`; `TOOL_RESULT_MAX_SIZE`; `TOOL_RESULT_PREVIEW_SIZE`; `check_tool_results_size` |
+| `co_cli/tools/tool_io.py` | `persist_if_oversized()`; `TOOL_RESULT_PREVIEW_SIZE`; `PERSISTED_OUTPUT_TAG`; `check_tool_results_size` |
 | `co_cli/main.py` | `_finalize_turn()` transcript persistence; `_chat_loop()` REPL session lifecycle |
 | `co_cli/commands/_commands.py` | slash dispatch for `/resume`, `/new`, `/clear`, `/compact`, `/sessions` |
 | `co_cli/bootstrap/core.py` | `restore_session()` at startup |

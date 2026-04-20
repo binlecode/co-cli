@@ -23,7 +23,7 @@ def agent_tool(
     integration: str | None = None,
     requires_config: str | None = None,
     retries: int | None = None,
-    max_result_size: int = 50_000,
+    max_result_size: int | float | None = None,
 ) -> Callable[[F], F]:
     """Decorator that attaches ToolInfo policy metadata to a native tool function.
 

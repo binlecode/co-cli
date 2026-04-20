@@ -225,7 +225,7 @@ These settings most directly affect top-level system assembly.
 | `docs/specs/mission.md` | Product mission, strategic thesis, and stage roadmap |
 | `docs/specs/bootstrap.md` | Startup sequencing and degradation details |
 | `docs/specs/core-loop.md` | Foreground-turn behavior, approval resumes, retries, interrupts |
-| `docs/specs/prompt-assembly.md` | Static + dynamic instruction layers, five history processors, append-only invariant |
+| `docs/specs/prompt-assembly.md` | Static + dynamic instruction layers, four history processors plus two preflight callables, append-only invariant |
 | `docs/specs/session.md` | JSONL transcript persistence, `/resume`, `/new`, oversized-output spill |
 | `docs/specs/compaction.md` | Three-mechanism compaction, summarizer, circuit breaker, overflow recovery |
 | `docs/specs/cognition.md` | Two-layer Memory + Knowledge: artifact schema, storage, retrieval, extraction, dreaming |

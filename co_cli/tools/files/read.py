@@ -3,6 +3,7 @@
 import asyncio
 import difflib
 import fnmatch
+import math
 import re
 import shlex
 import shutil
@@ -342,7 +343,7 @@ async def file_glob(
     visibility=VisibilityPolicyEnum.ALWAYS,
     is_read_only=True,
     is_concurrent_safe=True,
-    max_result_size=80_000,
+    max_result_size=math.inf,
 )
 async def file_read(
     ctx: RunContext[CoDeps],

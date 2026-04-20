@@ -4,8 +4,8 @@
 Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
 
   --- Pre-compact layer (at tool return time) ---
-  Step 1 — persist_if_oversized: 50K threshold, 2K preview, content-addressed disk write
-           [BC4: 50K persist-to-disk still applies]
+  Step 1 — persist_if_oversized: config-threshold persist, 2K preview, content-addressed disk write
+           [BC4: persist-to-disk threshold sourced from config.tools.result_persist_chars]
 
   --- Processor chain components (isolated validation) ---
   Step 2 — P1 truncate_tool_results: recency clearing, COMPACTABLE_TOOLS, keep 5
@@ -98,7 +98,6 @@ from co_cli.llm._factory import LlmModel, build_model
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import (
     PERSISTED_OUTPUT_TAG,
-    TOOL_RESULT_MAX_SIZE,
     TOOL_RESULT_PREVIEW_SIZE,
     persist_if_oversized,
 )
@@ -117,6 +116,7 @@ _DEPS = CoDeps(
     config=_EVAL_CONFIG,
     model=_LLM_MODEL,
 )
+_PERSIST_THRESHOLD = _EVAL_CONFIG.tools.result_persist_chars
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +320,7 @@ def _fake_file(name: str, lines: int = 60) -> str:
 
 
 def step_1_precompact() -> bool:
-    """Validate pre-compact layer: tool results >50K persisted to disk with 2K preview."""
+    """Validate pre-compact layer: tool results over threshold persisted to disk with 2K preview."""
     print("\n--- Step 1: Pre-compact — persist_if_oversized [BC4] ---")
     passed = True
 
@@ -329,25 +329,25 @@ def step_1_precompact() -> bool:
 
         # 1a: Under threshold → unchanged
         small = _fake_file("auth/views.py", lines=15)
-        r = persist_if_oversized(small, d, "read_file")
+        r = persist_if_oversized(small, d, "read_file", max_size=_PERSIST_THRESHOLD)
         assert r == small, "under threshold should pass through"
-        print(f"  PASS: {len(small)} chars < {TOOL_RESULT_MAX_SIZE} → unchanged")
+        print(f"  PASS: {len(small)} chars < {_PERSIST_THRESHOLD} → unchanged")
         print(f"    content: {_snippet(small, 100)}")
 
         # 1b: At boundary → unchanged
-        boundary = _fake_file("auth/middleware.py", lines=600)[:TOOL_RESULT_MAX_SIZE]
-        r = persist_if_oversized(boundary, d, "read_file")
+        boundary = _fake_file("auth/middleware.py", lines=600)[:_PERSIST_THRESHOLD]
+        r = persist_if_oversized(boundary, d, "read_file", max_size=_PERSIST_THRESHOLD)
         assert r == boundary
-        print(f"  PASS: {TOOL_RESULT_MAX_SIZE} == threshold → unchanged (boundary)")
+        print(f"  PASS: {_PERSIST_THRESHOLD} == threshold → unchanged (boundary)")
 
         # 1c: Over threshold → persisted + preview
-        big = _fake_file("search_results.log", lines=800) + "\n" * (TOOL_RESULT_MAX_SIZE - 10_000)
+        big = _fake_file("search_results.log", lines=800) + "\n" * (_PERSIST_THRESHOLD - 10_000)
         big = big + _fake_file("more_results.log", lines=200)
-        r = persist_if_oversized(big, d, "find_in_files")
+        r = persist_if_oversized(big, d, "find_in_files", max_size=_PERSIST_THRESHOLD)
         if PERSISTED_OUTPUT_TAG not in r:
             print("  FAIL: over-threshold not persisted")
             return False
-        print(f"  PASS: {len(big)} > {TOOL_RESULT_MAX_SIZE} → persisted with preview tag")
+        print(f"  PASS: {len(big)} > {_PERSIST_THRESHOLD} → persisted with preview tag")
         print(f"    snippet: {_snippet(r, 160)}")
 
         # 1d: Preview capped at TOOL_RESULT_PREVIEW_SIZE
@@ -365,7 +365,7 @@ def step_1_precompact() -> bool:
         print(f"  PASS: content-addressed file on disk ({files[0].name})")
 
         # 1f: Idempotent
-        persist_if_oversized(big, d, "find_in_files")
+        persist_if_oversized(big, d, "find_in_files", max_size=_PERSIST_THRESHOLD)
         if len(list(d.iterdir())) != 1:
             print("  FAIL: duplicate file created")
             return False

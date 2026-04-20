@@ -120,23 +120,28 @@ Approval controls human permission; locks ensure structural correctness.
 
 Legend: **Tool** shows the callable signature · **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
 
-The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/_mcp.py`, are always DEFERRED, and are not included in the 37-tool native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface.
+The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/_mcp.py`, are always DEFERRED, and are not included in the 37-tool native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface. The grouping below is capability-oriented so it can be compared directly with peer inventories such as Hermes without changing the underlying visibility or approval semantics.
 
-### User Interaction
+### Interaction & Session Control
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
 | `clarify(question, options=None, user_answer=None)` | A | — | — | — | Pause mid-execution to ask the user a clarifying question; resume with injected answer |
-
-### Introspection & Flow Tracking
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
 | `capabilities_check()` | A | — | — | — | Runtime doctor: binary probes, auth states, config |
 | `todo_write(todos)` | A | — | — | — | Replace in-session multi-turn checklist |
 | `todo_read()` | A | — | — | — | Fetch current checklist |
 
-### Cognition & Knowledge — Read
+### Workspace & File Operations
+
+| Tool | V | Appr | Lock | Gate | Purpose |
+|------|---|------|------|------|---------|
+| `file_glob(path=".", pattern="*", max_entries=200)` | A | — | — | — | List directory or find files by pattern |
+| `file_read(path, start_line=None, end_line=None)` | A | — | — | — | Read workspace file; pagination hint + fuzzy name suggestions |
+| `file_grep(pattern, path=".", glob="**/*", case_insensitive=False, output_mode="content", context_lines=0, head_limit=250, offset=0)` | A | — | — | — | Regex content search across workspace |
+| `file_write(path, content)` | D | ✓ | ✓ | — | Create or overwrite a file |
+| `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
+
+### Knowledge, Memory & Skills
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
@@ -144,67 +149,34 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | `knowledge_list(offset=0, limit=20, kind=None)` | A | — | — | — | Paginate knowledge artifact metadata |
 | `knowledge_article_read(slug)` | A | — | — | — | Fetch full markdown for a cached article by slug |
 | `memory_search(query, *, limit=5)` | A | — | — | — | Keyword search across historic session transcripts |
+| `knowledge_update(slug, old_content, new_content)` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
+| `knowledge_append(slug, content)` | D | ✓ | — | — | Append to a knowledge artifact |
+| `knowledge_article_save(content, title, origin_url, tags=None, related=None)` | D | ✓ | — | — | Persist web content as a local markdown artifact |
 
-### Workspace & Files — Read
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `file_glob(path=".", pattern="*", max_entries=200)` | A | — | — | — | List directory or find files by pattern |
-| `file_read(path, start_line=None, end_line=None)` | A | — | — | — | Read workspace file; pagination hint + fuzzy name suggestions |
-| `file_grep(pattern, path=".", glob="**/*", case_insensitive=False, output_mode="content", context_lines=0, head_limit=250, offset=0)` | A | — | — | — | Regex content search across workspace |
-
-### Web
+### Web, Browser & Media
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
 | `web_search(query, max_results=5, domains=None)` | A | — | — | — | Brave API search with optional domain filter |
 | `web_fetch(url)` | A | — | — | — | Fetch URL and convert to markdown |
 
-### Shell Execution
+### Execution, Jobs & Delegation
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
 | `shell(cmd, timeout=120)` | A | hybrid | — | — | Run blocking shell command; safe-prefix auto-approves, mutations prompt, destructive denied |
-
-### Workspace & Files — Write
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `file_write(path, content)` | D | ✓ | ✓ | — | Create or overwrite a file |
-| `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
-
-### Cognition & Knowledge — Write
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `knowledge_update(slug, old_content, new_content)` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
-| `knowledge_append(slug, content)` | D | ✓ | — | — | Append to a knowledge artifact |
-| `knowledge_article_save(content, title, origin_url, tags=None, related=None)` | D | ✓ | — | — | Persist web content as a local markdown artifact |
-
-### Background Tasks
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
 | `task_start(command, description, working_directory=None)` | D | ✓ | — | — | Spawn unblocked process group; returns `task_id` |
 | `task_status(task_id, tail_lines=20)` | D | — | — | — | Poll stdout/stderr and completion state of a task |
 | `task_cancel(task_id)` | D | — | — | — | SIGTERM → SIGKILL a background task |
 | `task_list(status_filter=None)` | D | — | — | — | Enumerate active/completed tasks |
-
-### Code Execution
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
 | `code_execute(cmd, timeout=60)` | D | hybrid | ✓ | — | Run an interpreter command; command policy denies unsafe forms and otherwise prompts before execution |
-
-### Delegation (Subagents)
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
 | `web_research(query, domains=None, max_requests=0)` | D | — | — | — | Deep web retrieval subagent |
 | `knowledge_analyze(question, inputs=None, max_requests=0)` | D | — | — | — | Cross-index deduction on internal + Drive knowledge |
 | `reason(problem, max_requests=0)` | D | — | — | — | Pure inference subagent; no external access |
 
-### External — Obsidian *(gate: `obsidian_vault_path`)*
+### External Service Integrations
+
+#### Obsidian *(gate: `obsidian_vault_path`)*
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
@@ -212,7 +184,7 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | `obsidian_search(query, limit=10, folder=None, tag=None)` | D | — | — | ✓ | Search note content by keyword, optionally narrowed by folder or tag |
 | `obsidian_read(filename)` | D | — | — | ✓ | Read raw Obsidian markdown note |
 
-### External — Google *(gate: `google_credentials_path`)*
+#### Google *(gate: `google_credentials_path`)*
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|

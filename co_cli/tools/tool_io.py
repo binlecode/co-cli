@@ -36,9 +36,23 @@ log = logging.getLogger(__name__)
 # Result persistence
 # ---------------------------------------------------------------------------
 
-TOOL_RESULT_MAX_SIZE = 50_000
 TOOL_RESULT_PREVIEW_SIZE = 2_000
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
+PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
+
+
+def _generate_preview(content: str, max_chars: int) -> tuple[str, bool]:
+    """Truncate at the last newline within max_chars when it lies past halfway; else hard-cut.
+
+    Returns (preview, has_more). has_more is True iff content was longer than max_chars.
+    """
+    if len(content) <= max_chars:
+        return content, False
+    truncated = content[:max_chars]
+    last_nl = truncated.rfind("\n")
+    if last_nl > max_chars // 2:
+        truncated = truncated[: last_nl + 1]
+    return truncated, True
 
 
 def persist_if_oversized(
@@ -46,19 +60,19 @@ def persist_if_oversized(
     tool_results_dir: Path,
     tool_name: str,
     *,
-    max_size: int = TOOL_RESULT_MAX_SIZE,
+    max_size: int | float,
 ) -> str:
     """Persist content to disk if oversized, returning a preview placeholder.
 
     If content length <= max_size, returns content unchanged.
     Otherwise, writes content to a content-addressed file and returns an XML
-    placeholder with tool name, file path, and a 2KB preview.
+    placeholder with tool name, file path, human-readable size, and a preview.
 
     Args:
         content: The full tool result text.
         tool_results_dir: Directory for persisted tool result files.
         tool_name: Name of the tool that produced the result.
-        max_size: Per-tool result size threshold (default: TOOL_RESULT_MAX_SIZE).
+        max_size: Per-tool result size threshold. Pass 0 to force spill.
 
     Returns:
         The original content if under threshold, or a preview placeholder.
@@ -74,17 +88,24 @@ def persist_if_oversized(
         if not file_path.exists():
             file_path.write_text(content, encoding="utf-8")
 
-        preview = content[:TOOL_RESULT_PREVIEW_SIZE]
+        preview, has_more = _generate_preview(content, TOOL_RESULT_PREVIEW_SIZE)
+        elision = "\n..." if has_more else ""
+
+        size_chars = len(content)
+        if size_chars >= 1024 * 1024:
+            size_human = f"{size_chars / (1024 * 1024):.1f} MB"
+        else:
+            size_human = f"{size_chars / 1024:.1f} KB"
 
         return (
             f"{PERSISTED_OUTPUT_TAG}\n"
             f"tool: {tool_name}\n"
             f"file: {file_path}\n"
-            f"size: {len(content)} chars\n"
+            f"size: {size_chars:,} chars ({size_human})\n"
             f"To read the full output, call read_file with the path above and use "
             f"start_line/end_line to page through it in chunks.\n"
-            f"preview:\n{preview}\n"
-            f"</persisted-output>"
+            f"preview:\n{preview}{elision}\n"
+            f"{PERSISTED_OUTPUT_CLOSING_TAG}"
         )
     except OSError:
         log.warning(
@@ -135,7 +156,11 @@ def tool_output(
     """Construct a ToolReturn with display as return_value and extras as metadata."""
     tool_name = ctx.tool_name or ""
     info = ctx.deps.tool_index.get(tool_name)
-    threshold = info.max_result_size if info else TOOL_RESULT_MAX_SIZE
+    threshold = (
+        info.max_result_size
+        if info and info.max_result_size is not None
+        else ctx.deps.config.tools.result_persist_chars
+    )
     if len(display) > threshold:
         display = persist_if_oversized(
             display,

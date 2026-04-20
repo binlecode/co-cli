@@ -78,6 +78,10 @@
     "log_max_size_mb": 5,
     "log_backup_count": 3
   },
+  "tools": {
+    "result_persist_chars": 50000,
+    "batch_spill_chars": 200000
+  },
 
   "obsidian_vault_path": "",
   "google_credentials_path": "",
