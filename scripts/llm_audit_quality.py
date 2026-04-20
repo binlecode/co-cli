@@ -2,7 +2,8 @@
 """Audit LLM output quality from a pytest run.
 
 Reads a pytest log (--log) and the OTel trace DB (--db), correlates chat spans
-by duration to their test contexts, and writes docs/REPORT-llm-audit-eval-YYYYMMDD-HHMMSS.md.
+by duration to their test contexts, runs LLM-as-judge semantic evaluation on all
+matched spans, and writes docs/REPORT-llm-audit-eval-YYYYMMDD-HHMMSS.md.
 
 Usage:
     uv run python scripts/llm_audit_quality.py --log .pytest-logs/20260418-110642-full-flow-audit.log
@@ -57,6 +58,35 @@ _CONTENT_FLOWS = frozenset(
         "intent routing",
     }
 )
+
+# Flows where thinking blocks are expected — absence is a warning signal.
+_THINKING_FLOWS = frozenset(
+    {
+        "llm thinking",
+        "knowledge dream cycle",
+        "knowledge dream mining",
+        "knowledge dream merge",
+        "history compaction",
+    }
+)
+
+
+def _has_thinking(span: FlowChatSpan) -> bool:
+    """Return True if the span's output_msgs contains at least one thinking block."""
+    if not span.output_msgs:
+        return False
+    try:
+        messages = json.loads(span.output_msgs)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(messages, list):
+        return False
+    return any(
+        isinstance(part, dict) and part.get("type") == "thinking"
+        for msg in messages
+        if isinstance(msg, dict)
+        for part in msg.get("parts", [])
+    )
 
 
 class JudgeResult(BaseModel):
@@ -228,6 +258,8 @@ def _verdict(span: FlowChatSpan) -> str:
         return "no DB match"
     if "length" in span.finish_reasons:
         return "WARN: length"
+    if span.output_tokens == 0 and "stop" in span.finish_reasons:
+        return "WARN: empty"
     if (
         span.output_tokens is not None
         and span.output_tokens <= 3
@@ -278,8 +310,14 @@ def _cut_finding(
     length_warns: list[FlowChatSpan],
     minimal_warns: list[FlowChatSpan],
     small_stops: list[FlowChatSpan],
+    empty_stops: list[FlowChatSpan],
 ) -> str:
     parts = []
+    if empty_stops:
+        flows = ", ".join(f"`{s.flow}`" for s in empty_stops)
+        parts.append(
+            f"WARNING: {len(empty_stops)} `stop` call(s) returned 0 output tokens — {flows}."
+        )
     if length_warns:
         parts.append(
             f"WARNING: {len(length_warns)} call(s) with `finish_reason=length` need investigation."
@@ -299,39 +337,35 @@ def _cut_finding(
     return "No suspiciously small `stop` outputs or `length` terminations detected."
 
 
+def _thinking_char_ratio(span: FlowChatSpan) -> float | None:
+    """Return thinking-to-output char ratio for span, or None if no thinking blocks."""
+    if not span.output_msgs:
+        return None
+    try:
+        messages = json.loads(span.output_msgs)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(messages, list):
+        return None
+    thinking_parts = [
+        part
+        for msg in messages
+        if isinstance(msg, dict)
+        for part in msg.get("parts", [])
+        if isinstance(part, dict) and part.get("type") == "thinking"
+    ]
+    if not thinking_parts:
+        return None
+    total_chars = sum(len(p.get("content", "")) for p in thinking_parts)
+    return total_chars / (span.output_chars or 1)
+
+
 def _thinking_presence_section(spans: list[FlowChatSpan]) -> str:
     """Build ### 5.4 Thinking Presence section."""
     matched = [s for s in spans if s.finish_reasons]
-    spans_with_thinking = 0
-    spans_without_thinking = 0
-    thinking_char_totals: list[float] = []
-
-    for span in matched:
-        if not span.output_msgs:
-            spans_without_thinking += 1
-            continue
-        try:
-            messages = json.loads(span.output_msgs)
-        except (json.JSONDecodeError, TypeError):
-            spans_without_thinking += 1
-            continue
-        if not isinstance(messages, list):
-            spans_without_thinking += 1
-            continue
-        thinking = [
-            part
-            for msg in messages
-            if isinstance(msg, dict)
-            for part in msg.get("parts", [])
-            if isinstance(part, dict) and part.get("type") == "thinking"
-        ]
-        if thinking:
-            spans_with_thinking += 1
-            total_chars = sum(len(p.get("content", "")) for p in thinking)
-            output_chars = span.output_chars or 1
-            thinking_char_totals.append(total_chars / output_chars)
-        else:
-            spans_without_thinking += 1
+    spans_with_thinking = sum(1 for s in matched if _has_thinking(s))
+    spans_without_thinking = len(matched) - spans_with_thinking
+    thinking_char_totals = [r for s in matched if (r := _thinking_char_ratio(s)) is not None]
 
     total_matched = spans_with_thinking + spans_without_thinking
     presence_pct = (
@@ -355,6 +389,84 @@ def _thinking_presence_section(spans: list[FlowChatSpan]) -> str:
 - Mean thinking-char ratio: `{mean_ratio}`
 {presence_warning}
 """
+
+
+def _section_call_depth(spans: list[FlowChatSpan]) -> str:
+    """Build ### 5.5 Call Depth per Test section."""
+    by_test: dict[str, list[FlowChatSpan]] = defaultdict(list)
+    for s in spans:
+        by_test[s.test_id].append(s)
+
+    multi_call = sum(1 for ss in by_test.values() if len(ss) > 1)
+    max_depth = max(len(ss) for ss in by_test.values()) if by_test else 0
+    deep_tests = [(tid, ss) for tid, ss in by_test.items() if len(ss) >= 5]
+
+    rows = []
+    for test_id, test_spans in sorted(by_test.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        short_id = test_id.split("::")[-1][:40]
+        n = len(test_spans)
+        in_toks = [s.input_tokens for s in test_spans if s.input_tokens is not None]
+        if len(in_toks) >= 2:
+            token_range = f"{in_toks[0]} → {in_toks[-1]} (+{in_toks[-1] - in_toks[0]})"
+        elif len(in_toks) == 1:
+            token_range = str(in_toks[0])
+        else:
+            token_range = "—"
+        finish_seq = " → ".join(r for s in test_spans for r in (s.finish_reasons or ["?"]))
+        rows.append(f"| `{short_id}` | {n} | {finish_seq} | {token_range} |")
+
+    deep_warning = ""
+    if deep_tests:
+        deep_warning = (
+            "\n> WARNING: high call depth — "
+            + ", ".join(f"`{tid.split('::')[-1]}` ({len(ss)} calls)" for tid, ss in deep_tests)
+            + " — possible retry spiral.\n"
+        )
+
+    return (
+        "### 5.5 Call Depth per Test\n\n"
+        f"- Tests with >1 LLM call: `{multi_call}` / `{len(by_test)}`\n"
+        f"- Max depth: `{max_depth}`\n"
+        f"{deep_warning}\n"
+        "| Test | Calls | Finish Sequence | Input Token Range |\n"
+        "|---|---:|---|---|\n" + "\n".join(rows) + "\n"
+    )
+
+
+def _section_per_flow_thinking(spans: list[FlowChatSpan]) -> str:
+    """Build ### 5.6 Per-Flow Thinking Distribution section."""
+    matched = [s for s in spans if s.finish_reasons]
+    by_flow: dict[str, list[FlowChatSpan]] = defaultdict(list)
+    for s in matched:
+        by_flow[s.flow].append(s)
+
+    rows = []
+    zero_thinking_expected: list[str] = []
+    for flow in sorted(by_flow):
+        flow_spans = by_flow[flow]
+        with_thinking = sum(1 for s in flow_spans if _has_thinking(s))
+        total = len(flow_spans)
+        pct = f"{with_thinking / total * 100:.0f}%" if total > 0 else "—"
+        expected = "yes" if flow in _THINKING_FLOWS else "—"
+        flag = " ⚠" if flow in _THINKING_FLOWS and with_thinking == 0 else ""
+        rows.append(f"| {flow} | {total} | {with_thinking} | {pct} | {expected}{flag} |")
+        if flow in _THINKING_FLOWS and with_thinking == 0 and total > 0:
+            zero_thinking_expected.append(flow)
+
+    warning = ""
+    if zero_thinking_expected:
+        warning = (
+            "\n> WARNING: flows expected to use reasoning had 0 thinking blocks: "
+            + ", ".join(f"`{f}`" for f in zero_thinking_expected)
+            + " — verify model reasoning settings.\n"
+        )
+
+    return (
+        "### 5.6 Per-Flow Thinking Distribution\n\n"
+        f"{warning}\n"
+        "| Flow | Matched Spans | With Thinking | Presence % | Thinking Expected |\n"
+        "|---|---:|---:|---:|---|\n" + "\n".join(rows) + "\n"
+    )
 
 
 async def _judge_all_spans(
@@ -488,16 +600,23 @@ def _generate_report(
 
     length_warns = [s for s in spans if _verdict(s) == "WARN: length"]
     minimal_warns = [s for s in spans if _verdict(s) == "WARN: minimal"]
+    empty_stops = [s for s in spans if _verdict(s) == "WARN: empty"]
     small_stops = [
         s
         for s in matched
         if (
             s.output_tokens is not None
             and s.output_tokens <= 3
+            and s.output_tokens > 0
             and "stop" in s.finish_reasons
             and s.flow not in _CONTENT_FLOWS
         )
     ]
+
+    by_test_depth: dict[str, int] = defaultdict(int)
+    for s in spans:
+        by_test_depth[s.test_id] += 1
+    max_depth = max(by_test_depth.values()) if by_test_depth else 0
 
     slowest = max(spans, key=lambda s: s.duration_ms)
 
@@ -545,8 +664,10 @@ this threshold are excluded from this report.
 - Finish reasons:
 {finish_lines}
 - Confirmed output-cut anomalies (`finish_reason=length`): `{len(length_warns)}`
+- Empty `stop` outputs (0 tokens): `{len(empty_stops)}`
 - Minimal-output warnings (content flows, ≤3 tokens): `{len(minimal_warns)}`
 - Small `stop` outputs (≤3 tokens, non-content flows): `{len(small_stops)}`
+- Max call depth (LLM calls per test): `{max_depth}`
 - Slowest visible call: {slowest_desc}
 """)
 
@@ -580,6 +701,8 @@ this threshold are excluded from this report.
         durs = [s.duration_ms for s in flow_spans]
         in_toks = [s.input_tokens for s in flow_spans if s.input_tokens is not None]
         out_toks = [s.output_tokens for s in flow_spans if s.output_tokens is not None]
+        flow_models = sorted({s.model for s in flow_spans if s.model})
+        models_str = ", ".join(f"`{m}`" for m in flow_models) if flow_models else "—"
         flow_rows.append(
             f"| {flow} | {len(flow_spans)} "
             f"| {_dur_s(statistics.median(durs))} "
@@ -588,20 +711,21 @@ this threshold are excluded from this report.
             f"| {_fmt(round(statistics.median(in_toks))) if in_toks else '—'} "
             f"| {_fmt(max(in_toks)) if in_toks else '—'} "
             f"| {_fmt(round(statistics.median(out_toks))) if out_toks else '—'} "
-            f"| {_fmt(max(out_toks)) if out_toks else '—'} |"
+            f"| {_fmt(max(out_toks)) if out_toks else '—'} "
+            f"| {models_str} |"
         )
 
     sections.append(
         "## 4. Workflow Breakdown\n\n"
         "| Flow | Calls | Median Duration | Max Duration | Mean Duration"
-        " | Median In Tokens | Max In Tokens | Median Out Tokens | Max Out Tokens |\n"
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|\n" + "\n".join(flow_rows) + "\n"
+        " | Median In Tokens | Max In Tokens | Median Out Tokens | Max Out Tokens | Models |\n"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|\n" + "\n".join(flow_rows) + "\n"
     )
 
     # Findings
     api_finding = _api_finding(matched, unmatched_count, apis)
     finish_finding = _finish_finding(finish_counts)
-    cut_finding = _cut_finding(length_warns, minimal_warns, small_stops)
+    cut_finding = _cut_finding(length_warns, minimal_warns, small_stops, empty_stops)
 
     sections.append(f"""\
 ## 5. Findings
@@ -620,6 +744,8 @@ this threshold are excluded from this report.
 """)
 
     sections.append(_thinking_presence_section(spans))
+    sections.append(_section_call_depth(spans))
+    sections.append(_section_per_flow_thinking(spans))
 
     return "\n".join(sections)
 
@@ -643,16 +769,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--out", type=Path, default=_DEFAULT_OUT, help="output directory (default: docs/)"
-    )
-    parser.add_argument(
-        "--no-eval",
-        action="store_true",
-        help="skip LLM-as-judge semantic evaluation (eval runs by default)",
-    )
-    parser.add_argument(
-        "--eval-only",
-        action="store_true",
-        help="skip full report — run only the LLM-as-judge eval and write a standalone eval report",
     )
     parser.add_argument(
         "--judge-model",
@@ -712,46 +828,24 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    if args.eval_only:
-        ollama_host = _resolve_ollama_host(args.ollama_host)
-        print(f"Evaluating {len(spans)} spans via {args.judge_model} at {ollama_host}...")
-        judge_model = OpenAIChatModel(
-            args.judge_model,
-            provider=OllamaProvider(base_url=f"{ollama_host}/v1"),
-        )
-        eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model))
-        out_path = out_dir / f"REPORT-llm-audit-eval-{now}.md"
-        out_path.write_text(
-            f"# LLM Semantic Eval — {log_path.name}\n\n"
-            f"**Date:** {date.today().isoformat()}\n"
-            f"**Log:** `{log_path}`\n"
-            f"**Spans:** {len(spans)} parsed, {matched_count} DB-matched\n\n"
-            + _eval_section(eval_pairs)
-        )
-    else:
-        out_path = out_dir / f"REPORT-llm-audit-eval-{now}.md"
-        report = _generate_report(spans, log_path, db_path, len(db_spans), matched_count)
-        run_eval = not args.no_eval
-        if run_eval:
-            ollama_host = _resolve_ollama_host(args.ollama_host)
-            print(f"Evaluating {len(spans)} spans via {args.judge_model} at {ollama_host}...")
-            judge_model = OpenAIChatModel(
-                args.judge_model,
-                provider=OllamaProvider(base_url=f"{ollama_host}/v1"),
-            )
-            eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model))
-            report += "\n" + _eval_section(eval_pairs)
-        else:
-            report += "\n## 6. Semantic Evaluation\n\n> Semantic evaluation skipped (--no-eval).\n"
-        out_path.write_text(report)
+    out_path = out_dir / f"REPORT-llm-audit-eval-{now}.md"
+    report = _generate_report(spans, log_path, db_path, len(db_spans), matched_count)
+    ollama_host = _resolve_ollama_host(args.ollama_host)
+    print(f"Evaluating {len(spans)} spans via {args.judge_model} at {ollama_host}...")
+    judge_model = OpenAIChatModel(
+        args.judge_model,
+        provider=OllamaProvider(base_url=f"{ollama_host}/v1"),
+    )
+    eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model))
+    report += "\n" + _eval_section(eval_pairs)
+    out_path.write_text(report)
 
     warn_count = sum(1 for s in spans if "WARN" in _verdict(s))
     print(f"\nReport → {out_path}")
-    if not args.eval_only:
-        print(
-            f"TL;DR: {len(spans)} spans audited, {matched_count} DB-matched, "
-            f"{warn_count} warnings{'.' if not warn_count else ' — check report.'}"
-        )
+    print(
+        f"TL;DR: {len(spans)} spans audited, {matched_count} DB-matched, "
+        f"{warn_count} warnings{'.' if not warn_count else ' — check report.'}"
+    )
 
 
 if __name__ == "__main__":
