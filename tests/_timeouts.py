@@ -4,6 +4,24 @@ Single source of truth for all per-await timeouts. Import from here instead
 of hardcoding numbers inline so a single edit relaxes or tightens a budget
 across every test that uses it.
 
+## Two-layer timeout model
+
+Every IO-bound await is wrapped with asyncio.timeout(N) using a constant from
+this file. That is the primary guard — it fires from inside the test and
+identifies exactly which call ran over.
+
+pytest-timeout (pyproject.toml: timeout = 120) is the safety net. It catches:
+- sync code that hangs (fixture setup, subprocess, file IO with no await)
+- an await that was accidentally left unwrapped
+
+Why 120s: the largest single per-await budget is LLM_REASONING_TIMEOUT_SECS
+(60s). 120s = 2x that, leaving room for fixture setup/teardown around one
+reasoning call. A test that legitimately needs more than 120s total would have
+to make two sequential unwrapped reasoning awaits — that is a test bug, not a
+budget gap. Raise LLM_REASONING_TIMEOUT_SECS if model latency increases; raise
+the pytest ceiling only if a test correctly wraps multiple sequential reasoning
+calls and the sum exceeds 120s.
+
 Usage::
 
     from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
