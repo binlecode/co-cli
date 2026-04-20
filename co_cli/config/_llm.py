@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -116,11 +117,31 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
 
 
 # ---------------------------------------------------------------------------
+# Environment helpers
+# ---------------------------------------------------------------------------
+
+_PROVIDER_API_KEY_VARS: dict[str, str] = {
+    "gemini": "GEMINI_API_KEY",
+}
+
+
+def resolve_api_key_from_env(env: Mapping[str, str], llm_data: dict) -> str | None:
+    """Resolve LLM API key from env: provider-specific var wins, CO_LLM_API_KEY fallback."""
+    provider = (
+        env.get("CO_LLM_PROVIDER")
+        or (llm_data.get("provider") if isinstance(llm_data, dict) else None)
+        or DEFAULT_LLM_PROVIDER
+    )
+    specific_var = _PROVIDER_API_KEY_VARS.get(provider)
+    return (specific_var and env.get(specific_var)) or env.get("CO_LLM_API_KEY") or None
+
+
+# ---------------------------------------------------------------------------
 # Settings override models
 # ---------------------------------------------------------------------------
 
 
-class InferenceOverride(BaseModel):
+class InferenceSettings(BaseModel):
     """User-configurable overrides applied on top of per-model inference defaults.
 
     Only provider-agnostic scalar params are exposed — provider-specific fields
@@ -155,8 +176,8 @@ class LlmSettings(BaseModel):
     ctx_output_reserve: int = Field(default=16_384)
     ctx_warn_threshold: float = Field(default=0.85)
     ctx_overflow_threshold: float = Field(default=1.0)
-    reasoning: InferenceOverride = Field(default_factory=InferenceOverride)
-    noreason: InferenceOverride = Field(default_factory=InferenceOverride)
+    reasoning: InferenceSettings = Field(default_factory=InferenceSettings)
+    noreason: InferenceSettings = Field(default_factory=InferenceSettings)
 
     def uses_ollama(self) -> bool:
         """Return True when the session LLM backend is Ollama's OpenAI-compatible API."""

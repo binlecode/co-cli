@@ -213,6 +213,46 @@ def test_llm_reranker_explicit_model_preserved(tmp_path):
     assert settings.knowledge.llm_reranker.model == "gemini-2.5-flash"
 
 
+def test_llm_api_key_from_provider_specific_env(tmp_path):
+    """GEMINI_API_KEY is picked up as llm.api_key when provider is gemini."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _env={"CO_LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "gemini-specific-key"},
+    )
+    assert settings.llm.api_key == "gemini-specific-key"
+
+
+def test_llm_api_key_generic_fallback(tmp_path):
+    """CO_LLM_API_KEY is used when no provider-specific env var is set."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _env={"CO_LLM_PROVIDER": "gemini", "CO_LLM_API_KEY": "generic-key"},
+    )
+    assert settings.llm.api_key == "generic-key"
+
+
+def test_llm_api_key_provider_specific_wins_over_generic(tmp_path):
+    """Provider-specific env var takes precedence over CO_LLM_API_KEY."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _env={
+            "CO_LLM_PROVIDER": "gemini",
+            "GEMINI_API_KEY": "specific-key",
+            "CO_LLM_API_KEY": "generic-key",
+        },
+    )
+    assert settings.llm.api_key == "specific-key"
+
+
+def test_llm_api_key_absent_when_no_env_set(tmp_path):
+    """llm.api_key remains None when neither provider-specific nor generic env var is set."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _env={},
+    )
+    assert settings.llm.api_key is None
+
+
 def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     """build_agent() must not rewrite GEMINI_API_KEY when config provides llm_api_key."""
     user_settings = tmp_path / "settings.json"

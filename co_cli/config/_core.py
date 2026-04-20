@@ -17,7 +17,7 @@ from pydantic import (
 )
 
 from co_cli.config._knowledge import KnowledgeSettings
-from co_cli.config._llm import DEFAULT_LLM_PROVIDER, LlmSettings
+from co_cli.config._llm import LlmSettings, resolve_api_key_from_env
 from co_cli.config._memory import MemorySettings
 from co_cli.config._observability import ObservabilitySettings
 from co_cli.config._shell import ShellSettings
@@ -249,22 +249,10 @@ class Settings(BaseModel):
                 if val:
                     data.setdefault(group, {})[field] = val
 
-        # Provider-aware api_key resolution: prefer provider-specific env var, fall back to CO_LLM_API_KEY.
-        _PROVIDER_API_KEY_VARS: dict[str, str] = {
-            "gemini": "GEMINI_API_KEY",
-        }
-        _llm_data = data.get("llm", {})
-        _provider = (
-            env_source.get("CO_LLM_PROVIDER")
-            or (_llm_data.get("provider") if isinstance(_llm_data, dict) else None)
-            or DEFAULT_LLM_PROVIDER
-        )
-        _specific_var = _PROVIDER_API_KEY_VARS.get(_provider)
-        _api_key_val = (_specific_var and env_source.get(_specific_var)) or env_source.get(
-            "CO_LLM_API_KEY"
-        )
-        if _api_key_val:
-            data.setdefault("llm", {})["api_key"] = _api_key_val
+        # Provider-aware API key resolution lives in _llm.py.
+        api_key = resolve_api_key_from_env(env_source, data.get("llm", {}))
+        if api_key:
+            data.setdefault("llm", {})["api_key"] = api_key
 
         # MCP servers (flat — env override)
         mcp_env = env_source.get("CO_MCP_SERVERS")
@@ -272,11 +260,6 @@ class Settings(BaseModel):
             data["mcp_servers"] = json.loads(mcp_env)
 
         return data
-
-    def save(self):
-        """Save current settings to settings.json"""
-        with open(SETTINGS_FILE, "w") as f:
-            f.write(self.model_dump_json(indent=2, exclude_none=True))
 
 
 def load_config(
