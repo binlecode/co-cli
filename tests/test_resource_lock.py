@@ -103,7 +103,7 @@ async def test_patch_same_path_contention(tmp_path: Path):
     await acquired.wait()
 
     # patch should fail with tool error (lock held)
-    result = await file_patch(ctx, "target.txt", "hello", "goodbye")
+    result = await file_patch(ctx, path="target.txt", old_string="hello", new_string="goodbye")
     assert result.metadata.get("error") is True
     assert "being modified" in result.return_value
 
@@ -127,8 +127,8 @@ async def test_patch_different_paths_no_contention(tmp_path: Path):
     ctx.deps.file_read_mtimes[str(file_b)] = file_b.stat().st_mtime
 
     result_a, result_b = await asyncio.gather(
-        file_patch(ctx, "a.txt", "aaa", "AAA"),
-        file_patch(ctx, "b.txt", "bbb", "BBB"),
+        file_patch(ctx, path="a.txt", old_string="aaa", new_string="AAA"),
+        file_patch(ctx, path="b.txt", old_string="bbb", new_string="BBB"),
     )
 
     assert result_a.metadata.get("error") is not True

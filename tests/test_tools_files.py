@@ -509,6 +509,132 @@ async def test_patch_not_found_path(tmp_path):
     assert result.metadata.get("error") is True
 
 
+# --- patch (V4A mode) ---
+
+
+@pytest.mark.asyncio
+async def test_patch_v4a_update_single_file(tmp_path):
+    """V4A patch updates a single file via Update File directive."""
+    (tmp_path / "config.txt").write_text("host=localhost\nport=8080\n")
+    ctx = _make_ctx(tmp_path)
+    await file_read(ctx, path="config.txt")
+
+    patch_str = (
+        "*** Begin Patch\n"
+        "*** Update File: config.txt\n"
+        "@@ update port @@\n"
+        " host=localhost\n"
+        "-port=8080\n"
+        "+port=9000\n"
+        "*** End Patch"
+    )
+    result = await file_patch(ctx, mode="patch", patch=patch_str)
+
+    assert not result.metadata.get("error")
+    assert "config.txt" in result.metadata["files_modified"]
+    assert (tmp_path / "config.txt").read_text() == "host=localhost\nport=9000\n"
+
+
+@pytest.mark.asyncio
+async def test_patch_v4a_update_multi_file(tmp_path):
+    """V4A patch applies edits to multiple files in a single call."""
+    (tmp_path / "a.txt").write_text("value=old\n")
+    (tmp_path / "b.txt").write_text("name=old\n")
+    ctx = _make_ctx(tmp_path)
+    await file_read(ctx, path="a.txt")
+    await file_read(ctx, path="b.txt")
+
+    patch_str = (
+        "*** Begin Patch\n"
+        "*** Update File: a.txt\n"
+        "-value=old\n"
+        "+value=new\n"
+        "*** Update File: b.txt\n"
+        "-name=old\n"
+        "+name=new\n"
+        "*** End Patch"
+    )
+    result = await file_patch(ctx, mode="patch", patch=patch_str)
+
+    assert not result.metadata.get("error")
+    assert "a.txt" in result.metadata["files_modified"]
+    assert "b.txt" in result.metadata["files_modified"]
+    assert (tmp_path / "a.txt").read_text() == "value=new\n"
+    assert (tmp_path / "b.txt").read_text() == "name=new\n"
+
+
+@pytest.mark.asyncio
+async def test_patch_v4a_add_file(tmp_path):
+    """V4A patch creates a new file via Add File directive."""
+    ctx = _make_ctx(tmp_path)
+
+    patch_str = "*** Begin Patch\n*** Add File: newfile.txt\n+line one\n+line two\n*** End Patch"
+    result = await file_patch(ctx, mode="patch", patch=patch_str)
+
+    assert not result.metadata.get("error")
+    assert "newfile.txt" in result.metadata["files_created"]
+    assert (tmp_path / "newfile.txt").read_text() == "line one\nline two"
+
+
+@pytest.mark.asyncio
+async def test_patch_v4a_delete_file(tmp_path):
+    """V4A patch deletes an existing file via Delete File directive."""
+    (tmp_path / "victim.txt").write_text("goodbye\n")
+    ctx = _make_ctx(tmp_path)
+    await file_read(ctx, path="victim.txt")
+
+    patch_str = "*** Begin Patch\n*** Delete File: victim.txt\n*** End Patch"
+    result = await file_patch(ctx, mode="patch", patch=patch_str)
+
+    assert not result.metadata.get("error")
+    assert "victim.txt" in result.metadata["files_deleted"]
+    assert not (tmp_path / "victim.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_patch_v4a_requires_read_before_update(tmp_path):
+    """V4A UPDATE returns error when file_read was not called first."""
+    (tmp_path / "target.txt").write_text("x=1\n")
+    ctx = _make_ctx(tmp_path)
+    # No file_read call
+
+    patch_str = "*** Begin Patch\n*** Update File: target.txt\n-x=1\n+x=99\n*** End Patch"
+    result = await file_patch(ctx, mode="patch", patch=patch_str)
+
+    assert result.metadata.get("error") is True
+    assert "file_read" in result.return_value or "Read" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_patch_v4a_hunk_not_found(tmp_path):
+    """V4A UPDATE returns error when old_string is not present in the file."""
+    (tmp_path / "target.txt").write_text("hello world\n")
+    ctx = _make_ctx(tmp_path)
+    await file_read(ctx, path="target.txt")
+
+    patch_str = (
+        "*** Begin Patch\n"
+        "*** Update File: target.txt\n"
+        "-nonexistent line\n"
+        "+replacement\n"
+        "*** End Patch"
+    )
+    result = await file_patch(ctx, mode="patch", patch=patch_str)
+
+    assert result.metadata.get("error") is True
+    assert "not found" in result.return_value.lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_v4a_invalid_format(tmp_path):
+    """V4A patch with no operations returns a parse error."""
+    ctx = _make_ctx(tmp_path)
+
+    result = await file_patch(ctx, mode="patch", patch="*** Begin Patch\n*** End Patch")
+
+    assert result.metadata.get("error") is True
+
+
 # --- _enforce_workspace_boundary ---
 
 
