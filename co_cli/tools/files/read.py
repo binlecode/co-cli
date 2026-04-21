@@ -22,6 +22,48 @@ from co_cli.tools.files.helpers import (
 )
 from co_cli.tools.tool_io import tool_error, tool_output
 
+_READ_DEFAULT_LIMIT = 500
+_READ_MAX_LINES = 2000
+_READ_MAX_LINE_CHARS = 2000
+_READ_MAX_FILE_BYTES = 500_000
+
+
+def _compute_read_slice(
+    start_line: int | None,
+    end_line: int | None,
+    total_line_count: int,
+) -> tuple[int, int, bool]:
+    """Return (lo, hi, is_partial) for a file_read call."""
+    if start_line is not None or end_line is not None:
+        lo = (start_line - 1) if start_line is not None else 0
+        requested_hi = end_line if end_line is not None else total_line_count
+        hi = min(requested_hi, lo + _READ_MAX_LINES)
+        return lo, hi, True
+    lo = 0
+    hi = min(total_line_count, _READ_DEFAULT_LIMIT)
+    return lo, hi, hi < total_line_count
+
+
+def _build_read_display(
+    sliced: list[str],
+    base: int,
+    total_line_count: int,
+    hi: int,
+) -> str:
+    """Build cat-n numbered display with per-line truncation and optional continuation hint."""
+    lines = []
+    for i, line in enumerate(sliced):
+        raw = line.rstrip("\n")
+        if len(raw) > _READ_MAX_LINE_CHARS:
+            raw = raw[:_READ_MAX_LINE_CHARS] + "...[truncated]"
+        lines.append(f"{base + i:>6}\t{raw}\n")
+    display = "".join(lines)
+    if hi < total_line_count:
+        display += (
+            f"\n[{total_line_count - hi} more lines — use start_line={hi + 1} to continue reading]"
+        )
+    return display
+
 
 def _has_command(cmd: str) -> bool:
     """Return True when a command is available on PATH."""
@@ -362,7 +404,7 @@ async def file_read(
     file_grep first to locate the file.
 
     Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
-    the full file is returned.
+    up to 500 lines are returned; use start_line to continue reading.
 
     Args:
         path: File path relative to the workspace root.
@@ -386,6 +428,17 @@ async def file_read(
     if resolved.is_dir():
         return tool_error(f"Path is a directory: {path}", ctx=ctx)
 
+    # Block full-file reads on large files to protect context budget.
+    # Explicit ranges still proceed; the line cap limits their output size.
+    if start_line is None and end_line is None:
+        file_bytes = resolved.stat().st_size
+        if file_bytes > _READ_MAX_FILE_BYTES:
+            return tool_error(
+                f"File too large for full-file read ({file_bytes // 1024} KB). "
+                "Use start_line/end_line to keep this result within context budget.",
+                ctx=ctx,
+            )
+
     try:
         enc = _detect_encoding(resolved)
         content = resolved.read_text(encoding=enc)
@@ -394,30 +447,20 @@ async def file_read(
 
     path_key = str(resolved)
     ctx.deps.file_read_mtimes[path_key] = resolved.stat().st_mtime
-    is_partial = start_line is not None or end_line is not None
+
+    all_lines = content.splitlines(keepends=True)
+    total_line_count = len(all_lines)
+
+    lo, hi, is_partial = _compute_read_slice(start_line, end_line, total_line_count)
+    sliced = all_lines[lo:hi]
+
     if is_partial:
         ctx.deps.file_partial_reads.add(path_key)
     else:
         ctx.deps.file_partial_reads.discard(path_key)
-    all_lines = content.splitlines(keepends=True)
-    total_line_count = len(all_lines)
 
-    if start_line is not None or end_line is not None:
-        lo = (start_line - 1) if start_line is not None else 0
-        hi = end_line if end_line is not None else total_line_count
-        sliced = all_lines[lo:hi]
-    else:
-        hi = total_line_count
-        sliced = all_lines
-
-    # cat -n style: right-justified 6-char line number + tab
     base = start_line if start_line is not None else 1
-    display = "".join(f"{base + i:>6}\t{line}" for i, line in enumerate(sliced))
-
-    if end_line is not None and total_line_count > hi:
-        display += (
-            f"\n[{total_line_count - hi} more lines — use start_line={hi + 1} to continue reading]"
-        )
+    display = _build_read_display(sliced, base, total_line_count, hi)
 
     return tool_output(
         display,

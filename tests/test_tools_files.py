@@ -293,6 +293,68 @@ async def test_read_file_line_numbers_ranged(tmp_path):
     assert "     5\t" in result.return_value
 
 
+@pytest.mark.asyncio
+async def test_read_file_default_limit(tmp_path):
+    """No-range read on a file exceeding _READ_DEFAULT_LIMIT returns 500 lines with a continuation hint."""
+    from co_cli.tools.files.read import _READ_DEFAULT_LIMIT
+
+    content = "".join(f"line{i}\n" for i in range(600))
+    (tmp_path / "big.txt").write_text(content)
+
+    result = await file_read(_make_ctx(tmp_path), path="big.txt")
+
+    assert not result.metadata.get("error")
+    assert f"start_line={_READ_DEFAULT_LIMIT + 1}" in result.return_value
+    # Exactly _READ_DEFAULT_LIMIT lines numbered — line 500 present, 501 absent
+    assert f"{_READ_DEFAULT_LIMIT:>6}\t" in result.return_value
+    assert f"{_READ_DEFAULT_LIMIT + 1:>6}\t" not in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_read_file_hard_ceiling(tmp_path):
+    """Explicit ranges exceeding _READ_MAX_LINES are capped at 2000 lines."""
+    from co_cli.tools.files.read import _READ_MAX_LINES
+
+    content = "".join(f"line{i}\n" for i in range(3000))
+    (tmp_path / "large.txt").write_text(content)
+
+    # Sub-case (a): end_line beyond the ceiling
+    result_a = await file_read(_make_ctx(tmp_path), path="large.txt", start_line=1, end_line=3000)
+    assert not result_a.metadata.get("error")
+    assert f"{_READ_MAX_LINES:>6}\t" in result_a.return_value
+    assert f"{_READ_MAX_LINES + 1:>6}\t" not in result_a.return_value
+
+    # Sub-case (b): start_line only, no end_line
+    result_b = await file_read(_make_ctx(tmp_path), path="large.txt", start_line=1)
+    assert not result_b.metadata.get("error")
+    assert f"{_READ_MAX_LINES:>6}\t" in result_b.return_value
+    assert f"{_READ_MAX_LINES + 1:>6}\t" not in result_b.return_value
+
+
+@pytest.mark.asyncio
+async def test_read_file_line_truncation(tmp_path):
+    """Lines exceeding _READ_MAX_LINE_CHARS are truncated inline with a marker."""
+    (tmp_path / "wide.txt").write_text("x" * 3000 + "\n")
+
+    result = await file_read(_make_ctx(tmp_path), path="wide.txt")
+
+    assert not result.metadata.get("error")
+    assert "...[truncated]" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_read_file_size_gate(tmp_path):
+    """Full-file read on a file exceeding _READ_MAX_FILE_BYTES returns an error with start_line guidance."""
+    from co_cli.tools.files.read import _READ_MAX_FILE_BYTES
+
+    (tmp_path / "huge.txt").write_bytes(b"x" * (_READ_MAX_FILE_BYTES + 1))
+
+    result = await file_read(_make_ctx(tmp_path), path="huge.txt")
+
+    assert result.metadata.get("error") is True
+    assert "start_line" in result.return_value
+
+
 # --- grep ---
 
 

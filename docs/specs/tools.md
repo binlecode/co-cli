@@ -136,7 +136,7 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
 | `file_glob(path=".", pattern="*", max_entries=200)` | A | — | — | — | List directory or find files by pattern |
-| `file_read(path, start_line=None, end_line=None)` | A | — | — | — | Read workspace file; pagination hint + fuzzy name suggestions |
+| `file_read(path, start_line=None, end_line=None)` | A | — | — | — | Read workspace file; 500-line default cap with continuation hint; 500 KB full-read gate; 2000-char per-line truncation; fuzzy name suggestions on not-found |
 | `file_grep(pattern, path=".", glob="**/*", case_insensitive=False, output_mode="content", context_lines=0, head_limit=250, offset=0)` | A | — | — | — | Regex content search across workspace |
 | `file_write(path, content)` | D | ✓ | ✓ | — | Create or overwrite a file |
 | `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
