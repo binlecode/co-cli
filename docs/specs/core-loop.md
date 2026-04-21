@@ -26,6 +26,42 @@ For top-level architecture and startup sequencing, see [system.md](system.md) an
 
 This doc describes one complete foreground turn, from prompt input to post-turn finalization.
 
+Cross-subsystem overview — one full turn crosses every subsystem; detailed behavior at each step lives in the linked specs:
+
+```mermaid
+flowchart TD
+    A["REPL input"] --> B{"slash command?"}
+    B -->|built-in local| A
+    B -->|skill dispatch| C["expand skill body → user_input"]
+    B -->|plain text| D["user_input"]
+    C --> E["run_turn()"]
+    D --> E
+
+    E --> F["agent.run_stream_events"]
+    F --> G["SDK appends ModelRequest + resolves instruction parts<br/>(static + @agent.instructions)"]
+    G --> H["history processors 1..5<br/>(truncate → compact → safety → recall → summarize)"]
+    H --> I["provider HTTP"]
+    I --> J{"tool approvals needed?"}
+    J -->|yes| K["_run_approval_loop → deferred_tool_results"]
+    K --> F
+    J -->|no| L["final result"]
+
+    L --> M["_finalize_turn()"]
+    M --> N["fire-and-forget memory extraction + transcript append<br/>(or child-session branch after history replacement)"]
+```
+
+| Stage | Owned by |
+| --- | --- |
+| Slash-command dispatch, skill expansion | [tui.md](tui.md), [skills.md](skills.md) |
+| `run_turn` / approval loop / retries | [core-loop.md](core-loop.md) |
+| Instruction parts + history processors | [prompt-assembly.md](prompt-assembly.md) |
+| Compaction trigger (processor #5) | [compaction.md](compaction.md) |
+| Turn-time recall (processor #4) | [cognition.md](cognition.md) |
+| Transcript append / child-session branching | [session.md](session.md) |
+| Fire-and-forget extraction | [cognition.md](cognition.md) |
+
+Detailed foreground turn flow:
+
 ```mermaid
 flowchart TD
     A["PromptSession.prompt_async()"] --> B{"blank or exit?"}

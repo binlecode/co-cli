@@ -21,6 +21,22 @@
 
 ## 1. What & How
 
+Session phases:
+
+```text
+CLI start
+  -> create_deps
+  -> build_agent
+  -> restore_session
+  -> _init_memory_index
+  -> enter REPL
+      -> local command or agent turn
+      -> approvals / tools / persistence / post-turn writes as needed
+  -> cleanup on exit
+```
+
+Bootstrap owns all steps up to "enter REPL". Turn execution is in [core-loop.md](core-loop.md). Teardown drains background work, cleans up the shell backend, and closes async resources (MCP connections, async exit stack).
+
 Canonical startup flow for `co-cli`, from settings resolution to the point where the REPL prompt is ready. Bootstrap owns sequencing, degradation, and the runtime object handed to the agent. It does not own runtime health checks; `check_runtime()` is invoked later by `/status`, not during startup.
 
 ```

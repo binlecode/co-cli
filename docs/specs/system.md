@@ -19,40 +19,48 @@
 
 ---
 
-This doc defines the top-level runtime architecture of `co-cli`: the major subsystems, their boundaries, and how control moves through the system. It does not own component internals. Startup sequencing lives in [bootstrap.md](bootstrap.md), turn orchestration in [core-loop.md](core-loop.md), prompt assembly in [prompt-assembly.md](prompt-assembly.md), session transcripts in [session.md](session.md), compaction in [compaction.md](compaction.md), cognitive architecture (memory + knowledge) in [cognition.md](cognition.md), tools in [tools.md](tools.md), skills in [skills.md](skills.md), model/provider rules in [llm-models.md](llm-models.md), telemetry in [observability.md](observability.md), and personality construction in [personality.md](personality.md).
+This doc defines the runtime architecture of `co-cli`: subsystems, boundaries, and cross-subsystem contracts. Component internals are owned by their component specs; see section 2.4 for the full cross-reference map.
 
 ## 1. What & How
 
 `co-cli` is a local-first, approval-first terminal agent. A Typer CLI starts a REPL, startup assembles a `CoDeps` runtime and a single foreground `Agent`, and each user turn runs through one orchestration entrypoint that can call native tools, MCP tools, and persistent context stores. Durable state lives outside the model: session transcripts, knowledge artifacts, the knowledge index, tool-result spill files, and telemetry are all stored on disk and reloaded or queried when needed.
 
-```mermaid
-flowchart LR
-    User[User] --> CLI[Typer CLI]
-    CLI --> Main[co_cli/main.py]
-
-    Main --> Bootstrap[create_deps]
-    Bootstrap --> Config[Settings]
-    Bootstrap --> Deps[CoDeps]
-    Bootstrap --> Stores[Local Stores]
-
-    Main --> AgentFactory[build_agent]
-    AgentFactory --> Agent[Foreground Agent]
-    Main --> SessionRestore[restore_session]
-    SessionRestore --> Stores
-
-    Main --> Loop[REPL Loop]
-    Loop --> Turn[run_turn]
-    Turn --> Agent
-    Agent --> Tools[Native Tools]
-    Agent --> MCP[MCP Toolsets]
-    Agent --> Context[Dynamic Context]
-
-    Tools --> Workspace[Workspace Files]
-    Tools --> External[Subprocesses / Remote APIs]
-    MCP --> External
-    Context --> Stores
-
-    Main --> Telemetry[OTel -> SQLite]
+```
+                    User
+                      │
+┌─────────────────────▼───────────────────────────────────────────┐
+│  co-cli                                                         │
+│                                                                 │
+│  ┌────────────┐   ┌─────────────────────────────────────────┐  │
+│  │ Bootstrap  │──▶│  CoDeps                                 │  │
+│  │ startup    │   │  config · model · shell · state         │  │
+│  │ capability │   │  tool registry · skill commands         │  │
+│  │ discovery  │   │  paths · degradations                   │  │
+│  └────────────┘   └─────────────────┬───────────────────────┘  │
+│                                     │ injected into all         │
+│  ┌──────────────────────────────────▼──────────────────────┐   │
+│  │  REPL Loop                                              │   │
+│  │  ┌───────────────────────┐  ┌──────────────────────┐   │   │
+│  │  │  TUI / Commands       │  │  Foreground Turn     │   │   │
+│  │  │  prompt · completer   │  │  orchestrate         │   │   │
+│  │  │  slash dispatch       │  │  approval · retries  │   │   │
+│  │  └───────────────────────┘  └──────────┬───────────┘   │   │
+│  └─────────────────────────────────────────┼───────────────┘   │
+│                                            │                    │
+│  ┌─────────────────────────────────────────▼────────────────┐  │
+│  │  Foreground Agent                                        │  │
+│  │  ┌──────────────┐  ┌───────────────┐  ┌──────────────┐  │  │
+│  │  │ Native Tools │  │  MCP Toolsets │  │  Personality │  │  │
+│  │  └──────────────┘  └───────────────┘  └──────────────┘  │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐ │
+│  │  Knowledge   │  │  Sessions    │  │     Observability     │ │
+│  │  artifacts   │  │  JSONL       │  │     OTel → SQLite     │ │
+│  └──────────────┘  └──────────────┘  └───────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+          │                    │                    │
+   LLM Provider         Workspace Files        MCP Servers
 ```
 
 ## 2. Core Logic
@@ -86,19 +94,7 @@ The system has three phases:
 2. **Interactive session**: run the REPL, dispatch slash commands locally when possible, and send agent turns through `run_turn()` when model work is needed.
 3. **Teardown**: drain background work, clean up the shell backend, and close async resources such as MCP connections.
 
-At a high level, control flow looks like this:
-
-```text
-CLI start
-  -> create_deps
-  -> build_agent
-  -> restore_session
-  -> _init_memory_index
-  -> enter REPL
-      -> local command or agent turn
-      -> approvals / tools / persistence / post-turn writes as needed
-  -> cleanup on exit
-```
+Startup sequencing detail is in [bootstrap.md](bootstrap.md); turn execution in [core-loop.md](core-loop.md).
 
 ### 2.3 Runtime Contract
 
@@ -154,42 +150,6 @@ The specialized DESIGN docs own the detailed behavior inside each boundary:
 - provider and model selection rules: [llm-models.md](llm-models.md)
 - tracing and log viewers: [observability.md](observability.md)
 
-### 2.5 Request Lifecycle (end-to-end)
-
-One full turn crosses every subsystem. This appendix shows the request lifecycle at a glance; the detailed behavior at each step lives in the linked specs.
-
-```mermaid
-flowchart TD
-    A["REPL input"] --> B{"slash command?"}
-    B -->|built-in local| A
-    B -->|skill dispatch| C["expand skill body → user_input"]
-    B -->|plain text| D["user_input"]
-    C --> E["run_turn()"]
-    D --> E
-
-    E --> F["agent.run_stream_events"]
-    F --> G["SDK appends ModelRequest + resolves instruction parts<br/>(static + @agent.instructions)"]
-    G --> H["history processors 1..5<br/>(truncate → compact → safety → recall → summarize)"]
-    H --> I["provider HTTP"]
-    I --> J{"tool approvals needed?"}
-    J -->|yes| K["_run_approval_loop → deferred_tool_results"]
-    K --> F
-    J -->|no| L["final result"]
-
-    L --> M["_finalize_turn()"]
-    M --> N["fire-and-forget memory extraction + transcript append<br/>(or child-session branch after history replacement)"]
-```
-
-| Stage | Owned by |
-| --- | --- |
-| Slash-command dispatch, skill expansion | [tui.md](tui.md), [skills.md](skills.md) |
-| `run_turn` / approval loop / retries | [core-loop.md](core-loop.md) |
-| Instruction parts + history processors | [prompt-assembly.md](prompt-assembly.md) |
-| Compaction trigger (processor #5) | [compaction.md](compaction.md) |
-| Turn-time recall (processor #4) | [cognition.md](cognition.md) |
-| Transcript append / child-session branching | [session.md](session.md) |
-| Fire-and-forget extraction | [cognition.md](cognition.md) |
-
 ## 3. Config
 
 These settings most directly affect top-level system assembly.
@@ -218,20 +178,3 @@ These settings most directly affect top-level system assembly.
 | `co_cli/commands/_commands.py` | Slash-command dispatch and skill handoff into the REPL loop |
 | `co_cli/deps.py` | Shared runtime contract and workspace path resolution |
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
-| `co_cli/observability/_telemetry.py` | OTel span exporters (`SQLiteSpanExporter`, `JsonSpanExporter`) and `setup_tracer_provider()` factory |
-| `co_cli/observability/_file_logging.py` | Two rotating JSONL handlers + `_JsonRedactingFormatter` — `co-cli.jsonl` (INFO+) and `errors.jsonl` (WARNING+) |
-| `co_cli/observability/_tail.py` | Polling loop and terminal rendering for live trace spans |
-| `co_cli/observability/_viewer.py` | Static HTML generator for nested span visualisation |
-| `docs/specs/mission.md` | Product mission, strategic thesis, and stage roadmap |
-| `docs/specs/bootstrap.md` | Startup sequencing and degradation details |
-| `docs/specs/core-loop.md` | Foreground-turn behavior, approval resumes, retries, interrupts |
-| `docs/specs/prompt-assembly.md` | Static + dynamic instruction layers, four history processors plus two preflight callables, append-only invariant |
-| `docs/specs/session.md` | JSONL transcript persistence, `/resume`, `/new`, oversized-output spill |
-| `docs/specs/compaction.md` | Three-mechanism compaction, summarizer, circuit breaker, overflow recovery |
-| `docs/specs/cognition.md` | Two-layer Memory + Knowledge: artifact schema, storage, retrieval, extraction, dreaming |
-| `docs/specs/tools.md` | Tool surface, approval classes, visibility, delegation, background tasks |
-| `docs/specs/skills.md` | Skill loading and slash-command delegation |
-| `docs/specs/tui.md` | REPL loop, completer, slash command registry and dispatch |
-| `docs/specs/personality.md` | Soul file layout, static prompt assembly, per-turn injection |
-| `docs/specs/llm-models.md` | Provider and model selection rules |
-| `docs/specs/observability.md` | Telemetry pipeline and trace viewers |
