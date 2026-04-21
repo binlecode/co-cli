@@ -265,3 +265,35 @@ All other files read and verified:
 
 **Overall: DELIVERED**
 CompactionSettings replaces module-level constants with user-tunable config; boundary planner hardened with soft-overrun and active-user anchoring; threshold floor and anti-thrashing gate added; 587 tests pass.
+
+---
+
+## Implementation Review — 2026-04-20
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | planner enforces protected live window with MIN_RETAINED_TURN_GROUPS, soft-overrun, active-user anchoring | ✓ pass | `_history.py:93` — `_MIN_RETAINED_TURN_GROUPS=1`; `_history.py:203` — `_anchor_tail_to_last_user`; `_history.py:270-285` — soft-overrun walk loop; `_history.py:291` — anchoring applied; `recover_overflow_history` at `_history.py:748-753` passes same config |
+| TASK-2 | threshold floor + anti-thrashing gate; savings cleared when overflow or hygiene fires | ✓ pass | `_history.py:809` — `max(int(budget * proactive_ratio), min_threshold_tokens)`; `_history.py:816-821` — gate check; `_history.py:849-854` — savings tracking; `orchestrate.py:618` — reset post-hygiene; `orchestrate.py:682` — reset post-overflow; `deps.py:144` — `recent_proactive_savings: list[float]` not in `reset_for_turn()` |
+| TASK-3 | all invariants covered by direct tests | ✓ pass | `test_history.py` — soft-overrun, active-user anchoring; `test_context_compaction.py` — threshold floor, gate activation, window passthrough, savings-clear, hygiene bypass |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Hygiene blocked by anti-thrashing gate: `maybe_run_pre_turn_hygiene` calls `summarize_history_window` without clearing savings first; an active gate silently skips hygiene for one turn, violating the spec constraint | `_history.py:882-885` | blocking | Cleared `recent_proactive_savings` inside `maybe_run_pre_turn_hygiene` before calling `summarize_history_window`; added `test_hygiene_not_blocked_by_anti_thrashing_gate` regression test |
+
+### Tests
+- Command: `uv run pytest -x`
+- Result: 589 passed, 0 failed
+- Log: `.pytest-logs/<timestamp>-review-impl.log`
+
+### Doc Sync
+- Scope: narrow — all tasks confined to `co_cli/context/_history.py`, `co_cli/config/_compaction.py`, `co_cli/deps.py`, `co_cli/context/orchestrate.py`; no public API renames
+- Result: fixed in prior `orchestrate-dev` pass; confirmed still accurate post-fix
+
+### Behavioral Verification
+- `uv run co config`: ✓ healthy — system starts, config loads with `CompactionSettings`, LLM online
+- No user-facing CLI surface changed — compaction improvements are internal
+
+### Overall: PASS
+Blocking finding (hygiene gated by anti-thrashing) found and fixed; 589 tests green; all TASK-1/TASK-2/TASK-3 spec requirements confirmed at file:line; behavioral verification clean. Ready to ship.
