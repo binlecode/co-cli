@@ -497,6 +497,27 @@ async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> N
 
 
 @pytest.mark.asyncio
+async def test_hygiene_not_blocked_by_anti_thrashing_gate() -> None:
+    """Pre-turn hygiene compaction fires even when the anti-thrashing gate is active.
+
+    Gate is active with two low-yield entries. Hygiene must still compact because
+    maybe_run_pre_turn_hygiene clears the savings ring before calling summarize_history_window.
+    """
+    # 10 messages x 40_000 chars = 400_000 chars / 4 = 100_000 tokens > 88_000 threshold
+    msgs = _make_messages(10, body_chars=40_000)
+    # Active gate: two low-yield runs below min_proactive_savings=0.10
+    deps = _make_hygiene_deps()
+    deps.runtime.recent_proactive_savings = [0.02, 0.03]
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    # Gate must not block hygiene — compaction must fire
+    assert len(result) < len(msgs)
+    # Stale gate state is gone: original [0.02, 0.03] values are cleared before compaction.
+    # The ring may contain one new entry from the hygiene-triggered compaction savings.
+    assert 0.02 not in deps.runtime.recent_proactive_savings
+    assert 0.03 not in deps.runtime.recent_proactive_savings
+
+
+@pytest.mark.asyncio
 async def test_savings_clear_unblocks_gate() -> None:
     """Clearing recent_proactive_savings (as hygiene and overflow do) deactivates the gate.
 

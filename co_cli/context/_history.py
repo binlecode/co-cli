@@ -881,6 +881,9 @@ async def maybe_run_pre_turn_hygiene(
         token_count = estimate_message_tokens(message_history)
         if token_count <= int(budget * deps.config.compaction.hygiene_ratio):
             return message_history
+        # Clear the anti-thrashing gate so hygiene is never blocked by prior low-yield
+        # proactive runs. Orchestrate.py also clears on return — that's a safe no-op.
+        deps.runtime.recent_proactive_savings.clear()
         ctx = RunContext(deps=deps, model=model, usage=RunUsage())
         return await summarize_history_window(ctx, message_history)
     except Exception:
