@@ -212,4 +212,4 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | Unified knowledge artifact directory |
 | `mcp_servers` | `CO_MCP_SERVERS` | 2 defaults | MCP server definitions |
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Default agent retry budget |
-| `subagent.max_requests_*` | `CO_SUBAGENT_MAX_REQUESTS_*` | var | Per-role request caps |
+| `max_requests` tool arg | — | 10 / 8 / 3 | Per-call override for delegation request caps (research / analysis / thinking); defaults are function-local |
