@@ -14,6 +14,7 @@ from pydantic_ai.messages import (
 )
 from tests._frontend import SilentFrontend
 from tests._settings import make_settings
+from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.context.orchestrate import TurnResult
 from co_cli.context.session import new_session_path
@@ -337,6 +338,42 @@ def test_format_file_size() -> None:
     assert format_file_size(500) == "500 B"
     assert format_file_size(2048) == "2 KB"
     assert format_file_size(1536 * 1024) == "1.5 MB"
+
+
+@pytest.mark.asyncio
+async def test_finalize_turn_branches_child_transcript_when_history_compacted(
+    tmp_path: Path,
+) -> None:
+    """When history_compaction_applied is True, _finalize_turn creates a child transcript."""
+    sessions_dir = tmp_path / "sessions"
+    parent = sessions_dir / "2026-04-20-T170000Z-hygiene001.jsonl"
+    original = [ModelRequest(parts=[UserPromptPart(content="original turn")])]
+    append_messages(parent, original)
+
+    config = make_settings()
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=config,
+        runtime=CoRuntimeState(history_compaction_applied=True),
+        sessions_dir=sessions_dir,
+    )
+    deps.session.session_path = parent
+    deps.session.persisted_message_count = len(original)
+
+    compacted = [ModelRequest(parts=[UserPromptPart(content="compacted summary")])]
+    turn_result = TurnResult(
+        interrupted=False,
+        outcome="continue",
+        messages=compacted,
+    )
+    frontend = SilentFrontend()
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        await _finalize_turn(turn_result, original, deps, frontend)
+
+    assert deps.session.session_path != parent
+    loaded = load_transcript(deps.session.session_path)
+    assert len(loaded) == 1
+    assert loaded[0].parts[0].content == "compacted summary"
 
 
 @pytest.mark.asyncio

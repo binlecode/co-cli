@@ -61,7 +61,11 @@ logger = logging.getLogger(__name__)
 _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
-from co_cli.context._history import build_recall_injection, build_safety_injection
+from co_cli.context._history import (
+    build_recall_injection,
+    build_safety_injection,
+    maybe_run_pre_turn_hygiene,
+)
 from co_cli.context.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -608,6 +612,7 @@ async def run_turn(
       "error"    — unrecoverable error, display and prompt
     """
     deps.runtime.reset_for_turn()
+    message_history = await maybe_run_pre_turn_hygiene(deps, message_history, agent.model)
 
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")

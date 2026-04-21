@@ -20,7 +20,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
@@ -35,6 +35,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.usage import RunUsage
 
 from co_cli.context.summarization import (
     estimate_message_tokens,
@@ -95,6 +96,18 @@ lands within ~0.8% of the old reserve-adjusted trigger; on smaller-context
 models produces a meaningful 75% fraction instead of the degenerate
 reserve-dominated value. Not settings-configurable — right shape at this
 scale is a named constant.
+"""
+
+HYGIENE_COMPACTION_RATIO: float = 0.88
+"""Fraction of raw context_window above which pre-turn hygiene compaction fires.
+
+Higher than PROACTIVE_COMPACTION_RATIO (0.75) because hygiene operates before any model
+call and uses rough estimates only — no provider-reported token count is available for
+the current turn state. The 13-percentage-point gap accounts for estimator imprecision
+(char/4 heuristic overestimates code/JSON-heavy content by 30–50%):
+  Real tokens at 75% → rough estimate ~97% → hygiene does NOT fire (proactive handles during turn)
+  Real tokens at 85% → rough estimate ~110% → hygiene fires (maintenance needed before turn)
+Not settings-configurable — right shape at this scale is a named constant.
 """
 
 TAIL_FRACTION: float = 0.40
@@ -801,6 +814,38 @@ async def summarize_history_window(
     ctx.deps.runtime.history_compaction_applied = True
     preserved_discovery = _preserve_search_tool_breadcrumbs(dropped, kept_ids)
     return [*head, summary_marker, *preserved_discovery, *tail]
+
+
+# ---------------------------------------------------------------------------
+# maybe_run_pre_turn_hygiene — pre-turn maintenance compaction
+# ---------------------------------------------------------------------------
+
+
+async def maybe_run_pre_turn_hygiene(
+    deps: CoDeps,
+    message_history: list[ModelMessage],
+    model: Any,
+) -> list[ModelMessage]:
+    """Pre-turn hygiene compaction: compact if rough-estimate tokens exceed HYGIENE_COMPACTION_RATIO.
+
+    Called from run_turn() after reset_for_turn() and before _run_model_preflight.
+    Uses rough token estimate only — no provider-reported count is available pre-turn.
+    Sets deps.runtime.history_compaction_applied when compaction runs.
+    Fails open: any exception returns message_history unchanged so the turn proceeds.
+    """
+    try:
+        ctx_window = model.context_window if model is not None else None
+        budget = resolve_compaction_budget(deps.config, ctx_window)
+        if budget <= 0:
+            return message_history
+        token_count = estimate_message_tokens(message_history)
+        if token_count <= int(budget * HYGIENE_COMPACTION_RATIO):
+            return message_history
+        ctx = RunContext(deps=deps, model=model, usage=RunUsage())
+        return await summarize_history_window(ctx, message_history)
+    except Exception:
+        log.warning("Pre-turn hygiene compaction failed — skipping", exc_info=True)
+        return message_history
 
 
 # ---------------------------------------------------------------------------

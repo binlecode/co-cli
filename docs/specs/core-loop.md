@@ -42,7 +42,7 @@ flowchart TD
     D -->|DelegateToAgent| F["set active_skill_name; snapshot/apply skill_env; delegated_input becomes user_input"]
 
     F --> H
-    H --> I["run_turn(): deps.runtime.reset_for_turn(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
+    H --> I["run_turn(): deps.runtime.reset_for_turn(); maybe_run_pre_turn_hygiene(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
     I --> J["_execute_stream_segment() via agent.run_stream_events(...)"]
     J --> K{"segment result / exception"}
 
@@ -232,6 +232,8 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
+**Pre-turn hygiene (M0).** Before the agent loop starts, `run_turn()` calls `maybe_run_pre_turn_hygiene()` after `reset_for_turn()` and before `frontend.on_status`. This is a maintenance compaction using rough token estimates (no provider-reported count is available pre-turn). It fires when the estimated token count exceeds `HYGIENE_COMPACTION_RATIO` (0.88) of the budget — higher than the proactive threshold to avoid false positives from the char/4 estimator. Uses the same M3 planner and summarizer. Fails open: any exception returns history unchanged so the turn proceeds. When it fires, it sets `deps.runtime.history_compaction_applied`, which branches the transcript into a child session on finalization. See [compaction.md](compaction.md) for M0 details.
+
 The main agent is built with four registered history processors (pure transformers) in this exact order:
 
 1. `truncate_tool_results`
@@ -365,7 +367,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/_history.py` | four registered history processors (tool-output trim, batch-budget cap, response capping, sliding-window compaction) plus two preflight callables (`build_recall_injection`, `build_safety_injection`) |
+| `co_cli/context/_history.py` | four registered history processors (tool-output trim, batch-budget cap, response capping, sliding-window compaction); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); plus two preflight callables (`build_recall_injection`, `build_safety_injection`) |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent/_core.py` | main agent factory |

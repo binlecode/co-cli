@@ -15,7 +15,11 @@ from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings, settings
-from co_cli.context._history import summarize_history_window
+from co_cli.context._history import (
+    HYGIENE_COMPACTION_RATIO,
+    maybe_run_pre_turn_hygiene,
+    summarize_history_window,
+)
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
@@ -307,3 +311,117 @@ def test_build_summarizer_prompt_keeps_personality_after_context() -> None:
     ctx_pos = result.index("## Additional Context")
     personality_pos = result.index("Additionally, preserve:")
     assert personality_pos > ctx_pos
+
+
+# ---------------------------------------------------------------------------
+# maybe_run_pre_turn_hygiene — TASK-1 / TASK-2 hygiene compaction tests
+#
+# Budget: ctx_token_budget=100_000 (default). model=None → ctx_window=None → budget=100_000.
+# Hygiene threshold: int(100_000 * 0.88) = 88_000 tokens = 352_000 chars.
+# Proactive threshold: int(100_000 * 0.75) = 75_000 tokens = 300_000 chars.
+# ---------------------------------------------------------------------------
+
+_HYGIENE_BUDGET = 100_000
+_HYGIENE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * HYGIENE_COMPACTION_RATIO)
+_PROACTIVE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * 0.75)
+
+
+def _make_hygiene_deps(*, ctx_token_budget: int = _HYGIENE_BUDGET) -> CoDeps:
+    config = make_settings(
+        llm=make_settings().llm.model_copy(
+            update={"provider": "anthropic", "ctx_token_budget": ctx_token_budget}
+        )
+    )
+    return CoDeps(shell=ShellBackend(), config=config)
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_compacts_oversized_history() -> None:
+    """Rough-estimate tokens above HYGIENE_COMPACTION_RATIO * budget triggers pre-turn compaction."""
+    # 10 messages x 40_000 chars = 400_000 chars / 4 = 100_000 tokens > 88_000 threshold
+    msgs = _make_messages(10, body_chars=40_000)
+    assert estimate_message_tokens(msgs) > _HYGIENE_THRESHOLD_TOKENS
+    deps = _make_hygiene_deps()
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    assert len(result) < len(msgs)
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_no_op_below_threshold() -> None:
+    """History well below the hygiene threshold is returned unchanged."""
+    # 4 messages x ~20 chars = ~80 chars / 4 = ~20 tokens ≪ 88_000 threshold
+    msgs = _make_messages(4)
+    assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
+    deps = _make_hygiene_deps()
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    assert result is msgs
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_no_op_in_proactive_zone() -> None:
+    """History in the proactive zone (above 0.75 but below 0.88) is not touched by hygiene.
+
+    The proactive processor (model-call time) handles this range — hygiene must not fire.
+    """
+    # 10 messages x 32_000 chars = 320_000 chars / 4 = 80_000 tokens
+    # 75_000 < 80_000 < 88_000: in proactive zone, below hygiene threshold
+    msgs = _make_messages(10, body_chars=32_000)
+    estimate = estimate_message_tokens(msgs)
+    assert estimate > _PROACTIVE_THRESHOLD_TOKENS
+    assert estimate <= _HYGIENE_THRESHOLD_TOKENS
+    deps = _make_hygiene_deps()
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    assert result is msgs
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_sets_history_compaction_applied() -> None:
+    """history_compaction_applied is True after hygiene compaction fires."""
+    msgs = _make_messages(10, body_chars=40_000)
+    deps = _make_hygiene_deps()
+    assert deps.runtime.history_compaction_applied is False
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    assert len(result) < len(msgs)
+    assert deps.runtime.history_compaction_applied is True
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_no_flag_when_no_compaction() -> None:
+    """history_compaction_applied remains False when hygiene does not fire."""
+    msgs = _make_messages(4)
+    deps = _make_hygiene_deps()
+    assert deps.runtime.history_compaction_applied is False
+    await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    assert deps.runtime.history_compaction_applied is False
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_fail_open_unusable_budget() -> None:
+    """When budget resolves to 0 (no context window known), hygiene skips and returns history unchanged."""
+    msgs = _make_messages(10, body_chars=40_000)
+    deps = _make_hygiene_deps(ctx_token_budget=0)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    assert result is msgs
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_latest_user_turn_survives() -> None:
+    """The most recent user message is preserved after pre-turn hygiene compaction."""
+    last_user_content = "the final user message that must survive compaction"
+    msgs = _make_messages(10, body_chars=40_000)
+    # Append the final user turn (oversized history + final message)
+    msgs.append(ModelRequest(parts=[UserPromptPart(content=last_user_content)]))
+    deps = _make_hygiene_deps()
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    assert len(result) < len(msgs)
+    # Find last user message in compacted result
+    last_user = None
+    for msg in reversed(result):
+        if isinstance(msg, ModelRequest):
+            for part in msg.parts:
+                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                    last_user = part.content
+                    break
+        if last_user is not None:
+            break
+    assert last_user == last_user_content

@@ -39,10 +39,11 @@ Covers how co-cli keeps context bounded under pressure. Prompt assembly and hist
 
 ## 1. What & How
 
-Compaction is **three mechanisms** operating at different lifecycle points, with one shared summarizer helper and one emergency entry point.
+Compaction is **four mechanisms** operating at different lifecycle points, with one shared summarizer helper and one emergency entry point.
 
 | Mechanism | When | Unit | Reversible? |
 |---|---|---|---|
+| **M0 — Pre-turn hygiene** | `run_turn()` entry, before agent loop | Turn-group range | Lossy (middle replaced by summary marker); uses same M3 planner + summarizer |
 | **M1 — Emit-time cap** | Tool returns | One tool result | Irreversible (content to disk, placeholder in context) |
 | **M2 — Prepass recency clearing** | Before every `ModelRequestNode` | Individual parts in older messages | Irreversible for the session (content replaced with placeholder string) |
 | **M3 — Window compaction** | Before every `ModelRequestNode`, when `token_count > threshold` | Turn-group range | Lossy (middle replaced by summary marker) |
@@ -573,6 +574,7 @@ One successful compaction per pressure event per turn.
 
 | Constant | Value | Purpose |
 |---|---|---|
+| `HYGIENE_COMPACTION_RATIO` | `0.88` | Fraction of raw context_window above which pre-turn hygiene (M0) fires |
 | `PROACTIVE_COMPACTION_RATIO` | `0.75` | Fraction of raw context_window above which M3 fires |
 | `TAIL_FRACTION` | `0.40` | Fraction of budget for the preserved tail |
 | `COMPACTABLE_KEEP_RECENT` | `5` | M2a: most-recent returns per tool to keep |
@@ -597,7 +599,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 
 | File | Purpose |
 |---|---|
-| `co_cli/context/_history.py` | Four registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `compact_assistant_responses`, `summarize_history_window`); `plan_compaction_boundaries` (shared planner); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `PROACTIVE_COMPACTION_RATIO`, `TAIL_FRACTION`, `COMPACTABLE_KEEP_RECENT`. |
+| `co_cli/context/_history.py` | Four registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `compact_assistant_responses`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `HYGIENE_COMPACTION_RATIO`, `PROACTIVE_COMPACTION_RATIO`, `TAIL_FRACTION`, `COMPACTABLE_KEEP_RECENT`. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
 | `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry. |
 | `co_cli/context/tool_categories.py` | `COMPACTABLE_TOOLS` (M2 scope); `FILE_TOOLS` (enrichment file-path scope); `PATH_NORMALIZATION_TOOLS`. |
