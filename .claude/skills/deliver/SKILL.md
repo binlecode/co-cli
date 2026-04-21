@@ -113,6 +113,12 @@ Run `/sync-doc` scoped to affected docs, or full if cross-cutting changes were m
 
 ## Phase 4 — Ship
 
+**Format gate** — run before staging anything:
+```bash
+scripts/quality-gate.sh lint --fix
+```
+Catches any formatting issues introduced by self-review fixes or doc-sync edits after Phase 3's quality gate.
+
 Mark completed tasks `✓ DONE` in the plan file (if a slug was used).
 
 **Version bump** — read current version from `pyproject.toml`, bump patch by 2 (feature) or 1 (bugfix):

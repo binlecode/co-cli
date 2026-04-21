@@ -335,6 +335,14 @@ Append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`:
 
 Run only after `/review-impl` returns PASS. Do not ship a DELIVERED-only delivery — Gate 2 requires the review-impl PASS verdict first.
 
+### Step 0 — Format gate
+
+Run before staging anything:
+```bash
+scripts/quality-gate.sh lint --fix
+```
+Catches any formatting issues introduced by review-impl fixes or doc-sync edits after Phase 3's quality gate.
+
 ### Step 1 — Archive plan
 
 Locate the plan file (glob `docs/exec-plans/active/*-<slug>.md`) then move it to completed:
