@@ -34,4 +34,12 @@ jobs:
         # CI=true is set automatically by GitHub Actions.
         # quality-gate.sh detects CI=true and adds -m "not local" to skip
         # tests that require Ollama or other local infrastructure.
+        #
+        # CO_MCP_SERVERS='{}' disables MCP server startup in tests.
+        # Without this, pydantic-ai tries to spawn the context7 MCP subprocess
+        # via "npx -y @upstash/context7-mcp@latest" at agent run time, which
+        # requires a fresh npm download (~7s) and trips the asyncio.timeout(10)
+        # in agent integration tests.
+        env:
+          CO_MCP_SERVERS: '{}'
         run: scripts/quality-gate.sh full
