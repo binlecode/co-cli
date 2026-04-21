@@ -1,4 +1,4 @@
-"""History processors and preflight helpers for automatic context governance.
+"""History processors and per-turn dynamic instruction functions for context governance.
 
 History processors are chained via ``Agent(history_processors=[...])``. They run
 before every model request and transform the message list in-place.
@@ -9,9 +9,9 @@ Registered processors (pure transformers — no deps mutation):
     compact_assistant_responses  — sync, caps large TextPart/ThinkingPart in older ModelResponse
     summarize_history_window     — async, summarizes middle messages via inline LLM or static marker
 
-Preflight callables (called explicitly by run_turn() before model-bound segments):
-    build_recall_injection       — async, returns date + personality + recall injection and recall-fired flag
-    build_safety_injection       — sync, returns doom-loop / shell-reflection injection messages and flags
+Dynamic instruction functions (registered via agent.instructions() — never appended to message history):
+    _recall_prompt_text          — async, returns date + personality + recalled knowledge as plain text
+    _safety_prompt_text          — sync, returns doom-loop / shell-reflection warnings as plain text
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, cast
 
 from pydantic_ai import RunContext
@@ -28,7 +29,6 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    SystemPromptPart,
     TextPart,
     ThinkingPart,
     ToolCallPart,
@@ -44,7 +44,7 @@ from co_cli.context.summarization import (
     summarize_messages,
 )
 from co_cli.context.tool_categories import COMPACTABLE_TOOLS, FILE_TOOLS
-from co_cli.context.types import MemoryRecallState, SafetyState
+from co_cli.context.types import MemoryRecallState
 from co_cli.deps import CoDeps
 
 log = logging.getLogger(__name__)
@@ -735,23 +735,37 @@ def _preserve_search_tool_breadcrumbs(
 async def recover_overflow_history(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
+    *,
+    tail_fraction_override: float | None = None,
 ) -> list[ModelMessage] | None:
     """Recover from provider context overflow via the shared boundary planner.
 
     Calls ``plan_compaction_boundaries`` with config-sourced tail settings.
+    ``tail_fraction_override`` allows a more aggressive retry with a smaller tail fraction.
     The last turn group is always preserved via ``_MIN_RETAINED_TURN_GROUPS=1``.
     Returns None when no compaction boundary exists.
     """
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
     cfg = ctx.deps.config.compaction
+    tail_fraction = (
+        tail_fraction_override if tail_fraction_override is not None else cfg.tail_fraction
+    )
+    token_count = max(estimate_message_tokens(messages), latest_response_input_tokens(messages))
     bounds = plan_compaction_boundaries(
         messages,
         budget,
-        cfg.tail_fraction,
+        tail_fraction,
         tail_soft_overrun_multiplier=cfg.tail_soft_overrun_multiplier,
     )
     if bounds is None:
+        log.warning(
+            "Compaction: overflow recovery boundary planning returned None "
+            "(tail group exceeds budget). budget=%d tail_fraction=%.2f token_count=%d — recovery impossible.",
+            budget,
+            tail_fraction,
+            token_count,
+        )
         return None
 
     head_end, tail_start, dropped_count = bounds
@@ -827,6 +841,13 @@ async def summarize_history_window(
         tail_soft_overrun_multiplier=cfg.tail_soft_overrun_multiplier,
     )
     if bounds is None:
+        log.warning(
+            "Compaction: proactive boundary planning returned None "
+            "(tail group exceeds budget). token_count=%d budget=%d tail_fraction=%.2f — no compaction possible.",
+            token_count,
+            budget,
+            cfg.tail_fraction,
+        )
         return messages
 
     head_end, tail_start, dropped_count = bounds
@@ -865,11 +886,11 @@ async def maybe_run_pre_turn_hygiene(
     deps: CoDeps,
     message_history: list[ModelMessage],
     model: Any,
+    reported_input_tokens: int = 0,
 ) -> list[ModelMessage]:
-    """Pre-turn hygiene compaction: compact if rough-estimate tokens exceed cfg.hygiene_ratio * budget.
+    """Pre-turn hygiene compaction: compact if token count exceeds cfg.hygiene_ratio * budget.
 
-    Called from run_turn() after reset_for_turn() and before _run_model_preflight.
-    Uses rough token estimate only — no provider-reported count is available pre-turn.
+    ``reported_input_tokens`` must be read from turn_usage before reset_for_turn() clears it.
     Sets deps.runtime.history_compaction_applied when compaction runs.
     Fails open: any exception returns message_history unchanged so the turn proceeds.
     """
@@ -878,7 +899,7 @@ async def maybe_run_pre_turn_hygiene(
         budget = resolve_compaction_budget(deps.config, ctx_window)
         if budget <= 0:
             return message_history
-        token_count = estimate_message_tokens(message_history)
+        token_count = max(estimate_message_tokens(message_history), reported_input_tokens)
         if token_count <= int(budget * deps.config.compaction.hygiene_ratio):
             return message_history
         # Clear the anti-thrashing gate so hygiene is never blocked by prior low-yield
@@ -892,7 +913,7 @@ async def maybe_run_pre_turn_hygiene(
 
 
 # ---------------------------------------------------------------------------
-# build_recall_injection — preflight callable (async — memory recall, no LLM)
+# _recall_prompt_text — per-turn dynamic instruction (async — memory recall, no LLM)
 # ---------------------------------------------------------------------------
 
 
@@ -915,66 +936,46 @@ def _count_user_turns(messages: list[ModelMessage]) -> int:
     return count
 
 
-async def build_recall_injection(
-    ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-    current_input: str | None = None,
-) -> tuple[ModelRequest, int, bool]:
-    """Return (injection_message, user_turn_count, recall_fired) for model-bound preflight.
-
-    Injects date, personality memories, and (conditionally) recalled knowledge.
-    ``current_input`` is the pending user message not yet in ``messages`` — used
-    to match the turn count the SDK would compute when running history processors.
-
-    Caller updates memory_recall_state when recall_fired is True:
-      state.last_recall_user_turn = user_turn_count
-      state.recall_count += 1
-    """
+async def _recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
+    """Per-turn dynamic instruction: date, personality memories, and recalled knowledge."""
     state: MemoryRecallState = ctx.deps.session.memory_recall_state
-    # Match the turn count the SDK sees (user_input appended before processors)
-    user_turn_count = _count_user_turns(messages) + (1 if current_input is not None else 0)
-    user_msg = current_input or _get_last_user_message(messages)
+    user_turn_count = _count_user_turns(ctx.messages)
+    user_msg = _get_last_user_message(ctx.messages)
 
-    injection_parts: list[SystemPromptPart] = []
+    parts: list[str] = []
 
-    # Current date: on every preflight — can change at midnight
-    from datetime import date
+    parts.append(f"Today is {date.today().isoformat()}.")
 
-    injection_parts.append(SystemPromptPart(content=f"Today is {date.today().isoformat()}."))
-
-    # Personality memories: on every preflight (never in @agent.instructions — cache invalidation)
+    # Personality memories — re-evaluated every turn (file may be updated between turns).
     if ctx.deps.config.personality:
         from co_cli.prompts.personalities._injector import _load_personality_memories
 
         personality_content = _load_personality_memories()
         if personality_content:
-            injection_parts.append(SystemPromptPart(content=personality_content))
+            parts.append(personality_content)
 
-    # Knowledge recall: only on new user turns
-    recall_fired = False
+    # Knowledge recall — only on new user turns.
     if user_msg and user_turn_count > state.last_recall_user_turn:
         from co_cli.tools.knowledge.read import _recall_for_context
 
         try:
             result = await _recall_for_context(ctx, user_msg, max_results=3)
-            recall_fired = True
-            # _recall_for_context always returns a str via tool_output(); cast narrows ToolReturnContent
+            state.last_recall_user_turn = user_turn_count
+            state.recall_count += 1
             if (result.metadata or {}).get("count", 0) > 0:
                 memory_content = cast("str", result.return_value)
                 max_chars = ctx.deps.config.memory.injection_max_chars
                 if len(memory_content) > max_chars:
                     memory_content = memory_content[:max_chars]
-                injection_parts.append(
-                    SystemPromptPart(content=f"Relevant memories:\n{memory_content}")
-                )
+                parts.append(f"Relevant memories:\n{memory_content}")
         except Exception:
-            log.debug("build_recall_injection: _recall_for_context failed", exc_info=True)
+            log.debug("_recall_prompt_text: _recall_for_context failed", exc_info=True)
 
-    return ModelRequest(parts=injection_parts), user_turn_count, recall_fired
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
-# build_safety_injection — preflight callable (sync — doom loop + shell reflection cap)
+# _safety_prompt_text — per-turn dynamic instruction (doom loop + shell reflection cap)
 # ---------------------------------------------------------------------------
 
 
@@ -1047,63 +1048,30 @@ def _count_consecutive_shell_errors(messages: list[ModelMessage]) -> int:
     return count
 
 
-def build_safety_injection(
-    deps: CoDeps,
-    messages: list[ModelMessage],
-) -> tuple[list[ModelRequest], bool, bool]:
-    """Return (injections, doom_flagged, reflection_flagged) for model-bound preflight.
-
-    Scans for doom loops and shell error streaks. Returns empty list when no issues
-    detected or when the relevant flag is already set.
-
-    Caller updates safety_state flags when the corresponding bool is True:
-      if doom_flagged: state.doom_loop_injected = True
-      if reflection_flagged: state.reflection_injected = True
-    """
-    state: SafetyState | None = deps.runtime.safety_state
-    if state is None or (state.doom_loop_injected and state.reflection_injected):
-        return [], False, False
-
+def _safety_prompt_text(ctx: RunContext[CoDeps]) -> str:
+    """Per-turn dynamic instruction: doom loop and shell reflection warnings. Empty string when no condition is active."""
+    deps = ctx.deps
+    messages = ctx.messages
     doom_threshold = deps.config.doom_loop_threshold
     max_refl = deps.config.max_reflections
 
     consecutive_same = _count_consecutive_same_calls(messages)
     consecutive_shell_errors = _count_consecutive_shell_errors(messages)
 
-    injections: list[ModelRequest] = []
-    doom_flagged = False
-    reflection_flagged = False
+    warnings: list[str] = []
 
-    if not state.doom_loop_injected and consecutive_same >= doom_threshold:
-        injections.append(
-            ModelRequest(
-                parts=[
-                    SystemPromptPart(
-                        content=(
-                            "You are repeating the same tool call. "
-                            "Try a different approach or explain why you are stuck."
-                        ),
-                    ),
-                ]
-            )
+    if consecutive_same >= doom_threshold:
+        warnings.append(
+            "You are repeating the same tool call. "
+            "Try a different approach or explain why you are stuck."
         )
-        doom_flagged = True
         log.warning("Doom loop detected: %d identical tool calls", consecutive_same)
 
-    if not state.reflection_injected and consecutive_shell_errors >= max_refl:
-        injections.append(
-            ModelRequest(
-                parts=[
-                    SystemPromptPart(
-                        content=(
-                            "Shell reflection limit reached. Ask the user for help "
-                            "or try a fundamentally different approach."
-                        ),
-                    ),
-                ]
-            )
+    if consecutive_shell_errors >= max_refl:
+        warnings.append(
+            "Shell reflection limit reached. Ask the user for help "
+            "or try a fundamentally different approach."
         )
-        reflection_flagged = True
         log.warning("Shell reflection cap: %d consecutive errors", consecutive_shell_errors)
 
-    return injections, doom_flagged, reflection_flagged
+    return "\n\n".join(warnings)

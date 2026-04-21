@@ -15,6 +15,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.usage import RunUsage
+from tests._ollama import ensure_ollama_warm
 from tests._settings import make_settings
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
@@ -26,7 +27,7 @@ from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
     OLDER_MSG_MAX_CHARS,
     _find_last_turn_start,
-    build_recall_injection,
+    _recall_prompt_text,
     compact_assistant_responses,
     emergency_compact,
     enforce_batch_budget,
@@ -208,6 +209,7 @@ async def test_circuit_breaker_probes_at_cadence():
     # count=13: skips_since_trip=10 → probe cadence → LLM attempted
     deps.runtime.compaction_failure_count = 13
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         await summarize_history_window(ctx, msgs)
     # After a probe: success resets to 0, failure increments to 14.
@@ -226,6 +228,7 @@ async def test_compact_produces_two_message_history():
     """/compact on non-empty history returns ReplaceTranscript with 2 messages and compaction_applied."""
     msgs = _make_messages(6)
     ctx = _make_compact_ctx(message_history=msgs)
+    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await dispatch("/compact", ctx)
     assert isinstance(result, ReplaceTranscript)
@@ -782,15 +785,13 @@ def test_compact_assistant_responses_tool_return_untouched():
 
 
 # ---------------------------------------------------------------------------
-# build_recall_injection — preflight helper (replaces append_recalled_memories processor)
+# _recall_prompt_text — per-turn dynamic instruction (date + personality + knowledge recall)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_build_recall_injection_includes_personality_memories():
-    """When personality is set, build_recall_injection emits the personality block as SystemPromptPart."""
-    from pydantic_ai.messages import SystemPromptPart
-
+async def test_recall_prompt_text_includes_personality_memories():
+    """When personality is set, _recall_prompt_text includes the personality block in its output."""
     from co_cli.prompts.personalities import _injector as _injector_module
     from co_cli.prompts.personalities._injector import invalidate_personality_cache
 
@@ -804,28 +805,21 @@ async def test_build_recall_injection_includes_personality_memories():
             model=_LLM_MODEL,
             session=CoSessionState(),
         )
-        ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-        msgs = [_user("hello")]
-        recall_msg, _, _ = await build_recall_injection(ctx, msgs, current_input="hello")
+        ctx = RunContext(
+            deps=deps, model=_AGENT.model, usage=RunUsage(), messages=[_user("hello")]
+        )
+        result = await _recall_prompt_text(ctx)
 
-        assert isinstance(recall_msg, ModelRequest)
-        sys_contents = [
-            p.content
-            for p in recall_msg.parts
-            if isinstance(p, SystemPromptPart) and isinstance(p.content, str)
-        ]
-        assert any("personality-tail-sentinel-XYZ789" in c for c in sys_contents), (
-            f"personality memories missing from injection; got: {sys_contents}"
+        assert "personality-tail-sentinel-XYZ789" in result, (
+            f"personality memories missing from recall text; got: {result!r}"
         )
     finally:
         invalidate_personality_cache()
 
 
 @pytest.mark.asyncio
-async def test_build_recall_injection_always_includes_date():
-    """build_recall_injection always returns a ModelRequest containing a date SystemPromptPart."""
-    from pydantic_ai.messages import SystemPromptPart
-
+async def test_recall_prompt_text_always_includes_date():
+    """_recall_prompt_text always includes a 'Today is' date line in its output."""
     from co_cli.prompts.personalities._injector import invalidate_personality_cache
 
     invalidate_personality_cache()
@@ -837,19 +831,11 @@ async def test_build_recall_injection_always_includes_date():
             session=CoSessionState(),
             knowledge_dir=Path("/nonexistent-test-dir"),
         )
-        ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-        msgs = [_user("ping"), _assistant("pong")]
-        recall_msg, _, _ = await build_recall_injection(ctx, msgs, current_input="ping again")
+        msgs = [_user("ping"), _assistant("pong"), _user("ping again")]
+        ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage(), messages=msgs)
+        result = await _recall_prompt_text(ctx)
 
-        assert isinstance(recall_msg, ModelRequest)
-        date_parts = [
-            p
-            for p in recall_msg.parts
-            if isinstance(p, SystemPromptPart)
-            and isinstance(p.content, str)
-            and p.content.startswith("Today is ")
-        ]
-        assert len(date_parts) == 1
+        assert "Today is " in result, f"date missing from recall text; got: {result!r}"
     finally:
         invalidate_personality_cache()
 

@@ -5,6 +5,20 @@ from pydantic_ai import RunContext
 from co_cli.deps import CoDeps
 
 
+async def recall_prompt(ctx: RunContext[CoDeps]) -> str:
+    """Per-turn: inject date, personality memories, and recalled knowledge."""
+    from co_cli.context._history import _recall_prompt_text
+
+    return await _recall_prompt_text(ctx)
+
+
+def safety_prompt(ctx: RunContext[CoDeps]) -> str:
+    """Per-turn: inject doom loop / shell reflection warnings when condition is active."""
+    from co_cli.context._history import _safety_prompt_text
+
+    return _safety_prompt_text(ctx)
+
+
 def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
     """Inject shell tool guidance when shell is available."""
     return (

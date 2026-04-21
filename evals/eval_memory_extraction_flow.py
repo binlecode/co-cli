@@ -39,7 +39,6 @@ from evals._timeouts import EVAL_MEMORY_EXTRACTION_TIMEOUT_SECS, EVAL_TURN_TIMEO
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
-    SystemPromptPart,
     TextPart,
     UserPromptPart,
 )
@@ -324,13 +323,13 @@ async def run_cadence_gate() -> dict[str, Any]:
 
 
 async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
-    """Full memory loop: turn 1 → extraction → DB index → build_recall_injection.
+    """Full memory loop: turn 1 → extraction → DB index → _recall_prompt_text.
 
     Turn 1 (real LLM): user states a preference. fire_and_forget_extraction runs.
     After drain: extracted memory file is written and indexed in KnowledgeStore.
-    Inject probe (no LLM): read actual extracted body, build a ModelRequest using
-    that content as the user message, call build_recall_injection directly, and
-    assert SystemPromptPart("Relevant memories: ...") is returned.
+    Inject probe (no LLM): read actual extracted body, build a RunContext with
+    that content as the user message, call _recall_prompt_text directly, and
+    assert "Relevant memories:" appears in the returned text.
 
     Using the extracted body as the query guarantees a BM25 match regardless of
     what the extractor LLM chose to save — no query/content mismatch risk.
@@ -339,7 +338,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
     from pydantic_ai import RunContext as _RunContext
     from pydantic_ai.usage import RunUsage
 
-    from co_cli.context._history import build_recall_injection
+    from co_cli.context._history import _recall_prompt_text
     from co_cli.knowledge._frontmatter import parse_frontmatter
 
     steps: list[dict[str, Any]] = []
@@ -528,7 +527,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
             }
         )
 
-        # Probe build_recall_injection directly — no second LLM call.
+        # Probe _recall_prompt_text directly — no second LLM call.
         # Use the first word that hit the DB as the user message — a clean single-word
         # query that _recall_for_context BM25 is guaranteed to rank > 0.
         # Fresh deps: run_turn already set state.last_recall_user_turn = 1 on `deps`;
@@ -542,30 +541,26 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
             memory_dir=memory_dir,
             model=llm_model,
         )
+        from dataclasses import replace as _replace
+
         ctx = _RunContext(deps=probe_deps, model=agent.model, usage=RunUsage())
+        ctx_probe = _replace(ctx, messages=probe_messages)
         t = time.monotonic()
-        recall_msg, _, _ = await build_recall_injection(ctx, probe_messages)
-        injected = [*probe_messages, recall_msg]
+        recall_text = await _recall_prompt_text(ctx_probe)
         steps.append(
             {
-                "name": "build_recall_injection (direct probe)",
+                "name": "_recall_prompt_text (direct probe)",
                 "ms": (time.monotonic() - t) * 1000,
-                "detail": f"returned {len(injected)} messages",
+                "detail": f"text length={len(recall_text)} chars",
             }
         )
 
         injection: str | None = None
-        for msg in injected:
-            if isinstance(msg, ModelRequest):
-                for part in msg.parts:
-                    if isinstance(part, SystemPromptPart) and "Relevant memories:" in part.content:
-                        injection = part.content
-                        break
-            if injection:
-                break
+        if "Relevant memories:" in recall_text:
+            injection = recall_text
         steps.append(
             {
-                "name": "SystemPromptPart injection check",
+                "name": "recall injection check",
                 "ms": 0,
                 "detail": f"injected={injection is not None} preview={(injection[:80] if injection else None)!r}",
             }
@@ -578,7 +573,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
         elif injection is None:
             verdict, failure = (
                 "FAIL",
-                "build_recall_injection returned no SystemPromptPart — recall path broken",
+                "_recall_prompt_text returned no recall content — recall path broken",
             )
         else:
             verdict, failure = "PASS", None

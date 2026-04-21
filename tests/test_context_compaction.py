@@ -430,6 +430,49 @@ async def test_pre_turn_hygiene_latest_user_turn_survives() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Gap 2 fix: maybe_run_pre_turn_hygiene uses max(estimate, reported_input_tokens)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_fires_when_reported_tokens_exceed_threshold() -> None:
+    """Hygiene fires when the provider-reported count exceeds the threshold, even if char estimate is below it.
+
+    Simulates a code-heavy session where chars/4 underestimates actual tokens by ~1.5x.
+    Char estimate: 80_000 tokens (below 88_000 threshold).
+    Reported count: 92_000 tokens (above 88_000 threshold).
+    Without the fix, hygiene would not fire. With the fix it must.
+    Uses 10 messages so M3 has enough turn groups to compact.
+    """
+    # 10 messages x 32_000 chars = 320_000 chars / 4 = 80_000 tokens (below threshold)
+    msgs = _make_messages(10, body_chars=32_000)
+    assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
+    deps = _make_hygiene_deps()
+    # Pass a provider-reported count that exceeds the threshold
+    result = await maybe_run_pre_turn_hygiene(
+        deps, msgs, None, reported_input_tokens=_HYGIENE_THRESHOLD_TOKENS + 4_000
+    )
+    assert len(result) < len(msgs), (
+        "hygiene must fire when reported_input_tokens exceeds threshold, "
+        "even if char estimate alone is below it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_no_op_first_turn_zero_reported() -> None:
+    """First-turn (no prior usage) passes reported_input_tokens=0 — falls back to char estimate.
+
+    This is the backwards-compatible default: no regression from adding the parameter.
+    History is small (well below threshold), so hygiene must not fire.
+    """
+    msgs = _make_messages(4)
+    assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
+    deps = _make_hygiene_deps()
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None, reported_input_tokens=0)
+    assert result is msgs
+
+
+# ---------------------------------------------------------------------------
 # TASK-3 regression tests: threshold floor + anti-thrashing gate
 # ---------------------------------------------------------------------------
 

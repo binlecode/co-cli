@@ -61,11 +61,7 @@ logger = logging.getLogger(__name__)
 _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
-from co_cli.context._history import (
-    build_recall_injection,
-    build_safety_injection,
-    maybe_run_pre_turn_hygiene,
-)
+from co_cli.context._history import maybe_run_pre_turn_hygiene
 from co_cli.context.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -536,56 +532,26 @@ def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessag
     ]
 
 
+async def _attempt_overflow_recovery(
+    recovery_ctx: RunContext[CoDeps],
+    recovery_history: list[ModelMessage],
+    tail_fraction: float,
+) -> tuple[list[ModelMessage] | None, str]:
+    """Try normal compaction then aggressive (half tail_fraction). Returns (compacted, status_msg)."""
+    from co_cli.context._history import recover_overflow_history
+
+    compacted = await recover_overflow_history(recovery_ctx, recovery_history)
+    if compacted is not None:
+        return compacted, "Context overflow — compacting and retrying..."
+    compacted = await recover_overflow_history(
+        recovery_ctx,
+        recovery_history,
+        tail_fraction_override=tail_fraction / 2.0,
+    )
+    return compacted, "Context overflow — aggressive compaction applied."
+
+
 # ---------------------------------------------------------------------------
-# _run_model_preflight — safety + recall injection before each model-bound segment
-# ---------------------------------------------------------------------------
-
-
-async def _run_model_preflight(
-    turn_state: _TurnState,
-    agent: SessionAgent,
-    deps: CoDeps,
-) -> list[ModelMessage]:
-    """Compute safety + recall injections for the next model-bound segment.
-
-    Returns the extended history to pass to _execute_stream_segment. Does not
-    mutate turn_state.current_history — injections are ephemeral, matching prior
-    history-processor behavior where pydantic-ai never persisted the processor
-    output back to the stored message list. Retry iterations start from the
-    clean turn_state.current_history without accumulated injections.
-    """
-    safety_msgs, doom_flagged, refl_flagged = build_safety_injection(
-        deps, turn_state.current_history
-    )
-    extended: list[ModelMessage] = (
-        [*turn_state.current_history, *safety_msgs]
-        if safety_msgs
-        else list(turn_state.current_history)
-    )
-    if doom_flagged and deps.runtime.safety_state:
-        deps.runtime.safety_state.doom_loop_injected = True
-    if refl_flagged and deps.runtime.safety_state:
-        deps.runtime.safety_state.reflection_injected = True
-
-    preflight_ctx = RunContext(
-        deps=deps,
-        model=agent.model,
-        usage=turn_state.latest_usage or RunUsage(),
-    )
-    recall_msg, recall_turn_count, recall_fired = await build_recall_injection(
-        preflight_ctx,
-        turn_state.current_history,
-        current_input=turn_state.current_input,
-    )
-    extended = [*extended, recall_msg]
-    if recall_fired:
-        mem_state = deps.session.memory_recall_state
-        mem_state.last_recall_user_turn = recall_turn_count
-        mem_state.recall_count += 1
-
-    return extended
-
-
 # ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
@@ -611,8 +577,12 @@ async def run_turn(
       "continue" — normal completion, prompt for next input
       "error"    — unrecoverable error, display and prompt
     """
+    # Must be read before reset_for_turn() clears turn_usage.
+    prior_input_tokens = deps.runtime.turn_usage.input_tokens if deps.runtime.turn_usage else 0
     deps.runtime.reset_for_turn()
-    message_history = await maybe_run_pre_turn_hygiene(deps, message_history, agent.model)
+    message_history = await maybe_run_pre_turn_hygiene(
+        deps, message_history, agent.model, reported_input_tokens=prior_input_tokens
+    )
     # Hygiene always bypasses the proactive anti-thrashing gate — reset savings so the
     # gate starts fresh regardless of whether hygiene actually compacted.
     deps.runtime.recent_proactive_savings.clear()
@@ -628,15 +598,13 @@ async def run_turn(
         try:
             while True:
                 try:
-                    preflight_history = await _run_model_preflight(turn_state, agent, deps)
-
                     await _execute_stream_segment(
                         turn_state,
                         agent,
                         deps,
                         model_settings,
                         frontend,
-                        message_history=preflight_history,
+                        message_history=turn_state.current_history,
                     )
 
                     await _run_approval_loop(turn_state, agent, deps, model_settings, frontend)
@@ -666,26 +634,25 @@ async def run_turn(
                     if _is_context_overflow(e):
                         if not turn_state.overflow_recovery_attempted:
                             turn_state.overflow_recovery_attempted = True
-                            from co_cli.context._history import recover_overflow_history
-
+                            recovery_ctx = RunContext(
+                                deps=deps,
+                                model=agent.model,
+                                usage=turn_state.latest_usage or RunUsage(),
+                            )
                             recovery_history = _history_with_pending_user_input(turn_state)
-                            compacted = await recover_overflow_history(
-                                RunContext(
-                                    deps=deps,
-                                    model=agent.model,
-                                    usage=turn_state.latest_usage or RunUsage(),
-                                ),
+                            compacted, status_msg = await _attempt_overflow_recovery(
+                                recovery_ctx,
                                 recovery_history,
+                                deps.config.compaction.tail_fraction,
                             )
                             if compacted is not None:
                                 # Overflow recovery bypasses the proactive gate — reset savings ring.
                                 deps.runtime.recent_proactive_savings.clear()
                                 turn_state.current_history = compacted
                                 turn_state.current_input = None
-                                frontend.on_status("Context overflow — compacting and retrying...")
+                                frontend.on_status(status_msg)
                                 continue
-                        # Terminal: either second overflow after retry, or compaction
-                        # impossible (≤2 groups). Both are unrecoverable.
+                        # Terminal: either second overflow after retry, or both attempts returned None.
                         frontend.on_status("Context overflow — unrecoverable.")
                         turn_state.outcome = "error"
                         return _build_error_turn_result(turn_state)

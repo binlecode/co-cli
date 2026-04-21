@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Eval: memory recall injection — verify build_recall_injection fires per turn via FTS5 DB.
+"""Eval: memory recall injection — verify _recall_prompt_text fires per turn via FTS5 DB.
 
 Pre-seeds memory files on disk, syncs them into a real KnowledgeStore, runs run_turn(),
-and checks for SystemPromptPart injection from build_recall_injection. Recall is NOT
-visible as a ToolCallPart — the eval scans for SystemPromptPart containing
-"Relevant memories:".
+and verifies that recall fired (via MemoryRecallState.recall_count). Recall is injected
+via the dynamic agent.instructions() mechanism — not as a message in history. A separate
+probe call to _recall_prompt_text verifies the injected text contains "Relevant memories:".
 
 Target flow:
     seed_memory (disk) → KnowledgeStore.sync_dir (DB index)
-    → run_turn → build_recall_injection → _recall_for_context (FTS5 DB search)
-    → SystemPromptPart("Relevant memories: ...")
+    → run_turn → _recall_prompt_text (dynamic instruction) → _recall_for_context (FTS5 DB)
+    → MemoryRecallState.recall_count += 1 + text contains "Relevant memories: ..."
 
 Also tests the degraded path: when knowledge_store=None, no injection occurs and no
 exception is raised.
@@ -36,10 +36,13 @@ from evals._deps import make_eval_deps
 from evals._fixtures import seed_memory
 from evals._frontend import SilentFrontend
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS as _EVAL_TURN_TIMEOUT_SECS
-from pydantic_ai.messages import ModelRequest, SystemPromptPart
+from pydantic_ai import RunContext
+from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.usage import RunUsage
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
+from co_cli.context._history import _recall_prompt_text
 from co_cli.context.orchestrate import run_turn
 from co_cli.knowledge._store import KnowledgeStore
 
@@ -136,24 +139,30 @@ CASES: list[RecallCase] = [
 # ---------------------------------------------------------------------------
 
 
-def _find_injection(messages: list[Any]) -> str | None:
-    for msg in messages:
-        if isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if isinstance(part, SystemPromptPart) and "Relevant memories:" in part.content:
-                    return part.content
-    return None
+async def _probe_recall_text(
+    agent: Any,
+    prompt: str,
+    knowledge_store: Any | None,
+    knowledge_dir: Path | None,
+) -> str | None:
+    """Call _recall_prompt_text directly to retrieve the injected text for a prompt.
 
-
-def _system_prompt_preview(messages: list[Any]) -> str:
-    """Concatenate all SystemPromptPart content received by the model."""
-    parts = []
-    for msg in messages:
-        if isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if isinstance(part, SystemPromptPart):
-                    parts.append(part.content[:200])
-    return " | ".join(parts)[:400] if parts else "(none)"
+    Uses fresh deps (no prior recall state) so the turn guard does not skip the call.
+    Returns the recall text if "Relevant memories:" is present, else None.
+    """
+    probe_deps = make_eval_deps(
+        knowledge_store=knowledge_store,
+        knowledge_dir=knowledge_dir,
+    )
+    probe_msgs = [ModelRequest(parts=[UserPromptPart(content=prompt)])]
+    probe_ctx = RunContext(
+        deps=probe_deps,
+        model=agent.model,
+        usage=RunUsage(),
+        messages=probe_msgs,
+    )
+    text = await _recall_prompt_text(probe_ctx)
+    return text if "Relevant memories:" in text else None
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +173,6 @@ def _system_prompt_preview(messages: list[Any]) -> str:
 async def run_case(case: RecallCase) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
-    sys_preview: str = "(none)"
     injection: str | None = None
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -222,7 +230,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
             t = time.monotonic()
             try:
                 async with asyncio.timeout(_TURN_TIMEOUT_SECS):
-                    result = await run_turn(
+                    await run_turn(
                         agent=agent,
                         user_input=case.prompt,
                         deps=deps,
@@ -241,17 +249,23 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
                 }
             )
 
-            sys_preview = _system_prompt_preview(result.messages)
-            injection = _find_injection(result.messages)
+            # Verify recall fired via state counter (dynamic instruction updated it during run_turn)
+            recall_fired = deps.session.memory_recall_state.recall_count > 0
+
+            # Probe recall text separately (fresh deps) to check keyword content
+            t = time.monotonic()
+            ks_probe = knowledge_store if not case.degraded_path else None
+            kd_probe = memory_dir if not case.degraded_path else None
+            injection = await _probe_recall_text(agent, case.prompt, ks_probe, kd_probe)
             content_match = (
                 case.expect_keyword is not None
                 and case.expect_keyword.lower() in (injection or "").lower()
             )
             steps.append(
                 {
-                    "name": "scan SystemPromptPart for 'Relevant memories:'",
-                    "ms": 0,
-                    "detail": f"injected={injection is not None} "
+                    "name": "recall fired + probe recall text for 'Relevant memories:'",
+                    "ms": (time.monotonic() - t) * 1000,
+                    "detail": f"recall_fired={recall_fired} injected={injection is not None} "
                     + (
                         f"keyword='{case.expect_keyword}' found={content_match}"
                         if case.expect_keyword
@@ -281,7 +295,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
         "verdict": verdict,
         "failure": failure,
         "steps": steps,
-        "system_prompt_preview": sys_preview,
+        "injection_preview": (injection[:120] if injection else None),
         "duration_ms": (time.monotonic() - case_t0) * 1000,
     }
 
@@ -317,8 +331,8 @@ def _write_report(cases: list[dict[str, Any]], total_ms: float) -> None:
             lines.append(f"- **{step['name']}** ({step['ms']:.0f}ms): {step['detail']}")
         if case.get("failure"):
             lines.append(f"- **Failure:** {case['failure']}")
-        if case.get("system_prompt_preview"):
-            lines.append(f"- **System prompt received:** `{case['system_prompt_preview']}`")
+        if case.get("injection_preview"):
+            lines.append(f"- **Recall text preview:** `{case['injection_preview']}`")
         lines.append("")
 
     lines += ["---", ""]
@@ -359,7 +373,7 @@ async def main() -> int:
                 "verdict": "ERROR",
                 "failure": str(exc),
                 "steps": [],
-                "system_prompt_preview": None,
+                "injection_preview": None,
                 "duration_ms": 0,
             }
         all_cases.append(result)
