@@ -80,7 +80,6 @@ async def _delegate_agent(
     format a pre-computed result (used by web_research's retry path, which
     manages its own span to cover both the primary attempt and any retry).
     """
-    scope = task[: ctx.deps.config.subagent.scope_chars]
     model_name = str(agent.model)
     if _precomputed is not None:
         output, requests_used, run_id = _precomputed
@@ -102,10 +101,7 @@ async def _delegate_agent(
             )
             span.set_attribute("agent.requests_used", usage.requests)
         requests_used = usage.requests
-    display = (
-        f"Scope: {scope}\n{output.result}\n"
-        f"[{role_key} · {model_name} · {requests_used}/{budget} req]"
-    )
+    display = f"{output.result}\n[{role_key} · {model_name} · {requests_used}/{budget} req]"
     return tool_output(
         display,
         ctx=ctx,
@@ -113,7 +109,6 @@ async def _delegate_agent(
         model_name=model_name,
         requests_used=requests_used,
         request_limit=budget,
-        scope=scope,
         run_id=run_id,
     )
 
@@ -202,7 +197,8 @@ async def web_research(
     from co_cli.tools.web.fetch import web_fetch
     from co_cli.tools.web.search import web_search
 
-    budget = max_requests or ctx.deps.config.subagent.max_requests_research
+    _default_max_requests = 10
+    budget = max_requests or _default_max_requests
     model_obj = ctx.deps.model.model
 
     scoped_prompt = query
@@ -307,7 +303,8 @@ async def knowledge_analyze(
     from co_cli.tools.google.drive import drive_search
     from co_cli.tools.knowledge.read import knowledge_search
 
-    budget = max_requests or ctx.deps.config.subagent.max_requests_analysis
+    _default_max_requests = 8
+    budget = max_requests or _default_max_requests
 
     scoped_prompt = question
     if inputs:
@@ -357,7 +354,8 @@ async def reason(
 
     from co_cli.agent._core import build_agent
 
-    budget = max_requests or ctx.deps.config.subagent.max_requests_thinking
+    _default_max_requests = 3
+    budget = max_requests or _default_max_requests
     # Reasoning agent uses the main model's base settings (config-derived, may include thinking tokens)
     task_settings = ctx.deps.model.settings
     agent = build_agent(
