@@ -47,7 +47,11 @@ async def memory_search(
     results = store.search(query, limit=limit)
     if not results:
         return tool_output(
-            f"No past sessions matched '{query}'.",
+            f"No past sessions matched '{query}'. "
+            "Try a broader query: use OR between keywords (e.g. 'foo OR bar'), "
+            "try fewer terms, or try a single keyword. "
+            "Do NOT switch to knowledge_search — that searches knowledge artifacts, "
+            "not session history.",
             ctx=ctx,
             count=0,
             results=[],

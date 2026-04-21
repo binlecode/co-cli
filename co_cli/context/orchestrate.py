@@ -613,6 +613,9 @@ async def run_turn(
     """
     deps.runtime.reset_for_turn()
     message_history = await maybe_run_pre_turn_hygiene(deps, message_history, agent.model)
+    # Hygiene always bypasses the proactive anti-thrashing gate — reset savings so the
+    # gate starts fresh regardless of whether hygiene actually compacted.
+    deps.runtime.recent_proactive_savings.clear()
 
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
@@ -675,6 +678,8 @@ async def run_turn(
                                 recovery_history,
                             )
                             if compacted is not None:
+                                # Overflow recovery bypasses the proactive gate — reset savings ring.
+                                deps.runtime.recent_proactive_savings.clear()
                                 turn_state.current_history = compacted
                                 turn_state.current_input = None
                                 frontend.on_status("Context overflow — compacting and retrying...")

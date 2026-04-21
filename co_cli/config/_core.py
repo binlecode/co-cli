@@ -16,12 +16,12 @@ from pydantic import (
     model_validator,
 )
 
+from co_cli.config._compaction import CompactionSettings
 from co_cli.config._knowledge import KnowledgeSettings
 from co_cli.config._llm import LlmSettings, resolve_api_key_from_env
 from co_cli.config._memory import MemorySettings
 from co_cli.config._observability import ObservabilitySettings
 from co_cli.config._shell import ShellSettings
-from co_cli.config._subagent import SubagentSettings
 from co_cli.config._tools import ToolsSettings
 from co_cli.config._web import WebSettings
 
@@ -129,11 +129,11 @@ class Settings(BaseModel):
     llm: LlmSettings = Field(default_factory=LlmSettings)
     knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
     web: WebSettings = Field(default_factory=WebSettings)
-    subagent: SubagentSettings = Field(default_factory=SubagentSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     shell: ShellSettings = Field(default_factory=ShellSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     tools: ToolsSettings = Field(default_factory=ToolsSettings)
+    compaction: CompactionSettings = Field(default_factory=CompactionSettings)
 
     # Flat — integration paths
     obsidian_vault_path: str | None = Field(default=None)
@@ -221,12 +221,6 @@ class Settings(BaseModel):
                 "injection_max_chars": "CO_MEMORY_INJECTION_MAX_CHARS",
                 "extract_every_n_turns": "CO_MEMORY_EXTRACT_EVERY_N_TURNS",
             },
-            "subagent": {
-                "scope_chars": "CO_SUBAGENT_SCOPE_CHARS",
-                "max_requests_research": "CO_SUBAGENT_MAX_REQUESTS_RESEARCH",
-                "max_requests_analysis": "CO_SUBAGENT_MAX_REQUESTS_ANALYSIS",
-                "max_requests_thinking": "CO_SUBAGENT_MAX_REQUESTS_THINKING",
-            },
             "shell": {
                 "max_timeout": "CO_SHELL_MAX_TIMEOUT",
                 "safe_commands": "CO_SHELL_SAFE_COMMANDS",
@@ -247,6 +241,15 @@ class Settings(BaseModel):
             "tools": {
                 "result_persist_chars": "CO_TOOLS_RESULT_PERSIST_CHARS",
                 "batch_spill_chars": "CO_TOOLS_BATCH_SPILL_CHARS",
+            },
+            "compaction": {
+                "proactive_ratio": "CO_COMPACTION_PROACTIVE_RATIO",
+                "hygiene_ratio": "CO_COMPACTION_HYGIENE_RATIO",
+                "tail_fraction": "CO_COMPACTION_TAIL_FRACTION",
+                "min_threshold_tokens": "CO_COMPACTION_MIN_THRESHOLD_TOKENS",
+                "tail_soft_overrun_multiplier": "CO_COMPACTION_TAIL_SOFT_OVERRUN_MULTIPLIER",
+                "min_proactive_savings": "CO_COMPACTION_MIN_PROACTIVE_SAVINGS",
+                "proactive_thrash_window": "CO_COMPACTION_PROACTIVE_THRASH_WINDOW",
             },
         }
         for group, fields in nested_env_map.items():

@@ -63,6 +63,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent._core import build_agent
+from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import Settings, settings
 from co_cli.config._llm import LlmSettings
 from co_cli.context._history import (
@@ -170,6 +171,7 @@ def _make_ctx(
             model=settings.llm.model,
             host=settings.llm.host,
         ),
+        compaction=CompactionSettings(min_threshold_tokens=0),
     )
     session = CoSessionState()
     if session_todos:
@@ -1286,7 +1288,7 @@ async def step_6_full_chain() -> bool:
     # Preview the enrichment context that P5 will assemble (before the LLM call)
     _p5_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     _p5_budget = resolve_compaction_budget(ctx.deps.config, _p5_ctx_window)
-    bounds = plan_compaction_boundaries(msgs, _p5_budget)
+    bounds = plan_compaction_boundaries(msgs, _p5_budget, ctx.deps.config.compaction.tail_fraction)
     if bounds is not None:
         head_end, tail_start, dropped_count = bounds
         dropped_preview = msgs[head_end:tail_start]
@@ -1634,7 +1636,9 @@ async def step_7_multi_cycle() -> bool:
     # Preview enrichment context (same as Step 6)
     _p5b_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     _p5b_budget = resolve_compaction_budget(ctx.deps.config, _p5b_ctx_window)
-    bounds_7 = plan_compaction_boundaries(msgs, _p5b_budget)
+    bounds_7 = plan_compaction_boundaries(
+        msgs, _p5b_budget, ctx.deps.config.compaction.tail_fraction
+    )
     if bounds_7 is not None:
         head_end_7, tail_start_7, dropped_count_7 = bounds_7
         dropped_7 = msgs[head_end_7:tail_start_7]
@@ -2231,7 +2235,9 @@ def step_11_edge_cases() -> bool:
     # Compaction boundaries: with 2 groups, should return None
     _massive_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     _massive_budget = resolve_compaction_budget(ctx.deps.config, _massive_ctx_window)
-    bounds = plan_compaction_boundaries(massive, _massive_budget)
+    bounds = plan_compaction_boundaries(
+        massive, _massive_budget, ctx.deps.config.compaction.tail_fraction
+    )
     if bounds is not None:
         print("  FAIL: 11f — compaction boundaries valid on 2-group history")
         passed = False
@@ -2333,7 +2339,7 @@ def step_11_edge_cases() -> bool:
     assert len(safety_msgs_empty) == 0
     ec = emergency_compact(empty)
     assert ec is None
-    bounds = plan_compaction_boundaries(empty, 100_000)
+    bounds = plan_compaction_boundaries(empty, 100_000, ctx.deps.config.compaction.tail_fraction)
     assert bounds is None
     print("  PASS: 11i — empty message list: all processors + helpers handle gracefully")
 

@@ -40,3 +40,4 @@ Each call must include a `content` string; a short `title` is strongly encourage
 4. Do not save the same fact twice across calls.
 5. Do not output explanatory prose. Call `knowledge_save` for each artifact. When finished, output exactly the word `Done`.
 6. If nothing durable is present in the window, output `Done` without calling any tool.
+7. You MUST always finish with `Done` as your final output — even if your reasoning was interrupted or inconclusive. An incomplete response with no terminating `Done` is a failure.

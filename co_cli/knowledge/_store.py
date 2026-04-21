@@ -249,9 +249,7 @@ class KnowledgeStore:
         elif self._llm_reranker is not None:
             _p = self._llm_reranker.provider
             self._reranker_provider = (
-                "ollama"
-                if _p == "ollama"
-                else ("gemini" if _p == "gemini" else "none")
+                "ollama" if _p == "ollama" else ("gemini" if _p == "gemini" else "none")
             )
         else:
             self._reranker_provider = "none"
@@ -269,9 +267,7 @@ class KnowledgeStore:
         if self._llm_reranker is not None:
             _p = self._llm_reranker.provider
             _llm_rerank_provider = (
-                "ollama"
-                if _p == "ollama"
-                else ("gemini" if _p == "gemini" else "none")
+                "ollama" if _p == "ollama" else ("gemini" if _p == "gemini" else "none")
             )
             _llm_rerank_model = self._llm_reranker.model
         else:

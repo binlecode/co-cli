@@ -14,9 +14,9 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
+from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import Settings, settings
 from co_cli.context._history import (
-    HYGIENE_COMPACTION_RATIO,
     maybe_run_pre_turn_hygiene,
     summarize_history_window,
 )
@@ -112,7 +112,8 @@ async def test_compaction_fallback_when_no_usage_data():
 
     # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 25
     config = make_settings(
-        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+        compaction=CompactionSettings(min_threshold_tokens=0),
     )
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs_no_usage)
@@ -134,7 +135,8 @@ async def test_compaction_triggers_on_ollama_budget():
     """
     msgs = _make_messages(10, last_input_tokens=7_200, body_chars=3_000)
     config = make_settings(
-        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 8192})
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 8192}),
+        compaction=CompactionSettings(min_threshold_tokens=0),
     )
     assert config.llm.uses_ollama()
     ctx = _make_ctx(config)
@@ -322,7 +324,7 @@ def test_build_summarizer_prompt_keeps_personality_after_context() -> None:
 # ---------------------------------------------------------------------------
 
 _HYGIENE_BUDGET = 100_000
-_HYGIENE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * HYGIENE_COMPACTION_RATIO)
+_HYGIENE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * CompactionSettings().hygiene_ratio)
 _PROACTIVE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * 0.75)
 
 
@@ -425,3 +427,96 @@ async def test_pre_turn_hygiene_latest_user_turn_survives() -> None:
         if last_user is not None:
             break
     assert last_user == last_user_content
+
+
+# ---------------------------------------------------------------------------
+# TASK-3 regression tests: threshold floor + anti-thrashing gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_threshold_floor_prevents_compaction_on_small_context() -> None:
+    """min_threshold_tokens floor blocks compaction when budget is tiny and tokens < floor.
+
+    With default min_threshold_tokens=32_000 and num_ctx=30, the effective threshold
+    is max(int(30*0.75), 32_000) = 32_000. A tiny message set (~33 tokens) is well
+    below that floor — compaction must not fire.
+    """
+    msgs = _make_messages(10, last_input_tokens=0)
+    # Default min_threshold_tokens=32_000 — floor should prevent compaction
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
+    )
+    ctx = _make_ctx(config)
+    result = await summarize_history_window(ctx, msgs)
+    # Floor prevents compaction — result returned unchanged
+    assert result is msgs
+
+
+@pytest.mark.asyncio
+async def test_anti_thrashing_gate_suppresses_proactive_after_low_yield_runs() -> None:
+    """Anti-thrashing gate: skips proactive compaction when recent N runs all had < min savings.
+
+    Sets recent_proactive_savings to two entries both below min_proactive_savings (0.10),
+    and proactive_thrash_window=2. Gate should activate and return msgs unchanged.
+    """
+    msgs = _make_messages(10, last_input_tokens=0)
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+        compaction=CompactionSettings(
+            min_threshold_tokens=0,
+            min_proactive_savings=0.10,
+            proactive_thrash_window=2,
+        ),
+    )
+    ctx = _make_ctx(config)
+    # Simulate two low-yield runs (savings < 10%) — gate should activate
+    ctx.deps.runtime.recent_proactive_savings = [0.02, 0.03]
+    result = await summarize_history_window(ctx, msgs)
+    assert result is msgs
+
+
+@pytest.mark.asyncio
+async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> None:
+    """Anti-thrashing gate is inactive when fewer than proactive_thrash_window runs have been recorded."""
+    msgs = _make_messages(10, last_input_tokens=0)
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+        compaction=CompactionSettings(
+            min_threshold_tokens=0,
+            min_proactive_savings=0.10,
+            proactive_thrash_window=2,
+        ),
+    )
+    ctx = _make_ctx(config)
+    # Only one low-yield run — window not full, gate must not activate
+    ctx.deps.runtime.recent_proactive_savings = [0.02]
+    result = await summarize_history_window(ctx, msgs)
+    # Compaction should still fire (gate inactive)
+    assert len(result) < len(msgs)
+
+
+@pytest.mark.asyncio
+async def test_savings_clear_unblocks_gate() -> None:
+    """Clearing recent_proactive_savings (as hygiene and overflow do) deactivates the gate.
+
+    Gate is active with [0.02, 0.03]. After clearing (what orchestrate.py does post-hygiene),
+    the next proactive pass must fire — confirming the reset contract is sufficient.
+    """
+    msgs = _make_messages(10, last_input_tokens=0)
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+        compaction=CompactionSettings(
+            min_threshold_tokens=0,
+            min_proactive_savings=0.10,
+            proactive_thrash_window=2,
+        ),
+    )
+    ctx = _make_ctx(config)
+    # Populate stale savings that would gate proactive compaction
+    ctx.deps.runtime.recent_proactive_savings = [0.02, 0.03]
+    # Simulate orchestrate.py post-hygiene/overflow reset
+    ctx.deps.runtime.recent_proactive_savings.clear()
+    # After clear, proactive must fire
+    result = await summarize_history_window(ctx, msgs)
+    assert len(result) < len(msgs)

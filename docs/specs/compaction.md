@@ -16,7 +16,7 @@
 - Multi-variant microcompact / snip / collapse stacks (fork-cc pattern rejected — complexity not justified).
 - Queued or async compaction tasks (opencode pattern rejected).
 - Two-layer hygiene with separate thresholds (hermes pattern rejected).
-- Settings-level configurability for compaction parameters (named constants are the right shape at this scale).
+- Per-request or per-session tuning of compaction parameters beyond what `settings.json` / env vars expose.
 - Modifying already-sent transcripts (transcripts are append-only).
 - Splitting compaction across turn-group boundaries (turn group is the atomic preserved unit).
 
@@ -158,7 +158,7 @@ sequenceDiagram
     RT->>RT: _is_context_overflow → True
     RT->>RT: overflow_recovery_attempted = True
     RT->>R: recover_overflow_history(history + pending input)
-    R->>R: plan_compaction_boundaries<br/>(same TAIL_FRACTION, min_groups_tail=1)
+    R->>R: plan_compaction_boundaries<br/>(config tail_fraction, soft-overrun, active-user anchoring)
     alt bounds is None (≤ 1 group)
         R-->>RT: None
         RT-->>U: terminal: context overflow unrecoverable
@@ -270,7 +270,7 @@ flowchart TD
     style B fill:#bbf,stroke:#333
 ```
 
-Blue = shared infrastructure; pink = enrichment helper. Same `TAIL_FRACTION`, same prompt, same summarizer — proactive and overflow differ only in trigger and retry semantics.
+Blue = shared infrastructure; pink = enrichment helper. Same config-sourced tail settings, same prompt, same summarizer — proactive and overflow differ only in trigger and retry semantics.
 
 ### Diagram 7: Trigger cadence — self-stabilization in a 3-tool-call turn
 
@@ -358,10 +358,18 @@ reported = latest_response_input_tokens(messages)
 token_count = max(estimate, reported)       # floor — stale report cannot suppress
 
 budget = resolve_compaction_budget(config, ctx_window)
-threshold = int(budget * PROACTIVE_COMPACTION_RATIO)
+cfg = ctx.deps.config.compaction
+threshold = max(int(budget * cfg.proactive_ratio), cfg.min_threshold_tokens)
+# threshold floor: prevents early compaction on small-context models
 
 if token_count <= threshold:
     return messages   # fast path
+
+# Anti-thrashing gate: skip proactive if last N compactions all yielded < min savings.
+# Does NOT gate overflow recovery or pre-turn hygiene.
+recent = ctx.deps.runtime.recent_proactive_savings
+if len(recent) >= cfg.proactive_thrash_window and all(s < cfg.min_proactive_savings for s in recent[-cfg.proactive_thrash_window:]):
+    return messages   # gate active — skip proactive
 ```
 
 **Budget resolution** (`resolve_compaction_budget`):
@@ -376,26 +384,32 @@ if token_count <= threshold:
 **Boundary planner** (`plan_compaction_boundaries`):
 
 ```
-Inputs: messages, budget, tail_fraction=TAIL_FRACTION, *, min_groups_tail=1
+Inputs: messages, budget, tail_fraction (required), *, tail_soft_overrun_multiplier=1.25
+
+_MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 
 1. head_end = find_first_run_end(messages) + 1
 2. groups = group_by_turn(messages)
-   if len(groups) < min_groups_tail + 1: return None
+   if len(groups) < _MIN_RETAINED_TURN_GROUPS + 1: return None
 3. Walk groups from end, accumulating token estimates:
-   acc_tokens = 0
-   acc_groups = []
+   tail_budget = tail_fraction * budget
+   soft_overrun_budget = tail_budget * tail_soft_overrun_multiplier
+   acc_tokens = 0; acc_groups = []
    for group in reversed(groups):
      gt = estimate_message_tokens(group.messages)
-     if len(acc_groups) >= min_groups_tail and acc_tokens + gt > tail_fraction * budget:
+     if len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > tail_budget:
        break
-     acc_groups.insert(0, group)
-     acc_tokens += gt
+     if len(acc_groups) < _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > soft_overrun_budget:
+       log(info, "last group exceeds soft-overrun budget; accepting overrun")
+     acc_groups.insert(0, group); acc_tokens += gt
 4. tail_start = acc_groups[0].start_index
-5. if tail_start <= head_end: return None
-6. return (head_end, tail_start, tail_start - head_end)
+5. Active-user anchoring: find the latest UserPromptPart. If its group falls in the
+   dropped middle (head_end <= idx < tail_start), extend tail_start to that group's start_index.
+6. if tail_start <= head_end: return None
+7. return (head_end, tail_start, tail_start - head_end)
 ```
 
-`min_groups_tail=1` is a correctness guarantee: at least the last turn group is always kept, even if its tokens alone exceed the budget. Without this clamp, the emergency overflow path could regress relative to today's behavior.
+`_MIN_RETAINED_TURN_GROUPS = 1` is a hardcoded correctness invariant — not user-configurable. The `tail_soft_overrun_multiplier` (default 1.25) allows the retained tail to exceed `tail_fraction * budget` when the last turn group alone exceeds the budget. Active-user anchoring guarantees the latest `UserPromptPart` is never dropped into the compacted middle.
 
 **Compaction assembly:**
 ```
@@ -429,7 +443,15 @@ else:
         marker = _static_marker(dropped_count)
 
 preserved = _preserve_search_tool_breadcrumbs(dropped, kept_ids)
-return [*head, marker, *preserved, *tail]
+result = [*head, marker, *preserved, *tail]
+
+# Track savings for anti-thrashing gate.
+tokens_after = estimate_message_tokens(result)
+savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
+ctx.deps.runtime.recent_proactive_savings = (
+    ctx.deps.runtime.recent_proactive_savings + [savings]
+)[-cfg.proactive_thrash_window:]
+return result
 ```
 
 **Marker structure.** A `ModelRequest` containing a `UserPromptPart` whose content is a prose envelope around the summary text:
@@ -495,7 +517,7 @@ if _is_context_overflow(e):
     return terminal error
 ```
 
-`recover_overflow_history` calls `plan_compaction_boundaries(...)` with default args (same `TAIL_FRACTION` as proactive). When overflow fires, it's because the estimator was wrong; the planner will drop whatever is needed because there's more to drop now. Using the same `TAIL_FRACTION` keeps the surface minimal.
+`recover_overflow_history` calls `plan_compaction_boundaries(...)` with the same config-sourced `tail_fraction` and `tail_soft_overrun_multiplier` as proactive compaction. When overflow fires, it's because the estimator was wrong; the planner will drop whatever is needed because there's more to drop now. Sharing the same planner settings keeps the surface minimal.
 
 ### 2.6 Summarizer
 
@@ -554,7 +576,7 @@ One successful compaction per pressure event per turn.
 | Processor re-fire after overflow recovery | Safe — planner returns `None` on overlap |
 | First-turn overflow (`len(groups) ≤ 1`) | Terminal — structural limit, not a bug |
 
-**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `_is_context_overflow` detects and `run_turn` routes to `recover_overflow_history`. The overflow planner runs with the same `TAIL_FRACTION` and `min_groups_tail=1`; if it also returns `None`, the turn is terminal with "Context overflow — unrecoverable." This is intentional: proactive and overflow share one planner — if the planner cannot help, letting the provider reject the request is the correct escalation. Do not add a retry loop at the proactive layer.
+**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `_is_context_overflow` detects and `run_turn` routes to `recover_overflow_history`. The overflow planner runs with the same config-sourced `tail_fraction` and `tail_soft_overrun_multiplier`; if it also returns `None`, the turn is terminal with "Context overflow — unrecoverable." This is intentional: proactive and overflow share one planner — if the planner cannot help, letting the provider reject the request is the correct escalation. Do not add a retry loop at the proactive layer.
 
 ### 2.10 Security
 
@@ -570,13 +592,23 @@ One successful compaction per pressure event per turn.
 | `llm.ctx_overflow_threshold` | — | `1.0` | Ratio at which `run_turn` warns of imminent Ollama truncation. |
 | `llm.ctx_warn_threshold` | — | `0.85` | Ratio at which `run_turn` surfaces "consider /compact". |
 
-**No settings for compaction parameters.** The following are **named module constants** in `co_cli/context/_history.py`, documented in source:
+**Compaction tuning** (`CompactionSettings` in `co_cli/config/_compaction.py`, wired into `Settings.compaction`):
+
+| Setting | Env Var | Default | Description |
+|---|---|---|---|
+| `compaction.proactive_ratio` | `CO_COMPACTION_PROACTIVE_RATIO` | `0.75` | Fraction of budget above which proactive compaction (M3) fires |
+| `compaction.hygiene_ratio` | `CO_COMPACTION_HYGIENE_RATIO` | `0.88` | Fraction of budget above which pre-turn hygiene (M0) fires |
+| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.40` | Fraction of budget targeted for the preserved tail |
+| `compaction.min_threshold_tokens` | `CO_COMPACTION_MIN_THRESHOLD_TOKENS` | `32000` | Absolute floor for the proactive trigger threshold (prevents early compaction on small-context models) |
+| `compaction.tail_soft_overrun_multiplier` | `CO_COMPACTION_TAIL_SOFT_OVERRUN_MULTIPLIER` | `1.25` | Multiplier applied to `tail_fraction * budget` as a soft-overrun cap when `_MIN_RETAINED_TURN_GROUPS` requires it |
+| `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
+| `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Number of consecutive low-yield proactive compactions before the anti-thrashing gate activates |
+
+**Non-configurable module constants** in `co_cli/context/_history.py`:
 
 | Constant | Value | Purpose |
 |---|---|---|
-| `HYGIENE_COMPACTION_RATIO` | `0.88` | Fraction of raw context_window above which pre-turn hygiene (M0) fires |
-| `PROACTIVE_COMPACTION_RATIO` | `0.75` | Fraction of raw context_window above which M3 fires |
-| `TAIL_FRACTION` | `0.40` | Fraction of budget for the preserved tail |
+| `_MIN_RETAINED_TURN_GROUPS` | `1` | Hardcoded correctness invariant — last turn group always retained even if it exceeds tail budget |
 | `COMPACTABLE_KEEP_RECENT` | `5` | M2a: most-recent returns per tool to keep |
 | `_CIRCUIT_BREAKER_PROBE_EVERY` | `10` | Skips between probe attempts when circuit breaker is tripped |
 
@@ -599,9 +631,10 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 
 | File | Purpose |
 |---|---|
-| `co_cli/context/_history.py` | Four registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `compact_assistant_responses`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `HYGIENE_COMPACTION_RATIO`, `PROACTIVE_COMPACTION_RATIO`, `TAIL_FRACTION`, `COMPACTABLE_KEEP_RECENT`. |
+| `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
+| `co_cli/context/_history.py` | Four registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `compact_assistant_responses`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — hardened with soft-overrun, active-user anchoring); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
-| `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry. |
+| `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry; resets `deps.runtime.recent_proactive_savings` after hygiene and overflow to unblock the anti-thrashing gate. |
 | `co_cli/context/tool_categories.py` | `COMPACTABLE_TOOLS` (M2 scope); `FILE_TOOLS` (enrichment file-path scope); `PATH_NORMALIZATION_TOOLS`. |
 | `co_cli/tools/tool_io.py` | `tool_output`; `persist_if_oversized` (M1 disk spill, requires explicit `max_size`); `_generate_preview` (newline-aware preview truncation); `check_tool_results_size`; `TOOL_RESULT_PREVIEW_SIZE`, `PERSISTED_OUTPUT_TAG`, `PERSISTED_OUTPUT_CLOSING_TAG`. |
 | `co_cli/agent/_native_toolset.py` | Per-tool `max_result_size` registration. |
@@ -609,7 +642,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | `co_cli/config/_llm.py` | `num_ctx`, `ctx_overflow_threshold`, `ctx_warn_threshold`. |
 | `co_cli/prompts/…` | Base system prompt assembly; static recency-clearing advisory. |
 | `evals/eval_compaction_quality.py` | Compaction fidelity regression: M2 clearing correctness, file-set retention, pending-task retention. |
-| `tests/test_history.py` | Planner unit tests (token scaling, turn-boundary snap, overlap, min-groups clamp, breadcrumb dedup); marker construction; prior-summary detection; Gap L orphan search_tools return structural preservation. |
-| `tests/test_context_compaction.py` | Token estimation (args + list content), trigger floor via `max()`, budget resolution, summarizer prompt assembly. |
+| `tests/test_history.py` | Planner unit tests (token scaling, turn-boundary snap, overlap, min-groups clamp, soft-overrun retain, active-user anchoring, breadcrumb dedup); marker construction; prior-summary detection; Gap L orphan search_tools return structural preservation. |
+| `tests/test_context_compaction.py` | Token estimation (args + list content), trigger floor via `max()`, budget resolution, summarizer prompt assembly; threshold floor (small-context floor blocks compaction); anti-thrashing gate activation, window-not-full passthrough, savings-clear unblocks gate. |
 | `tests/test_prompt_assembly.py` | Recency-clearing advisory present in cacheable prefix; advisory built from `COMPACTABLE_KEEP_RECENT`. |
 | `tests/test_tool_output_sizing.py` | M1 persistence threshold, preview placeholder format. |

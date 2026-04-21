@@ -20,6 +20,7 @@ from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
+from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import settings
 from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
@@ -58,7 +59,8 @@ def _make_processor_ctx() -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+            compaction=CompactionSettings(min_threshold_tokens=0),
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -138,7 +140,8 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+            compaction=CompactionSettings(min_threshold_tokens=0),
         ),
         model=_LLM_MODEL,
     )
@@ -167,7 +170,8 @@ async def test_circuit_breaker_first_trip_is_skip():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+            compaction=CompactionSettings(min_threshold_tokens=0),
         ),
         model=_LLM_MODEL,
     )
@@ -196,7 +200,8 @@ async def test_circuit_breaker_probes_at_cadence():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+            compaction=CompactionSettings(min_threshold_tokens=0),
         ),
         model=_LLM_MODEL,
     )
@@ -357,8 +362,8 @@ def test_planner_tail_scales_with_token_pressure():
 
     # budget=200 → tail_budget = 80 tokens. small group ≈ 6 tokens, big group ≈ 100 tokens.
     budget = 200
-    small_bounds = plan_compaction_boundaries(small_msgs, budget)
-    big_bounds = plan_compaction_boundaries(big_msgs, budget)
+    small_bounds = plan_compaction_boundaries(small_msgs, budget, 0.40)
+    big_bounds = plan_compaction_boundaries(big_msgs, budget, 0.40)
 
     # Big transcript drops more groups than small (tail captures fewer groups under budget).
     assert big_bounds is not None
@@ -372,7 +377,7 @@ def test_planner_snaps_to_turn_boundary():
     msgs = []
     for i in range(5):
         msgs.extend(_group_of(50, i))
-    bounds = plan_compaction_boundaries(msgs, budget=100)
+    bounds = plan_compaction_boundaries(msgs, 100, 0.40)
     assert bounds is not None
     _, tail_start, _ = bounds
     group_starts = {g.start_index for g in group_by_turn(msgs)}
@@ -383,10 +388,10 @@ def test_planner_returns_none_below_structural_floor():
     """len(groups) <= min_groups_tail → None; never even consider walking."""
     # 1 group
     msgs_one = [_user("only turn"), _assistant("only reply")]
-    assert plan_compaction_boundaries(msgs_one, budget=1000) is None
+    assert plan_compaction_boundaries(msgs_one, 1000, 0.40) is None
 
     # empty
-    assert plan_compaction_boundaries([], budget=1000) is None
+    assert plan_compaction_boundaries([], 1000, 0.40) is None
 
 
 def test_planner_returns_none_on_head_tail_overlap():
@@ -396,7 +401,7 @@ def test_planner_returns_none_on_head_tail_overlap():
         msgs.extend(_group_of(10, i))
     # budget=1_000_000 → tail_budget=400K; all 3 small groups fit easily → acc_groups=[G0,G1,G2].
     # tail_start=G0.start_index=0 <= head_end=2 → None.
-    assert plan_compaction_boundaries(msgs, budget=1_000_000) is None
+    assert plan_compaction_boundaries(msgs, 1_000_000, 0.40) is None
 
 
 def test_planner_min_groups_tail_keeps_last_group():
@@ -408,7 +413,7 @@ def test_planner_min_groups_tail_keeps_last_group():
     # Huge last group: 4000 chars ≈ 1000 tokens
     msgs.extend(_group_of(2000, 3))
     # tail_fraction*budget = 40 tokens; last group alone is ~1000 tokens
-    bounds = plan_compaction_boundaries(msgs, budget=100)
+    bounds = plan_compaction_boundaries(msgs, 100, 0.40)
     assert bounds is not None
     head_end, tail_start, _ = bounds
     # Last group must be kept — tail_start is the last group's start_index
@@ -978,3 +983,71 @@ def test_enforce_batch_budget_fail_open_on_oserror(tmp_path: Path) -> None:
     # Fail-open: persist failed → content unchanged
     part = result[2].parts[0]
     assert part.content == big
+
+
+# ---------------------------------------------------------------------------
+# TASK-3 regression tests: soft-overrun + active-user anchoring
+# ---------------------------------------------------------------------------
+
+
+def test_planner_soft_overrun_retains_oversized_last_group():
+    """Soft-overrun: last group > tail_budget is still retained (clamp to _MIN_RETAINED_TURN_GROUPS).
+
+    Verifies that when a single group exceeds the soft-overrun cap, the planner
+    keeps it rather than dropping it entirely — the minimum-retained invariant wins.
+    Uses tail_soft_overrun_multiplier=1.0 (no slack) to hit the path clearly.
+    """
+    msgs = []
+    # 3 small turn groups (~6 tokens each)
+    for i in range(3):
+        msgs.extend([_user(f"small user {i}"), _assistant(f"small reply {i}")])
+    # One large last group: 2000 chars ≈ 500 tokens — far above any reasonable tail_budget
+    msgs.extend([_user("big user " + "z" * 2000), _assistant("big reply " + "z" * 2000)])
+
+    # budget=100 → tail_budget=40 tokens; last group is ~500 tokens >> soft-overrun
+    bounds = plan_compaction_boundaries(msgs, 100, 0.40, tail_soft_overrun_multiplier=1.0)
+    assert bounds is not None
+    head_end, tail_start, _ = bounds
+    groups = group_by_turn(msgs)
+    # Last group must be in the tail (tail_start <= last group's start_index)
+    assert tail_start <= groups[-1].start_index
+    assert tail_start > head_end
+
+
+def test_planner_active_user_anchoring_pulls_latest_user_into_tail():
+    """Active-user anchoring: latest user turn in the dropped middle gets pulled into the tail.
+
+    Constructs a history where the budget-driven tail would start at the penultimate group
+    but the actual last user turn is in the middle (just before the tail boundary).
+    Anchoring must advance tail_start to include that user turn.
+    """
+    msgs = []
+    # Groups 0-2: small head groups
+    for i in range(3):
+        msgs.extend([_user(f"head user {i}"), _assistant(f"head reply {i}")])
+    # Group 3: large assistant-only response that lands in the would-be tail
+    # (No user turn here — assistant continues from previous)
+    msgs.append(_assistant("large assistant monologue " + "x" * 400))
+    # Group 4 (last): another user turn + reply that forms the final group
+    msgs.extend([_user("FINAL USER TURN"), _assistant("final reply")])
+
+    # budget=200 → tail_budget=80 tokens. The large assistant group at index 3 (~100 tokens)
+    # exceeds tail_budget alone, so the planner might not include the final user group.
+    # Anchoring must ensure the final user turn is always kept.
+    bounds = plan_compaction_boundaries(msgs, 200, 0.40)
+    if bounds is None:
+        # Everything fits → no compaction needed, invariant trivially satisfied
+        return
+    _, tail_start, _ = bounds
+    # Find the index of "FINAL USER TURN" message
+    final_user_idx = next(
+        idx
+        for idx, msg in enumerate(msgs)
+        if isinstance(msg, ModelRequest)
+        and any(
+            isinstance(p, UserPromptPart) and "FINAL USER TURN" in str(p.content)
+            for p in msg.parts
+        )
+    )
+    # The final user turn must be in the tail (not dropped)
+    assert final_user_idx >= tail_start

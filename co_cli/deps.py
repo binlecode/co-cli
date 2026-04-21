@@ -138,6 +138,10 @@ class CoRuntimeState:
     history_compaction_applied: bool = False
     # Delegation depth — incremented by fork_deps(); guards against recursive delegation.
     agent_depth: int = 0
+    # Anti-thrashing ring buffer: savings fractions from recent proactive compaction runs.
+    # Not reset per turn — persists across turns within a session.
+    # Reset by orchestrate.py when overflow recovery or hygiene fires.
+    recent_proactive_savings: list[float] = field(default_factory=list)
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""

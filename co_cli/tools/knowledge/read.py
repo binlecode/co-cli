@@ -490,6 +490,10 @@ async def knowledge_search(
         tag_match_mode: 'any' (OR) or 'all' (AND — doc must have every tag).
         created_after: ISO8601 date string; only return items created on or after this date.
         created_before: ISO8601 date string; only return items created on or before this date.
+
+    Do NOT use to search what was SAID in past conversations — use memory_search
+    for episodic recall of conversation transcripts. This tool searches distilled
+    knowledge artifacts; memory_search searches raw session history.
     """
     # Article-index fast-path: returns continuation schema for read_article()
     if kind == "article":

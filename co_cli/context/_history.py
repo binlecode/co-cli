@@ -83,42 +83,12 @@ row early in the session. First probe fires at failure_count == 3 + N (i.e. afte
 N skips), then every N skips thereafter.
 """
 
-PROACTIVE_COMPACTION_RATIO: float = 0.75
-"""Fraction of raw context_window above which ``summarize_history_window`` fires.
+_MIN_RETAINED_TURN_GROUPS: int = 1
+"""Minimum number of turn groups the planner must retain in the tail.
 
-Trigger point for proactive compaction:
-``token_count > int(budget * PROACTIVE_COMPACTION_RATIO)``.
-
-Applied to raw context_window (single model-proportional knob). The 25%
-headroom absorbs estimator error (char/4 heuristic), system prompt, and
-tool schemas. Portable across all supported model sizes — on qwen3.5 131K
-lands within ~0.8% of the old reserve-adjusted trigger; on smaller-context
-models produces a meaningful 75% fraction instead of the degenerate
-reserve-dominated value. Not settings-configurable — right shape at this
-scale is a named constant.
-"""
-
-HYGIENE_COMPACTION_RATIO: float = 0.88
-"""Fraction of raw context_window above which pre-turn hygiene compaction fires.
-
-Higher than PROACTIVE_COMPACTION_RATIO (0.75) because hygiene operates before any model
-call and uses rough estimates only — no provider-reported token count is available for
-the current turn state. The 13-percentage-point gap accounts for estimator imprecision
-(char/4 heuristic overestimates code/JSON-heavy content by 30–50%):
-  Real tokens at 75% → rough estimate ~97% → hygiene does NOT fire (proactive handles during turn)
-  Real tokens at 85% → rough estimate ~110% → hygiene fires (maintenance needed before turn)
-Not settings-configurable — right shape at this scale is a named constant.
-"""
-
-TAIL_FRACTION: float = 0.40
-"""Fraction of budget targeted for the preserved tail in ``plan_compaction_boundaries``.
-
-The walk-from-end accumulator stops before adding a group that would push
-accumulated tokens over ``TAIL_FRACTION * budget``, so the dropped middle
-plus summary marker stays within the remaining budget when the next request
-fires. Shared by proactive and overflow paths — when overflow happens it's
-because the estimate was wrong, and fixing the estimate (see
-``estimate_message_tokens``) keeps this single value workable for both.
+Hardcoded correctness invariant — setting it to 0 breaks the planner.
+Not user-configurable. The soft-overrun multiplier allows the retained
+tail to exceed ``tail_fraction * budget`` when needed to satisfy this floor.
 """
 
 
@@ -230,32 +200,62 @@ def _summary_marker(dropped_count: int, summary_text: str) -> ModelRequest:
 # ---------------------------------------------------------------------------
 
 
+def _anchor_tail_to_last_user(
+    messages: list[ModelMessage],
+    groups: list[TurnGroup],
+    head_end: int,
+    tail_start: int,
+) -> int:
+    """Extend tail_start back so the latest UserPromptPart is in the retained tail.
+
+    If the latest UserPromptPart is already in the tail or head, returns tail_start
+    unchanged (no-op). If it falls in the dropped middle, returns the start index
+    of the group containing it.
+    """
+    last_user_idx = -1
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if isinstance(msg, ModelRequest) and any(isinstance(p, UserPromptPart) for p in msg.parts):
+            last_user_idx = idx
+            break
+
+    if head_end <= last_user_idx < tail_start:
+        for group in groups:
+            if group.start_index <= last_user_idx < group.start_index + len(group.messages):
+                return group.start_index
+
+    return tail_start
+
+
 def plan_compaction_boundaries(
     messages: list[ModelMessage],
     budget: int,
-    tail_fraction: float = TAIL_FRACTION,
+    tail_fraction: float,
     *,
-    min_groups_tail: int = 1,
+    tail_soft_overrun_multiplier: float = 1.25,
 ) -> _CompactionBoundaries | None:
     """Plan ``(head_end, tail_start, dropped_count)`` for a compaction pass.
 
     Algorithm:
       1. ``head_end = find_first_run_end(messages) + 1``
       2. ``groups = group_by_turn(messages)``; abort when
-         ``len(groups) < min_groups_tail + 1``.
+         ``len(groups) < _MIN_RETAINED_TURN_GROUPS + 1``.
       3. Walk groups from the end, accumulating token estimates. Stop BEFORE
          adding a group that would push accumulated tokens over
-         ``tail_fraction * budget``, UNLESS fewer than ``min_groups_tail``
-         groups have been accumulated (in which case the clamp wins over
-         the budget — at least one turn group is always preserved).
+         ``tail_fraction * budget``, UNLESS fewer than ``_MIN_RETAINED_TURN_GROUPS``
+         groups have been accumulated. In that case, allow up to
+         ``tail_fraction * budget * tail_soft_overrun_multiplier``; if even the
+         soft-overrun cap is exceeded, accept the overrun and log at info.
       4. ``tail_start = accumulated_groups[0].start_index``.
-      5. Abort when ``tail_start <= head_end`` (head/tail overlap — nothing
-         to drop, or everything fit in the tail budget).
+      5. Active-user anchoring: if the latest ``UserPromptPart`` falls in the
+         dropped middle (between ``head_end`` and ``tail_start``), extend
+         ``tail_start`` backward to the start of the group containing it.
+      6. Abort when ``tail_start <= head_end`` (head/tail overlap — nothing to drop).
 
     Shared between proactive compaction (``summarize_history_window``) and
-    overflow recovery (``recover_overflow_history``). ``min_groups_tail=1``
-    is a correctness guarantee: the last turn group is always kept even
-    when its tokens alone exceed the tail budget (Gap A regression guard).
+    overflow recovery (``recover_overflow_history``). ``_MIN_RETAINED_TURN_GROUPS=1``
+    is a hardcoded correctness invariant: the last turn group is always kept even
+    when its tokens alone exceed the tail budget.
     """
     if not messages:
         return None
@@ -264,16 +264,23 @@ def plan_compaction_boundaries(
     head_end = first_run_end + 1
 
     groups = group_by_turn(messages)
-    if len(groups) < min_groups_tail + 1:
+    if len(groups) < _MIN_RETAINED_TURN_GROUPS + 1:
         return None
 
     tail_budget = tail_fraction * budget
+    soft_overrun_budget = tail_budget * tail_soft_overrun_multiplier
     acc_groups: list[TurnGroup] = []
     acc_tokens = 0
     for group in reversed(groups):
         gt = estimate_message_tokens(group.messages)
-        if len(acc_groups) >= min_groups_tail and acc_tokens + gt > tail_budget:
+        if len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > tail_budget:
             break
+        if len(acc_groups) < _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > soft_overrun_budget:
+            log.info(
+                "Compaction: last group exceeds soft-overrun budget (group_tokens=%d, soft_budget=%.0f); accepting overrun",
+                gt,
+                soft_overrun_budget,
+            )
         acc_groups.insert(0, group)
         acc_tokens += gt
 
@@ -281,6 +288,8 @@ def plan_compaction_boundaries(
         return None
 
     tail_start = acc_groups[0].start_index
+    tail_start = _anchor_tail_to_last_user(messages, groups, head_end, tail_start)
+
     if tail_start <= head_end:
         return None
     return (head_end, tail_start, tail_start - head_end)
@@ -729,13 +738,19 @@ async def recover_overflow_history(
 ) -> list[ModelMessage] | None:
     """Recover from provider context overflow via the shared boundary planner.
 
-    Calls ``plan_compaction_boundaries`` with the same ``TAIL_FRACTION`` as
-    proactive compaction and ``min_groups_tail=1`` — the last turn group is
-    always preserved. Returns None when no compaction boundary exists.
+    Calls ``plan_compaction_boundaries`` with config-sourced tail settings.
+    The last turn group is always preserved via ``_MIN_RETAINED_TURN_GROUPS=1``.
+    Returns None when no compaction boundary exists.
     """
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
-    bounds = plan_compaction_boundaries(messages, budget)
+    cfg = ctx.deps.config.compaction
+    bounds = plan_compaction_boundaries(
+        messages,
+        budget,
+        cfg.tail_fraction,
+        tail_soft_overrun_multiplier=cfg.tail_soft_overrun_multiplier,
+    )
     if bounds is None:
         return None
 
@@ -766,13 +781,14 @@ async def summarize_history_window(
 ) -> list[ModelMessage]:
     """Drop middle messages when history exceeds the token budget threshold.
 
-    Triggers when ``token_count > int(budget * PROACTIVE_COMPACTION_RATIO)``.
+    Triggers when ``token_count > max(int(budget * cfg.proactive_ratio), cfg.min_threshold_tokens)``.
     Boundaries come from ``plan_compaction_boundaries`` — the same planner
-    used by overflow recovery.
+    used by overflow recovery. Anti-thrashing gate skips proactive when the
+    last N runs all yielded < cfg.min_proactive_savings savings.
 
     Keeps:
       - **head** — first run's messages (up to first TextPart response)
-      - **tail** — planner-selected suffix that fits under ``TAIL_FRACTION * budget``
+      - **tail** — planner-selected suffix bounded by ``cfg.tail_fraction * budget``
     Drops:
       - everything in between, replaced by an inline LLM summary when
         possible, else a static marker (circuit-breaker fallback)
@@ -789,12 +805,27 @@ async def summarize_history_window(
     token_count = max(estimate, reported)
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
-    token_threshold = int(budget * PROACTIVE_COMPACTION_RATIO)
+    cfg = ctx.deps.config.compaction
+    token_threshold = max(int(budget * cfg.proactive_ratio), cfg.min_threshold_tokens)
 
     if token_count <= token_threshold:
         return messages
 
-    bounds = plan_compaction_boundaries(messages, budget)
+    # Anti-thrashing gate: skip proactive if the last N compactions all yielded low savings.
+    # Does NOT gate overflow recovery or hygiene — only the proactive path.
+    recent = ctx.deps.runtime.recent_proactive_savings
+    if len(recent) >= cfg.proactive_thrash_window and all(
+        s < cfg.min_proactive_savings for s in recent[-cfg.proactive_thrash_window :]
+    ):
+        log.info("Compaction: proactive anti-thrashing gate active, skipping")
+        return messages
+
+    bounds = plan_compaction_boundaries(
+        messages,
+        budget,
+        cfg.tail_fraction,
+        tail_soft_overrun_multiplier=cfg.tail_soft_overrun_multiplier,
+    )
     if bounds is None:
         return messages
 
@@ -813,7 +844,16 @@ async def summarize_history_window(
 
     ctx.deps.runtime.history_compaction_applied = True
     preserved_discovery = _preserve_search_tool_breadcrumbs(dropped, kept_ids)
-    return [*head, summary_marker, *preserved_discovery, *tail]
+    result = [*head, summary_marker, *preserved_discovery, *tail]
+
+    # Track proactive compaction savings for the anti-thrashing gate.
+    tokens_after = estimate_message_tokens(result)
+    savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
+    updated_savings = list(ctx.deps.runtime.recent_proactive_savings)
+    updated_savings.append(savings)
+    ctx.deps.runtime.recent_proactive_savings = updated_savings[-cfg.proactive_thrash_window :]
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -826,7 +866,7 @@ async def maybe_run_pre_turn_hygiene(
     message_history: list[ModelMessage],
     model: Any,
 ) -> list[ModelMessage]:
-    """Pre-turn hygiene compaction: compact if rough-estimate tokens exceed HYGIENE_COMPACTION_RATIO.
+    """Pre-turn hygiene compaction: compact if rough-estimate tokens exceed cfg.hygiene_ratio * budget.
 
     Called from run_turn() after reset_for_turn() and before _run_model_preflight.
     Uses rough token estimate only — no provider-reported count is available pre-turn.
@@ -839,7 +879,7 @@ async def maybe_run_pre_turn_hygiene(
         if budget <= 0:
             return message_history
         token_count = estimate_message_tokens(message_history)
-        if token_count <= int(budget * HYGIENE_COMPACTION_RATIO):
+        if token_count <= int(budget * deps.config.compaction.hygiene_ratio):
             return message_history
         ctx = RunContext(deps=deps, model=model, usage=RunUsage())
         return await summarize_history_window(ctx, message_history)
