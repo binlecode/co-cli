@@ -24,13 +24,9 @@ class CompactionSettings(BaseModel):
         default=0.40,
         description="Fraction of budget targeted for the preserved tail in plan_compaction_boundaries.",
     )
-    min_threshold_tokens: int = Field(
-        default=32_000,
-        description="Absolute floor for the proactive trigger threshold. Prevents early compaction on small-context models.",
-    )
     min_context_length_tokens: int = Field(
         default=64_000,
-        description="Minimum context window size below which proactive compaction is skipped entirely.",
+        description="Absolute floor on the proactive trigger threshold. Compaction never fires until token_count exceeds this value, regardless of the budget-ratio result.",
     )
     tail_soft_overrun_multiplier: float = Field(
         default=1.25,

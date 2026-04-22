@@ -166,7 +166,7 @@ def _make_ctx(
             model=settings.llm.model,
             host=settings.llm.host,
         ),
-        compaction=CompactionSettings(min_threshold_tokens=0),
+        compaction=CompactionSettings(min_context_length_tokens=0),
     )
     session = CoSessionState()
     if session_todos:

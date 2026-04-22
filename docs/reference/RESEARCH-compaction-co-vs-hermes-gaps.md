@@ -5,7 +5,7 @@ identifying gaps in co-cli to adopt or learn from. Complements the broader
 peer survey in `RESEARCH-peer-compaction-survey.md`.
 
 Method: full function-body reads of both implementations on 2026-04-21.
-Last co-cli sync: 2026-04-21 (second pass — reflects post-initial-draft changes).
+Last co-cli sync: 2026-04-21 (third pass — gap #15 closed, min_context_length guard shipped, docstring gap #14 confirmed open).
 
 co-cli sources (read):
 - `co_cli/context/_history.py`
@@ -58,7 +58,8 @@ M2b Batch budget enforcement (always-on, every turn, no LLM):
     No equivalent in hermes
 
 M3  Window compaction (token-pressure-driven, LLM call):
-    Trigger: proactive_ratio × budget (default 0.75); hard floor min_threshold_tokens (32 K)
+    Trigger: max(proactive_ratio × budget, min_context_length_tokens)
+             = max(0.75 × budget, 64 K) — matches hermes two-way floor semantics
     Anti-thrash: savings ring buffer — blocked if last N runs saved < 10 % each
     Boundary planner (shared with ER):
       1. head_end = find_first_run_end (first TextPart/ThinkingPart response) + 1
@@ -112,12 +113,21 @@ Phase 4  Assembly ─ head + summary + tail, orphaned-pair cleanup, session roll
 | Primary source | `max(char_estimate/4, api_reported)` — char estimate now includes `ToolCallPart.args` (fix for tool-heavy transcripts where args were excluded, causing under-estimates) | API-reported `prompt_tokens` |
 | Fallback | Char estimate is always computed | Rough char estimate if no API report |
 | Trigger threshold | Configurable `proactive_ratio` (default 0.75 × budget) | Configurable `threshold` (default 0.50 × context_length) |
-| Hard floor | `min_threshold_tokens` (default 32 K) below which M3 never fires | `MINIMUM_CONTEXT_LENGTH = 64 K` — minimum to run at all |
+| Hard floor | `min_context_length_tokens` (default 64 K) — floor on trigger threshold | `MINIMUM_CONTEXT_LENGTH = 64 K` — floor on trigger threshold |
 | Pre-trigger hygiene | M0 at 0.88 (separate, earlier threshold) | Gateway at 0.85 (separate process/layer) |
 
-**co-cli gap:** No minimum-context guard at startup. The `min_threshold_tokens` floor
-prevents premature M3 fires but does not block compaction-attempted-on-tiny-context
-scenarios. Hermes's 64 K hard floor is a safety invariant.
+~~**co-cli gap:** No minimum-context guard at startup.~~ **SHIPPED + CORRECTED:** `min_context_length_tokens`
+(default 64 K) is now a floor on the trigger threshold —
+`threshold = max(budget × proactive_ratio, min_context_length_tokens)` — matching
+hermes's semantics. Earlier impl used it as a binary budget gate (`if budget < 64K: skip`), which is
+a weaker invariant: for models with budget > 64K the gate never fired, and the threshold could
+still fall below 64K on low proactive_ratio configs. Architecture overview updated.
+
+~~**co-cli note (stale token count after same-turn compaction):**~~ **SHIPPED:** `compacted_in_current_turn`
+flag in `CoRuntimeState` closes this. `summarize_history_window` sets the flag on compaction
+(`_history.py:826`); the next invocation zeroes out the API-reported count:
+`reported = 0 if ctx.deps.runtime.compacted_in_current_turn else latest_response_input_tokens(messages)`.
+Spurious `plan_compaction_boundaries` calls no longer occur. See gap #15 — closed.
 
 ### 2. Summarization model
 
@@ -216,8 +226,16 @@ making probes sparse (`count-3` growing). Hermes's time-based cooldown is bounde
 error bodies only. Gemini (now a supported provider) returns 400s with different wording
 — e.g. `"Request payload size exceeds the limit"` or `"Input token count exceeds the
 maximum"`. `_is_context_overflow` returns False for Gemini context overflows, so the
-turn falls through to the generic HTTP 400 error path and errors out **without attempting
-compaction recovery**. Regression introduced when Gemini provider support was added.
+turn falls through to the **reformulation handler** (`orchestrate.py:661`), not generic
+error handling. Full failure sequence:
+1. Gemini returns HTTP 400 (context length exceeded).
+2. `_is_context_overflow` → False; falls to `if code == 400 and tool_reformat_budget > 0`.
+3. Reformulation handler injects `UserPromptPart("Your previous tool call was rejected: [token error]")` into `turn_state.current_history` — **making the history longer**.
+4. Retries; same 400. Budget decremented twice total (default budget = 2).
+5. Budget exhausted → falls to `frontend.on_status(f"Provider error (HTTP {code}): {e.body}")` — generic unhelpful message.
+6. `_build_error_turn_result` returns `turn_state.current_history` (since `latest_result` is None after all failed segments). The 2 injected reformulation `UserPromptPart`s are **persisted into the REPL's `message_history`** for subsequent turns, contaminating the model's context.
+
+The design invariant comment at `orchestrate.py:633` — `"NEVER falls through to the 400 reformulation handler"` for context overflow — is violated for Gemini. Regression introduced when Gemini provider support was added.
 
 ### 8. Anti-thrashing
 
@@ -231,6 +249,21 @@ compaction recovery**. Regression introduced when Gemini provider support was ad
 
 **co-cli gap:** No guided `/compact <focus>`. Hermes's `/compress <focus_topic>` lets users
 direct what to preserve when anti-thrashing blocks. co-cli users have no escape short of `/new`.
+
+**co-cli note (gate is per-turn, not cross-turn):** The Reset row above is technically
+accurate but incomplete. `run_turn()` (`orchestrate.py:588`) clears `recent_proactive_savings`
+**unconditionally at every turn entry**, not only when M0 actually fires:
+```python
+message_history = await maybe_run_pre_turn_hygiene(...)
+deps.runtime.recent_proactive_savings.clear()  # always, regardless of whether M0 ran
+```
+This makes the anti-thrash gate per-turn only — it can accumulate entries only across
+`ModelRequestNode` boundaries within a single turn (multi-tool-call chains). A session
+where M3 fires once per turn with < 10 % savings on every turn never trips the gate.
+The `CoRuntimeState` docstring (`deps.py:144`) says `recent_proactive_savings`
+"persists across turns within a session" — this is misleading for the proactive savings
+field specifically. The behavioral analysis here is confirmed correct; the docstring fix
+is still pending in source.
 
 ### 9. Session continuity and post-compaction state
 
@@ -294,8 +327,10 @@ size; no per-provider or per-model tuning of the summarizer.
 | 9 | No iterative summary evolution on recompression | LLM merges prior summary with new progress | Low — duplicate or contradicting summaries possible across compression cycles |
 | 10 | Monotone failure counter — probes grow sparse | Time-based cooldown is bounded | Low — intermittent provider issues push probe cadence increasingly far apart |
 | 11 | `emergency_compact` defined but unwired | N/A — no equivalent; static fallback is production | Low — both LLM recovery attempts failing leaves session in error state rather than degrading gracefully |
-| 12 | Gemini context overflow not detected — `_CONTEXT_OVERFLOW_PATTERNS` (`orchestrate.py`) covers Ollama/OpenAI error bodies only; Gemini 400s use different wording, so `_is_context_overflow` returns False and recovery never fires | N/A (Ollama-only patterns; hermes doesn't support multiple providers) | High — Gemini sessions hitting context limit error out instead of compacting |
+| 12 | Gemini context overflow not detected — `_CONTEXT_OVERFLOW_PATTERNS` covers Ollama/OpenAI error bodies only; Gemini 400s fall into the reformulation handler, injecting 2 error `UserPromptPart`s into history (making it longer), exhausting `tool_reformat_budget`, and persisting those messages into subsequent turns via `_build_error_turn_result`. Design invariant "NEVER falls through to 400 reformulation handler" violated for Gemini. | N/A | High — Gemini sessions hitting context limit get worse history, confusing model on next turn, no compaction attempted |
 | 13 | ~~`file_read` no safety-net size limit~~ — **SHIPPED 2026-04-21**: four in-tool caps added (500-line default, 2000-line ceiling, 2000-char/line, 500 KB gate); `max_result_size` stays `math.inf` to prevent persist→read→persist loop | N/A | ~~Medium~~ — resolved |
+| 14 | Anti-thrash gate is per-turn only — `run_turn()` unconditionally clears `recent_proactive_savings` at every turn entry; cross-turn thrashing (repeated low-yield M3 runs across turns) is never blocked | N/A | Low — M0 hygiene provides a backstop for true thrashing scenarios; within-turn gate still works |
+| 15 | ~~Stale `latest_response_input_tokens` after same-turn compaction~~ — **SHIPPED:** `compacted_in_current_turn` flag (`_history.py:826`) zeroes out the API-reported count on the next invocation, preventing spurious `plan_compaction_boundaries` calls | N/A | ~~Low~~ — resolved |
 
 ---
 

@@ -746,7 +746,7 @@ async def summarize_history_window(
 ) -> list[ModelMessage]:
     """Drop middle messages when history exceeds the token budget threshold.
 
-    Triggers when ``token_count > max(int(budget * cfg.proactive_ratio), cfg.min_threshold_tokens)``.
+    Triggers when ``token_count > max(int(budget * cfg.proactive_ratio), cfg.min_context_length_tokens)``.
     Boundaries come from ``plan_compaction_boundaries`` — the same planner
     used by overflow recovery. Anti-thrashing gate skips proactive when the
     last N runs all yielded < cfg.min_proactive_savings savings.
@@ -769,9 +769,6 @@ async def summarize_history_window(
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
     cfg = ctx.deps.config.compaction
 
-    if budget < cfg.min_context_length_tokens:
-        return messages
-
     # Skip stale API-reported count when compaction already ran this turn — the
     # reported value reflects the pre-compaction context and would re-trigger spuriously.
     reported = (
@@ -779,7 +776,7 @@ async def summarize_history_window(
     )
     estimate = estimate_message_tokens(messages)
     token_count = max(estimate, reported)
-    token_threshold = max(int(budget * cfg.proactive_ratio), cfg.min_threshold_tokens)
+    token_threshold = max(int(budget * cfg.proactive_ratio), cfg.min_context_length_tokens)
 
     if token_count <= token_threshold:
         return messages

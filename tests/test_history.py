@@ -59,7 +59,7 @@ def _make_processor_ctx() -> RunContext:
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_threshold_tokens=0, min_context_length_tokens=0),
+            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -140,7 +140,7 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_threshold_tokens=0, min_context_length_tokens=0),
+            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
         model=_LLM_MODEL,
     )
@@ -170,7 +170,7 @@ async def test_circuit_breaker_first_trip_is_skip():
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_threshold_tokens=0, min_context_length_tokens=0),
+            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
         model=_LLM_MODEL,
     )
@@ -200,7 +200,7 @@ async def test_circuit_breaker_probes_at_cadence():
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_threshold_tokens=0, min_context_length_tokens=0),
+            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
         model=_LLM_MODEL,
     )

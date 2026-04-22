@@ -114,7 +114,7 @@ async def test_compaction_fallback_when_no_usage_data():
     # min_context_length_tokens=0 disables the guard so the tiny synthetic budget works.
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-        compaction=CompactionSettings(min_threshold_tokens=0, min_context_length_tokens=0),
+        compaction=CompactionSettings(min_context_length_tokens=0),
     )
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs_no_usage)
@@ -137,7 +137,7 @@ async def test_compaction_triggers_on_ollama_budget():
     msgs = _make_messages(10, last_input_tokens=7_200, body_chars=3_000)
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 8192}),
-        compaction=CompactionSettings(min_threshold_tokens=0, min_context_length_tokens=0),
+        compaction=CompactionSettings(min_context_length_tokens=0),
     )
     assert config.llm.uses_ollama()
     ctx = _make_ctx(config)
@@ -480,14 +480,14 @@ async def test_pre_turn_hygiene_no_op_first_turn_zero_reported() -> None:
 
 @pytest.mark.asyncio
 async def test_threshold_floor_prevents_compaction_on_small_context() -> None:
-    """min_threshold_tokens floor blocks compaction when budget is tiny and tokens < floor.
+    """min_context_length_tokens floor blocks compaction when token_count < floor.
 
-    With default min_threshold_tokens=32_000 and num_ctx=30, the effective threshold
-    is max(int(30*0.75), 32_000) = 32_000. A tiny message set (~33 tokens) is well
+    With default min_context_length_tokens=64_000 and num_ctx=30, the effective threshold
+    is max(int(30*0.75), 64_000) = 64_000. A tiny message set (~33 tokens) is well
     below that floor — compaction must not fire.
     """
     msgs = _make_messages(10, last_input_tokens=0)
-    # Default min_threshold_tokens=32_000 — floor should prevent compaction
+    # Default min_context_length_tokens=64_000 — floor should prevent compaction
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
     )
@@ -508,7 +508,6 @@ async def test_anti_thrashing_gate_suppresses_proactive_after_low_yield_runs() -
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
-            min_threshold_tokens=0,
             min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
@@ -528,7 +527,6 @@ async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> N
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
-            min_threshold_tokens=0,
             min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
@@ -574,7 +572,6 @@ async def test_savings_clear_unblocks_gate() -> None:
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
-            min_threshold_tokens=0,
             min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
