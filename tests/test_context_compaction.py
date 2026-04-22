@@ -308,12 +308,17 @@ async def test_trigger_uses_max_floor():
 
 
 def test_summarize_prompt_active_task_section() -> None:
-    """Assembled prompt includes ## Active Task as the primary continuity anchor section."""
+    """## Active Task is the first static section — appears before ## Goal."""
     result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
     assert "## Active Task" in result
-    active_task_pos = result.index("## Active Task")
-    goal_pos = result.index("## Goal")
-    assert active_task_pos < goal_pos, "## Active Task must appear before ## Goal"
+    assert result.index("## Active Task") < result.index("## Goal")
+
+
+def test_summarize_prompt_critical_context_section() -> None:
+    """## Critical Context is present and positioned after ## Next Step."""
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
+    assert "## Critical Context" in result
+    assert result.index("## Next Step") < result.index("## Critical Context")
 
 
 def test_summarize_prompt_pending_resolved_sections() -> None:
@@ -330,9 +335,9 @@ def test_summarize_prompt_merge_contract() -> None:
 
 
 def test_summarize_prompt_skip_guard() -> None:
-    """Assembled prompt includes the skip guard for empty Pending User Asks."""
+    """Pending User Asks and Resolved Questions both carry a skip-if-none guard."""
     result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
-    assert "Skip this section if there are none" in result
+    assert "Skip if none" in result
 
 
 def test_build_summarizer_prompt_keeps_personality_after_context() -> None:

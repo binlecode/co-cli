@@ -794,7 +794,7 @@ def step_5_prompt_assembly() -> bool:
     print("\n--- Step 5: Prompt assembly [Outcome 1, BC1] ---")
     passed = True
 
-    # 5a: Template has all 9 static sections
+    # 5a: Template has all 10 static sections
     # ## User Corrections is conditional (LLM inserts it only when corrections detected) —
     # it is described in the instruction text after ## Next Step, not as a static body section.
     for section in (
@@ -807,14 +807,16 @@ def step_5_prompt_assembly() -> bool:
         "## Pending User Asks",
         "## Resolved Questions",
         "## Next Step",
+        "## Critical Context",
     ):
         if section not in _SUMMARIZE_PROMPT:
             print(f"  FAIL: template missing {section}")
             passed = False
     if passed:
         print(
-            "  PASS: template has 9 static sections (Active Task, Goal, Key Decisions, "
-            "Errors & Fixes, Working Set, Progress, Pending User Asks, Resolved Questions, Next Step)"
+            "  PASS: template has 10 static sections (Active Task, Goal, Key Decisions, "
+            "Errors & Fixes, Working Set, Progress, Pending User Asks, Resolved Questions, "
+            "Next Step, Critical Context)"
         )
 
     # 5b: Prior-summary integration instruction — explicit merge contract required
@@ -1134,7 +1136,15 @@ async def step_6_full_chain() -> bool:
     # Structured sections
     sections = [
         s
-        for s in ("Active Task", "Goal", "Key Decisions", "Working Set", "Progress", "Next Step")
+        for s in (
+            "Active Task",
+            "Goal",
+            "Key Decisions",
+            "Working Set",
+            "Progress",
+            "Next Step",
+            "Critical Context",
+        )
         if s.lower() in summary_text.lower()
     ]
     if len(sections) >= 2:
@@ -2111,7 +2121,7 @@ async def step_12_prompt_composition() -> bool:
     enrichment = "Files touched: /auth/views.py, /auth/middleware.py\n\nActive tasks:\n- [pending] Add JWT support"
     prompt = _build_summarizer_prompt(_SUMMARIZE_PROMPT, enrichment, personality_active=True)
 
-    # 9 static template sections present and in order.
+    # 10 static template sections present and in order.
     # ## User Corrections is conditional (LLM inserts it only when corrections detected) —
     # it is described in the instruction text after ## Next Step, not as a static body section.
     section_positions = {}
@@ -2125,6 +2135,7 @@ async def step_12_prompt_composition() -> bool:
         "## Pending User Asks",
         "## Resolved Questions",
         "## Next Step",
+        "## Critical Context",
     ):
         pos = prompt.find(section)
         if pos == -1:
@@ -2133,7 +2144,7 @@ async def step_12_prompt_composition() -> bool:
         else:
             section_positions[section] = pos
 
-    if len(section_positions) == 9:
+    if len(section_positions) == 10:
         ordered = all(
             section_positions[a] < section_positions[b]
             for a, b in zip(
@@ -2146,6 +2157,7 @@ async def step_12_prompt_composition() -> bool:
                     "## Progress",
                     "## Pending User Asks",
                     "## Resolved Questions",
+                    "## Next Step",
                 ],
                 [
                     "## Goal",
@@ -2156,12 +2168,13 @@ async def step_12_prompt_composition() -> bool:
                     "## Pending User Asks",
                     "## Resolved Questions",
                     "## Next Step",
+                    "## Critical Context",
                 ],
                 strict=False,
             )
         )
         if ordered:
-            print("  PASS: 12a — 9 static template sections present and in order")
+            print("  PASS: 12a — 10 static template sections present and in order")
         else:
             print(f"  FAIL: 12a — sections out of order: {section_positions}")
             passed = False
