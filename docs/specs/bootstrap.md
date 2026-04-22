@@ -187,7 +187,7 @@ else:
     deps.session.session_path = new_session_path(deps.sessions_dir)  # path only, no file write
 ```
 
-No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing lifecycle are owned by [session.md](session.md).
+No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing memory/session lifecycle are owned by [memory-knowledge.md](memory-knowledge.md).
 
 ### Step 12b. Initialise the memory index
 

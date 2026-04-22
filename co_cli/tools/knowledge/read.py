@@ -74,7 +74,7 @@ async def _recall_for_context(
     created_after: str | None = None,
     created_before: str | None = None,
 ) -> ToolReturn:
-    """Used by build_recall_injection to surface relevant artifacts before each model-bound segment.
+    """Used by _recall_prompt_text to surface relevant artifacts for the per-turn dynamic instruction.
 
     Uses FTS5/BM25 DB search via knowledge_store. Returns empty when knowledge_store
     is None (degraded mode — no crash).

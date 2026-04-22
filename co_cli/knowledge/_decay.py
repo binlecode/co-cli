@@ -2,7 +2,7 @@
 
 Pure selection logic — callers (e.g. the dream-cycle decay sweep in TASK-5.6)
 archive the returned artifacts. Pinned and decay-protected entries are immune.
-See ``docs/specs/cognition.md`` for the lifecycle model.
+See ``docs/specs/memory-knowledge.md`` for the lifecycle model.
 """
 
 from __future__ import annotations

@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
 from co_cli.config._core import Settings, settings
 from co_cli.context.session import find_latest_session, new_session_path
-from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools.shell_backend import ShellBackend
@@ -276,7 +275,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     )
 
     # Step 8: assemble deps
-    runtime = CoRuntimeState(safety_state=SafetyState())
+    runtime = CoRuntimeState()
     return CoDeps(
         shell=ShellBackend(),
         config=config,

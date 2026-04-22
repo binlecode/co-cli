@@ -18,15 +18,3 @@ class MemoryRecallState:
 
     recall_count: int = 0
     last_recall_user_turn: int = 0
-
-
-@dataclass
-class SafetyState:
-    """Turn-scoped state for safety checks.
-
-    Initialized in create_deps() and reset at the start of each turn by run_turn(),
-    stored on CoDeps.runtime.safety_state.
-    """
-
-    doom_loop_injected: bool = False
-    reflection_injected: bool = False

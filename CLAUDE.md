@@ -37,7 +37,7 @@ See `docs/specs/system.md` for architecture, `CoDeps`, capability surface, and s
 
 ### Knowledge System
 
-All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge artifacts (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db`. See `docs/specs/cognition.md` for the two-layer Memory + Knowledge model (extraction, retrieval, dreaming), `docs/specs/prompt-assembly.md` for how recall injects into the turn, and `docs/specs/session.md` for transcript persistence.
+All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge artifacts (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db`. See `docs/specs/memory-knowledge.md` for the Memory + Knowledge model (transcripts, retrieval, extraction, dreaming) and `docs/specs/prompt-assembly.md` for how recall injects into the turn.
 
 ## Engineering Rules
 
@@ -65,6 +65,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   | `*Error` | Exception class |
   | `*Enum` | Enumeration |
 - **Variable and function naming**: use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
+- **Suffix preservation**: preserve existing suffix conventions (e.g. `*Registry`, `*Info`) unless explicitly told otherwise. Before proposing a rename, verify the new name against peer codebases and existing conventions in this repo.
 - **Display**: use the project's shared `console` object for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Quality gates**: `scripts/quality-gate.sh` is the single source of truth for all automated checks. `lint` = ruff (pre-commit enforced), `full` = lint + pytest. Tool configs live in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
 
@@ -138,6 +139,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Production config only — no overrides**: do not pass `model=` or `model_settings=` to `agent.run()` — use the production orchestration path or invoke the agent with no override. Do not strip personality in tests. Use non-thinking model settings for tool-calling, signal-detection, and orchestration tests. Cache module-level agents rather than rebuilding per call.
 - **Never copy inline logic into tests**: do not replicate display formatting or string construction in assertions.
 - **Google credentials**: never configure or inject — they resolve automatically via settings, `~/.co-cli/google_token.json`, or ADC.
+- **No pytest markers**: do not add markers (e.g. `integration`, `slow`) unless explicitly requested.
 
 ### Review Discipline
 
@@ -145,6 +147,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Evidence-based verdicts**: do not declare "ready" unless you can cite `file:line` references. If zero issues found, list every file read and what was checked. If scope is unclear, ask rather than rubber-stamp.
 - Always check `docs/reference/` for research/best-practice docs before reviews or design proposals.
 - **Design philosophy**: design from first principles — MVP-first but production-grade. Add abstractions only when a concrete need exists. When researching peers, focus on convergent best practices, not volume.
+- **Peer research verification**: when comparing against peer tools, always confirm the correct repo/source before reading. Do a deep code scan (grep/read) to verify claimed gaps exist — do not report features as missing without evidence.
 
 ### Code Change Principles
 
@@ -165,6 +168,7 @@ Use `USER_DIR` and derived constants (`SETTINGS_FILE`, `SEARCH_DB`, etc.) from `
 - When asked to append to an existing doc, never create a new file instead.
 - Never add unsolicited notes, reminders, or meta-commentary to outputs unless explicitly asked.
 - **Subagents**: declare tool permissions upfront (Read, Edit, Bash, Grep). Each subagent cleans up dead code before returning. After all finish, do an integration review for stale imports and orphaned references.
+- Keep plans concise and actionable — resist over-engineering. If the user pushes back on complexity, simplify immediately rather than defending the design.
 
 ### Dev Workflow
 
@@ -197,6 +201,7 @@ git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/comple
 - `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification against running system. Appends pass/fail verdict to plan. **PASS means ship — no further gate needed.**
 - `/sync-doc [doc...]`: fix spec inaccuracies in `docs/specs/` in-place. No args means all specs. Auto-invoked by `orchestrate-dev`.
 - `/deliver [slug]`: lightweight solo delivery — implement a clear task directly, test-gate, self-review, and ship. No subagent orchestration. Use instead of `/orchestrate-dev` when the task is simple enough for a single-dev pass, or without a slug for ad-hoc work described inline.
+- **Staged-file hygiene**: before shipping, verify only related files are staged — never include unrelated changes. Ask the user before staging any file that seems tangential to the task.
 
 ## Docs
 
@@ -222,9 +227,8 @@ Specs index:
 - `docs/specs/bootstrap.md` — startup sequence from settings load to REPL entry
 - `docs/specs/core-loop.md` — agent loop, turn orchestration, approval flow, retries, interrupts
 - `docs/specs/prompt-assembly.md` — static + dynamic instruction layers, five history processors, append-only invariant
-- `docs/specs/session.md` — JSONL transcript persistence, `/resume`, `/new`, oversized-output spill
+- `docs/specs/memory-knowledge.md` — session transcripts, episodic recall, reusable knowledge, extraction, and dreaming
 - `docs/specs/compaction.md` — three-mechanism compaction, summarizer, circuit breaker, overflow recovery
-- `docs/specs/cognition.md` — two-layer Memory + Knowledge: schema, retrieval, extraction, consolidation ("dreaming")
 - `docs/specs/tools.md` — tool registration, visibility tiers, approval model, delegation, background tasks
 - `docs/specs/skills.md` — skill system, load order, dispatch, argument expansion
 - `docs/specs/tui.md` — REPL loop, tab completion, slash command dispatch, reasoning display
@@ -232,7 +236,7 @@ Specs index:
 - `docs/specs/llm-models.md` — single-model architecture, provider abstraction, model quirks
 - `docs/specs/observability.md` — OTel tracing, SQLite exporter, three viewer modes
 
-Sequence-owning specs (`bootstrap.md`, `core-loop.md`, and the processing diagrams inside `compaction.md`, `prompt-assembly.md`, `cognition.md`, `session.md`) follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
+Sequence-owning specs (`bootstrap.md`, `core-loop.md`, and the processing diagrams inside `compaction.md`, `prompt-assembly.md`, `memory-knowledge.md`) follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
 
 `docs/reference/` is for research and background material (`RESEARCH-*`) and is not linked from specs.
 

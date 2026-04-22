@@ -17,7 +17,7 @@ from co_cli.config._core import (
     USER_DIR,
     Settings,
 )
-from co_cli.context.types import MemoryRecallState, SafetyState
+from co_cli.context.types import MemoryRecallState
 
 if TYPE_CHECKING:
     from co_cli.agent._core import ToolRegistry
@@ -123,7 +123,7 @@ class CoRuntimeState:
     should be explicitly justified.
 
     Per-turn (reset by reset_for_turn() at run_turn() entry):
-      turn_usage, safety_state, tool_progress_callback, resume_tool_names
+      turn_usage, tool_progress_callback, resume_tool_names
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_failure_count
     """
@@ -132,7 +132,6 @@ class CoRuntimeState:
     compaction_failure_count: int = 0
     turn_usage: RunUsage | None = None
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
-    safety_state: SafetyState | None = field(default=None, repr=False)
     active_skill_name: str | None = None
     resume_tool_names: frozenset[str] | None = None
     history_compaction_applied: bool = False
@@ -146,7 +145,6 @@ class CoRuntimeState:
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""
         self.turn_usage = None
-        self.safety_state = SafetyState()
         self.tool_progress_callback = None
         self.resume_tool_names = None
         self.history_compaction_applied = False

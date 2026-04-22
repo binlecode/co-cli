@@ -53,7 +53,7 @@ def _build_read_display(
     """Build cat-n numbered display with per-line truncation and optional continuation hint."""
     lines = []
     for i, line in enumerate(sliced):
-        raw = line.rstrip("\n")
+        raw = line.rstrip("\r\n")
         if len(raw) > _READ_MAX_LINE_CHARS:
             raw = raw[:_READ_MAX_LINE_CHARS] + "...[truncated]"
         lines.append(f"{base + i:>6}\t{raw}\n")
@@ -428,16 +428,15 @@ async def file_read(
     if resolved.is_dir():
         return tool_error(f"Path is a directory: {path}", ctx=ctx)
 
+    st = resolved.stat()
     # Block full-file reads on large files to protect context budget.
     # Explicit ranges still proceed; the line cap limits their output size.
-    if start_line is None and end_line is None:
-        file_bytes = resolved.stat().st_size
-        if file_bytes > _READ_MAX_FILE_BYTES:
-            return tool_error(
-                f"File too large for full-file read ({file_bytes // 1024} KB). "
-                "Use start_line/end_line to keep this result within context budget.",
-                ctx=ctx,
-            )
+    if start_line is None and end_line is None and st.st_size > _READ_MAX_FILE_BYTES:
+        return tool_error(
+            f"File too large for full-file read ({st.st_size // 1024} KB). "
+            "Use start_line/end_line to keep this result within context budget.",
+            ctx=ctx,
+        )
 
     try:
         enc = _detect_encoding(resolved)
@@ -446,7 +445,7 @@ async def file_read(
         return tool_error(f"Binary file — cannot display as text: {path}", ctx=ctx)
 
     path_key = str(resolved)
-    ctx.deps.file_read_mtimes[path_key] = resolved.stat().st_mtime
+    ctx.deps.file_read_mtimes[path_key] = st.st_mtime
 
     all_lines = content.splitlines(keepends=True)
     total_line_count = len(all_lines)

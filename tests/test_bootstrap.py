@@ -18,7 +18,6 @@ from co_cli.bootstrap.core import (
 )
 from co_cli.config._knowledge import LlmModelSettings
 from co_cli.context.session import session_filename
-from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.knowledge._store import KnowledgeStore
@@ -35,7 +34,7 @@ def _make_deps(
     config = make_settings(
         mcp_servers=mcp_servers if mcp_servers is not None else {},
     )
-    runtime = CoRuntimeState(safety_state=SafetyState())
+    runtime = CoRuntimeState()
     return CoDeps(
         shell=ShellBackend(),
         knowledge_store=knowledge_store,
@@ -481,7 +480,7 @@ def test_restore_session_readonly_dir_does_not_raise(tmp_path: Path) -> None:
     os.chmod(readonly_dir, 0o555)
     try:
         config = make_settings(mcp_servers={})
-        runtime = CoRuntimeState(safety_state=SafetyState())
+        runtime = CoRuntimeState()
         deps = CoDeps(
             shell=ShellBackend(),
             knowledge_store=None,
