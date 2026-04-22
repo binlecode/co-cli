@@ -5,12 +5,13 @@ identifying gaps in co-cli to adopt or learn from. Complements the broader
 peer survey in `RESEARCH-peer-compaction-survey.md`.
 
 Method: full function-body reads of both implementations on 2026-04-21.
-Last co-cli sync: 2026-04-21 (third pass — gap #15 closed, min_context_length guard shipped, docstring gap #14 confirmed open).
+Last co-cli sync: 2026-04-22 (fourth pass — pipeline diagrams rewritten against live code; gap #12 closed [Hermes-style HTTP classifier shipped]; gap #3 closed [Resolved/Pending sections in co-cli prompt]; hermes diagram expanded to match co-cli detail level).
 
 co-cli sources (read):
 - `co_cli/context/_history.py`
 - `co_cli/context/summarization.py`
 - `co_cli/context/orchestrate.py`
+- `co_cli/context/_http_error_classifier.py`
 - `co_cli/context/tool_categories.py`
 - `co_cli/config/_compaction.py`, `_llm.py`, `_tools.py`
 - `co_cli/tools/tool_io.py`
@@ -18,11 +19,11 @@ co-cli sources (read):
 
 hermes-agent sources (read):
 - `agent/context_compressor.py`
+- `agent/context_engine.py`
+- `agent/error_classifier.py`
+- `agent/model_metadata.py`
 - `run_agent.py`
 - `gateway/run.py`
-- `hermes_cli/config.py`
-- `agent/model_metadata.py`
-- `agent/context_engine.py`
 
 ---
 
@@ -31,75 +32,210 @@ hermes-agent sources (read):
 ### co-cli: five-mechanism pipeline
 
 ```
-M0  Pre-turn hygiene (88 % threshold) ─ fires before agent loop
-    Token count: max(char estimate, prior-turn API-reported tokens) — same dual-source as M3
-    When threshold exceeded: calls summarize_history_window() → LLM summary or static marker
+M0  Pre-turn hygiene (88 % threshold) — fires at run_turn() entry, before agent loop
+    Token count: max(estimate_message_tokens(message_history), reported_input_tokens)
+                 reported_input_tokens = deps.runtime.turn_usage.input_tokens read
+                 BEFORE reset_for_turn() clears it (prior-turn API count)
+    Threshold: hygiene_ratio × budget (default 0.88)
+    When exceeded: calls summarize_history_window(ctx, message_history)
+                   — same planner as M3; LLM summary or static marker
+    Anti-thrash gate: cleared unconditionally after hygiene returns, ensuring M3's
+                      gate starts fresh each turn regardless of whether M0 fired
+    Fails open: any exception returns message_history unchanged
 
-M1  Emit-time cap ─ tool result → disk at persist time, never re-enters context
-    Thresholds (ToolInfo.max_result_size > result_persist_chars default = 50 K):
-      30 K chars shell; file_read = math.inf (never spills — prevents persist→read→persist loop)
-    file_read in-tool caps (shipped 2026-04-21, co_cli/tools/files/read.py):
+M1  Emit-time cap — tool result → disk at persist time, never re-enters context
+    Per-tool max_result_size (persist_if_oversized in tool_io.py):
+      30 K chars shell; 50 K default; math.inf file_read (prevents persist→read→persist loop)
+    file_read in-tool caps (co_cli/tools/files/read.py):
       500-line default when no range given (+ continuation hint when more lines remain)
       2000-line hard ceiling on any explicit range
       2000-char per-line truncation with ...[truncated] marker
       500 KB file size gate blocks full-file reads with no range (explicit ranges proceed)
 
-M2a Truncate tool results (always-on, every turn, no LLM):
-    Boundary: last turn start (_find_last_turn_start — last UserPromptPart boundary)
-    Keep 5 most-recent returns per compactable tool type (file_read, shell, file_grep, file_glob,
-    web_search, web_fetch, knowledge_article_read, obsidian_read); clear older with
-    static placeholder "[tool result cleared — older than 5 most recent calls]"
-    Does NOT touch ToolCallPart args or non-compactable tools
-    Recency-weighting rationale: stale tool outputs cause model reasoning drift
+M2a truncate_tool_results (processor #1 — always-on, sync, no LLM):
+    Boundary: last UserPromptPart index (_find_last_turn_start); protects last turn entirely
+    Keep COMPACTABLE_KEEP_RECENT=5 most-recent ToolReturnParts per compactable tool type
+    Compactable set: file_read, shell, file_grep, file_glob, web_search, web_fetch,
+                     knowledge_article_read, obsidian_read
+    Clear older with static placeholder "[tool result cleared — older than 5 most recent calls]"
+    Does NOT touch ToolCallPart.args (never truncated — load-bearing for M3 token estimate)
+    Does NOT touch non-compactable tools (e.g. search_tools, memory)
 
-M2b Batch budget enforcement (always-on, every turn, no LLM):
-    Targets current turn's tool batch only (ToolReturnParts after last ToolCallPart)
-    If aggregate > 200 K chars: spill largest non-persisted result to disk, repeat
-    No equivalent in hermes
+M2b enforce_batch_budget (processor #2 — always-on, sync, disk I/O):
+    Current batch: ToolReturnParts after last ModelResponse containing a ToolCallPart
+    If aggregate > batch_spill_chars (200 K chars default):
+      spill largest non-persisted candidates via persist_if_oversized(max_size=0), repeat
+      until aggregate ≤ threshold or no eligible candidates remain
+    Skipped in sub-agent delegation chains (short-lived, unnecessary overhead)
 
-M3  Window compaction (token-pressure-driven, LLM call):
-    Trigger: max(proactive_ratio × budget, min_context_length_tokens)
-             = max(0.75 × budget, 64 K) — matches hermes two-way floor semantics
-    Anti-thrash: consecutive low-yield counter — blocked after N proactive runs each save < 10 %
-    Boundary planner (shared with ER):
+M3  summarize_history_window (processor #3 — async, LLM call):
+    Threshold: max(int(budget × proactive_ratio), min_context_length_tokens)
+               = max(0.75 × budget, 64 K tokens) — two-way floor
+    Token count: max(estimate_message_tokens(messages), api_reported_tokens)
+                 api_reported = 0 when compacted_in_current_turn flag set
+                 (prevents spurious re-trigger after same-turn compaction)
+    Anti-thrash gate: skip when consecutive_low_yield_proactive_compactions ≥
+                      proactive_thrash_window (default 2); does NOT block M0 or ER
+    Boundary planner plan_compaction_boundaries (shared with ER):
       1. head_end = find_first_run_end (first TextPart/ThinkingPart response) + 1
-      2. group_by_turn — groups by UserPromptPart boundaries
+      2. group_by_turn — groups at UserPromptPart boundaries
       3. Walk groups from tail accumulating tokens; stop before tail_fraction × budget (0.40)
-         _MIN_RETAINED_TURN_GROUPS = 1: last group always retained even if it exceeds budget
-         soft_overrun_multiplier = 1.25: allow 1.25 × tail_fraction × budget for last group before hard accept
+         _MIN_RETAINED_TURN_GROUPS = 1: last group always retained even if budget exceeded
+         soft_overrun_multiplier = 1.25 × tail_fraction × budget for last group before hard accept
       4. _anchor_tail_to_last_user: extend tail_start to cover last UserPromptPart
-    LLM summarizes dropped middle → structured summary injected as marker message
-    Static marker fallback when circuit breaker trips (≥ 3 failures; probe every 10 skips)
+      5. Abort if tail_start ≤ head_end (head/tail overlap — nothing to drop)
+    Enrichment context gathered from dropped range for summarizer (_gather_compaction_context):
+      (1) file paths from ToolCallPart.args of FILE_TOOLS calls in dropped range
+      (2) pending todos from ctx.deps.session.session_todos
+      (3) prior summary text from dropped messages (detected by _SUMMARY_MARKER_PREFIX)
+      capped at _CONTEXT_MAX_CHARS = 4000 chars total
+    _preserve_search_tool_breadcrumbs: search_tools ToolReturnParts from dropped range
+      injected between marker and tail; id-dedup prevents quadratic accumulation
+    LLM summarizes via summarize_messages(deps.model.settings_noreason, no reasoning/thinking)
+    Circuit breaker: compaction_failure_count ≥ 3 → skip LLM; probe every 10 skips (CIRCUIT_BREAKER_PROBE_EVERY=10)
+    Summary injected as _summary_marker (LLM text); _static_marker on circuit breaker or failure
+    Sets compacted_in_current_turn = True, history_compaction_applied = True
+    Savings < min_proactive_savings (0.10) → increment low-yield counter; else reset to 0
 
 ER  Overflow recovery (provider HTTP 400/413):
-    Two attempts via same boundary planner: (1) normal tail_fraction; (2) tail_fraction / 2
-    emergency_compact (static first+last+marker, no LLM) defined but NOT wired to production
+    is_context_overflow (co_cli/context/_http_error_classifier.py):
+      HTTP 413 → True unconditionally
+      HTTP 400 → True only with explicit overflow evidence in body:
+        Recognized phrases (14): "prompt is too long", "context_length_exceeded",
+        "context length", "context size", "context window", "token limit",
+        "too many tokens", "exceeds the limit", "input token count",
+        "maximum number of tokens", "prompt length", "input is too long",
+        "maximum model length", "max input token", "exceeds the max_model_len",
+        "reduce the length"
+        Recognized codes: context_length_exceeded, max_tokens_exceeded
+        Parsed paths: error.message, flat body message, metadata.raw inner JSON
+    Two attempts via same boundary planner:
+      (1) normal tail_fraction; (2) tail_fraction / 2 if (1) returns None
+    First overflow in turn: attempt recovery and retry; second overflow → terminal error
+    emergency_compact (static head+last+marker, no LLM) defined in _history.py
+      but NOT wired to production path; used in tests only
 ```
 
 All of M2a–M3 run as pydantic-ai history processors before each `ModelRequestNode`.
 M1 runs at tool-return time, outside the processor chain. M0 runs at turn entry,
 also outside the chain.
 
-### hermes-agent: two-layer defence + four-phase algorithm
+### hermes-agent: three-layer defence + five-phase algorithm
 
 ```
-Layer 1  Gateway hygiene (85 %) ─ fires pre-agent, rough char estimate
-Layer 2  Agent ContextCompressor (50 %) ─ in-loop, API-reported tokens
+L0  Gateway hygiene (85 % threshold) — fires pre-agent in gateway process (gateway/run.py)
+    Scope: long-lived gateway sessions only (not CLI turns); separate process layer
+    Token source: session_entry.last_prompt_tokens (API-reported) OR rough char estimate
+    Hard safety valve: forces compression when message count ≥ 400 regardless of tokens
+    Threshold: 0.85 × context_length (intentionally higher than L1/L2's 50%:
+               hygiene is a safety net; L1/L2 handle normal management)
+    When exceeded: spawns temp AIAgent (quiet_mode=True, skip_memory=True, max_iterations=4)
+                   filters to user/assistant messages only; calls _compress_context
+    Session rollover: new session_id with parent_session_id link; transcript rewritten in store
 
-Phase 1  Tool result pruning (full message list, no LLM):
-           Pass 1 — hash-based dedup: identical results → back-reference string
-           Pass 2 — semantic condensing: results > 200 chars → 1-line description
-                    (tool name + first 2 args + char count; no LLM)
-           Pass 3 — tool call arg truncation: args > 500 chars → first 200 + "...[truncated]"
-           Boundary: token-budget-driven (walk backward from tail); count floor = protect_last_n
-           Scope: live message list modified in-place
-           No equivalent for current-turn batch aggregate cap (co-cli M2b)
-Phase 2  Boundary planning ─ token-budget tail protection
-Phase 3  LLM summarization:
-           _serialize_for_summary caps each message at 6 K chars (4 K head + 1.5 K tail)
-           before feeding to the LLM — summarizer input only, does NOT modify live messages
-           Auxiliary model (configurable), iterative updates on recompression
-Phase 4  Assembly ─ head + summary + tail, orphaned-pair cleanup, session rollover
+L1  Preflight compression (50 % threshold) — fires at top of run_turn, before main loop
+    Scope: applies to all sessions (CLI and gateway); handles model-switch / session rehydration
+    Token count: estimate_request_tokens_rough(messages, system_prompt, tools)
+                 — includes tool schema tokens (20-30K+ for large toolsets)
+    Threshold: context_compressor.threshold_tokens = max(0.50 × context_length, 64K)
+    Up to 3 passes (for very large sessions or small context windows)
+    Each pass calls _compress_context; resets empty-content retry counters after compression
+
+L2  In-loop compression (50 % threshold) — fires after each tool batch, inside main loop
+    Location: after tool execution, before the next LLM call in the tool-calling loop
+    Token count: last_prompt_tokens + last_completion_tokens (API-reported);
+                 fallback: estimate_messages_tokens_rough when last_prompt_tokens == 0
+    should_compress() includes anti-thrash: _ineffective_compression_count ≥ 2 → False
+    When fires: calls _compress_context
+
+ER  Error-triggered compression — via classify_api_error() in error_classifier.py
+    Fires on: context_overflow (HTTP 400 with overflow phrases) or payload_too_large (413)
+    Up to max_compression_attempts per turn; each attempt calls _compress_context
+    Falls through to normal error handling if compression exhausted or didn't reduce size
+
+_compress_context wrapper (called by L0, L1, L2, ER):
+    Pre-compression:
+      flush_memories(messages, min_turns=0) — agent memory extraction before context lost
+      memory_manager.on_pre_compress(messages) — external provider notification
+    Core:
+      context_compressor.compress(messages, focus_topic) — Phase 1–5 below
+    Post-compression:
+      todo_snapshot = todo_store.format_for_injection(); append as user message
+        (unconditional — ensures active tasks survive even if summary omits them)
+      system prompt rebuild: _invalidate_system_prompt() + _build_system_prompt()
+      last_prompt_tokens updated to post-compression estimate (system + messages)
+    Session rollover (when session_db present):
+      session_db.end_session(old_id, reason="compression")
+      new session_id = timestamp + uuid6 hex
+      session_db.create_session(new_id, parent_session_id=old_id, model=…)
+      title propagation: get_next_title_in_lineage (auto-numbering)
+      session_log_file updated; _last_flushed_db_idx reset to 0
+
+ContextCompressor.compress (Phases 1–5):
+
+    Phase 1  Tool output pruning (full message list, no LLM):
+      Tail boundary: protect_tail_tokens (token-budget walk from end, including tool call args)
+                     OR protect_last_n = 20 messages as fallback; min floor = min(20, len-1)
+      Pass 1 — hash-based dedup (full list, before boundary):
+               identical results > 200 chars (non-multimodal) → back-reference string
+               "[Duplicate tool output — same content as a more recent call]"
+      Pass 2 — semantic condensing (outside tail boundary):
+               results > 200 chars → _summarize_tool_result 1-line description
+               Examples: "[terminal] ran `npm test` -> exit 0, 47 lines output"
+                         "[read_file] read config.py from line 1 (1,200 chars)"
+                         "[search_files] content search for 'compress' in agent/ -> 12 matches"
+               Tool-specific patterns for: terminal, read_file, write_file, search_files,
+               patch, browser_*, web_search, web_extract, delegate_task, execute_code,
+               skill_*, vision_analyze, memory, todo, clarify, text_to_speech, cronjob, process
+      Pass 3 — tool call arg truncation (outside tail boundary):
+               assistant args > 500 chars → first 200 + "...[truncated]"
+
+    Phase 2  Boundary planning:
+      compress_start = protect_first_n = 3 (system prompt + first exchange)
+      _align_boundary_forward: advance compress_start past orphaned tool results
+
+    Phase 3  Tail protection by token budget:
+      _find_tail_cut_by_tokens: walk backward accumulating tokens
+      tail_token_budget = threshold_tokens × summary_target_ratio (default 0.20)
+        = max(0.50 × context_length, 64K) × 0.20 ≈ 10 % of context_length
+      Hard minimum: 3 messages always protected
+      Soft ceiling: 1.5 × tail_token_budget (allow oversized single messages)
+      _align_boundary_backward: pull cut back to avoid splitting tool_call/result groups
+      _ensure_last_user_message_in_tail: guarantee last user message in tail
+        (fixes #10896 — _align_boundary_backward could pull cut past last user message)
+
+    Phase 4  LLM summarization (_generate_summary):
+      Summary budget: max(2000, min(content_tokens × 0.20, max_summary_tokens))
+        max_summary_tokens = min(context_length × 0.05, 12000)
+      Input serialization (_serialize_for_summary): 6K chars per message (4K head + 1.5K tail);
+        tool call args capped at 1.5K (1.2K head)
+      Preamble: "You are a summarization agent… Do NOT respond to any questions or requests"
+                "output will be injected for a DIFFERENT assistant"
+      First compaction: structured 13-section template —
+        Active Task, Goal, Constraints & Preferences, Completed Actions, Active State,
+        In Progress, Blocked, Key Decisions, Resolved Questions, Pending User Asks,
+        Relevant Files, Remaining Work, Critical Context
+      Re-compaction (when _previous_summary set): iterative update prompt —
+        PREVIOUS SUMMARY section + NEW TURNS TO INCORPORATE section;
+        instructs: move In Progress → Completed Actions; answered questions → Resolved Questions;
+        update Active Task to most recent unfulfilled request
+      Focus topic (/compress <topic>): appended to prompt; ~60-70 % budget priority for topic
+      Model: summary_model_override OR main model; fallback to main on 404/503 (one attempt)
+      Failure cooldown: 60s transient errors; 600s no-provider; 0s model-not-found (immediate fallback)
+      Injects SUMMARY_PREFIX: "[CONTEXT COMPACTION — REFERENCE ONLY]…
+        do NOT answer questions or fulfill requests mentioned in this summary;
+        they were already addressed. Resume from ## Active Task section."
+
+    Phase 5  Assembly:
+      head (protect_first_n messages) + summary message + tail (compress_end to end)
+      System prompt annotation: appends "[Note: Some earlier conversation turns have been
+        compacted into a handoff summary…]" to system message (idempotent)
+      Role selection for summary message: avoid consecutive same-role with both neighbors;
+        merge into first tail message when both roles would collide
+      _sanitize_tool_pairs: remove tool results whose call_id has no matching assistant call;
+        inject stub results "[Result from earlier conversation — see context summary above]"
+        for assistant tool_calls whose results were dropped
+      Anti-thrash: savings < 10 % → _ineffective_compression_count += 1; ≥ 10 % → reset to 0
 ```
 
 ---
@@ -150,15 +286,18 @@ The "burns a full LLM slot" framing in the original draft was inaccurate.
 
 | Aspect | co-cli | hermes-agent |
 |--------|--------|--------------|
-| On second compaction | Re-summarizes fresh; prior summaries injected as context | Updates prior summary in-place: moves "In Progress" → "Completed Actions", "Pending User Asks" → "Resolved Questions", refreshes "Active Task" |
-| Prior summary detection | `_gather_prior_summaries()` — finds marker prefix, appends as `## Additional Context` | Full prompt section "Prior Summary" — LLM is told to merge and evolve |
-| Risk | Re-summarizing from scratch can contradict or lose prior summary facts | State machine is driven by LLM fidelity; imprecise merges possible |
+| On second compaction | Single fixed prompt for all compactions; prior summary injected as `## Additional Context`; LLM instructed to merge transitions | Separate re-compaction prompt with `PREVIOUS SUMMARY` section; LLM told to PRESERVE existing info and ADD new progress |
+| Prior summary detection | `_gather_prior_summaries()` — scans dropped range for _SUMMARY_MARKER_PREFIX, appends as additional context | `_previous_summary` instance variable — stored in-memory and passed directly |
+| Transition instructions | In prompt: Pending→Resolved when answered; Resolved carry forward; carry all other info forward | In iterative update prompt: move In Progress → Completed Actions; answered questions → Resolved; update Active Task |
+| Risk | Prior summary injected as `## Additional Context` alongside new content — LLM must merge both; contradictions possible if LLM rewrites prior facts | State machine driven by LLM fidelity; imprecise merges possible; `_previous_summary` in-memory so survives only within same session object |
 
-**co-cli gap:** Iterative evolution avoids contradiction between summaries that cover
-overlapping ranges. co-cli nests prior summaries as context but may lose the distinction
-between "resolved" and "pending" across compression cycles.
+**co-cli gap (risk reduced):** co-cli's summarizer now receives prior summaries as
+`## Additional Context` and has explicit transition instructions. The remaining gap
+is structural: co-cli uses one fixed prompt for all compactions (no separate "update
+mode"); hermes switches to a dedicated iterative update prompt that explicitly frames
+the prior summary as ground truth to preserve. Both rely on LLM fidelity for merging.
 
-**Gap #9 — Risk: Low. Hermes: LLM merges prior summary with new progress on recompression; co-cli re-summarizes fresh each time.**
+**Gap #9 — Risk: Low. Hermes: dedicated iterative-update prompt with prior summary as ground truth; co-cli single prompt + additional context injection.**
 
 ### 4. Tool result handling before summarization
 
@@ -189,17 +328,22 @@ the same file across many turns accumulates token cost unnecessarily.
 
 | Aspect | co-cli | hermes-agent |
 |--------|--------|--------------|
-| Sections | 7 optional sections (Goal, Key Decisions, Errors & Fixes, Working Set, Progress, Next Step, User Corrections) | 11 required sections (Active Task, Goal, Constraints & Preferences, Completed Actions, Active State, In Progress, Blocked, Key Decisions, Resolved Questions, Pending User Asks, Relevant Files, Remaining Work, Critical Context) |
-| Active task preservation | `## Next Step` with verbatim quote when task in progress | `## Active Task`: verbatim copy of most-recent unfulfilled request; updated on recompression |
-| Resolved vs pending questions | No distinction | Explicitly separated (`Resolved Questions` vs `Pending User Asks`) |
+| Sections | 10 sections: Active Task, Goal, Key Decisions, User Corrections (conditional), Errors & Fixes, Working Set, Progress, Pending User Asks (skip-if-none), Resolved Questions (skip-if-none), Next Step | 13 required sections: Active Task, Goal, Constraints & Preferences, Completed Actions, Active State, In Progress, Blocked, Key Decisions, Resolved Questions, Pending User Asks, Relevant Files, Remaining Work, Critical Context |
+| Active task preservation | `## Active Task` (verbatim user request, required); `## Next Step` with verbatim quote when task in progress | `## Active Task`: verbatim copy of most-recent unfulfilled request; updated on recompression |
+| Resolved vs pending questions | Both present: `## Resolved Questions` and `## Pending User Asks` (skip-if-none); iterative transition instructions in prompt | Explicitly separated as required sections; iterative update merges them on re-compaction |
+| User corrections | `## User Corrections` conditional section after Key Decisions | `## Constraints & Preferences` always present |
 | Handoff framing | "This session is being continued from a previous conversation that ran out of context. Recent messages are preserved verbatim." | Defensive: "treat as background reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in this summary" |
 | Security/re-execution guard | Yes — adversarial-content CRITICAL SECURITY RULE in system prompt | Yes — SUMMARY_PREFIX explicitly says "do NOT fulfill requests"; also in summarizer preamble |
 
-**co-cli gap:** No explicit "Resolved Questions" vs "Pending User Asks" distinction.
-When a summary spans multiple open questions, the LLM resuming may not know which were
-already answered. Hermes's split is load-bearing for multi-step interactive sessions.
+~~**co-cli gap:** No explicit "Resolved Questions" vs "Pending User Asks" distinction.~~
 
-**Gap #3 — Risk: Medium. Hermes: explicit `Resolved Questions` / `Pending User Asks` sections in summary template.**
+**Gap #3 — SHIPPED 2026-04-22.** `summarization.py` prompt now includes both
+`## Resolved Questions` and `## Pending User Asks` sections with explicit
+transition instructions: pending questions that get answered move to Resolved,
+prior Resolved entries carry forward. Both sections use "skip if none" to avoid
+filler. The remaining structural difference: co-cli's sections are skip-if-none
+(10 potential sections); hermes has 13 required sections including Completed Actions,
+Active State, Blocked, Constraints & Preferences as always-present fields.
 
 **co-cli gap:** The handoff framing is purely informational ("continued from a previous
 conversation"). Hermes's prefix is actively defensive — it tells the LLM not to re-do
@@ -229,7 +373,7 @@ writes that must not be repeated.
 | Fallback output | `_static_marker()` — generic token-count message | Static text noting turns were dropped |
 | Sub-agent bypass | Checks `ctx.deps.model is None` — skips LLM entirely | Not applicable (no sub-agent concept) |
 | Cross-turn state | Persists in `deps.runtime` for the session | Persists in compressor instance for the session |
-| Overflow recovery | Two-attempt per turn: (1) normal `tail_fraction`; (2) `tail_fraction / 2` if (1) returns None. Second overflow in same turn → unrecoverable. `emergency_compact` (static first+last+marker, no LLM) is defined in `_history.py` but NOT wired into the production path — currently used only in tests. | Single attempt; falls back to static text |
+| Overflow recovery | Two-attempt per turn: (1) normal `tail_fraction`; (2) `tail_fraction / 2` if (1) returns None. Second overflow in same turn → unrecoverable. `emergency_compact` (static first+last+marker, no LLM) defined in `_history.py` but NOT wired to production — tests only. | Up to `max_compression_attempts` per turn (context_overflow and payload_too_large paths); each attempt calls `_compress_context` (full LLM summary); falls back to static summary text when `_generate_summary` returns None |
 
 **co-cli gap:** `emergency_compact` is defined in `_history.py` (static head+last+marker, no LLM) but not wired into the production overflow path — currently used only in tests. When both `recover_overflow_history` attempts return None, the session falls to an unrecoverable error state rather than degrading gracefully.
 
@@ -241,23 +385,22 @@ making probes sparse (`count-3` growing). Hermes's time-based cooldown is bounde
 
 **Gap #10 — Risk: Low. Hermes: time-based cooldown (`_summary_failure_cooldown_until`) with bounded, deterministic recovery interval.**
 
-**co-cli gap:** `_CONTEXT_OVERFLOW_PATTERNS` in `orchestrate.py` (`"prompt is too long"`,
+~~**co-cli gap:** `_CONTEXT_OVERFLOW_PATTERNS` in `orchestrate.py` (`"prompt is too long"`,
 `"context_length_exceeded"`, `"maximum context length"`) covers Ollama/OpenAI-compatible
 error bodies only. Gemini (now a supported provider) returns 400s with different wording
 — e.g. `"Request payload size exceeds the limit"` or `"Input token count exceeds the
-maximum"`. `_is_context_overflow` returns False for Gemini context overflows, so the
-turn falls through to the **reformulation handler** (`orchestrate.py:661`), not generic
-error handling. Full failure sequence:
-1. Gemini returns HTTP 400 (context length exceeded).
-2. `_is_context_overflow` → False; falls to `if code == 400 and tool_reformat_budget > 0`.
-3. Reformulation handler injects `UserPromptPart("Your previous tool call was rejected: [token error]")` into `turn_state.current_history` — **making the history longer**.
-4. Retries; same 400. Budget decremented twice total (default budget = 2).
-5. Budget exhausted → falls to `frontend.on_status(f"Provider error (HTTP {code}): {e.body}")` — generic unhelpful message.
-6. `_build_error_turn_result` returns `turn_state.current_history` (since `latest_result` is None after all failed segments). The 2 injected reformulation `UserPromptPart`s are **persisted into the REPL's `message_history`** for subsequent turns, contaminating the model's context.
+maximum"`.~~
 
-The design invariant comment at `orchestrate.py:633` — `"NEVER falls through to the 400 reformulation handler"` for context overflow — is violated for Gemini. Regression introduced when Gemini provider support was added.
-
-**Gap #12 — Risk: High. Hermes: not applicable. Fix: add Gemini error strings to `_CONTEXT_OVERFLOW_PATTERNS`.**
+**Gap #12 — SHIPPED 2026-04-22.** `_CONTEXT_OVERFLOW_PATTERNS` inline matching in
+`orchestrate.py` was replaced by a dedicated `co_cli/context/_http_error_classifier.py`
+module with Hermes-style broad phrase coverage. The new `is_context_overflow` function
+handles HTTP 413 unconditionally and HTTP 400 with 14 recognized phrases (including
+"exceeds the limit", "input token count", "context length", etc.) plus recognized error
+codes (`context_length_exceeded`, `max_tokens_exceeded`). Gemini's `"Request payload
+size exceeds the limit"` and `"Input token count exceeds the maximum"` are both covered.
+The parsing also handles nested `metadata.raw` JSON (OpenRouter/Cloudflare proxy pattern).
+The design invariant `"NEVER falls through to the 400 reformulation handler"` is now
+correctly enforced for all providers.
 
 ### 8. Anti-thrashing
 
