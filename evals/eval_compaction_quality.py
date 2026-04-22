@@ -25,7 +25,7 @@ Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
            [Outcome 3: prior-summary detection and integration]
 
   --- Error recovery ---
-  Step 8 — Overflow: _is_context_overflow + emergency_compact + one-shot guard
+  Step 8 — Overflow: is_context_overflow + emergency_compact + one-shot guard
            [Outcome 4] [BC5: one-shot]
 
 Prerequisites: LLM provider configured (Ollama or cloud).
@@ -80,7 +80,7 @@ from co_cli.context._history import (
     summarize_history_window,
     truncate_tool_results,
 )
-from co_cli.context.orchestrate import _is_context_overflow
+from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
@@ -1079,7 +1079,7 @@ async def step_6_full_chain() -> bool:
 
     len_pre_p5 = len(msgs)
     try:
-        async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS * 2):
+        async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
             msgs = await summarize_history_window(ctx, msgs)
     except TimeoutError:
         print("    FAIL: timed out")
@@ -1393,7 +1393,7 @@ async def step_7_multi_cycle() -> bool:
 
     len_pre = len(msgs)
     try:
-        async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS * 2):
+        async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
             msgs = await summarize_history_window(ctx, msgs)
     except TimeoutError:
         print("    FAIL: timed out")
@@ -1513,9 +1513,11 @@ def step_8_overflow() -> bool:
     """Validate overflow detection + emergency compact + one-shot guard.
 
     Specs from TODO:
-    - _is_context_overflow: status_code in (400, 413) AND body pattern match
-    - Handles str body (Ollama) and dict body (OpenAI)
-    - Bare 400 without pattern → False (falls to reformulation)
+    - is_context_overflow: 413 → True unconditionally; 400 → True only with explicit
+      overflow evidence in the body (recognized phrase in message, flat message, or
+      wrapped metadata.raw; or recognized overflow code); other status codes → False
+    - Handles str body (Ollama), dict body (OpenAI/Gemini), and wrapped metadata.raw
+    - Bare 400 without overflow evidence → False (falls to reformulation)
     - emergency_compact: ≤2 groups → None, >2 → first + marker + last
     - dropped_count = sum(len(g.messages) for g in groups[1:-1])
     - [BC5]: one-shot recovery
@@ -1523,7 +1525,7 @@ def step_8_overflow() -> bool:
     print("\n--- Step 8: Overflow recovery [Outcome 4, BC5] ---")
     passed = True
 
-    # --- _is_context_overflow ---
+    # --- is_context_overflow ---
     from pydantic_ai.exceptions import ModelHTTPError
 
     def _err(code: int, body: object) -> ModelHTTPError:
@@ -1546,9 +1548,45 @@ def step_8_overflow() -> bool:
         (400, {"error": {"message": "invalid JSON"}}, False, "bare 400 → False (reformulation)"),
         (500, "context_length_exceeded", False, "500 → False (wrong code)"),
         (400, None, False, "400 + None body → False"),
+        (
+            400,
+            {"error": {"message": "Request payload size exceeds the limit"}},
+            True,
+            "400 + Gemini exceeds-limit",
+        ),
+        (
+            400,
+            {"error": {"message": "Input token count exceeds the maximum"}},
+            True,
+            "400 + Gemini input-token-count",
+        ),
+        (
+            400,
+            {"error": {"code": "context_length_exceeded", "message": ""}},
+            True,
+            "400 + structured overflow code",
+        ),
+        (413, None, True, "413 + None body → True (status alone)"),
+        (
+            400,
+            {
+                "error": {
+                    "message": "Provider returned error",
+                    "metadata": {"raw": '{"error": {"message": "prompt is too long"}}'},
+                }
+            },
+            True,
+            "400 + wrapped metadata.raw",
+        ),
+        (
+            400,
+            {"error": {"message": "Provider returned error", "metadata": {"raw": "not json"}}},
+            False,
+            "400 + malformed metadata.raw → False",
+        ),
     ]
     for code, body, expected, desc in cases:
-        result = _is_context_overflow(_err(code, body))
+        result = is_context_overflow(_err(code, body))
         if result != expected:
             print(f"  FAIL: {desc}: got {result}")
             passed = False

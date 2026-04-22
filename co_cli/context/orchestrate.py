@@ -62,6 +62,7 @@ _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._history import maybe_run_pre_turn_hygiene
+from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -498,30 +499,6 @@ def _check_output_limits(
                 )
 
 
-# ---------------------------------------------------------------------------
-# Overflow detection
-# ---------------------------------------------------------------------------
-
-_CONTEXT_OVERFLOW_PATTERNS = (
-    "prompt is too long",
-    "context_length_exceeded",
-    "maximum context length",
-)
-
-
-def _is_context_overflow(e: ModelHTTPError) -> bool:
-    """Detect context-overflow errors from provider HTTP responses.
-
-    Both status code AND body pattern must match — bare 400 without a
-    context-length message falls through to the reformulation handler.
-    """
-    if e.status_code not in (400, 413):
-        return False
-    body_str = str(e.body) if e.body is not None else ""
-    body_lower = body_str.lower()
-    return any(pat in body_lower for pat in _CONTEXT_OVERFLOW_PATTERNS)
-
-
 def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessage]:
     """Materialize the in-flight user prompt into history for retryable recovery paths."""
     if turn_state.current_input is None:
@@ -631,7 +608,7 @@ async def run_turn(
                     code = e.status_code
                     # Context overflow — must resolve completely (compact+retry OR terminal).
                     # Design invariant: NEVER falls through to the 400 reformulation handler.
-                    if _is_context_overflow(e):
+                    if is_context_overflow(e):
                         if not turn_state.overflow_recovery_attempted:
                             turn_state.overflow_recovery_attempted = True
                             recovery_ctx = RunContext(

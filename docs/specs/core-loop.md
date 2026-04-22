@@ -322,7 +322,7 @@ Error matrix:
 
 | Condition | Behavior |
 | --- | --- |
-| HTTP 400/413 with context-length body pattern (`_is_context_overflow`) | one-shot `recover_overflow_history()` — first materializes the pending user input into history, then calls the shared `plan_compaction_boundaries()` (same `TAIL_FRACTION`, `min_groups_tail=1`) and replaces the dropped middle with an LLM summary when available or a static marker otherwise. Retry on success; terminal when the planner cannot find a boundary or on second overflow. Never falls through to 400 reformulation. |
+| HTTP 413 unconditionally, or HTTP 400 with explicit overflow evidence (`is_context_overflow` in `_http_error_classifier`) | one-shot `recover_overflow_history()` — first materializes the pending user input into history, then calls the shared `plan_compaction_boundaries()` (same `TAIL_FRACTION`, `min_groups_tail=1`) and replaces the dropped middle with an LLM summary when available or a static marker otherwise. Retry on success; terminal when the planner cannot find a boundary or on second overflow. Never falls through to 400 reformulation. |
 | HTTP 400 with reformat budget left (not context overflow) | append a reflection request describing the rejected tool call, set `current_input=None`, retry (app-level reformulation, not transport retry) |
 | HTTP 400 with budget exhausted, or other terminal HTTP errors | set `outcome='error'`; record `provider_error` span event (`http.status_code`, `error.body` capped at 500 chars) on the `co.turn` span; return `_build_error_turn_result()` |
 | `ModelAPIError` (network errors exhausted by SDK) | set `outcome='error'` and return `_build_error_turn_result()` |

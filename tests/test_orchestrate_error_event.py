@@ -166,3 +166,40 @@ async def test_budget_exhausted_400_records_provider_error_event() -> None:
     provider_errors = [e for e in events if e.get("name") == "provider_error"]
     assert len(provider_errors) == 1
     assert provider_errors[0]["attributes"]["http.status_code"] == 400
+
+
+@pytest.mark.asyncio
+async def test_gemini_overflow_400_no_provider_error_event() -> None:
+    """Gemini overflow 400 takes the overflow path and does NOT emit a provider_error span event.
+
+    The provider_error event is only emitted for terminal non-overflow HTTP errors.
+    An overflow 400 exits via the overflow recovery branch, bypassing that event.
+    """
+
+    async def _raise_gemini_overflow(messages, agent_info):
+        raise ModelHTTPError(
+            status_code=400,
+            model_name="test",
+            body={"error": {"message": "Request payload size exceeds the limit"}},
+        )
+        yield
+
+    deps = _make_deps()
+    agent = build_agent(
+        config=deps.config, model=FunctionModel(stream_function=_raise_gemini_overflow)
+    )
+
+    before_ns = time.time_ns()
+    async with asyncio.timeout(_TURN_TIMEOUT_SECS):
+        turn = await run_turn(
+            agent=agent,
+            user_input="hello",
+            deps=deps,
+            message_history=[],
+            frontend=SilentFrontend(),
+        )
+
+    assert turn.outcome == "error"
+    events = _get_co_turn_events_after(before_ns)
+    provider_errors = [e for e in events if e.get("name") == "provider_error"]
+    assert provider_errors == [], "Overflow path must not emit provider_error span events"

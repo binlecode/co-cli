@@ -16,10 +16,11 @@ This guarantees enough time for complex RAG loops but prevents infinite ModelRet
 """
 
 
-EVAL_SUMMARIZATION_TIMEOUT_SECS: int = 20
+EVAL_SUMMARIZATION_TIMEOUT_SECS: int = 60
 """Upper bound for background summarization tasks during evals.
-Slightly relaxed compared to tests/ to handle heavy context loads.
-Calculated as: 1 non-reasoning LLM call (~10s) + 1 local DB injection (5s) + 5s buffer.
+Sized for the heaviest compaction eval step (Step 6: 50 dropped messages,
+~58K chars, measured at ~41s on local Ollama). 60s gives ~19s headroom
+for model load variation without over-extending to benchmark territory.
 """
 
 EVAL_MEMORY_EXTRACTION_TIMEOUT_SECS: int = 15

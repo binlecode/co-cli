@@ -154,7 +154,7 @@ sequenceDiagram
     AG->>M: HTTP
     M-->>AG: HTTP 400 "prompt is too long"
     AG-->>RT: ModelHTTPError
-    RT->>RT: _is_context_overflow → True
+    RT->>RT: is_context_overflow → True
     RT->>RT: overflow_recovery_attempted = True
     RT->>R: recover_overflow_history(history + pending input)
     R->>R: plan_compaction_boundaries<br/>(config tail_fraction, soft-overrun, active-user anchoring)
@@ -497,12 +497,12 @@ Output: single `str`, capped at 4000 chars, passed as `context=` argument to `su
 ### 2.5 Overflow recovery — emergency entry
 
 Structurally identical to M3's compaction assembly. The only differences:
-1. **Trigger:** `ModelHTTPError` status `400`/`413` with body matching `{"prompt is too long", "context_length_exceeded", "maximum context length"}`, detected in `orchestrate._is_context_overflow`.
+1. **Trigger:** `ModelHTTPError` classified by `_http_error_classifier.is_context_overflow`: HTTP 413 unconditionally; HTTP 400 with explicit overflow evidence in `error.message`, flat `message`, `error.code`, or wrapped `error.metadata.raw`. Recognized evidence: overflow phrases from multiple providers (OpenAI, Ollama, Gemini, vLLM, AWS Bedrock) and structured codes (`context_length_exceeded`, `max_tokens_exceeded`). Generic 400s without overflow evidence fall through to reformulation.
 2. **Rate limit:** gated by `turn_state.overflow_recovery_attempted` — one-shot per turn.
 
 **Logic** (`run_turn` error handler):
 ```
-if _is_context_overflow(e):
+if is_context_overflow(e):
     if not turn_state.overflow_recovery_attempted:
         turn_state.overflow_recovery_attempted = True
         recovery_history = history + pending user input
@@ -573,7 +573,7 @@ One successful compaction per pressure event per turn.
 | Processor re-fire after overflow recovery | Safe — planner returns `None` on overlap |
 | First-turn overflow (`len(groups) ≤ 1`) | Terminal — structural limit, not a bug |
 
-**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `_is_context_overflow` detects and `run_turn` routes to `recover_overflow_history`. The overflow planner runs with the same config-sourced `tail_fraction` and `tail_soft_overrun_multiplier`; if it also returns `None`, the turn is terminal with "Context overflow — unrecoverable." This is intentional: proactive and overflow share one planner — if the planner cannot help, letting the provider reject the request is the correct escalation. Do not add a retry loop at the proactive layer.
+**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes to `recover_overflow_history`. The overflow planner runs with the same config-sourced `tail_fraction` and `tail_soft_overrun_multiplier`; if it also returns `None`, the turn is terminal with "Context overflow — unrecoverable." This is intentional: proactive and overflow share one planner — if the planner cannot help, letting the provider reject the request is the correct escalation. Do not add a retry loop at the proactive layer.
 
 ### 2.10 Security
 
@@ -631,7 +631,8 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
 | `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — hardened with soft-overrun, active-user anchoring); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
-| `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry; resets `deps.runtime.consecutive_low_yield_proactive_compactions` after hygiene and overflow to unblock the anti-thrashing gate. |
+| `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — public overflow predicate: HTTP 413 unconditional; HTTP 400 with explicit overflow evidence from `error.message`, flat `message`, `error.code`, or wrapped `error.metadata.raw`. Body parse failures fall back safely to `False`. |
+| `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; calls `is_context_overflow` to classify provider errors; `turn_state.overflow_recovery_attempted` gates one-shot retry; resets `deps.runtime.consecutive_low_yield_proactive_compactions` after hygiene and overflow to unblock the anti-thrashing gate. |
 | `co_cli/context/tool_categories.py` | `COMPACTABLE_TOOLS` (M2 scope); `FILE_TOOLS` (enrichment file-path scope); `PATH_NORMALIZATION_TOOLS`. |
 | `co_cli/tools/tool_io.py` | `tool_output`; `persist_if_oversized` (M1 disk spill, requires explicit `max_size`); `_generate_preview` (newline-aware preview truncation); `check_tool_results_size`; `TOOL_RESULT_PREVIEW_SIZE`, `PERSISTED_OUTPUT_TAG`, `PERSISTED_OUTPUT_CLOSING_TAG`. |
 | `co_cli/agent/_native_toolset.py` | Per-tool `max_result_size` registration. |
