@@ -307,6 +307,25 @@ async def test_trigger_uses_max_floor():
     assert len(result) < len(msgs), "max() floor should have triggered compaction"
 
 
+def test_summarize_prompt_pending_resolved_sections() -> None:
+    """Assembled prompt includes ## Pending User Asks and ## Resolved Questions sections."""
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
+    assert "## Pending User Asks" in result
+    assert "## Resolved Questions" in result
+
+
+def test_summarize_prompt_merge_contract() -> None:
+    """Assembled prompt includes the explicit state-transition contract for prior summaries."""
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
+    assert "move to '## Resolved Questions'" in result
+
+
+def test_summarize_prompt_skip_guard() -> None:
+    """Assembled prompt includes the skip guard for empty Pending User Asks."""
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
+    assert "Skip this section if there are none" in result
+
+
 def test_build_summarizer_prompt_keeps_personality_after_context() -> None:
     """When both addenda are present, personality guidance must stay after context."""
     ctx_text = "Active tasks:\n- [pending] fix bug"
