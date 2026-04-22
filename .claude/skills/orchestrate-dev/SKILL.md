@@ -283,10 +283,3 @@ Append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`:
 **DELIVERED** = all tasks passed, tests pass, independent review clean or minor only, doc sync clean or fixed.
 **BLOCKED** = one or more tasks failed `done_when`, or tests still failing after fix attempts.
 
----
-
-## Phase 5 — Ship
-
-Run only after `/review-impl` returns PASS. Do not ship a DELIVERED-only delivery — Gate 2 requires the review-impl PASS verdict first.
-
-Run `/ship <slug>`. Do not re-run `/orchestrate-dev` — that restarts task execution from the beginning.

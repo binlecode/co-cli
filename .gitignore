@@ -42,6 +42,9 @@ htmlcov/
 demo_knowledge_temp/
 evals/personality_behavior-trace-*.md
 
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
+
 # Misc
 *.log
 # *.pdf
