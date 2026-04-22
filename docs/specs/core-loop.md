@@ -20,7 +20,7 @@
 
 ---
 
-For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); transcript storage in [session.md](session.md); compaction mechanics in [compaction.md](compaction.md).
+For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); memory/session persistence and recall live in [memory-knowledge.md](memory-knowledge.md); compaction mechanics in [compaction.md](compaction.md).
 
 ## 1. Foreground Turn Flow
 
@@ -56,9 +56,9 @@ flowchart TD
 | `run_turn` / approval loop / retries | [core-loop.md](core-loop.md) |
 | Instruction parts + history processors | [prompt-assembly.md](prompt-assembly.md) |
 | Compaction trigger (processor #5) | [compaction.md](compaction.md) |
-| Turn-time recall (processor #4) | [cognition.md](cognition.md) |
-| Transcript append / child-session branching | [session.md](session.md) |
-| Fire-and-forget extraction | [cognition.md](cognition.md) |
+| Turn-time recall (processor #4) | [memory-knowledge.md](memory-knowledge.md) |
+| Transcript append / child-session branching | [memory-knowledge.md](memory-knowledge.md) |
+| Fire-and-forget extraction | [memory-knowledge.md](memory-knowledge.md) |
 
 Detailed foreground turn flow:
 
@@ -154,7 +154,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `deps.runtime` field | Why it is not in `_TurnState` |
 | --- | --- |
 | `turn_usage` | authoritative per-turn accumulator shared across foreground and sub-agent tool calls |
-| `safety_state` | updated by preflight (`build_safety_injection`) before each model-bound segment |
+| `safety_state` | updated by the `safety_prompt` dynamic instruction before each model-bound segment |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
 | `compaction_failure_count` | cross-turn circuit breaker for inline compaction (>= 3 trips breaker; every 10 skips a probe is attempted) |
@@ -270,17 +270,16 @@ Shell approval remains split correctly:
 
 **Pre-turn hygiene (M0).** Before the agent loop starts, `run_turn()` calls `maybe_run_pre_turn_hygiene()` after `reset_for_turn()` and before `frontend.on_status`. This is a maintenance compaction using rough token estimates (no provider-reported count is available pre-turn). It fires when the estimated token count exceeds `HYGIENE_COMPACTION_RATIO` (0.88) of the budget — higher than the proactive threshold to avoid false positives from the char/4 estimator. Uses the same M3 planner and summarizer. Fails open: any exception returns history unchanged so the turn proceeds. When it fires, it sets `deps.runtime.history_compaction_applied`, which branches the transcript into a child session on finalization. See [compaction.md](compaction.md) for M0 details.
 
-The main agent is built with four registered history processors (pure transformers) in this exact order:
+The main agent is built with three registered history processors (pure transformers) in this exact order:
 
 1. `truncate_tool_results`
 2. `enforce_batch_budget`
-3. `compact_assistant_responses`
-4. `summarize_history_window`
+3. `summarize_history_window`
 
-Two additional callables run as preflight before each model-bound `_execute_stream_segment`, called explicitly by `run_turn()` via `_run_model_preflight()`:
+Two additional functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
 
-- `build_safety_injection` — doom-loop detection + shell reflection cap; returns injection messages and flags; caller writes flags to `deps.runtime.safety_state`
-- `build_recall_injection` — injects current date, personality-context memories, and (once per new user turn) top-3 recalled knowledge artifacts; caller writes recall counters to `deps.session.memory_recall_state`
+- `safety_prompt` — doom-loop detection + shell reflection cap; active warnings returned as plain text
+- `recall_prompt` — injects current date, personality-context memories, and (once per new user turn) top-3 recalled knowledge artifacts; writes recall counters to `deps.session.memory_recall_state`
 
 Processor roles:
 
@@ -288,15 +287,14 @@ Processor roles:
 | --- | --- |
 | `truncate_tool_results` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn (from last `UserPromptPart` onward) |
 | `enforce_batch_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `config.tools.batch_spill_chars`; fails open |
-| `compact_assistant_responses` | caps large `TextPart`/`ThinkingPart` in older `ModelResponse` messages at 2.5K chars with proportional head/tail truncation; protects the last turn (from last `UserPromptPart` onward); does not touch `ToolCallPart` args |
 | `summarize_history_window` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 
 Preflight is called before every model-bound segment but not on approval-resume segments (SDK skips `ModelRequestNode` on resume, so preflight would inject into a non-model path). Preflight injections are ephemeral — they are not stored back to `turn_state.current_history`, so retry iterations always start from the clean history without accumulated injections.
 
 Ordering rationale:
 
-- **#1–2 before #3**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate.
-- **Preflight before segment**: safety and recall run explicitly in `_run_model_preflight()` before each `_execute_stream_segment`. The extended history (with injections) is passed directly to the segment without mutating `turn_state.current_history`.
+- **#1–2 before #3**: truncation runs before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate.
+- **Dynamic instructions before model request**: `safety_prompt` and `recall_prompt` run via the SDK's `agent.instructions()` mechanism before every model-bound request. Their output is ephemeral context — not stored back to `turn_state.current_history`.
 
 Compaction behavior:
 
@@ -311,10 +309,10 @@ Compaction behavior:
 
 Memory recall is also per-turn, not sticky:
 
-- `build_recall_injection()` (preflight) writes counters to `deps.session.memory_recall_state` via the caller (`_run_model_preflight`)
+- `recall_prompt` (dynamic instruction) writes counters to `deps.session.memory_recall_state`
 - it recalls only once per new user turn
 - failure to recall silently leaves history unchanged
-- the recall logic itself lives in `tools/knowledge/read.py::_recall_for_context()` (internal — called by `build_recall_injection`, not registered as an agent tool)
+- the recall logic itself lives in `tools/knowledge/read.py::_recall_for_context()` (internal — called by `recall_prompt`, not registered as an agent tool)
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 
@@ -386,7 +384,7 @@ The intentional simplification remains:
 
 ## 3. Config
 
-These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); session settings in [session.md](session.md); knowledge-index settings in [cognition.md](cognition.md).
+These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); memory/session and knowledge settings live in [memory-knowledge.md](memory-knowledge.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
@@ -403,7 +401,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/_history.py` | four registered history processors (tool-output trim, batch-budget cap, response capping, sliding-window compaction); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); plus two preflight callables (`build_recall_injection`, `build_safety_injection`) |
+| `co_cli/context/_history.py` | three registered history processors (tool-output trim, batch-budget cap, sliding-window compaction); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `_recall_prompt_text` and `_safety_prompt_text` (dynamic instruction implementations, called via `agent.instructions()` wrappers in `_instructions.py`) |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent/_core.py` | main agent factory |

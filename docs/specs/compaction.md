@@ -35,7 +35,7 @@
 
 ---
 
-Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (including child-session branching after compaction) in [session.md](session.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
+Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (including child-session branching after compaction) lives in [memory-knowledge.md](memory-knowledge.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
 
 ## 1. What & How
 
@@ -69,9 +69,8 @@ flowchart TD
     subgraph PerReq["M2 + M3 — per ModelRequestNode"]
         R1[truncate_tool_results<br/>M2a]
         R1b[enforce_batch_budget<br/>M2b]
-        R2[compact_assistant_responses<br/>M2c]
         R5[summarize_history_window<br/>M3]
-        R1 --> R1b --> R2 --> R5
+        R1 --> R1b --> R5
     end
 
     subgraph Window["M3 — window compaction"]
@@ -117,13 +116,13 @@ sequenceDiagram
     U->>RT: user prompt
     RT->>RT: reset_for_turn()
     RT->>AG: run_stream_events (request #1)
-    AG->>HP: M2a, M2b, M2c, M3<br/>token_count ≤ threshold → fast path
+    AG->>HP: M2a, M2b, M3<br/>token_count ≤ threshold → fast path
     AG->>M: HTTP request
     M-->>AG: ToolCallPart(file_read)
     AG->>TL: execute tool
     TL->>TL: M1: size &gt; max_result_size → persist
     TL-->>AG: ToolReturnPart(&lt;persisted-output&gt;)
-    AG->>HP: chain (request #2 prep)<br/>M2a,M2b,M2c; token_count &gt; threshold → M3 fires
+    AG->>HP: chain (request #2 prep)<br/>M2a,M2b; token_count &gt; threshold → M3 fires
     Note over HP: plan_compaction_boundaries<br/>→ head, tail, dropped<br/>summarize_messages (LLM)<br/>assemble marker
     AG->>M: HTTP request (compacted history)
     M-->>AG: ToolCallPart(file_grep)
@@ -342,11 +341,6 @@ Three sync processors in order; no LLM calls.
 `COMPACTABLE_KEEP_RECENT = 5` is borrowed verbatim from `fork-claude-code/services/compact/timeBasedMCConfig.ts:33` (`keepRecent: 5`). Not convergent across peers — codex, hermes, opencode have no per-tool recency retention. Not tuned for co-cli's tool surface; revisit via `evals/eval_compaction_quality.py` if retention/fidelity tradeoff becomes measurable.
 
 **`enforce_batch_budget` (M2b).** Fires on the current batch — the `ToolReturnPart`s that follow the last `ModelResponse` with a `ToolCallPart`. If the aggregate size of that batch exceeds `config.tools.batch_spill_chars`, spills the largest non-persisted returns via `persist_if_oversized(max_size=0)`, largest-first, until the aggregate fits. Skips already-persisted parts (those containing `<persisted-output>`). Fails open: if persist raises `OSError`, the candidate is skipped. Operates only on the current batch — no cross-turn state mutation.
-
-**`compact_assistant_responses` (M2c).** Same region as M2a. For each older `ModelResponse`:
-- `TextPart` / `ThinkingPart` with `len(content) > 2500` → proportional truncate (20% head + `\n[...truncated...]\n` + 80% tail).
-- `ToolCallPart.args` is never touched (load-bearing for enrichment).
-- `ToolReturnPart` is never touched (owned by `truncate_tool_results`).
 
 ### 2.3 M3 — Window compaction
 
@@ -632,7 +626,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | File | Purpose |
 |---|---|
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
-| `co_cli/context/_history.py` | Four registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `compact_assistant_responses`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — hardened with soft-overrun, active-user anchoring); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`. |
+| `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — hardened with soft-overrun, active-user anchoring); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
 | `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry; resets `deps.runtime.recent_proactive_savings` after hygiene and overflow to unblock the anti-thrashing gate. |
 | `co_cli/context/tool_categories.py` | `COMPACTABLE_TOOLS` (M2 scope); `FILE_TOOLS` (enrichment file-path scope); `PATH_NORMALIZATION_TOOLS`. |

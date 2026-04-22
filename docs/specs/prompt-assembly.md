@@ -12,8 +12,8 @@
 
 **Non-goals:**
 - Compaction internals (owned by [compaction.md](compaction.md))
-- Session transcript storage (owned by [session.md](session.md))
-- Cognitive artifact schema and retrieval (owned by [cognition.md](cognition.md))
+- Memory/session persistence and transcript recall (owned by [memory-knowledge.md](memory-knowledge.md))
+- Reusable knowledge schema and retrieval (owned by [memory-knowledge.md](memory-knowledge.md))
 - Provider wire format past the pydantic-ai SDK boundary
 
 **Success criteria:** Prompt-prefix cache hit rate preserved across turns; dynamic content appended to the tail, never woven into `@agent.instructions`; approval resumes add zero new tokens.
@@ -22,7 +22,7 @@
 
 ---
 
-Covers how `co-cli` shapes the prompt for each model request. Startup sequencing lives in [bootstrap.md](bootstrap.md); turn orchestration in [core-loop.md](core-loop.md); compaction mechanics in [compaction.md](compaction.md); transcript persistence in [session.md](session.md); knowledge retrieval internals in [cognition.md](cognition.md); tool registration in [tools.md](tools.md).
+Covers how `co-cli` shapes the prompt for each model request. Startup sequencing lives in [bootstrap.md](bootstrap.md); turn orchestration in [core-loop.md](core-loop.md); compaction mechanics in [compaction.md](compaction.md); memory/session and knowledge internals in [memory-knowledge.md](memory-knowledge.md); tool registration in [tools.md](tools.md).
 
 ## 1. What & How
 
@@ -89,29 +89,28 @@ Any content that can vary within a single session MUST be appended to the tail o
 
 **Rationale:** `@agent.instructions` output is concatenated into the static system-prompt block pydantic-ai sends to the provider. Providers cache the system-prompt block as the prefix of every request. Any per-request variance in that block invalidates the cache for the entire prefix, including fixed tool schemas and soul assets.
 
-New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date and `personality-context` memories both live in `build_recall_injection` (preflight) for this reason — the date can change at midnight, and personality-context memories can change mid-session.
+New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date and `personality-context` memories are injected via `recall_prompt`, registered with `agent.instructions()` — the date can change at midnight, and personality-context memories can change mid-session.
 
-### 2.4 History Processors And Preflight
+### 2.4 History Processors And Dynamic Instructions
 
-Four pure-transformer processors run in this exact order (registered in `build_agent()`):
+Three pure-transformer processors run in this exact order (registered in `build_agent()`):
 
 | Processor | Behavior |
 | --- | --- |
 | `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
 | `enforce_batch_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `config.tools.batch_spill_chars`; fails open |
-| `compact_assistant_responses` | caps older `TextPart`/`ThinkingPart` to 2,500 chars with 20/80 head/tail retention; uses `_find_last_turn_start()` boundary, not turn grouping |
 | `summarize_history_window` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full design in [compaction.md](compaction.md) |
 
-Two preflight callables run before each model-bound segment (called explicitly by `run_turn()` — not registered as processors):
+Two dynamic instruction functions are registered via `agent.instructions()` and run before every model request:
 
-| Preflight | Behavior |
+| Dynamic instruction | Behavior |
 | --- | --- |
-| `build_safety_injection` | detects identical-tool-call streaks and shell-error streaks; returns injection messages and flags (caller writes flags to `deps.runtime.safety_state`) |
-| `build_recall_injection` | on every model-bound segment: appends current date and `personality-context` memories; once per new user turn: also appends top-3 recalled knowledge artifacts (caller writes counters to `deps.session.memory_recall_state`) |
+| `safety_prompt` | detects identical-tool-call streaks and shell-error streaks; returns warning text injected into the instructions context |
+| `recall_prompt` | on every model-bound segment: appends current date and `personality-context` memories; once per new user turn: also appends top-3 recalled knowledge artifacts (writes counters to `deps.session.memory_recall_state`) |
 
 **Ordering rationale:**
-- **#1–2 before #3**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set, todos) to compensate.
-- **Preflight before segment**: safety and recall run in `_run_model_preflight()` before `_execute_stream_segment()`; the extended history is passed directly to the segment without storing back to `turn_state.current_history`, so retry iterations start clean.
+- **#1–2 before #3**: truncation runs before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set, todos) to compensate.
+- **Dynamic instructions before model request**: `safety_prompt` and `recall_prompt` run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
 
 ### 2.5 Approval Resume
 
@@ -119,7 +118,7 @@ Approval resumes reuse the main agent with zero additional tokens. The pydantic-
 
 ## 3. Config
 
-Only the settings that directly shape prompt text are listed here. Compaction thresholds live in [compaction.md](compaction.md); recall parameters in [cognition.md](cognition.md).
+Only the settings that directly shape prompt text are listed here. Compaction thresholds live in [compaction.md](compaction.md); recall parameters live in [memory-knowledge.md](memory-knowledge.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
@@ -134,11 +133,11 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | File | Purpose |
 | --- | --- |
 | `co_cli/agent/_core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
-| `co_cli/agent/_instructions.py` | dynamic instruction callbacks (`add_shell_guidance`, `add_category_awareness_prompt`) |
+| `co_cli/agent/_instructions.py` | dynamic instruction callbacks: `recall_prompt`, `safety_prompt`, `add_shell_guidance`, `add_category_awareness_prompt` |
 | `co_cli/prompts/_assembly.py` | `build_static_instructions()`; rule-file validation |
 | `co_cli/prompts/personalities/_loader.py` | soul seed, mindset, character memory, examples, critique loading |
 | `co_cli/prompts/personalities/_injector.py` | per-turn `personality-context` memory injection |
 | `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
-| `co_cli/context/_history.py` | four registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `compact_assistant_responses`, `summarize_history_window`); `build_recall_injection` and `build_safety_injection` preflight callables; compaction trigger |
+| `co_cli/context/_history.py` | three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `_recall_prompt_text` and `_safety_prompt_text` (dynamic instruction implementations); compaction trigger |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |

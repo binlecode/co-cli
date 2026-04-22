@@ -6,7 +6,6 @@ before every model request and transform the message list in-place.
 Registered processors (pure transformers — no deps mutation):
     truncate_tool_results        — sync, content-clears compactable tool results by recency
     enforce_batch_budget         — sync, spills largest non-persisted tool returns when batch aggregate exceeds threshold
-    compact_assistant_responses  — sync, caps large TextPart/ThinkingPart in older ModelResponse
     summarize_history_window     — async, summarizes middle messages via inline LLM or static marker
 
 Dynamic instruction functions (registered via agent.instructions() — never appended to message history):
@@ -296,10 +295,8 @@ def plan_compaction_boundaries(
 
 
 # ---------------------------------------------------------------------------
-# Processor helpers (shared by #1 and #2)
+# Processor helpers
 # ---------------------------------------------------------------------------
-
-OLDER_MSG_MAX_CHARS = 2_500
 
 COMPACTABLE_KEEP_RECENT = 5
 """Keep the N most-recent tool returns per compactable tool type; clear older.
@@ -325,20 +322,6 @@ def _find_last_turn_start(messages: list[ModelMessage]) -> int:
         ):
             return i
     return 0
-
-
-def _truncate_proportional(text: str, max_chars: int, head_ratio: float = 0.20) -> str:
-    """Truncate text keeping head(head_ratio) + tail(1-head_ratio) with a marker between."""
-    if len(text) <= max_chars:
-        return text
-    marker = "\n[...truncated...]\n"
-    available = max_chars - len(marker)
-    if available <= 0:
-        # max_chars too small for marker — hard truncate
-        return text[:max_chars]
-    head_size = int(available * head_ratio)
-    tail_size = available - head_size
-    return text[:head_size] + marker + text[-tail_size:]
 
 
 # ---------------------------------------------------------------------------
@@ -414,39 +397,7 @@ def truncate_tool_results(
 
 
 # ---------------------------------------------------------------------------
-# 2. compact_assistant_responses (sync — no I/O)
-# ---------------------------------------------------------------------------
-
-
-def compact_assistant_responses(
-    ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-) -> list[ModelMessage]:
-    """Cap large TextPart/ThinkingPart in older ModelResponse messages.
-
-    Protects the last turn (everything from the last UserPromptPart onward).
-    Does NOT touch ToolCallPart (args are critical for file path extraction),
-    ToolReturnPart, or UserPromptPart.  Mutates in-place — no list rebuild.
-    """
-    boundary = _find_last_turn_start(messages)
-    if boundary == 0:
-        return messages
-
-    for msg in messages[:boundary]:
-        if not isinstance(msg, ModelResponse):
-            continue
-        for part in msg.parts:
-            if (
-                isinstance(part, (TextPart, ThinkingPart))
-                and len(part.content) > OLDER_MSG_MAX_CHARS
-            ):
-                part.content = _truncate_proportional(part.content, OLDER_MSG_MAX_CHARS)
-
-    return messages
-
-
-# ---------------------------------------------------------------------------
-# 3. enforce_batch_budget (sync — disk I/O via persist_if_oversized)
+# 2. enforce_batch_budget (sync — disk I/O via persist_if_oversized)
 # ---------------------------------------------------------------------------
 
 
@@ -521,7 +472,7 @@ def enforce_batch_budget(
     candidates remain. Fails open: if persist_if_oversized returns unchanged
     content (OSError fallback), that candidate is skipped.
 
-    Registered between truncate_tool_results and compact_assistant_responses.
+    Registered after truncate_tool_results.
     Not added to delegation sub-agent chains (short-lived, unnecessary overhead).
     """
     from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, persist_if_oversized
@@ -785,7 +736,7 @@ async def recover_overflow_history(
 
 
 # ---------------------------------------------------------------------------
-# 5. summarize_history_window (async — LLM call)
+# 3. summarize_history_window (async — LLM call)
 # ---------------------------------------------------------------------------
 
 

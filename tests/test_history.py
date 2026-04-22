@@ -25,10 +25,8 @@ from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import settings
 from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
-    OLDER_MSG_MAX_CHARS,
     _find_last_turn_start,
     _recall_prompt_text,
-    compact_assistant_responses,
     emergency_compact,
     enforce_batch_budget,
     find_first_run_end,
@@ -720,68 +718,6 @@ async def test_recover_overflow_history_preserves_pending_user_turn():
     ]
     assert "current request" in user_texts
     assert ctx.deps.runtime.history_compaction_applied is True
-
-
-# ---------------------------------------------------------------------------
-# compact_assistant_responses — assistant response compaction
-# ---------------------------------------------------------------------------
-
-
-def test_compact_assistant_responses_large_text_truncated():
-    """Old 50K TextPart → truncated to OLDER_MSG_MAX_CHARS; last turn group untouched."""
-    big_text = "x" * 50_000
-    msgs = [
-        _user("turn 1"),
-        ModelResponse(parts=[TextPart(content=big_text)]),
-        _user("turn 2"),
-        _assistant("short response"),
-    ]
-    ctx = _make_processor_ctx()
-    result = compact_assistant_responses(ctx, msgs)
-    # Find the old response (first ModelResponse)
-    old_response = next(m for m in result if isinstance(m, ModelResponse))
-    old_text = old_response.parts[0].content
-    assert len(old_text) <= OLDER_MSG_MAX_CHARS
-    assert "[...truncated...]" in old_text
-    # Last turn group's response untouched
-    last_response = [m for m in result if isinstance(m, ModelResponse)][-1]
-    assert last_response.parts[0].content == "short response"
-
-
-def test_compact_assistant_responses_tool_return_untouched():
-    """ToolReturnPart and UserPromptPart are not affected by compact_assistant_responses."""
-    big_tool_return = "y" * 50_000
-    big_user_text = "z" * 50_000
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content=big_user_text)]),
-        ModelResponse(parts=[ToolCallPart(tool_name="file_read", args={}, tool_call_id="c1")]),
-        ModelRequest(
-            parts=[
-                ToolReturnPart(tool_name="file_read", content=big_tool_return, tool_call_id="c1")
-            ]
-        ),
-        ModelResponse(parts=[TextPart(content="done")]),
-        _user("turn 2"),
-        _assistant("ok"),
-    ]
-    ctx = _make_processor_ctx()
-    result = compact_assistant_responses(ctx, msgs)
-    # Find the ToolReturnPart — should be untouched
-    tool_returns = [
-        part
-        for msg in result
-        if isinstance(msg, ModelRequest)
-        for part in msg.parts
-        if isinstance(part, ToolReturnPart)
-    ]
-    assert len(tool_returns) == 1
-    assert tool_returns[0].content == big_tool_return
-    # The big UserPromptPart in the first group should also be untouched
-    first_request = result[0]
-    assert isinstance(first_request, ModelRequest)
-    user_part = first_request.parts[0]
-    assert isinstance(user_part, UserPromptPart)
-    assert user_part.content == big_user_text
 
 
 # ---------------------------------------------------------------------------

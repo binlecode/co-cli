@@ -9,19 +9,17 @@ Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
 
   --- Processor chain components (isolated validation) ---
   Step 2 — P1 truncate_tool_results: recency clearing, COMPACTABLE_TOOLS, keep 5
-  Step 3 — P2 compact_assistant_responses: OLDER_MSG_MAX_CHARS=2500, proportional truncation
-           [BC6: preserves tool results and user input] [BC7: in-place mutation]
   Step 4 — P5 sub-component: context enrichment (_gather_compaction_context)
            3 sources (file paths, todos, prior summaries), 4K cap, enrichment only on LLM path
            [BC2: capped, never blocks] [BC3: from ToolCallPart.args not ToolReturnPart]
   Step 5 — P5 sub-component: prompt assembly (_build_summarizer_prompt)
            template sections, context+personality ordering
            [Outcome 1: structured template] [BC1: free-form fallback]
-  (P3 build_safety_injection and P4 build_recall_injection are validated
-   as passthrough within Steps 6/7 — no isolated step needed.)
+  (P3 _safety_prompt_text and P4 _recall_prompt_text are validated
+   as dynamic instructions within Steps 6/7 — no isolated step needed.)
 
   --- Full chain execution (real LLM calls) ---
-  Step 6 — Full processor chain P1→P2→P3→P4→P5 with numerical validation
+  Step 6 — Full processor chain P1→P3→P4→P5 with numerical validation
            [Outcome 1-5 integrated] [Processor chain order verified]
   Step 7 — Multi-cycle: chain on prior summary, integration verified
            [Outcome 3: prior-summary detection and integration]
@@ -72,12 +70,9 @@ from co_cli.context._history import (
     _SUMMARY_MARKER_PREFIX,
     COMPACTABLE_KEEP_RECENT,
     FILE_TOOLS,
-    OLDER_MSG_MAX_CHARS,
     _gather_compaction_context,
-    _truncate_proportional,
-    build_recall_injection,
-    build_safety_injection,
-    compact_assistant_responses,
+    _recall_prompt_text,
+    _safety_prompt_text,
     emergency_compact,
     find_first_run_end,
     group_by_turn,
@@ -207,16 +202,6 @@ def _count_cleared(msgs: list[ModelMessage]) -> int:
     )
 
 
-def _count_truncated_text(msgs: list[ModelMessage]) -> int:
-    return sum(
-        1
-        for m in msgs
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-        if isinstance(p, TextPart) and "[...truncated...]" in p.content
-    )
-
-
 def _check_semantic(
     summary: str,
     ground_truth: list[tuple[str, list[str]]],
@@ -264,7 +249,7 @@ def _check_no_hallucination(
     return all_ok, lines
 
 
-# Realistic assistant text generator (>2.5K chars to trigger P2)
+# Realistic assistant text generator (large content for compaction testing)
 def _analysis(topic: str, extra: str = "") -> str:
     return (
         f"I've analyzed {topic}. Here's what I found:\n\n"
@@ -583,190 +568,6 @@ def step_2_p1_truncate() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step 3: P2 compact_assistant_responses [Outcome 5, BC6, BC7]
-# ---------------------------------------------------------------------------
-
-
-def step_3_p2_compact_responses() -> bool:
-    """Validate P2: TextPart/ThinkingPart capping with exact thresholds.
-
-    Specs from TODO:
-    - OLDER_MSG_MAX_CHARS = 2_500
-    - _truncate_proportional: head(20%) + tail(80%) + marker (aligned with gemini-cli)
-    - Does NOT touch ToolCallPart, ToolReturnPart, UserPromptPart [BC6]
-    - Last turn group untouched
-    - In-place mutation [BC7]
-    """
-    print(
-        f"\n--- Step 3: P2 compact_assistant_responses (cap={OLDER_MSG_MAX_CHARS}) [BC6,BC7] ---"
-    )
-    passed = True
-    ctx = _make_ctx()
-
-    # 3a: Threshold constant
-    if OLDER_MSG_MAX_CHARS != 2_500:
-        print(f"  FAIL: OLDER_MSG_MAX_CHARS = {OLDER_MSG_MAX_CHARS}, expected 2500")
-        return False
-    print(f"  PASS: OLDER_MSG_MAX_CHARS = {OLDER_MSG_MAX_CHARS}")
-
-    # 3b: TextPart >2500 → capped with marker
-    big_analysis = _analysis("auth/views.py", "Starting with the login endpoint.\n\n") * 20
-    msgs: list[ModelMessage] = [
-        _user("Analyze the auth module"),
-        ModelResponse(parts=[TextPart(content=big_analysis)]),
-        _user("Continue"),
-        _assistant("ok"),
-    ]
-    result = compact_assistant_responses(ctx, msgs)
-    old_text = [
-        p
-        for m in result
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-        if isinstance(p, TextPart) and "auth/views" in p.content
-    ]
-    if not old_text or len(old_text[0].content) > OLDER_MSG_MAX_CHARS:
-        print(f"  FAIL: {len(big_analysis)} char TextPart not capped")
-        passed = False
-    elif "[...truncated...]" not in old_text[0].content:
-        print("  FAIL: truncation marker missing")
-        passed = False
-    else:
-        print(
-            f"  PASS: {len(big_analysis)} char TextPart → {len(old_text[0].content)} chars with marker"
-        )
-        print(f"    head: {old_text[0].content[:80]!r}")
-        print(f"    tail: ...{old_text[0].content[-80:]!r}")
-
-    # 3c: ThinkingPart also capped
-    big_thinking = "Let me think about the middleware chain and how to replace it... " * 800
-    msgs = [
-        _user("Plan the migration"),
-        ModelResponse(parts=[ThinkingPart(content=big_thinking)]),
-        _user("Continue"),
-        _assistant("ok"),
-    ]
-    result = compact_assistant_responses(ctx, msgs)
-    for m in result:
-        if isinstance(m, ModelResponse):
-            for p in m.parts:
-                if isinstance(p, ThinkingPart):
-                    if len(p.content) > OLDER_MSG_MAX_CHARS:
-                        print(f"  FAIL: ThinkingPart not capped: {len(p.content)}")
-                        passed = False
-                    else:
-                        print(f"  PASS: ThinkingPart capped to {len(p.content)}")
-
-    # 3d: Last turn group untouched [BC6]
-    last_response = "The middleware chain is now fully migrated. Tests are green."
-    msgs = [
-        _user("First question"),
-        _assistant("Earlier analysis..."),
-        _user("Status?"),
-        _assistant(last_response),
-    ]
-    result = compact_assistant_responses(ctx, msgs)
-    last_text = [
-        p
-        for m in result
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-        if isinstance(p, TextPart) and "middleware chain" in p.content
-    ]
-    if not last_text or last_text[0].content != last_response:
-        print("  FAIL: last turn group modified")
-        passed = False
-    else:
-        print(f"  PASS: last turn group untouched ({last_response[:60]!r}...)")
-
-    # 3e: ToolCallPart.args preserved [BC6 — critical for context enrichment]
-    big_with_tool = _analysis("auth migration plan") * 20
-    msgs = [
-        _user("Read the critical file"),
-        ModelResponse(
-            parts=[
-                TextPart(content=big_with_tool),
-                ToolCallPart(
-                    tool_name="read_file", args={"file_path": "/critical.py"}, tool_call_id="c1"
-                ),
-            ]
-        ),
-        _tool_return("read_file", "class AuthMiddleware: ...", "c1"),
-        _user("Continue"),
-        _assistant("ok"),
-    ]
-    result = compact_assistant_responses(ctx, msgs)
-    found = any(
-        isinstance(p, ToolCallPart) and p.args_as_dict().get("file_path") == "/critical.py"
-        for m in result
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-    )
-    if not found:
-        print("  FAIL: ToolCallPart.args lost by P2")
-        passed = False
-    else:
-        print("  PASS: ToolCallPart.args preserved (file_path=/critical.py)")
-
-    # 3f: ToolReturnPart untouched [BC6]
-    big_return = _fake_file("auth/views.py", lines=700)
-    msgs = [
-        _user("Read auth views"),
-        _tool_call("read_file", {"file_path": "auth/views.py"}, "c1"),
-        _tool_return("read_file", big_return, "c1"),
-        _assistant("Got the file."),
-        _user("Now edit it"),
-        _assistant("done"),
-    ]
-    result = compact_assistant_responses(ctx, msgs)
-    returns = [
-        p
-        for m in result
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if isinstance(p, ToolReturnPart) and p.content == big_return
-    ]
-    if not returns:
-        print("  FAIL: ToolReturnPart modified by P2")
-        passed = False
-    else:
-        print(f"  PASS: ToolReturnPart untouched ({len(big_return)} char file content intact)")
-
-    # 3g: _truncate_proportional ratio: head(20%) + tail(80%) — aligned with gemini-cli
-    text = _analysis("auth/middleware.py")  # ~2000 chars of realistic content
-    truncated = _truncate_proportional(text, 200)
-    marker = "\n[...truncated...]\n"
-    if marker not in truncated:
-        print("  FAIL: marker missing")
-        passed = False
-    else:
-        head, tail = truncated.split(marker)
-        available = 200 - len(marker)
-        expected_head = int(available * 0.20)
-        if abs(len(head) - expected_head) > 2:
-            print(f"  FAIL: head ratio: {len(head)} vs ~{expected_head}")
-            passed = False
-        else:
-            print(f"  PASS: _truncate_proportional head={len(head)}, tail={len(tail)} (20%/80%)")
-            print(f"    head: {head[:60]!r}...")
-            print(f"    tail: ...{tail[-60:]!r}")
-
-    # 3h: _truncate_proportional output never exceeds max_chars (edge case fix)
-    for test_max in (100, 50, 25, 19, 10, 1):
-        r = _truncate_proportional("X" * 5000, test_max)
-        if len(r) > test_max:
-            print(
-                f"  FAIL: _truncate_proportional(5000, {test_max}) → {len(r)} chars (>{test_max})"
-            )
-            passed = False
-            break
-    else:
-        print("  PASS: output never exceeds max_chars (tested down to 1)")
-
-    return passed
-
-
-# ---------------------------------------------------------------------------
 # Step 4: P5 context enrichment [Outcome 2, BC2, BC3]
 # ---------------------------------------------------------------------------
 
@@ -842,7 +643,7 @@ def step_4_context_enrichment() -> bool:
         print(f"    context: {_snippet(result, 160)}")
 
     # 4d: Always-on memories not in compaction context (architectural decision)
-    # Memories are injected separately by P4 (build_recall_injection), not by
+    # Memories are injected separately by the recall dynamic instruction, not by
     # _gather_compaction_context. This test verifies that memory files do NOT
     # appear in compaction context, confirming the separation of concerns.
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1069,7 +870,7 @@ def step_5_prompt_assembly() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Full processor chain P1→P2→P3→P4→P5 [all Outcomes, chain order]
+# Step 6: Full processor chain P1→P3→P4→P5 [all Outcomes, chain order]
 # ---------------------------------------------------------------------------
 
 
@@ -1077,15 +878,14 @@ async def step_6_full_chain() -> bool:
     """Execute real processor chain with numerical validation at each stage.
 
     Validates:
-    - Processor order: P1→P2→P3→P4→P5 (from agent.py registration)
+    - Processor order: P1→P3→P4→P5 (from agent.py registration)
     - P1: exact cleared count = N_read_file - COMPACTABLE_KEEP_RECENT
-    - P2: TextParts > OLDER_MSG_MAX_CHARS capped, exact count
     - P3: no safety injections (clean history)
     - P4: memory recall (may or may not inject)
     - P5: message reduction, summary marker count matches dropped, structured sections
     - Context enrichment: file paths + todos in summary output
     """
-    print("\n--- Step 6: Full processor chain P1→P2→P3→P4→P5 (real LLM) ---")
+    print("\n--- Step 6: Full processor chain P1→P3→P4→P5 (real LLM) ---")
     passed = True
 
     # Build history: 10 read_file + 2 edit_file + 1 find_in_files, large assistant text
@@ -1173,18 +973,7 @@ async def step_6_full_chain() -> bool:
     total_chars = _msg_chars(history)
     print(f"  Input: {n_msgs} msgs, {n_groups} groups, {total_chars:,} chars")
 
-    # Count TextParts >2500 in non-last groups for P2 expectation
-    groups = group_by_turn(history)
-    expected_p2_truncated = 0
-    for g in groups[:-1]:
-        for m in g.messages:
-            if isinstance(m, ModelResponse):
-                for p in m.parts:
-                    if isinstance(p, TextPart) and len(p.content) > OLDER_MSG_MAX_CHARS:
-                        expected_p2_truncated += 1
-    print(
-        f"  Expected: P1 clears {N_READ - COMPACTABLE_KEEP_RECENT}, P2 caps {expected_p2_truncated}"
-    )
+    print(f"  Expected: P1 clears {N_READ - COMPACTABLE_KEEP_RECENT}")
 
     # Build ctx with todos for enrichment
     config = Settings.model_construct(
@@ -1223,52 +1012,26 @@ async def step_6_full_chain() -> bool:
     else:
         print("    PASS")
 
-    # --- P2 ---
-    print("\n  [P2] compact_assistant_responses")
-    msgs = compact_assistant_responses(ctx, msgs)
-    p2_truncated = _count_truncated_text(msgs)
-    chars_post_p2 = _msg_chars(msgs)
-    print(f"    Truncated: {p2_truncated} (expected {expected_p2_truncated})")
-    print(
-        f"    Chars: {chars_post_p1:,} → {chars_post_p2:,} (P2 reduced {chars_post_p1 - chars_post_p2:,})"
-    )
-    if p2_truncated != expected_p2_truncated:
-        print(f"    FAIL: P2 truncated {p2_truncated} ≠ {expected_p2_truncated}")
-        passed = False
-    else:
-        print("    PASS")
-
     # --- P3 ---
-    print("\n  [P3] build_safety_injection")
-    len_pre_p3 = len(msgs)
-    safety_msgs, doom_flagged, refl_flagged = build_safety_injection(ctx.deps, msgs)
-    msgs = [*msgs, *safety_msgs] if safety_msgs else msgs
-    if doom_flagged and ctx.deps.runtime.safety_state:
-        ctx.deps.runtime.safety_state.doom_loop_injected = True
-    if refl_flagged and ctx.deps.runtime.safety_state:
-        ctx.deps.runtime.safety_state.reflection_injected = True
-    p3_injections = len(msgs) - len_pre_p3
-    print(f"    Injections: {p3_injections} (clean history → no safety warnings)")
+    # Safety injection now happens via dynamic agent.instructions() — not appended to msgs.
+    print("\n  [P3] _safety_prompt_text (dynamic instruction)")
+    from dataclasses import replace as _replace
+
+    ctx_p3 = _replace(ctx, messages=msgs)
+    safety_text = _safety_prompt_text(ctx_p3)
+    print(f"    Safety text: {safety_text!r} (clean history → no warnings expected)")
     print("    PASS")
 
     # --- P4 ---
-    print("\n  [P4] build_recall_injection")
+    # Recall injection now happens via dynamic agent.instructions() — not appended to msgs.
+    print("\n  [P4] _recall_prompt_text (dynamic instruction)")
     recall_pre = ctx.deps.session.memory_recall_state.recall_count
-    len_pre_p4 = len(msgs)
-    recall_msg, recall_turn_count, recall_fired_flag = await build_recall_injection(ctx, msgs)
-    msgs = [*msgs, recall_msg]
-    if recall_fired_flag:
-        mem_state = ctx.deps.session.memory_recall_state
-        mem_state.last_recall_user_turn = recall_turn_count
-        mem_state.recall_count += 1
+    ctx_p4 = _replace(ctx, messages=msgs)
+    recall_text = await _recall_prompt_text(ctx_p4)
     recall_post = ctx.deps.session.memory_recall_state.recall_count
-    p4_injections = len(msgs) - len_pre_p4
     recall_fired = recall_post > recall_pre
     if recall_fired:
         print(f"    _recall_for_context called (recall_count {recall_pre} → {recall_post})")
-        print(
-            f"    Injections: {p4_injections} ({'memory injected' if p4_injections else 'no matches → no injection'})"
-        )
     else:
         user_turns = sum(
             1
@@ -1280,7 +1043,7 @@ async def step_6_full_chain() -> bool:
         print(
             f"    _recall_for_context skipped (user_turn={user_turns}, last_recall_turn={ctx.deps.session.memory_recall_state.last_recall_user_turn})"
         )
-        print(f"    Injections: {p4_injections}")
+    print(f"    Recall text length: {len(recall_text)} chars")
     print("    PASS")
 
     # --- P5 ---
@@ -1319,7 +1082,7 @@ async def step_6_full_chain() -> bool:
     actual_dropped = net_reduction + 1
     chars_final = _msg_chars(msgs)
     print(f"    Messages: {len_pre_p5} → {len(msgs)} ({actual_dropped} replaced by 1 marker)")
-    print(f"    Chars: {chars_post_p2:,} → {chars_final:,}")
+    print(f"    Chars: {chars_post_p1:,} → {chars_final:,}")
 
     if len(msgs) >= len_pre_p5:
         print("    FAIL: no reduction")
@@ -1439,9 +1202,7 @@ async def step_7_multi_cycle() -> bool:
         "## Progress\nViews and middleware updated. Tests and urls pending."
     )
 
-    # Cycle 2 assistant text (>2500 to trigger P2)
-    # _detail must produce >2500 chars to trigger P2 in the multi-cycle test.
-    # OLDER_MSG_MAX_CHARS = 2500; content must exceed this threshold.
+    # Cycle 2 assistant text (realistic large responses)
     def _detail(topic: str) -> str:
         return (
             f"Completed {topic} update. JWT flow implemented:\n\n"
@@ -1537,16 +1298,7 @@ async def step_7_multi_cycle() -> bool:
         if isinstance(p, ToolCallPart) and p.tool_name == "read_file"
     )
     expected_p1 = max(0, n_read - COMPACTABLE_KEEP_RECENT)
-    groups_pre = group_by_turn(history)
-    expected_p2 = sum(
-        1
-        for g in groups_pre[:-1]
-        for m in g.messages
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-        if isinstance(p, TextPart) and len(p.content) > OLDER_MSG_MAX_CHARS
-    )
-    print(f"  Expected: P1 clears {expected_p1} (of {n_read} read_file), P2 caps {expected_p2}")
+    print(f"  Expected: P1 clears {expected_p1} (of {n_read} read_file)")
 
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
@@ -1582,53 +1334,27 @@ async def step_7_multi_cycle() -> bool:
     else:
         print("    PASS")
 
-    # --- P2 ---
-    print("\n  [P2] compact_assistant_responses")
-    msgs = compact_assistant_responses(ctx, msgs)
-    p2_truncated = _count_truncated_text(msgs)
-    chars_post_p2 = _msg_chars(msgs)
-    print(f"    Truncated: {p2_truncated} (expected {expected_p2})")
-    print(
-        f"    Chars: {chars_post_p1:,} → {chars_post_p2:,} (P2 reduced {chars_post_p1 - chars_post_p2:,})"
-    )
-    if p2_truncated != expected_p2:
-        print("    FAIL")
-        passed = False
-    else:
-        print("    PASS")
-
     # --- P3 + P4 ---
-    print("\n  [P3] build_safety_injection")
-    len_pre_p3 = len(msgs)
-    safety_msgs2, doom_flagged2, refl_flagged2 = build_safety_injection(ctx.deps, msgs)
-    msgs = [*msgs, *safety_msgs2] if safety_msgs2 else msgs
-    if doom_flagged2 and ctx.deps.runtime.safety_state:
-        ctx.deps.runtime.safety_state.doom_loop_injected = True
-    if refl_flagged2 and ctx.deps.runtime.safety_state:
-        ctx.deps.runtime.safety_state.reflection_injected = True
-    print(f"    Injections: {len(msgs) - len_pre_p3}")
+    # Safety/recall injection now happens via dynamic agent.instructions() — not appended to msgs.
+    print("\n  [P3] _safety_prompt_text (dynamic instruction)")
+    from dataclasses import replace as _replace
+
+    ctx_p3b = _replace(ctx, messages=msgs)
+    safety_text2 = _safety_prompt_text(ctx_p3b)
+    print(f"    Safety text: {safety_text2!r}")
     print("    PASS")
 
-    print("\n  [P4] build_recall_injection")
+    print("\n  [P4] _recall_prompt_text (dynamic instruction)")
     recall_pre = ctx.deps.session.memory_recall_state.recall_count
-    len_pre_p4 = len(msgs)
-    recall_msg2, recall_turn_count2, recall_fired_flag2 = await build_recall_injection(ctx, msgs)
-    msgs = [*msgs, recall_msg2]
-    if recall_fired_flag2:
-        mem_state2 = ctx.deps.session.memory_recall_state
-        mem_state2.last_recall_user_turn = recall_turn_count2
-        mem_state2.recall_count += 1
+    ctx_p4b = _replace(ctx, messages=msgs)
+    recall_text2 = await _recall_prompt_text(ctx_p4b)
     recall_post = ctx.deps.session.memory_recall_state.recall_count
-    p4_injections = len(msgs) - len_pre_p4
     recall_fired = recall_post > recall_pre
     if recall_fired:
         print(f"    _recall_for_context called (recall_count {recall_pre} → {recall_post})")
-        print(
-            f"    Injections: {p4_injections} ({'memory injected' if p4_injections else 'no matches → no injection'})"
-        )
     else:
         print("    _recall_for_context skipped (already recalled for this user turn)")
-        print(f"    Injections: {p4_injections}")
+    print(f"    Recall text length: {len(recall_text2)} chars")
     print("    PASS")
 
     # --- P5 ---
@@ -1668,7 +1394,7 @@ async def step_7_multi_cycle() -> bool:
     actual_dropped = net_reduction + 1
     chars_final = _msg_chars(msgs)
     print(f"    Messages: {len_pre} → {len(msgs)} ({actual_dropped} replaced by 1 marker)")
-    print(f"    Chars: {chars_post_p2:,} → {chars_final:,}")
+    print(f"    Chars: {chars_post_p1:,} → {chars_final:,}")
 
     if len(msgs) >= len_pre:
         print("    FAIL: no reduction")
@@ -2135,12 +1861,10 @@ def step_11_edge_cases() -> bool:
     if r is not one_turn:
         print("  FAIL: P1 modified 1-turn history")
         passed = False
-    r = compact_assistant_responses(ctx, one_turn)
-    if r is not one_turn:
-        print("  FAIL: P2 modified 1-turn history")
-        passed = False
-    safety_msgs_p3a, _, _ = build_safety_injection(ctx.deps, one_turn)
-    if safety_msgs_p3a:
+    from dataclasses import replace as _replace
+
+    safety_text_p3a = _safety_prompt_text(_replace(ctx, messages=one_turn))
+    if safety_text_p3a:
         print("  FAIL: P3 injected on 1-turn history")
         passed = False
     if passed:
@@ -2150,9 +1874,7 @@ def step_11_edge_cases() -> bool:
     two_turn = [_user("a"), _assistant("b"), _user("c"), _assistant("d")]
     r = truncate_tool_results(ctx, two_turn)
     assert len(r) == 4
-    r = compact_assistant_responses(ctx, two_turn)
-    assert len(r) == 4
-    print("  PASS: 11b — 2-turn history: processors passthrough cleanly")
+    print("  PASS: 11b — 2-turn history: P1 passthrough cleanly")
 
     # 11c: No ToolCallParts — context enrichment source #1 produces empty
     no_tools = [
@@ -2184,10 +1906,6 @@ def step_11_edge_cases() -> bool:
     if len(r) != len(with_marker):
         print("  FAIL: 11d — P1 altered history with static marker")
         passed = False
-    r = compact_assistant_responses(ctx, with_marker)
-    if len(r) != len(with_marker):
-        print("  FAIL: 11d — P2 altered history with static marker")
-        passed = False
     # emergency_compact should still work — the marker is a UserPromptPart
     groups = group_by_turn(with_marker)
     if len(groups) < 3:
@@ -2195,43 +1913,16 @@ def step_11_edge_cases() -> bool:
         passed = False
     else:
         print(
-            f"  PASS: 11d — static marker in history: processors + grouping handle correctly ({len(groups)} groups)"
+            f"  PASS: 11d — static marker in history: P1 + grouping handle correctly ({len(groups)} groups)"
         )
 
-    # 11e: Every assistant response under 2.5K — P2 is pure no-op
-    short_msgs: list[ModelMessage] = []
-    for i in range(8):
-        short_msgs += [_user(f"q{i}"), _assistant(f"Short answer {i}. " * 10)]
-    r = compact_assistant_responses(ctx, short_msgs)
-    truncated = _count_truncated_text(r)
-    if truncated != 0:
-        print(f"  FAIL: 11e — P2 truncated {truncated} messages when all under 2.5K")
-        passed = False
-    else:
-        print("  PASS: 11e — all responses under 2.5K: P2 is pure no-op (0 truncated)")
-
-    # 11f: Single massive message in 2-turn history — P2 caps but compaction can't fire
+    # 11f: Single massive message in 2-turn history — compaction boundaries can't fire
     massive = [
         _user("explain everything"),
         ModelResponse(parts=[TextPart(content="X" * 60_000)]),
         _user("thanks"),
         _assistant("welcome"),
     ]
-    r = compact_assistant_responses(ctx, massive)
-    big_part = [
-        p
-        for m in r
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-        if isinstance(p, TextPart) and "X" in p.content
-    ]
-    if big_part and len(big_part[0].content) > OLDER_MSG_MAX_CHARS:
-        print("  FAIL: 11f — P2 didn't cap 60K message")
-        passed = False
-    else:
-        print(
-            f"  PASS: 11f — single 60K message: P2 caps to {len(big_part[0].content) if big_part else '?'}"
-        )
     # Compaction boundaries: with 2 groups, should return None
     _massive_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     _massive_budget = resolve_compaction_budget(ctx.deps.config, _massive_ctx_window)
@@ -2333,10 +2024,8 @@ def step_11_edge_cases() -> bool:
     empty: list[ModelMessage] = []
     r = truncate_tool_results(ctx, empty)
     assert r == [] or r is empty
-    r = compact_assistant_responses(ctx, empty)
-    assert r == [] or r is empty
-    safety_msgs_empty, _, _ = build_safety_injection(ctx.deps, empty)
-    assert len(safety_msgs_empty) == 0
+    safety_text_empty = _safety_prompt_text(_replace(ctx, messages=empty))
+    assert safety_text_empty == ""
     ec = emergency_compact(empty)
     assert ec is None
     bounds = plan_compaction_boundaries(empty, 100_000, ctx.deps.config.compaction.tail_fraction)
@@ -2742,7 +2431,6 @@ async def _run_all() -> int:
 
     # --- Processor chain components (flow order) ---
     results["Step 2: P1 truncate_tool_results"] = step_2_p1_truncate()
-    results["Step 3: P2 compact_assistant_responses [BC6,BC7]"] = step_3_p2_compact_responses()
     results["Step 4: Context enrichment [BC2,BC3]"] = step_4_context_enrichment()
     results["Step 5: Prompt assembly [Outcome 1,BC1]"] = step_5_prompt_assembly()
 
@@ -2788,10 +2476,9 @@ async def _run_all() -> int:
 _STEP_DESCRIPTIONS: dict[str, str] = {
     "Step 1": "Tool results exceeding 50K chars are persisted to disk with a 2K preview placeholder. Content-addressed files ensure idempotency.",
     "Step 2": "Older compactable tool results (beyond the 5 most recent per type) are cleared. Non-compactable tools and the last turn group are protected.",
-    "Step 3": "Large assistant TextPart/ThinkingPart content in older messages is capped at 2500 chars with proportional head(20%)/tail(80%) truncation (aligned with gemini-cli). Tool args and returns are untouched.",
     "Step 4": "Side-channel context is gathered from 3 sources (file paths from ToolCallPart.args, pending todos, prior summaries) and capped at 4K chars. Always-on memories are injected separately by P4.",
     "Step 5": "Summarizer prompt has 7 structured sections (Goal, Key Decisions, User Corrections, Errors & Fixes, Working Set, Progress, Next Step). Assembly order: template + context + personality.",
-    "Step 6": "Full P1-P5 chain on a 14-turn conversation with tool calls, producing an LLM summary. Validates numerical counts at each stage.",
+    "Step 6": "Full P1→P3→P4→P5 chain on a 14-turn conversation with tool calls, producing an LLM summary. Validates numerical counts at each stage.",
     "Step 7": "Chain on history containing a prior compaction summary. Validates that both prior context and new work are preserved across cycles.",
     "Step 8": "Overflow detection (413/400 with context-length body), emergency compaction (keep first+last groups), and one-shot recovery guard.",
     "Step 9": "Circuit breaker degradation: after 3 consecutive LLM failures, compaction falls back to static marker without attempting an LLM call.",
