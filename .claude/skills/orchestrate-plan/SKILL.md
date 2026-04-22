@@ -23,7 +23,7 @@ argument-hint: "<slug>"
 | `code-feature` | New functionality, new tools, schema additions | Standard |
 | `doc-restructure` | Reorganizing or rewriting non-DESIGN docs (reference/, TODO, CLAUDE.md) | Add Code Accuracy Verification step |
 | `doc+code` | Non-DESIGN doc update + corresponding code changes (reference/, TODO, CLAUDE.md) | Both extras |
-| `refactor` | Code reorganization without behavior change | Add regression surface check |
+| `refactor` | Code reorganization without behavior change | Standard |
 
 State the task type at the top of the TL draft (e.g. "Task type: code-feature").
 

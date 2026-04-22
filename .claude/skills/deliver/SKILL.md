@@ -5,7 +5,7 @@ description: Lightweight solo delivery — read task/TODO, implement, test-gate,
 
 # Deliver
 
-Solo implementation skill. No subagents. Same quality bar as orchestrate-dev, none of the orchestration overhead.
+Solo implementation skill. No subagents. Same quality bar as orchestrate-dev, none of the orchestration overhead. Ships directly after Phase 3 — no `/review-impl` gate. Use `/orchestrate-dev` when a formal review gate is required.
 
 **Invocation:** `/deliver <slug>` or `/deliver` (ad-hoc, without a TODO doc)
 
@@ -73,6 +73,7 @@ Fix any remaining violations auto-fix can't resolve.
 
 ### Step 5 — Run tests (scoped)
 ```bash
+mkdir -p .pytest-logs
 uv run pytest <affected test files> -x -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-task.log
 ```
 If any test fails: diagnose from traceback, fix, re-run. Do not move to the next task with a red suite.
@@ -107,7 +108,11 @@ Read every changed file. Check:
 Report findings as a short table (severity, file:line, description). Stop at blocking issues; proceed on minor.
 
 ### Doc sync
-Run `/sync-doc` scoped to affected docs, or full if cross-cutting changes were made.
+Determine scope before running:
+- **Full** (`/sync-doc`): any task touches shared modules (config, agent registration, core dependency infrastructure), renames or removes a public API, or changes a schema.
+- **Narrow** (`/sync-doc <doc>`): all tasks are self-contained within a single module with no public API changes and no cross-module dependencies.
+
+State the scope decision and rationale before running.
 
 ---
 
@@ -125,10 +130,11 @@ Mark completed tasks `✓ DONE` in the plan file (if a slug was used).
 - Even patch = feature/enhancement
 - Odd patch = bugfix
 
-**Archive plan** — if a slug was used and review-impl returns PASS, move the plan to completed:
+**Archive plan** — if a slug was used, move the plan to completed:
 ```
 git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/completed/
 ```
+Grep the repo for the slug to confirm no stale references remain in source code (DESIGN docs referencing this plan by name are expected — only source code references are stale).
 
 **Commit** — stage only delivery files + `pyproject.toml` + the plan archive move (if applicable). Never include unrelated files. If anything is ambiguous, ask before staging.
 

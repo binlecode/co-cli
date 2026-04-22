@@ -118,6 +118,7 @@ For each blocking finding, in order:
 
 Run the full test suite:
 ```
+mkdir -p .pytest-logs
 uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-review-impl.log
 ```
 

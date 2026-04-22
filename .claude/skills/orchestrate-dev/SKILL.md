@@ -210,72 +210,27 @@ or
 
 Run after all tasks have been attempted (or after the first blocked task if stopping early).
 
-### Step 1 — Quality gate
+### Step 1 — Quality gate and test run
 
-Run the full quality gate (lint + types + tests) across the source tree:
+**Full delivery (all tasks passed):**
 ```bash
-scripts/quality-gate.sh full
+mkdir -p .pytest-logs
+scripts/quality-gate.sh full 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
 ```
-Any failure = stop and fix before proceeding. Use `scripts/quality-gate.sh lint --fix` to auto-fix ruff violations; test failures require manual fixes.
+Runs lint and the full test suite. Any failure = stop and fix. Use `scripts/quality-gate.sh lint --fix` for ruff violations; test failures require manual fixes.
 
-### Step 2 — Run tests
-
-> **Note:** `scripts/quality-gate.sh full` already ran the test suite. This step only applies when running tests with different scope (partial delivery).
-
-
-**Full delivery (all tasks passed):** Run the full test suite to catch cross-module regressions.
-A task can pass its own `done_when` while silently breaking an unrelated module that imports the
-changed code. Touched-files-only testing misses this.
+**Partial delivery (any task blocked or skipped):** Run only test files touched by completed tasks — a full suite against incomplete code produces misleading failures.
+```bash
+mkdir -p .pytest-logs
+uv run pytest <test_file_1> <test_file_2> -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-touched.log
 ```
-uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
-```
+Collect touched test files from completed tasks only. If none were touched, skip and record "no tests run — no test files touched by completed tasks."
 
-**Partial delivery (any task blocked or skipped):** Run only test files touched by completed
-(✓ pass) tasks — a full suite against incomplete code produces misleading failures.
-```
-uv run pytest <test_file_1> <test_file_2> ... -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-touched.log
-```
-Collect touched test files from completed tasks only. If none were touched, skip and record
-"no tests run — no test files touched by completed tasks."
-
-**Any failure = stop. Do RCA: read the failing test, trace to root cause in source, fix it, re-run. Never dismiss a failure as flaky without running it 3 times and identifying the specific cause. Do not proceed to Step 2 with a red suite.**
+Any failure = stop. Do RCA: read the failing test, trace to root cause in source, fix it, re-run. Never dismiss a failure as flaky without running it 3 times and identifying the specific cause.
 
 Record: command run, number passed, number failed, any failure output.
 
-### Step 3 — Independent code review
-
-Spawn a reviewer subagent. Pass it exactly:
-- The output of `git diff HEAD` scoped to files changed by completed tasks
-- The task specs (id, title, done_when) for all completed tasks
-- The Engineering Rules section from CLAUDE.md
-
-The reviewer has no access to the implementation conversation — cold read only.
-
-**Reviewer checks** (apply CLAUDE.md Engineering Rules to every changed file):
-- Spec fidelity: does the diff implement exactly the task spec, no more, no less
-- Cross-task coherence: do the combined changes form a consistent whole
-- Code hygiene: dead code, stale imports, over-engineering — simplify before integration
-- Test policy: no mocks or fakes — blocking regardless of other quality
-- Security: command injection, path traversal, SQL injection, missing input validation
-
-**Reviewer output** (append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` under `## Independent Review`):
-
-```markdown
-## Independent Review
-
-| File | Finding | Severity | Task |
-|------|---------|----------|------|
-| ...  | ...     | blocking/minor | TASK-N |
-
-**Overall: clean / <N> blocking / <N> minor**
-```
-
-If any blocking findings: fix before proceeding to Step 3. Minor findings:
-record and proceed — TL decides at Gate 2.
-
-Record result: clean / N blocking / N minor.
-
-### Step 4 — Sync docs
+### Step 2 — Sync docs
 
 Determine scope before running:
 
@@ -286,7 +241,7 @@ State the scope decision and rationale before running (e.g., "narrow — all tas
 
 Record result: clean / fixed (what was fixed).
 
-### Step 5 — TODO lifecycle
+### Step 3 — TODO lifecycle
 
 For every task that reached ✓ pass, mark it done in the plan file — do not delete or remove it. The task record is preserved as a track log for debugging, troubleshooting, and potential revert.
 
@@ -319,7 +274,6 @@ Append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`:
 | TASK-3 | <done_when text> | — skipped |
 
 **Tests:** <full suite / touched files> — <N> passed, <N> failed
-**Independent Review:** clean / <N> blocking / <N> minor
 **Doc Sync:** clean / fixed (<what was fixed>)
 
 **Overall: DELIVERED / BLOCKED**
@@ -334,6 +288,8 @@ Append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`:
 ## Phase 5 — Ship
 
 Run only after `/review-impl` returns PASS. Do not ship a DELIVERED-only delivery — Gate 2 requires the review-impl PASS verdict first.
+
+After Gate 2 PASS, invoke `/ship <slug>` to execute this phase directly — do not re-run `/orchestrate-dev`, which would restart task execution from the beginning.
 
 ### Step 0 — Format gate
 

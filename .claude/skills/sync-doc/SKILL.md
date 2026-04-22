@@ -76,7 +76,6 @@ Check every factual claim against the source. Inaccuracy patterns to look for:
 | **Wrong field name** | Struct/dataclass/schema field name misspelled or renamed in code |
 | **Stale file path** | File listed in Files section has been moved or deleted |
 | **Missing coverage** | Shipped feature with no doc coverage at all (add a minimal description, don't over-document) |
-| **Stale cross-doc index** | `system.md` Component Docs table missing a `docs/specs/` file, or referencing a renamed/deleted one. Check once per sync-doc run regardless of scope — glob actual `docs/specs/*.md` files and diff against the table in `system.md`. |
 | **Stale term in out-of-scope docs** | A renamed API, decorator, or concept appears in specs outside the explicit invocation scope. When an API rename is *confirmed* by reading source (not suspected), widen scope to grep all `docs/specs/*.md` files for the old term. Announce the expansion before fixing: `⚠ Expanding scope: renaming <old> → <new> across all specs.` |
 
 #### 2d. Fix in-place
@@ -89,7 +88,11 @@ Use the Edit tool to fix each inaccuracy directly in the doc. Rules:
 - For stale status: update the status claim to reflect reality; if a TODO reference is now wrong, remove it or update it
 - For missing coverage: add a minimal accurate description — don't pad
 
-### Step 3 — Output summary
+### Step 3 — Cross-doc index check (once per run)
+
+Glob `docs/specs/*.md` and diff the result against the Component Docs table in `system.md`. Fix any entries that are missing, renamed, or deleted. This runs once per invocation regardless of which docs were in scope.
+
+### Step 4 — Output summary
 
 After processing all docs, output a table:
 
