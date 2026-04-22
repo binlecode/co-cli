@@ -307,6 +307,15 @@ async def test_trigger_uses_max_floor():
     assert len(result) < len(msgs), "max() floor should have triggered compaction"
 
 
+def test_summarize_prompt_active_task_section() -> None:
+    """Assembled prompt includes ## Active Task as the primary continuity anchor section."""
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
+    assert "## Active Task" in result
+    active_task_pos = result.index("## Active Task")
+    goal_pos = result.index("## Goal")
+    assert active_task_pos < goal_pos, "## Active Task must appear before ## Goal"
+
+
 def test_summarize_prompt_pending_resolved_sections() -> None:
     """Assembled prompt includes ## Pending User Asks and ## Resolved Questions sections."""
     result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)

@@ -794,11 +794,13 @@ def step_5_prompt_assembly() -> bool:
     print("\n--- Step 5: Prompt assembly [Outcome 1, BC1] ---")
     passed = True
 
-    # 5a: Template has all 9 sections
+    # 5a: Template has all 9 static sections
+    # ## User Corrections is conditional (LLM inserts it only when corrections detected) —
+    # it is described in the instruction text after ## Next Step, not as a static body section.
     for section in (
+        "## Active Task",
         "## Goal",
         "## Key Decisions",
-        "## User Corrections",
         "## Errors & Fixes",
         "## Working Set",
         "## Progress",
@@ -811,7 +813,7 @@ def step_5_prompt_assembly() -> bool:
             passed = False
     if passed:
         print(
-            "  PASS: template has 9 template sections (Goal, Key Decisions, User Corrections, "
+            "  PASS: template has 9 static sections (Active Task, Goal, Key Decisions, "
             "Errors & Fixes, Working Set, Progress, Pending User Asks, Resolved Questions, Next Step)"
         )
 
@@ -1132,7 +1134,7 @@ async def step_6_full_chain() -> bool:
     # Structured sections
     sections = [
         s
-        for s in ("Goal", "Key Decisions", "Working Set", "Progress", "Next Step")
+        for s in ("Active Task", "Goal", "Key Decisions", "Working Set", "Progress", "Next Step")
         if s.lower() in summary_text.lower()
     ]
     if len(sections) >= 2:
@@ -2109,11 +2111,12 @@ async def step_12_prompt_composition() -> bool:
     enrichment = "Files touched: /auth/views.py, /auth/middleware.py\n\nActive tasks:\n- [pending] Add JWT support"
     prompt = _build_summarizer_prompt(_SUMMARIZE_PROMPT, enrichment, personality_active=True)
 
-    # 8 static template sections present and in order.
+    # 9 static template sections present and in order.
     # ## User Corrections is conditional (LLM inserts it only when corrections detected) —
-    # it is described in the instruction text, not in the static section body.
+    # it is described in the instruction text after ## Next Step, not as a static body section.
     section_positions = {}
     for section in (
+        "## Active Task",
         "## Goal",
         "## Key Decisions",
         "## Errors & Fixes",
@@ -2130,11 +2133,12 @@ async def step_12_prompt_composition() -> bool:
         else:
             section_positions[section] = pos
 
-    if len(section_positions) == 8:
+    if len(section_positions) == 9:
         ordered = all(
             section_positions[a] < section_positions[b]
             for a, b in zip(
                 [
+                    "## Active Task",
                     "## Goal",
                     "## Key Decisions",
                     "## Errors & Fixes",
@@ -2144,6 +2148,7 @@ async def step_12_prompt_composition() -> bool:
                     "## Resolved Questions",
                 ],
                 [
+                    "## Goal",
                     "## Key Decisions",
                     "## Errors & Fixes",
                     "## Working Set",
@@ -2156,7 +2161,7 @@ async def step_12_prompt_composition() -> bool:
             )
         )
         if ordered:
-            print("  PASS: 12a — 8 static template sections present and in order")
+            print("  PASS: 12a — 9 static template sections present and in order")
         else:
             print(f"  FAIL: 12a — sections out of order: {section_positions}")
             passed = False
@@ -2393,8 +2398,11 @@ async def step_13_prompt_upgrade_quality() -> bool:
         print(f"    Next Step section: {_snippet(next_step_text or '(empty)', 120)}")
         passed = False
 
-    # --- 13b: User corrections preserved ---
-    print("\n  [13b] User corrections preserved in ## User Corrections")
+    # --- 13b: User corrections captured in ## Active Task verbatim anchor ---
+    # The last user message is "wait, that's not what I wanted — use python-jose, not hmac".
+    # ## Active Task must quote it verbatim → "python-jose" must appear there.
+    # This is deterministic (verbatim copy), unlike conditional section classification.
+    print("\n  [13b] User corrections captured in ## Active Task verbatim anchor")
     msgs_13b = [
         _user("Implement JWT auth."),
         _assistant("I'll use PyJWT library for token generation."),
@@ -2410,19 +2418,19 @@ async def step_13_prompt_upgrade_quality() -> bool:
         print("  FAIL: 13b — timed out")
         return False
 
-    corrections_section = _extract_section(summary_13b, "User Corrections")
-    corrections_low = corrections_section.lower()
-    has_token = "hmac" in corrections_low or "python-jose" in corrections_low
-    if corrections_section and has_token:
+    active_task = _extract_section(summary_13b, "Active Task")
+    active_task_low = active_task.lower()
+    has_token = "python-jose" in active_task_low or "hmac" in active_task_low
+    if active_task and has_token:
         print(
-            "  PASS: 13b — ## User Corrections exists and contains correction token (hmac/python-jose)"
+            "  PASS: 13b — ## Active Task present and contains correction token (python-jose/hmac)"
         )
-    elif not corrections_section:
-        print("  FAIL: 13b — ## User Corrections section absent from summary")
+    elif not active_task:
+        print("  FAIL: 13b — ## Active Task section absent from summary")
         passed = False
     else:
-        print("  FAIL: 13b — ## User Corrections exists but missing 'hmac'/'python-jose' tokens")
-        print(f"    Corrections: {_snippet(corrections_section, 200)}")
+        print("  FAIL: 13b — ## Active Task present but missing 'python-jose'/'hmac' tokens")
+        print(f"    Active Task: {_snippet(active_task, 200)}")
         passed = False
 
     # --- 13c: User feedback on error fix retained ---

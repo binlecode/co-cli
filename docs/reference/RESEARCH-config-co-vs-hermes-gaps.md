@@ -36,7 +36,13 @@ Code-verified comparison of the current `co-cli` config loader against Hermes.
 
 ## Gaps
 
-### 1. `${VAR}` template expansion in config values
+### 1. Separate secrets file
+
+Hermes splits settings and secrets across `config.yaml` and `.env`. `co-cli` supports env vars, but still allows secret-bearing fields in `settings.json`, so secrets can end up persisted in the main config file.
+
+**ROI:** medium to high. Useful if the goal is safer shared config templates or less secret sprawl, but broader than `${VAR}` expansion.
+
+### 2. `${VAR}` template expansion in config values
 
 Hermes expands `${VAR}` inside loaded config values. `co-cli` does not: it parses `settings.json`, then applies only explicit mapped env overrides.
 
@@ -53,12 +59,6 @@ Example that works in Hermes but not in `co-cli`:
 
 **ROI:** medium. Small loader change, direct Hermes parity, no file-format migration required.
 
-### 2. Separate secrets file
-
-Hermes splits settings and secrets across `config.yaml` and `.env`. `co-cli` supports env vars, but still allows secret-bearing fields in `settings.json`, so secrets can end up persisted in the main config file.
-
-**ROI:** medium to high. Useful if the goal is safer shared config templates or less secret sprawl, but broader than `${VAR}` expansion.
-
 ### 3. Commentable config
 
 Hermes uses YAML, so config can be documented inline. `co-cli` uses plain JSON, so it cannot.
@@ -69,6 +69,6 @@ Hermes uses YAML, so config can be documented inline. `co-cli` uses plain JSON, 
 
 Against the latest `co-cli` implementation, the real Hermes config gaps are:
 
-1. `${VAR}` expansion in file-backed config values
-2. a first-class split between settings and secrets
+1. a first-class split between settings and secrets
+2. `${VAR}` expansion in file-backed config values
 3. a commentable config format
