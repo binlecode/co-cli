@@ -289,44 +289,4 @@ Append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`:
 
 Run only after `/review-impl` returns PASS. Do not ship a DELIVERED-only delivery — Gate 2 requires the review-impl PASS verdict first.
 
-After Gate 2 PASS, invoke `/ship <slug>` to execute this phase directly — do not re-run `/orchestrate-dev`, which would restart task execution from the beginning.
-
-### Step 0 — Format gate
-
-Run before staging anything:
-```bash
-scripts/quality-gate.sh lint --fix
-```
-Catches any formatting issues introduced by review-impl fixes or doc-sync edits after Phase 3's quality gate.
-
-### Step 1 — Archive plan
-
-Locate the plan file (glob `docs/exec-plans/active/*-<slug>.md`) then move it to completed:
-
-```
-git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/completed/
-```
-
-Grep the repo for the slug to confirm no stale references remain in source code (DESIGN docs referencing this plan by name are expected — only source code references are stale).
-
-### Step 2 — Bump version
-
-Read the current version from `pyproject.toml`. Bump the **third digit** (patch) by 2 unless the user specifies a different version or digit:
-
-- Even patch = feature/enhancement delivery (default for most deliveries)
-- Odd patch = bugfix delivery
-
-```
-# e.g. 0.5.0 → 0.5.2 for a feature delivery
-# e.g. 0.5.0 → 0.5.1 for a pure bugfix delivery
-```
-
-Edit `pyproject.toml` — the `version =` field only. No other changes.
-
-### Step 3 — Commit
-
-Stage all delivery files plus `pyproject.toml`. Commit with a message that:
-- Starts with `refactor:`, `feat:`, or `fix:` as appropriate
-- One-line subject summarising the delivery
-- Body bullets for the most significant changes (3–6 lines max)
-- Ends with `Co-Authored-By: Claude <noreply@anthropic.com>`
+Run `/ship <slug>`. Do not re-run `/orchestrate-dev` — that restarts task execution from the beginning.
