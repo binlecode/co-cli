@@ -499,10 +499,10 @@ async def test_threshold_floor_prevents_compaction_on_small_context() -> None:
 
 @pytest.mark.asyncio
 async def test_anti_thrashing_gate_suppresses_proactive_after_low_yield_runs() -> None:
-    """Anti-thrashing gate: skips proactive compaction when recent N runs all had < min savings.
+    """Anti-thrashing gate: skips proactive compaction after N low-yield runs.
 
-    Sets recent_proactive_savings to two entries both below min_proactive_savings (0.10),
-    and proactive_thrash_window=2. Gate should activate and return msgs unchanged.
+    Sets the low-yield counter to the proactive_thrash_window value. Gate should
+    activate and return msgs unchanged.
     """
     msgs = _make_messages(10, last_input_tokens=0)
     config = make_settings(
@@ -514,15 +514,15 @@ async def test_anti_thrashing_gate_suppresses_proactive_after_low_yield_runs() -
         ),
     )
     ctx = _make_ctx(config)
-    # Simulate two low-yield runs (savings < 10%) — gate should activate
-    ctx.deps.runtime.recent_proactive_savings = [0.02, 0.03]
+    # Simulate two low-yield runs (savings < 10%) — gate should activate.
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 2
     result = await summarize_history_window(ctx, msgs)
     assert result is msgs
 
 
 @pytest.mark.asyncio
 async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> None:
-    """Anti-thrashing gate is inactive when fewer than proactive_thrash_window runs have been recorded."""
+    """Anti-thrashing gate is inactive when the low-yield counter is below the threshold."""
     msgs = _make_messages(10, last_input_tokens=0)
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
@@ -533,8 +533,8 @@ async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> N
         ),
     )
     ctx = _make_ctx(config)
-    # Only one low-yield run — window not full, gate must not activate
-    ctx.deps.runtime.recent_proactive_savings = [0.02]
+    # Only one low-yield run — gate must not activate.
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 1
     result = await summarize_history_window(ctx, msgs)
     # Compaction should still fire (gate inactive)
     assert len(result) < len(msgs)
@@ -544,29 +544,28 @@ async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> N
 async def test_hygiene_not_blocked_by_anti_thrashing_gate() -> None:
     """Pre-turn hygiene compaction fires even when the anti-thrashing gate is active.
 
-    Gate is active with two low-yield entries. Hygiene must still compact because
-    maybe_run_pre_turn_hygiene clears the savings ring before calling summarize_history_window.
+    Gate is active with the low-yield counter at the threshold. Hygiene must still
+    compact because maybe_run_pre_turn_hygiene clears the counter before calling
+    summarize_history_window.
     """
     # 10 messages x 40_000 chars = 400_000 chars / 4 = 100_000 tokens > 88_000 threshold
     msgs = _make_messages(10, body_chars=40_000)
-    # Active gate: two low-yield runs below min_proactive_savings=0.10
+    # Active gate: low-yield counter is already at the threshold.
     deps = _make_hygiene_deps()
-    deps.runtime.recent_proactive_savings = [0.02, 0.03]
+    deps.runtime.consecutive_low_yield_proactive_compactions = 2
     result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
     # Gate must not block hygiene — compaction must fire
     assert len(result) < len(msgs)
-    # Stale gate state is gone: original [0.02, 0.03] values are cleared before compaction.
-    # The ring may contain one new entry from the hygiene-triggered compaction savings.
-    assert 0.02 not in deps.runtime.recent_proactive_savings
-    assert 0.03 not in deps.runtime.recent_proactive_savings
+    # Hygiene reset prevents stale gate state from blocking compaction.
+    assert deps.runtime.consecutive_low_yield_proactive_compactions == 0
 
 
 @pytest.mark.asyncio
 async def test_savings_clear_unblocks_gate() -> None:
-    """Clearing recent_proactive_savings (as hygiene and overflow do) deactivates the gate.
+    """Resetting the low-yield counter (as hygiene and overflow do) deactivates the gate.
 
-    Gate is active with [0.02, 0.03]. After clearing (what orchestrate.py does post-hygiene),
-    the next proactive pass must fire — confirming the reset contract is sufficient.
+    Gate is active at the threshold. After resetting the counter, the next proactive
+    pass must fire — confirming the reset contract is sufficient.
     """
     msgs = _make_messages(10, last_input_tokens=0)
     config = make_settings(
@@ -578,10 +577,10 @@ async def test_savings_clear_unblocks_gate() -> None:
         ),
     )
     ctx = _make_ctx(config)
-    # Populate stale savings that would gate proactive compaction
-    ctx.deps.runtime.recent_proactive_savings = [0.02, 0.03]
-    # Simulate orchestrate.py post-hygiene/overflow reset
-    ctx.deps.runtime.recent_proactive_savings.clear()
+    # Populate stale low-yield state that would gate proactive compaction.
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 2
+    # Simulate orchestrate.py post-hygiene/overflow reset.
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
     # After clear, proactive must fire
     result = await summarize_history_window(ctx, msgs)
     assert len(result) < len(msgs)

@@ -60,7 +60,7 @@ M2b Batch budget enforcement (always-on, every turn, no LLM):
 M3  Window compaction (token-pressure-driven, LLM call):
     Trigger: max(proactive_ratio × budget, min_context_length_tokens)
              = max(0.75 × budget, 64 K) — matches hermes two-way floor semantics
-    Anti-thrash: savings ring buffer — blocked if last N runs saved < 10 % each
+    Anti-thrash: consecutive low-yield counter — blocked after N proactive runs each save < 10 %
     Boundary planner (shared with ER):
       1. head_end = find_first_run_end (first TextPart/ThinkingPart response) + 1
       2. group_by_turn — groups by UserPromptPart boundaries
@@ -144,6 +144,8 @@ dominant cost driver for large models. The auxiliary-model comparison is also
 inconsistent with co-cli's single-model architecture (see Design decisions below).
 The "burns a full LLM slot" framing in the original draft was inaccurate.
 
+**Gap #1 — Rejected; not adopted.**
+
 ### 3. Iterative recompression / summary updates
 
 | Aspect | co-cli | hermes-agent |
@@ -155,6 +157,8 @@ The "burns a full LLM slot" framing in the original draft was inaccurate.
 **co-cli gap:** Iterative evolution avoids contradiction between summaries that cover
 overlapping ranges. co-cli nests prior summaries as context but may lose the distinction
 between "resolved" and "pending" across compression cycles.
+
+**Gap #9 — Risk: Low. Hermes: LLM merges prior summary with new progress on recompression; co-cli re-summarizes fresh each time.**
 
 ### 4. Tool result handling before summarization
 
@@ -172,8 +176,14 @@ signal about what those calls returned. Hermes's semantic 1-line descriptions
 producing richer summaries. This gap is scoped to summarization quality — M2a's
 always-on pruning is intentional (see Design decisions below).
 
+**Gap #2 — Risk: Medium. Hermes: semantic 1-line descriptions (tool name + first 2 args + char count) in Phase 1.**
+
 **co-cli gap:** No deduplication of identical tool results. Repeated `file_read` of
 the same file across many turns accumulates token cost unnecessarily.
+
+**Gap #5 — Risk: Low-medium. Hermes: hash-based dedup of identical tool result content in Phase 1.**
+
+**Gap #13 — Shipped 2026-04-21.** `file_read` in-tool caps resolved (500-line default, 2000-line ceiling, 2000-char/line, 500 KB gate); `max_result_size` stays `math.inf` to prevent persist→read→persist loop. Details in M1 pipeline entry.
 
 ### 5. Summary structure and handoff framing
 
@@ -189,10 +199,14 @@ the same file across many turns accumulates token cost unnecessarily.
 When a summary spans multiple open questions, the LLM resuming may not know which were
 already answered. Hermes's split is load-bearing for multi-step interactive sessions.
 
+**Gap #3 — Risk: Medium. Hermes: explicit `Resolved Questions` / `Pending User Asks` sections in summary template.**
+
 **co-cli gap:** The handoff framing is purely informational ("continued from a previous
 conversation"). Hermes's prefix is actively defensive — it tells the LLM not to re-do
 listed work. This matters when the summary contains successful shell commands or file
 writes that must not be repeated.
+
+**Gap #4 — Risk: Medium. Hermes: defensive `SUMMARY_PREFIX` with explicit "do NOT re-execute" guard.**
 
 ### 6. Boundary planning and tail protection
 
@@ -217,9 +231,15 @@ writes that must not be repeated.
 | Cross-turn state | Persists in `deps.runtime` for the session | Persists in compressor instance for the session |
 | Overflow recovery | Two-attempt per turn: (1) normal `tail_fraction`; (2) `tail_fraction / 2` if (1) returns None. Second overflow in same turn → unrecoverable. `emergency_compact` (static first+last+marker, no LLM) is defined in `_history.py` but NOT wired into the production path — currently used only in tests. | Single attempt; falls back to static text |
 
+**co-cli gap:** `emergency_compact` is defined in `_history.py` (static head+last+marker, no LLM) but not wired into the production overflow path — currently used only in tests. When both `recover_overflow_history` attempts return None, the session falls to an unrecoverable error state rather than degrading gracefully.
+
+**Gap #11 — Risk: Low. Hermes: no equivalent; static text fallback is production there.**
+
 **co-cli gap:** Failure count is a monotone counter; recovery resets to 0. If provider
 issues are intermittent, a string of failures could push count to very high values,
 making probes sparse (`count-3` growing). Hermes's time-based cooldown is bounded.
+
+**Gap #10 — Risk: Low. Hermes: time-based cooldown (`_summary_failure_cooldown_until`) with bounded, deterministic recovery interval.**
 
 **co-cli gap:** `_CONTEXT_OVERFLOW_PATTERNS` in `orchestrate.py` (`"prompt is too long"`,
 `"context_length_exceeded"`, `"maximum context length"`) covers Ollama/OpenAI-compatible
@@ -237,11 +257,13 @@ error handling. Full failure sequence:
 
 The design invariant comment at `orchestrate.py:633` — `"NEVER falls through to the 400 reformulation handler"` for context overflow — is violated for Gemini. Regression introduced when Gemini provider support was added.
 
+**Gap #12 — Risk: High. Hermes: not applicable. Fix: add Gemini error strings to `_CONTEXT_OVERFLOW_PATTERNS`.**
+
 ### 8. Anti-thrashing
 
 | Aspect | co-cli | hermes-agent |
 |--------|--------|--------------|
-| Mechanism | Savings ring buffer (configurable window + min fraction) | Consecutive ineffective-compression counter |
+| Mechanism | Consecutive low-yield counter (configurable count + min fraction) | Consecutive ineffective-compression counter |
 | Config | `proactive_thrash_window` (default 2), `min_proactive_savings` (default 0.10) | Hardcoded: 2 consecutive < 10 % savings → block |
 | Scope | Blocks M3 (proactive) only; M0 hygiene and overflow recovery are never blocked | Blocks `should_compress()` entirely; error-triggered path bypassed separately |
 | Reset | Cleared by M0 hygiene, overflow recovery, and post-hygiene in `run_turn()` | Reset to 0 on next effective (≥ 10 %) compression |
@@ -250,20 +272,22 @@ The design invariant comment at `orchestrate.py:633` — `"NEVER falls through t
 **co-cli gap:** No guided `/compact <focus>`. Hermes's `/compress <focus_topic>` lets users
 direct what to preserve when anti-thrashing blocks. co-cli users have no escape short of `/new`.
 
+**Gap #8 — Risk: Low. Hermes: `/compress <focus_topic>` parameter passes a topic hint to the summarizer.**
+
 **co-cli note (gate is per-turn, not cross-turn):** The Reset row above is technically
-accurate but incomplete. `run_turn()` (`orchestrate.py:588`) clears `recent_proactive_savings`
+accurate but incomplete. `run_turn()` (`orchestrate.py:588`) resets `consecutive_low_yield_proactive_compactions`
 **unconditionally at every turn entry**, not only when M0 actually fires:
 ```python
 message_history = await maybe_run_pre_turn_hygiene(...)
-deps.runtime.recent_proactive_savings.clear()  # always, regardless of whether M0 ran
+deps.runtime.consecutive_low_yield_proactive_compactions = 0  # always, regardless of whether M0 ran
 ```
 This makes the anti-thrash gate per-turn only — it can accumulate entries only across
 `ModelRequestNode` boundaries within a single turn (multi-tool-call chains). A session
 where M3 fires once per turn with < 10 % savings on every turn never trips the gate.
-The `CoRuntimeState` docstring (`deps.py:144`) says `recent_proactive_savings`
-"persists across turns within a session" — this is misleading for the proactive savings
-field specifically. The behavioral analysis here is confirmed correct; the docstring fix
-is still pending in source.
+The simplified counter implementation makes the control flow easier to see, but the
+behavioral limit is unchanged: anti-thrash still does not accumulate across turns.
+
+**Gap #14 — Risk: Low. Hermes: no equivalent. M0 hygiene provides a backstop; within-turn gate still works.**
 
 ### 9. Session continuity and post-compaction state
 
@@ -280,10 +304,14 @@ marker that "this section is post-compaction-N." The summary marker is in-line b
 there is no external record. Hermes's session lineage enables tools like "show me
 what changed before and after compaction."
 
+**Gap #6 — Risk: Low. Hermes: new session ID + parent link recorded in session DB on each compaction.**
+
 **co-cli gap:** Todos are passed to the summarizer as enrichment (informing the
 summary text) but are not injected as a standalone message post-compaction. If the
 summary omits a todo, it is lost from the active context. Hermes appends the todo
 snapshot unconditionally.
+
+**Gap #7 — Risk: Low. Hermes: unconditional todo snapshot appended to compressed messages post-compaction.**
 
 ### 10. Search-tool breadcrumb preservation
 
@@ -309,28 +337,6 @@ silently break tool discovery for the remainder of the session. Not applicable t
 
 **co-cli gap:** No config for auxiliary summarizer. Single knob for per-tool result
 size; no per-provider or per-model tuning of the summarizer.
-
----
-
-## Summary of co-cli Gaps by Priority
-
-| # | Gap | Hermes approach | Risk if not addressed |
-|---|-----|-----------------|----------------------|
-| 1 | ~~No auxiliary summarization model~~ — **REJECTED**: `settings_noreason` already suppresses reasoning cost; single-model architecture is intentional | `auxiliary.compression.model` config | N/A |
-| 2 | Static tool-result truncation placeholders | Semantic 1-line descriptions in Phase 1 | Medium — summarizer gets less signal from cleared older turns |
-| 3 | No resolved/pending question split in summary | `Resolved Questions` vs `Pending User Asks` sections | Medium — LLM may re-answer already-resolved questions after compaction |
-| 4 | Weak handoff framing | Defensive `SUMMARY_PREFIX` with explicit "do NOT re-execute" | Medium — risk of repeated tool calls (writes, shells) described in summary |
-| 5 | No tool result deduplication | Hash-based dedup in Phase 1 | Low-medium — repeated reads accumulate token cost; common in file-heavy sessions |
-| 6 | No session rollover / compaction audit trail | New session ID + parent link | Low — no external record of compaction events; harder to debug |
-| 7 | Todos injected as enrichment, not standalone | Unconditional todo snapshot appended to compressed messages | Low — todo loss on summarizer omission is possible |
-| 8 | No guided `/compact <focus>` | `/compress <focus_topic>` parameter | Low — users cannot direct what to preserve when anti-thrashing blocks |
-| 9 | No iterative summary evolution on recompression | LLM merges prior summary with new progress | Low — duplicate or contradicting summaries possible across compression cycles |
-| 10 | Monotone failure counter — probes grow sparse | Time-based cooldown is bounded | Low — intermittent provider issues push probe cadence increasingly far apart |
-| 11 | `emergency_compact` defined but unwired | N/A — no equivalent; static fallback is production | Low — both LLM recovery attempts failing leaves session in error state rather than degrading gracefully |
-| 12 | Gemini context overflow not detected — `_CONTEXT_OVERFLOW_PATTERNS` covers Ollama/OpenAI error bodies only; Gemini 400s fall into the reformulation handler, injecting 2 error `UserPromptPart`s into history (making it longer), exhausting `tool_reformat_budget`, and persisting those messages into subsequent turns via `_build_error_turn_result`. Design invariant "NEVER falls through to 400 reformulation handler" violated for Gemini. | N/A | High — Gemini sessions hitting context limit get worse history, confusing model on next turn, no compaction attempted |
-| 13 | ~~`file_read` no safety-net size limit~~ — **SHIPPED 2026-04-21**: four in-tool caps added (500-line default, 2000-line ceiling, 2000-char/line, 500 KB gate); `max_result_size` stays `math.inf` to prevent persist→read→persist loop | N/A | ~~Medium~~ — resolved |
-| 14 | Anti-thrash gate is per-turn only — `run_turn()` unconditionally clears `recent_proactive_savings` at every turn entry; cross-turn thrashing (repeated low-yield M3 runs across turns) is never blocked | N/A | Low — M0 hygiene provides a backstop for true thrashing scenarios; within-turn gate still works |
-| 15 | ~~Stale `latest_response_input_tokens` after same-turn compaction~~ — **SHIPPED:** `compacted_in_current_turn` flag (`_history.py:826`) zeroes out the API-reported count on the next invocation, preventing spurious `plan_compaction_boundaries` calls | N/A | ~~Low~~ — resolved |
 
 ---
 

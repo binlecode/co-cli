@@ -749,7 +749,7 @@ async def summarize_history_window(
     Triggers when ``token_count > max(int(budget * cfg.proactive_ratio), cfg.min_context_length_tokens)``.
     Boundaries come from ``plan_compaction_boundaries`` — the same planner
     used by overflow recovery. Anti-thrashing gate skips proactive when the
-    last N runs all yielded < cfg.min_proactive_savings savings.
+    last N proactive runs each yielded < cfg.min_proactive_savings savings.
 
     Keeps:
       - **head** — first run's messages (up to first TextPart response)
@@ -781,12 +781,9 @@ async def summarize_history_window(
     if token_count <= token_threshold:
         return messages
 
-    # Anti-thrashing gate: skip proactive if the last N compactions all yielded low savings.
+    # Anti-thrashing gate: skip proactive after N consecutive low-yield proactive runs.
     # Does NOT gate overflow recovery or hygiene — only the proactive path.
-    recent = ctx.deps.runtime.recent_proactive_savings
-    if len(recent) >= cfg.proactive_thrash_window and all(
-        s < cfg.min_proactive_savings for s in recent[-cfg.proactive_thrash_window :]
-    ):
+    if ctx.deps.runtime.consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window:
         log.info("Compaction: proactive anti-thrashing gate active, skipping")
         return messages
 
@@ -827,9 +824,10 @@ async def summarize_history_window(
     # Track proactive compaction savings for the anti-thrashing gate.
     tokens_after = estimate_message_tokens(result)
     savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
-    updated_savings = list(ctx.deps.runtime.recent_proactive_savings)
-    updated_savings.append(savings)
-    ctx.deps.runtime.recent_proactive_savings = updated_savings[-cfg.proactive_thrash_window :]
+    if savings < cfg.min_proactive_savings:
+        ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
+    else:
+        ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
 
     return result
 
@@ -861,7 +859,7 @@ async def maybe_run_pre_turn_hygiene(
             return message_history
         # Clear the anti-thrashing gate so hygiene is never blocked by prior low-yield
         # proactive runs. Orchestrate.py also clears on return — that's a safe no-op.
-        deps.runtime.recent_proactive_savings.clear()
+        deps.runtime.consecutive_low_yield_proactive_compactions = 0
         ctx = RunContext(deps=deps, model=model, usage=RunUsage())
         return await summarize_history_window(ctx, message_history)
     except Exception:

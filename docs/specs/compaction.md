@@ -362,10 +362,9 @@ threshold = max(int(budget * cfg.proactive_ratio), cfg.min_context_length_tokens
 if token_count <= threshold:
     return messages   # fast path
 
-# Anti-thrashing gate: skip proactive if last N compactions all yielded < min savings.
+# Anti-thrashing gate: skip proactive after N consecutive low-yield runs.
 # Does NOT gate overflow recovery or pre-turn hygiene.
-recent = ctx.deps.runtime.recent_proactive_savings
-if len(recent) >= cfg.proactive_thrash_window and all(s < cfg.min_proactive_savings for s in recent[-cfg.proactive_thrash_window:]):
+if ctx.deps.runtime.consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window:
     return messages   # gate active — skip proactive
 ```
 
@@ -445,9 +444,10 @@ result = [*head, marker, *preserved, *tail]
 # Track savings for anti-thrashing gate.
 tokens_after = estimate_message_tokens(result)
 savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
-ctx.deps.runtime.recent_proactive_savings = (
-    ctx.deps.runtime.recent_proactive_savings + [savings]
-)[-cfg.proactive_thrash_window:]
+if savings < cfg.min_proactive_savings:
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
+else:
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
 return result
 ```
 
@@ -631,7 +631,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
 | `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — hardened with soft-overrun, active-user anchoring); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
-| `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry; resets `deps.runtime.recent_proactive_savings` after hygiene and overflow to unblock the anti-thrashing gate. |
+| `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; `_is_context_overflow` detects provider error; `turn_state.overflow_recovery_attempted` gates one-shot retry; resets `deps.runtime.consecutive_low_yield_proactive_compactions` after hygiene and overflow to unblock the anti-thrashing gate. |
 | `co_cli/context/tool_categories.py` | `COMPACTABLE_TOOLS` (M2 scope); `FILE_TOOLS` (enrichment file-path scope); `PATH_NORMALIZATION_TOOLS`. |
 | `co_cli/tools/tool_io.py` | `tool_output`; `persist_if_oversized` (M1 disk spill, requires explicit `max_size`); `_generate_preview` (newline-aware preview truncation); `check_tool_results_size`; `TOOL_RESULT_PREVIEW_SIZE`, `PERSISTED_OUTPUT_TAG`, `PERSISTED_OUTPUT_CLOSING_TAG`. |
 | `co_cli/agent/_native_toolset.py` | Per-tool `max_result_size` registration. |

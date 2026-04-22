@@ -585,7 +585,7 @@ async def run_turn(
     )
     # Hygiene always bypasses the proactive anti-thrashing gate — reset savings so the
     # gate starts fresh regardless of whether hygiene actually compacted.
-    deps.runtime.recent_proactive_savings.clear()
+    deps.runtime.consecutive_low_yield_proactive_compactions = 0
 
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
@@ -647,7 +647,7 @@ async def run_turn(
                             )
                             if compacted is not None:
                                 # Overflow recovery bypasses the proactive gate — reset savings ring.
-                                deps.runtime.recent_proactive_savings.clear()
+                                deps.runtime.consecutive_low_yield_proactive_compactions = 0
                                 turn_state.current_history = compacted
                                 turn_state.current_input = None
                                 frontend.on_status(status_msg)
