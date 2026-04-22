@@ -347,12 +347,19 @@ Three sync processors in order; no LLM calls.
 **Trigger check** (async processor, last in chain, runs before every request):
 
 ```python
-estimate = estimate_message_tokens(messages)
-reported = latest_response_input_tokens(messages)
-token_count = max(estimate, reported)       # floor — stale report cannot suppress
-
 budget = resolve_compaction_budget(config, ctx_window)
 cfg = ctx.deps.config.compaction
+
+# Hard floor: skip M3 entirely when the model's context window is too small.
+if budget < cfg.min_context_length_tokens:
+    return messages
+
+# Suppress stale API-reported count if compaction already ran in this turn —
+# the reported value reflects the pre-compaction context and would re-trigger spuriously.
+reported = 0 if ctx.deps.runtime.compacted_in_current_turn else latest_response_input_tokens(messages)
+estimate = estimate_message_tokens(messages)
+token_count = max(estimate, reported)       # floor — stale report cannot suppress
+
 threshold = max(int(budget * cfg.proactive_ratio), cfg.min_threshold_tokens)
 # threshold floor: prevents early compaction on small-context models
 
@@ -594,6 +601,7 @@ One successful compaction per pressure event per turn.
 | `compaction.hygiene_ratio` | `CO_COMPACTION_HYGIENE_RATIO` | `0.88` | Fraction of budget above which pre-turn hygiene (M0) fires |
 | `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.40` | Fraction of budget targeted for the preserved tail |
 | `compaction.min_threshold_tokens` | `CO_COMPACTION_MIN_THRESHOLD_TOKENS` | `32000` | Absolute floor for the proactive trigger threshold (prevents early compaction on small-context models) |
+| `compaction.min_context_length_tokens` | `CO_COMPACTION_MIN_CONTEXT_LENGTH_TOKENS` | `64000` | Minimum context window budget below which proactive compaction (M3) is skipped entirely |
 | `compaction.tail_soft_overrun_multiplier` | `CO_COMPACTION_TAIL_SOFT_OVERRUN_MULTIPLIER` | `1.25` | Multiplier applied to `tail_fraction * budget` as a soft-overrun cap when `_MIN_RETAINED_TURN_GROUPS` requires it |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Number of consecutive low-yield proactive compactions before the anti-thrashing gate activates |

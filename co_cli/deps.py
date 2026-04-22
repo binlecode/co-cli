@@ -123,7 +123,8 @@ class CoRuntimeState:
     should be explicitly justified.
 
     Per-turn (reset by reset_for_turn() at run_turn() entry):
-      turn_usage, tool_progress_callback, resume_tool_names
+      turn_usage, tool_progress_callback, resume_tool_names,
+      history_compaction_applied, compacted_in_current_turn
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_failure_count
     """
@@ -135,6 +136,9 @@ class CoRuntimeState:
     active_skill_name: str | None = None
     resume_tool_names: frozenset[str] | None = None
     history_compaction_applied: bool = False
+    # Set when proactive compaction fires within the current turn; cleared by reset_for_turn().
+    # Suppresses stale API-reported token counts that would re-trigger compaction spuriously.
+    compacted_in_current_turn: bool = False
     # Delegation depth — incremented by fork_deps(); guards against recursive delegation.
     agent_depth: int = 0
     # Anti-thrashing ring buffer: savings fractions from recent proactive compaction runs.
@@ -148,6 +152,7 @@ class CoRuntimeState:
         self.tool_progress_callback = None
         self.resume_tool_names = None
         self.history_compaction_applied = False
+        self.compacted_in_current_turn = False
 
 
 # Path defaults — all user-global; resolved from USER_DIR constants at runtime

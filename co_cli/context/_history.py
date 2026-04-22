@@ -765,12 +765,20 @@ async def summarize_history_window(
 
     Registered as the last history processor.
     """
-    estimate = estimate_message_tokens(messages)
-    reported = latest_response_input_tokens(messages)
-    token_count = max(estimate, reported)
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
     cfg = ctx.deps.config.compaction
+
+    if budget < cfg.min_context_length_tokens:
+        return messages
+
+    # Skip stale API-reported count when compaction already ran this turn — the
+    # reported value reflects the pre-compaction context and would re-trigger spuriously.
+    reported = (
+        0 if ctx.deps.runtime.compacted_in_current_turn else latest_response_input_tokens(messages)
+    )
+    estimate = estimate_message_tokens(messages)
+    token_count = max(estimate, reported)
     token_threshold = max(int(budget * cfg.proactive_ratio), cfg.min_threshold_tokens)
 
     if token_count <= token_threshold:
@@ -815,6 +823,7 @@ async def summarize_history_window(
         summary_marker = _static_marker(dropped_count)
 
     ctx.deps.runtime.history_compaction_applied = True
+    ctx.deps.runtime.compacted_in_current_turn = True
     preserved_discovery = _preserve_search_tool_breadcrumbs(dropped, kept_ids)
     result = [*head, summary_marker, *preserved_discovery, *tail]
 

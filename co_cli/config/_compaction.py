@@ -28,6 +28,10 @@ class CompactionSettings(BaseModel):
         default=32_000,
         description="Absolute floor for the proactive trigger threshold. Prevents early compaction on small-context models.",
     )
+    min_context_length_tokens: int = Field(
+        default=64_000,
+        description="Minimum context window size below which proactive compaction is skipped entirely.",
+    )
     tail_soft_overrun_multiplier: float = Field(
         default=1.25,
         description="Multiplier applied to tail_fraction * budget as a soft-overrun cap when min retained groups requires it.",

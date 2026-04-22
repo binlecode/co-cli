@@ -111,9 +111,10 @@ async def test_compaction_fallback_when_no_usage_data():
     assert latest_response_input_tokens(msgs_no_usage) == 0
 
     # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 25
+    # min_context_length_tokens=0 disables the guard so the tiny synthetic budget works.
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-        compaction=CompactionSettings(min_threshold_tokens=0),
+        compaction=CompactionSettings(min_threshold_tokens=0, min_context_length_tokens=0),
     )
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs_no_usage)
@@ -136,7 +137,7 @@ async def test_compaction_triggers_on_ollama_budget():
     msgs = _make_messages(10, last_input_tokens=7_200, body_chars=3_000)
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 8192}),
-        compaction=CompactionSettings(min_threshold_tokens=0),
+        compaction=CompactionSettings(min_threshold_tokens=0, min_context_length_tokens=0),
     )
     assert config.llm.uses_ollama()
     ctx = _make_ctx(config)
@@ -508,6 +509,7 @@ async def test_anti_thrashing_gate_suppresses_proactive_after_low_yield_runs() -
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
             min_threshold_tokens=0,
+            min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
         ),
@@ -527,6 +529,7 @@ async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> N
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
             min_threshold_tokens=0,
+            min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
         ),
@@ -572,6 +575,7 @@ async def test_savings_clear_unblocks_gate() -> None:
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
             min_threshold_tokens=0,
+            min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
         ),
