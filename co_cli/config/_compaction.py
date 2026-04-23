@@ -30,7 +30,7 @@ class CompactionSettings(BaseModel):
     )
     tail_soft_overrun_multiplier: float = Field(
         default=1.25,
-        description="Multiplier applied to tail_fraction * budget as a soft-overrun cap when min retained groups requires it.",
+        description="Multiplier applied to tail_fraction * budget to set the soft-overrun log threshold. Advisory only: an oversized last turn is still retained to satisfy _MIN_RETAINED_TURN_GROUPS; exceeding this threshold only emits an info log.",
     )
     min_proactive_savings: float = Field(
         default=0.10,

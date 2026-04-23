@@ -389,14 +389,15 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
    if len(groups) < _MIN_RETAINED_TURN_GROUPS + 1: return None
 3. Walk groups from end, accumulating token estimates:
    tail_budget = tail_fraction * budget
-   soft_overrun_budget = tail_budget * tail_soft_overrun_multiplier
+   soft_overrun_log_threshold = tail_budget * tail_soft_overrun_multiplier
    acc_tokens = 0; acc_groups = []
    for group in reversed(groups):
      gt = estimate_message_tokens(group.messages)
      if len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > tail_budget:
        break
-     if len(acc_groups) < _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > soft_overrun_budget:
-       log(info, "last group exceeds soft-overrun budget; accepting overrun")
+     if len(acc_groups) < _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > soft_overrun_log_threshold:
+       log(info, "last group exceeds soft-overrun threshold; retained to satisfy _MIN_RETAINED_TURN_GROUPS")
+     # group is always retained here — the log is advisory, not enforcement
      acc_groups.insert(0, group); acc_tokens += gt
 4. tail_start = acc_groups[0].start_index
 5. Active-user anchoring: find the latest UserPromptPart. If its group falls in the
@@ -405,7 +406,7 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 7. return (head_end, tail_start, tail_start - head_end)
 ```
 
-`_MIN_RETAINED_TURN_GROUPS = 1` is a hardcoded correctness invariant — not user-configurable. The `tail_soft_overrun_multiplier` (default 1.25) allows the retained tail to exceed `tail_fraction * budget` when the last turn group alone exceeds the budget. Active-user anchoring guarantees the latest `UserPromptPart` is never dropped into the compacted middle.
+`_MIN_RETAINED_TURN_GROUPS = 1` is a hardcoded correctness invariant — not user-configurable. The last turn group is retained unconditionally; `tail_soft_overrun_multiplier` (default 1.25) defines a log-only threshold that emits an info message when the retained tail exceeds `tail_fraction * budget` by more than the multiplier. It is advisory telemetry, not an enforced cap. Active-user anchoring guarantees the latest `UserPromptPart` is never dropped into the compacted middle.
 
 **Compaction assembly:**
 ```
@@ -597,7 +598,7 @@ One successful compaction per pressure event per turn.
 | `compaction.hygiene_ratio` | `CO_COMPACTION_HYGIENE_RATIO` | `0.88` | Fraction of budget above which pre-turn hygiene (M0) fires |
 | `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.40` | Fraction of budget targeted for the preserved tail |
 | `compaction.min_context_length_tokens` | `CO_COMPACTION_MIN_CONTEXT_LENGTH_TOKENS` | `64000` | Absolute floor on the proactive trigger threshold — compaction never fires until token_count exceeds this value, regardless of the budget-ratio result |
-| `compaction.tail_soft_overrun_multiplier` | `CO_COMPACTION_TAIL_SOFT_OVERRUN_MULTIPLIER` | `1.25` | Multiplier applied to `tail_fraction * budget` as a soft-overrun cap when `_MIN_RETAINED_TURN_GROUPS` requires it |
+| `compaction.tail_soft_overrun_multiplier` | `CO_COMPACTION_TAIL_SOFT_OVERRUN_MULTIPLIER` | `1.25` | Multiplier applied to `tail_fraction * budget` to set the soft-overrun log threshold. Advisory only — an oversized last turn is retained regardless to satisfy `_MIN_RETAINED_TURN_GROUPS`; exceeding this threshold only emits an info log |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Number of consecutive low-yield proactive compactions before the anti-thrashing gate activates |
 

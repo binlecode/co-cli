@@ -1,6 +1,7 @@
 """Tests for tool_output() and persist_if_oversized() — per-tool sizing and persistence mechanics."""
 
 import math
+import os
 from pathlib import Path
 
 from pydantic_ai import RunContext
@@ -17,6 +18,7 @@ from co_cli.tools.tool_io import (
     TOOL_RESULT_PREVIEW_SIZE,
     _generate_preview,
     persist_if_oversized,
+    sweep_tool_result_orphans,
     tool_output,
     tool_output_raw,
 )
@@ -233,3 +235,69 @@ def test_generate_preview_hard_cuts_when_no_newline_in_latter_half() -> None:
     preview, has_more = _generate_preview(content, max_chars=50)
     assert preview == "x" * 50
     assert has_more is True
+
+
+def _find_dead_pid() -> int:
+    """Return a PID guaranteed not to be live. Avoids a 1-in-4B flake on 99999999."""
+    for candidate in (99_999_999, 99_999_997, 99_999_991, 99_999_983):
+        try:
+            os.kill(candidate, 0)
+        except ProcessLookupError:
+            return candidate
+        except PermissionError:
+            continue
+    raise RuntimeError("could not locate a dead PID for test — exhaust candidates")
+
+
+def test_sweep_tool_result_orphans_removes_dead_pid_files(tmp_path: Path) -> None:
+    """Sweep unlinks `.tmp.<dead_pid>.<uuid>` sidecars and returns the count removed."""
+    dead_pid = _find_dead_pid()
+    orphan = tmp_path / f"deadbeefdeadbeef.txt.tmp.{dead_pid}.abcd1234"
+    orphan.write_text("stale", encoding="utf-8")
+
+    removed = sweep_tool_result_orphans(tmp_path)
+
+    assert removed == 1
+    assert not orphan.exists()
+
+
+def test_sweep_tool_result_orphans_preserves_live_pid_files(tmp_path: Path) -> None:
+    """Sweep preserves sidecars whose PID is currently a live process."""
+    live = tmp_path / f"cafecafecafecafe.txt.tmp.{os.getpid()}.deadbeef"
+    live.write_text("in-flight", encoding="utf-8")
+
+    removed = sweep_tool_result_orphans(tmp_path)
+
+    assert removed == 0
+    assert live.exists()
+
+
+def test_sweep_tool_result_orphans_preserves_final_files(tmp_path: Path) -> None:
+    """Sweep leaves final `<hash>.txt` files (no `.tmp.*`) untouched."""
+    final = tmp_path / "abcdef1234567890.txt"
+    final.write_text("committed content", encoding="utf-8")
+
+    removed = sweep_tool_result_orphans(tmp_path)
+
+    assert removed == 0
+    assert final.exists()
+
+
+def test_sweep_tool_result_orphans_ignores_malformed_names(tmp_path: Path) -> None:
+    """Sweep is fail-safe — unrecognized filename shapes are preserved, not deleted."""
+    malformed = tmp_path / "abcd.txt.tmp.notapid.abcd1234"
+    malformed.write_text("unknown", encoding="utf-8")
+    truncated = tmp_path / "abcd.txt.tmp."
+    truncated.write_text("partial", encoding="utf-8")
+
+    removed = sweep_tool_result_orphans(tmp_path)
+
+    assert removed == 0
+    assert malformed.exists()
+    assert truncated.exists()
+
+
+def test_sweep_tool_result_orphans_missing_dir(tmp_path: Path) -> None:
+    """Sweep on a nonexistent directory returns 0 without raising."""
+    missing = tmp_path / "does-not-exist"
+    assert sweep_tool_result_orphans(missing) == 0

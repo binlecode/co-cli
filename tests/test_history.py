@@ -915,7 +915,7 @@ def test_enforce_batch_budget_fail_open_on_oserror(tmp_path: Path) -> None:
 def test_planner_soft_overrun_retains_oversized_last_group():
     """Soft-overrun: last group > tail_budget is still retained (clamp to _MIN_RETAINED_TURN_GROUPS).
 
-    Verifies that when a single group exceeds the soft-overrun cap, the planner
+    Verifies that when a single group exceeds the soft-overrun log threshold, the planner
     keeps it rather than dropping it entirely — the minimum-retained invariant wins.
     Uses tail_soft_overrun_multiplier=1.0 (no slack) to hit the path clearly.
     """

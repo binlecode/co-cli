@@ -17,6 +17,9 @@ For call sites without RunContext (helper functions, lifecycle modules):
 
 import hashlib
 import logging
+import os
+import re
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -86,7 +89,9 @@ def persist_if_oversized(
         file_path = tool_results_dir / f"{hash_prefix}.txt"
 
         if not file_path.exists():
-            file_path.write_text(content, encoding="utf-8")
+            tmp_path = file_path.with_suffix(f".txt.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+            tmp_path.write_text(content, encoding="utf-8")
+            os.replace(tmp_path, file_path)
 
         preview, has_more = _generate_preview(content, TOOL_RESULT_PREVIEW_SIZE)
         elision = "\n..." if has_more else ""
@@ -113,6 +118,55 @@ def persist_if_oversized(
             tool_name,
         )
         return content
+
+
+_TMP_RESULT_NAME_RE = re.compile(r"^[0-9a-f]+\.txt\.tmp\.(\d+)\.[0-9a-f]+$")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def sweep_tool_result_orphans(tool_results_dir: Path) -> int:
+    """Unlink stale `*.tmp.*` sidecars left by crashed persist_if_oversized writes.
+
+    Matches files with the shape produced at line 91 above: `<hash>.txt.tmp.<pid>.<uuid>`.
+    Preserves sidecars whose embedded PID is still a live process — another `co`
+    process's in-flight write is safe. Never raises; sweep failures must not block startup.
+
+    Returns the count of files removed.
+    """
+    if not tool_results_dir.is_dir():
+        return 0
+
+    try:
+        entries = list(tool_results_dir.iterdir())
+    except OSError:
+        return 0
+
+    removed = 0
+    for entry in entries:
+        match = _TMP_RESULT_NAME_RE.match(entry.name)
+        if match is None:
+            continue
+        try:
+            pid = int(match.group(1))
+        except ValueError:
+            continue
+        if _pid_alive(pid):
+            continue
+        try:
+            entry.unlink(missing_ok=True)
+        except OSError:
+            continue
+        removed += 1
+    return removed
 
 
 def check_tool_results_size(

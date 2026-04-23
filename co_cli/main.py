@@ -49,6 +49,7 @@ from co_cli.deps import CoDeps
 from co_cli.display._core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
 from co_cli.observability._file_logging import setup_file_logging
 from co_cli.observability._telemetry import setup_tracer_provider
+from co_cli.tools.tool_io import sweep_tool_result_orphans
 
 _VERSION = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())[
     "project"
@@ -197,6 +198,12 @@ async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None
     await stack.aclose()
 
 
+def _sweep_tool_results(deps: CoDeps) -> None:
+    swept = sweep_tool_result_orphans(deps.tool_results_dir)
+    if swept:
+        logging.getLogger(__name__).debug("Swept %d stale tool-result tmp file(s)", swept)
+
+
 async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
     """Run the dream cycle on session end when enabled via knowledge config.
 
@@ -284,6 +291,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 
         current_session_path = restore_session(deps, frontend)
         _init_memory_index(deps, current_session_path, frontend)
+        _sweep_tool_results(deps)
         from co_cli.commands._commands import get_skill_registry
 
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")

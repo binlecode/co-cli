@@ -1,9 +1,9 @@
 """History processors and per-turn dynamic instruction functions for context governance.
 
 History processors are chained via ``Agent(history_processors=[...])``. They run
-before every model request and transform the message list in-place.
+before every model request and return a transformed message list.
 
-Registered processors (pure transformers — no deps mutation):
+Registered processors (pure transformers — no deps mutation, no in-place mutation of ModelMessage objects):
     truncate_tool_results        — sync, content-clears compactable tool results by recency
     enforce_batch_budget         — sync, spills largest non-persisted tool returns when batch aggregate exceeds threshold
     summarize_history_window     — async, summarizes middle messages via inline LLM or static marker
@@ -18,12 +18,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any, cast
 
 from pydantic_ai import RunContext
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -194,6 +193,13 @@ def _summary_marker(dropped_count: int, summary_text: str) -> ModelRequest:
     )
 
 
+def _build_compaction_marker(dropped_count: int, summary_text: str | None) -> ModelRequest:
+    """Return a summary marker when summary_text is present, else a static marker."""
+    if summary_text is not None:
+        return _summary_marker(dropped_count, summary_text)
+    return _static_marker(dropped_count)
+
+
 # ---------------------------------------------------------------------------
 # Shared boundary planner
 # ---------------------------------------------------------------------------
@@ -242,9 +248,10 @@ def plan_compaction_boundaries(
       3. Walk groups from the end, accumulating token estimates. Stop BEFORE
          adding a group that would push accumulated tokens over
          ``tail_fraction * budget``, UNLESS fewer than ``_MIN_RETAINED_TURN_GROUPS``
-         groups have been accumulated. In that case, allow up to
-         ``tail_fraction * budget * tail_soft_overrun_multiplier``; if even the
-         soft-overrun cap is exceeded, accept the overrun and log at info.
+         groups have been accumulated. In that case the group is retained
+         regardless; log at info when it exceeds
+         ``tail_fraction * budget * tail_soft_overrun_multiplier`` (the
+         soft-overrun log threshold — advisory only, not enforced).
       4. ``tail_start = accumulated_groups[0].start_index``.
       5. Active-user anchoring: if the latest ``UserPromptPart`` falls in the
          dropped middle (between ``head_end`` and ``tail_start``), extend
@@ -267,18 +274,21 @@ def plan_compaction_boundaries(
         return None
 
     tail_budget = tail_fraction * budget
-    soft_overrun_budget = tail_budget * tail_soft_overrun_multiplier
+    soft_overrun_log_threshold = tail_budget * tail_soft_overrun_multiplier
     acc_groups: list[TurnGroup] = []
     acc_tokens = 0
     for group in reversed(groups):
         gt = estimate_message_tokens(group.messages)
         if len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > tail_budget:
             break
-        if len(acc_groups) < _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > soft_overrun_budget:
+        if (
+            len(acc_groups) < _MIN_RETAINED_TURN_GROUPS
+            and acc_tokens + gt > soft_overrun_log_threshold
+        ):
             log.info(
-                "Compaction: last group exceeds soft-overrun budget (group_tokens=%d, soft_budget=%.0f); accepting overrun",
+                "Compaction: last group exceeds soft-overrun threshold (group_tokens=%d, threshold=%.0f); retaining to satisfy _MIN_RETAINED_TURN_GROUPS",
                 gt,
-                soft_overrun_budget,
+                soft_overrun_log_threshold,
             )
         acc_groups.insert(0, group)
         acc_tokens += gt
@@ -368,9 +378,10 @@ def truncate_tool_results(
     older = messages[:boundary]
     keep_ids = _build_keep_ids(older)
 
-    # Forward pass: content-clear compactable parts not in keep_ids
-    for msg in older:
-        if not isinstance(msg, ModelRequest):
+    result: list[ModelMessage] = []
+    for idx, msg in enumerate(messages):
+        if idx >= boundary or not isinstance(msg, ModelRequest):
+            result.append(msg)
             continue
         new_parts: list = []
         msg_modified = False
@@ -390,10 +401,9 @@ def truncate_tool_results(
                 msg_modified = True
             else:
                 new_parts.append(part)
-        if msg_modified:
-            msg.parts = new_parts
+        result.append(replace(msg, parts=new_parts) if msg_modified else msg)
 
-    return messages
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -438,11 +448,13 @@ def _collect_batch_parts(
 def _apply_batch_replacements(
     messages: list[ModelMessage],
     replacements: dict[int, dict[int, str]],
-) -> None:
-    """Rebuild parts lists for messages in replacements, mutating messages in-place."""
-    for msg_idx, part_replacements in replacements.items():
-        msg = messages[msg_idx]
-        if not isinstance(msg, ModelRequest):
+) -> list[ModelMessage]:
+    """Return a new message list with rebuilt parts for indexes in ``replacements``."""
+    result: list[ModelMessage] = []
+    for msg_idx, msg in enumerate(messages):
+        part_replacements = replacements.get(msg_idx)
+        if part_replacements is None or not isinstance(msg, ModelRequest):
+            result.append(msg)
             continue
         new_parts = []
         for part_idx, part in enumerate(msg.parts):
@@ -456,7 +468,8 @@ def _apply_batch_replacements(
                 )
             else:
                 new_parts.append(part)
-        msg.parts = new_parts
+        result.append(replace(msg, parts=new_parts))
+    return result
 
 
 def enforce_batch_budget(
@@ -511,8 +524,7 @@ def enforce_batch_budget(
     if not replacements:
         return messages
 
-    _apply_batch_replacements(messages, replacements)
-    return messages
+    return _apply_batch_replacements(messages, replacements)
 
 
 # ---------------------------------------------------------------------------
@@ -596,7 +608,7 @@ def _gather_compaction_context(
     if not context_parts:
         return None
     result = "\n\n".join(context_parts)
-    return result[:_CONTEXT_MAX_CHARS] if len(result) > _CONTEXT_MAX_CHARS else result
+    return result[:_CONTEXT_MAX_CHARS]
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +633,19 @@ def emergency_compact(messages: list[ModelMessage]) -> list[ModelMessage] | None
     ]
 
 
+def _circuit_breaker_should_skip(failure_count: int) -> bool:
+    """Return True when the circuit breaker requires a skip at this failure count.
+
+    Trips at failure_count >= 3. Once tripped, allows a probe every
+    _CIRCUIT_BREAKER_PROBE_EVERY skips: first probe at failure_count == 13,
+    then 23, 33, and so on. At any other tripped count, callers must skip.
+    """
+    if failure_count < 3:
+        return False
+    skips_since_trip = failure_count - 3
+    return skips_since_trip == 0 or skips_since_trip % _CIRCUIT_BREAKER_PROBE_EVERY != 0
+
+
 async def _summarize_dropped_messages(
     ctx: RunContext[CoDeps],
     dropped: list[ModelMessage],
@@ -633,12 +658,11 @@ async def _summarize_dropped_messages(
         return None
 
     count = ctx.deps.runtime.compaction_failure_count
+    if _circuit_breaker_should_skip(count):
+        log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
+        ctx.deps.runtime.compaction_failure_count += 1
+        return None
     if count >= 3:
-        skips_since_trip = count - 3
-        if skips_since_trip == 0 or skips_since_trip % _CIRCUIT_BREAKER_PROBE_EVERY != 0:
-            log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
-            ctx.deps.runtime.compaction_failure_count += 1
-            return None
         log.info("Compaction: circuit breaker probe (count=%d)", count)
 
     if announce:
@@ -646,8 +670,8 @@ async def _summarize_dropped_messages(
 
         console.print("[dim]Compacting conversation...[/dim]")
 
-    enrichment = _gather_compaction_context(ctx, dropped)
     try:
+        enrichment = _gather_compaction_context(ctx, dropped)
         summary_text = await summarize_messages(
             ctx.deps,
             dropped,
@@ -656,31 +680,52 @@ async def _summarize_dropped_messages(
         )
         ctx.deps.runtime.compaction_failure_count = 0
         return summary_text
-    except (ModelHTTPError, ModelAPIError) as e:
-        log.warning("Compaction summarization failed: %s", e)
+    except Exception:
+        log.warning(
+            "Compaction summarization failed — falling back to static marker", exc_info=True
+        )
         ctx.deps.runtime.compaction_failure_count += 1
         return None
 
 
 def _preserve_search_tool_breadcrumbs(
     dropped: list[ModelMessage],
-    kept_ids: set[int],
 ) -> list[ModelMessage]:
-    """Keep SDK search-tools discovery state across compaction boundaries.
-
-    Skips any message whose ``id(msg)`` is already in ``kept_ids`` — prevents
-    quadratic accumulation when a prior compaction's preserved breadcrumb
-    falls into a later compaction's head or tail range (Gap J regression
-    guard). Callers build ``kept_ids`` from the head + tail slices before
-    invoking.
-    """
+    """Keep SDK search-tools discovery state across compaction boundaries."""
     return [
         msg
         for msg in dropped
-        if id(msg) not in kept_ids
-        and isinstance(msg, ModelRequest)
+        if isinstance(msg, ModelRequest)
         and any(isinstance(p, ToolReturnPart) and p.tool_name == "search_tools" for p in msg.parts)
     ]
+
+
+async def _apply_compaction(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+    bounds: _CompactionBoundaries,
+    *,
+    announce: bool,
+) -> tuple[list[ModelMessage], str | None]:
+    """Assemble a compacted history from planner bounds and set runtime flags.
+
+    Returns ``(result, summary_text)``. ``summary_text`` is None when the
+    summarizer fell back to a static marker (model absent, circuit breaker
+    tripped, or LLM failure), letting callers log success conditionally.
+    """
+    head_end, tail_start, dropped_count = bounds
+    dropped = messages[head_end:tail_start]
+    summary_text = await _summarize_dropped_messages(ctx, dropped, announce=announce)
+    marker = _build_compaction_marker(dropped_count, summary_text)
+    ctx.deps.runtime.history_compaction_applied = True
+    ctx.deps.runtime.compacted_in_current_turn = True
+    result = [
+        *messages[:head_end],
+        marker,
+        *_preserve_search_tool_breadcrumbs(dropped),
+        *messages[tail_start:],
+    ]
+    return result, summary_text
 
 
 async def recover_overflow_history(
@@ -719,20 +764,8 @@ async def recover_overflow_history(
         )
         return None
 
-    head_end, tail_start, dropped_count = bounds
-    head = messages[:head_end]
-    tail = messages[tail_start:]
-    dropped = messages[head_end:tail_start]
-    kept_ids = {id(m) for m in head} | {id(m) for m in tail}
-
-    summary_text = await _summarize_dropped_messages(ctx, dropped, announce=False)
-    marker = (
-        _summary_marker(dropped_count, summary_text)
-        if summary_text is not None
-        else _static_marker(dropped_count)
-    )
-    ctx.deps.runtime.history_compaction_applied = True
-    return [*head, marker, *_preserve_search_tool_breadcrumbs(dropped, kept_ids), *tail]
+    result, _ = await _apply_compaction(ctx, messages, bounds, announce=False)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -803,23 +836,10 @@ async def summarize_history_window(
         )
         return messages
 
-    head_end, tail_start, dropped_count = bounds
-    head = messages[:head_end]
-    tail = messages[tail_start:]
-    dropped = messages[head_end:tail_start]
-    kept_ids = {id(m) for m in head} | {id(m) for m in tail}
-
-    summary_text = await _summarize_dropped_messages(ctx, dropped, announce=True)
+    dropped_count = bounds[2]
+    result, summary_text = await _apply_compaction(ctx, messages, bounds, announce=True)
     if summary_text is not None:
-        summary_marker = _summary_marker(dropped_count, summary_text)
         log.info("Sliding window: summarised %d messages inline", dropped_count)
-    else:
-        summary_marker = _static_marker(dropped_count)
-
-    ctx.deps.runtime.history_compaction_applied = True
-    ctx.deps.runtime.compacted_in_current_turn = True
-    preserved_discovery = _preserve_search_tool_breadcrumbs(dropped, kept_ids)
-    result = [*head, summary_marker, *preserved_discovery, *tail]
 
     # Track proactive compaction savings for the anti-thrashing gate.
     tokens_after = estimate_message_tokens(result)

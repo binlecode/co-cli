@@ -9,6 +9,7 @@ interaction here.
 
 import asyncio
 import logging
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -63,6 +64,7 @@ _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._history import maybe_run_pre_turn_hygiene
 from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.context.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -160,8 +162,11 @@ def _merge_turn_usage(
     """
     if usage is None:
         return
+    # Deepcopy on first assignment: pydantic-ai mutates the passed-in usage object
+    # (including its `details` dict) in place across segments, so aliasing turn_usage
+    # to latest_usage would make later incr() calls self-referential and double-count.
     if deps.runtime.turn_usage is None:
-        deps.runtime.turn_usage = usage
+        deps.runtime.turn_usage = deepcopy(usage)
     else:
         deps.runtime.turn_usage.incr(usage)
 
@@ -554,11 +559,12 @@ async def run_turn(
       "continue" — normal completion, prompt for next input
       "error"    — unrecoverable error, display and prompt
     """
-    # Must be read before reset_for_turn() clears turn_usage.
-    prior_input_tokens = deps.runtime.turn_usage.input_tokens if deps.runtime.turn_usage else 0
     deps.runtime.reset_for_turn()
     message_history = await maybe_run_pre_turn_hygiene(
-        deps, message_history, agent.model, reported_input_tokens=prior_input_tokens
+        deps,
+        message_history,
+        agent.model,
+        reported_input_tokens=latest_response_input_tokens(message_history),
     )
     # Hygiene always bypasses the proactive anti-thrashing gate — reset savings so the
     # gate starts fresh regardless of whether hygiene actually compacted.
@@ -694,11 +700,11 @@ async def run_turn(
             span.set_attribute("turn.interrupted", turn_state.interrupted)
             span.set_attribute(
                 "turn.input_tokens",
-                (turn_state.latest_usage.input_tokens or 0) if turn_state.latest_usage else 0,
+                turn_state.latest_usage.input_tokens if turn_state.latest_usage else 0,
             )
             span.set_attribute(
                 "turn.output_tokens",
-                (turn_state.latest_usage.output_tokens or 0) if turn_state.latest_usage else 0,
+                turn_state.latest_usage.output_tokens if turn_state.latest_usage else 0,
             )
             deps.runtime.tool_progress_callback = (
                 None  # belt-and-suspenders; also cleared by reset_for_turn() at next turn entry
