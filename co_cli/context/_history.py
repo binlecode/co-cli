@@ -234,12 +234,9 @@ def _anchor_tail_to_last_user(
     unchanged (no-op). If it falls in the dropped middle, returns the start index
     of the group containing it.
     """
-    last_user_idx = -1
-    for idx in range(len(messages) - 1, -1, -1):
-        msg = messages[idx]
-        if isinstance(msg, ModelRequest) and any(isinstance(p, UserPromptPart) for p in msg.parts):
-            last_user_idx = idx
-            break
+    last_user_idx = _find_last_turn_start(messages)
+    if last_user_idx is None:
+        return tail_start
 
     if head_end <= last_user_idx < tail_start:
         for group in groups:
@@ -321,7 +318,9 @@ co-cli's tool surface; revisit via ``evals/eval_compaction_quality.py`` if a
 retention/fidelity tradeoff becomes measurable.
 """
 
-_CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"
+_CLEARED_PLACEHOLDER = (
+    f"[tool result cleared — older than {COMPACTABLE_KEEP_RECENT} most recent calls]"
+)
 """Last-resort fallback when ToolReturnPart.content is non-string (multimodal).
 
 Normal path uses ``semantic_marker`` to produce per-tool descriptions that
@@ -330,17 +329,18 @@ for non-string content shapes where a marker cannot be generated.
 """
 
 
-def _find_last_turn_start(messages: list[ModelMessage]) -> int:
+def _find_last_turn_start(messages: list[ModelMessage]) -> int | None:
     """Return the index of the last ModelRequest containing a UserPromptPart.
 
-    Returns 0 when no such message exists (protect nothing — degenerate case).
+    Returns ``None`` when no such message exists. Callers that need a slice
+    boundary under a protect-tail-or-nothing contract should treat both
+    ``None`` and ``0`` as "no boundary to protect".
     """
-    for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], ModelRequest) and any(
-            isinstance(p, UserPromptPart) for p in messages[i].parts
-        ):
-            return i
-    return 0
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if isinstance(msg, ModelRequest) and any(isinstance(p, UserPromptPart) for p in msg.parts):
+            return idx
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +437,7 @@ def dedup_tool_results(
     before recency-based clearing applies.
     """
     boundary = _find_last_turn_start(messages)
-    if boundary == 0:
+    if not boundary:
         return messages
 
     latest_id_by_key = _build_latest_id_by_key(messages[:boundary])
@@ -538,7 +538,7 @@ def truncate_tool_results(
     accessed.
     """
     boundary = _find_last_turn_start(messages)
-    if boundary == 0:
+    if not boundary:
         return messages
 
     keep_ids = _build_keep_ids(messages[:boundary])
@@ -899,6 +899,17 @@ async def _apply_compaction(
     return result, summary_text
 
 
+def _effective_token_count(messages: list[ModelMessage], reported: int) -> int:
+    """Token count for threshold checks: max of local estimate and provider-reported.
+
+    Two signals, neither fully trustworthy: the local char-based estimate
+    can drift from provider tokenization, and the provider-reported count
+    lags by a turn. Taking the max biases toward earlier compaction — safer
+    than under-counting.
+    """
+    return max(estimate_message_tokens(messages), reported)
+
+
 async def recover_overflow_history(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -913,7 +924,7 @@ async def recover_overflow_history(
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
     cfg = ctx.deps.config.compaction
-    token_count = max(estimate_message_tokens(messages), latest_response_input_tokens(messages))
+    token_count = _effective_token_count(messages, latest_response_input_tokens(messages))
     bounds = plan_compaction_boundaries(
         messages,
         budget,
@@ -1063,8 +1074,12 @@ async def maybe_run_pre_turn_hygiene(
         budget = resolve_compaction_budget(deps.config, ctx_window)
         if budget <= 0:
             return message_history
-        token_count = max(estimate_message_tokens(message_history), reported_input_tokens)
-        if token_count <= int(budget * deps.config.compaction.hygiene_ratio):
+        token_count = _effective_token_count(message_history, reported_input_tokens)
+        token_threshold = max(
+            int(budget * deps.config.compaction.hygiene_ratio),
+            deps.config.compaction.min_context_length_tokens,
+        )
+        if token_count <= token_threshold:
             return message_history
         # Clear the anti-thrashing gate so hygiene is never blocked by prior low-yield
         # proactive runs. Orchestrate.py also clears on return — that's a safe no-op.

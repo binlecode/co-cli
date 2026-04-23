@@ -506,6 +506,26 @@ async def test_pre_turn_hygiene_no_op_first_turn_zero_reported() -> None:
     assert result is msgs
 
 
+@pytest.mark.asyncio
+async def test_pre_turn_hygiene_respects_min_context_length_floor() -> None:
+    """At small budgets, hygiene must respect min_context_length_tokens the same way proactive does.
+
+    budget=50_000, hygiene_ratio=0.88 → raw threshold 44_000 tokens.
+    min_context_length_tokens=64_000 (default) raises the effective threshold to 64_000.
+    Token count of ~50_000 sits above the raw threshold but below the floor — hygiene must no-op.
+    """
+    msgs = _make_messages(10, body_chars=20_000)
+    estimate = estimate_message_tokens(msgs)
+    deps = _make_hygiene_deps(ctx_token_budget=50_000)
+    floor = deps.config.compaction.min_context_length_tokens
+    raw_threshold = int(50_000 * deps.config.compaction.hygiene_ratio)
+    assert raw_threshold < estimate < floor, (
+        f"fixture out of band: need raw_threshold ({raw_threshold}) < estimate ({estimate}) < floor ({floor})"
+    )
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    assert result is msgs
+
+
 # ---------------------------------------------------------------------------
 # TASK-3 regression tests: threshold floor + anti-thrashing gate
 # ---------------------------------------------------------------------------

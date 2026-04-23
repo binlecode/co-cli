@@ -230,7 +230,7 @@ def test_dedup_protects_last_turn():
     result = dedup_tool_results(_processor_ctx(), msgs)
 
     # Every return from the protected tail keeps full content.
-    boundary = _find_last_turn_start(result)
+    boundary = _find_last_turn_start(result) or 0
     tail_returns = [
         part
         for msg in result[boundary:]

@@ -24,10 +24,12 @@ from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatc
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import settings
 from co_cli.context._history import (
+    _SUMMARY_MARKER_PREFIX,
     _TODO_SNAPSHOT_PREFIX,
     _active_todos,
     _build_todo_snapshot,
     _find_last_turn_start,
+    _gather_prior_summaries,
     _gather_session_todos,
     _recall_prompt_text,
     emergency_compact,
@@ -227,7 +229,7 @@ async def test_circuit_breaker_probes_at_cadence():
 @pytest.mark.asyncio
 @pytest.mark.local
 async def test_compact_produces_two_message_history():
-    """/compact on non-empty history returns ReplaceTranscript with 2 messages and compaction_applied."""
+    """/compact returns the shared compaction marker so auto-compaction can detect prior summaries."""
     msgs = _make_messages(6)
     ctx = _make_compact_ctx(message_history=msgs)
     await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
@@ -236,6 +238,11 @@ async def test_compact_produces_two_message_history():
     assert isinstance(result, ReplaceTranscript)
     assert len(result.history) == 2
     assert result.compaction_applied is True
+    first = result.history[0]
+    assert isinstance(first, ModelRequest)
+    assert isinstance(first.parts[0], UserPromptPart)
+    assert first.parts[0].content.startswith(_SUMMARY_MARKER_PREFIX)
+    assert _gather_prior_summaries([first]) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +628,7 @@ def test_current_turn_protection_multi_tool():
     result = truncate_tool_results(ctx, msgs)
 
     # The 3 read_file returns in the last turn must be intact
-    boundary = _find_last_turn_start(result)
+    boundary = _find_last_turn_start(result) or 0
     tail_returns = [
         part
         for msg in result[boundary:]

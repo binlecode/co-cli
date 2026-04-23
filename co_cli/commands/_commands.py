@@ -329,9 +329,10 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
 async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Summarize conversation via LLM to reduce context."""
     from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
-    from pydantic_ai.messages import ModelResponse, UserPromptPart
+    from pydantic_ai.messages import ModelResponse
     from pydantic_ai.messages import TextPart as _TextPart
 
+    from co_cli.context._history import _build_compaction_marker, _build_todo_snapshot
     from co_cli.context.summarization import (
         estimate_message_tokens,
         resolve_compaction_budget,
@@ -348,6 +349,7 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
     console.print("[dim]Compacting conversation...[/dim]")
     pre_tokens = estimate_message_tokens(ctx.message_history)
+    old_len = len(ctx.message_history)
     try:
         summary = await summarize_messages(ctx.deps, ctx.message_history)
     except (ModelHTTPError, ModelAPIError) as e:
@@ -358,17 +360,8 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         console.print("[bold red]Compact failed:[/bold red] provider error (see logs)")
         return None
 
-    # Build a minimal history: summary request + (optional todo snapshot) + ack response
-    from co_cli.context._history import _build_todo_snapshot
-
     todo_snapshot = _build_todo_snapshot(ctx.deps.session.session_todos)
-    new_history: list[Any] = [
-        ModelRequest(
-            parts=[
-                UserPromptPart(content=f"[Compacted conversation summary]\n{summary}"),
-            ]
-        ),
-    ]
+    new_history: list[Any] = [_build_compaction_marker(old_len, summary)]
     if todo_snapshot is not None:
         new_history.append(todo_snapshot)
     new_history.append(
@@ -378,7 +371,6 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
             ]
         )
     )
-    old_len = len(ctx.message_history)
     post_tokens = estimate_message_tokens(new_history)
     budget = resolve_compaction_budget(
         ctx.deps.config, ctx.deps.model.context_window if ctx.deps.model else None
