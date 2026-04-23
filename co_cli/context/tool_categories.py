@@ -11,7 +11,6 @@ PATH_NORMALIZATION_TOOLS: frozenset[str] = frozenset(
         "file_write",
         "file_patch",
         "file_find",
-        "file_glob",
     }
 )
 
@@ -25,8 +24,6 @@ FILE_TOOLS: frozenset[str] = frozenset(
         "file_patch",
         "file_search",
         "file_find",
-        "file_grep",
-        "file_glob",
     }
 )
 
@@ -38,8 +35,6 @@ COMPACTABLE_TOOLS: frozenset[str] = frozenset(
         "shell",
         "file_search",
         "file_find",
-        "file_grep",
-        "file_glob",
         "web_search",
         "web_fetch",
         "knowledge_article_read",

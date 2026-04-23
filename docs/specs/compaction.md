@@ -333,7 +333,7 @@ Model pages the full content via `file_read(path, start_line=, end_line=)`. Pers
 Three sync processors in order; no LLM calls.
 
 **`truncate_tool_results` (M2a).** Protects the last user turn (everything from the last `UserPromptPart` onward). For the region before:
-- For each tool in `COMPACTABLE_TOOLS` = `{file_read, shell, file_search, file_find, web_search, web_fetch, knowledge_article_read, obsidian_read}` (plus historical aliases `file_grep` and `file_glob` for older transcripts), keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
+- For each tool in `COMPACTABLE_TOOLS` = `{file_read, shell, file_search, file_find, web_search, web_fetch, knowledge_article_read, obsidian_read}`, keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
 - Older compactable returns: content replaced with a per-tool **semantic marker** via `semantic_marker()` in `co_cli/context/_tool_result_markers.py` — carries tool name, 1-3 informative args (looked up from the matching `ToolCallPart` via a `tool_call_id → args` index built at processor entry), and a size/outcome signal. Examples: `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`, `[file_search] 'pattern' in src → no matches`. A generic `[tool] k=v (N chars)` fallback covers any tool added to `COMPACTABLE_TOOLS` without an explicit handler.
 - Non-string (multimodal) content falls back to the static `_CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"` since markers require a readable string for their heuristics.
 - `tool_name` and `tool_call_id` are preserved (call/return pairing intact).
@@ -488,7 +488,7 @@ Rationale: three-strikes trips the breaker to avoid burning LLM cost when the pr
 
 | Source | Scope | Why it survives M2 |
 |---|---|---|
-| `ToolCallPart.args` for `FILE_TOOLS = {file_read, file_write, file_patch, file_search, file_find}` (plus historical aliases `file_grep`, `file_glob`) → `_gather_file_paths(dropped)` | **Dropped range only** | `truncate_tool_results` only touches return content, never call args. Scoped to `dropped` to avoid duplicating paths already visible in the preserved tail. |
+| `ToolCallPart.args` for `FILE_TOOLS = {file_read, file_write, file_patch, file_search, file_find}` → `_gather_file_paths(dropped)` | **Dropped range only** | `truncate_tool_results` only touches return content, never call args. Scoped to `dropped` to avoid duplicating paths already visible in the preserved tail. |
 | `ctx.deps.session.session_todos` → `_gather_session_todos` | Session state | Orthogonal to message history. |
 | Prior compaction summaries in `dropped` → `_gather_prior_summaries` | Dropped range only | Detected via prefix-match on `_SUMMARY_MARKER_PREFIX` shared constant. |
 

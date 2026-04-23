@@ -390,9 +390,6 @@ def step_2_p1_truncate() -> bool:
         "shell",
         "web_fetch",
         "web_search",
-        # Historical aliases retained for transcript compatibility.
-        "file_glob",
-        "file_grep",
     }
     from co_cli.context._history import COMPACTABLE_TOOLS
 
@@ -409,9 +406,6 @@ def step_2_p1_truncate() -> bool:
         "file_patch",
         "file_read",
         "file_write",
-        # Historical aliases retained for transcript compatibility.
-        "file_glob",
-        "file_grep",
     }
     if expected_file_tools != FILE_TOOLS:
         print(f"  FAIL: FILE_TOOLS mismatch: {FILE_TOOLS}")

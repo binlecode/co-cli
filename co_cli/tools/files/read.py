@@ -572,9 +572,3 @@ async def file_search(
         mode=output_mode,
         truncated=truncated,
     )
-
-
-# Backward-compatible import aliases. The public tool surface uses file_find
-# and file_search, but older internal callers may still import these names.
-file_glob = file_find
-file_grep = file_search

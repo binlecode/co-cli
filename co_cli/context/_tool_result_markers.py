@@ -130,9 +130,6 @@ _TOOL_MARKERS: dict[str, _MarkerFn] = {
     "file_read": _file_read_marker,
     "file_search": _file_search_marker,
     "file_find": _file_find_marker,
-    # Historical aliases for older transcripts.
-    "file_grep": _file_search_marker,
-    "file_glob": _file_find_marker,
     "web_search": _web_search_marker,
     "web_fetch": _web_fetch_marker,
     "knowledge_article_read": _knowledge_article_marker,
