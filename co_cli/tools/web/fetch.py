@@ -12,7 +12,7 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output
-from co_cli.tools.web._ssrf import is_url_safe
+from co_cli.tools.web._ssrf import SSRFRedirectError, is_url_safe, ssrf_redirect_guard
 from co_cli.tools.web.search import _http_get_with_retries
 
 # ---------------------------------------------------------------------------
@@ -153,33 +153,37 @@ async def web_fetch(
     if not is_url_safe(url):
         raise ModelRetry("web_fetch blocked: URL resolves to a private or internal address.")
 
-    async with httpx.AsyncClient(
-        timeout=_FETCH_TIMEOUT,
-        follow_redirects=True,
-        max_redirects=5,
-    ) as client:
-        resp_or_error = await _http_get_with_retries(
-            client=client,
-            tool_name="web_fetch",
-            target=url,
-            url=url,
-            headers=_build_fetch_headers(hostname),
-            params=None,
-            max_retries=ctx.deps.config.web.http_max_retries,
-            backoff_base_seconds=ctx.deps.config.web.http_backoff_base_seconds,
-            backoff_max_seconds=ctx.deps.config.web.http_backoff_max_seconds,
-            backoff_jitter_ratio=ctx.deps.config.web.http_jitter_ratio,
-            cf_fallback_headers=_CF_FALLBACK_HEADERS,
-        )
+    try:
+        async with httpx.AsyncClient(
+            timeout=_FETCH_TIMEOUT,
+            follow_redirects=True,
+            max_redirects=5,
+            event_hooks={"response": [ssrf_redirect_guard]},
+        ) as client:
+            resp_or_error = await _http_get_with_retries(
+                client=client,
+                tool_name="web_fetch",
+                target=url,
+                url=url,
+                headers=_build_fetch_headers(hostname),
+                params=None,
+                max_retries=ctx.deps.config.web.http_max_retries,
+                backoff_base_seconds=ctx.deps.config.web.http_backoff_base_seconds,
+                backoff_max_seconds=ctx.deps.config.web.http_backoff_max_seconds,
+                backoff_jitter_ratio=ctx.deps.config.web.http_jitter_ratio,
+                cf_fallback_headers=_CF_FALLBACK_HEADERS,
+            )
+    except SSRFRedirectError as exc:
+        raise ModelRetry(
+            f"web_fetch blocked: redirect target resolves to a private or "
+            f"internal address ({exc})."
+        ) from exc
+
     if not isinstance(resp_or_error, httpx.Response):
         return resp_or_error
     resp = resp_or_error
 
     final_url = str(resp.url)
-    if final_url != url and not is_url_safe(final_url):
-        raise ModelRetry(
-            "web_fetch blocked: redirect target resolves to a private or internal address."
-        )
 
     content_type = resp.headers.get("content-type", "")
 
