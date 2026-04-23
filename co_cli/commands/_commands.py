@@ -351,7 +351,9 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     pre_tokens = estimate_message_tokens(ctx.message_history)
     old_len = len(ctx.message_history)
     try:
-        summary = await summarize_messages(ctx.deps, ctx.message_history)
+        summary = await summarize_messages(
+            ctx.deps, ctx.message_history, focus=args.strip() or None
+        )
     except (ModelHTTPError, ModelAPIError) as e:
         logger.warning("Compact summarization failed: %s", e)
         summary = None

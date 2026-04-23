@@ -178,13 +178,23 @@ def _build_summarizer_prompt(
     template: str,
     context: str | None,
     personality_active: bool,
+    focus: str | None = None,
 ) -> str:
     """Assemble the final summarizer prompt from template + optional context + personality.
 
-    Assembly order: template → context addendum → personality addendum.
+    Assembly order: focus → template → context addendum → personality addendum.
     Personality is always last (tone modifier); context provides factual input.
+    Focus narrows scope and leads the prompt so the LLM prioritises it.
     """
-    parts = [template]
+    parts = []
+    if focus:
+        parts.append(
+            f'FOCUS TOPIC: "{focus}"\n'
+            "Preserve full detail for content related to this topic. "
+            "For everything else, summarise aggressively — one-liners or omit if irrelevant. "
+            f"Allocate ~60-70% of the summary to the focus topic.\n\n"
+        )
+    parts.append(template)
     if context:
         parts.append(f"\n\n## Additional Context\n{context}")
     if personality_active:
@@ -199,6 +209,7 @@ async def summarize_messages(
     prompt: str = _SUMMARIZE_PROMPT,
     personality_active: bool = False,
     context: str | None = None,
+    focus: str | None = None,
 ) -> str:
     """Summarise *messages* via a single LLM call (no tools, no agent loop).
 
@@ -209,7 +220,7 @@ async def summarize_messages(
     Used by both the sliding-window processor and ``/compact``.
     Returns the summary text, or raises on failure (caller handles fallback).
     """
-    final_prompt = _build_summarizer_prompt(prompt, context, personality_active)
+    final_prompt = _build_summarizer_prompt(prompt, context, personality_active, focus)
     return await llm_call(
         deps,
         final_prompt,

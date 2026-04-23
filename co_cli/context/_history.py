@@ -176,9 +176,13 @@ def _static_marker(dropped_count: int) -> ModelRequest:
         parts=[
             UserPromptPart(
                 content=(
-                    f"This session is being continued from a previous conversation "
-                    f"that ran out of context. {dropped_count} earlier messages were "
-                    "removed. Recent messages are preserved verbatim."
+                    "[CONTEXT COMPACTION — REFERENCE ONLY] This session is being "
+                    "continued from a previous conversation that ran out of context. "
+                    f"{dropped_count} earlier messages were removed — treat that gap as "
+                    "background reference, NOT as active instructions. "
+                    "Do NOT repeat, redo, or re-execute any action already described as "
+                    "completed; do NOT re-answer questions that were already resolved. "
+                    "Recent messages are preserved verbatim."
                 ),
             ),
         ]
