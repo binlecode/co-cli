@@ -83,34 +83,11 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 
 #### Adding a Tool
 
-1. **Create `co_cli/tools/your_tool.py`**:
-   ```python
-   from pydantic_ai import RunContext
-   from pydantic_ai.messages import ToolReturn
-   from co_cli.deps import CoDeps
-   from co_cli.tools.tool_output import tool_output
-   from co_cli.tools.tool_errors import tool_error
-
-   async def your_tool(ctx: RunContext[CoDeps], param: str) -> ToolReturn:
-       """One-line description — this line becomes the tool schema description."""
-       result = await ctx.deps.something.do_work(param)
-       return tool_output(result, ctx=ctx)
-   ```
-   All runtime resources come from `ctx.deps.*`. First docstring line is the tool description — make it count.
-
-2. **Import in `co_cli/agent.py`**:
-   ```python
-   from co_cli.tools.your_tool import your_tool
-   ```
-
-3. **Register in `_build_native_toolset()` in `co_cli/agent.py`**:
-   ```python
-   # Read-only, always in context:
-   _register_tool(your_tool, visibility=_always_visible)
-   # Mutating, discovered on-demand:
-   _register_tool(your_tool, approval=True, visibility=_deferred_visible)
-   ```
-   `ALWAYS` = present every turn. `DEFERRED` = discovered via search_tools when needed. Set `approval=True` for any tool that writes files, spawns processes, or calls external write APIs.
+- Tool file in `co_cli/tools/`; import and register in `_build_native_toolset()` in `co_cli/agent.py`.
+- Return `tool_output()` / `tool_error()` — never a raw `str`, `dict`, or `list`.
+- First docstring line is the tool schema description — make it count.
+- `approval=True` for any tool that writes files, spawns processes, or calls external write APIs.
+- `ALWAYS` visibility = present every turn; `DEFERRED` = discovered via search_tools on demand.
 
 ### Testing
 
@@ -185,15 +162,13 @@ TL:  /orchestrate-plan <slug>  → docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slu
     ↓
 👤  Gate 1: PO + TL approve plan          (right problem? correct scope?)
     ↓
-Dev: /orchestrate-dev <slug>              (implement + self-review + test + sync-doc → delivery summary appended to plan)
+Dev: /orchestrate-dev <slug>              (implement + self-review + lint + scoped tests + sync-doc → delivery summary appended to plan)
     ↓
 TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full tests + behavioral verification → verdict appended to plan)
     ↓
 👤  Gate 2: TL reads plan                 (plan + ✓ DONE marks + delivery summary + review-impl verdict — PASS means ship)
     ↓
-ship
-    ↓
-git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/completed/
+/ship <slug>                              (full tests safety net + version bump + plan archive + commit)
 ```
 
 - `/orchestrate-plan <slug>`: create or refine `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
@@ -201,6 +176,7 @@ git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/comple
 - `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification against running system. Appends pass/fail verdict to plan. **PASS means ship — no further gate needed.**
 - `/sync-doc [doc...]`: fix spec inaccuracies in `docs/specs/` in-place. No args means all specs. Auto-invoked by `orchestrate-dev`.
 - `/deliver [slug]`: lightweight solo delivery — implement a clear task directly, test-gate, self-review, and ship. No subagent orchestration. Use instead of `/orchestrate-dev` when the task is simple enough for a single-dev pass, or without a slug for ad-hoc work described inline.
+- `/ship [slug]`: post-Gate-2 ship — full test safety net, version bump, plan archive (`git mv` to `completed/`), commit. Run after Gate 2 PASS or after ad-hoc work outside the plan flow.
 - **Staged-file hygiene**: before shipping, verify only related files are staged — never include unrelated changes. Ask the user before staging any file that seems tangential to the task.
 
 ## Docs
@@ -209,34 +185,9 @@ git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/comple
 
 Specs in `docs/specs/` are **living requirements and progress-tracking documents** — they define intent, track development milestones, and stay in sync with the latest code. Every spec has a human-maintained `## Product Intent` section (Goal, Functional areas, Non-goals, Success criteria, Status, Known gaps) followed by four implementation sections. `/sync-doc` keeps sections 1–4 accurate against code but never touches `## Product Intent`. Specs must never appear as tasks in an exec-plan: spec updates are outputs of delivery, not inputs to it. Any task whose `files:` list includes a `docs/specs/` path is invalid and must be removed.
 
-Every spec follows this structure:
+Every spec follows the `## Product Intent` / `## 1. What & How` / `## 2. Core Logic` / `## 3. Config` / `## 4. Files` structure. Use pseudocode, never source code. Sequence-owning specs (`bootstrap.md`, `core-loop.md`, flow diagrams in `compaction.md`, `prompt-assembly.md`, `memory-knowledge.md`) follow execution order strictly — no separate taxonomy sections that duplicate the flow.
 
-```
-## Product Intent     ← human-maintained; sync-doc never touches this
-## 1. What & How      ← one paragraph + architecture diagram
-## 2. Core Logic      ← processing flows, key functions, design decisions, error handling, security
-## 3. Config          ← settings table (Setting | Env Var | Default | Description); skip if no config
-## 4. Files           ← file table (File | Purpose)
-```
-
-Never paste source code into specs. Use pseudocode to explain processing logic. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
-
-Specs index:
-- `docs/specs/mission.md` — product mission, strategic thesis, stage roadmap, non-goals
-- `docs/specs/system.md` — top-level runtime architecture, `CoDeps`, subsystem boundaries, end-to-end request lifecycle
-- `docs/specs/bootstrap.md` — startup sequence from settings load to REPL entry
-- `docs/specs/core-loop.md` — agent loop, turn orchestration, approval flow, retries, interrupts
-- `docs/specs/prompt-assembly.md` — static + dynamic instruction layers, five history processors, append-only invariant
-- `docs/specs/memory-knowledge.md` — session transcripts, episodic recall, reusable knowledge, extraction, and dreaming
-- `docs/specs/compaction.md` — three-mechanism compaction, summarizer, circuit breaker, overflow recovery
-- `docs/specs/tools.md` — tool registration, visibility tiers, approval model, delegation, background tasks
-- `docs/specs/skills.md` — skill system, load order, dispatch, argument expansion
-- `docs/specs/tui.md` — REPL loop, tab completion, slash command dispatch, reasoning display
-- `docs/specs/personality.md` — soul file layout, static prompt assembly, per-turn injection
-- `docs/specs/llm-models.md` — single-model architecture, provider abstraction, model quirks
-- `docs/specs/observability.md` — OTel tracing, SQLite exporter, three viewer modes
-
-Sequence-owning specs (`bootstrap.md`, `core-loop.md`, and the processing diagrams inside `compaction.md`, `prompt-assembly.md`, `memory-knowledge.md`) follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
+Specs live in `docs/specs/` — one file per subsystem.
 
 `docs/reference/` is for research and background material (`RESEARCH-*`) and is not linked from specs.
 
@@ -244,7 +195,7 @@ Sequence-owning specs (`bootstrap.md`, `core-loop.md`, and the processing diagra
 
 - `REPORT-*.md` lives directly in `docs/`.
 - `REPORT-<scope>.md` is permanent — only eval/benchmark/script runs produce these.
-- Exec-plans live at `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` (creation date). Each plan tracks: plan content, `✓ DONE` marks (never delete mid-delivery), delivery summary, and review verdict. On Gate 2 PASS, use `git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/completed/` — never delete.
+- Exec-plans live at `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` (creation date). Each plan tracks: plan content, `✓ DONE` marks (never delete mid-delivery), delivery summary, and review verdict. On Gate 2 PASS, run `/ship <slug>` — it handles plan archiving (`git mv` to `completed/`) as part of the commit. Never delete a plan.
 
 ## Reference Repos
 

@@ -1,6 +1,6 @@
 ---
 name: orchestrate-dev
-description: Execute a reviewed plan as a dev team — TL leads and codes alongside Dev subagents. TL assigns tasks, everyone implements, TL integrates, syncs docs, and appends delivery summary to TODO. Run after Gate 1 (PO + TL approved the plan).
+description: Execute a reviewed plan as a dev team — TL leads and codes alongside Dev subagents. TL assigns tasks, everyone implements, TL integrates, syncs docs, and appends delivery summary to plan. Run after Gate 1 (PO + TL approved the plan).
 ---
 
 # Dev Orchestration Workflow
@@ -212,19 +212,20 @@ Run after all tasks have been attempted (or after the first blocked task if stop
 
 ### Step 1 — Quality gate and test run
 
-**Full delivery (all tasks passed):**
+Run lint on all changed files:
 ```bash
 mkdir -p .pytest-logs
-scripts/quality-gate.sh full 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
+scripts/quality-gate.sh lint 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-lint.log
 ```
-Runs lint and the full test suite. Any failure = stop and fix. Use `scripts/quality-gate.sh lint --fix` for ruff violations; test failures require manual fixes.
+Use `scripts/quality-gate.sh lint --fix` for auto-fixable ruff violations.
 
-**Partial delivery (any task blocked or skipped):** Run only test files touched by completed tasks — a full suite against incomplete code produces misleading failures.
+Then run scoped tests for files touched by completed tasks (both full and partial delivery):
 ```bash
-mkdir -p .pytest-logs
-uv run pytest <test_file_1> <test_file_2> -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-touched.log
+uv run pytest <test_file_1> <test_file_2> -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-scoped.log
 ```
 Collect touched test files from completed tasks only. If none were touched, skip and record "no tests run — no test files touched by completed tasks."
+
+**Do not run the full test suite here.** The full suite is review-impl's responsibility — running it here creates a duplicate expensive run.
 
 Any failure = stop. Do RCA: read the failing test, trace to root cause in source, fix it, re-run. Never dismiss a failure as flaky without running it 3 times and identifying the specific cause.
 
@@ -273,13 +274,15 @@ Append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`:
 | TASK-2 | <done_when text> | ✗ blocked: <reason> |
 | TASK-3 | <done_when text> | — skipped |
 
-**Tests:** <full suite / touched files> — <N> passed, <N> failed
+**Tests:** scoped (touched files) — <N> passed, <N> failed
 **Doc Sync:** clean / fixed (<what was fixed>)
 
 **Overall: DELIVERED / BLOCKED**
 <one sentence summary. If BLOCKED: list blocked tasks and whether the fix needs plan revision, code fix, or follow-up TODO.>
 ```
 
-**DELIVERED** = all tasks passed, tests pass, independent review clean or minor only, doc sync clean or fixed.
+**DELIVERED** = all tasks passed, lint clean, scoped tests pass, doc sync clean or fixed.
 **BLOCKED** = one or more tasks failed `done_when`, or tests still failing after fix attempts.
+
+Do not prompt the user to run `/review-impl` — the workflow manages next steps.
 
