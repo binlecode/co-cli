@@ -8,10 +8,10 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
-from co_cli.agent._core import build_agent
+from co_cli.agent._core import build_agent, build_tool_registry
 from co_cli.bootstrap.check import check_runtime
 from co_cli.config._core import MCPServerSettings, settings
-from co_cli.deps import CoDeps, CoSessionState, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools.capabilities import capabilities_check
 from co_cli.tools.shell_backend import ShellBackend
@@ -21,9 +21,12 @@ _AGENT = build_agent(config=settings)
 
 def _make_deps(**settings_overrides) -> CoDeps:
     """Build runtime deps for doctor-style checks without test doubles."""
+    config = make_settings(**settings_overrides)
+    tool_registry = build_tool_registry(config)
     return CoDeps(
         shell=ShellBackend(),
-        config=make_settings(**settings_overrides),
+        config=config,
+        tool_index=dict(tool_registry.tool_index),
         session=CoSessionState(),
     )
 
@@ -43,10 +46,11 @@ async def test_new_runtime_fields_present() -> None:
     ctx = _make_ctx(deps)
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         result = await capabilities_check(ctx)
-    assert "tool_count" in result.metadata
-    assert "mcp_mode" in result.metadata
+    assert result.metadata["tool_count"] == len(deps.tool_index)
+    assert result.metadata["native_tool_count"] + result.metadata["mcp_tool_count"] == len(
+        deps.tool_index
+    )
     assert result.metadata["mcp_mode"] in ("mcp", "native-only")
-    assert isinstance(result.metadata["tool_count"], int)
 
 
 @pytest.mark.asyncio
@@ -191,33 +195,16 @@ async def test_capabilities_mcp_wording_is_evidence_based_not_connected() -> Non
 
 
 @pytest.mark.asyncio
-async def test_capabilities_source_counts_use_tool_source_enum() -> None:
-    """mcp_tool_count and native_tool_count must key off ToolSourceEnum.
-
-    Regression: old code compared tc.source (enum) to string literals 'native'/'mcp',
-    which silently returned zero and made the MCP display read '… · 0 tools'
-    regardless of how many MCP tools were actually discovered.
-    """
-    deps = _make_deps()
-    deps.tool_index["fake_mcp_tool"] = ToolInfo(
-        name="fake_mcp_tool",
-        description="demo mcp tool",
-        approval=False,
-        source=ToolSourceEnum.MCP,
-        visibility=VisibilityPolicyEnum.DEFERRED,
-    )
-    deps.tool_index["fake_native_tool"] = ToolInfo(
-        name="fake_native_tool",
-        description="demo native tool",
-        approval=False,
-        source=ToolSourceEnum.NATIVE,
-        visibility=VisibilityPolicyEnum.ALWAYS,
-    )
+async def test_capabilities_source_counts_match_real_registry() -> None:
+    """Tool counts must reflect the real registry attached to the running deps."""
+    deps = _make_deps(mcp_servers={"mysvr": MCPServerSettings(command="ls")})
     ctx = _make_ctx(deps)
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         result = await capabilities_check(ctx)
-    assert result.metadata["mcp_tool_count"] >= 1
-    assert result.metadata["native_tool_count"] >= 1
+    source_counts = result.metadata["source_counts"]
+    assert result.metadata["native_tool_count"] == source_counts.get("native", 0)
+    assert result.metadata["mcp_tool_count"] == source_counts.get("mcp", 0)
+    assert result.metadata["tool_count"] == sum(source_counts.values())
 
 
 def test_check_runtime_reasoning_ready_false_when_provider_probe_fails() -> None:

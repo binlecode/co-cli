@@ -130,13 +130,18 @@ _in_flight: asyncio.Task[None] | None = None
 async def _run_extraction_async(
     delta: list,
     deps: "CoDeps",
-    frontend: "Frontend",
+    frontend: "Frontend | None",
     *,
     cursor_start: int,
+    advance_cursor: bool = True,
 ) -> None:
     """Background extraction: build and run a knowledge extractor agent on the delta window.
 
-    Advances deps.session.last_extracted_message_idx on success only.
+    When ``advance_cursor`` is True (default), advances
+    ``deps.session.last_extracted_message_idx`` to ``cursor_start + len(delta)``
+    on success. The compaction path passes False because it pins the cursor
+    synchronously to the post-compact history length — cursor_start indexes
+    into the pre-compact list, which is a different length.
     Handles CancelledError for clean shutdown.
     Never crashes the main chat loop.
     """
@@ -146,14 +151,16 @@ async def _run_extraction_async(
     try:
         window = build_transcript_window(delta)
         if not window.strip():
-            deps.session.last_extracted_message_idx = cursor_start + len(delta)
+            if advance_cursor:
+                deps.session.last_extracted_message_idx = cursor_start + len(delta)
             return
         _model = deps.model.model if deps.model else None
         agent = build_knowledge_extractor_agent()
         with tracer.start_as_current_span("co.memory.extraction") as span:
             span.set_attribute("agent.role", "memory_extractor")
             await agent.run(window, deps=deps, model=_model)
-        deps.session.last_extracted_message_idx = cursor_start + len(delta)
+        if advance_cursor:
+            deps.session.last_extracted_message_idx = cursor_start + len(delta)
     except asyncio.CancelledError:
         logger.debug("Background memory extraction cancelled")
     except Exception:
@@ -173,9 +180,10 @@ def _on_extraction_done(task: asyncio.Task[None]) -> None:
 def fire_and_forget_extraction(
     delta: list,
     deps: "CoDeps",
-    frontend: "Frontend",
+    frontend: "Frontend | None" = None,
     *,
     cursor_start: int,
+    advance_cursor: bool = True,
 ) -> None:
     """Launch extraction as a background task. Skips if one is already running."""
     global _in_flight
@@ -184,10 +192,50 @@ def fire_and_forget_extraction(
         return
 
     _in_flight = asyncio.get_running_loop().create_task(
-        _run_extraction_async(delta, deps, frontend, cursor_start=cursor_start),
+        _run_extraction_async(
+            delta,
+            deps,
+            frontend,
+            cursor_start=cursor_start,
+            advance_cursor=advance_cursor,
+        ),
         name="memory_extraction",
     )
     _in_flight.add_done_callback(_on_extraction_done)
+
+
+def schedule_compaction_extraction(
+    pre_compact: list,
+    post_compact: list,
+    deps: "CoDeps",
+    frontend: "Frontend | None" = None,
+) -> None:
+    """Extract-before-discard hook for compaction boundaries.
+
+    Fires background extraction over the un-extracted pre-compact tail
+    (``pre_compact[last_extracted_message_idx:]``) so content about to be
+    summarised away still reaches the knowledge layer. Then pins the cursor
+    synchronously to ``len(post_compact)`` and resets the cadence counter —
+    the post-compact history starts from a clean extraction boundary, so
+    the synthetic compaction marker / todo snapshot never appear in a future
+    cadence delta.
+
+    Cursor must be pinned synchronously, not by the async extraction, because
+    ``cursor_start + len(delta)`` indexes into ``pre_compact`` and would be
+    incorrect (often out of range) in the shorter ``post_compact`` list.
+    """
+    cursor = deps.session.last_extracted_message_idx
+    if 0 <= cursor < len(pre_compact):
+        delta = pre_compact[cursor:]
+        fire_and_forget_extraction(
+            delta,
+            deps=deps,
+            frontend=frontend,
+            cursor_start=cursor,
+            advance_cursor=False,
+        )
+    deps.session.last_extracted_message_idx = len(post_compact)
+    deps.session.last_extracted_turn_idx = 0
 
 
 async def drain_pending_extraction(timeout_ms: int = 10_000) -> None:

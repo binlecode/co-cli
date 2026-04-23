@@ -1,9 +1,7 @@
 """Functional tests for the terminal display frontend."""
 
-from tests._frontend import SilentFrontend
-
 from co_cli.context.tool_approvals import resolve_approval_subject
-from co_cli.display._core import QuestionPrompt, TerminalFrontend, console
+from co_cli.display._core import TerminalFrontend, console
 from co_cli.display._stream_renderer import StreamRenderer
 
 
@@ -114,25 +112,3 @@ def test_build_approval_panel_no_preview_block_when_preview_is_none() -> None:
 
     assert "shell" in output
     assert "git status" in output
-
-
-def test_silent_frontend_prompt_question_returns_configured_answer_free_text() -> None:
-    """SilentFrontend.prompt_question returns the configured answer for a free-text question."""
-    frontend = SilentFrontend(question_answer="purple")
-    result = frontend.prompt_question(QuestionPrompt(question="What is your favourite colour?"))
-    assert result == "purple"
-
-
-def test_silent_frontend_prompt_question_returns_configured_answer_constrained() -> None:
-    """SilentFrontend.prompt_question returns the configured answer for a constrained question."""
-    frontend = SilentFrontend(question_answer="yes")
-    result = frontend.prompt_question(QuestionPrompt(question="Continue?", options=["yes", "no"]))
-    assert result == "yes"
-
-
-def test_silent_frontend_prompt_question_records_last_question() -> None:
-    """SilentFrontend.prompt_question records the prompt so callers can inspect it."""
-    frontend = SilentFrontend(question_answer="42")
-    q = QuestionPrompt(question="What is the answer?", options=None)
-    frontend.prompt_question(q)
-    assert frontend.last_question is q

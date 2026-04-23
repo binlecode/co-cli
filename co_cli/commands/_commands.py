@@ -381,6 +381,9 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         f"[info]Compacted: {old_len} → {len(new_history)} messages "
         f"(est. {pre_tokens // 1000}K → {post_tokens // 1000}K of {budget // 1000}K budget)[/info]"
     )
+    from co_cli.knowledge._distiller import schedule_compaction_extraction
+
+    schedule_compaction_extraction(ctx.message_history, new_history, ctx.deps, ctx.frontend)
     return ReplaceTranscript(history=new_history, compaction_applied=True)
 
 

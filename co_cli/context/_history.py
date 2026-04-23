@@ -900,6 +900,9 @@ async def _apply_compaction(
         *_preserve_search_tool_breadcrumbs(dropped),
         *messages[tail_start:],
     ]
+    from co_cli.knowledge._distiller import schedule_compaction_extraction
+
+    schedule_compaction_extraction(messages, result, ctx.deps)
     return result, summary_text
 
 
@@ -970,6 +973,9 @@ async def emergency_recover_overflow_history(
         "(len(groups)=%d).",
         len(group_by_turn(messages)),
     )
+    from co_cli.knowledge._distiller import schedule_compaction_extraction
+
+    schedule_compaction_extraction(messages, result, ctx.deps)
     return result
 
 

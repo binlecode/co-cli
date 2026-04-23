@@ -20,6 +20,7 @@ from co_cli.knowledge._distiller import (
     build_transcript_window,
     drain_pending_extraction,
     fire_and_forget_extraction,
+    schedule_compaction_extraction,
 )
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -194,6 +195,75 @@ async def test_last_extracted_idx_advances_on_empty_window(tmp_path: Path) -> No
 
     # Cursor must have advanced to cursor_start + len(delta)
     assert deps.session.last_extracted_message_idx == cursor_start + len(delta)
+
+
+@pytest.mark.asyncio
+async def test_schedule_compaction_extraction_pins_cursor_to_post_compact(
+    tmp_path: Path,
+) -> None:
+    """After compaction, cursor and cadence counter are pinned for the post-compact history.
+
+    Regression for /compact bleed: previously, the slash path left
+    last_extracted_message_idx pointing into the discarded pre-compact history,
+    causing a later cadence extraction to ingest the synthetic compaction marker
+    as transcript input.
+    """
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(),
+        knowledge_dir=memory_dir,
+        model=None,
+    )
+    pre_compact = [
+        ModelRequest(parts=[UserPromptPart(content=f"user turn {idx}")]) for idx in range(8)
+    ]
+    post_compact = [
+        ModelRequest(parts=[UserPromptPart(content="[compaction marker]")]),
+        ModelRequest(parts=[UserPromptPart(content="[todo snapshot]")]),
+        ModelResponse(
+            parts=[TextPart(content="Understood.")],
+            model_name="test-model",
+        ),
+    ]
+    deps.session.last_extracted_message_idx = 4
+    deps.session.last_extracted_turn_idx = 5
+
+    schedule_compaction_extraction(pre_compact, post_compact, deps)
+    async with asyncio.timeout(5):
+        await drain_pending_extraction(timeout_ms=1000)
+
+    assert deps.session.last_extracted_message_idx == len(post_compact)
+    assert deps.session.last_extracted_turn_idx == 0
+
+
+@pytest.mark.asyncio
+async def test_schedule_compaction_extraction_noop_cursor_beyond_pre_compact(
+    tmp_path: Path,
+) -> None:
+    """Cursor already at end of pre-compact history → no extraction fire, cursor still pins."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(),
+        knowledge_dir=memory_dir,
+        model=None,
+    )
+    pre_compact = [
+        ModelRequest(parts=[UserPromptPart(content=f"user turn {idx}")]) for idx in range(4)
+    ]
+    post_compact = [ModelRequest(parts=[UserPromptPart(content="[compaction marker]")])]
+    deps.session.last_extracted_message_idx = len(pre_compact)
+    deps.session.last_extracted_turn_idx = 2
+
+    schedule_compaction_extraction(pre_compact, post_compact, deps)
+
+    assert deps.session.last_extracted_message_idx == len(post_compact)
+    assert deps.session.last_extracted_turn_idx == 0
 
 
 @pytest.mark.asyncio

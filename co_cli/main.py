@@ -109,26 +109,24 @@ async def _finalize_turn(
 
     next_history = turn_result.messages
 
-    # Memory extraction — cadence-gated, fire-and-forget on clean turns
+    # Memory extraction — cadence-gated, fire-and-forget on clean turns.
+    # Compaction boundaries (turn-time or slash /compact) are handled by
+    # schedule_compaction_extraction at the compaction site, which pins the
+    # cursor and resets the cadence counter, so we do not special-case them here.
     if not turn_result.interrupted and turn_result.outcome != "error":
-        if deps.runtime.history_compaction_applied:
-            # Summarizer already processed the compacted content.
-            # Reset cursor to end of compacted history — skip extraction this turn.
-            deps.session.last_extracted_message_idx = len(next_history)
-        else:
-            n = deps.config.memory.extract_every_n_turns
-            if n > 0:
-                deps.session.last_extracted_turn_idx += 1
-                if deps.session.last_extracted_turn_idx % n == 0:
-                    cursor = deps.session.last_extracted_message_idx
-                    delta = (
-                        next_history[cursor:]
-                        if 0 <= cursor <= len(next_history)
-                        else next_history[-20:]
-                    )
-                    fire_and_forget_extraction(
-                        delta, deps=deps, frontend=frontend, cursor_start=cursor
-                    )
+        n = deps.config.memory.extract_every_n_turns
+        if n > 0:
+            deps.session.last_extracted_turn_idx += 1
+            if deps.session.last_extracted_turn_idx % n == 0:
+                cursor = deps.session.last_extracted_message_idx
+                delta = (
+                    next_history[cursor:]
+                    if 0 <= cursor <= len(next_history)
+                    else next_history[-20:]
+                )
+                fire_and_forget_extraction(
+                    delta, deps=deps, frontend=frontend, cursor_start=cursor
+                )
 
     try:
         deps.session.session_path = persist_session_history(
