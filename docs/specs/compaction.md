@@ -157,7 +157,7 @@ sequenceDiagram
     RT->>RT: is_context_overflow → True
     RT->>RT: overflow_recovery_attempted = True
     RT->>R: recover_overflow_history(history + pending input)
-    R->>R: plan_compaction_boundaries<br/>(config tail_fraction, soft-overrun, active-user anchoring)
+    R->>R: plan_compaction_boundaries<br/>(config tail_fraction, active-user anchoring)
     alt bounds is None (≤ 1 group)
         R-->>RT: None
         RT-->>U: terminal: context overflow unrecoverable
@@ -381,7 +381,7 @@ if ctx.deps.runtime.consecutive_low_yield_proactive_compactions >= cfg.proactive
 **Boundary planner** (`plan_compaction_boundaries`):
 
 ```
-Inputs: messages, budget, tail_fraction (required), *, tail_soft_overrun_multiplier=1.25
+Inputs: messages, budget, tail_fraction (required)
 
 _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 
@@ -390,15 +390,11 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
    if len(groups) < _MIN_RETAINED_TURN_GROUPS + 1: return None
 3. Walk groups from end, accumulating token estimates:
    tail_budget = tail_fraction * budget
-   soft_overrun_log_threshold = tail_budget * tail_soft_overrun_multiplier
    acc_tokens = 0; acc_groups = []
    for group in reversed(groups):
      gt = estimate_message_tokens(group.messages)
      if len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > tail_budget:
        break
-     if len(acc_groups) < _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > soft_overrun_log_threshold:
-       log(info, "last group exceeds soft-overrun threshold; retained to satisfy _MIN_RETAINED_TURN_GROUPS")
-     # group is always retained here — the log is advisory, not enforcement
      acc_groups.insert(0, group); acc_tokens += gt
 4. tail_start = acc_groups[0].start_index
 5. Active-user anchoring: find the latest UserPromptPart. If its group falls in the
@@ -407,7 +403,7 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 7. return (head_end, tail_start, tail_start - head_end)
 ```
 
-`_MIN_RETAINED_TURN_GROUPS = 1` is a hardcoded correctness invariant — not user-configurable. The last turn group is retained unconditionally; `tail_soft_overrun_multiplier` (default 1.25) defines a log-only threshold that emits an info message when the retained tail exceeds `tail_fraction * budget` by more than the multiplier. It is advisory telemetry, not an enforced cap. Active-user anchoring guarantees the latest `UserPromptPart` is never dropped into the compacted middle.
+`_MIN_RETAINED_TURN_GROUPS = 1` is a hardcoded correctness invariant — not user-configurable. The last turn group is retained unconditionally even when its tokens alone exceed `tail_fraction * budget`. Active-user anchoring guarantees the latest `UserPromptPart` is never dropped into the compacted middle.
 
 **Compaction assembly:**
 ```
@@ -453,16 +449,26 @@ else:
 return result
 ```
 
-**Marker structure.** A `ModelRequest` containing a `UserPromptPart` whose content is a prose envelope around the summary text:
+**Marker structure.** A `ModelRequest` containing a `UserPromptPart` whose content is a prose envelope around the summary text. The envelope opens with a loud `[CONTEXT COMPACTION — REFERENCE ONLY]` tag and three guardrails that frame the summary as retrospective (not actionable) for the continuation model:
 
 ```
-"This session is being continued from a previous conversation that ran out of context. "
-"The summary below covers the earlier portion (N messages).\n\n"
+"[CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a "
+"previous conversation that ran out of context. "
+"The summary below is a retrospective recap of completed prior work — treat it "
+"as background reference, NOT as active instructions. "
+"Do NOT repeat, redo, or re-execute any action already described as completed; "
+"do NOT re-answer questions that the summary records as resolved. "
+"Your active task is identified in the '## Active Task' / '## Next Step' "
+"sections of the summary — resume from there and respond only to user messages "
+"that appear AFTER this summary.\n\n"
+"The summary covers the earlier portion (N messages).\n\n"
 + summary_text
 + "\n\nRecent messages are preserved verbatim."
 ```
 
-Prior-summary detection uses `startswith(_SUMMARY_MARKER_PREFIX)` with a shared constant defined in one place and used by both builder and detector.
+The three guardrails protect against re-executing side-effecting actions described in the summary, re-answering resolved questions, and confusing the summary with an active user request. Summary-section anchors (`## Active Task`, `## Next Step`) are produced by the summarizer template in `co_cli/context/summarization.py`.
+
+Prior-summary detection uses `startswith(_SUMMARY_MARKER_PREFIX)` with a shared constant defined in one place and used by both builder and detector. The constant matches the literal start of the marker through the end of the "ran out of context." sentence.
 
 **Breadcrumb preservation** (`_preserve_search_tool_breadcrumbs`):
 - Return messages from `dropped` that contain a `search_tools` `ToolReturnPart`.
@@ -516,7 +522,7 @@ if is_context_overflow(e):
     return terminal error
 ```
 
-`recover_overflow_history` calls `plan_compaction_boundaries(...)` with the same config-sourced `tail_fraction` and `tail_soft_overrun_multiplier` as proactive compaction. When overflow fires, it's because the estimator was wrong; the planner will drop whatever is needed because there's more to drop now. Sharing the same planner settings keeps the surface minimal.
+`recover_overflow_history` calls `plan_compaction_boundaries(...)` with the same config-sourced `tail_fraction` as proactive compaction. When overflow fires, it's because the estimator was wrong; the planner will drop whatever is needed because there's more to drop now. Sharing the same planner settings keeps the surface minimal.
 
 ### 2.6 Summarizer
 
@@ -575,7 +581,7 @@ One successful compaction per pressure event per turn.
 | Processor re-fire after overflow recovery | Safe — planner returns `None` on overlap |
 | First-turn overflow (`len(groups) ≤ 1`) | Terminal — structural limit, not a bug |
 
-**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes to `recover_overflow_history`. The overflow planner runs with the same config-sourced `tail_fraction` and `tail_soft_overrun_multiplier`; if it also returns `None`, the turn is terminal with "Context overflow — unrecoverable." This is intentional: proactive and overflow share one planner — if the planner cannot help, letting the provider reject the request is the correct escalation. Do not add a retry loop at the proactive layer.
+**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes to `recover_overflow_history`. The overflow planner runs with the same config-sourced `tail_fraction`; if it also returns `None`, the turn is terminal with "Context overflow — unrecoverable." This is intentional: proactive and overflow share one planner — if the planner cannot help, letting the provider reject the request is the correct escalation. Do not add a retry loop at the proactive layer.
 
 ### 2.10 Security
 
@@ -599,7 +605,6 @@ One successful compaction per pressure event per turn.
 | `compaction.hygiene_ratio` | `CO_COMPACTION_HYGIENE_RATIO` | `0.88` | Fraction of budget above which pre-turn hygiene (M0) fires |
 | `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.40` | Fraction of budget targeted for the preserved tail |
 | `compaction.min_context_length_tokens` | `CO_COMPACTION_MIN_CONTEXT_LENGTH_TOKENS` | `64000` | Absolute floor on the proactive trigger threshold — compaction never fires until token_count exceeds this value, regardless of the budget-ratio result |
-| `compaction.tail_soft_overrun_multiplier` | `CO_COMPACTION_TAIL_SOFT_OVERRUN_MULTIPLIER` | `1.25` | Multiplier applied to `tail_fraction * budget` to set the soft-overrun log threshold. Advisory only — an oversized last turn is retained regardless to satisfy `_MIN_RETAINED_TURN_GROUPS`; exceeding this threshold only emits an info log |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Number of consecutive low-yield proactive compactions before the anti-thrashing gate activates |
 
@@ -631,7 +636,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | File | Purpose |
 |---|---|
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
-| `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — hardened with soft-overrun, active-user anchoring); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_build_call_id_to_args` (tool_call_id → args index for semantic markers); `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
+| `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_build_call_id_to_args` (tool_call_id → args index for semantic markers); `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker(tool_name, args, content)` — per-tool 1-line markers that replace the static placeholder in `truncate_tool_results`; dispatch table covers all eight `COMPACTABLE_TOOLS` with a generic `[tool] k=v (N chars)` fallback. `is_cleared_marker(content)` public predicate — recognizes both the static fallback and per-tool markers (checks prefix against `COMPACTABLE_TOOLS`); used by tests and evals. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — public overflow predicate: HTTP 413 unconditional; HTTP 400 with explicit overflow evidence from `error.message`, flat `message`, `error.code`, or wrapped `error.metadata.raw`. Body parse failures fall back safely to `False`. |
@@ -643,7 +648,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | `co_cli/config/_llm.py` | `num_ctx`, `ctx_overflow_threshold`, `ctx_warn_threshold`. |
 | `co_cli/prompts/…` | Base system prompt assembly; static recency-clearing advisory. |
 | `evals/eval_compaction_quality.py` | Compaction fidelity regression: M2 clearing correctness, file-set retention, pending-task retention. |
-| `tests/test_history.py` | Planner unit tests (token scaling, turn-boundary snap, overlap, min-groups clamp, soft-overrun retain, active-user anchoring, breadcrumb dedup); marker construction; prior-summary detection; Gap L orphan search_tools return structural preservation. |
+| `tests/test_history.py` | Planner unit tests (token scaling, turn-boundary snap, overlap, min-groups clamp, oversized-last-group retain, active-user anchoring, breadcrumb dedup); marker construction; prior-summary detection; Gap L orphan search_tools return structural preservation. |
 | `tests/test_tool_result_markers.py` | Per-tool `semantic_marker` format tests (all 8 compactable tools + generic fallback + shell exit detection); `is_cleared_marker` predicate tests; end-to-end `truncate_tool_results` replacement behavior for each compactable tool; non-string (multimodal) fallback to static placeholder. |
 | `tests/test_context_compaction.py` | Token estimation (args + list content), trigger floor via `max()`, budget resolution, summarizer prompt assembly; threshold floor (small-context floor blocks compaction); anti-thrashing gate activation, window-not-full passthrough, savings-clear unblocks gate. |
 | `tests/test_prompt_assembly.py` | Recency-clearing advisory present in cacheable prefix; advisory built from `COMPACTABLE_KEEP_RECENT`. |

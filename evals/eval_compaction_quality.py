@@ -73,6 +73,7 @@ from co_cli.context._history import (
     _gather_compaction_context,
     _recall_prompt_text,
     _safety_prompt_text,
+    _summary_marker,
     emergency_compact,
     find_first_run_end,
     group_by_turn,
@@ -674,20 +675,9 @@ def step_4_context_enrichment() -> bool:
                 "  PASS: Source 3 (memories) not in compaction context — injected separately by P4"
             )
 
-    # 4e: Source 3 — prior-summary from dropped messages (new marker format)
+    # 4e: Source 3 — prior-summary from dropped messages (production marker format)
     dropped_with_summary: list[ModelMessage] = [
-        ModelRequest(
-            parts=[
-                UserPromptPart(
-                    content=(
-                        "This session is being continued from a previous conversation "
-                        "that ran out of context. The summary below covers the earlier "
-                        "portion (15 messages).\n\n## Goal\nRefactor auth module\n\n"
-                        "Recent messages are preserved verbatim."
-                    )
-                )
-            ]
-        ),
+        _summary_marker(15, "## Goal\nRefactor auth module"),
         _assistant("continuing..."),
     ]
     ctx = _make_ctx()
@@ -1209,15 +1199,14 @@ async def step_7_multi_cycle() -> bool:
     """Execute chain on history with prior summary marker. Verify integration.
 
     Specs from TODO:
-    - Prior summary in dropped slice detected via [Summary of prefix
+    - Prior summary in dropped slice detected via _SUMMARY_MARKER_PREFIX startswith
     - Context enrichment includes prior summary text
     - New summary integrates prior content (not lost)
     """
     print("\n--- Step 7: Multi-cycle compaction [Outcome 3] ---")
     passed = True
 
-    prior_summary = (
-        "[Summary of 10 earlier messages]\n"
+    prior_summary_body = (
         "## Goal\nRefactor auth module from sessions to JWT.\n\n"
         "## Key Decisions\nUsing PyJWT directly for more control.\n\n"
         "## Working Set\nauth/views.py, auth/middleware.py\n\n"
@@ -1269,7 +1258,7 @@ async def step_7_multi_cycle() -> bool:
         # Cycle 1 output
         _user("hello"),
         _assistant("hi"),
-        ModelRequest(parts=[UserPromptPart(content=prior_summary)]),
+        _summary_marker(10, prior_summary_body),
         # Cycle 2 conversation: 7 read_file calls (>5 → P1 fires)
         _user("Update tests."),
         _tool_call("file_read", {"file_path": "tests/test_auth.py"}, "c10"),

@@ -906,30 +906,25 @@ def test_enforce_batch_budget_fail_open_on_oserror(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# TASK-3 regression tests: soft-overrun + active-user anchoring
+# Regression tests: min-retained-groups invariant + active-user anchoring
 # ---------------------------------------------------------------------------
 
 
-def test_planner_soft_overrun_retains_oversized_last_group():
-    """Soft-overrun: last group > tail_budget is still retained (clamp to _MIN_RETAINED_TURN_GROUPS).
+def test_planner_retains_oversized_last_group():
+    """Last group > tail_budget is still retained (clamp to _MIN_RETAINED_TURN_GROUPS).
 
-    Verifies that when a single group exceeds the soft-overrun log threshold, the planner
+    Verifies that when a single group exceeds the nominal tail budget, the planner
     keeps it rather than dropping it entirely — the minimum-retained invariant wins.
-    Uses tail_soft_overrun_multiplier=1.0 (no slack) to hit the path clearly.
     """
     msgs = []
-    # 3 small turn groups (~6 tokens each)
-    for i in range(3):
-        msgs.extend([_user(f"small user {i}"), _assistant(f"small reply {i}")])
-    # One large last group: 2000 chars ≈ 500 tokens — far above any reasonable tail_budget
+    for idx in range(3):
+        msgs.extend([_user(f"small user {idx}"), _assistant(f"small reply {idx}")])
     msgs.extend([_user("big user " + "z" * 2000), _assistant("big reply " + "z" * 2000)])
 
-    # budget=100 → tail_budget=40 tokens; last group is ~500 tokens >> soft-overrun
-    bounds = plan_compaction_boundaries(msgs, 100, 0.40, tail_soft_overrun_multiplier=1.0)
+    bounds = plan_compaction_boundaries(msgs, 100, 0.40)
     assert bounds is not None
     head_end, tail_start, _ = bounds
     groups = group_by_turn(msgs)
-    # Last group must be in the tail (tail_start <= last group's start_index)
     assert tail_start <= groups[-1].start_index
     assert tail_start > head_end
 

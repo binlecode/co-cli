@@ -247,7 +247,6 @@ class Settings(BaseModel):
                 "hygiene_ratio": "CO_COMPACTION_HYGIENE_RATIO",
                 "tail_fraction": "CO_COMPACTION_TAIL_FRACTION",
                 "min_context_length_tokens": "CO_COMPACTION_MIN_CONTEXT_LENGTH_TOKENS",
-                "tail_soft_overrun_multiplier": "CO_COMPACTION_TAIL_SOFT_OVERRUN_MULTIPLIER",
                 "min_proactive_savings": "CO_COMPACTION_MIN_PROACTIVE_SAVINGS",
                 "proactive_thrash_window": "CO_COMPACTION_PROACTIVE_THRASH_WINDOW",
             },

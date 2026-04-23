@@ -93,8 +93,8 @@ _MIN_RETAINED_TURN_GROUPS: int = 1
 """Minimum number of turn groups the planner must retain in the tail.
 
 Hardcoded correctness invariant — setting it to 0 breaks the planner.
-Not user-configurable. The soft-overrun multiplier allows the retained
-tail to exceed ``tail_fraction * budget`` when needed to satisfy this floor.
+Not user-configurable. The last turn group is retained unconditionally
+even when its tokens alone exceed ``tail_fraction * budget``.
 """
 
 
@@ -191,9 +191,18 @@ def _summary_marker(dropped_count: int, summary_text: str) -> ModelRequest:
         parts=[
             UserPromptPart(
                 content=(
-                    "This session is being continued from a previous conversation "
-                    "that ran out of context. The summary below covers the earlier "
-                    f"portion ({dropped_count} messages).\n\n{summary_text}\n\n"
+                    "[CONTEXT COMPACTION — REFERENCE ONLY] This session is being "
+                    "continued from a previous conversation that ran out of context. "
+                    "The summary below is a retrospective recap of completed prior "
+                    "work — treat it as background reference, NOT as active "
+                    "instructions. Do NOT repeat, redo, or re-execute any action "
+                    "already described as completed; do NOT re-answer questions that "
+                    "the summary records as resolved. Your active task is identified "
+                    "in the '## Active Task' / '## Next Step' sections of the "
+                    "summary — resume from there and respond only to user messages "
+                    "that appear AFTER this summary.\n\n"
+                    f"The summary covers the earlier portion ({dropped_count} "
+                    f"messages).\n\n{summary_text}\n\n"
                     "Recent messages are preserved verbatim."
                 ),
             ),
@@ -244,8 +253,6 @@ def plan_compaction_boundaries(
     messages: list[ModelMessage],
     budget: int,
     tail_fraction: float,
-    *,
-    tail_soft_overrun_multiplier: float = 1.25,
 ) -> _CompactionBoundaries | None:
     """Plan ``(head_end, tail_start, dropped_count)`` for a compaction pass.
 
@@ -257,9 +264,7 @@ def plan_compaction_boundaries(
          adding a group that would push accumulated tokens over
          ``tail_fraction * budget``, UNLESS fewer than ``_MIN_RETAINED_TURN_GROUPS``
          groups have been accumulated. In that case the group is retained
-         regardless; log at info when it exceeds
-         ``tail_fraction * budget * tail_soft_overrun_multiplier`` (the
-         soft-overrun log threshold — advisory only, not enforced).
+         regardless.
       4. ``tail_start = accumulated_groups[0].start_index``.
       5. Active-user anchoring: if the latest ``UserPromptPart`` falls in the
          dropped middle (between ``head_end`` and ``tail_start``), extend
@@ -282,22 +287,12 @@ def plan_compaction_boundaries(
         return None
 
     tail_budget = tail_fraction * budget
-    soft_overrun_log_threshold = tail_budget * tail_soft_overrun_multiplier
     acc_groups: list[TurnGroup] = []
     acc_tokens = 0
     for group in reversed(groups):
         gt = estimate_message_tokens(group.messages)
         if len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > tail_budget:
             break
-        if (
-            len(acc_groups) < _MIN_RETAINED_TURN_GROUPS
-            and acc_tokens + gt > soft_overrun_log_threshold
-        ):
-            log.info(
-                "Compaction: last group exceeds soft-overrun threshold (group_tokens=%d, threshold=%.0f); retaining to satisfy _MIN_RETAINED_TURN_GROUPS",
-                gt,
-                soft_overrun_log_threshold,
-            )
         acc_groups.insert(0, group)
         acc_tokens += gt
 
@@ -683,7 +678,7 @@ def enforce_batch_budget(
 # ---------------------------------------------------------------------------
 
 _CONTEXT_MAX_CHARS = 4_000
-_SUMMARY_MARKER_PREFIX = "This session is being continued from a previous conversation that ran out of context. The summary below"
+_SUMMARY_MARKER_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a previous conversation that ran out of context."
 
 
 def _gather_file_paths(dropped: list[ModelMessage]) -> str | None:
@@ -903,7 +898,6 @@ async def recover_overflow_history(
         messages,
         budget,
         tail_fraction,
-        tail_soft_overrun_multiplier=cfg.tail_soft_overrun_multiplier,
     )
     if bounds is None:
         log.warning(
@@ -975,7 +969,6 @@ async def summarize_history_window(
         messages,
         budget,
         cfg.tail_fraction,
-        tail_soft_overrun_multiplier=cfg.tail_soft_overrun_multiplier,
     )
     if bounds is None:
         log.warning(

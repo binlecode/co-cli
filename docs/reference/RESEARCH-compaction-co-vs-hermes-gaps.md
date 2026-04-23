@@ -100,7 +100,6 @@ M3  summarize_history_window (processor #3 — async, LLM call):
       2. group_by_turn — groups at UserPromptPart boundaries
       3. Walk groups from tail accumulating tokens; stop before tail_fraction × budget (0.40)
          _MIN_RETAINED_TURN_GROUPS = 1: last group always retained even if budget exceeded
-         soft_overrun_multiplier = 1.25 × tail_fraction × budget for last group before hard accept
       4. _anchor_tail_to_last_user: extend tail_start to cover last UserPromptPart
       5. Abort if tail_start ≤ head_end (head/tail overlap — nothing to drop)
     Enrichment context gathered from dropped range for summarizer (_gather_compaction_context):
