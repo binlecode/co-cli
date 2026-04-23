@@ -679,6 +679,11 @@ def enforce_batch_budget(
 
 _CONTEXT_MAX_CHARS = 4_000
 _SUMMARY_MARKER_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a previous conversation that ran out of context."
+_TODO_SNAPSHOT_PREFIX = "[ACTIVE TODOS — PRESERVED ACROSS CONVERSATION COMPACTION]"
+"""Stable sentinel prefix for post-compaction todo snapshot messages.
+Recognizable by design so subsequent compaction passes can filter prior
+snapshots if needed, and so tests can lock in the contract.
+"""
 
 
 def _gather_file_paths(dropped: list[ModelMessage]) -> str | None:
@@ -701,17 +706,35 @@ def _gather_file_paths(dropped: list[ModelMessage]) -> str | None:
     return f"Files touched: {', '.join(sorted(file_paths)[:20])}" if file_paths else None
 
 
+def _active_todos(todos: list) -> list:
+    """Return only todos whose status is pending or in_progress."""
+    if not todos:
+        return []
+    return [t for t in todos if t.get("status") not in ("completed", "cancelled")]
+
+
 def _gather_session_todos(todos: list) -> str | None:
     """Format pending session todos for compaction context."""
-    if not todos:
+    active = _active_todos(todos)
+    if not active:
         return None
-    pending = [t for t in todos if t.get("status") not in ("completed", "cancelled")]
-    if not pending:
-        return None
-    todo_lines = [
-        f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in pending[:10]
-    ]
+    todo_lines = [f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in active[:10]]
     return "Active tasks:\n" + "\n".join(todo_lines)
+
+
+def _build_todo_snapshot(todos: list) -> ModelRequest | None:
+    """Build a durable post-compaction ModelRequest carrying active todos.
+
+    Returns None when no pending/in_progress items exist. The content starts
+    with ``_TODO_SNAPSHOT_PREFIX`` so repeat compaction passes and anchoring
+    logic can identify these messages without guessing from wording.
+    """
+    active = _active_todos(todos)
+    if not active:
+        return None
+    todo_lines = [f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in active[:10]]
+    content = _TODO_SNAPSHOT_PREFIX + "\n" + "\n".join(todo_lines)
+    return ModelRequest(parts=[UserPromptPart(content=content)])
 
 
 def _gather_prior_summaries(dropped: list[ModelMessage]) -> str | None:
@@ -863,11 +886,13 @@ async def _apply_compaction(
     dropped = messages[head_end:tail_start]
     summary_text = await _summarize_dropped_messages(ctx, dropped, announce=announce)
     marker = _build_compaction_marker(dropped_count, summary_text)
+    todo_snapshot = _build_todo_snapshot(ctx.deps.session.session_todos)
     ctx.deps.runtime.history_compaction_applied = True
     ctx.deps.runtime.compacted_in_current_turn = True
     result = [
         *messages[:head_end],
         marker,
+        *([todo_snapshot] if todo_snapshot is not None else []),
         *_preserve_search_tool_breadcrumbs(dropped),
         *messages[tail_start:],
     ]
@@ -877,39 +902,59 @@ async def _apply_compaction(
 async def recover_overflow_history(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
-    *,
-    tail_fraction_override: float | None = None,
 ) -> list[ModelMessage] | None:
     """Recover from provider context overflow via the shared boundary planner.
 
     Calls ``plan_compaction_boundaries`` with config-sourced tail settings.
-    ``tail_fraction_override`` allows a more aggressive retry with a smaller tail fraction.
     The last turn group is always preserved via ``_MIN_RETAINED_TURN_GROUPS=1``.
-    Returns None when no compaction boundary exists.
+    Returns None when no compaction boundary exists — caller should fall back to
+    ``emergency_recover_overflow_history``.
     """
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
     cfg = ctx.deps.config.compaction
-    tail_fraction = (
-        tail_fraction_override if tail_fraction_override is not None else cfg.tail_fraction
-    )
     token_count = max(estimate_message_tokens(messages), latest_response_input_tokens(messages))
     bounds = plan_compaction_boundaries(
         messages,
         budget,
-        tail_fraction,
+        cfg.tail_fraction,
     )
     if bounds is None:
         log.warning(
-            "Compaction: overflow recovery boundary planning returned None "
-            "(tail group exceeds budget). budget=%d tail_fraction=%.2f token_count=%d — recovery impossible.",
+            "Compaction: overflow recovery boundary planning returned None. "
+            "budget=%d tail_fraction=%.2f token_count=%d — caller must try emergency fallback.",
             budget,
-            tail_fraction,
+            cfg.tail_fraction,
             token_count,
         )
         return None
 
     result, _ = await _apply_compaction(ctx, messages, bounds, announce=False)
+    return result
+
+
+async def emergency_recover_overflow_history(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage] | None:
+    """Structural last-resort overflow recovery — no planner, no LLM.
+
+    Drops all middle turn groups and keeps first + static marker + last. Used
+    when ``recover_overflow_history`` returns None despite a provider overflow
+    rejection (estimator underestimate; the planner sees no work to do).
+    Returns None when ``len(groups) <= 2`` — the pre-existing structural
+    first-turn-overflow limit.
+    """
+    result = emergency_compact(messages)
+    if result is None:
+        return None
+    ctx.deps.runtime.history_compaction_applied = True
+    ctx.deps.runtime.compacted_in_current_turn = True
+    log.warning(
+        "Emergency overflow recovery: planner returned None; dropped all middle groups "
+        "(len(groups)=%d).",
+        len(group_by_turn(messages)),
+    )
     return result
 
 

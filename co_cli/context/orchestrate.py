@@ -517,20 +517,26 @@ def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessag
 async def _attempt_overflow_recovery(
     recovery_ctx: RunContext[CoDeps],
     recovery_history: list[ModelMessage],
-    tail_fraction: float,
 ) -> tuple[list[ModelMessage] | None, str]:
-    """Try normal compaction then aggressive (half tail_fraction). Returns (compacted, status_msg)."""
-    from co_cli.context._history import recover_overflow_history
+    """Normal planner-based compaction, else structural emergency fallback.
+
+    Returns ``(compacted, status_msg)``. ``compacted is None`` signals terminal
+    overflow — happens only when ``len(groups) <= 2`` (first-turn structural limit).
+    """
+    from co_cli.context._history import (
+        emergency_recover_overflow_history,
+        recover_overflow_history,
+    )
 
     compacted = await recover_overflow_history(recovery_ctx, recovery_history)
     if compacted is not None:
         return compacted, "Context overflow — compacting and retrying..."
-    compacted = await recover_overflow_history(
-        recovery_ctx,
-        recovery_history,
-        tail_fraction_override=tail_fraction / 2.0,
-    )
-    return compacted, "Context overflow — aggressive compaction applied."
+
+    compacted = await emergency_recover_overflow_history(recovery_ctx, recovery_history)
+    if compacted is not None:
+        return compacted, "Context overflow — emergency compaction (first + last turn only)."
+
+    return None, ""
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +632,6 @@ async def run_turn(
                             compacted, status_msg = await _attempt_overflow_recovery(
                                 recovery_ctx,
                                 recovery_history,
-                                deps.config.compaction.tail_fraction,
                             )
                             if compacted is not None:
                                 # Overflow recovery bypasses the proactive gate — reset savings ring.

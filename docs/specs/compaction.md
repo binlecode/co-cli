@@ -87,10 +87,16 @@ flowchart TD
         O1[provider 400/413 context overflow]
         O2{overflow_recovery_attempted?}
         O3[recover_overflow_history<br/>same planner, same prompt]
+        O3b{bounds valid?}
+        O3c[emergency_recover_overflow_history<br/>structural fallback: first + marker + last]
         O4[retry once]
         O1 --> O2
-        O2 -->|no| O3 --> O4
-        O2 -->|yes| O6[terminal error]
+        O2 -->|no| O3 --> O3b
+        O3b -->|yes| O4
+        O3b -->|no| O3c
+        O3c -->|len groups &gt; 2| O4
+        O3c -->|len groups ≤ 2| O6[terminal error]
+        O2 -->|yes| O6
     end
 
     Emit --> PerReq
@@ -158,10 +164,7 @@ sequenceDiagram
     RT->>RT: overflow_recovery_attempted = True
     RT->>R: recover_overflow_history(history + pending input)
     R->>R: plan_compaction_boundaries<br/>(config tail_fraction, active-user anchoring)
-    alt bounds is None (≤ 1 group)
-        R-->>RT: None
-        RT-->>U: terminal: context overflow unrecoverable
-    else bounds valid
+    alt bounds valid
         R->>E: enrichment (files + todos + prior summaries)
         E-->>R: str
         R->>S: summarize_messages(dropped, context=enrichment)
@@ -173,12 +176,20 @@ sequenceDiagram
             R->>R: marker = _static_marker(...) (fallback)
         end
         R-->>RT: [head, marker, breadcrumbs, tail]
-        RT->>AG: request #2 (retry)
-        AG->>M: HTTP (compacted)
-        M-->>AG: response
-        AG-->>RT: TurnResult
-        RT-->>U: response
+    else bounds is None (planner overlap or oversized tail)
+        R-->>RT: None
+        RT->>RT: emergency_recover_overflow_history(history)
+        alt len(groups) > 2
+            RT->>RT: [first group, static marker, last group]
+        else len(groups) ≤ 2
+            RT-->>U: terminal: context overflow unrecoverable
+        end
     end
+    RT->>AG: request #2 (retry)
+    AG->>M: HTTP (compacted)
+    M-->>AG: response
+    AG-->>RT: TurnResult
+    RT-->>U: response
 ```
 
 ### Diagram 4: M2 recency clearing — worked example
@@ -243,6 +254,7 @@ flowchart TD
 flowchart TD
     L3[summarize_history_window<br/>proactive]
     L5[recover_overflow_history<br/>overflow emergency]
+    L6[emergency_recover_overflow_history<br/>structural fallback — no planner, no LLM]
 
     P[plan_compaction_boundaries]
     E[_gather_compaction_context<br/>enrichment helper]
@@ -262,14 +274,17 @@ flowchart TD
     S -->|exception| MK_ST
     L3 --> B
     L5 --> B
+    L5 -.bounds is None.-> L6
+    L6 --> MK_ST
 
     style P fill:#bbf,stroke:#333
     style E fill:#f9f,stroke:#333
     style S fill:#bbf,stroke:#333
     style B fill:#bbf,stroke:#333
+    style L6 fill:#fcc,stroke:#333
 ```
 
-Blue = shared infrastructure; pink = enrichment helper. Same config-sourced tail settings, same prompt, same summarizer — proactive and overflow differ only in trigger and retry semantics.
+Blue = shared infrastructure; pink = enrichment helper; red = structural last-resort fallback. Proactive and normal overflow share the same planner, prompt, and summarizer. The emergency path bypasses all three and keeps only the first + last turn group + static marker — used only when the planner cannot find a valid boundary despite a provider rejection.
 
 ### Diagram 7: Trigger cadence — self-stabilization in a 3-tool-call turn
 
@@ -508,13 +523,17 @@ Structurally identical to M3's compaction assembly. The only differences:
 1. **Trigger:** `ModelHTTPError` classified by `_http_error_classifier.is_context_overflow`: HTTP 413 unconditionally; HTTP 400 with explicit overflow evidence in `error.message`, flat `message`, `error.code`, or wrapped `error.metadata.raw`. Recognized evidence: overflow phrases from multiple providers (OpenAI, Ollama, Gemini, vLLM, AWS Bedrock) and structured codes (`context_length_exceeded`, `max_tokens_exceeded`). Generic 400s without overflow evidence fall through to reformulation.
 2. **Rate limit:** gated by `turn_state.overflow_recovery_attempted` — one-shot per turn.
 
-**Logic** (`run_turn` error handler):
+**Logic** (`run_turn` error handler, implemented inside `_attempt_overflow_recovery`):
 ```
 if is_context_overflow(e):
     if not turn_state.overflow_recovery_attempted:
         turn_state.overflow_recovery_attempted = True
         recovery_history = history + pending user input
+        # Layer 1: planner-based recovery — preserves the most content.
         compacted = await recover_overflow_history(ctx, recovery_history)
+        if compacted is None:
+            # Layer 2: structural fallback — drops all middle groups.
+            compacted = await emergency_recover_overflow_history(ctx, recovery_history)
         if compacted is not None:
             turn_state.current_history = compacted
             turn_state.current_input = None
@@ -522,7 +541,9 @@ if is_context_overflow(e):
     return terminal error
 ```
 
-`recover_overflow_history` calls `plan_compaction_boundaries(...)` with the same config-sourced `tail_fraction` as proactive compaction. When overflow fires, it's because the estimator was wrong; the planner will drop whatever is needed because there's more to drop now. Sharing the same planner settings keeps the surface minimal.
+`recover_overflow_history` calls `plan_compaction_boundaries(...)` with the same config-sourced `tail_fraction` as proactive compaction. When overflow fires it's because the estimator was wrong; the planner will drop whatever is needed because there's more to drop now. Sharing the same planner settings keeps the surface minimal.
+
+`emergency_recover_overflow_history` is the structural last resort. It bypasses the planner entirely (no budget math, no active-user anchoring) and keeps only the first turn group + static marker + last turn group. It exists to cover the narrow case where `plan_compaction_boundaries` returns `None` despite a provider rejection — the estimator underestimates so severely that every group appears to fit under `tail_fraction * budget` and the walker accumulates them all, collapsing `tail_start` into the head. When `len(groups) ≤ 2` (first-turn-overflow), emergency returns `None` and the turn is terminal — the structural limit that existed before the fallback still applies.
 
 ### 2.6 Summarizer
 
@@ -576,12 +597,12 @@ One successful compaction per pressure event per turn.
 | Summarizer raises 3+ consecutive times | Circuit breaker trips; static markers used for most attempts; LLM probed once every 10 skips — probe success resets counter |
 | `ctx.deps.model is None` (sub-agent context) | Static marker without LLM attempt |
 | `plan_compaction_boundaries` returns `None` (proactive) | Return messages unchanged; next request re-checks |
-| `plan_compaction_boundaries` returns `None` (overflow) | `recover_overflow_history` returns `None` → terminal error |
+| `plan_compaction_boundaries` returns `None` (overflow) | Fall through to `emergency_recover_overflow_history` (structural fallback — first + marker + last) |
 | Second overflow in same turn | Terminal error (gated by `overflow_recovery_attempted`) |
 | Processor re-fire after overflow recovery | Safe — planner returns `None` on overlap |
-| First-turn overflow (`len(groups) ≤ 1`) | Terminal — structural limit, not a bug |
+| First-turn overflow (`len(groups) ≤ 2`) | Terminal — emergency fallback also returns `None`; structural limit, not a bug |
 
-**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes to `recover_overflow_history`. The overflow planner runs with the same config-sourced `tail_fraction`; if it also returns `None`, the turn is terminal with "Context overflow — unrecoverable." This is intentional: proactive and overflow share one planner — if the planner cannot help, letting the provider reject the request is the correct escalation. Do not add a retry loop at the proactive layer.
+**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes into the two-tier cascade inside `_attempt_overflow_recovery`: first `recover_overflow_history` (planner-based), then `emergency_recover_overflow_history` (structural fallback — drops all middle groups, keeps first + marker + last). The turn is terminal only when both tiers return `None`, which happens exactly when `len(groups) ≤ 2` (first-turn structural limit). Do not add a retry loop at the proactive layer — proactive and normal overflow recovery share one planner, so a single failure mode does not need two handlers at the proactive tier.
 
 ### 2.10 Security
 

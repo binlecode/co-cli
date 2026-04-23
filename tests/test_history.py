@@ -24,9 +24,14 @@ from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatc
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import settings
 from co_cli.context._history import (
+    _TODO_SNAPSHOT_PREFIX,
+    _active_todos,
+    _build_todo_snapshot,
     _find_last_turn_start,
+    _gather_session_todos,
     _recall_prompt_text,
     emergency_compact,
+    emergency_recover_overflow_history,
     enforce_batch_budget,
     find_first_run_end,
     group_by_turn,
@@ -716,6 +721,261 @@ async def test_recover_overflow_history_preserves_pending_user_turn():
     ]
     assert "current request" in user_texts
     assert ctx.deps.runtime.history_compaction_applied is True
+
+
+@pytest.mark.asyncio
+async def test_emergency_recover_overflow_sets_runtime_flags():
+    """Emergency fallback drops middle groups and sets runtime flags for transcript branching."""
+    ctx = _make_processor_ctx()
+    msgs = []
+    for idx in range(5):
+        msgs.append(_user(f"turn {idx}"))
+        msgs.append(_assistant(f"response {idx}"))
+    assert len(group_by_turn(msgs)) == 5
+
+    result = await emergency_recover_overflow_history(ctx, msgs)
+
+    assert result is not None
+    result_groups = group_by_turn(result)
+    assert len(result_groups) == 3
+    assert ctx.deps.runtime.history_compaction_applied is True
+    assert ctx.deps.runtime.compacted_in_current_turn is True
+
+
+@pytest.mark.asyncio
+async def test_emergency_recover_overflow_returns_none_for_two_groups():
+    """Structural limit preserved: <=2 groups → None (terminal first-turn-overflow case)."""
+    ctx = _make_processor_ctx()
+    msgs = [
+        _user("turn 1"),
+        _assistant("response 1"),
+        _user("turn 2"),
+        _assistant("response 2"),
+    ]
+    assert len(group_by_turn(msgs)) == 2
+
+    result = await emergency_recover_overflow_history(ctx, msgs)
+
+    assert result is None
+    assert ctx.deps.runtime.history_compaction_applied is False
+
+
+@pytest.mark.asyncio
+async def test_emergency_recover_rescues_planner_overlap_case():
+    """Head/tail overlap (planner None) → emergency fallback still produces a compacted history."""
+    ctx = _make_processor_ctx()
+    msgs = []
+    for idx in range(3):
+        msgs.extend(_group_of(10, idx))
+    # Budget large enough that all small groups fit under tail_budget →
+    # plan_compaction_boundaries returns None via head/tail overlap.
+    assert plan_compaction_boundaries(msgs, 1_000_000, 0.40) is None
+
+    result = await emergency_recover_overflow_history(ctx, msgs)
+
+    assert result is not None
+    assert len(group_by_turn(result)) == 3
+
+
+# ---------------------------------------------------------------------------
+# Todo snapshot — durable post-compaction continuity for active session todos
+# ---------------------------------------------------------------------------
+
+
+def test_active_todos_filters_completed_and_cancelled():
+    """_active_todos keeps only pending / in_progress items."""
+    todos = [
+        {"content": "a", "status": "pending"},
+        {"content": "b", "status": "in_progress"},
+        {"content": "c", "status": "completed"},
+        {"content": "d", "status": "cancelled"},
+    ]
+    active = _active_todos(todos)
+    assert [t["content"] for t in active] == ["a", "b"]
+
+
+def test_active_todos_empty_input_returns_empty_list():
+    assert _active_todos([]) == []
+    assert _active_todos(None) == []
+
+
+def test_gather_session_todos_returns_none_when_no_active():
+    """Enrichment drops empty and all-closed inputs."""
+    assert _gather_session_todos([]) is None
+    assert (
+        _gather_session_todos(
+            [
+                {"content": "a", "status": "completed"},
+                {"content": "b", "status": "cancelled"},
+            ]
+        )
+        is None
+    )
+
+
+def test_gather_session_todos_formats_active_only():
+    """Existing enrichment behavior is preserved after refactor to _active_todos."""
+    todos = [
+        {"content": "ship fix", "status": "pending"},
+        {"content": "run tests", "status": "in_progress"},
+        {"content": "old task", "status": "completed"},
+    ]
+    text = _gather_session_todos(todos)
+    assert text is not None
+    assert text.startswith("Active tasks:")
+    assert "ship fix" in text
+    assert "run tests" in text
+    assert "old task" not in text
+
+
+def test_build_todo_snapshot_returns_none_when_empty_or_closed():
+    assert _build_todo_snapshot([]) is None
+    assert (
+        _build_todo_snapshot(
+            [
+                {"content": "done", "status": "completed"},
+                {"content": "dropped", "status": "cancelled"},
+            ]
+        )
+        is None
+    )
+
+
+def test_build_todo_snapshot_emits_model_request_with_prefix():
+    """Snapshot is a ModelRequest/UserPromptPart whose content starts with the sentinel prefix."""
+    todos = [
+        {"content": "ship fix", "status": "pending"},
+        {"content": "run tests", "status": "in_progress"},
+        {"content": "old task", "status": "completed"},
+    ]
+    snapshot = _build_todo_snapshot(todos)
+    assert snapshot is not None
+    assert isinstance(snapshot, ModelRequest)
+    assert len(snapshot.parts) == 1
+    part = snapshot.parts[0]
+    assert isinstance(part, UserPromptPart)
+    assert isinstance(part.content, str)
+    assert part.content.startswith(_TODO_SNAPSHOT_PREFIX)
+    assert "ship fix" in part.content
+    assert "run tests" in part.content
+    assert "old task" not in part.content
+
+
+def _snapshot_contents(messages: list) -> list[str]:
+    return [
+        part.content
+        for msg in messages
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+        if isinstance(part, UserPromptPart)
+        and isinstance(part.content, str)
+        and part.content.startswith(_TODO_SNAPSHOT_PREFIX)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_compaction_injects_snapshot_when_active_todos_exist():
+    """Proactive compaction with an active todo produces a durable snapshot message."""
+    ctx = _make_processor_ctx()
+    ctx.deps.session.session_todos = [
+        {"content": "preserve me across compaction", "status": "pending", "priority": "medium"},
+    ]
+    msgs = _make_messages(10)
+    result = await summarize_history_window(ctx, msgs)
+
+    contents = _snapshot_contents(result)
+    assert len(contents) == 1
+    assert "preserve me across compaction" in contents[0]
+
+
+@pytest.mark.asyncio
+async def test_apply_compaction_static_marker_fallback_still_injects_snapshot():
+    """Model=None forces the static-marker path — the snapshot must still survive."""
+    ctx = _make_processor_ctx()
+    # _make_processor_ctx already has model=None (RunContext receives _AGENT.model
+    # but ctx.deps.model is the one that matters for the static-marker path).
+    assert ctx.deps.model is None
+    ctx.deps.session.session_todos = [
+        {"content": "static path survivor", "status": "in_progress", "priority": "high"},
+    ]
+    msgs = _make_messages(10)
+    result = await summarize_history_window(ctx, msgs)
+
+    contents = _snapshot_contents(result)
+    assert len(contents) == 1
+    assert "static path survivor" in contents[0]
+
+
+@pytest.mark.asyncio
+async def test_apply_compaction_no_snapshot_when_no_active_todos():
+    """No active todos → no snapshot message is inserted."""
+    ctx = _make_processor_ctx()
+    ctx.deps.session.session_todos = []
+    msgs = _make_messages(10)
+    result = await summarize_history_window(ctx, msgs)
+
+    assert _snapshot_contents(result) == []
+
+
+@pytest.mark.asyncio
+async def test_apply_compaction_re_compaction_does_not_duplicate_snapshot():
+    """A second compaction pass over already-compacted history produces exactly one snapshot.
+
+    Locks in re-compaction safety: the prior snapshot falls into the dropped
+    middle and a fresh one is rebuilt from live session_todos — never two
+    snapshots in the final output.
+    """
+    ctx = _make_processor_ctx()
+    ctx.deps.session.session_todos = [
+        {"content": "persistent task", "status": "pending", "priority": "medium"},
+    ]
+
+    # Pass 1 — initial history → compacted with snapshot.
+    first_result = await summarize_history_window(ctx, _make_messages(10))
+    assert len(_snapshot_contents(first_result)) == 1
+
+    # Extend with fresh turns so a second compaction pass is triggered.
+    extended = list(first_result)
+    for i in range(10):
+        extended.append(_user(f"later turn {i}"))
+        extended.append(_assistant(f"later response {i}"))
+
+    second_result = await summarize_history_window(ctx, extended)
+    contents = _snapshot_contents(second_result)
+    assert len(contents) == 1, (
+        "re-compaction must not retain prior snapshot alongside the fresh one"
+    )
+    assert "persistent task" in contents[0]
+
+
+# ---------------------------------------------------------------------------
+# /compact slash command — todo snapshot parity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_compact_command_inserts_todo_snapshot_between_summary_and_ack():
+    """User-invoked /compact injects the snapshot between the summary request and the ack."""
+    msgs = _make_messages(6)
+    ctx = _make_compact_ctx(message_history=msgs)
+    ctx.deps.session.session_todos = [
+        {"content": "survive user compact", "status": "pending", "priority": "medium"},
+    ]
+    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        result = await dispatch("/compact", ctx)
+
+    assert isinstance(result, ReplaceTranscript)
+    assert result.compaction_applied is True
+    assert len(result.history) == 3
+    snapshots = _snapshot_contents(result.history)
+    assert len(snapshots) == 1
+    assert "survive user compact" in snapshots[0]
+    # Snapshot sits between the summary request (idx 0) and the ack response (idx 2)
+    middle = result.history[1]
+    assert isinstance(middle, ModelRequest)
+    assert middle.parts[0].content.startswith(_TODO_SNAPSHOT_PREFIX)
 
 
 # ---------------------------------------------------------------------------

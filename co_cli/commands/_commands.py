@@ -358,19 +358,26 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         console.print("[bold red]Compact failed:[/bold red] provider error (see logs)")
         return None
 
-    # Build a minimal 2-message history: summary request + ack response
+    # Build a minimal history: summary request + (optional todo snapshot) + ack response
+    from co_cli.context._history import _build_todo_snapshot
+
+    todo_snapshot = _build_todo_snapshot(ctx.deps.session.session_todos)
     new_history: list[Any] = [
         ModelRequest(
             parts=[
                 UserPromptPart(content=f"[Compacted conversation summary]\n{summary}"),
             ]
         ),
+    ]
+    if todo_snapshot is not None:
+        new_history.append(todo_snapshot)
+    new_history.append(
         ModelResponse(
             parts=[
                 _TextPart(content="Understood. I have the conversation context."),
             ]
-        ),
-    ]
+        )
+    )
     old_len = len(ctx.message_history)
     post_tokens = estimate_message_tokens(new_history)
     budget = resolve_compaction_budget(

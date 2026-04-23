@@ -260,6 +260,43 @@ def test_persist_session_history_branches_child_session_on_compaction(tmp_path: 
     assert load_transcript(parent)[0].parts[0].content == "original turn"
 
 
+def test_persist_session_history_preserves_todo_snapshot_in_child(tmp_path: Path) -> None:
+    """A post-compaction todo snapshot round-trips through the child transcript."""
+    from co_cli.context._history import _TODO_SNAPSHOT_PREFIX, _build_todo_snapshot
+
+    sessions_dir = tmp_path / "sessions"
+    parent = sessions_dir / "2026-04-23-T120000Z-parent-todo001.jsonl"
+    original = [ModelRequest(parts=[UserPromptPart(content="original turn")])]
+    append_messages(parent, original)
+
+    snapshot = _build_todo_snapshot(
+        [
+            {"content": "survive persistence", "status": "pending", "priority": "medium"},
+        ]
+    )
+    assert snapshot is not None
+
+    compacted = [
+        ModelRequest(parts=[UserPromptPart(content="[Compacted conversation summary]\nSummary")]),
+        snapshot,
+        ModelResponse(parts=[TextPart(content="Understood.")], model_name="m"),
+    ]
+    child = persist_session_history(
+        session_path=parent,
+        sessions_dir=sessions_dir,
+        messages=compacted,
+        persisted_message_count=len(original),
+        history_compacted=True,
+    )
+
+    loaded_child = load_transcript(child)
+    assert len(loaded_child) == 3
+    snapshot_loaded = loaded_child[1]
+    assert isinstance(snapshot_loaded, ModelRequest)
+    assert snapshot_loaded.parts[0].content.startswith(_TODO_SNAPSHOT_PREFIX)
+    assert "survive persistence" in snapshot_loaded.parts[0].content
+
+
 def test_load_transcript_rejects_oversized_file(tmp_path: Path) -> None:
     """Files exceeding MAX_TRANSCRIPT_READ_BYTES return empty list."""
     path = tmp_path / "sessions" / "test-oversized.jsonl"
