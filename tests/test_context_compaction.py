@@ -251,12 +251,12 @@ def test_estimate_counts_tool_call_args():
     big_args = {"query": "x" * 2000}
     bare = [
         ModelResponse(
-            parts=[ToolCallPart(tool_name="file_grep", args={}, tool_call_id="c1")],
+            parts=[ToolCallPart(tool_name="file_search", args={}, tool_call_id="c1")],
         )
     ]
     with_args = [
         ModelResponse(
-            parts=[ToolCallPart(tool_name="file_grep", args=big_args, tool_call_id="c1")],
+            parts=[ToolCallPart(tool_name="file_search", args=big_args, tool_call_id="c1")],
         )
     ]
     assert estimate_message_tokens(with_args) > estimate_message_tokens(bare)
@@ -267,12 +267,12 @@ def test_estimate_counts_list_tool_return():
     big_list = ["item " + "y" * 200 for _ in range(20)]
     msgs_with_list = [
         ModelRequest(
-            parts=[ToolReturnPart(tool_name="file_grep", content=big_list, tool_call_id="c1")],
+            parts=[ToolReturnPart(tool_name="file_search", content=big_list, tool_call_id="c1")],
         )
     ]
     msgs_empty = [
         ModelRequest(
-            parts=[ToolReturnPart(tool_name="file_grep", content=[], tool_call_id="c1")],
+            parts=[ToolReturnPart(tool_name="file_search", content=[], tool_call_id="c1")],
         )
     ]
     assert estimate_message_tokens(msgs_with_list) > estimate_message_tokens(msgs_empty)

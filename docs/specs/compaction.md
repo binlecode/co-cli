@@ -125,7 +125,7 @@ sequenceDiagram
     AG->>HP: chain (request #2 prep)<br/>M2a,M2b; token_count &gt; threshold → M3 fires
     Note over HP: plan_compaction_boundaries<br/>→ head, tail, dropped<br/>summarize_messages (LLM)<br/>assemble marker
     AG->>M: HTTP request (compacted history)
-    M-->>AG: ToolCallPart(file_grep)
+    M-->>AG: ToolCallPart(file_search)
     AG->>TL: execute tool
     TL-->>AG: ToolReturnPart
     AG->>HP: chain (request #3 prep)<br/>fast path (compacted)
@@ -188,35 +188,35 @@ flowchart LR
     subgraph Before["before truncate_tool_results"]
         B1[file_read #1]
         B2[file_read #2]
-        B3[file_grep #1]
+        B3[file_search #1]
         B4[file_read #3]
         B5[file_read #4]
         B6[web_search #1]
         B7[file_read #5]
         B8[file_read #6]
         B9[file_read #7]
-        B10[file_grep #2]
+        B10[file_search #2]
         B11[UserPromptPart<br/>current turn]
     end
 
     subgraph After["after — protect last turn"]
         A1[file_read #1<br/>CLEARED]
         A2[file_read #2<br/>CLEARED]
-        A3[file_grep #1<br/>kept]
+        A3[file_search #1<br/>kept]
         A4[file_read #3<br/>kept — last 5]
         A5[file_read #4<br/>kept — last 5]
         A6[web_search #1<br/>kept]
         A7[file_read #5<br/>kept — last 5]
         A8[file_read #6<br/>kept — last 5]
         A9[file_read #7<br/>kept — last 5]
-        A10[file_grep #2<br/>kept]
+        A10[file_search #2<br/>kept]
         A11[UserPromptPart<br/>current turn]
     end
 
     Before --> After
 ```
 
-For `file_read` (7 returns), keep last 5 (#3–#7), clear #1 and #2. For `file_grep` (2), keep both. For `web_search` (1), keep. Tool-call args are never touched (load-bearing for enrichment).
+For `file_read` (7 returns), keep last 5 (#3–#7), clear #1 and #2. For `file_search` (2), keep both. For `web_search` (1), keep. Tool-call args are never touched (load-bearing for enrichment).
 
 ### Diagram 5: Boundary planner — walk from end
 
@@ -333,8 +333,8 @@ Model pages the full content via `file_read(path, start_line=, end_line=)`. Pers
 Three sync processors in order; no LLM calls.
 
 **`truncate_tool_results` (M2a).** Protects the last user turn (everything from the last `UserPromptPart` onward). For the region before:
-- For each tool in `COMPACTABLE_TOOLS` = `{file_read, shell, file_grep, file_glob, web_search, web_fetch, knowledge_article_read, obsidian_read}`, keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
-- Older compactable returns: content replaced with a per-tool **semantic marker** via `semantic_marker()` in `co_cli/context/_tool_result_markers.py` — carries tool name, 1-3 informative args (looked up from the matching `ToolCallPart` via a `tool_call_id → args` index built at processor entry), and a size/outcome signal. Examples: `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`, `[file_grep] 'pattern' in src → no matches`. A generic `[tool] k=v (N chars)` fallback covers any tool added to `COMPACTABLE_TOOLS` without an explicit handler.
+- For each tool in `COMPACTABLE_TOOLS` = `{file_read, shell, file_search, file_find, web_search, web_fetch, knowledge_article_read, obsidian_read}` (plus historical aliases `file_grep` and `file_glob` for older transcripts), keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
+- Older compactable returns: content replaced with a per-tool **semantic marker** via `semantic_marker()` in `co_cli/context/_tool_result_markers.py` — carries tool name, 1-3 informative args (looked up from the matching `ToolCallPart` via a `tool_call_id → args` index built at processor entry), and a size/outcome signal. Examples: `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`, `[file_search] 'pattern' in src → no matches`. A generic `[tool] k=v (N chars)` fallback covers any tool added to `COMPACTABLE_TOOLS` without an explicit handler.
 - Non-string (multimodal) content falls back to the static `_CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"` since markers require a readable string for their heuristics.
 - `tool_name` and `tool_call_id` are preserved (call/return pairing intact).
 - Non-compactable tools (writes, approvals) are never cleared.
@@ -488,7 +488,7 @@ Rationale: three-strikes trips the breaker to avoid burning LLM cost when the pr
 
 | Source | Scope | Why it survives M2 |
 |---|---|---|
-| `ToolCallPart.args` for `FILE_TOOLS = {file_read, file_write, file_patch, file_grep, file_glob}` → `_gather_file_paths(dropped)` | **Dropped range only** | `truncate_tool_results` only touches return content, never call args. Scoped to `dropped` to avoid duplicating paths already visible in the preserved tail. |
+| `ToolCallPart.args` for `FILE_TOOLS = {file_read, file_write, file_patch, file_search, file_find}` (plus historical aliases `file_grep`, `file_glob`) → `_gather_file_paths(dropped)` | **Dropped range only** | `truncate_tool_results` only touches return content, never call args. Scoped to `dropped` to avoid duplicating paths already visible in the preserved tail. |
 | `ctx.deps.session.session_todos` → `_gather_session_todos` | Session state | Orthogonal to message history. |
 | Prior compaction summaries in `dropped` → `_gather_prior_summaries` | Dropped range only | Detected via prefix-match on `_SUMMARY_MARKER_PREFIX` shared constant. |
 

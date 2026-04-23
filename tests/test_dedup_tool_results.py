@@ -133,7 +133,7 @@ def test_dedup_key_different_content_differs():
 
 def test_dedup_key_different_tool_same_content_differs():
     a = ToolReturnPart(tool_name="file_read", content="x" * 500, tool_call_id="c0")
-    b = ToolReturnPart(tool_name="file_grep", content="x" * 500, tool_call_id="c1")
+    b = ToolReturnPart(tool_name="file_search", content="x" * 500, tool_call_id="c1")
     assert dedup_key(a) != dedup_key(b)
 
 
@@ -287,13 +287,13 @@ def test_dedup_different_tools_same_content_do_not_collapse():
     """Identical content across different tools must NOT dedup (key includes tool name)."""
     msgs: list = []
     msgs.extend(_tool_turn("file_read", {"path": "x"}, "fr0", _CONTENT_A))
-    msgs.extend(_tool_turn("file_grep", {"pattern": "x", "path": "."}, "fg0", _CONTENT_A))
+    msgs.extend(_tool_turn("file_search", {"pattern": "x", "path": "."}, "fg0", _CONTENT_A))
     msgs.extend(_tool_turn("web_fetch", {"url": "http://x"}, "wf0", _CONTENT_A))
     msgs.extend(_tail())
 
     result = dedup_tool_results(_processor_ctx(), msgs)
     # Each tool's return should still carry full content.
-    for tool_name in ("file_read", "file_grep", "web_fetch"):
+    for tool_name in ("file_read", "file_search", "web_fetch"):
         returns = _extract_returns(result, tool_name)
         assert len(returns) == 1
         assert returns[0].content == _CONTENT_A

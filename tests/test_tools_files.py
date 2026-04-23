@@ -12,7 +12,7 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.tools.files.helpers import _enforce_workspace_boundary, _is_recursive_pattern
-from co_cli.tools.files.read import file_glob, file_grep, file_read
+from co_cli.tools.files.read import file_find, file_read, file_search
 from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
@@ -41,7 +41,7 @@ async def test_glob_basic(tmp_path):
     (tmp_path / "b.txt").write_text("world")
     (tmp_path / "subdir").mkdir()
 
-    result = await file_glob(_make_ctx(tmp_path), path=".")
+    result = await file_find(_make_ctx(tmp_path), path=".")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] >= 3
@@ -58,7 +58,7 @@ async def test_glob_pattern(tmp_path):
     (tmp_path / "util.py").write_text("")
     (tmp_path / "readme.txt").write_text("")
 
-    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="*.py")
+    result = await file_find(_make_ctx(tmp_path), path=".", pattern="*.py")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -82,7 +82,7 @@ async def test_glob_recursive_glob(tmp_path):
     (tmp_path / "src" / "mid.py").write_text("m")
     (tmp_path / "readme.txt").write_text("ignore me")
 
-    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="**/*.py")
+    result = await file_find(_make_ctx(tmp_path), path=".", pattern="**/*.py")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -102,7 +102,7 @@ async def test_glob_recursive_truncation(tmp_path):
     for i in range(10):
         (tmp_path / f"file{i:02d}.py").write_text("")
 
-    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="**/*.py", max_entries=3)
+    result = await file_find(_make_ctx(tmp_path), path=".", pattern="**/*.py", max_entries=3)
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3
@@ -116,7 +116,7 @@ async def test_glob_broken_symlink(tmp_path):
     (tmp_path / "real.txt").write_text("exists")
     (tmp_path / "broken_link").symlink_to(tmp_path / "nonexistent_target")
 
-    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="**/*")
+    result = await file_find(_make_ctx(tmp_path), path=".", pattern="**/*")
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
@@ -130,7 +130,7 @@ async def test_glob_shallow_truncation(tmp_path):
     for i in range(10):
         (tmp_path / f"file{i:02d}.txt").write_text("")
 
-    result = await file_glob(_make_ctx(tmp_path), path=".", max_entries=3)
+    result = await file_find(_make_ctx(tmp_path), path=".", max_entries=3)
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3
@@ -144,7 +144,7 @@ async def test_glob_recursive_includes_directories(tmp_path):
     nested_dir.mkdir(parents=True)
     (nested_dir / "module.py").write_text("x = 1\n")
 
-    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="**/*")
+    result = await file_find(_make_ctx(tmp_path), path=".", pattern="**/*")
 
     assert not result.metadata.get("error")
     entries = result.metadata["entries"]
@@ -163,7 +163,7 @@ async def test_glob_recursive_scoped_pattern_respected(tmp_path):
     (tmp_path / "src" / "inside.py").write_text("x = 1\n")
     (tmp_path / "other" / "outside.py").write_text("x = 2\n")
 
-    result = await file_glob(_make_ctx(tmp_path), path=".", pattern="src/**/*.py")
+    result = await file_find(_make_ctx(tmp_path), path=".", pattern="src/**/*.py")
 
     assert not result.metadata.get("error")
     names = [entry["name"] for entry in result.metadata["entries"]]
@@ -182,7 +182,7 @@ def test_is_recursive_pattern():
 @pytest.mark.asyncio
 async def test_glob_not_found(tmp_path):
     """Returns error dict when path does not exist."""
-    result = await file_glob(_make_ctx(tmp_path), path="nonexistent_dir")
+    result = await file_find(_make_ctx(tmp_path), path="nonexistent_dir")
 
     assert result.metadata.get("error") is True
 
@@ -192,7 +192,7 @@ async def test_glob_not_a_dir(tmp_path):
     """Returns error dict when path points to a file, not a directory."""
     (tmp_path / "afile.txt").write_text("content")
 
-    result = await file_glob(_make_ctx(tmp_path), path="afile.txt")
+    result = await file_find(_make_ctx(tmp_path), path="afile.txt")
 
     assert result.metadata.get("error") is True
 
@@ -365,7 +365,7 @@ async def test_grep(tmp_path):
     (tmp_path / "beta.txt").write_text("hello foo\n")
     (tmp_path / "gamma.txt").write_text("nothing here\n")
 
-    result = await file_grep(_make_ctx(tmp_path), pattern="foo")
+    result = await file_search(_make_ctx(tmp_path), pattern="foo")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 2
@@ -378,7 +378,7 @@ async def test_grep(tmp_path):
 @pytest.mark.asyncio
 async def test_grep_invalid_regex(tmp_path):
     """Returns error dict for malformed regex patterns."""
-    result = await file_grep(_make_ctx(tmp_path), pattern="[unclosed")
+    result = await file_search(_make_ctx(tmp_path), pattern="[unclosed")
 
     assert result.metadata.get("error") is True
 
@@ -388,7 +388,7 @@ async def test_grep_no_matches(tmp_path):
     """Returns zero count and empty matches list when nothing matches."""
     (tmp_path / "sample.txt").write_text("no match here\n")
 
-    result = await file_grep(_make_ctx(tmp_path), pattern="zzz_will_never_match")
+    result = await file_search(_make_ctx(tmp_path), pattern="zzz_will_never_match")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 0
@@ -403,11 +403,25 @@ async def test_grep_recursive_subdirectory(tmp_path):
     (deep / "deep.py").write_text("TARGET_MARKER = True\n")
     (tmp_path / "top.txt").write_text("no match here\n")
 
-    result = await file_grep(_make_ctx(tmp_path), pattern="TARGET_MARKER")
+    result = await file_search(_make_ctx(tmp_path), pattern="TARGET_MARKER")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 1
     assert "src/pkg/deep.py" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_search_glob_filters_content_search_to_matching_files(tmp_path):
+    """file_search(glob=...) searches content only within the matching file set."""
+    (tmp_path / "match.py").write_text("TOKEN = 1\n")
+    (tmp_path / "skip.txt").write_text("TOKEN = 2\n")
+
+    result = await file_search(_make_ctx(tmp_path), pattern="TOKEN", glob="**/*.py")
+
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 1
+    assert "match.py" in result.return_value
+    assert "skip.txt" not in result.return_value
 
 
 # --- write_file ---
@@ -865,7 +879,7 @@ async def test_grep_scoped_to_path(tmp_path):
     (tmp_path / "outside.py").write_text("TARGET_TOKEN = 2")
     ctx = _make_ctx(tmp_path)
 
-    result = await file_grep(ctx, pattern="TARGET_TOKEN", path="sub")
+    result = await file_search(ctx, pattern="TARGET_TOKEN", path="sub")
 
     assert not result.metadata.get("error")
     assert "inside.py" in result.return_value
@@ -992,7 +1006,7 @@ async def test_grep_case_insensitive(tmp_path):
     (tmp_path / "a.txt").write_text("Hello World\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await file_grep(ctx, pattern="hello world", case_insensitive=True)
+    result = await file_search(ctx, pattern="hello world", case_insensitive=True)
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 1
@@ -1006,7 +1020,7 @@ async def test_grep_files_with_matches_mode(tmp_path):
     (tmp_path / "miss.txt").write_text("nothing relevant\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await file_grep(ctx, pattern="TARGET", output_mode="files_with_matches")
+    result = await file_search(ctx, pattern="TARGET", output_mode="files_with_matches")
 
     assert not result.metadata.get("error")
     assert "hit.txt" in result.return_value
@@ -1022,7 +1036,7 @@ async def test_grep_count_mode(tmp_path):
     (tmp_path / "one.txt").write_text("MARK\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await file_grep(ctx, pattern="MARK", output_mode="count")
+    result = await file_search(ctx, pattern="MARK", output_mode="count")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 3  # 2 + 1 total matches
@@ -1036,7 +1050,7 @@ async def test_grep_context_lines(tmp_path):
     (tmp_path / "src.py").write_text("before\nTARGET\nafter\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await file_grep(ctx, pattern="TARGET", context_lines=1)
+    result = await file_search(ctx, pattern="TARGET", context_lines=1)
 
     assert not result.metadata.get("error")
     assert "before" in result.return_value
@@ -1051,12 +1065,12 @@ async def test_grep_head_limit_and_offset(tmp_path):
     (tmp_path / "big.txt").write_text(content + "\n")
     ctx = _make_ctx(tmp_path)
 
-    result_limited = await file_grep(ctx, pattern="MATCH", head_limit=3)
+    result_limited = await file_search(ctx, pattern="MATCH", head_limit=3)
     assert not result_limited.metadata.get("error")
     assert result_limited.metadata["truncated"] is True
     assert result_limited.return_value.count("MATCH") == 3
 
-    result_offset = await file_grep(ctx, pattern="MATCH", head_limit=3, offset=3)
+    result_offset = await file_search(ctx, pattern="MATCH", head_limit=3, offset=3)
     assert not result_offset.metadata.get("error")
     # First result_limited entry must not appear in result_offset
     first_line = result_limited.return_value.splitlines()[0]
@@ -1075,7 +1089,7 @@ async def test_grep_searches_hidden_and_gitignored_files(tmp_path):
     (ignored_dir / "ignored.txt").write_text("TOKEN\n")
     ctx = _make_ctx(tmp_path)
 
-    result = await file_grep(ctx, pattern="TOKEN")
+    result = await file_search(ctx, pattern="TOKEN")
 
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 2
@@ -1092,7 +1106,7 @@ async def test_grep_without_rg_falls_back_to_python(tmp_path):
     original_path = os.environ.get("PATH")
     os.environ["PATH"] = ""
     try:
-        result = await file_grep(ctx, pattern="TARGET")
+        result = await file_search(ctx, pattern="TARGET")
     finally:
         if original_path is None:
             del os.environ["PATH"]
@@ -1132,8 +1146,8 @@ def _make_ctx_sized(workspace: Path, tool_name: str, max_result_size: int = 10) 
 @pytest.mark.asyncio
 async def test_glob_error_uses_ctx_path(tmp_path):
     """Oversized glob 'path not found' error is persisted through the ctx-aware path."""
-    ctx = _make_ctx_sized(tmp_path, "file_glob")
-    result = await file_glob(ctx, path="a" * 50)
+    ctx = _make_ctx_sized(tmp_path, "file_find")
+    result = await file_find(ctx, path="a" * 50)
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
 
@@ -1148,8 +1162,8 @@ async def test_read_file_error_uses_ctx_path(tmp_path):
 @pytest.mark.asyncio
 async def test_grep_error_uses_ctx_path(tmp_path):
     """Oversized grep 'invalid regex' error is persisted through the ctx-aware path."""
-    ctx = _make_ctx_sized(tmp_path, "file_grep")
-    result = await file_grep(ctx, pattern="[unclosed")
+    ctx = _make_ctx_sized(tmp_path, "file_search")
+    result = await file_search(ctx, pattern="[unclosed")
     assert PERSISTED_OUTPUT_TAG in result.return_value
 
 

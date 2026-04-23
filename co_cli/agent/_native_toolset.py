@@ -17,7 +17,7 @@ from co_cli.tools.agents import (
 )
 from co_cli.tools.capabilities import capabilities_check
 from co_cli.tools.execute_code import code_execute
-from co_cli.tools.files.read import file_glob, file_grep, file_read
+from co_cli.tools.files.read import file_find, file_read, file_search
 from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.google.calendar import calendar_list, calendar_search
 from co_cli.tools.google.drive import drive_read, drive_search
@@ -52,9 +52,9 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     knowledge_article_read,
     memory_search,
     # Workspace reads
-    file_glob,
+    file_find,
     file_read,
-    file_grep,
+    file_search,
     # Web
     web_search,
     web_fetch,

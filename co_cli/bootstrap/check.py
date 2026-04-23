@@ -25,9 +25,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from co_cli.deps import VisibilityPolicyEnum
+
 if TYPE_CHECKING:
     from co_cli.config._core import Settings
     from co_cli.deps import CoDeps
+
+
+# Map raw CheckResult.status to a coarse component-state vocabulary used by the
+# self-check tool display. "warn" is split below based on intent: soft-unconfigured
+# integrations (google/brave/obsidian/skills with no config) report "not_configured",
+# genuine runtime failures report "degraded".
+_STATE_BY_STATUS: dict[str, str] = {
+    "ok": "available",
+    "skipped": "not_configured",
+    "warn": "degraded",
+    "error": "unavailable",
+}
 
 
 @dataclass
@@ -37,6 +51,8 @@ class RuntimeCheckResult:
     findings: list[dict[str, str]] = field(default_factory=list)
     fallbacks: list[str] = field(default_factory=list)
     mcp_probes: list[tuple[str, "CheckResult"]] = field(default_factory=list)  # bare server names
+    tool_groups: dict[str, list[str]] = field(default_factory=dict)
+    component_status: list[dict[str, str]] = field(default_factory=list)
 
     def summary_lines(self) -> list[str]:
         lines: list[str] = []
@@ -500,7 +516,7 @@ def check_runtime(
             "detail": provider_result.detail,
         },
         "reasoning_model": deps.config.llm.model,
-        "reasoning_ready": bool(deps.config.llm.model),
+        "reasoning_ready": provider_result.ok,
         "google": google_result.status == "ok",
         "obsidian": obsidian_result.status == "ok",
         "brave": brave_result.status == "ok",
@@ -509,12 +525,25 @@ def check_runtime(
         "checks": checks,
     }
 
-    # Build source breakdown from tool_index
+    # Build tool groupings and source breakdown from tool_index
     tool_index = deps.tool_index
     source_counts: dict[str, int] = {}
     for tc in tool_index.values():
         source_name = tc.source.value
         source_counts[source_name] = source_counts.get(source_name, 0) + 1
+
+    always_visible_tools = sorted(
+        name for name, tc in tool_index.items() if tc.visibility == VisibilityPolicyEnum.ALWAYS
+    )
+    deferred_tools = sorted(
+        name for name, tc in tool_index.items() if tc.visibility == VisibilityPolicyEnum.DEFERRED
+    )
+    approval_required_tools = sorted(name for name, tc in tool_index.items() if tc.approval)
+    tool_groups: dict[str, list[str]] = {
+        "always_visible": always_visible_tools,
+        "deferred": deferred_tools,
+        "approval_required": approval_required_tools,
+    }
 
     # Build status dict from session state
     status: dict[str, Any] = {
@@ -541,10 +570,28 @@ def check_runtime(
                 }
             )
 
-    # Fallbacks: active degraded-mode operations
+    # Component status: coarse available / not_configured / degraded / unavailable
+    # vocabulary for the self-check surface. "warn" for unconfigured integrations
+    # (google, brave) collapses to "not_configured"; true failures stay "degraded".
+    component_status: list[dict[str, str]] = []
+    for name, result in named_checks:
+        state = _STATE_BY_STATUS.get(result.status, "degraded")
+        if state == "degraded" and "not configured" in result.detail.lower():
+            state = "not_configured"
+        component_status.append(
+            {"component": name, "state": state, "detail": result.detail},
+        )
+
+    # Fallbacks: normalized from deps.degradations (bootstrap-recorded runtime fallbacks)
     fallbacks: list[str] = []
-    if len(deps.config.mcp_servers) == 0:
-        fallbacks.append("mcp: native-only (no MCP servers configured)")
+    for key, detail in sorted(deps.degradations.items()):
+        if key == "knowledge":
+            fallbacks.append(f"knowledge: {detail}")
+        elif key.startswith("mcp."):
+            server = key.removeprefix("mcp.")
+            fallbacks.append(f"mcp.{server}: tool discovery failed — {detail}")
+        else:
+            fallbacks.append(f"{key}: {detail}")
 
     return RuntimeCheckResult(
         capabilities=capabilities,
@@ -552,4 +599,6 @@ def check_runtime(
         findings=findings,
         fallbacks=fallbacks,
         mcp_probes=[(name.removeprefix("mcp:"), result) for name, result in mcp_probes],
+        tool_groups=tool_groups,
+        component_status=component_status,
     )

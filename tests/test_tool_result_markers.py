@@ -81,27 +81,27 @@ def test_file_read_range_marker_includes_line_span():
     assert "lines 10-20" in marker
 
 
-def test_file_grep_no_matches_marker():
-    marker = semantic_marker("file_grep", {"pattern": "xyz", "path": "."}, "(no matches)")
-    assert marker == "[file_grep] 'xyz' in . → no matches"
+def test_file_search_no_matches_marker():
+    marker = semantic_marker("file_search", {"pattern": "xyz", "path": "."}, "(no matches)")
+    assert marker == "[file_search] 'xyz' in . → no matches"
 
 
-def test_file_grep_with_matches_marker_reports_line_count():
+def test_file_search_with_matches_marker_reports_line_count():
     content = "foo.py:1: match a\nfoo.py:2: match b\nbar.py:5: match c"
-    marker = semantic_marker("file_grep", {"pattern": "match", "path": "src"}, content)
-    assert marker.startswith("[file_grep] 'match' in src")
+    marker = semantic_marker("file_search", {"pattern": "match", "path": "src"}, content)
+    assert marker.startswith("[file_search] 'match' in src")
     assert "3 result lines" in marker
 
 
-def test_file_glob_empty_marker():
-    marker = semantic_marker("file_glob", {"path": ".", "pattern": "*.foo"}, "(empty)")
-    assert marker == "[file_glob] *.foo in . → no entries"
+def test_file_find_empty_marker():
+    marker = semantic_marker("file_find", {"path": ".", "pattern": "*.foo"}, "(empty)")
+    assert marker == "[file_find] *.foo in . → no entries"
 
 
-def test_file_glob_entries_marker():
+def test_file_find_entries_marker():
     content = "[file] a.py\n[file] b.py\n[dir] sub"
-    marker = semantic_marker("file_glob", {"path": "src", "pattern": "**/*"}, content)
-    assert marker.startswith("[file_glob] **/* in src")
+    marker = semantic_marker("file_find", {"path": "src", "pattern": "**/*"}, content)
+    assert marker.startswith("[file_find] **/* in src")
     assert "3 entries" in marker
 
 
@@ -318,8 +318,8 @@ def test_truncate_falls_back_to_static_placeholder_on_non_string_content():
     ("tool_name", "args", "verbatim_content"),
     [
         ("file_read", {"path": "a.py"}, "a" * 500),
-        ("file_grep", {"pattern": "x", "path": "."}, "a.py:1: x\nb.py:2: x"),
-        ("file_glob", {"path": ".", "pattern": "*"}, "[file] a\n[file] b"),
+        ("file_search", {"pattern": "x", "path": "."}, "a.py:1: x\nb.py:2: x"),
+        ("file_find", {"path": ".", "pattern": "*"}, "[file] a\n[file] b"),
         ("web_search", {"query": "q"}, "Web search results for 'q':\n\n1. Title"),
         ("web_fetch", {"url": "https://e.com"}, "Content from https://e.com:\n\nbody"),
         ("knowledge_article_read", {"slug": "s"}, "# Title\n\nbody"),

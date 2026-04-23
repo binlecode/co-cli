@@ -22,6 +22,10 @@ def safety_prompt(ctx: RunContext[CoDeps]) -> str:
 def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
     """Inject shell tool guidance when shell is available."""
     return (
+        "Prefer dedicated workspace file tools over shell primitives: "
+        "file_read for known files, file_find for path/name discovery, and "
+        "file_search for content search. Use file_search(glob=...) when you "
+        "need to search inside only a subset of files. "
         "Shell runs as subprocess. DENY-pattern commands are blocked before deferral. "
         "Safe-prefix commands execute directly. All others require user approval. "
         "On non-zero exit, the tool returns the exit code and combined output as a "

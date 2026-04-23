@@ -127,7 +127,7 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
 | `clarify(question, options=None, user_answer=None)` | A | — | — | — | Pause mid-execution to ask the user a clarifying question; resume with injected answer |
-| `capabilities_check()` | A | — | — | — | Runtime doctor: binary probes, auth states, config |
+| `capabilities_check()` | A | — | — | — | Canonical self-check surface: grouped tool visibility, approval-gating, unavailable or limited integrations, bootstrap-recorded fallbacks |
 | `todo_write(todos)` | A | — | — | — | Replace in-session multi-turn checklist |
 | `todo_read()` | A | — | — | — | Fetch current checklist |
 
@@ -135,9 +135,9 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `file_glob(path=".", pattern="*", max_entries=200)` | A | — | — | — | List directory or find files by pattern |
+| `file_find(path=".", pattern="*", max_entries=200)` | A | — | — | — | List directory or find files by path/name pattern |
 | `file_read(path, start_line=None, end_line=None)` | A | — | — | — | Read workspace file; 500-line default cap with continuation hint; 500 KB full-read gate; 2000-char per-line truncation; fuzzy name suggestions on not-found |
-| `file_grep(pattern, path=".", glob="**/*", case_insensitive=False, output_mode="content", context_lines=0, head_limit=250, offset=0)` | A | — | — | — | Regex content search across workspace |
+| `file_search(pattern, path=".", glob="**/*", case_insensitive=False, output_mode="content", context_lines=0, head_limit=250, offset=0)` | A | — | — | — | Regex content search across workspace; use `glob` to limit the searched file set |
 | `file_write(path, content)` | D | ✓ | ✓ | — | Create or overwrite a file |
 | `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
 

@@ -4,6 +4,8 @@ user-invocable: true
 disable-model-invocation: false
 ---
 
+`capabilities_check` is the canonical runtime self-check; `/doctor` is a troubleshooting workflow layered on top of it, not a separate introspection mechanism. Plain-language capability questions ("what can you do right now?", "can you access X?") should invoke `capabilities_check` directly — use this skill when the user wants structured triage of a problem.
+
 Run `capabilities_check` to get the full runtime picture: capabilities, session state, findings, and active fallbacks.
 
 Review the result against any prior context in this conversation (what the user was trying to do, what failed). Identify the most relevant degraded or blocking condition.

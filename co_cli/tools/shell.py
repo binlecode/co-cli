@@ -21,8 +21,8 @@ async def shell(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolRe
 
     Do not use shell for file reads, content search, or tasks with dedicated tools:
     - file_read instead of cat/head/tail
-    - file_grep instead of grep/rg
-    - file_glob instead of ls/find
+    - file_search instead of grep/rg
+    - file_find instead of ls/find
     - web_fetch instead of curl for web pages
     - obsidian_search / obsidian_read instead of grep/cat on the Obsidian vault
     - drive_search / drive_read instead of manual API calls

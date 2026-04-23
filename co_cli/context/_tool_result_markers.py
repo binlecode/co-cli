@@ -34,7 +34,7 @@ def is_cleared_marker(content: object) -> bool:
     compactable tool name. Used by tests and evals to detect "was this
     return cleared?" without depending on the exact marker format.
 
-    Unknown prefixes (``[file] ...`` from verbatim file_glob output,
+    Unknown prefixes (``[file] ...`` from verbatim file_find output,
     ``[Reply]`` in an email body, ``[TODO]`` in a note) correctly return
     False — only compactable-tool markers are recognized.
     """
@@ -77,22 +77,22 @@ def _file_read_marker(args: dict[str, Any], content: str, chars: int, lines: int
     return f"[file_read] {path} ({span}, {chars:,} chars)"
 
 
-def _file_grep_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
+def _file_search_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
     del chars
     pattern = args.get("pattern", "?")
     path = args.get("path", ".")
     if content.startswith("(no matches)"):
-        return f"[file_grep] '{pattern}' in {path} → no matches"
-    return f"[file_grep] '{pattern}' in {path} ({lines} result lines)"
+        return f"[file_search] '{pattern}' in {path} → no matches"
+    return f"[file_search] '{pattern}' in {path} ({lines} result lines)"
 
 
-def _file_glob_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
+def _file_find_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
     del chars
     path = args.get("path", ".")
     pattern = args.get("pattern", "*")
     if content.startswith("(empty)"):
-        return f"[file_glob] {pattern} in {path} → no entries"
-    return f"[file_glob] {pattern} in {path} ({lines} entries)"
+        return f"[file_find] {pattern} in {path} → no entries"
+    return f"[file_find] {pattern} in {path} ({lines} entries)"
 
 
 def _web_search_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
@@ -128,8 +128,11 @@ _MarkerFn = Callable[[dict[str, Any], str, int, int], str]
 _TOOL_MARKERS: dict[str, _MarkerFn] = {
     "shell": _shell_marker,
     "file_read": _file_read_marker,
-    "file_grep": _file_grep_marker,
-    "file_glob": _file_glob_marker,
+    "file_search": _file_search_marker,
+    "file_find": _file_find_marker,
+    # Historical aliases for older transcripts.
+    "file_grep": _file_search_marker,
+    "file_glob": _file_find_marker,
     "web_search": _web_search_marker,
     "web_fetch": _web_fetch_marker,
     "knowledge_article_read": _knowledge_article_marker,

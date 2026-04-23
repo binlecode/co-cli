@@ -19,6 +19,8 @@ TOOL_START_DISPLAY_ARG: dict[str, str] = {
     "file_read": "path",
     "file_write": "path",
     "file_patch": "path",
+    "file_search": "pattern",
+    "file_find": "path",
     "file_grep": "pattern",
     "file_glob": "path",
     "knowledge_article_save": "content",

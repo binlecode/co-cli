@@ -11,7 +11,7 @@ from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.check import check_runtime
 from co_cli.config._core import MCPServerSettings, settings
-from co_cli.deps import CoDeps, CoSessionState
+from co_cli.deps import CoDeps, CoSessionState, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools.capabilities import capabilities_check
 from co_cli.tools.shell_backend import ShellBackend
@@ -122,3 +122,116 @@ def test_check_runtime_binary_probe_passes_when_command_on_path() -> None:
     )
 
     assert not any(finding["component"] == "mcp:mysvr" for finding in result.findings)
+
+
+# ---------------------------------------------------------------------------
+# Self-check contract — grouped display, degradations, MCP wording, enum counts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_capabilities_display_contains_self_check_sections() -> None:
+    """The model-visible display must expose the grouped self-check contract.
+
+    Without these sections the model cannot answer "what can you do right now?"
+    from the tool result alone and has to fall back to metadata or guesswork.
+    """
+    deps = _make_deps()
+    ctx = _make_ctx(deps)
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
+        result = await capabilities_check(ctx)
+    display = result.return_value
+    assert "Available now:" in display
+    assert "Discoverable on demand:" in display
+    assert "Approval-gated:" in display
+    assert "Unavailable or limited:" in display
+    assert "Active fallbacks:" in display
+
+
+@pytest.mark.asyncio
+async def test_capabilities_surfaces_deps_degradations() -> None:
+    """Bootstrap-recorded degradations must surface in display and metadata.
+
+    Regression: old code hardcoded a single 'mcp: native-only' fallback string
+    and ignored deps.degradations, so knowledge/MCP fallbacks never reached
+    the model's self-check result.
+    """
+    deps = _make_deps()
+    deps.degradations["knowledge"] = "sqlite-fts → grep (embedder unavailable)"
+    deps.degradations["mcp.notes"] = "binary missing"
+    ctx = _make_ctx(deps)
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
+        result = await capabilities_check(ctx)
+    display = result.return_value
+    assert "knowledge: sqlite-fts → grep (embedder unavailable)" in display
+    assert "mcp.notes: tool discovery failed — binary missing" in display
+    assert result.metadata["degradations"] == {
+        "knowledge": "sqlite-fts → grep (embedder unavailable)",
+        "mcp.notes": "binary missing",
+    }
+    fallbacks = result.metadata["fallbacks"]
+    assert "knowledge: sqlite-fts → grep (embedder unavailable)" in fallbacks
+    assert "mcp.notes: tool discovery failed — binary missing" in fallbacks
+
+
+@pytest.mark.asyncio
+async def test_capabilities_mcp_wording_is_evidence_based_not_connected() -> None:
+    """MCP block must use evidence-based wording (command found / url configured / probe failed).
+
+    A PATH probe only proves the command exists — calling that state 'connected'
+    overstates reality and misleads the model into false confidence.
+    """
+    deps = _make_deps(mcp_servers={"mysvr": MCPServerSettings(command="ls")})
+    ctx = _make_ctx(deps)
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
+        result = await capabilities_check(ctx)
+    display = result.return_value
+    assert "connected" not in display.lower()
+    assert "command found" in display
+
+
+@pytest.mark.asyncio
+async def test_capabilities_source_counts_use_tool_source_enum() -> None:
+    """mcp_tool_count and native_tool_count must key off ToolSourceEnum.
+
+    Regression: old code compared tc.source (enum) to string literals 'native'/'mcp',
+    which silently returned zero and made the MCP display read '… · 0 tools'
+    regardless of how many MCP tools were actually discovered.
+    """
+    deps = _make_deps()
+    deps.tool_index["fake_mcp_tool"] = ToolInfo(
+        name="fake_mcp_tool",
+        description="demo mcp tool",
+        approval=False,
+        source=ToolSourceEnum.MCP,
+        visibility=VisibilityPolicyEnum.DEFERRED,
+    )
+    deps.tool_index["fake_native_tool"] = ToolInfo(
+        name="fake_native_tool",
+        description="demo native tool",
+        approval=False,
+        source=ToolSourceEnum.NATIVE,
+        visibility=VisibilityPolicyEnum.ALWAYS,
+    )
+    ctx = _make_ctx(deps)
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
+        result = await capabilities_check(ctx)
+    assert result.metadata["mcp_tool_count"] >= 1
+    assert result.metadata["native_tool_count"] >= 1
+
+
+def test_check_runtime_reasoning_ready_false_when_provider_probe_fails() -> None:
+    """reasoning_ready must follow provider probe health, not just llm.model truthiness.
+
+    Regression: old code was `bool(deps.config.llm.model)` and returned True
+    whenever a model name was configured, even when the provider was unreachable
+    or the API key was missing.
+    """
+    base = make_settings()
+    unhealthy_llm = base.llm.model_copy(update={"provider": "gemini", "api_key": None})
+    broken = base.model_copy(update={"llm": unhealthy_llm})
+    deps = CoDeps(shell=ShellBackend(), config=broken, session=CoSessionState())
+    result = check_runtime(deps)
+    assert deps.config.llm.model, "precondition: llm.model string is set"
+    assert result.capabilities["provider"]["ok"] is False
+    assert result.capabilities["reasoning_ready"] is False

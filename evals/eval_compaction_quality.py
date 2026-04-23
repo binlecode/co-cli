@@ -371,7 +371,7 @@ def step_2_p1_truncate() -> bool:
     """Validate P1: recency-based clearing with exact counts.
 
     Specs from TODO:
-    - COMPACTABLE_TOOLS: read_file, shell, find_in_files, list_directory, web_search, web_fetch
+    - COMPACTABLE_TOOLS: file_read, shell, file_search, file_find, web_search, web_fetch
     - Keep COMPACTABLE_KEEP_RECENT (5) most recent per tool type
     - Non-compactable tools pass through regardless of count
     - Last turn group always protected
@@ -382,14 +382,17 @@ def step_2_p1_truncate() -> bool:
 
     # 2a: COMPACTABLE_TOOLS constant matches spec
     expected_compactable = {
-        "file_glob",
-        "file_grep",
+        "file_find",
+        "file_search",
         "file_read",
         "knowledge_article_read",
         "obsidian_read",
         "shell",
         "web_fetch",
         "web_search",
+        # Historical aliases retained for transcript compatibility.
+        "file_glob",
+        "file_grep",
     }
     from co_cli.context._history import COMPACTABLE_TOOLS
 
@@ -401,11 +404,14 @@ def step_2_p1_truncate() -> bool:
 
     # 2b: FILE_TOOLS constant matches spec
     expected_file_tools = {
-        "file_glob",
-        "file_grep",
+        "file_find",
+        "file_search",
         "file_patch",
         "file_read",
         "file_write",
+        # Historical aliases retained for transcript compatibility.
+        "file_glob",
+        "file_grep",
     }
     if expected_file_tools != FILE_TOOLS:
         print(f"  FAIL: FILE_TOOLS mismatch: {FILE_TOOLS}")

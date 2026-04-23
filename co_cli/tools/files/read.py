@@ -1,4 +1,4 @@
-"""Read-only file system tools: file_glob, file_read, file_grep."""
+"""Read-only file system tools: file_find, file_read, file_search."""
 
 import asyncio
 import difflib
@@ -330,19 +330,21 @@ def _grep_format_file_matches(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def file_glob(
+async def file_find(
     ctx: RunContext[CoDeps],
     path: str = ".",
     pattern: str = "*",
     max_entries: int = 200,
 ) -> ToolReturn:
-    """List directory contents or find files by name pattern (glob).
+    """Find workspace files by path/name pattern or list a directory.
 
-    Use for file-name and path discovery — when you need to know what files
-    exist or find files by extension/name pattern. Use "**/*.ext" for recursive
-    search by name (results sorted by modification time, newest first).
+    Use this instead of shell `ls` or `find` for workspace path discovery.
+    Use it when you need to know what files exist or find files by
+    extension/name pattern. Use "**/*.ext" for recursive search by name
+    (results sorted by modification time, newest first).
 
-    When NOT to use: for content search inside files — use file_grep instead.
+    When NOT to use: for content search inside files — use file_search
+    instead.
 
     Args:
         path: Directory path relative to the workspace root (default: current directory).
@@ -400,8 +402,8 @@ async def file_read(
     with start_line set to the indicated value. If the file is not found, the error
     message includes similar filenames from the same directory to help correct typos.
 
-    When NOT to use: when the file location is unknown — use file_glob or
-    file_grep first to locate the file.
+    When NOT to use: when the file location is unknown — use file_find or
+    file_search first to locate the file.
 
     Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
     up to 500 lines are returned; use start_line to continue reading.
@@ -470,7 +472,7 @@ async def file_read(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def file_grep(
+async def file_search(
     ctx: RunContext[CoDeps],
     pattern: str,
     path: str = ".",
@@ -481,12 +483,15 @@ async def file_grep(
     head_limit: int = 250,
     offset: int = 0,
 ) -> ToolReturn:
-    """Search file contents by regex pattern across the workspace or a subdirectory.
+    """Search file contents by regex across the workspace or a subdirectory.
 
-    Use for content search — finding text, symbols, or patterns inside files.
-    Prefer this over shell grep/rg for workspace content search.
+    Use this instead of shell `grep` or `rg` for workspace content search.
+    Use it to find text, symbols, or patterns inside files.
+    If you want to search only within matching files, set `glob`
+    (for example `glob="**/*.py"`).
 
-    When NOT to use: for file-name discovery — use file_glob with a pattern instead.
+    When NOT to use: for file-name discovery — use file_find with a pattern
+    instead.
 
     Skips binary files.
 
@@ -567,3 +572,9 @@ async def file_grep(
         mode=output_mode,
         truncated=truncated,
     )
+
+
+# Backward-compatible import aliases. The public tool surface uses file_find
+# and file_search, but older internal callers may still import these names.
+file_glob = file_find
+file_grep = file_search
