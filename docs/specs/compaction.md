@@ -334,7 +334,8 @@ Three sync processors in order; no LLM calls.
 
 **`truncate_tool_results` (M2a).** Protects the last user turn (everything from the last `UserPromptPart` onward). For the region before:
 - For each tool in `COMPACTABLE_TOOLS` = `{file_read, shell, file_grep, file_glob, web_search, web_fetch, knowledge_article_read, obsidian_read}`, keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
-- Older compactable returns: `content ← "[tool result cleared — older than 5 most recent calls]"`.
+- Older compactable returns: content replaced with a per-tool **semantic marker** via `semantic_marker()` in `co_cli/context/_tool_result_markers.py` — carries tool name, 1-3 informative args (looked up from the matching `ToolCallPart` via a `tool_call_id → args` index built at processor entry), and a size/outcome signal. Examples: `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`, `[file_grep] 'pattern' in src → no matches`. A generic `[tool] k=v (N chars)` fallback covers any tool added to `COMPACTABLE_TOOLS` without an explicit handler.
+- Non-string (multimodal) content falls back to the static `_CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"` since markers require a readable string for their heuristics.
 - `tool_name` and `tool_call_id` are preserved (call/return pairing intact).
 - Non-compactable tools (writes, approvals) are never cleared.
 
@@ -549,7 +550,7 @@ Requirements:
 - Lives in the cacheable prefix.
 - `5` pulled from `COMPACTABLE_KEEP_RECENT` at module-load time (static per process).
 
-Purpose: give the model a coherent mental model for the `[tool result cleared…]` placeholders it will encounter, and shift the burden of recording important information into the model's own responses.
+Purpose: give the model a coherent mental model for the per-tool semantic markers (`[shell] …`, `[file_read] …`, etc.) — and the static `[tool result cleared…]` fallback for multimodal content — that it will encounter, and shift the burden of recording important information into the model's own responses.
 
 ### 2.8 Trigger cadence and self-stabilization
 
@@ -630,7 +631,8 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | File | Purpose |
 |---|---|
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
-| `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — hardened with soft-overrun, active-user anchoring); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`. |
+| `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — hardened with soft-overrun, active-user anchoring); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_build_call_id_to_args` (tool_call_id → args index for semantic markers); `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
+| `co_cli/context/_tool_result_markers.py` | `semantic_marker(tool_name, args, content)` — per-tool 1-line markers that replace the static placeholder in `truncate_tool_results`; dispatch table covers all eight `COMPACTABLE_TOOLS` with a generic `[tool] k=v (N chars)` fallback. `is_cleared_marker(content)` public predicate — recognizes both the static fallback and per-tool markers (checks prefix against `COMPACTABLE_TOOLS`); used by tests and evals. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — public overflow predicate: HTTP 413 unconditional; HTTP 400 with explicit overflow evidence from `error.message`, flat `message`, `error.code`, or wrapped `error.metadata.raw`. Body parse failures fall back safely to `False`. |
 | `co_cli/context/orchestrate.py` | `run_turn` dispatches overflow recovery; calls `is_context_overflow` to classify provider errors; `turn_state.overflow_recovery_attempted` gates one-shot retry; resets `deps.runtime.consecutive_low_yield_proactive_compactions` after hygiene and overflow to unblock the anti-thrashing gate. |
@@ -642,6 +644,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | `co_cli/prompts/…` | Base system prompt assembly; static recency-clearing advisory. |
 | `evals/eval_compaction_quality.py` | Compaction fidelity regression: M2 clearing correctness, file-set retention, pending-task retention. |
 | `tests/test_history.py` | Planner unit tests (token scaling, turn-boundary snap, overlap, min-groups clamp, soft-overrun retain, active-user anchoring, breadcrumb dedup); marker construction; prior-summary detection; Gap L orphan search_tools return structural preservation. |
+| `tests/test_tool_result_markers.py` | Per-tool `semantic_marker` format tests (all 8 compactable tools + generic fallback + shell exit detection); `is_cleared_marker` predicate tests; end-to-end `truncate_tool_results` replacement behavior for each compactable tool; non-string (multimodal) fallback to static placeholder. |
 | `tests/test_context_compaction.py` | Token estimation (args + list content), trigger floor via `max()`, budget resolution, summarizer prompt assembly; threshold floor (small-context floor blocks compaction); anti-thrashing gate activation, window-not-full passthrough, savings-clear unblocks gate. |
 | `tests/test_prompt_assembly.py` | Recency-clearing advisory present in cacheable prefix; advisory built from `COMPACTABLE_KEEP_RECENT`. |
 | `tests/test_tool_output_sizing.py` | M1 persistence threshold, preview placeholder format. |

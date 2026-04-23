@@ -1,11 +1,10 @@
 # RESEARCH: Context Compaction — co-cli vs hermes-agent Gap Analysis
 
 Scope: deep-code comparison of co-cli's compaction stack against hermes-agent,
-identifying gaps in co-cli to adopt or learn from. Complements the broader
-peer survey in `RESEARCH-peer-compaction-survey.md`.
+identifying gaps in co-cli to adopt or learn from.
 
 Method: full function-body reads of both implementations on 2026-04-21.
-Last co-cli sync: 2026-04-22 (fifth pass — claims re-verified with file:line evidence against current source; summarization prompt now has 10 fixed sections with `## Critical Context` appended [commit c700eb5 — converges with hermes's last section]; `## Active Task` verbatim anchor confirmed [4d6e463]; line citations refreshed for orchestrate.py and _history.py drift).
+Last co-cli sync: 2026-04-23 (eighth pass — Gap #1 shipped: per-tool semantic markers replace the static `_CLEARED_PLACEHOLDER` in `truncate_tool_results`; Gap #2 shipped: hash-based dedup of identical tool results via new `dedup_tool_results` processor registered before M2a; remaining gaps renumbered).
 Last hermes-agent sync: 2026-04-22 (all 15 claim areas verified — no drift detected; no compaction-related commits since April 2026).
 
 co-cli sources (read):
@@ -25,6 +24,25 @@ hermes-agent sources (read):
 - `agent/model_metadata.py`
 - `run_agent.py`
 - `gateway/run.py`
+
+---
+
+## Remaining Gaps — Ranked by Impact
+
+| # | Risk | Gap | Section |
+|---|------|-----|---------|
+| 1 | Medium | Defensive `SUMMARY_PREFIX` ("do NOT re-execute listed work") on handoff — prevents replay of completed shell/file writes | §5 |
+| 2 | Low | Unconditional todo snapshot appended post-compaction — ensures todos survive summary omission | §9 |
+| 3 | Low | Dedicated iterative-update prompt framing prior summary as ground truth | §3 |
+| 4 | Low | `/compact <focus>` escape hatch when anti-thrash gate blocks | §8 |
+| 5 | Low | Time-based circuit-breaker cooldown (bounded recovery interval) | §7 |
+| 6 | Low | Wire `emergency_compact` into production overflow recovery as final fallback | §7 |
+| 7 | Low | Session rollover with parent lineage for audit trail | §9 |
+| 8 | Low | Cross-turn anti-thrash accumulation (gate is currently per-turn only) | §8 |
+
+Shipped and rejected items from prior passes have been removed; see git history of
+this file for the earlier evolution record (commits c700eb5, 4d6e463, cb9e57a, the
+Gap #1 semantic-marker ship on 2026-04-23, and the Gap #2 dedup ship on 2026-04-23).
 
 ---
 
@@ -102,9 +120,9 @@ ER  Overflow recovery (provider HTTP 400/413):
     is_context_overflow (co_cli/context/_http_error_classifier.py):
       HTTP 413 → True unconditionally
       HTTP 400 → True only with explicit overflow evidence in body:
-        Recognized phrases (14): "prompt is too long", "context_length_exceeded",
-        "context length", "context size", "context window", "token limit",
-        "too many tokens", "exceeds the limit", "input token count",
+        Recognized phrases (17): "prompt is too long", "context_length_exceeded",
+        "maximum context length", "context length", "context size", "context window",
+        "token limit", "too many tokens", "exceeds the limit", "input token count",
         "maximum number of tokens", "prompt length", "input is too long",
         "maximum model length", "max input token", "exceeds the max_model_len",
         "reduce the length"
@@ -253,18 +271,7 @@ ContextCompressor.compress (Phases 1–5):
 | Hard floor | `min_context_length_tokens` (default 64 K) — floor on trigger threshold | `MINIMUM_CONTEXT_LENGTH = 64 K` — floor on trigger threshold |
 | Pre-trigger hygiene | M0 at 0.88 (separate, earlier threshold) | Gateway at 0.85 (separate process/layer) |
 
-~~**co-cli gap:** No minimum-context guard at startup.~~ **SHIPPED + CORRECTED:** `min_context_length_tokens`
-(default 64 K) is now a floor on the trigger threshold —
-`threshold = max(budget × proactive_ratio, min_context_length_tokens)` — matching
-hermes's semantics. Earlier impl used it as a binary budget gate (`if budget < 64K: skip`), which is
-a weaker invariant: for models with budget > 64K the gate never fired, and the threshold could
-still fall below 64K on low proactive_ratio configs. Architecture overview updated.
-
-~~**co-cli note (stale token count after same-turn compaction):**~~ **SHIPPED:** `compacted_in_current_turn`
-flag in `CoRuntimeState` closes this. `summarize_history_window` sets the flag on compaction
-(`_history.py:820`); the next invocation zeroes out the API-reported count:
-`reported = 0 if ctx.deps.runtime.compacted_in_current_turn else latest_response_input_tokens(messages)`.
-Spurious `plan_compaction_boundaries` calls no longer occur.
+No current gaps in this dimension.
 
 ### 2. Summarization model
 
@@ -275,13 +282,10 @@ Spurious `plan_compaction_boundaries` calls no longer occur.
 | Separate endpoint | No | Yes — `auxiliary.compression.base_url`, `provider` |
 | Timeout | Inherits LLM client default | Configurable (default 120 s) |
 
-**Rejected (not a gap):** `summarize_messages` calls `llm_call` with
+**Not a gap:** `summarize_messages` calls `llm_call` with
 `deps.model.settings_noreason`, which disables extended reasoning/thinking — the
 dominant cost driver for large models. The auxiliary-model comparison is also
 inconsistent with co-cli's single-model architecture (see Design decisions below).
-The "burns a full LLM slot" framing in the original draft was inaccurate.
-
-**Gap #1 — Rejected; not adopted.**
 
 ### 3. Iterative recompression / summary updates
 
@@ -298,32 +302,26 @@ is structural: co-cli uses one fixed prompt for all compactions (no separate "up
 mode"); hermes switches to a dedicated iterative update prompt that explicitly frames
 the prior summary as ground truth to preserve. Both rely on LLM fidelity for merging.
 
-**Gap #9 — Risk: Low. Hermes: dedicated iterative-update prompt with prior summary as ground truth; co-cli single prompt + additional context injection.**
+**Gap #3 — Risk: Low. Hermes: dedicated iterative-update prompt with prior summary as ground truth; co-cli single prompt + additional context injection.**
 
 ### 4. Tool result handling before summarization
 
 | Aspect | co-cli | hermes-agent |
 |--------|--------|--------------|
 | Pre-LLM cheap pass | M2a (keep 5 most-recent per compactable tool — set: `file_read`, `shell`, `file_grep`, `file_glob`, `web_search`, `web_fetch`, `knowledge_article_read`, `obsidian_read`) + M2b (batch spill) — both sync, no LLM | Phase 1 `_prune_old_tool_results()` — collapses old tool results to semantic 1-line descriptions |
-| Semantic condensing | No — placeholders are static strings like "tool result cleared" | Yes — generates compact human-readable summaries e.g. "`[terminal] ran npm test → exit 0, 47 lines output`" |
-| Deduplication | No | Hash-based dedup of identical tool result content |
+| Semantic condensing | Yes — `semantic_marker` in `co_cli/context/_tool_result_markers.py` dispatches per-tool handlers (e.g. `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] foo.py (full, 1,200 chars)`) with a generic fallback; call_id → args index built in `_history.py:_build_call_id_to_args` so markers can reference the original call's args. Non-string (multimodal) content falls back to the static `_CLEARED_PLACEHOLDER`. Shipped 2026-04-23. | Yes — generates compact human-readable summaries e.g. "`[terminal] ran npm test → exit 0, 47 lines output`" |
+| Deduplication | Yes — `dedup_tool_results` in `co_cli/context/_history.py` (shipped 2026-04-23). Reverse-scans `messages[:_find_last_turn_start]` for ToolReturnParts eligible per `is_dedup_candidate` (compactable tool, string content, ≥ 200 chars); records the `tool_call_id` of the most-recent occurrence per `(tool_name, sha256_prefix(content))` key; rewrites earlier identical returns to back-reference markers via `build_dedup_part` while preserving each return's original `tool_call_id`. Registered as the first history processor so the kept recent window is already collapsed before M2a's recency clearing runs. Non-string content and non-compactable tools pass through. | Hash-based dedup of identical tool result content |
 | Max result threshold | M1 (per-tool): 30 K shell, 50 K default, `math.inf` file_read — no cap | 6 K per-message serialization cap for summarizer input |
 
-**co-cli gap (summarization fidelity only):** When M3 fires, the static placeholder
-`"[tool result cleared — older than 5 most recent calls]"` gives the summarizer no
-signal about what those calls returned. Hermes's semantic 1-line descriptions
-(`[shell] ran npm test → exit 0, 47 lines output`) preserve intent without token cost,
-producing richer summaries. This gap is scoped to summarization quality — M2a's
-always-on pruning is intentional (see Design decisions below).
-
-**Gap #2 — Risk: Medium. Hermes: semantic 1-line descriptions (tool name + first 2 args + char count) in Phase 1.**
-
-**co-cli gap:** No deduplication of identical tool results. Repeated `file_read` of
-the same file across many turns accumulates token cost unnecessarily.
-
-**Gap #5 — Risk: Low-medium. Hermes: hash-based dedup of identical tool result content in Phase 1.**
-
-**Gap #13 — Shipped 2026-04-21.** `file_read` in-tool caps resolved (500-line default, 2000-line ceiling, 2000-char/line, 500 KB gate); `max_result_size` stays `math.inf` to prevent persist→read→persist loop. Details in M1 pipeline entry.
+Shipped 2026-04-23. Previously Gap #2 tracked the absence of identical-content
+dedup, leaving the kept recent window (5 most-recent per compactable tool) to
+carry N× full content when the same file/URL/query produced identical results
+across several turns. The new `dedup_tool_results` processor attacks exactly
+that pattern: identical-to-more-recent returns collapse to a 1-line back-
+reference, freeing tokens that M2a's recency gate would not have touched. Two
+shared scaffolding helpers in `_history.py` (`_iter_tool_returns_reversed` and
+`_rewrite_tool_returns`) are reused by `truncate_tool_results` — behaviour-
+preserving DRY refactor validated against the existing M2a test suite.
 
 ### 5. Summary structure and handoff framing
 
@@ -337,27 +335,19 @@ the same file across many turns accumulates token cost unnecessarily.
 | Handoff framing | "This session is being continued from a previous conversation that ran out of context. Recent messages are preserved verbatim." | Defensive: "treat as background reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in this summary" |
 | Security/re-execution guard | Yes — adversarial-content CRITICAL SECURITY RULE in system prompt | Yes — SUMMARY_PREFIX explicitly says "do NOT fulfill requests"; also in summarizer preamble |
 
-~~**co-cli gap:** No explicit "Resolved Questions" vs "Pending User Asks" distinction.~~
-
-**Gap #3 — SHIPPED 2026-04-22.** `summarization.py` prompt now includes both
-`## Resolved Questions` and `## Pending User Asks` sections with explicit
-transition instructions: pending questions that get answered move to Resolved,
-prior Resolved entries carry forward. Both sections use "skip if none" to avoid
-filler. Additionally, `## Critical Context` (skip-if-none) was added in c700eb5,
-matching hermes's final section on exact-value preservation. The remaining
-structural difference: co-cli's sections are skip-if-none (10 fixed positions +
-1 conditional); hermes has 13 required always-present sections including
-Completed Actions, Active State, In Progress, Blocked, Constraints & Preferences,
-Relevant Files, and Remaining Work — which co-cli folds into broader sections
-(Progress, Working Set) or omits. Structural divergence remains; content coverage
-has converged.
-
 **co-cli gap:** The handoff framing is purely informational ("continued from a previous
 conversation"). Hermes's prefix is actively defensive — it tells the LLM not to re-do
 listed work. This matters when the summary contains successful shell commands or file
 writes that must not be repeated.
 
-**Gap #4 — Risk: Medium. Hermes: defensive `SUMMARY_PREFIX` with explicit "do NOT re-execute" guard.**
+**Gap #1 — Risk: Medium. Hermes: defensive `SUMMARY_PREFIX` with explicit "do NOT re-execute" guard.**
+
+**Note on structural differences (not a gap):** co-cli uses skip-if-none sections
+(10 fixed positions + 1 conditional); hermes has 13 required always-present sections
+including Completed Actions, Active State, In Progress, Blocked, Constraints &
+Preferences, Relevant Files, and Remaining Work — which co-cli folds into broader
+sections (Progress, Working Set) or omits. Content coverage has converged; the
+structural choice is intentional on both sides.
 
 ### 6. Boundary planning and tail protection
 
@@ -384,30 +374,13 @@ writes that must not be repeated.
 
 **co-cli gap:** `emergency_compact` is defined in `_history.py` (static head+last+marker, no LLM) but not wired into the production overflow path — currently used only in tests. When both `recover_overflow_history` attempts return None, the session falls to an unrecoverable error state rather than degrading gracefully.
 
-**Gap #11 — Risk: Low. Hermes: no equivalent; static text fallback is production there.**
+**Gap #6 — Risk: Low. Hermes: no equivalent; static text fallback is production there.**
 
 **co-cli gap:** Failure count is a monotone counter; recovery resets to 0. If provider
 issues are intermittent, a string of failures could push count to very high values,
 making probes sparse (`count-3` growing). Hermes's time-based cooldown is bounded.
 
-**Gap #10 — Risk: Low. Hermes: time-based cooldown (`_summary_failure_cooldown_until`) with bounded, deterministic recovery interval.**
-
-~~**co-cli gap:** `_CONTEXT_OVERFLOW_PATTERNS` in `orchestrate.py` (`"prompt is too long"`,
-`"context_length_exceeded"`, `"maximum context length"`) covers Ollama/OpenAI-compatible
-error bodies only. Gemini (now a supported provider) returns 400s with different wording
-— e.g. `"Request payload size exceeds the limit"` or `"Input token count exceeds the
-maximum"`.~~
-
-**Gap #12 — SHIPPED 2026-04-22.** `_CONTEXT_OVERFLOW_PATTERNS` inline matching in
-`orchestrate.py` was replaced by a dedicated `co_cli/context/_http_error_classifier.py`
-module with Hermes-style broad phrase coverage. The new `is_context_overflow` function
-handles HTTP 413 unconditionally and HTTP 400 with 14 recognized phrases (including
-"exceeds the limit", "input token count", "context length", etc.) plus recognized error
-codes (`context_length_exceeded`, `max_tokens_exceeded`). Gemini's `"Request payload
-size exceeds the limit"` and `"Input token count exceeds the maximum"` are both covered.
-The parsing also handles nested `metadata.raw` JSON (OpenRouter/Cloudflare proxy pattern).
-The design invariant `"NEVER falls through to the 400 reformulation handler"` is now
-correctly enforced for all providers.
+**Gap #5 — Risk: Low. Hermes: time-based cooldown (`_summary_failure_cooldown_until`) with bounded, deterministic recovery interval.**
 
 ### 8. Anti-thrashing
 
@@ -422,7 +395,7 @@ correctly enforced for all providers.
 **co-cli gap:** No guided `/compact <focus>`. Hermes's `/compress <focus_topic>` lets users
 direct what to preserve when anti-thrashing blocks. co-cli users have no escape short of `/new`.
 
-**Gap #8 — Risk: Low. Hermes: `/compress <focus_topic>` parameter passes a topic hint to the summarizer.**
+**Gap #4 — Risk: Low. Hermes: `/compress <focus_topic>` parameter passes a topic hint to the summarizer.**
 
 **co-cli note (gate is per-turn, not cross-turn):** The Reset row above is technically
 accurate but incomplete. `run_turn()` (`orchestrate.py:565`) resets `consecutive_low_yield_proactive_compactions`
@@ -437,7 +410,7 @@ where M3 fires once per turn with < 10 % savings on every turn never trips the g
 The simplified counter implementation makes the control flow easier to see, but the
 behavioral limit is unchanged: anti-thrash still does not accumulate across turns.
 
-**Gap #14 — Risk: Low. Hermes: no equivalent. M0 hygiene provides a backstop; within-turn gate still works.**
+**Gap #8 — Risk: Low. Hermes: no equivalent. M0 hygiene provides a backstop; within-turn gate still works.**
 
 ### 9. Session continuity and post-compaction state
 
@@ -454,14 +427,14 @@ marker that "this section is post-compaction-N." The summary marker is in-line b
 there is no external record. Hermes's session lineage enables tools like "show me
 what changed before and after compaction."
 
-**Gap #6 — Risk: Low. Hermes: new session ID + parent link recorded in session DB on each compaction.**
+**Gap #7 — Risk: Low. Hermes: new session ID + parent link recorded in session DB on each compaction.**
 
 **co-cli gap:** Todos are passed to the summarizer as enrichment (informing the
 summary text) but are not injected as a standalone message post-compaction. If the
 summary omits a todo, it is lost from the active context. Hermes appends the todo
 snapshot unconditionally.
 
-**Gap #7 — Risk: Low. Hermes: unconditional todo snapshot appended to compressed messages post-compaction.**
+**Gap #2 — Risk: Low. Hermes: unconditional todo snapshot appended to compressed messages post-compaction.**
 
 ### 10. Search-tool breadcrumb preservation
 

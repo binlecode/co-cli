@@ -24,7 +24,6 @@ from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatc
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import settings
 from co_cli.context._history import (
-    _CLEARED_PLACEHOLDER,
     _find_last_turn_start,
     _recall_prompt_text,
     emergency_compact,
@@ -539,12 +538,11 @@ def _make_tool_conversation(n_read_file: int, n_save_memory: int = 0) -> list:
 
 
 def test_compactable_older_than_5_cleared():
-    """Compactable tool returns older than 5 most recent are content-cleared."""
+    """Compactable tool returns older than 5 most recent are replaced with markers."""
     msgs = _make_tool_conversation(n_read_file=8)
     ctx = _make_processor_ctx()
     result = truncate_tool_results(ctx, msgs)
 
-    # Count read_file returns in result
     read_file_contents = []
     for msg in result:
         if isinstance(msg, ModelRequest):
@@ -552,12 +550,12 @@ def test_compactable_older_than_5_cleared():
                 if isinstance(part, ToolReturnPart) and part.tool_name == "file_read":
                     read_file_contents.append(part.content)
 
-    # 8 total, 5 most recent kept, 3 cleared (last group is protected so
-    # the 8th read_file is in the second-to-last group, not the tail)
-    cleared = [c for c in read_file_contents if c == _CLEARED_PLACEHOLDER]
-    intact = [c for c in read_file_contents if c != _CLEARED_PLACEHOLDER]
-    assert len(cleared) == 3
-    assert len(intact) == 5
+    # 8 total, 5 most recent kept verbatim, 3 replaced with semantic markers.
+    verbatim = [c for c in read_file_contents if c.startswith("content ")]
+    replaced = [c for c in read_file_contents if not c.startswith("content ")]
+    assert len(replaced) == 3
+    assert len(verbatim) == 5
+    assert all(c.startswith("[file_read]") for c in replaced)
 
 
 def test_non_compactable_pass_through():
@@ -573,8 +571,8 @@ def test_non_compactable_pass_through():
                 if isinstance(part, ToolReturnPart) and part.tool_name == "save_memory":
                     save_memory_contents.append(part.content)
 
-    # All 10 save_memory returns should be intact
-    assert all(c != _CLEARED_PLACEHOLDER for c in save_memory_contents)
+    # All 10 save_memory returns should be intact (verbatim "saved {i}")
+    assert all(c.startswith("saved ") for c in save_memory_contents)
     assert len(save_memory_contents) == 10
 
 
@@ -627,7 +625,7 @@ def test_current_turn_protection_multi_tool():
         if isinstance(part, ToolReturnPart)
     ]
     assert len(tail_returns) == 3
-    assert all(r.content != _CLEARED_PLACEHOLDER for r in tail_returns)
+    assert all(r.content.startswith("final content ") for r in tail_returns)
 
 
 # ---------------------------------------------------------------------------

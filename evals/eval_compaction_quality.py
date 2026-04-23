@@ -81,6 +81,7 @@ from co_cli.context._history import (
     truncate_tool_results,
 )
 from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
@@ -198,7 +199,7 @@ def _count_cleared(msgs: list[ModelMessage]) -> int:
         for m in msgs
         if isinstance(m, ModelRequest)
         for p in m.parts
-        if isinstance(p, ToolReturnPart) and p.content == _CLEARED_PLACEHOLDER
+        if isinstance(p, ToolReturnPart) and is_cleared_marker(p.content)
     )
 
 
@@ -454,7 +455,7 @@ def step_2_p1_truncate() -> bool:
                     if (
                         isinstance(p, ToolReturnPart)
                         and p.tool_name == "file_read"
-                        and p.content == _CLEARED_PLACEHOLDER
+                        and is_cleared_marker(p.content)
                     ):
                         print(f"    cleared: {_snippet(p.content)}")
                         break
@@ -464,7 +465,7 @@ def step_2_p1_truncate() -> bool:
                     if (
                         isinstance(p, ToolReturnPart)
                         and p.tool_name == "file_read"
-                        and p.content != _CLEARED_PLACEHOLDER
+                        and not is_cleared_marker(p.content)
                     ):
                         print(f"    kept:    {_snippet(p.content)}")
                         break
@@ -514,7 +515,7 @@ def step_2_p1_truncate() -> bool:
         for p in m.parts
         if isinstance(p, ToolReturnPart)
         and p.tool_name == "file_read"
-        and p.content == _CLEARED_PLACEHOLDER
+        and is_cleared_marker(p.content)
     )
     cleared_ws = sum(
         1
@@ -523,7 +524,7 @@ def step_2_p1_truncate() -> bool:
         for p in m.parts
         if isinstance(p, ToolReturnPart)
         and p.tool_name == "web_search"
-        and p.content == _CLEARED_PLACEHOLDER
+        and is_cleared_marker(p.content)
     )
     expected_rf = 8 - COMPACTABLE_KEEP_RECENT  # 3
     expected_ws = 7 - COMPACTABLE_KEEP_RECENT  # 2
@@ -558,7 +559,7 @@ def step_2_p1_truncate() -> bool:
         for p in m.parts
         if isinstance(p, ToolReturnPart)
     ]
-    if not last_returns or last_returns[0].content == _CLEARED_PLACEHOLDER:
+    if not last_returns or is_cleared_marker(last_returns[0].content):
         print("  FAIL: last turn group tool result was cleared")
         passed = False
     else:
