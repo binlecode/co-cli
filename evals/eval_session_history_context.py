@@ -42,8 +42,8 @@ from pydantic_ai.messages import (
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
-from co_cli.context.session import new_session_path
-from co_cli.context.transcript import load_transcript, persist_session_history
+from co_cli.memory.session import new_session_path
+from co_cli.memory.transcript import load_transcript, persist_session_history
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-session-history-context.md"
 

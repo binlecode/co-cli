@@ -10,10 +10,10 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
-from co_cli.context.session import session_filename
-from co_cli.context.transcript import append_messages
 from co_cli.deps import CoDeps
 from co_cli.memory._store import MemoryIndex
+from co_cli.memory.session import session_filename
+from co_cli.memory.transcript import append_messages
 from co_cli.tools.memory import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 

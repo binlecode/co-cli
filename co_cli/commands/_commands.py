@@ -389,7 +389,7 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Start a fresh session."""
-    from co_cli.context.session import new_session_path
+    from co_cli.memory.session import new_session_path
 
     if not ctx.message_history:
         console.print("[dim]Nothing to rotate — history is empty.[/dim]")
@@ -785,9 +785,9 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Resume a past session via interactive picker."""
-    from co_cli.context.session_browser import format_file_size, list_sessions
-    from co_cli.context.transcript import load_transcript
     from co_cli.display._core import prompt_selection
+    from co_cli.memory.session_browser import format_file_size, list_sessions
+    from co_cli.memory.transcript import load_transcript
 
     sessions = list_sessions(ctx.deps.sessions_dir)
     if not sessions:
@@ -1007,7 +1007,7 @@ async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
     """List past sessions, optionally filtered by keyword."""
     from rich.table import Table
 
-    from co_cli.context.session_browser import format_file_size, list_sessions
+    from co_cli.memory.session_browser import format_file_size, list_sessions
 
     summaries = list_sessions(ctx.deps.sessions_dir)
     if args:

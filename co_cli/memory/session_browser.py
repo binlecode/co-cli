@@ -1,7 +1,7 @@
 """Session browser — listing, title extraction, and summary for UI.
 
 Lightweight session metadata for listing/picker display. No transcript
-content loading — delegates to ``_transcript.py`` for I/O primitives.
+content loading — delegates to ``transcript.py`` for I/O primitives.
 
 Public API:
     SessionSummary    — frozen dataclass for listing UI
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from co_cli.context.session import parse_session_filename
+from co_cli.memory.session import parse_session_filename
 
 logger = logging.getLogger(__name__)
 

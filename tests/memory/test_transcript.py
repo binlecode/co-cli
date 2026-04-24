@@ -17,9 +17,11 @@ from tests._settings import make_settings
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.context.orchestrate import TurnResult
-from co_cli.context.session import new_session_path
-from co_cli.context.session_browser import format_file_size, list_sessions
-from co_cli.context.transcript import (
+from co_cli.deps import CoDeps, CoRuntimeState
+from co_cli.main import _finalize_turn
+from co_cli.memory.session import new_session_path
+from co_cli.memory.session_browser import format_file_size, list_sessions
+from co_cli.memory.transcript import (
     MAX_TRANSCRIPT_READ_BYTES,
     SKIP_PRECOMPACT_THRESHOLD,
     append_messages,
@@ -27,8 +29,6 @@ from co_cli.context.transcript import (
     persist_session_history,
     write_compact_boundary,
 )
-from co_cli.deps import CoDeps, CoRuntimeState
-from co_cli.main import _finalize_turn
 from co_cli.tools.shell_backend import ShellBackend
 
 
@@ -128,7 +128,7 @@ def test_list_sessions_sorted_by_filename(tmp_path: Path) -> None:
     """list_sessions returns entries sorted by filename descending with titles and file sizes."""
     from datetime import UTC, datetime
 
-    from co_cli.context.session import session_filename
+    from co_cli.memory.session import session_filename
 
     sessions_dir = tmp_path / "sessions"
 
@@ -174,7 +174,7 @@ def test_list_sessions_title_truncation(tmp_path: Path) -> None:
     """Titles longer than 80 chars are truncated with ellipsis."""
     from datetime import UTC, datetime
 
-    from co_cli.context.session import session_filename
+    from co_cli.memory.session import session_filename
 
     sessions_dir = tmp_path / "sessions"
     long_prompt = "x" * 120

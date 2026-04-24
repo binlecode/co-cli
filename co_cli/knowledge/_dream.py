@@ -159,7 +159,7 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState) -> int:
     are marked processed so they are not retried. Sub-agent failures are
     logged and the session is left unmarked so a future cycle can retry.
     """
-    from co_cli.context.transcript import load_transcript
+    from co_cli.memory.transcript import load_transcript
 
     sessions_dir = deps.sessions_dir
     if not sessions_dir.exists():

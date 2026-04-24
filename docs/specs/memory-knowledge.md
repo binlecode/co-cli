@@ -369,9 +369,9 @@ Dream state persists:
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/context/session.py` | session filename parsing/generation and latest-session discovery |
-| `co_cli/context/transcript.py` | transcript append/load logic, child-session branching, and control records |
-| `co_cli/context/session_browser.py` | lightweight session listing and picker metadata for `/resume` and `/sessions` |
+| `co_cli/memory/session.py` | session filename parsing/generation and latest-session discovery |
+| `co_cli/memory/transcript.py` | transcript append/load logic, child-session branching, and control records |
+| `co_cli/memory/session_browser.py` | lightweight session listing and picker metadata for `/resume` and `/sessions` |
 | `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, and size warnings |
 | `co_cli/memory/_store.py` | `MemoryIndex` — derived FTS5 index over past session transcripts |
 | `co_cli/tools/memory.py` | `memory_search()` episodic recall tool |

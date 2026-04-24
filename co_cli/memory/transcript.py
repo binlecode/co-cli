@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
-from co_cli.context.session import new_session_path
+from co_cli.memory.session import new_session_path
 
 logger = logging.getLogger(__name__)
 

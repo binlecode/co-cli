@@ -44,9 +44,9 @@ from co_cli.config._core import (
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.context.skill_env import cleanup_skill_run_state
-from co_cli.context.transcript import persist_session_history
 from co_cli.deps import CoDeps
 from co_cli.display._core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
+from co_cli.memory.transcript import persist_session_history
 from co_cli.observability._file_logging import setup_file_logging
 from co_cli.observability._telemetry import setup_tracer_provider
 from co_cli.tools.tool_io import sweep_tool_result_orphans

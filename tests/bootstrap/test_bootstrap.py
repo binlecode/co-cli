@@ -17,10 +17,10 @@ from co_cli.bootstrap.core import (
     restore_session,
 )
 from co_cli.config._knowledge import LlmModelSettings
-from co_cli.context.session import session_filename
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.knowledge._store import KnowledgeStore
+from co_cli.memory.session import session_filename
 from co_cli.tools.shell_backend import ShellBackend
 
 
@@ -502,8 +502,8 @@ def test_init_memory_index_indexes_past_sessions(tmp_path: Path) -> None:
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
     from co_cli.bootstrap.core import _init_memory_index
-    from co_cli.context.transcript import append_messages
     from co_cli.memory._store import MemoryIndex
+    from co_cli.memory.transcript import append_messages
 
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(parents=True)
@@ -511,7 +511,7 @@ def test_init_memory_index_indexes_past_sessions(tmp_path: Path) -> None:
     # Write a past session with searchable content
     from datetime import UTC, datetime
 
-    from co_cli.context.session import session_filename
+    from co_cli.memory.session import session_filename
 
     past_name = session_filename(
         datetime(2026, 4, 14, 10, 0, 0, tzinfo=UTC),

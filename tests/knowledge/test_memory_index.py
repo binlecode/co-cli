@@ -19,10 +19,10 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.context.session import session_filename
-from co_cli.context.transcript import append_messages, write_compact_boundary
 from co_cli.memory._indexer import extract_messages
 from co_cli.memory._store import MemoryIndex, SessionSearchResult
+from co_cli.memory.session import session_filename
+from co_cli.memory.transcript import append_messages, write_compact_boundary
 
 # ---------------------------------------------------------------------------
 # Fixtures
