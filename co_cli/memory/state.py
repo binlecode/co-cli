@@ -1,7 +1,8 @@
-"""Shared type definitions for the context package.
+"""Runtime state for the memory subsystem.
 
-Extracted from _history.py to break the circular import between deps.py and
-context/_history.py. These dataclasses have no dependency on deps.py.
+Session-scoped state owned by ``CoSessionState`` and consumed by memory-recall
+injection in ``co_cli/context/_prompt_text.py``. Kept dependency-free (no
+import of ``deps``) so both sides can import it without cycles.
 """
 
 from __future__ import annotations

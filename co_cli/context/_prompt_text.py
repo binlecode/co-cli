@@ -27,8 +27,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.context.types import MemoryRecallState
 from co_cli.deps import CoDeps
+from co_cli.memory.state import MemoryRecallState
 
 log = logging.getLogger(__name__)
 

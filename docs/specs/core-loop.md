@@ -404,7 +404,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/context/_compaction.py` | three registered history processors (tool-output trim, batch-budget cap, sliding-window compaction); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `plan_compaction_boundaries` (shared planner); overflow-recovery entry points (`recover_overflow_history`, `emergency_recover_overflow_history`) |
 | `co_cli/context/_prompt_text.py` | `_recall_prompt_text` and `_safety_prompt_text` — dynamic instruction implementations called via `agent.instructions()` wrappers in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
-| `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
+| `co_cli/memory/state.py` | `MemoryRecallState` — session-scoped memory-recall debouncing state |
 | `co_cli/agent/_core.py` | main agent factory |
 | `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |

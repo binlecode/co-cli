@@ -17,7 +17,7 @@ from co_cli.config._core import (
     USER_DIR,
     Settings,
 )
-from co_cli.context.types import MemoryRecallState
+from co_cli.memory.state import MemoryRecallState
 
 if TYPE_CHECKING:
     from co_cli.agent._core import ToolRegistry
