@@ -259,7 +259,9 @@ delta = next_history[cursor:]           # fallback: last 20 messages if cursor i
 fire_and_forget_extraction(delta, cursor_start=cursor)
 ```
 
-`fire_and_forget_extraction()` is single-flight: if one extraction task is already running, later launches are skipped.
+`fire_and_forget_extraction()` is single-flight: if one extraction task is already running, later launches are skipped. This is acceptable at cadence boundaries because the delta remains in history and will be re-offered at the next cadence tick.
+
+**Compaction-boundary extraction is synchronous.** Because compaction is about to discard the pre-compact tail, `extract_at_compaction_boundary()` drains any in-flight cadence task, awaits extraction inline, and only then pins `last_extracted_message_idx` to `len(post_compact)`. Extraction failures are best-effort: the cursor still pins so compaction can proceed.
 
 The extractor pipeline:
 

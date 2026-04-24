@@ -204,40 +204,6 @@ def fire_and_forget_extraction(
     _in_flight.add_done_callback(_on_extraction_done)
 
 
-def schedule_compaction_extraction(
-    pre_compact: list,
-    post_compact: list,
-    deps: "CoDeps",
-    frontend: "Frontend | None" = None,
-) -> None:
-    """Extract-before-discard hook for compaction boundaries.
-
-    Fires background extraction over the un-extracted pre-compact tail
-    (``pre_compact[last_extracted_message_idx:]``) so content about to be
-    summarised away still reaches the knowledge layer. Then pins the cursor
-    synchronously to ``len(post_compact)`` and resets the cadence counter —
-    the post-compact history starts from a clean extraction boundary, so
-    the synthetic compaction marker / todo snapshot never appear in a future
-    cadence delta.
-
-    Cursor must be pinned synchronously, not by the async extraction, because
-    ``cursor_start + len(delta)`` indexes into ``pre_compact`` and would be
-    incorrect (often out of range) in the shorter ``post_compact`` list.
-    """
-    cursor = deps.session.last_extracted_message_idx
-    if 0 <= cursor < len(pre_compact):
-        delta = pre_compact[cursor:]
-        fire_and_forget_extraction(
-            delta,
-            deps=deps,
-            frontend=frontend,
-            cursor_start=cursor,
-            advance_cursor=False,
-        )
-    deps.session.last_extracted_message_idx = len(post_compact)
-    deps.session.last_extracted_turn_idx = 0
-
-
 async def drain_pending_extraction(timeout_ms: int = 10_000) -> None:
     """Await the in-flight extraction task with a timeout. Cancel on timeout."""
     global _in_flight
@@ -257,3 +223,39 @@ async def drain_pending_extraction(timeout_ms: int = 10_000) -> None:
         logger.debug("Drain failed", exc_info=True)
     finally:
         _in_flight = None
+
+
+async def extract_at_compaction_boundary(
+    pre_compact: list,
+    post_compact: list,
+    deps: "CoDeps",
+    frontend: "Frontend | None" = None,
+) -> None:
+    """Extract knowledge from the pre-compact tail before history is discarded.
+
+    Runs inline (awaited) so compaction can pin the extraction cursor
+    atomically. Drains any in-flight cadence extraction first so its cursor
+    advance is settled before we read the cursor, then bypasses the
+    single-flight guard by awaiting ``_run_extraction_async`` directly.
+
+    Best-effort: extraction failures are caught inside
+    ``_run_extraction_async`` and never raise here; the cursor still pins to
+    ``len(post_compact)`` so compaction can proceed. ``advance_cursor=False``
+    because ``cursor_start`` indexes into ``pre_compact``, which is a different
+    length than ``post_compact``.
+    """
+    await drain_pending_extraction()
+
+    cursor = deps.session.last_extracted_message_idx
+    if 0 <= cursor < len(pre_compact):
+        delta = pre_compact[cursor:]
+        await _run_extraction_async(
+            delta,
+            deps,
+            frontend,
+            cursor_start=cursor,
+            advance_cursor=False,
+        )
+
+    deps.session.last_extracted_message_idx = len(post_compact)
+    deps.session.last_extracted_turn_idx = 0

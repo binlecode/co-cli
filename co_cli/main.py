@@ -111,7 +111,7 @@ async def _finalize_turn(
 
     # Memory extraction — cadence-gated, fire-and-forget on clean turns.
     # Compaction boundaries (turn-time or slash /compact) are handled by
-    # schedule_compaction_extraction at the compaction site, which pins the
+    # extract_at_compaction_boundary at the compaction site, which pins the
     # cursor and resets the cadence counter, so we do not special-case them here.
     if not turn_result.interrupted and turn_result.outcome != "error":
         n = deps.config.memory.extract_every_n_turns

@@ -19,8 +19,8 @@ from co_cli.deps import CoDeps
 from co_cli.knowledge._distiller import (
     build_transcript_window,
     drain_pending_extraction,
+    extract_at_compaction_boundary,
     fire_and_forget_extraction,
-    schedule_compaction_extraction,
 )
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -198,7 +198,7 @@ async def test_last_extracted_idx_advances_on_empty_window(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_schedule_compaction_extraction_pins_cursor_to_post_compact(
+async def test_compaction_boundary_extraction_pins_cursor_to_post_compact(
     tmp_path: Path,
 ) -> None:
     """After compaction, cursor and cadence counter are pinned for the post-compact history.
@@ -208,6 +208,8 @@ async def test_schedule_compaction_extraction_pins_cursor_to_post_compact(
     causing a later cadence extraction to ingest the synthetic compaction marker
     as transcript input.
     """
+    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -231,19 +233,20 @@ async def test_schedule_compaction_extraction_pins_cursor_to_post_compact(
     deps.session.last_extracted_message_idx = 4
     deps.session.last_extracted_turn_idx = 5
 
-    schedule_compaction_extraction(pre_compact, post_compact, deps)
-    async with asyncio.timeout(5):
-        await drain_pending_extraction(timeout_ms=1000)
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        await extract_at_compaction_boundary(pre_compact, post_compact, deps)
 
     assert deps.session.last_extracted_message_idx == len(post_compact)
     assert deps.session.last_extracted_turn_idx == 0
 
 
 @pytest.mark.asyncio
-async def test_schedule_compaction_extraction_noop_cursor_beyond_pre_compact(
+async def test_compaction_boundary_extraction_noop_cursor_beyond_pre_compact(
     tmp_path: Path,
 ) -> None:
     """Cursor already at end of pre-compact history → no extraction fire, cursor still pins."""
+    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -260,7 +263,40 @@ async def test_schedule_compaction_extraction_noop_cursor_beyond_pre_compact(
     deps.session.last_extracted_message_idx = len(pre_compact)
     deps.session.last_extracted_turn_idx = 2
 
-    schedule_compaction_extraction(pre_compact, post_compact, deps)
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        await extract_at_compaction_boundary(pre_compact, post_compact, deps)
+
+    assert deps.session.last_extracted_message_idx == len(post_compact)
+    assert deps.session.last_extracted_turn_idx == 0
+
+
+@pytest.mark.asyncio
+async def test_compaction_boundary_extraction_pins_cursor_even_on_failure(
+    tmp_path: Path,
+) -> None:
+    """When extraction raises internally, compaction still pins cursor (best-effort)."""
+    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(),
+        knowledge_dir=memory_dir,
+        model=None,
+    )
+    pre_compact = [
+        ModelRequest(parts=[UserPromptPart(content="content to extract")]),
+    ]
+    post_compact = [
+        ModelRequest(parts=[UserPromptPart(content="[compaction marker]")]),
+    ]
+    deps.session.last_extracted_message_idx = 0
+    deps.session.last_extracted_turn_idx = 3
+
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        await extract_at_compaction_boundary(pre_compact, post_compact, deps)
 
     assert deps.session.last_extracted_message_idx == len(post_compact)
     assert deps.session.last_extracted_turn_idx == 0

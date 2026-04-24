@@ -203,9 +203,9 @@ async def _apply_compaction(
         *_preserve_search_tool_breadcrumbs(dropped),
         *messages[tail_start:],
     ]
-    from co_cli.knowledge._distiller import schedule_compaction_extraction
+    from co_cli.knowledge._distiller import extract_at_compaction_boundary
 
-    schedule_compaction_extraction(messages, result, ctx.deps)
+    await extract_at_compaction_boundary(messages, result, ctx.deps)
     return result, summary_text
 
 
@@ -287,9 +287,9 @@ async def emergency_recover_overflow_history(
         "(len(groups)=%d).",
         len(groups),
     )
-    from co_cli.knowledge._distiller import schedule_compaction_extraction
+    from co_cli.knowledge._distiller import extract_at_compaction_boundary
 
-    schedule_compaction_extraction(messages, result, ctx.deps)
+    await extract_at_compaction_boundary(messages, result, ctx.deps)
     return result
 
 
