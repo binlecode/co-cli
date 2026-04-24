@@ -323,12 +323,12 @@ async def run_cadence_gate() -> dict[str, Any]:
 
 
 async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
-    """Full memory loop: turn 1 → extraction → DB index → _recall_prompt_text.
+    """Full memory loop: turn 1 → extraction → DB index → recall_prompt_text.
 
     Turn 1 (real LLM): user states a preference. fire_and_forget_extraction runs.
     After drain: extracted memory file is written and indexed in KnowledgeStore.
     Inject probe (no LLM): read actual extracted body, build a RunContext with
-    that content as the user message, call _recall_prompt_text directly, and
+    that content as the user message, call recall_prompt_text directly, and
     assert "Relevant memories:" appears in the returned text.
 
     Using the extracted body as the query guarantees a BM25 match regardless of
@@ -338,7 +338,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
     from pydantic_ai import RunContext as _RunContext
     from pydantic_ai.usage import RunUsage
 
-    from co_cli.context._prompt_text import _recall_prompt_text
+    from co_cli.context.prompt_text import recall_prompt_text
     from co_cli.knowledge._frontmatter import parse_frontmatter
 
     steps: list[dict[str, Any]] = []
@@ -527,7 +527,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
             }
         )
 
-        # Probe _recall_prompt_text directly — no second LLM call.
+        # Probe recall_prompt_text directly — no second LLM call.
         # Use the first word that hit the DB as the user message — a clean single-word
         # query that _recall_for_context BM25 is guaranteed to rank > 0.
         # Fresh deps: run_turn already set state.last_recall_user_turn = 1 on `deps`;
@@ -546,10 +546,10 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
         ctx = _RunContext(deps=probe_deps, model=agent.model, usage=RunUsage())
         ctx_probe = _replace(ctx, messages=probe_messages)
         t = time.monotonic()
-        recall_text = await _recall_prompt_text(ctx_probe)
+        recall_text = await recall_prompt_text(ctx_probe)
         steps.append(
             {
-                "name": "_recall_prompt_text (direct probe)",
+                "name": "recall_prompt_text (direct probe)",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"text length={len(recall_text)} chars",
             }
@@ -573,7 +573,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
         elif injection is None:
             verdict, failure = (
                 "FAIL",
-                "_recall_prompt_text returned no recall content — recall path broken",
+                "recall_prompt_text returned no recall content — recall path broken",
             )
         else:
             verdict, failure = "PASS", None

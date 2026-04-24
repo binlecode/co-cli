@@ -16,7 +16,7 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import Settings, settings
-from co_cli.context._compaction import (
+from co_cli.context.compaction import (
     maybe_run_pre_turn_hygiene,
     summarize_history_window,
 )

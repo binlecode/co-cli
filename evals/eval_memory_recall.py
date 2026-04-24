@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Eval: memory recall injection — verify _recall_prompt_text fires per turn via FTS5 DB.
+"""Eval: memory recall injection — verify recall_prompt_text fires per turn via FTS5 DB.
 
 Pre-seeds memory files on disk, syncs them into a real KnowledgeStore, runs run_turn(),
 and verifies that recall fired (via MemoryRecallState.recall_count). Recall is injected
 via the dynamic agent.instructions() mechanism — not as a message in history. A separate
-probe call to _recall_prompt_text verifies the injected text contains "Relevant memories:".
+probe call to recall_prompt_text verifies the injected text contains "Relevant memories:".
 
 Target flow:
     seed_memory (disk) → KnowledgeStore.sync_dir (DB index)
-    → run_turn → _recall_prompt_text (dynamic instruction) → _recall_for_context (FTS5 DB)
+    → run_turn → recall_prompt_text (dynamic instruction) → _recall_for_context (FTS5 DB)
     → MemoryRecallState.recall_count += 1 + text contains "Relevant memories: ..."
 
 Also tests the degraded path: when knowledge_store=None, no injection occurs and no
@@ -42,8 +42,8 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
-from co_cli.context._prompt_text import _recall_prompt_text
 from co_cli.context.orchestrate import run_turn
+from co_cli.context.prompt_text import recall_prompt_text
 from co_cli.knowledge._store import KnowledgeStore
 
 _TURN_TIMEOUT_SECS = _EVAL_TURN_TIMEOUT_SECS
@@ -145,7 +145,7 @@ async def _probe_recall_text(
     knowledge_store: Any | None,
     knowledge_dir: Path | None,
 ) -> str | None:
-    """Call _recall_prompt_text directly to retrieve the injected text for a prompt.
+    """Call recall_prompt_text directly to retrieve the injected text for a prompt.
 
     Uses fresh deps (no prior recall state) so the turn guard does not skip the call.
     Returns the recall text if "Relevant memories:" is present, else None.
@@ -161,7 +161,7 @@ async def _probe_recall_text(
         usage=RunUsage(),
         messages=probe_msgs,
     )
-    text = await _recall_prompt_text(probe_ctx)
+    text = await recall_prompt_text(probe_ctx)
     return text if "Relevant memories:" in text else None
 
 

@@ -298,7 +298,7 @@ Ordering rationale:
 
 Compaction behavior:
 
-- `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
+- `summarize_history_window()` gathers side-channel context via `gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds `PROACTIVE_COMPACTION_RATIO` (0.75) of the budget
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
@@ -401,8 +401,8 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/_compaction.py` | three registered history processors (tool-output trim, batch-budget cap, sliding-window compaction); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `plan_compaction_boundaries` (shared planner); overflow-recovery entry points (`recover_overflow_history`, `emergency_recover_overflow_history`) |
-| `co_cli/context/_prompt_text.py` | `_recall_prompt_text` and `_safety_prompt_text` — dynamic instruction implementations called via `agent.instructions()` wrappers in `_instructions.py` |
+| `co_cli/context/compaction.py` | public entry points (three registered history processors, `maybe_run_pre_turn_hygiene`, `summarize_history_window`, overflow-recovery entry points `recover_overflow_history` and `emergency_recover_overflow_history`); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `_history_processors.py` (dedup / truncate / batch-budget transformers) |
+| `co_cli/context/prompt_text.py` | `recall_prompt_text` and `safety_prompt_text` — dynamic instruction implementations called via `agent.instructions()` wrappers in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/memory/state.py` | `MemoryRecallState` — session-scoped memory-recall debouncing state |
 | `co_cli/agent/_core.py` | main agent factory |

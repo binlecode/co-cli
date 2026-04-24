@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.context._compaction import COMPACTABLE_KEEP_RECENT
+from co_cli.context.compaction import COMPACTABLE_KEEP_RECENT
 
 if TYPE_CHECKING:
     from co_cli.config._core import Settings

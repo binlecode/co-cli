@@ -9,13 +9,13 @@ Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
 
   --- Processor chain components (isolated validation) ---
   Step 2 — P1 truncate_tool_results: recency clearing, COMPACTABLE_TOOLS, keep 5
-  Step 4 — P5 sub-component: context enrichment (_gather_compaction_context)
+  Step 4 — P5 sub-component: context enrichment (gather_compaction_context)
            3 sources (file paths, todos, prior summaries), 4K cap, enrichment only on LLM path
            [BC2: capped, never blocks] [BC3: from ToolCallPart.args not ToolReturnPart]
   Step 5 — P5 sub-component: prompt assembly (_build_summarizer_prompt)
            template sections, context+personality ordering
            [Outcome 1: structured template] [BC1: free-form fallback]
-  (P3 _safety_prompt_text and P4 _recall_prompt_text are validated
+  (P3 safety_prompt_text and P4 recall_prompt_text are validated
    as dynamic instructions within Steps 6/7 — no isolated step needed.)
 
   --- Full chain execution (real LLM calls) ---
@@ -64,23 +64,23 @@ from co_cli.agent._core import build_agent
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import Settings, settings
 from co_cli.config._llm import LlmSettings
-from co_cli.context._compaction import (
-    _CLEARED_PLACEHOLDER,
-    _CONTEXT_MAX_CHARS,
-    _SUMMARY_MARKER_PREFIX,
+from co_cli.context._compaction_markers import _CONTEXT_MAX_CHARS
+from co_cli.context._history_processors import _CLEARED_PLACEHOLDER
+from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context._tool_result_markers import is_cleared_marker
+from co_cli.context.compaction import (
     COMPACTABLE_KEEP_RECENT,
-    _gather_compaction_context,
-    _summary_marker,
+    SUMMARY_MARKER_PREFIX,
     emergency_compact,
     find_first_run_end,
+    gather_compaction_context,
     group_by_turn,
     plan_compaction_boundaries,
     summarize_history_window,
+    summary_marker,
     truncate_tool_results,
 )
-from co_cli.context._http_error_classifier import is_context_overflow
-from co_cli.context._prompt_text import _recall_prompt_text, _safety_prompt_text
-from co_cli.context._tool_result_markers import is_cleared_marker
+from co_cli.context.prompt_text import recall_prompt_text, safety_prompt_text
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
@@ -574,7 +574,7 @@ def step_2_p1_truncate() -> bool:
 
 
 def step_4_context_enrichment() -> bool:
-    """Validate _gather_compaction_context: 4 sources, 4K cap, lazy execution.
+    """Validate gather_compaction_context: 4 sources, 4K cap, lazy execution.
 
     Specs from TODO:
     - Source 1: File paths from ToolCallPart.args via FILE_TOOLS (scans ALL messages) [BC3]
@@ -598,7 +598,7 @@ def step_4_context_enrichment() -> bool:
         _assistant("done"),
     ]
     ctx = _make_ctx()
-    result = _gather_compaction_context(ctx, dropped=msgs)
+    result = gather_compaction_context(ctx, dropped=msgs)
     if result is None or "/app/models.py" not in result or "/app/views.py" not in result:
         print("  FAIL: file paths not extracted from ToolCallPart.args")
         passed = False
@@ -614,7 +614,7 @@ def step_4_context_enrichment() -> bool:
         _tool_return("file_read", "z", "m1"),
         _assistant("mid"),
     ]
-    result = _gather_compaction_context(ctx, dropped=dropped_msgs)
+    result = gather_compaction_context(ctx, dropped=dropped_msgs)
     if result is None or "/mid.py" not in result:
         print("  FAIL: /mid.py (in dropped) missing from enrichment")
         passed = False
@@ -632,7 +632,7 @@ def step_4_context_enrichment() -> bool:
         {"content": "Cancel this", "status": "cancelled"},
     ]
     ctx = _make_ctx(session_todos=todos)
-    result = _gather_compaction_context(ctx, dropped=[])
+    result = gather_compaction_context(ctx, dropped=[])
     if result is None or "Update tests" not in result or "Write docs" not in result:
         print("  FAIL: pending todos missing")
         passed = False
@@ -645,7 +645,7 @@ def step_4_context_enrichment() -> bool:
 
     # 4d: Always-on memories not in compaction context (architectural decision)
     # Memories are injected separately by the recall dynamic instruction, not by
-    # _gather_compaction_context. This test verifies that memory files do NOT
+    # gather_compaction_context. This test verifies that memory files do NOT
     # appear in compaction context, confirming the separation of concerns.
     with tempfile.TemporaryDirectory() as tmpdir:
         mem_dir = Path(tmpdir)
@@ -663,7 +663,7 @@ def step_4_context_enrichment() -> bool:
             f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\nUser prefers concise responses.\n"
         )
         ctx = _make_ctx(memory_dir=mem_dir)
-        result = _gather_compaction_context(ctx, dropped=[])
+        result = gather_compaction_context(ctx, dropped=[])
         if result is not None and "concise responses" in result:
             print(
                 "  FAIL: always-on memories should not appear in compaction context (handled by P4)"
@@ -676,11 +676,11 @@ def step_4_context_enrichment() -> bool:
 
     # 4e: Source 3 — prior-summary from dropped messages (production marker format)
     dropped_with_summary: list[ModelMessage] = [
-        _summary_marker(15, "## Goal\nRefactor auth module"),
+        summary_marker(15, "## Goal\nRefactor auth module"),
         _assistant("continuing..."),
     ]
     ctx = _make_ctx()
-    result = _gather_compaction_context(ctx, dropped=dropped_with_summary)
+    result = gather_compaction_context(ctx, dropped=dropped_with_summary)
     if result is None or "Prior summary" not in result or "Refactor auth module" not in result:
         print("  FAIL: prior summary not extracted from dropped messages")
         passed = False
@@ -690,7 +690,7 @@ def step_4_context_enrichment() -> bool:
 
     # 4f: Returns None when empty
     ctx = _make_ctx()
-    result = _gather_compaction_context(ctx, dropped=[])
+    result = gather_compaction_context(ctx, dropped=[])
     if result is not None:
         print(f"  FAIL: expected None when no sources, got: {result[:80]}")
         passed = False
@@ -714,7 +714,7 @@ def step_4_context_enrichment() -> bool:
         _assistant("done"),
     ]
     ctx = _make_ctx(session_todos=big_todos)
-    result = _gather_compaction_context(ctx, dropped=msgs_many_files)
+    result = gather_compaction_context(ctx, dropped=msgs_many_files)
     if result is not None and len(result) > _CONTEXT_MAX_CHARS:
         print(f"  FAIL: context {len(result)} > {_CONTEXT_MAX_CHARS}")
         passed = False
@@ -724,14 +724,14 @@ def step_4_context_enrichment() -> bool:
         print("  PASS: context was None (sources below threshold)")
 
     # 4h: Enrichment only runs on LLM path (not static-marker fallback)
-    # Verify structurally: _gather_compaction_context appears in the source of
-    # _summarize_dropped_messages AFTER both the model-absence guard and the
+    # Verify structurally: gather_compaction_context appears in the source of
+    # summarize_dropped_messages AFTER both the model-absence guard and the
     # circuit-breaker guard.
     import inspect
 
-    from co_cli.context._compaction import _summarize_dropped_messages
+    from co_cli.context.compaction import summarize_dropped_messages
 
-    source_lines = inspect.getsource(_summarize_dropped_messages).splitlines()
+    source_lines = inspect.getsource(summarize_dropped_messages).splitlines()
 
     def _first_line(keyword: str) -> int | None:
         for idx, line in enumerate(source_lines):
@@ -739,7 +739,7 @@ def step_4_context_enrichment() -> bool:
                 return idx
         return None
 
-    enrichment_line = _first_line("_gather_compaction_context")
+    enrichment_line = _first_line("gather_compaction_context")
     model_guard_line = _first_line("not ctx.deps.model")
     breaker_line = _first_line("compaction_failure_count")
     if enrichment_line is None or model_guard_line is None or breaker_line is None:
@@ -1017,20 +1017,20 @@ async def step_6_full_chain() -> bool:
 
     # --- P3 ---
     # Safety injection now happens via dynamic agent.instructions() — not appended to msgs.
-    print("\n  [P3] _safety_prompt_text (dynamic instruction)")
+    print("\n  [P3] safety_prompt_text (dynamic instruction)")
     from dataclasses import replace as _replace
 
     ctx_p3 = _replace(ctx, messages=msgs)
-    safety_text = _safety_prompt_text(ctx_p3)
+    safety_text = safety_prompt_text(ctx_p3)
     print(f"    Safety text: {safety_text!r} (clean history → no warnings expected)")
     print("    PASS")
 
     # --- P4 ---
     # Recall injection now happens via dynamic agent.instructions() — not appended to msgs.
-    print("\n  [P4] _recall_prompt_text (dynamic instruction)")
+    print("\n  [P4] recall_prompt_text (dynamic instruction)")
     recall_pre = ctx.deps.session.memory_recall_state.recall_count
     ctx_p4 = _replace(ctx, messages=msgs)
-    recall_text = await _recall_prompt_text(ctx_p4)
+    recall_text = await recall_prompt_text(ctx_p4)
     recall_post = ctx.deps.session.memory_recall_state.recall_count
     recall_fired = recall_post > recall_pre
     if recall_fired:
@@ -1058,7 +1058,7 @@ async def step_6_full_chain() -> bool:
     if bounds is not None:
         head_end, tail_start, dropped_count = bounds
         dropped_preview = msgs[head_end:tail_start]
-        enrichment_preview = _gather_compaction_context(ctx, dropped_preview)
+        enrichment_preview = gather_compaction_context(ctx, dropped_preview)
         print(
             f"    Boundaries: head_end={head_end}, tail_start={tail_start}, dropped={dropped_count}"
         )
@@ -1099,7 +1099,7 @@ async def step_6_full_chain() -> bool:
         if isinstance(m, ModelRequest):
             for p in m.parts:
                 if isinstance(p, UserPromptPart) and isinstance(p.content, str):
-                    if _SUMMARY_MARKER_PREFIX in p.content:
+                    if SUMMARY_MARKER_PREFIX in p.content:
                         summary_text = p.content
                         marker_count_in_output += 1
                     elif "earlier messages were removed" in p.content:
@@ -1198,7 +1198,7 @@ async def step_7_multi_cycle() -> bool:
     """Execute chain on history with prior summary marker. Verify integration.
 
     Specs from TODO:
-    - Prior summary in dropped slice detected via _SUMMARY_MARKER_PREFIX startswith
+    - Prior summary in dropped slice detected via SUMMARY_MARKER_PREFIX startswith
     - Context enrichment includes prior summary text
     - New summary integrates prior content (not lost)
     """
@@ -1257,7 +1257,7 @@ async def step_7_multi_cycle() -> bool:
         # Cycle 1 output
         _user("hello"),
         _assistant("hi"),
-        _summary_marker(10, prior_summary_body),
+        summary_marker(10, prior_summary_body),
         # Cycle 2 conversation: 7 read_file calls (>5 → P1 fires)
         _user("Update tests."),
         _tool_call("file_read", {"file_path": "tests/test_auth.py"}, "c10"),
@@ -1347,18 +1347,18 @@ async def step_7_multi_cycle() -> bool:
 
     # --- P3 + P4 ---
     # Safety/recall injection now happens via dynamic agent.instructions() — not appended to msgs.
-    print("\n  [P3] _safety_prompt_text (dynamic instruction)")
+    print("\n  [P3] safety_prompt_text (dynamic instruction)")
     from dataclasses import replace as _replace
 
     ctx_p3b = _replace(ctx, messages=msgs)
-    safety_text2 = _safety_prompt_text(ctx_p3b)
+    safety_text2 = safety_prompt_text(ctx_p3b)
     print(f"    Safety text: {safety_text2!r}")
     print("    PASS")
 
-    print("\n  [P4] _recall_prompt_text (dynamic instruction)")
+    print("\n  [P4] recall_prompt_text (dynamic instruction)")
     recall_pre = ctx.deps.session.memory_recall_state.recall_count
     ctx_p4b = _replace(ctx, messages=msgs)
-    recall_text2 = await _recall_prompt_text(ctx_p4b)
+    recall_text2 = await recall_prompt_text(ctx_p4b)
     recall_post = ctx.deps.session.memory_recall_state.recall_count
     recall_fired = recall_post > recall_pre
     if recall_fired:
@@ -1379,7 +1379,7 @@ async def step_7_multi_cycle() -> bool:
     if bounds_7 is not None:
         head_end_7, tail_start_7, dropped_count_7 = bounds_7
         dropped_7 = msgs[head_end_7:tail_start_7]
-        enrichment_7 = _gather_compaction_context(ctx, dropped_7)
+        enrichment_7 = gather_compaction_context(ctx, dropped_7)
         print(
             f"    Boundaries: head_end={head_end_7}, tail_start={tail_start_7}, dropped={dropped_count_7}"
         )
@@ -1419,7 +1419,7 @@ async def step_7_multi_cycle() -> bool:
         if isinstance(m, ModelRequest):
             for p in m.parts:
                 if isinstance(p, UserPromptPart) and isinstance(p.content, str):
-                    if _SUMMARY_MARKER_PREFIX in p.content:
+                    if SUMMARY_MARKER_PREFIX in p.content:
                         summary = p.content
                         marker_count_in_output += 1
                     elif "earlier messages were removed" in p.content:
@@ -1715,7 +1715,7 @@ async def step_9_circuit_breaker() -> bool:
         for p in m.parts
     )
     has_summary = any(
-        isinstance(p, UserPromptPart) and _SUMMARY_MARKER_PREFIX in str(p.content)
+        isinstance(p, UserPromptPart) and SUMMARY_MARKER_PREFIX in str(p.content)
         for m in result
         if isinstance(m, ModelRequest)
         for p in m.parts
@@ -1780,7 +1780,7 @@ async def step_10_enrichment_ab() -> bool:
         _assistant("I'll start with the middleware refactor based on my analysis."),
     ]
 
-    # Build context enrichment manually (simulating what _gather_compaction_context would produce)
+    # Build context enrichment manually (simulating what gather_compaction_context would produce)
     enrichment = (
         f"Files touched: {', '.join(file_names)}\n\n"
         "Active tasks:\n"
@@ -1913,7 +1913,7 @@ def step_11_edge_cases() -> bool:
         passed = False
     from dataclasses import replace as _replace
 
-    safety_text_p3a = _safety_prompt_text(_replace(ctx, messages=one_turn))
+    safety_text_p3a = safety_prompt_text(_replace(ctx, messages=one_turn))
     if safety_text_p3a:
         print("  FAIL: P3 injected on 1-turn history")
         passed = False
@@ -1933,7 +1933,7 @@ def step_11_edge_cases() -> bool:
         _user("more chat"),
         _assistant("ok"),
     ]
-    result = _gather_compaction_context(ctx, dropped=no_tools)
+    result = gather_compaction_context(ctx, dropped=no_tools)
     if result is not None:
         print(f"  FAIL: 11c — enrichment should return None with no tools, got: {result[:60]}")
         passed = False
@@ -1941,12 +1941,12 @@ def step_11_edge_cases() -> bool:
         print("  PASS: 11c — no ToolCallParts: enrichment returns None")
 
     # 11d: History contains a prior static marker (from emergency compact)
-    from co_cli.context._compaction import _static_marker
+    from co_cli.context.compaction import static_marker
 
     with_marker = [
         _user("turn 1"),
         _assistant("resp 1"),
-        _static_marker(5),
+        static_marker(5),
         _user("turn 2"),
         _assistant("resp 2"),
         _user("turn 3"),
@@ -2074,7 +2074,7 @@ def step_11_edge_cases() -> bool:
     empty: list[ModelMessage] = []
     r = truncate_tool_results(ctx, empty)
     assert r == [] or r is empty
-    safety_text_empty = _safety_prompt_text(_replace(ctx, messages=empty))
+    safety_text_empty = safety_prompt_text(_replace(ctx, messages=empty))
     assert safety_text_empty == ""
     ec = emergency_compact(empty)
     assert ec is None

@@ -231,14 +231,14 @@ def test_compact_boundary_ignored_for_small_files(tmp_path: Path) -> None:
 
 def test_persist_session_history_branches_child_session_on_compaction(tmp_path: Path) -> None:
     """Compacted history is persisted in a fresh child transcript linked to the parent."""
-    from co_cli.context._compaction import _SUMMARY_MARKER_PREFIX, _build_compaction_marker
+    from co_cli.context.compaction import SUMMARY_MARKER_PREFIX, build_compaction_marker
 
     sessions_dir = tmp_path / "sessions"
     parent = sessions_dir / "2026-04-11-T080000Z-parent001.jsonl"
     original = [ModelRequest(parts=[UserPromptPart(content="original turn")])]
     append_messages(parent, original)
 
-    marker = _build_compaction_marker(1, "Summary")
+    marker = build_compaction_marker(1, "Summary")
     compacted = [
         marker,
         ModelResponse(parts=[TextPart(content="Understood.")], model_name="m"),
@@ -258,17 +258,17 @@ def test_persist_session_history_branches_child_session_on_compaction(tmp_path: 
 
     loaded_child = load_transcript(child)
     assert len(loaded_child) == 2
-    assert loaded_child[0].parts[0].content.startswith(_SUMMARY_MARKER_PREFIX)
+    assert loaded_child[0].parts[0].content.startswith(SUMMARY_MARKER_PREFIX)
     assert loaded_child[1].parts[0].content == "Understood."
     assert load_transcript(parent)[0].parts[0].content == "original turn"
 
 
 def test_persist_session_history_preserves_todo_snapshot_in_child(tmp_path: Path) -> None:
     """A post-compaction todo snapshot round-trips through the child transcript."""
-    from co_cli.context._compaction import (
-        _TODO_SNAPSHOT_PREFIX,
-        _build_compaction_marker,
-        _build_todo_snapshot,
+    from co_cli.context.compaction import (
+        TODO_SNAPSHOT_PREFIX,
+        build_compaction_marker,
+        build_todo_snapshot,
     )
 
     sessions_dir = tmp_path / "sessions"
@@ -276,7 +276,7 @@ def test_persist_session_history_preserves_todo_snapshot_in_child(tmp_path: Path
     original = [ModelRequest(parts=[UserPromptPart(content="original turn")])]
     append_messages(parent, original)
 
-    snapshot = _build_todo_snapshot(
+    snapshot = build_todo_snapshot(
         [
             {"content": "survive persistence", "status": "pending", "priority": "medium"},
         ]
@@ -284,7 +284,7 @@ def test_persist_session_history_preserves_todo_snapshot_in_child(tmp_path: Path
     assert snapshot is not None
 
     compacted = [
-        _build_compaction_marker(1, "Summary"),
+        build_compaction_marker(1, "Summary"),
         snapshot,
         ModelResponse(parts=[TextPart(content="Understood.")], model_name="m"),
     ]
@@ -300,7 +300,7 @@ def test_persist_session_history_preserves_todo_snapshot_in_child(tmp_path: Path
     assert len(loaded_child) == 3
     snapshot_loaded = loaded_child[1]
     assert isinstance(snapshot_loaded, ModelRequest)
-    assert snapshot_loaded.parts[0].content.startswith(_TODO_SNAPSHOT_PREFIX)
+    assert snapshot_loaded.parts[0].content.startswith(TODO_SNAPSHOT_PREFIX)
     assert "survive persistence" in snapshot_loaded.parts[0].content
 
 

@@ -7,16 +7,16 @@ from co_cli.deps import CoDeps
 
 async def recall_prompt(ctx: RunContext[CoDeps]) -> str:
     """Per-turn: inject date, personality memories, and recalled knowledge."""
-    from co_cli.context._prompt_text import _recall_prompt_text
+    from co_cli.context.prompt_text import recall_prompt_text
 
-    return await _recall_prompt_text(ctx)
+    return await recall_prompt_text(ctx)
 
 
 def safety_prompt(ctx: RunContext[CoDeps]) -> str:
     """Per-turn: inject doom loop / shell reflection warnings when condition is active."""
-    from co_cli.context._prompt_text import _safety_prompt_text
+    from co_cli.context.prompt_text import safety_prompt_text
 
-    return _safety_prompt_text(ctx)
+    return safety_prompt_text(ctx)
 
 
 def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:

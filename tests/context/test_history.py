@@ -23,14 +23,16 @@ from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import settings
-from co_cli.context._compaction import (
-    _SUMMARY_MARKER_PREFIX,
-    _TODO_SNAPSHOT_PREFIX,
+from co_cli.context._compaction_boundaries import _find_last_turn_start
+from co_cli.context._compaction_markers import (
     _active_todos,
-    _build_todo_snapshot,
-    _find_last_turn_start,
     _gather_prior_summaries,
     _gather_session_todos,
+)
+from co_cli.context.compaction import (
+    SUMMARY_MARKER_PREFIX,
+    TODO_SNAPSHOT_PREFIX,
+    build_todo_snapshot,
     emergency_compact,
     emergency_recover_overflow_history,
     enforce_batch_budget,
@@ -42,8 +44,8 @@ from co_cli.context._compaction import (
     summarize_history_window,
     truncate_tool_results,
 )
-from co_cli.context._prompt_text import _recall_prompt_text
 from co_cli.context.orchestrate import _history_with_pending_user_input
+from co_cli.context.prompt_text import recall_prompt_text
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
@@ -241,7 +243,7 @@ async def test_compact_produces_two_message_history():
     first = result.history[0]
     assert isinstance(first, ModelRequest)
     assert isinstance(first.parts[0], UserPromptPart)
-    assert first.parts[0].content.startswith(_SUMMARY_MARKER_PREFIX)
+    assert first.parts[0].content.startswith(SUMMARY_MARKER_PREFIX)
     assert _gather_prior_summaries([first]) is not None
 
 
@@ -641,7 +643,7 @@ def test_current_turn_protection_multi_tool():
 
 
 # ---------------------------------------------------------------------------
-# _gather_compaction_context — context enrichment tests
+# gather_compaction_context — context enrichment tests
 # ---------------------------------------------------------------------------
 
 
@@ -895,9 +897,9 @@ def test_gather_session_todos_formats_active_only():
 
 
 def test_build_todo_snapshot_returns_none_when_empty_or_closed():
-    assert _build_todo_snapshot([]) is None
+    assert build_todo_snapshot([]) is None
     assert (
-        _build_todo_snapshot(
+        build_todo_snapshot(
             [
                 {"content": "done", "status": "completed"},
                 {"content": "dropped", "status": "cancelled"},
@@ -914,14 +916,14 @@ def test_build_todo_snapshot_emits_model_request_with_prefix():
         {"content": "run tests", "status": "in_progress"},
         {"content": "old task", "status": "completed"},
     ]
-    snapshot = _build_todo_snapshot(todos)
+    snapshot = build_todo_snapshot(todos)
     assert snapshot is not None
     assert isinstance(snapshot, ModelRequest)
     assert len(snapshot.parts) == 1
     part = snapshot.parts[0]
     assert isinstance(part, UserPromptPart)
     assert isinstance(part.content, str)
-    assert part.content.startswith(_TODO_SNAPSHOT_PREFIX)
+    assert part.content.startswith(TODO_SNAPSHOT_PREFIX)
     assert "ship fix" in part.content
     assert "run tests" in part.content
     assert "old task" not in part.content
@@ -935,7 +937,7 @@ def _snapshot_contents(messages: list) -> list[str]:
         for part in msg.parts
         if isinstance(part, UserPromptPart)
         and isinstance(part.content, str)
-        and part.content.startswith(_TODO_SNAPSHOT_PREFIX)
+        and part.content.startswith(TODO_SNAPSHOT_PREFIX)
     ]
 
 
@@ -1041,17 +1043,17 @@ async def test_compact_command_inserts_todo_snapshot_between_summary_and_ack():
     # Snapshot sits between the summary request (idx 0) and the ack response (idx 2)
     middle = result.history[1]
     assert isinstance(middle, ModelRequest)
-    assert middle.parts[0].content.startswith(_TODO_SNAPSHOT_PREFIX)
+    assert middle.parts[0].content.startswith(TODO_SNAPSHOT_PREFIX)
 
 
 # ---------------------------------------------------------------------------
-# _recall_prompt_text — per-turn dynamic instruction (date + personality + knowledge recall)
+# recall_prompt_text — per-turn dynamic instruction (date + personality + knowledge recall)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_recall_prompt_text_includes_personality_memories():
-    """When personality is set, _recall_prompt_text includes the personality block in its output."""
+    """When personality is set, recall_prompt_text includes the personality block in its output."""
     from co_cli.prompts.personalities import _injector as _injector_module
     from co_cli.prompts.personalities._injector import invalidate_personality_cache
 
@@ -1068,7 +1070,7 @@ async def test_recall_prompt_text_includes_personality_memories():
         ctx = RunContext(
             deps=deps, model=_AGENT.model, usage=RunUsage(), messages=[_user("hello")]
         )
-        result = await _recall_prompt_text(ctx)
+        result = await recall_prompt_text(ctx)
 
         assert "personality-tail-sentinel-XYZ789" in result, (
             f"personality memories missing from recall text; got: {result!r}"
@@ -1079,7 +1081,7 @@ async def test_recall_prompt_text_includes_personality_memories():
 
 @pytest.mark.asyncio
 async def test_recall_prompt_text_always_includes_date():
-    """_recall_prompt_text always includes a 'Today is' date line in its output."""
+    """recall_prompt_text always includes a 'Today is' date line in its output."""
     from co_cli.prompts.personalities._injector import invalidate_personality_cache
 
     invalidate_personality_cache()
@@ -1093,7 +1095,7 @@ async def test_recall_prompt_text_always_includes_date():
         )
         msgs = [_user("ping"), _assistant("pong"), _user("ping again")]
         ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage(), messages=msgs)
-        result = await _recall_prompt_text(ctx)
+        result = await recall_prompt_text(ctx)
 
         assert "Today is " in result, f"date missing from recall text; got: {result!r}"
     finally:

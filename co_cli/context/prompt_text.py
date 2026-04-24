@@ -5,8 +5,8 @@ appended to ``message_history`` — they drive the ``instructions`` field that
 pydantic-ai re-emits each turn.
 
 Functions:
-    _recall_prompt_text   — async, returns date + personality memories + recalled knowledge
-    _safety_prompt_text   — sync, returns doom-loop / shell-reflection warnings
+    recall_prompt_text   — async, returns date + personality memories + recalled knowledge
+    safety_prompt_text   — sync, returns doom-loop / shell-reflection warnings
 """
 
 from __future__ import annotations
@@ -33,11 +33,6 @@ from co_cli.memory.state import MemoryRecallState
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Last-user helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_last_user_message(messages: list[ModelMessage]) -> str | None:
     """Extract the text of the most recent UserPromptPart from messages."""
     for msg in reversed(messages):
@@ -57,12 +52,7 @@ def _count_user_turns(messages: list[ModelMessage]) -> int:
     return count
 
 
-# ---------------------------------------------------------------------------
-# _recall_prompt_text — per-turn dynamic instruction (async — memory recall, no LLM)
-# ---------------------------------------------------------------------------
-
-
-async def _recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
+async def recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
     """Per-turn dynamic instruction: date, personality memories, and recalled knowledge."""
     state: MemoryRecallState = ctx.deps.session.memory_recall_state
     user_turn_count = _count_user_turns(ctx.messages)
@@ -72,7 +62,6 @@ async def _recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
 
     parts.append(f"Today is {date.today().isoformat()}.")
 
-    # Personality memories — re-evaluated every turn (file may be updated between turns).
     if ctx.deps.config.personality:
         from co_cli.prompts.personalities._injector import _load_personality_memories
 
@@ -80,7 +69,6 @@ async def _recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
         if personality_content:
             parts.append(personality_content)
 
-    # Knowledge recall — only on new user turns.
     if user_msg and user_turn_count > state.last_recall_user_turn:
         from co_cli.tools.knowledge.read import _recall_for_context
 
@@ -95,14 +83,9 @@ async def _recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
                     memory_content = memory_content[:max_chars]
                 parts.append(f"Relevant memories:\n{memory_content}")
         except Exception:
-            log.debug("_recall_prompt_text: _recall_for_context failed", exc_info=True)
+            log.debug("recall_prompt_text: _recall_for_context failed", exc_info=True)
 
     return "\n\n".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# _safety_prompt_text — per-turn dynamic instruction (doom loop + shell reflection cap)
-# ---------------------------------------------------------------------------
 
 
 def _count_consecutive_same_calls(messages: list[ModelMessage]) -> int:
@@ -124,11 +107,11 @@ def _count_consecutive_same_calls(messages: list[ModelMessage]) -> int:
                 else str(part.args),
                 sort_keys=True,
             )
-            h = hashlib.md5(f"{part.tool_name}:{args_str}".encode()).hexdigest()
+            hashed = hashlib.md5(f"{part.tool_name}:{args_str}".encode()).hexdigest()
             if last_hash is None:
                 consecutive_same = 1
-                last_hash = h
-            elif h == last_hash:
+                last_hash = hashed
+            elif hashed == last_hash:
                 consecutive_same += 1
             else:
                 return consecutive_same
@@ -139,14 +122,11 @@ def _is_shell_error_return(part: ToolReturnPart) -> bool:
     """Return True when the tool return represents a shell command error."""
     content = part.content
     if isinstance(content, str):
-        c = content.lower()
-        # Require "error" at the start or the pydantic-ai ModelRetry prefix.
-        # Substring match on the whole output caused false positives on text like
-        # "3 tests passed, 0 errors".
+        lowered = content.lower()
         str_is_error = (
-            c.startswith("error")
-            or c.startswith("shell: command failed")
-            or c.startswith("shell: unexpected error")
+            lowered.startswith("error")
+            or lowered.startswith("shell: command failed")
+            or lowered.startswith("shell: unexpected error")
         )
     else:
         str_is_error = False
@@ -174,7 +154,7 @@ def _count_consecutive_shell_errors(messages: list[ModelMessage]) -> int:
     return count
 
 
-def _safety_prompt_text(ctx: RunContext[CoDeps]) -> str:
+def safety_prompt_text(ctx: RunContext[CoDeps]) -> str:
     """Per-turn dynamic instruction: doom loop and shell reflection warnings. Empty string when no condition is active."""
     deps = ctx.deps
     messages = ctx.messages

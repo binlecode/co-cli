@@ -48,7 +48,7 @@ Compaction is **four mechanisms** operating at different lifecycle points, with 
 | **M2 — Prepass recency clearing** | Before every `ModelRequestNode` | Individual parts in older messages | Irreversible for the session (content replaced with placeholder string) |
 | **M3 — Window compaction** | Before every `ModelRequestNode`, when `token_count > threshold` | Turn-group range | Lossy (middle replaced by summary marker) |
 
-**Helper:** `_gather_compaction_context` — enrichment collected from sources that survive M2 (`ToolCallPart.args` for file paths, session todos, prior summaries). Called from inside M3 and the overflow entry.
+**Helper:** `gather_compaction_context` — enrichment collected from sources that survive M2 (`ToolCallPart.args` for file paths, session todos, prior summaries). Called from inside M3 and the overflow entry.
 
 **Emergency entry:** `recover_overflow_history` — same planner, same summarizer, same output shape as M3; gated by provider context-length rejection; one-shot per turn.
 
@@ -76,7 +76,7 @@ flowchart TD
     subgraph Window["M3 — window compaction"]
         T1{token_count &gt; threshold?}
         T2[plan_compaction_boundaries]
-        T3[_gather_compaction_context<br/>enrichment helper]
+        T3[gather_compaction_context<br/>enrichment helper]
         T4[summarize_messages]
         T5[head + marker + breadcrumbs + tail]
         T1 -->|yes| T2 --> T3 --> T4 --> T5
@@ -150,7 +150,7 @@ sequenceDiagram
     participant RT as run_turn
     participant AG as Agent (SDK)
     participant R as recover_overflow_history
-    participant E as _gather_compaction_context
+    participant E as gather_compaction_context
     participant S as summarize_messages
     participant M as Provider
 
@@ -170,10 +170,10 @@ sequenceDiagram
         R->>S: summarize_messages(dropped, context=enrichment)
         alt summarizer succeeds
             S-->>R: summary text
-            R->>R: marker = _summary_marker(...)
+            R->>R: marker = summary_marker(...)
         else summarizer raises
             S-->>R: exception
-            R->>R: marker = _static_marker(...) (fallback)
+            R->>R: marker = static_marker(...) (fallback)
         end
         R-->>RT: [head, marker, breadcrumbs, tail]
     else bounds is None (planner overlap or oversized tail)
@@ -257,12 +257,12 @@ flowchart TD
     L6[emergency_recover_overflow_history<br/>structural fallback — no planner, no LLM]
 
     P[plan_compaction_boundaries]
-    E[_gather_compaction_context<br/>enrichment helper]
+    E[gather_compaction_context<br/>enrichment helper]
     S[summarize_messages]
     B[_preserve_search_tool_breadcrumbs<br/>dedup by kept_ids]
 
-    MK_SUM[_summary_marker]
-    MK_ST[_static_marker]
+    MK_SUM[summary_marker]
+    MK_ST[static_marker]
 
     L3 --> P
     L5 --> P
@@ -428,7 +428,7 @@ tail = messages[tail_start:]
 dropped = messages[head_end:tail_start]
 kept_ids = {id(m) for m in head} | {id(m) for m in tail}
 
-enrichment = _gather_compaction_context(ctx, dropped)
+enrichment = gather_compaction_context(ctx, dropped)
 
 # Circuit breaker: skip or probe based on failure count.
 # count < 3: always attempt. count >= 3: skip unless probe turn (every 10 skips).
@@ -436,7 +436,7 @@ count = ctx.deps.runtime.compaction_failure_count
 is_probe = count >= 3 and (count - 3) > 0 and (count - 3) % _CIRCUIT_BREAKER_PROBE_EVERY == 0
 if ctx.deps.model is None or (count >= 3 and not is_probe):
     ctx.deps.runtime.compaction_failure_count += 1  # keep counting for probe cadence
-    marker = _static_marker(dropped_count)
+    marker = static_marker(dropped_count)
 else:
     try:
         summary = await summarize_messages(
@@ -446,11 +446,11 @@ else:
             context=enrichment,
         )
         ctx.deps.runtime.compaction_failure_count = 0
-        marker = _summary_marker(dropped_count, summary)
+        marker = summary_marker(dropped_count, summary)
     except (ModelHTTPError, ModelAPIError) as e:
         log.warning("Compaction summarization failed: %s", e)
         ctx.deps.runtime.compaction_failure_count += 1
-        marker = _static_marker(dropped_count)
+        marker = static_marker(dropped_count)
 
 preserved = _preserve_search_tool_breadcrumbs(dropped, kept_ids)
 result = [*head, marker, *preserved, *tail]
@@ -484,7 +484,7 @@ return result
 
 The three guardrails protect against re-executing side-effecting actions described in the summary, re-answering resolved questions, and confusing the summary with an active user request. Summary-section anchors (`## Active Task`, `## Next Step`) are produced by the summarizer template in `co_cli/context/summarization.py`.
 
-Prior-summary detection uses `startswith(_SUMMARY_MARKER_PREFIX)` with a shared constant defined in one place and used by both builder and detector. The constant matches the literal start of the marker through the end of the "ran out of context." sentence.
+Prior-summary detection uses `startswith(SUMMARY_MARKER_PREFIX)` with a shared constant defined in one place and used by both builder and detector. The constant matches the literal start of the marker through the end of the "ran out of context." sentence.
 
 **Breadcrumb preservation** (`_preserve_search_tool_breadcrumbs`):
 - Return messages from `dropped` that contain a `search_tools` `ToolReturnPart`.
@@ -506,17 +506,17 @@ Rationale: three-strikes trips the breaker to avoid burning LLM cost when the pr
 
 ### 2.4 Enrichment helper (shared between proactive and overflow)
 
-`_gather_compaction_context` collects signal that survives M2 clearing. It is the summarizer's side-channel input.
+`gather_compaction_context` collects signal that survives M2 clearing. It is the summarizer's side-channel input.
 
 | Source | Scope | Why it survives M2 |
 |---|---|---|
 | `ToolCallPart.args` for `FILE_TOOLS = {file_read, file_write, file_patch, file_search, file_find}` → `_gather_file_paths(dropped)` | **Dropped range only** | `truncate_tool_results` only touches return content, never call args. Scoped to `dropped` to avoid duplicating paths already visible in the preserved tail. |
 | `ctx.deps.session.session_todos` → `_gather_session_todos` | Session state | Orthogonal to message history. |
-| Prior compaction summaries in `dropped` → `_gather_prior_summaries` | Dropped range only | Detected via prefix-match on `_SUMMARY_MARKER_PREFIX` shared constant. |
+| Prior compaction summaries in `dropped` → `_gather_prior_summaries` | Dropped range only | Detected via prefix-match on `SUMMARY_MARKER_PREFIX` shared constant. |
 
 Output: single `str`, capped at 4000 chars, passed as `context=` argument to `summarize_messages`. Returns `None` when no sources yield content.
 
-**Invariant:** shared byte-for-byte between M3's proactive path and the overflow emergency entry — both call `_summarize_dropped_messages` which calls `_gather_compaction_context`.
+**Invariant:** shared byte-for-byte between M3's proactive path and the overflow emergency entry — both call `summarize_dropped_messages` which calls `gather_compaction_context`.
 
 ### 2.5 Overflow recovery — emergency entry
 
@@ -630,7 +630,7 @@ One successful compaction per pressure event per turn.
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Number of consecutive low-yield proactive compactions before the anti-thrashing gate activates |
 
-**Non-configurable module constants** in `co_cli/context/_compaction.py`:
+**Non-configurable module constants** in `co_cli/context/compaction.py` and submodules:
 
 | Constant | Value | Purpose |
 |---|---|---|
@@ -658,7 +658,10 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | File | Purpose |
 |---|---|
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
-| `co_cli/context/_compaction.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_build_call_id_to_args` (tool_call_id → args index for semantic markers); `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
+| `co_cli/context/compaction.py` | Public entry surface: `summarize_history_window`; `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `recover_overflow_history`, `emergency_recover_overflow_history`, `emergency_compact`; `summarize_dropped_messages`; `_preserve_search_tool_breadcrumbs`; re-exports of the processors, boundary planner, and marker builders from the private submodules. Constant `_CIRCUIT_BREAKER_PROBE_EVERY`. |
+| `co_cli/context/_compaction_boundaries.py` | `TurnGroup`; `group_by_turn`, `groups_to_messages`, `find_first_run_end`; `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `_find_last_turn_start`. Constant `_MIN_RETAINED_TURN_GROUPS`. |
+| `co_cli/context/_compaction_markers.py` | Marker builders (`static_marker`, `summary_marker`, `build_compaction_marker`, `build_todo_snapshot`); `gather_compaction_context` (enrichment helper — file paths, session todos, prior summaries); `SUMMARY_MARKER_PREFIX`, `TODO_SNAPSHOT_PREFIX`; constant `_CONTEXT_MAX_CHARS`. |
+| `co_cli/context/_history_processors.py` | Three registered history processors (`dedup_tool_results`, `truncate_tool_results`, `enforce_batch_budget`); `_build_call_id_to_args` (tool_call_id → args index for semantic markers); constants `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker(tool_name, args, content)` — per-tool 1-line markers that replace the static placeholder in `truncate_tool_results`; dispatch table covers all eight `COMPACTABLE_TOOLS` with a generic `[tool] k=v (N chars)` fallback. `is_cleared_marker(content)` public predicate — recognizes both the static fallback and per-tool markers (checks prefix against `COMPACTABLE_TOOLS`); used by tests and evals. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — public overflow predicate: HTTP 413 unconditional; HTTP 400 with explicit overflow evidence from `error.message`, flat `message`, `error.code`, or wrapped `error.metadata.raw`. Body parse failures fall back safely to `False`. |
