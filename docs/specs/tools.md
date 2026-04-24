@@ -32,11 +32,11 @@ co_cli/agent/_native_toolset.py
   -> NATIVE_TOOLS, _build_native_toolset(), _approval_resume_filter()
 co_cli/agent/_mcp.py
   -> _build_mcp_toolsets(), discover_mcp_tools()
-co_cli/context/_tool_lifecycle.py
+co_cli/tools/_lifecycle.py
   -> before_tool_execute(), after_tool_execute()
-co_cli/context/_deferred_tool_prompt.py
+co_cli/tools/_deferred_prompt.py
   -> category awareness prompt for DEFERRED tools
-co_cli/context/tool_approvals.py
+co_cli/tools/approvals.py
   -> approval subject resolution and remembered session rules
 co_cli/tools/agent_tool.py
   -> @agent_tool metadata attachment

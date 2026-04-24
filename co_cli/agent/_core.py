@@ -18,8 +18,8 @@ from co_cli.context._compaction import (
     summarize_history_window,
     truncate_tool_results,
 )
-from co_cli.context._tool_lifecycle import CoToolLifecycle
 from co_cli.deps import CoDeps, ToolInfo
+from co_cli.tools._lifecycle import CoToolLifecycle
 
 logger = logging.getLogger(__name__)
 

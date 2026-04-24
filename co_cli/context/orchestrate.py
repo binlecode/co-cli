@@ -3,7 +3,7 @@
 Contains TurnResult, run_turn(), and supporting private functions.
 Frontend lives in co_cli/display/_core.py. Stream rendering policy
 lives in co_cli/display/_stream_renderer.py. Tool display metadata lives in
-co_cli/context/tool_display.py. The chat loop in main.py delegates all LLM
+co_cli/tools/display.py. The chat loop in main.py delegates all LLM
 interaction here.
 """
 
@@ -65,16 +65,16 @@ from co_cli.config._core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._compaction import maybe_run_pre_turn_hygiene
 from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context.summarization import latest_response_input_tokens
-from co_cli.context.tool_approvals import (
+from co_cli.deps import CoDeps
+from co_cli.display._core import Frontend, QuestionPrompt
+from co_cli.display._stream_renderer import StreamRenderer
+from co_cli.tools.approvals import (
     decode_tool_args,
     is_auto_approved,
     record_approval_choice,
     resolve_approval_subject,
 )
-from co_cli.context.tool_display import format_for_display, get_tool_start_args_display
-from co_cli.deps import CoDeps
-from co_cli.display._core import Frontend, QuestionPrompt
-from co_cli.display._stream_renderer import StreamRenderer
+from co_cli.tools.display import format_for_display, get_tool_start_args_display
 
 type SessionAgent = Agent[CoDeps, str | DeferredToolRequests]
 type SessionRunResult = AgentRunResult[str | DeferredToolRequests]

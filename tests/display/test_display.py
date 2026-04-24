@@ -1,8 +1,8 @@
 """Functional tests for the terminal display frontend."""
 
-from co_cli.context.tool_approvals import resolve_approval_subject
 from co_cli.display._core import TerminalFrontend, console
 from co_cli.display._stream_renderer import StreamRenderer
+from co_cli.tools.approvals import resolve_approval_subject
 
 
 def test_terminal_frontend_tool_progress_replaces_generic_status() -> None:

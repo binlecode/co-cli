@@ -89,9 +89,9 @@ from co_cli.context.summarization import (
     resolve_compaction_budget,
     summarize_messages,
 )
-from co_cli.context.tool_categories import FILE_TOOLS
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import LlmModel, build_model
+from co_cli.tools.categories import FILE_TOOLS
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import (
     PERSISTED_OUTPUT_TAG,
@@ -391,7 +391,7 @@ def step_2_p1_truncate() -> bool:
         "web_fetch",
         "web_search",
     }
-    from co_cli.context.tool_categories import COMPACTABLE_TOOLS
+    from co_cli.tools.categories import COMPACTABLE_TOOLS
 
     if expected_compactable != COMPACTABLE_TOOLS:
         print(f"  FAIL: COMPACTABLE_TOOLS mismatch: {COMPACTABLE_TOOLS}")

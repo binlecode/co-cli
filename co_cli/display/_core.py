@@ -14,7 +14,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from co_cli.config._core import settings
-from co_cli.context.tool_approvals import ApprovalSubject
+from co_cli.tools.approvals import ApprovalSubject
 
 if TYPE_CHECKING:
     from co_cli.tools.tool_io import ToolResultPayload

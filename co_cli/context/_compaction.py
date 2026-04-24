@@ -47,8 +47,8 @@ from co_cli.context.summarization import (
     resolve_compaction_budget,
     summarize_messages,
 )
-from co_cli.context.tool_categories import COMPACTABLE_TOOLS, FILE_TOOLS
 from co_cli.deps import CoDeps
+from co_cli.tools.categories import COMPACTABLE_TOOLS, FILE_TOOLS
 
 log = logging.getLogger(__name__)
 

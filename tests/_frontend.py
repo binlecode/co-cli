@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from co_cli.context.tool_approvals import ApprovalSubject
 from co_cli.display._core import QuestionPrompt
+from co_cli.tools.approvals import ApprovalSubject
 
 
 class SilentFrontend:

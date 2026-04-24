@@ -4,14 +4,14 @@ import pytest
 from pydantic_ai import DeferredToolResults
 
 from co_cli.config._core import settings
-from co_cli.context.tool_approvals import (
+from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
+from co_cli.tools.approvals import (
     ApprovalSubject,
     is_auto_approved,
     record_approval_choice,
     remember_tool_approval,
     resolve_approval_subject,
 )
-from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 from co_cli.tools.shell_backend import ShellBackend
 
 

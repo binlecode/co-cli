@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from co_cli.context.tool_categories import COMPACTABLE_TOOLS
+from co_cli.tools.categories import COMPACTABLE_TOOLS
 
 _ARG_PREVIEW_MAX = 40
 _CMD_PREVIEW_MAX = 80

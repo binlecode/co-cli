@@ -407,7 +407,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent/_core.py` | main agent factory |
 | `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
-| `co_cli/context/tool_approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
+| `co_cli/tools/approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
 | `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, approval prompts, and question prompting (`QuestionPrompt`, `prompt_question`) |

@@ -755,7 +755,7 @@ async def test_lifecycle_normalizes_relative_path(tmp_path):
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
 
-    from co_cli.context._tool_lifecycle import CoToolLifecycle
+    from co_cli.tools._lifecycle import CoToolLifecycle
 
     lifecycle = CoToolLifecycle()
     ctx = _make_ctx(tmp_path)
@@ -781,7 +781,7 @@ async def test_lifecycle_skips_non_file_tools(tmp_path):
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
 
-    from co_cli.context._tool_lifecycle import CoToolLifecycle
+    from co_cli.tools._lifecycle import CoToolLifecycle
 
     lifecycle = CoToolLifecycle()
     ctx = _make_ctx(tmp_path)

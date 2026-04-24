@@ -38,6 +38,6 @@ def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
 
 def add_category_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
     """Inject category-level awareness so the model discovers deferred tools via search_tools."""
-    from co_cli.context._deferred_tool_prompt import build_category_awareness_prompt
+    from co_cli.tools._deferred_prompt import build_category_awareness_prompt
 
     return build_category_awareness_prompt(ctx.deps.tool_index)

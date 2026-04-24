@@ -19,7 +19,7 @@ import hashlib
 
 from pydantic_ai.messages import ToolReturnPart
 
-from co_cli.context.tool_categories import COMPACTABLE_TOOLS
+from co_cli.tools.categories import COMPACTABLE_TOOLS
 
 _DEDUP_MIN_CHARS: int = 200
 """Skip content shorter than this: a back-reference marker is larger than the payload.

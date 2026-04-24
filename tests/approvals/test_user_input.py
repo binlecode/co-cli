@@ -6,8 +6,8 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
-from co_cli.context.tool_approvals import QuestionRequired
 from co_cli.deps import CoDeps
+from co_cli.tools.approvals import QuestionRequired
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.user_input import clarify
 
