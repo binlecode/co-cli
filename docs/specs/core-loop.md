@@ -412,4 +412,4 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
 | `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, approval prompts, and question prompting (`QuestionPrompt`, `prompt_question`) |
 | `co_cli/memory/session.py` | session filename generation and latest-session discovery |
-| `co_cli/context/skill_env.py` | skill-run environment save/restore and active-skill-name cleanup |
+| `co_cli/skills/lifecycle.py` | skill-run environment save/restore and active-skill-name cleanup |

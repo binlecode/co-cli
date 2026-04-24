@@ -2,8 +2,8 @@
 
 from tests._settings import make_settings
 
-from co_cli.context.skill_env import cleanup_skill_run_state
 from co_cli.deps import CoDeps
+from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.shell_backend import ShellBackend
 
 
