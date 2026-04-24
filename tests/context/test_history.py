@@ -784,6 +784,65 @@ async def test_emergency_recover_rescues_planner_overlap_case():
     assert len(group_by_turn(result)) == 3
 
 
+@pytest.mark.asyncio
+async def test_emergency_recover_preserves_todo_snapshot():
+    """Emergency fallback preserves the todo snapshot — parity with the planner path."""
+    ctx = _make_processor_ctx()
+    ctx.deps.session.session_todos = [
+        {"content": "survive emergency overflow", "status": "pending", "priority": "medium"},
+    ]
+    msgs = []
+    for idx in range(5):
+        msgs.append(_user(f"turn {idx}"))
+        msgs.append(_assistant(f"response {idx}"))
+
+    result = await emergency_recover_overflow_history(ctx, msgs)
+
+    assert result is not None
+    contents = _snapshot_contents(result)
+    assert len(contents) == 1
+    assert "survive emergency overflow" in contents[0]
+
+
+@pytest.mark.asyncio
+async def test_emergency_recover_preserves_search_tools_breadcrumb():
+    """A search_tools return from the dropped middle survives emergency fallback as an orphan."""
+    ctx = _make_processor_ctx()
+    msgs = [
+        _user("start"),
+        _assistant("ok"),
+        _user("search for something"),
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="search_tools", args={"q": "foo"}, tool_call_id="st-1")]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="search_tools",
+                    content="discovered [foo_tool]",
+                    tool_call_id="st-1",
+                )
+            ]
+        ),
+        _assistant("got it"),
+        _user("final"),
+        _assistant("done"),
+    ]
+
+    result = await emergency_recover_overflow_history(ctx, msgs)
+
+    assert result is not None
+    returns = [
+        part
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "search_tools"
+    ]
+    assert len(returns) == 1
+    assert returns[0].tool_call_id == "st-1"
+
+
 # ---------------------------------------------------------------------------
 # Todo snapshot — durable post-compaction continuity for active session todos
 # ---------------------------------------------------------------------------

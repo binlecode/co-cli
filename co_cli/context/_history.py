@@ -957,21 +957,32 @@ async def emergency_recover_overflow_history(
 ) -> list[ModelMessage] | None:
     """Structural last-resort overflow recovery — no planner, no LLM.
 
-    Drops all middle turn groups and keeps first + static marker + last. Used
-    when ``recover_overflow_history`` returns None despite a provider overflow
-    rejection (estimator underestimate; the planner sees no work to do).
+    Drops all middle turn groups, keeping first + static marker + last. Preserves
+    the non-LLM continuity state that the planner-based path preserves: the todo
+    snapshot from session state and search_tools breadcrumbs from the dropped
+    range. Used when ``recover_overflow_history`` returns None despite a provider
+    overflow rejection (estimator underestimate; the planner sees no work to do).
     Returns None when ``len(groups) <= 2`` — the pre-existing structural
     first-turn-overflow limit.
     """
-    result = emergency_compact(messages)
-    if result is None:
+    groups = group_by_turn(messages)
+    if len(groups) <= 2:
         return None
+    dropped = groups_to_messages(groups[1:-1])
+    todo_snapshot = _build_todo_snapshot(ctx.deps.session.session_todos)
+    result = [
+        *groups_to_messages([groups[0]]),
+        _static_marker(len(dropped)),
+        *([todo_snapshot] if todo_snapshot is not None else []),
+        *_preserve_search_tool_breadcrumbs(dropped),
+        *groups_to_messages([groups[-1]]),
+    ]
     ctx.deps.runtime.history_compaction_applied = True
     ctx.deps.runtime.compacted_in_current_turn = True
     log.warning(
         "Emergency overflow recovery: planner returned None; dropped all middle groups "
         "(len(groups)=%d).",
-        len(group_by_turn(messages)),
+        len(groups),
     )
     from co_cli.knowledge._distiller import schedule_compaction_extraction
 
@@ -1092,7 +1103,7 @@ async def maybe_run_pre_turn_hygiene(
         if token_count <= token_threshold:
             return message_history
         # Clear the anti-thrashing gate so hygiene is never blocked by prior low-yield
-        # proactive runs. Orchestrate.py also clears on return — that's a safe no-op.
+        # proactive runs.
         deps.runtime.consecutive_low_yield_proactive_compactions = 0
         ctx = RunContext(deps=deps, model=model, usage=RunUsage())
         return await summarize_history_window(ctx, message_history)

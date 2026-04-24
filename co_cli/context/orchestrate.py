@@ -572,10 +572,6 @@ async def run_turn(
         agent.model,
         reported_input_tokens=latest_response_input_tokens(message_history),
     )
-    # Hygiene always bypasses the proactive anti-thrashing gate — reset savings so the
-    # gate starts fresh regardless of whether hygiene actually compacted.
-    deps.runtime.consecutive_low_yield_proactive_compactions = 0
-
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
     turn_state = _TurnState(

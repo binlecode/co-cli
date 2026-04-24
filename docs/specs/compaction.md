@@ -88,7 +88,7 @@ flowchart TD
         O2{overflow_recovery_attempted?}
         O3[recover_overflow_history<br/>same planner, same prompt]
         O3b{bounds valid?}
-        O3c[emergency_recover_overflow_history<br/>structural fallback: first + marker + last]
+        O3c[emergency_recover_overflow_history<br/>structural fallback: first + marker + todo snapshot + search_tools breadcrumbs + last]
         O4[retry once]
         O1 --> O2
         O2 -->|no| O3 --> O3b
@@ -274,6 +274,7 @@ flowchart TD
     S -->|exception| MK_ST
     L3 --> B
     L5 --> B
+    L6 --> B
     L5 -.bounds is None.-> L6
     L6 --> MK_ST
 
@@ -284,7 +285,7 @@ flowchart TD
     style L6 fill:#fcc,stroke:#333
 ```
 
-Blue = shared infrastructure; pink = enrichment helper; red = structural last-resort fallback. Proactive and normal overflow share the same planner, prompt, and summarizer. The emergency path bypasses all three and keeps only the first + last turn group + static marker — used only when the planner cannot find a valid boundary despite a provider rejection.
+Blue = shared infrastructure; pink = enrichment helper; red = structural last-resort fallback. Proactive and normal overflow share the same planner, prompt, and summarizer. The emergency path bypasses all three and keeps first + static marker + todo snapshot + search_tools breadcrumbs + last — the same non-LLM continuity state the planner-based path preserves. Used only when the planner cannot find a valid boundary despite a provider rejection.
 
 ### Diagram 7: Trigger cadence — self-stabilization in a 3-tool-call turn
 
@@ -543,7 +544,7 @@ if is_context_overflow(e):
 
 `recover_overflow_history` calls `plan_compaction_boundaries(...)` with the same config-sourced `tail_fraction` as proactive compaction. When overflow fires it's because the estimator was wrong; the planner will drop whatever is needed because there's more to drop now. Sharing the same planner settings keeps the surface minimal.
 
-`emergency_recover_overflow_history` is the structural last resort. It bypasses the planner entirely (no budget math, no active-user anchoring) and keeps only the first turn group + static marker + last turn group. It exists to cover the narrow case where `plan_compaction_boundaries` returns `None` despite a provider rejection — the estimator underestimates so severely that every group appears to fit under `tail_fraction * budget` and the walker accumulates them all, collapsing `tail_start` into the head. When `len(groups) ≤ 2` (first-turn-overflow), emergency returns `None` and the turn is terminal — the structural limit that existed before the fallback still applies.
+`emergency_recover_overflow_history` is the structural last resort. It bypasses the planner entirely (no budget math, no active-user anchoring) and keeps the first turn group + static marker + todo snapshot + search_tools breadcrumbs from the dropped range + last turn group — the same non-LLM continuity state the planner-based path preserves. It exists to cover the narrow case where `plan_compaction_boundaries` returns `None` despite a provider rejection — the estimator underestimates so severely that every group appears to fit under `tail_fraction * budget` and the walker accumulates them all, collapsing `tail_start` into the head. When `len(groups) ≤ 2` (first-turn-overflow), emergency returns `None` and the turn is terminal — the structural limit that existed before the fallback still applies.
 
 ### 2.6 Summarizer
 
@@ -597,12 +598,12 @@ One successful compaction per pressure event per turn.
 | Summarizer raises 3+ consecutive times | Circuit breaker trips; static markers used for most attempts; LLM probed once every 10 skips — probe success resets counter |
 | `ctx.deps.model is None` (sub-agent context) | Static marker without LLM attempt |
 | `plan_compaction_boundaries` returns `None` (proactive) | Return messages unchanged; next request re-checks |
-| `plan_compaction_boundaries` returns `None` (overflow) | Fall through to `emergency_recover_overflow_history` (structural fallback — first + marker + last) |
+| `plan_compaction_boundaries` returns `None` (overflow) | Fall through to `emergency_recover_overflow_history` (structural fallback — first + marker + todo snapshot + search_tools breadcrumbs + last) |
 | Second overflow in same turn | Terminal error (gated by `overflow_recovery_attempted`) |
 | Processor re-fire after overflow recovery | Safe — planner returns `None` on overlap |
 | First-turn overflow (`len(groups) ≤ 2`) | Terminal — emergency fallback also returns `None`; structural limit, not a bug |
 
-**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes into the two-tier cascade inside `_attempt_overflow_recovery`: first `recover_overflow_history` (planner-based), then `emergency_recover_overflow_history` (structural fallback — drops all middle groups, keeps first + marker + last). The turn is terminal only when both tiers return `None`, which happens exactly when `len(groups) ≤ 2` (first-turn structural limit). Do not add a retry loop at the proactive layer — proactive and normal overflow recovery share one planner, so a single failure mode does not need two handlers at the proactive tier.
+**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes into the two-tier cascade inside `_attempt_overflow_recovery`: first `recover_overflow_history` (planner-based), then `emergency_recover_overflow_history` (structural fallback — drops all middle groups, keeps first + marker + todo snapshot + search_tools breadcrumbs + last). The turn is terminal only when both tiers return `None`, which happens exactly when `len(groups) ≤ 2` (first-turn structural limit). Do not add a retry loop at the proactive layer — proactive and normal overflow recovery share one planner, so a single failure mode does not need two handlers at the proactive tier.
 
 ### 2.10 Security
 
