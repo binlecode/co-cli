@@ -26,9 +26,9 @@ Main co-cli files checked:
 - [agent.py](/Users/binle/workspace_genai/co-cli/co_cli/agent.py)
 - [deps.py](/Users/binle/workspace_genai/co-cli/co_cli/deps.py)
 - [orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py)
-- [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - [tool_output.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_output.py)
-- [tool_display.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_display.py)
+- [display.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/display.py)
 - [resource_lock.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/resource_lock.py)
 - [shell.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/shell.py)
 - [DESIGN-tools.md](/Users/binle/workspace_genai/co-cli/docs/DESIGN-tools.md)
@@ -180,7 +180,7 @@ Observed visibility controls:
 Observed in `co-cli`:
 
 - deferred approval handling in [orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py)
-- approval subject resolution in [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- approval subject resolution in [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - session-scoped remembered approvals in `deps.session.session_approval_rules`
 - shell-specific `DENY` / `ALLOW` / `REQUIRE_APPROVAL` in [shell.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/shell.py)
 
@@ -189,7 +189,7 @@ Observed in `co-cli`:
 Observed in `co-cli`:
 
 - native tool results produced through `tool_output(display: str, *, ctx: RunContext[CoDeps], **metadata)` in [tool_output.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_output.py); `tool_output_raw(...)` is the ctx-free variant for helpers
-- centralized display formatting in [tool_display.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_display.py)
+- centralized display formatting in [display.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/display.py)
 - per-resource lock store in [resource_lock.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/resource_lock.py)
 
 ### 3.4 History processors

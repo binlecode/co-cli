@@ -428,7 +428,7 @@ Personality is optional; if absent, only rules are assembled.
 | `add_shell_guidance` | Always | Shell approval/reminder text | ~100 tokens |
 | `add_always_on_memories` | `always_on=True` entries exist | `agent/_instructions.py:24-31`; caps at 5 memories, `memory_injection_max_chars` (default 2K) | ~500 tokens |
 | `add_personality_memories` | `config.personality` set | `prompts/personalities/_injector.py`; top-5 personality-context tagged memories sorted by recency | ~500 tokens |
-| `add_category_awareness_prompt` | Deferred tools registered | `context/_deferred_tool_prompt.py`; category-level prompt for `search_tools` discovery | ~100 tokens |
+| `add_category_awareness_prompt` | Deferred tools registered | `tools/_deferred_prompt.py`; category-level prompt for `search_tools` discovery | ~100 tokens |
 
 ### 4.2 History Processing Chain
 
@@ -606,7 +606,7 @@ Registration helper `_register_tool()` (lines 71-107) accepts: `fn`, `approval` 
 
 Mechanism: pydantic-ai SDK's `ToolSearchToolset` (auto-added by Agent). Per-tool `defer_loading` set at `_native_toolset.py:102` based on visibility enum.
 
-**Category awareness prompt** injected per-turn via `add_category_awareness_prompt()` at `context/_deferred_tool_prompt.py`. Groups deferred tools into categories with representative names:
+**Category awareness prompt** injected per-turn via `add_category_awareness_prompt()` at `tools/_deferred_prompt.py`. Groups deferred tools into categories with representative names:
 - "file editing (write_file, patch)"
 - "memory management (save_article)"
 - "background tasks (start_background_task)"

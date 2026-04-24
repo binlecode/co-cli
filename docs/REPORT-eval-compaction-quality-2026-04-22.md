@@ -49,7 +49,7 @@ from the old flat names to `file_`-prefixed names, but the eval was not updated.
 | `patch` | `file_patch` |
 | `write_file` | `file_write` |
 
-The constants in `co_cli/context/tool_categories.py` are:
+The constants in `co_cli/tools/categories.py` are:
 ```python
 COMPACTABLE_TOOLS = frozenset({"file_read", "shell", "file_grep", "file_glob",
                                 "web_search", "web_fetch", "knowledge_article_read", "obsidian_read"})

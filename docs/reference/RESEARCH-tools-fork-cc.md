@@ -16,9 +16,9 @@ Main co-cli files checked:
 - [agent.py](/Users/binle/workspace_genai/co-cli/co_cli/agent.py)
 - [deps.py](/Users/binle/workspace_genai/co-cli/co_cli/deps.py)
 - [orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py)
-- [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - [tool_output.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_output.py)
-- [tool_display.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_display.py)
+- [display.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/display.py)
 - [resource_lock.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/resource_lock.py)
 - [files.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/files.py)
 - [shell.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/shell.py)
@@ -73,7 +73,7 @@ In `co-cli`, deferred approval handling is implemented in [orchestrate.py](/User
 - `_collect_deferred_tool_approvals()`
 - `_run_approval_loop()`
 
-Approval subjects are resolved in [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py) into these categories:
+Approval subjects are resolved in [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py) into these categories:
 
 - `shell`
 - `path`
@@ -87,7 +87,7 @@ Remembered approval rules are session-scoped and stored in:
 Sources:
 
 - [orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py)
-- [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - [DESIGN-core-loop.md](/Users/binle/workspace_genai/co-cli/docs/DESIGN-core-loop.md)
 
 ### 2.3 Shell policy
@@ -150,7 +150,7 @@ The current code therefore does inherit remembered approval rules into sub-agent
 
 ### 2.7 Tool display
 
-`co-cli` has centralized display helpers in [tool_display.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_display.py):
+`co-cli` has centralized display helpers in [display.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/display.py):
 
 - `get_tool_start_args_display()`
 - `format_for_display()`
@@ -257,7 +257,7 @@ Not observed in checked `co-cli` tool lifecycle files:
 
 - [agent.py](/Users/binle/workspace_genai/co-cli/co_cli/agent.py)
 - [orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py)
-- [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - [tool_output.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_output.py)
 
 ### 4.3 Multi-source persistent permission rule system not observed in co-cli
@@ -317,7 +317,7 @@ Observed in `fork-cc`:
 
 Observed in `co-cli`:
 
-- centralized display helpers in [tool_display.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_display.py)
+- centralized display helpers in [display.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/display.py)
 - generic frontend callbacks in [orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py)
 
 ---
@@ -342,7 +342,7 @@ The current code copies `session_approval_rules` in `make_subagent_deps()` in [d
 
 The current code contains:
 
-- session remembered approvals by semantic scope in [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- session remembered approvals by semantic scope in [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - shell `DENY` / `ALLOW` / `REQUIRE_APPROVAL` in [shell.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/shell.py)
 
 This does not match the full `fork-cc` permission system, but it is more than a bare `requires_approval` boolean in runtime behavior.

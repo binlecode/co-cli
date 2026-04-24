@@ -11,8 +11,8 @@ then architecture-level gaps and anti-patterns.
 - [`co_cli/agent/_native_toolset.py`](/Users/binle/workspace_genai/co-cli/co_cli/agent/_native_toolset.py) — `NATIVE_TOOLS` tuple, `@agent_tool` policy, approval-resume filter
 - [`co_cli/agent/_mcp.py`](/Users/binle/workspace_genai/co-cli/co_cli/agent/_mcp.py)
 - [`co_cli/agent/_core.py`](/Users/binle/workspace_genai/co-cli/co_cli/agent/_core.py)
-- [`co_cli/context/_tool_lifecycle.py`](/Users/binle/workspace_genai/co-cli/co_cli/context/_tool_lifecycle.py)
-- [`co_cli/context/tool_approvals.py`](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- [`co_cli/tools/_lifecycle.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/_lifecycle.py)
+- [`co_cli/tools/approvals.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - [`co_cli/tools/agent_tool.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/agent_tool.py)
 - [`co_cli/tools/tool_io.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_io.py)
 - Tool implementations: `co_cli/tools/{user_input,capabilities,todo,memory,shell,execute_code,task_control,background,obsidian,agents}.py`, `co_cli/tools/{files,knowledge,web,google}/*.py`
@@ -263,7 +263,7 @@ staleness detection, but unbounded.
 
 ### 4.5 `CoToolLifecycle.before_tool_execute` path normalization is a hidden arg rewrite
 
-Path normalization in `_tool_lifecycle.py` rewrites `path` args from relative to
+Path normalization in `tools/_lifecycle.py` rewrites `path` args from relative to
 absolute before the tool body executes. A tool author testing their function
 directly gets different `path` values than in production. Tool implementations
 appear to accept relative paths, but never receive them in a running system.

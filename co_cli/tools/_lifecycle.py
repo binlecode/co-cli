@@ -10,8 +10,8 @@ from pydantic_ai.capabilities import AbstractCapability, ValidatedToolArgs
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 
-from co_cli.context.tool_categories import PATH_NORMALIZATION_TOOLS
 from co_cli.deps import CoDeps
+from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
 
 logger = logging.getLogger(__name__)
 

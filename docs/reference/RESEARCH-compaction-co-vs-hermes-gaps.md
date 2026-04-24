@@ -12,7 +12,7 @@ co-cli sources (read):
 - `co_cli/context/summarization.py`
 - `co_cli/context/orchestrate.py`
 - `co_cli/context/_http_error_classifier.py`
-- `co_cli/context/tool_categories.py`
+- `co_cli/tools/categories.py`
 - `co_cli/commands/_commands.py`
 - `co_cli/config/_compaction.py`, `_llm.py`, `_tools.py`
 - `co_cli/tools/tool_io.py`

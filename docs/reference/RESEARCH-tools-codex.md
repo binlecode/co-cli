@@ -26,9 +26,9 @@ Main co-cli files checked:
 - [agent.py](/Users/binle/workspace_genai/co-cli/co_cli/agent.py)
 - [deps.py](/Users/binle/workspace_genai/co-cli/co_cli/deps.py)
 - [orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py)
-- [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - [tool_output.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_output.py)
-- [tool_display.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_display.py)
+- [display.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/display.py)
 - [files.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/files.py)
 - [shell.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/shell.py)
 - [resource_lock.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/resource_lock.py)
@@ -216,7 +216,7 @@ Observed visibility controls:
 Observed in `co-cli`:
 
 - deferred approval collection in [orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py)
-- approval subject resolution in [tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py)
+- approval subject resolution in [approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - remembered session approvals in `deps.session.session_approval_rules`
 
 Observed approval subject categories:
@@ -243,7 +243,7 @@ Observed in `co-cli`:
 - `tool_output(...)` requires `ctx: RunContext[CoDeps]` as a keyword arg and reads the current tool's `max_result_size` from `ToolInfo` to persist oversized results
 - `tool_output_raw(...)` is the ctx-free variant for helper functions that lack a RunContext
 
-Observed display handling in [tool_display.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_display.py):
+Observed display handling in [display.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/display.py):
 
 - string results are passed through directly
 - dict payloads are summarized into compact key/value text

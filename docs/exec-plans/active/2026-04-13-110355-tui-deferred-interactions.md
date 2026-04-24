@@ -14,7 +14,7 @@ Current-state validation against the latest code:
 - The REPL is still a linear `PromptSession.prompt_async()` loop in [co_cli/main.py](/Users/binle/workspace_genai/co-cli/co_cli/main.py), not a custom prompt-toolkit `Application`.
 - The frontend contract in [co_cli/display/_core.py](/Users/binle/workspace_genai/co-cli/co_cli/display/_core.py) only exposes one blocking interaction primitive today: `prompt_approval(description) -> "y" | "n" | "a"`.
 - Deferred tool pauses already exist in [_collect_deferred_tool_approvals() in co_cli/context/orchestrate.py](/Users/binle/workspace_genai/co-cli/co_cli/context/orchestrate.py); resume state is already narrowed through `deps.runtime.resume_tool_names`.
-- Approval prompts already have a structured subject model in [co_cli/context/tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py): `ApprovalSubject` resolves scope, display text, and session-rememberability.
+- Approval prompts already have a structured subject model in [co_cli/tools/approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py): `ApprovalSubject` resolves scope, display text, and session-rememberability.
 - Session approval persistence is already intentionally limited to `deps.session.session_approval_rules` in [co_cli/deps.py](/Users/binle/workspace_genai/co-cli/co_cli/deps.py); there is no cross-session approval store today.
 - No current native tool provides structured deferred clarification. `request_user_input` is still absent from the active tool surface.
 
@@ -78,7 +78,7 @@ Out of scope:
   - `y` = once
   - `a` = remember for this session when the subject is rememberable
   - `n` = deny
-- Approval detail rendering must reuse the canonical approval-subject data in [co_cli/context/tool_approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/context/tool_approvals.py); do not fork parallel description logic inside the frontend.
+- Approval detail rendering must reuse the canonical approval-subject data in [co_cli/tools/approvals.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py); do not fork parallel description logic inside the frontend.
 - Input-phase terminal ownership must remain clean. Any new prompt flow has to respect `TerminalFrontend._input_active`, flush behavior, and cleanup guarantees in [co_cli/display/_core.py](/Users/binle/workspace_genai/co-cli/co_cli/display/_core.py).
 - Keep the first version narrow:
   - one question per `request_user_input` call
@@ -181,7 +181,7 @@ prerequisites: [TASK-1]
 
 ## TASK-3: Upgrade approval prompting to preview-first UX
 
-files: `co_cli/display/_core.py`, `co_cli/context/tool_approvals.py`, `tests/test_approvals.py`, `tests/test_display.py`, `tests/test_commands.py`
+files: `co_cli/display/_core.py`, `co_cli/tools/approvals.py`, `tests/test_approvals.py`, `tests/test_display.py`, `tests/test_commands.py`
 
 Implementation:
 - Keep `ApprovalSubject` as the single source of approval description truth.
