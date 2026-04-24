@@ -338,7 +338,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
     from pydantic_ai import RunContext as _RunContext
     from pydantic_ai.usage import RunUsage
 
-    from co_cli.context._history import _recall_prompt_text
+    from co_cli.context._prompt_text import _recall_prompt_text
     from co_cli.knowledge._frontmatter import parse_frontmatter
 
     steps: list[dict[str, Any]] = []

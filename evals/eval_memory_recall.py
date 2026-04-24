@@ -42,7 +42,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
-from co_cli.context._history import _recall_prompt_text
+from co_cli.context._prompt_text import _recall_prompt_text
 from co_cli.context.orchestrate import run_turn
 from co_cli.knowledge._store import KnowledgeStore
 

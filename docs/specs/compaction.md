@@ -630,7 +630,7 @@ One successful compaction per pressure event per turn.
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Number of consecutive low-yield proactive compactions before the anti-thrashing gate activates |
 
-**Non-configurable module constants** in `co_cli/context/_history.py`:
+**Non-configurable module constants** in `co_cli/context/_compaction.py`:
 
 | Constant | Value | Purpose |
 |---|---|---|
@@ -658,7 +658,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | File | Purpose |
 |---|---|
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
-| `co_cli/context/_history.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_build_call_id_to_args` (tool_call_id → args index for semantic markers); `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
+| `co_cli/context/_compaction.py` | Three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene entry point); `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `recover_overflow_history`; marker builders; `_build_call_id_to_args` (tool_call_id → args index for semantic markers); `_preserve_search_tool_breadcrumbs` with kept-id dedup; `_gather_compaction_context` (enrichment helper); constants `_MIN_RETAINED_TURN_GROUPS`, `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker(tool_name, args, content)` — per-tool 1-line markers that replace the static placeholder in `truncate_tool_results`; dispatch table covers all eight `COMPACTABLE_TOOLS` with a generic `[tool] k=v (N chars)` fallback. `is_cleared_marker(content)` public predicate — recognizes both the static fallback and per-tool markers (checks prefix against `COMPACTABLE_TOOLS`); used by tests and evals. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — public overflow predicate: HTTP 413 unconditional; HTTP 400 with explicit overflow evidence from `error.message`, flat `message`, `error.code`, or wrapped `error.metadata.raw`. Body parse failures fall back safely to `False`. |

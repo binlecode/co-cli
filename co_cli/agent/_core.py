@@ -12,7 +12,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.toolsets.combined import CombinedToolset
 
 from co_cli.config._core import Settings
-from co_cli.context._history import (
+from co_cli.context._compaction import (
     dedup_tool_results,
     enforce_batch_budget,
     summarize_history_window,

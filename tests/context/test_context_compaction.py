@@ -16,7 +16,7 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import Settings, settings
-from co_cli.context._history import (
+from co_cli.context._compaction import (
     maybe_run_pre_turn_hygiene,
     summarize_history_window,
 )
@@ -378,7 +378,7 @@ async def test_pre_turn_hygiene_compacts_oversized_history() -> None:
     msgs = _make_messages(10, body_chars=40_000)
     assert estimate_message_tokens(msgs) > _HYGIENE_THRESHOLD_TOKENS
     deps = _make_hygiene_deps()
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs)
     assert len(result) < len(msgs)
 
 
@@ -389,7 +389,7 @@ async def test_pre_turn_hygiene_no_op_below_threshold() -> None:
     msgs = _make_messages(4)
     assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
     deps = _make_hygiene_deps()
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs)
     assert result is msgs
 
 
@@ -406,7 +406,7 @@ async def test_pre_turn_hygiene_no_op_in_proactive_zone() -> None:
     assert estimate > _PROACTIVE_THRESHOLD_TOKENS
     assert estimate <= _HYGIENE_THRESHOLD_TOKENS
     deps = _make_hygiene_deps()
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs)
     assert result is msgs
 
 
@@ -416,7 +416,7 @@ async def test_pre_turn_hygiene_sets_history_compaction_applied() -> None:
     msgs = _make_messages(10, body_chars=40_000)
     deps = _make_hygiene_deps()
     assert deps.runtime.history_compaction_applied is False
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs)
     assert len(result) < len(msgs)
     assert deps.runtime.history_compaction_applied is True
 
@@ -427,7 +427,7 @@ async def test_pre_turn_hygiene_no_flag_when_no_compaction() -> None:
     msgs = _make_messages(4)
     deps = _make_hygiene_deps()
     assert deps.runtime.history_compaction_applied is False
-    await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    await maybe_run_pre_turn_hygiene(deps, msgs)
     assert deps.runtime.history_compaction_applied is False
 
 
@@ -436,7 +436,7 @@ async def test_pre_turn_hygiene_fail_open_unusable_budget() -> None:
     """When budget resolves to 0 (no context window known), hygiene skips and returns history unchanged."""
     msgs = _make_messages(10, body_chars=40_000)
     deps = _make_hygiene_deps(ctx_token_budget=0)
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs)
     assert result is msgs
 
 
@@ -448,7 +448,7 @@ async def test_pre_turn_hygiene_latest_user_turn_survives() -> None:
     # Append the final user turn (oversized history + final message)
     msgs.append(ModelRequest(parts=[UserPromptPart(content=last_user_content)]))
     deps = _make_hygiene_deps()
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs)
     assert len(result) < len(msgs)
     # Find last user message in compacted result
     last_user = None
@@ -484,7 +484,7 @@ async def test_pre_turn_hygiene_fires_when_reported_tokens_exceed_threshold() ->
     deps = _make_hygiene_deps()
     # Pass a provider-reported count that exceeds the threshold
     result = await maybe_run_pre_turn_hygiene(
-        deps, msgs, None, reported_input_tokens=_HYGIENE_THRESHOLD_TOKENS + 4_000
+        deps, msgs, reported_input_tokens=_HYGIENE_THRESHOLD_TOKENS + 4_000
     )
     assert len(result) < len(msgs), (
         "hygiene must fire when reported_input_tokens exceeds threshold, "
@@ -502,7 +502,7 @@ async def test_pre_turn_hygiene_no_op_first_turn_zero_reported() -> None:
     msgs = _make_messages(4)
     assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
     deps = _make_hygiene_deps()
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None, reported_input_tokens=0)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs, reported_input_tokens=0)
     assert result is msgs
 
 
@@ -522,7 +522,7 @@ async def test_pre_turn_hygiene_respects_min_context_length_floor() -> None:
     assert raw_threshold < estimate < floor, (
         f"fixture out of band: need raw_threshold ({raw_threshold}) < estimate ({estimate}) < floor ({floor})"
     )
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs)
     assert result is msgs
 
 
@@ -606,7 +606,7 @@ async def test_hygiene_not_blocked_by_anti_thrashing_gate() -> None:
     # Active gate: low-yield counter is already at the threshold.
     deps = _make_hygiene_deps()
     deps.runtime.consecutive_low_yield_proactive_compactions = 2
-    result = await maybe_run_pre_turn_hygiene(deps, msgs, None)
+    result = await maybe_run_pre_turn_hygiene(deps, msgs)
     # Gate must not block hygiene — compaction must fire
     assert len(result) < len(msgs)
     # Hygiene reset prevents stale gate state from blocking compaction.

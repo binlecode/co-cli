@@ -64,15 +64,12 @@ from co_cli.agent._core import build_agent
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import Settings, settings
 from co_cli.config._llm import LlmSettings
-from co_cli.context._history import (
+from co_cli.context._compaction import (
     _CLEARED_PLACEHOLDER,
     _CONTEXT_MAX_CHARS,
     _SUMMARY_MARKER_PREFIX,
     COMPACTABLE_KEEP_RECENT,
-    FILE_TOOLS,
     _gather_compaction_context,
-    _recall_prompt_text,
-    _safety_prompt_text,
     _summary_marker,
     emergency_compact,
     find_first_run_end,
@@ -82,6 +79,7 @@ from co_cli.context._history import (
     truncate_tool_results,
 )
 from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context._prompt_text import _recall_prompt_text, _safety_prompt_text
 from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
@@ -91,6 +89,7 @@ from co_cli.context.summarization import (
     resolve_compaction_budget,
     summarize_messages,
 )
+from co_cli.context.tool_categories import FILE_TOOLS
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import LlmModel, build_model
 from co_cli.tools.shell_backend import ShellBackend
@@ -392,7 +391,7 @@ def step_2_p1_truncate() -> bool:
         "web_fetch",
         "web_search",
     }
-    from co_cli.context._history import COMPACTABLE_TOOLS
+    from co_cli.context.tool_categories import COMPACTABLE_TOOLS
 
     if expected_compactable != COMPACTABLE_TOOLS:
         print(f"  FAIL: COMPACTABLE_TOOLS mismatch: {COMPACTABLE_TOOLS}")
@@ -730,7 +729,7 @@ def step_4_context_enrichment() -> bool:
     # circuit-breaker guard.
     import inspect
 
-    from co_cli.context._history import _summarize_dropped_messages
+    from co_cli.context._compaction import _summarize_dropped_messages
 
     source_lines = inspect.getsource(_summarize_dropped_messages).splitlines()
 
@@ -1942,7 +1941,7 @@ def step_11_edge_cases() -> bool:
         print("  PASS: 11c — no ToolCallParts: enrichment returns None")
 
     # 11d: History contains a prior static marker (from emergency compact)
-    from co_cli.context._history import _static_marker
+    from co_cli.context._compaction import _static_marker
 
     with_marker = [
         _user("turn 1"),

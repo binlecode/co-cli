@@ -15,15 +15,15 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
 from co_cli.config._compaction import CompactionSettings
+from co_cli.context._compaction import (
+    _find_last_turn_start,
+    dedup_tool_results,
+    truncate_tool_results,
+)
 from co_cli.context._dedup_tool_results import (
     build_dedup_part,
     dedup_key,
     is_dedup_candidate,
-)
-from co_cli.context._history import (
-    _find_last_turn_start,
-    dedup_tool_results,
-    truncate_tool_results,
 )
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend

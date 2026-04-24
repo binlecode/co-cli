@@ -138,6 +138,6 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/prompts/personalities/_loader.py` | soul seed, mindset, character memory, examples, critique loading |
 | `co_cli/prompts/personalities/_injector.py` | per-turn `personality-context` memory injection |
 | `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
-| `co_cli/context/_history.py` | three registered history processors (`truncate_tool_results`, `enforce_batch_budget`, `summarize_history_window`); `_recall_prompt_text` and `_safety_prompt_text` (dynamic instruction implementations); compaction trigger |
+| `co_cli/context/_prompt_text.py` | `_recall_prompt_text` and `_safety_prompt_text` — dynamic instruction implementations called via `agent.instructions()` wrappers in `agent/_instructions.py` |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |

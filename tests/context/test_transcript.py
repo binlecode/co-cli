@@ -231,7 +231,7 @@ def test_compact_boundary_ignored_for_small_files(tmp_path: Path) -> None:
 
 def test_persist_session_history_branches_child_session_on_compaction(tmp_path: Path) -> None:
     """Compacted history is persisted in a fresh child transcript linked to the parent."""
-    from co_cli.context._history import _SUMMARY_MARKER_PREFIX, _build_compaction_marker
+    from co_cli.context._compaction import _SUMMARY_MARKER_PREFIX, _build_compaction_marker
 
     sessions_dir = tmp_path / "sessions"
     parent = sessions_dir / "2026-04-11-T080000Z-parent001.jsonl"
@@ -265,7 +265,7 @@ def test_persist_session_history_branches_child_session_on_compaction(tmp_path: 
 
 def test_persist_session_history_preserves_todo_snapshot_in_child(tmp_path: Path) -> None:
     """A post-compaction todo snapshot round-trips through the child transcript."""
-    from co_cli.context._history import (
+    from co_cli.context._compaction import (
         _TODO_SNAPSHOT_PREFIX,
         _build_compaction_marker,
         _build_todo_snapshot,

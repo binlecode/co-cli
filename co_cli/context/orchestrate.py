@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
-from co_cli.context._history import maybe_run_pre_turn_hygiene
+from co_cli.context._compaction import maybe_run_pre_turn_hygiene
 from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.context.tool_approvals import (
@@ -523,7 +523,7 @@ async def _attempt_overflow_recovery(
     Returns ``(compacted, status_msg)``. ``compacted is None`` signals terminal
     overflow — happens only when ``len(groups) <= 2`` (first-turn structural limit).
     """
-    from co_cli.context._history import (
+    from co_cli.context._compaction import (
         emergency_recover_overflow_history,
         recover_overflow_history,
     )
@@ -569,7 +569,6 @@ async def run_turn(
     message_history = await maybe_run_pre_turn_hygiene(
         deps,
         message_history,
-        agent.model,
         reported_input_tokens=latest_response_input_tokens(message_history),
     )
     # Status before span — matches prior wrapper ordering

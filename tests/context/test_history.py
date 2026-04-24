@@ -23,7 +23,7 @@ from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
 from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import settings
-from co_cli.context._history import (
+from co_cli.context._compaction import (
     _SUMMARY_MARKER_PREFIX,
     _TODO_SNAPSHOT_PREFIX,
     _active_todos,
@@ -31,7 +31,6 @@ from co_cli.context._history import (
     _find_last_turn_start,
     _gather_prior_summaries,
     _gather_session_todos,
-    _recall_prompt_text,
     emergency_compact,
     emergency_recover_overflow_history,
     enforce_batch_budget,
@@ -43,6 +42,7 @@ from co_cli.context._history import (
     summarize_history_window,
     truncate_tool_results,
 )
+from co_cli.context._prompt_text import _recall_prompt_text
 from co_cli.context.orchestrate import _history_with_pending_user_input
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import build_model

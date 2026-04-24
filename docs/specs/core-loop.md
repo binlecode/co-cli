@@ -401,7 +401,8 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/_history.py` | three registered history processors (tool-output trim, batch-budget cap, sliding-window compaction); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `_recall_prompt_text` and `_safety_prompt_text` (dynamic instruction implementations, called via `agent.instructions()` wrappers in `_instructions.py`) |
+| `co_cli/context/_compaction.py` | three registered history processors (tool-output trim, batch-budget cap, sliding-window compaction); `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `plan_compaction_boundaries` (shared planner); overflow-recovery entry points (`recover_overflow_history`, `emergency_recover_overflow_history`) |
+| `co_cli/context/_prompt_text.py` | `_recall_prompt_text` and `_safety_prompt_text` — dynamic instruction implementations called via `agent.instructions()` wrappers in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent/_core.py` | main agent factory |
