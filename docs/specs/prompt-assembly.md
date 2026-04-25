@@ -6,7 +6,7 @@
 **Functional areas:**
 - Static instruction assembly (soul + rules + examples + critique)
 - Dynamic instruction callbacks (`@agent.instructions`)
-- Four registered history processors (truncate, batch-budget, compact, summarize) plus two preflight callables (safety injection, recall injection)
+- Registered history-processor pipeline and ordering, plus two preflight callables (safety injection, recall injection)
 - Append-only invariant for dynamic content (cache hygiene)
 - Approval resume reusing the main agent
 
@@ -30,7 +30,7 @@ The agent has no persistent state in model weights. Each request is reconstructe
 
 - **Static instructions** — assembled once at agent construction; never mutated during the session.
 - **Dynamic instruction layers** — `@agent.instructions` callbacks evaluated fresh on every model request.
-- **Message history** — transformed before every request by five ordered history processors.
+- **Message history** — transformed before every request by an ordered processor pipeline whose detailed behavior is owned by the relevant subsystem specs.
 
 ```mermaid
 flowchart TD

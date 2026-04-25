@@ -6,8 +6,8 @@
 **Functional areas:**
 - Turn orchestration and stream segment execution
 - Approval flow and approval-resume narrowing
-- History processors (compaction, summarization, context trimming)
-- Inline compaction with circuit breaker
+- History-processor orchestration and trigger points
+- Inline recovery and degradation routing for compaction-related failures
 - Retries and interrupt handling
 
 **Non-goals:**
@@ -20,7 +20,7 @@
 
 ---
 
-For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); memory/session persistence and recall live in [memory-knowledge.md](memory-knowledge.md); compaction mechanics in [compaction.md](compaction.md).
+For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); memory/session persistence and recall live in [memory-knowledge.md](memory-knowledge.md); compaction mechanics in [compaction.md](compaction.md).
 
 ## 1. Foreground Turn Flow
 
