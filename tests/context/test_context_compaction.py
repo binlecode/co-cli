@@ -594,23 +594,26 @@ async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> N
 
 
 @pytest.mark.asyncio
-async def test_hygiene_not_blocked_by_anti_thrashing_gate() -> None:
-    """Pre-turn hygiene compaction fires even when the anti-thrashing gate is active.
+async def test_hygiene_isolated_from_proactive_thrash_counter() -> None:
+    """Pre-turn hygiene neither reads nor writes the proactive thrash counter.
 
-    Gate is active with the low-yield counter at the threshold. Hygiene must still
-    compact because maybe_run_pre_turn_hygiene clears the counter before calling
-    summarize_history_window.
+    Hygiene fires regardless of gate state (no read), and a hygiene compaction
+    leaves the counter unchanged (no write — neither increment nor reset). The
+    counter is named and configured for proactive (M3) only; cross-layer writes
+    from hygiene (M0) would poison next-turn proactive and the orchestrate.py
+    UX nudge that gates on the same counter.
     """
     # 10 messages x 40_000 chars = 400_000 chars / 4 = 100_000 tokens > 88_000 threshold
     msgs = _make_messages(10, body_chars=40_000)
-    # Active gate: low-yield counter is already at the threshold.
     deps = _make_hygiene_deps()
+    # Pre-seed at the gate threshold so we observe both possible writes:
+    # the buggy increment (would push to 3) and the prior cross-layer reset (would zero).
     deps.runtime.consecutive_low_yield_proactive_compactions = 2
     result = await maybe_run_pre_turn_hygiene(deps, msgs)
-    # Gate must not block hygiene — compaction must fire
+    # Hygiene is not gated — compaction must fire even with the proactive gate active.
     assert len(result) < len(msgs)
-    # Hygiene reset prevents stale gate state from blocking compaction.
-    assert deps.runtime.consecutive_low_yield_proactive_compactions == 0
+    # Counter is untouched: neither incremented (low-yield bug) nor reset (cross-layer rescue).
+    assert deps.runtime.consecutive_low_yield_proactive_compactions == 2
 
 
 @pytest.mark.asyncio

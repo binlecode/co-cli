@@ -295,10 +295,12 @@ async def _run_window_compaction(
     budget: int,
     token_count: int,
 ) -> list[ModelMessage]:
-    """Plan boundaries, apply compaction, and update the anti-thrashing counter.
+    """Plan boundaries and apply compaction.
 
-    Called after the caller's gate checks have already passed. ``token_count``
-    is the caller's pre-computed estimate used for savings tracking.
+    Called after the caller's gate checks have already passed. Returns the
+    original ``messages`` reference unchanged when boundary planning fails;
+    otherwise returns a freshly-constructed list. Per-layer state updates
+    (e.g. proactive thrash tracking) are the caller's responsibility.
     """
     cfg = ctx.deps.config.compaction
     bounds = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
@@ -316,14 +318,6 @@ async def _run_window_compaction(
     result, summary_text = await apply_compaction(ctx, messages, bounds, announce=True)
     if summary_text is not None:
         log.info("Sliding window: summarised %d messages inline", dropped_count)
-
-    tokens_after = estimate_message_tokens(result)
-    savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
-    if savings < cfg.min_proactive_savings:
-        ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
-    else:
-        ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-
     return result
 
 
@@ -369,7 +363,17 @@ async def summarize_history_window(
         log.info("Compaction: proactive anti-thrashing gate active, skipping")
         return messages
 
-    return await _run_window_compaction(ctx, messages, budget, token_count)
+    result = await _run_window_compaction(ctx, messages, budget, token_count)
+    if result is messages:
+        return result
+
+    tokens_after = estimate_message_tokens(result)
+    savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
+    if savings < cfg.min_proactive_savings:
+        ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
+    else:
+        ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+    return result
 
 
 async def maybe_run_pre_turn_hygiene(
