@@ -241,6 +241,7 @@ async def recover_overflow_history(
         return None
 
     result, _ = await apply_compaction(ctx, messages, bounds, announce=False)
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
     return result
 
 
@@ -272,6 +273,7 @@ async def emergency_recover_overflow_history(
     ]
     ctx.deps.runtime.history_compaction_applied = True
     ctx.deps.runtime.compacted_in_current_turn = True
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
     log.warning(
         "Emergency overflow recovery: planner returned None; dropped all middle groups "
         "(len(groups)=%d).",

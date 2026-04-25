@@ -629,8 +629,6 @@ async def run_turn(
                                 recovery_history,
                             )
                             if compacted is not None:
-                                # Overflow recovery bypasses the proactive gate — reset savings ring.
-                                deps.runtime.consecutive_low_yield_proactive_compactions = 0
                                 turn_state.current_history = compacted
                                 turn_state.current_input = None
                                 frontend.on_status(status_msg)
