@@ -11,7 +11,7 @@ DEFAULT_WEB_HTTP_JITTER_RATIO = 0.2
 class WebSettings(BaseModel):
     """Web fetch domain policy and HTTP retry settings."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     fetch_allowed_domains: list[str] = Field(default=[])
     fetch_blocked_domains: list[str] = Field(default=[])

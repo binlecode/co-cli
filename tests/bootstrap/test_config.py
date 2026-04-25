@@ -375,3 +375,29 @@ def test_compaction_valid_ratio_ordering_loads(tmp_path):
     settings = load_config(_user_config_path=user_settings)
     assert settings.compaction.proactive_ratio == 0.70
     assert settings.compaction.hygiene_ratio == 0.85
+
+
+def test_unknown_top_level_key_rejected(tmp_path):
+    """Unknown top-level key in settings.json must fail with file attribution, not silently drop."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(json.dumps({"thme": "dark"}))
+    with pytest.raises(ValueError, match=str(user_settings)):
+        load_config(_user_config_path=user_settings)
+
+
+def test_unknown_nested_key_rejected(tmp_path):
+    """Unknown key inside a nested group must fail with file attribution, not silently drop."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(json.dumps({"llm": {"modle": "my-model"}}))
+    with pytest.raises(ValueError, match=str(user_settings)):
+        load_config(_user_config_path=user_settings)
+
+
+def test_unknown_mcp_server_key_rejected(tmp_path):
+    """Unknown key in an MCP server entry must fail, not silently drop."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(
+        json.dumps({"mcp_servers": {"my-server": {"command": "npx", "typo_key": "value"}}})
+    )
+    with pytest.raises(ValueError, match=str(user_settings)):
+        load_config(_user_config_path=user_settings)

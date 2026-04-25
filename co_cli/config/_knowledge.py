@@ -25,6 +25,8 @@ _RERANKER_DEFAULT_MODEL: dict[str, str] = {
 class LlmModelSettings(BaseModel):
     """A model+provider bundle for auxiliary model references (e.g. LLM reranker)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     model: str = Field(default="")
     api_params: dict[str, Any] = Field(default_factory=dict)
     provider: Literal["ollama", "gemini"]
@@ -39,7 +41,7 @@ class LlmModelSettings(BaseModel):
 class KnowledgeSettings(BaseModel):
     """Knowledge search, embedding, and chunking settings."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     search_backend: Literal["grep", "fts5", "hybrid"] = Field(
         default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND

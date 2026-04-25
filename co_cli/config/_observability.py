@@ -1,6 +1,6 @@
 """Observability configuration sub-model."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # Default patterns redacted from span attribute values before SQLite storage.
 _DEFAULT_REDACT_PATTERNS: list[str] = [
@@ -15,6 +15,8 @@ _DEFAULT_REDACT_PATTERNS: list[str] = [
 
 class ObservabilitySettings(BaseModel):
     """Controls JSONL file logging and OTel span redaction."""
+
+    model_config = ConfigDict(extra="forbid")
 
     log_level: str = Field(
         default="INFO",

@@ -84,6 +84,8 @@ class MCPServerSettings(BaseModel):
     Exactly one of ``command`` or ``url`` must be provided.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     command: str | None = Field(
         default=None,
         description="Executable to launch (e.g. 'npx', 'uvx', 'python'). Required for stdio transport.",
@@ -123,7 +125,7 @@ _DEFAULT_MCP_SERVERS: dict[str, MCPServerSettings] = {
 
 
 class Settings(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     # Nested sub-model groups
     llm: LlmSettings = Field(default_factory=LlmSettings)

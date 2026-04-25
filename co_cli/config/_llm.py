@@ -148,7 +148,7 @@ class InferenceSettings(BaseModel):
     (extra_body, thinking_config, num_ctx, etc.) belong in _INFERENCE_DEFAULTS.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     temperature: float | None = Field(default=None)
     top_p: float | None = Field(default=None)
@@ -163,7 +163,7 @@ class InferenceSettings(BaseModel):
 class LlmSettings(BaseModel):
     """LLM provider, model, and inference settings."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = Field(default=None)
     provider: Literal["ollama", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)

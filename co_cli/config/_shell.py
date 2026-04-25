@@ -57,7 +57,7 @@ DEFAULT_SHELL_SAFE_COMMANDS: list[str] = [
 class ShellSettings(BaseModel):
     """Shell execution limits and safe command list."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     max_timeout: int = Field(default=DEFAULT_SHELL_MAX_TIMEOUT)
     safe_commands: list[str] = Field(default=DEFAULT_SHELL_SAFE_COMMANDS)

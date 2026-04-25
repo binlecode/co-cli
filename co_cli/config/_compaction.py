@@ -10,7 +10,7 @@ class CompactionSettings(BaseModel):
     Threshold knobs are integers (token counts). All fields are overridable via settings.json.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     proactive_ratio: float = Field(
         default=0.75,

@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ToolsSettings(BaseModel):
     """Tool result persistence and spill thresholds."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     result_persist_chars: int = Field(
         default=50_000,
