@@ -106,25 +106,65 @@ def _circuit_breaker_should_skip(skip_count: int) -> bool:
     return skips_since_trip == 0 or skips_since_trip % _CIRCUIT_BREAKER_PROBE_EVERY != 0
 
 
-async def summarize_dropped_messages(
-    ctx: RunContext[CoDeps],
-    dropped: list[ModelMessage],
-    *,
-    announce: bool,
-    focus: str | None = None,
-) -> str | None:
-    """Summarize dropped messages when the model and circuit breaker allow it."""
+def _summarization_gate_open(ctx: RunContext[CoDeps]) -> bool:
+    """Decide whether the LLM summarizer may run for the next compaction pass.
+
+    Returns False when the model is absent or the circuit breaker requires a skip;
+    returns True otherwise. Increments ``compaction_skip_count`` on a breaker-blocked
+    skip so the existing probe cadence is preserved. The caller resets the count on a
+    successful summary and increments it on summarizer failure.
+    """
     if not ctx.deps.model:
         log.info("Compaction: model absent, using static marker")
-        return None
+        return False
 
     count = ctx.deps.runtime.compaction_skip_count
     if _circuit_breaker_should_skip(count):
         log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
         ctx.deps.runtime.compaction_skip_count += 1
-        return None
-    elif count >= 3:
+        return False
+    if count >= 3:
         log.info("Compaction: circuit breaker probe (count=%d)", count)
+    return True
+
+
+async def summarize_dropped_messages(
+    ctx: RunContext[CoDeps],
+    dropped: list[ModelMessage],
+    *,
+    focus: str | None = None,
+) -> str:
+    """Pure summarizer call over ``dropped`` — no gate, no fallback.
+
+    Callers must call ``_summarization_gate_open(ctx)`` first; this function assumes
+    a model is configured and the circuit breaker permits the LLM call. Raises on
+    summarizer failure (including ``asyncio.CancelledError``).
+    """
+    enrichment = gather_compaction_context(ctx, dropped)
+    return await summarize_messages(
+        ctx.deps,
+        dropped,
+        personality_active=bool(ctx.deps.config.personality),
+        context=enrichment,
+        focus=focus,
+    )
+
+
+async def _gated_summarize_or_none(
+    ctx: RunContext[CoDeps],
+    dropped: list[ModelMessage],
+    *,
+    announce: bool,
+    focus: str | None,
+) -> str | None:
+    """Run the summarizer if the gate is open, else return None.
+
+    Owns the user-visible "Compacting conversation..." announce print, the success
+    reset of ``compaction_skip_count``, and the fall-through-to-static-marker path
+    when the summarizer raises. Lets ``asyncio.CancelledError`` propagate.
+    """
+    if not _summarization_gate_open(ctx):
+        return None
 
     if announce:
         from co_cli.display._core import console
@@ -132,22 +172,15 @@ async def summarize_dropped_messages(
         console.print("[dim]Compacting conversation...[/dim]")
 
     try:
-        enrichment = gather_compaction_context(ctx, dropped)
-        summary_text = await summarize_messages(
-            ctx.deps,
-            dropped,
-            personality_active=bool(ctx.deps.config.personality),
-            context=enrichment,
-            focus=focus,
-        )
-        ctx.deps.runtime.compaction_skip_count = 0
-        return summary_text
+        summary_text = await summarize_dropped_messages(ctx, dropped, focus=focus)
     except Exception:
         log.warning(
             "Compaction summarization failed — falling back to static marker", exc_info=True
         )
         ctx.deps.runtime.compaction_skip_count += 1
         return None
+    ctx.deps.runtime.compaction_skip_count = 0
+    return summary_text
 
 
 def _preserve_search_tool_breadcrumbs(
@@ -187,7 +220,7 @@ async def apply_compaction(
     """
     head_end, tail_start, dropped_count = bounds
     dropped = messages[head_end:tail_start]
-    summary_text = await summarize_dropped_messages(ctx, dropped, announce=announce, focus=focus)
+    summary_text = await _gated_summarize_or_none(ctx, dropped, announce=announce, focus=focus)
     marker = build_compaction_marker(dropped_count, summary_text)
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
     result = [
@@ -368,6 +401,14 @@ async def summarize_history_window(
 
     if ctx.deps.runtime.consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window:
         log.info("Compaction: proactive anti-thrashing gate active, skipping")
+        if not ctx.deps.runtime.compaction_thrash_hint_emitted:
+            from co_cli.display._core import console
+
+            console.print(
+                "[dim]Compaction paused: recent passes freed too little context. "
+                "Run /compact to force a manual pass.[/dim]"
+            )
+            ctx.deps.runtime.compaction_thrash_hint_emitted = True
         return messages
 
     result = await _run_window_compaction(ctx, messages, budget)

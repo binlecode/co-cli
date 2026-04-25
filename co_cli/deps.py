@@ -148,6 +148,9 @@ class CoRuntimeState:
     # the configured minimum savings threshold.
     # Reset by compaction.py when overflow recovery or hygiene fires.
     consecutive_low_yield_proactive_compactions: int = 0
+    # One-shot guard for the user-visible "anti-thrashing gate active" console hint.
+    # Set the first time the gate trips per session so subsequent trips stay log-only.
+    compaction_thrash_hint_emitted: bool = False
     # Dedup key for enforce_batch_budget's "still over budget" warning.
     # Same batch repeated request-to-request emits the warning once, not per cycle.
     last_overbudget_batch_signature: tuple[str, ...] | None = None

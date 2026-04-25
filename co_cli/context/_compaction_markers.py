@@ -20,6 +20,9 @@ from pydantic_ai.messages import (
 from co_cli.deps import CoDeps
 from co_cli.tools.categories import FILE_TOOLS
 
+_FILE_PATHS_MAX_CHARS = 1_500
+_TODOS_MAX_CHARS = 1_500
+_PRIOR_SUMMARIES_MAX_CHARS = 2_000
 _CONTEXT_MAX_CHARS = 4_000
 
 SUMMARY_MARKER_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a previous conversation that ran out of context."
@@ -151,6 +154,13 @@ def _gather_prior_summaries(dropped: list[ModelMessage]) -> str | None:
     return "\n\n".join(summaries) if summaries else None
 
 
+def _cap(text: str | None, limit: int) -> str | None:
+    """Truncate ``text`` to ``limit`` chars; pass through None."""
+    if text is None:
+        return None
+    return text if len(text) <= limit else text[:limit]
+
+
 def gather_compaction_context(
     ctx: RunContext[CoDeps],
     dropped: list[ModelMessage],
@@ -162,14 +172,18 @@ def gather_compaction_context(
     2. Pending session todos from ``ctx.deps.session``
     3. Prior-summary text from ``dropped``
 
+    Each source is capped independently so a long entry in one source cannot
+    starve the others. The joined result is then bounded by ``_CONTEXT_MAX_CHARS``
+    as a final safety net.
+
     Returns None when no context was gathered.
     """
     context_parts = [
         p
         for p in [
-            _gather_file_paths(dropped),
-            _gather_session_todos(ctx.deps.session.session_todos),
-            _gather_prior_summaries(dropped),
+            _cap(_gather_file_paths(dropped), _FILE_PATHS_MAX_CHARS),
+            _cap(_gather_session_todos(ctx.deps.session.session_todos), _TODOS_MAX_CHARS),
+            _cap(_gather_prior_summaries(dropped), _PRIOR_SUMMARIES_MAX_CHARS),
         ]
         if p is not None
     ]

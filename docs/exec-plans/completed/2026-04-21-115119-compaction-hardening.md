@@ -223,14 +223,14 @@ Option B is the lower-risk change. Option A requires new runtime state.
 
 ## Task Breakdown
 
-| # | Task | Gap | Effort | Risk |
-|---|------|-----|--------|------|
-| T1 | Widen exception catch in `_summarize_dropped_messages` | 1 | XS | Low |
-| T2 | Add `model_validator` to `CompactionSettings` for ratio ordering | 2 | XS | Low |
-| T3 | Add re-execution guard text to `_summary_marker` and `_static_marker` | 3 | XS | Low |
-| T4 | Per-source caps in `_gather_compaction_context` | 4 | S | Low |
-| T5 | Semantic placeholder in `truncate_tool_results` | 5 | M | Low |
-| T6 | Anti-thrashing gate escape (option B: UI hint) | 6 | XS | Low |
+| # | Task | Gap | Effort | Risk | Status |
+|---|------|-----|--------|------|--------|
+| T1 | Widen exception catch in `_summarize_dropped_messages` | 1 | XS | Low | ✓ DONE — absorbed into later refactors |
+| T2 | Add `model_validator` to `CompactionSettings` for ratio ordering | 2 | XS | Low | → carried over |
+| T3 | Add re-execution guard text to `_summary_marker` and `_static_marker` | 3 | XS | Low | ✓ DONE — absorbed into later refactors |
+| T4 | Per-source caps in `_gather_compaction_context` | 4 | S | Low | → carried over |
+| T5 | Semantic placeholder in `truncate_tool_results` | 5 | M | Low | ✓ DONE — absorbed into later refactors |
+| T6 | Anti-thrashing gate escape (option B: UI hint) | 6 | XS | Low | → carried over |
 
 T1–T4 and T6 are all single-function changes. T5 requires building a `call_id → args` index
 inside `truncate_tool_results`. All changes are confined to `_history.py`, `_compaction.py`,
@@ -254,3 +254,47 @@ and `summarization.py`. No schema migrations. No new config required for T1–T5
 - Iterative summary evolution (hermes-style "In Progress → Completed" state machine) — prompt engineering, separate plan
 - Tool result deduplication (hash-based) — separate plan
 - Resolved vs Pending Questions split in summary sections — separate plan
+
+---
+
+## Delivery Summary (2026-04-25)
+
+This plan was never executed end-to-end. Three of the six tasks were absorbed into adjacent
+refactors and are now verifiable in the live code; three remain open and have been carried
+forward to `2026-04-25-115715-compaction-hardening-followup.md`. Closing this plan as
+partial-delivery to make the followup the single source of truth.
+
+**Verified in current code (T1, T3, T5):**
+
+- **T1 — broad `except Exception`** in `co_cli/context/compaction.py:145` (the function moved
+  from private `_summarize_dropped_messages` in `_history.py` to public
+  `summarize_dropped_messages` in `compaction.py` during the history-split refactor; the
+  widened catch came along with it).
+- **T3 — re-execution guard** present in both `static_marker`
+  (`co_cli/context/_compaction_markers.py:48`, "Do NOT repeat, redo, or re-execute…") and
+  `summary_marker` (`_compaction_markers.py:65–66`), plus a `[CONTEXT COMPACTION — REFERENCE
+  ONLY]` `SUMMARY_MARKER_PREFIX` that hardens the guard further.
+- **T5 — semantic placeholder** delivered as a full `co_cli/context/_tool_result_markers.py`
+  module with per-tool handlers (`shell`, `file_read`, `file_search`, `file_find`,
+  `web_search`, `web_fetch`, `knowledge_article_read`, `obsidian_read`) and a generic fallback,
+  wired into `truncate_tool_results` (`_history_processors.py`).
+
+**Deferred to followup (T2, T4, T6):**
+
+- **T2** — `CompactionSettings` has no `model_validator`; user-set
+  `proactive_ratio >= hygiene_ratio` still silently breaks hygiene.
+- **T4** — `gather_compaction_context` (`_compaction_markers.py:154–179`) still applies a
+  single `_CONTEXT_MAX_CHARS = 4_000` cap to the joined result; per-source caps not
+  implemented.
+- **T6** — anti-thrashing gate (`compaction.py:369–370`) still emits only a `log.info` when
+  active; no user-visible `/compact` hint surfaces.
+
+**Newly identified, carried into followup:**
+
+- `summarize_dropped_messages` in `compaction.py:109–150` mixes the summarization gate
+  (model presence, circuit-breaker check, skip-count bookkeeping) with the LLM call itself
+  and may return `None` from any of three branches. Followup plan extracts the gate so the
+  summarizer becomes a pure call.
+
+No version bump (no production code changed in this plan close-out — pure documentation
+move). The followup plan owns the next round of `pyproject.toml` versioning.

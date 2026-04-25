@@ -34,10 +34,12 @@ from co_cli.context.compaction import (
     emergency_recover_overflow_history,
     enforce_batch_budget,
     find_first_run_end,
+    gather_compaction_context,
     group_by_turn,
     groups_to_messages,
     plan_compaction_boundaries,
     recover_overflow_history,
+    summarize_dropped_messages,
     summarize_history_window,
     truncate_tool_results,
 )
@@ -130,6 +132,63 @@ async def test_summarize_history_window_static_marker_when_no_model():
     ]
     assert any("This session is being continued" in t for t in marker_texts)
     assert len(result) < len(msgs)
+
+
+# ---------------------------------------------------------------------------
+# Pure summarizer — raises on failure (orchestrator owns the fallback)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_summarize_dropped_messages_raises_on_summarizer_failure():
+    """Pure summarizer must not swallow exceptions. Before the TASK-4 split this
+    function quietly returned None on any failure; after the split, the caller
+    (_gated_summarize_or_none) owns the static-marker fallback and the pure
+    function is expected to raise so that contract is observable."""
+    msgs = _make_messages(6)
+    # No model on deps → summarize_messages reaches deps.model.model and raises.
+    # This exercises the post-refactor contract: gate would normally have stopped
+    # the call, but invoking the pure function directly must not silently no-op.
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+            compaction=CompactionSettings(min_context_length_tokens=0),
+        ),
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    with pytest.raises(AttributeError):
+        await summarize_dropped_messages(ctx, msgs, focus=None)
+
+
+# ---------------------------------------------------------------------------
+# Anti-thrashing gate — user-visible hint emits once per session
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_thrash_gate_emits_user_hint_once_per_session():
+    """First trip: console hint mentioning /compact is emitted and the one-shot flag flips.
+    Second trip: no further console output, flag stays True (hint suppressed)."""
+    from co_cli.display._core import console as _console
+
+    msgs = _make_messages(10)
+    ctx = _make_processor_ctx()
+    cfg = ctx.deps.config.compaction
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = cfg.proactive_thrash_window
+
+    assert ctx.deps.runtime.compaction_thrash_hint_emitted is False
+    with _console.capture() as cap_first:
+        first = await summarize_history_window(ctx, msgs)
+    assert first is msgs
+    assert ctx.deps.runtime.compaction_thrash_hint_emitted is True
+    assert "/compact" in cap_first.get()
+
+    with _console.capture() as cap_second:
+        second = await summarize_history_window(ctx, msgs)
+    assert second is msgs
+    assert ctx.deps.runtime.compaction_thrash_hint_emitted is True
+    assert "/compact" not in cap_second.get()
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +918,90 @@ def test_build_todo_snapshot_returns_none_when_empty_or_closed():
         )
         is None
     )
+
+
+def test_gather_compaction_context_caps_file_paths_without_starving_other_sources():
+    """An over-budget file-paths source must not consume the budget of todos / prior summaries.
+
+    Scenario: dropped contains many long file paths (file-paths section overflows its
+    1.5 KB cap) AND a long prior summary; session has active todos. Each source must
+    remain visible in the output, proving caps are independent of source order.
+    """
+    long_paths = [f"/extremely/long/path/segment/{idx}/" + "x" * 200 for idx in range(20)]
+    dropped: list = []
+    for path in long_paths:
+        dropped.append(
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_call_id=f"call-{path[-3:]}",
+                        tool_name="file_read",
+                        args={"path": path},
+                    )
+                ]
+            )
+        )
+    long_summary_body = "x" * 3000
+    dropped.append(
+        ModelRequest(
+            parts=[UserPromptPart(content=f"{SUMMARY_MARKER_PREFIX} {long_summary_body}")]
+        )
+    )
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+            compaction=CompactionSettings(min_context_length_tokens=0),
+        ),
+        session=CoSessionState(
+            session_todos=[{"content": "ship the followup", "status": "in_progress"}]
+        ),
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+    result = gather_compaction_context(ctx, dropped)
+    assert result is not None
+    assert "Files touched:" in result
+    assert "Active tasks:" in result
+    assert "ship the followup" in result
+    assert "Prior summary:" in result
+
+
+def test_gather_compaction_context_file_paths_section_respects_per_source_cap():
+    """Even when file-paths could exceed 4 KB on its own, the file-paths slice of the
+    output stops at the per-source 1.5 KB cap — the remaining budget is preserved for
+    later sources."""
+    long_paths = [f"/long/{idx}/" + "x" * 250 for idx in range(20)]
+    dropped: list = []
+    for path in long_paths:
+        dropped.append(
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_call_id=f"call-{path[-3:]}",
+                        tool_name="file_read",
+                        args={"path": path},
+                    )
+                ]
+            )
+        )
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(
+            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
+            compaction=CompactionSettings(min_context_length_tokens=0),
+        ),
+        session=CoSessionState(),
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+    result = gather_compaction_context(ctx, dropped)
+    assert result is not None
+    assert result.startswith("Files touched:")
+    # File-paths is the only source — joined output equals capped file-paths slice.
+    assert len(result) <= 1_500
 
 
 def test_build_todo_snapshot_emits_model_request_with_prefix():

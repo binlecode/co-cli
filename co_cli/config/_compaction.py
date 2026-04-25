@@ -1,6 +1,6 @@
 """Compaction settings sub-model."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CompactionSettings(BaseModel):
@@ -36,3 +36,14 @@ class CompactionSettings(BaseModel):
         default=2,
         description="Number of consecutive low-yield proactive compactions before the anti-thrashing gate activates.",
     )
+
+    @model_validator(mode="after")
+    def _check_ratio_ordering(self) -> "CompactionSettings":
+        if self.proactive_ratio >= self.hygiene_ratio:
+            raise ValueError(
+                "compaction.proactive_ratio must be strictly less than compaction.hygiene_ratio "
+                f"(got proactive_ratio={self.proactive_ratio}, hygiene_ratio={self.hygiene_ratio}). "
+                "The hygiene ratio is the safety net at run_turn entry; placing it at or below "
+                "the proactive ratio inverts the trigger order and breaks the safety-net semantics."
+            )
+        return self

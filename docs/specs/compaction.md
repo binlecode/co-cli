@@ -48,7 +48,7 @@ Compaction is **four mechanisms** operating at different lifecycle points, plus 
 | **M2 — Prepass recency clearing** | Before every `ModelRequestNode` | Individual parts in older messages | Irreversible for the session (content replaced with placeholder string) |
 | **M3 — Window compaction** | Before every `ModelRequestNode`, when `token_count > threshold` | Turn-group range | Lossy (middle replaced by summary marker) |
 
-**Helper:** `gather_compaction_context` — enrichment collected from sources that survive M2 (`ToolCallPart.args` for file paths, session todos, prior summaries). Called from inside `summarize_dropped_messages` so every LLM-capable compaction path inherits it.
+**Helper:** `gather_compaction_context` — enrichment collected from sources that survive M2 (`ToolCallPart.args` for file paths, session todos, prior summaries). Each source is capped independently before joining so a long entry in one cannot starve the others; the joined result is then bounded by a total cap. Called from inside the pure `summarize_dropped_messages` so every LLM-capable compaction path inherits it.
 
 **Emergency entry:** `recover_overflow_history` — same planner, same summarizer, same output shape as M3; gated by provider context-length rejection; one-shot per turn.
 
@@ -429,7 +429,7 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 async def apply_compaction(ctx, messages, bounds, *, announce, focus=None):
     head_end, tail_start, dropped_count = bounds
     dropped = messages[head_end:tail_start]
-    summary = await summarize_dropped_messages(
+    summary = await _gated_summarize_or_none(
         ctx, dropped, announce=announce, focus=focus
     )
     marker = build_compaction_marker(dropped_count, summary)   # summary or static
@@ -447,7 +447,12 @@ async def apply_compaction(ctx, messages, bounds, *, announce, focus=None):
     return result, summary
 ```
 
-`summarize_dropped_messages` owns the degradation policy: returns `None` when `ctx.deps.model is None`, when the circuit breaker is tripped (and not at probe cadence), or when the summarizer raises any non-cancellation `Exception`. `build_compaction_marker(dropped_count, None)` becomes `static_marker(dropped_count)`; with a non-None summary it becomes `summary_marker(dropped_count, summary)`. `asyncio.CancelledError` propagates because it inherits from `BaseException`, not `Exception`.
+The summarizer surface is split:
+- `_summarization_gate_open(ctx) -> bool` — predicate for "may we attempt the LLM?". Returns False when `ctx.deps.model is None` or the circuit breaker is tripped (and not at probe cadence); increments `compaction_skip_count` on a breaker-blocked skip.
+- `summarize_dropped_messages(ctx, dropped, *, focus)` — pure LLM call. Calls `gather_compaction_context` and `summarize_messages`. Raises on failure; `asyncio.CancelledError` propagates because it inherits from `BaseException`, not `Exception`.
+- `_gated_summarize_or_none(ctx, dropped, *, announce, focus)` — orchestration: invokes the gate, prints the announce line when open, calls the pure summarizer, resets `compaction_skip_count` on success, increments it on summarizer failure, and returns `None` so the caller falls back to `static_marker`.
+
+`build_compaction_marker(dropped_count, None)` becomes `static_marker(dropped_count)`; with a non-None summary it becomes `summary_marker(dropped_count, summary)`.
 
 `summarize_history_window` (proactive) wraps the call with anti-thrashing-savings tracking:
 
@@ -513,9 +518,9 @@ Rationale: three-strikes trips the breaker to avoid burning LLM cost when the pr
 | `ctx.deps.session.session_todos` → `_gather_session_todos` | Session state | Orthogonal to message history. |
 | Prior compaction summaries in `dropped` → `_gather_prior_summaries` | Dropped range only | Detected via prefix-match on `SUMMARY_MARKER_PREFIX` shared constant. |
 
-Output: single `str`, capped at 4000 chars, passed as `context=` argument to `summarize_messages`. Returns `None` when no sources yield content.
+Output: single `str`, with each source capped independently (file paths ~1.5 KB, todos ~1.5 KB, prior summaries ~2 KB) before joining and the joined result bounded at 4000 chars as a final safety net. Passed as `context=` argument to `summarize_messages`. Returns `None` when no sources yield content.
 
-**Invariant:** shared byte-for-byte across every LLM-capable compaction entry — proactive (M3), planner-based overflow recovery, and manual `/compact` — because all three route through `apply_compaction` → `summarize_dropped_messages` → `gather_compaction_context`.
+**Invariant:** shared byte-for-byte across every LLM-capable compaction entry — proactive (M3), planner-based overflow recovery, and manual `/compact` — because all three route through `apply_compaction` → `_gated_summarize_or_none` → `summarize_dropped_messages` → `gather_compaction_context`.
 
 ### 2.5 Overflow recovery — emergency entry
 
@@ -657,9 +662,9 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | File | Purpose |
 |---|---|
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
-| `co_cli/context/compaction.py` | Public entry surface: `summarize_history_window`; `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `recover_overflow_history`, `emergency_recover_overflow_history`, `emergency_compact`; `apply_compaction` (shared assembly helper used by M3, planner-based overflow recovery, and manual `/compact`); `summarize_dropped_messages` (degradation gate — broad `Exception` catch + circuit breaker); `_preserve_search_tool_breadcrumbs`; re-exports of the processors, boundary planner, and marker builders from the private submodules. Constant `_CIRCUIT_BREAKER_PROBE_EVERY`. |
+| `co_cli/context/compaction.py` | Public entry surface: `summarize_history_window`; `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `recover_overflow_history`, `emergency_recover_overflow_history`, `emergency_compact`; `apply_compaction` (shared assembly helper used by M3, planner-based overflow recovery, and manual `/compact`); `summarize_dropped_messages` (pure LLM call — raises on failure); `_summarization_gate_open` (model-presence + circuit-breaker predicate); `_gated_summarize_or_none` (gate + announce + summarizer + fallback orchestration owned by `apply_compaction`); `_preserve_search_tool_breadcrumbs`; re-exports of the processors, boundary planner, and marker builders from the private submodules. Constant `_CIRCUIT_BREAKER_PROBE_EVERY`. |
 | `co_cli/context/_compaction_boundaries.py` | `TurnGroup`; `group_by_turn`, `groups_to_messages`, `find_first_run_end`; `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `_find_last_turn_start`. Constant `_MIN_RETAINED_TURN_GROUPS`. |
-| `co_cli/context/_compaction_markers.py` | Marker builders (`static_marker`, `summary_marker`, `build_compaction_marker`, `build_todo_snapshot`); `gather_compaction_context` (enrichment helper — file paths, session todos, prior summaries); `SUMMARY_MARKER_PREFIX`, `TODO_SNAPSHOT_PREFIX`; constant `_CONTEXT_MAX_CHARS`. |
+| `co_cli/context/_compaction_markers.py` | Marker builders (`static_marker`, `summary_marker`, `build_compaction_marker`, `build_todo_snapshot`); `gather_compaction_context` (enrichment helper — file paths, session todos, prior summaries; per-source caps + total cap); `_cap` (per-source truncation helper); `SUMMARY_MARKER_PREFIX`, `TODO_SNAPSHOT_PREFIX`; constants `_FILE_PATHS_MAX_CHARS`, `_TODOS_MAX_CHARS`, `_PRIOR_SUMMARIES_MAX_CHARS`, `_CONTEXT_MAX_CHARS`. |
 | `co_cli/context/_history_processors.py` | Three registered history processors (`dedup_tool_results`, `truncate_tool_results`, `enforce_batch_budget`); `_build_call_id_to_args` (tool_call_id → args index for semantic markers); constants `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker(tool_name, args, content)` — per-tool 1-line markers that replace the static placeholder in `truncate_tool_results`; dispatch table covers all eight `COMPACTABLE_TOOLS` with a generic `[tool] k=v (N chars)` fallback. `is_cleared_marker(content)` public predicate — recognizes both the static fallback and per-tool markers (checks prefix against `COMPACTABLE_TOOLS`); used by tests and evals. |
 | `co_cli/context/summarization.py` | `estimate_message_tokens` (counts `ToolCallPart.args` + `(dict, list)` content); `latest_response_input_tokens`; `resolve_compaction_budget`; `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `_SUMMARIZE_PROMPT`; security system prompt; personality addendum. |

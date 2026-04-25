@@ -722,44 +722,56 @@ def step_4_context_enrichment() -> bool:
     else:
         print("  PASS: context was None (sources below threshold)")
 
-    # 4h: Enrichment only runs on LLM path (not static-marker fallback)
-    # Verify structurally: gather_compaction_context appears in the source of
-    # summarize_dropped_messages AFTER both the model-absence guard and the
-    # circuit-breaker guard.
+    # 4h: Enrichment only runs on LLM path (not static-marker fallback).
+    # Verify structurally: in _gated_summarize_or_none, the gate predicate
+    # (_summarization_gate_open — which contains both the model-absence guard and the
+    # circuit-breaker guard) is invoked before the call into summarize_dropped_messages
+    # (where enrichment / gather_compaction_context lives).
     import inspect
 
-    from co_cli.context.compaction import summarize_dropped_messages
+    from co_cli.context.compaction import (
+        _gated_summarize_or_none,
+        _summarization_gate_open,
+        summarize_dropped_messages,
+    )
 
-    source_lines = inspect.getsource(summarize_dropped_messages).splitlines()
+    gate_source = inspect.getsource(_summarization_gate_open).splitlines()
+    pure_source = inspect.getsource(summarize_dropped_messages).splitlines()
+    orch_source = inspect.getsource(_gated_summarize_or_none).splitlines()
 
-    def _first_line(keyword: str) -> int | None:
-        for idx, line in enumerate(source_lines):
+    def _first_line(lines: list[str], keyword: str) -> int | None:
+        for idx, line in enumerate(lines):
             if keyword in line:
                 return idx
         return None
 
-    enrichment_line = _first_line("gather_compaction_context")
-    model_guard_line = _first_line("not ctx.deps.model")
-    breaker_line = _first_line("compaction_skip_count")
-    if enrichment_line is None or model_guard_line is None or breaker_line is None:
+    model_guard_line = _first_line(gate_source, "not ctx.deps.model")
+    breaker_line = _first_line(gate_source, "compaction_skip_count")
+    enrichment_line = _first_line(pure_source, "gather_compaction_context")
+    gate_call_line = _first_line(orch_source, "_summarization_gate_open")
+    summarize_call_line = _first_line(orch_source, "summarize_dropped_messages")
+    if (
+        enrichment_line is None
+        or model_guard_line is None
+        or breaker_line is None
+        or gate_call_line is None
+        or summarize_call_line is None
+    ):
         print(
-            f"  FAIL: cannot locate enrichment (line {enrichment_line}), "
-            f"model guard (line {model_guard_line}), or breaker (line {breaker_line}) in source"
+            f"  FAIL: cannot locate enrichment (L{enrichment_line}) in summarize_dropped_messages, "
+            f"or model guard (L{model_guard_line}) / breaker (L{breaker_line}) in _summarization_gate_open, "
+            f"or gate call (L{gate_call_line}) / summarize call (L{summarize_call_line}) in _gated_summarize_or_none"
         )
         passed = False
-    elif enrichment_line < model_guard_line:
+    elif gate_call_line >= summarize_call_line:
         print(
-            f"  FAIL: enrichment (L{enrichment_line}) runs BEFORE model-absence guard (L{model_guard_line})"
-        )
-        passed = False
-    elif enrichment_line < breaker_line:
-        print(
-            f"  FAIL: enrichment (L{enrichment_line}) runs BEFORE circuit-breaker (L{breaker_line})"
+            f"  FAIL: gate call (L{gate_call_line}) does not precede summarize call (L{summarize_call_line}) in _gated_summarize_or_none"
         )
         passed = False
     else:
         print(
-            f"  PASS: enrichment deferred to LLM branch (L{enrichment_line} after guards L{model_guard_line}, L{breaker_line})"
+            f"  PASS: enrichment deferred to LLM branch — gate (L{gate_call_line}) precedes "
+            f"summarizer (L{summarize_call_line}); guards (L{model_guard_line}, L{breaker_line}) live in gate"
         )
 
     return passed
