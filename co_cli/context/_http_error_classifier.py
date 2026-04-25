@@ -8,11 +8,7 @@ from pydantic_ai.exceptions import ModelHTTPError
 logger = logging.getLogger(__name__)
 
 _OVERFLOW_PHRASES = (
-    # Preserved from prior co-cli contract
     "prompt is too long",
-    "context_length_exceeded",
-    "maximum context length",
-    # Broader explicit overflow evidence (ported from Hermes reference)
     "context length",
     "context size",
     "context window",

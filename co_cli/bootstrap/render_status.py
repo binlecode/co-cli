@@ -173,7 +173,7 @@ def check_security(
                 SecurityCheckResult(
                     severity="warn",
                     check_id="user-config-permissions",
-                    detail=f"~/.co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
+                    detail=f"{user_cfg} permissions are {oct(mode)} (expected 0o600)",
                     remediation=f"chmod 600 {user_cfg}",
                 )
             )
