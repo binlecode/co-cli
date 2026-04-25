@@ -127,13 +127,13 @@ class CoRuntimeState:
       turn_usage, tool_progress_callback, resume_tool_names,
       history_compaction_applied, compacted_in_current_turn
     Cross-turn (managed by orchestration layer):
-      active_skill_name, compaction_failure_count,
+      active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions, last_overbudget_batch_signature,
       extraction_task
     """
 
     # Circuit breaker for inline compaction summarisation.
-    compaction_failure_count: int = 0
+    compaction_skip_count: int = 0
     turn_usage: RunUsage | None = None
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
     active_skill_name: str | None = None

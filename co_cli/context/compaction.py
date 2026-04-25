@@ -85,24 +85,24 @@ log = logging.getLogger(__name__)
 
 
 _CIRCUIT_BREAKER_PROBE_EVERY: int = 10
-"""When the circuit breaker is tripped (failure_count >= 3), attempt the LLM anyway
+"""When the circuit breaker is tripped (skip_count >= 3), attempt the LLM anyway
 every Nth subsequent trigger. A success resets the counter to 0. Prevents
 permanent bypass from a transient provider hiccup that happened to hit 3 in a
-row early in the session. First probe fires at failure_count == 3 + N (i.e. after
+row early in the session. First probe fires at skip_count == 3 + N (i.e. after
 N skips), then every N skips thereafter.
 """
 
 
-def _circuit_breaker_should_skip(failure_count: int) -> bool:
-    """Return True when the circuit breaker requires a skip at this failure count.
+def _circuit_breaker_should_skip(skip_count: int) -> bool:
+    """Return True when the circuit breaker requires a skip at this miss count.
 
-    Trips at failure_count >= 3. Once tripped, allows a probe every
-    _CIRCUIT_BREAKER_PROBE_EVERY skips: first probe at failure_count == 13,
+    Trips at skip_count >= 3. Once tripped, allows a probe every
+    _CIRCUIT_BREAKER_PROBE_EVERY skips: first probe at skip_count == 13,
     then 23, 33, and so on. At any other tripped count, callers must skip.
     """
-    if failure_count < 3:
+    if skip_count < 3:
         return False
-    skips_since_trip = failure_count - 3
+    skips_since_trip = skip_count - 3
     return skips_since_trip == 0 or skips_since_trip % _CIRCUIT_BREAKER_PROBE_EVERY != 0
 
 
@@ -118,10 +118,10 @@ async def summarize_dropped_messages(
         log.info("Compaction: model absent, using static marker")
         return None
 
-    count = ctx.deps.runtime.compaction_failure_count
+    count = ctx.deps.runtime.compaction_skip_count
     if _circuit_breaker_should_skip(count):
         log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
-        ctx.deps.runtime.compaction_failure_count += 1
+        ctx.deps.runtime.compaction_skip_count += 1
         return None
     elif count >= 3:
         log.info("Compaction: circuit breaker probe (count=%d)", count)
@@ -140,13 +140,13 @@ async def summarize_dropped_messages(
             context=enrichment,
             focus=focus,
         )
-        ctx.deps.runtime.compaction_failure_count = 0
+        ctx.deps.runtime.compaction_skip_count = 0
         return summary_text
     except Exception:
         log.warning(
             "Compaction summarization failed — falling back to static marker", exc_info=True
         )
-        ctx.deps.runtime.compaction_failure_count += 1
+        ctx.deps.runtime.compaction_skip_count += 1
         return None
 
 
@@ -197,6 +197,7 @@ async def apply_compaction(
         *_preserve_search_tool_breadcrumbs(dropped),
         *messages[tail_start:],
     ]
+    # Deferred: compaction ↔ distiller circular import.
     from co_cli.knowledge._distiller import extract_at_compaction_boundary
 
     await extract_at_compaction_boundary(messages, result, ctx.deps)
@@ -281,6 +282,7 @@ async def emergency_recover_overflow_history(
         *_preserve_search_tool_breadcrumbs(dropped),
         *groups_to_messages([groups[-1]]),
     ]
+    # Deferred: compaction ↔ distiller circular import.
     from co_cli.knowledge._distiller import extract_at_compaction_boundary
 
     await extract_at_compaction_boundary(messages, result, ctx.deps)
@@ -300,7 +302,7 @@ async def _run_window_compaction(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
     budget: int,
-) -> list[ModelMessage]:
+) -> list[ModelMessage] | None:
     """Plan boundaries and apply compaction.
 
     Called after the caller's gate checks have already passed. Returns the
@@ -312,14 +314,14 @@ async def _run_window_compaction(
     bounds = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
     if bounds is None:
         log.warning(
-            "Compaction: boundary planning returned None "
-            "(tail group exceeds budget). budget=%d tail_fraction=%.2f — no compaction possible.",
+            "Compaction: boundary planning returned None. "
+            "budget=%d tail_fraction=%.2f — no compaction possible.",
             budget,
             cfg.tail_fraction,
         )
-        return messages
+        return None
 
-    dropped_count = bounds[2]
+    _, _, dropped_count = bounds
     result, summary_text = await apply_compaction(ctx, messages, bounds, announce=True)
     if summary_text is not None:
         log.info("Sliding window: summarised %d messages inline", dropped_count)
@@ -369,8 +371,8 @@ async def summarize_history_window(
         return messages
 
     result = await _run_window_compaction(ctx, messages, budget)
-    if result is messages:
-        return result
+    if result is None:
+        return messages
 
     tokens_after = estimate_message_tokens(result)
     savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
@@ -406,7 +408,8 @@ async def maybe_run_pre_turn_hygiene(
             return message_history
         raw_model = deps.model.model if deps.model else None
         ctx = RunContext(deps=deps, model=raw_model, usage=RunUsage())
-        return await _run_window_compaction(ctx, message_history, budget)
+        result = await _run_window_compaction(ctx, message_history, budget)
+        return result if result is not None else message_history
     except Exception:
         log.warning("Pre-turn hygiene compaction failed — skipping", exc_info=True)
         return message_history

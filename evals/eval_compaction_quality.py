@@ -740,7 +740,7 @@ def step_4_context_enrichment() -> bool:
 
     enrichment_line = _first_line("gather_compaction_context")
     model_guard_line = _first_line("not ctx.deps.model")
-    breaker_line = _first_line("compaction_failure_count")
+    breaker_line = _first_line("compaction_skip_count")
     if enrichment_line is None or model_guard_line is None or breaker_line is None:
         print(
             f"  FAIL: cannot locate enrichment (line {enrichment_line}), "
@@ -1627,7 +1627,7 @@ async def step_9_circuit_breaker() -> bool:
     for i in range(6):
         msgs += [_user(f"turn {i}"), _assistant(f"response {i} " + "x" * 200)]
 
-    # Set compaction_failure_count = 3 → circuit breaker active
+    # Set compaction_skip_count = 3 → circuit breaker active
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
             provider="ollama",
@@ -1643,7 +1643,7 @@ async def step_9_circuit_breaker() -> bool:
         model=_LLM_MODEL,
         session=CoSessionState(),
     )
-    deps.runtime.compaction_failure_count = 3
+    deps.runtime.compaction_skip_count = 3
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
     len_pre = len(msgs)
@@ -1670,7 +1670,7 @@ async def step_9_circuit_breaker() -> bool:
     )
 
     if has_summary:
-        print("  FAIL: LLM summary produced despite circuit breaker (failure_count=3)")
+        print("  FAIL: LLM summary produced despite circuit breaker (skip_count=3)")
         passed = False
     elif not has_static:
         print("  FAIL: no static marker found")
@@ -1679,13 +1679,13 @@ async def step_9_circuit_breaker() -> bool:
         print("  PASS: static marker used (no LLM call)")
 
     # Verify failure count incremented by 1 (circuit breaker tracks skip count)
-    if deps.runtime.compaction_failure_count != 4:
+    if deps.runtime.compaction_skip_count != 4:
         print(
-            f"  FAIL: failure_count should be 4 (3 + 1 skip increment), got {deps.runtime.compaction_failure_count}"
+            f"  FAIL: skip_count should be 4 (3 + 1 skip increment), got {deps.runtime.compaction_skip_count}"
         )
         passed = False
     else:
-        print("  PASS: failure_count incremented to 4 (circuit breaker skip tracking)")
+        print("  PASS: skip_count incremented to 4 (circuit breaker skip tracking)")
 
     # Verify compaction still reduces message count
     print(f"  PASS: messages reduced {len_pre} → {len(result)}")
