@@ -11,7 +11,7 @@ from opentelemetry import trace
 if TYPE_CHECKING:
     from co_cli.knowledge._store import KnowledgeStore
 
-from co_cli.config._core import Settings, settings
+from co_cli.config._core import Settings, get_settings
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display._core import TerminalFrontend
 from co_cli.memory.session import find_latest_session, new_session_path
@@ -204,7 +204,7 @@ async def create_deps(
     from co_cli.agent._mcp import discover_mcp_tools
     from co_cli.llm._factory import build_model
 
-    config = copy.deepcopy(settings)
+    config = copy.deepcopy(get_settings())
     if theme_override:
         config.theme = theme_override
     cwd = Path.cwd()

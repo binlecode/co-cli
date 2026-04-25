@@ -51,30 +51,25 @@ from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
 
 _VERSION = project_info().version
-
-# Python logging + OTel spans → co-cli.jsonl (single rotating JSONL file)
-setup_file_logging(
-    log_dir=LOGS_DIR,
-    level=settings.observability.log_level,
-    max_size_mb=settings.observability.log_max_size_mb,
-    backup_count=settings.observability.log_backup_count,
-)
-
-# OTel spans → co-cli-logs.db (SQLite) + co-cli.jsonl (via JsonSpanExporter propagation)
-_tracer_provider = setup_tracer_provider(
-    service_name="co-cli",
-    service_version=_VERSION,
-    redact_patterns=settings.observability.redact_patterns,
-)
-
-# Enable pydantic-ai instrumentation for all agents
-# Using version=3 for latest OTel GenAI semantic conventions (spec compliant)
-Agent.instrument_all(InstrumentationSettings(tracer_provider=_tracer_provider, version=3))
-
-# Suppress noisy third-party loggers to WARNING; co_cli.* loggers are not affected
 _SUPPRESS_LOGGERS = ["openai", "httpx", "anthropic", "hpack"]
-for _logger_name in _SUPPRESS_LOGGERS:
-    logging.getLogger(_logger_name).setLevel(logging.WARNING)
+
+
+def _setup_observability() -> None:
+    setup_file_logging(
+        log_dir=LOGS_DIR,
+        level=settings.observability.log_level,
+        max_size_mb=settings.observability.log_max_size_mb,
+        backup_count=settings.observability.log_backup_count,
+    )
+    tracer_provider = setup_tracer_provider(
+        service_name="co-cli",
+        service_version=_VERSION,
+        redact_patterns=settings.observability.redact_patterns,
+    )
+    Agent.instrument_all(InstrumentationSettings(tracer_provider=tracer_provider, version=3))
+    for logger_name in _SUPPRESS_LOGGERS:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
 
 app = typer.Typer(
     help="Co — personal AI operator · local-first · approval-first",
@@ -355,8 +350,8 @@ async def _chat_loop(
 
 def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None) -> None:
     """Resolve startup options and enter the interactive chat loop."""
-    if theme:
-        set_theme(theme)
+    _setup_observability()
+    set_theme(theme or settings.theme)
     # Resolve effective mode: explicit flag > --verbose alias > persistent config default
     if reasoning_display is not None:
         if reasoning_display not in VALID_REASONING_DISPLAY_MODES:

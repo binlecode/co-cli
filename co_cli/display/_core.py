@@ -13,7 +13,6 @@ from rich.rule import Rule
 from rich.text import Text
 from rich.theme import Theme
 
-from co_cli.config._core import settings
 from co_cli.tools.approvals import ApprovalSubject
 
 if TYPE_CHECKING:
@@ -48,7 +47,7 @@ _THEMES: dict[str, dict[str, str]] = {
 
 # -- Console (single instance, themed) --------------------------------------
 
-console = Console(theme=Theme(_THEMES.get(settings.theme, _THEMES["light"])))
+console = Console(theme=Theme(_THEMES["light"]))
 
 # -- Indicators ------------------------------------------------------------
 

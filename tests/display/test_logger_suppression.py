@@ -15,7 +15,7 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
 
 
 def test_third_party_loggers_suppressed_to_warning(tmp_path: Path) -> None:
-    """Importing co_cli.main sets all listed third-party loggers to WARNING."""
+    """_setup_observability() sets all listed third-party loggers to WARNING."""
     env = _base_env(tmp_path)
 
     proc = subprocess.run(
@@ -23,7 +23,9 @@ def test_third_party_loggers_suppressed_to_warning(tmp_path: Path) -> None:
             sys.executable,
             "-c",
             (
-                "import co_cli.main, logging; "
+                "from co_cli.main import _setup_observability; "
+                "_setup_observability(); "
+                "import logging; "
                 "assert logging.getLogger('openai').level == logging.WARNING, 'openai'; "
                 "assert logging.getLogger('httpx').level == logging.WARNING, 'httpx'; "
                 "assert logging.getLogger('anthropic').level == logging.WARNING, 'anthropic'; "
@@ -42,7 +44,7 @@ def test_third_party_loggers_suppressed_to_warning(tmp_path: Path) -> None:
 
 
 def test_co_cli_loggers_not_suppressed(tmp_path: Path) -> None:
-    """co_cli.* loggers must not be forced to WARNING by third-party suppression."""
+    """co_cli.* loggers must not be forced to WARNING by _setup_observability()."""
     env = _base_env(tmp_path)
 
     proc = subprocess.run(
@@ -50,7 +52,9 @@ def test_co_cli_loggers_not_suppressed(tmp_path: Path) -> None:
             sys.executable,
             "-c",
             (
-                "import co_cli.main, logging; "
+                "from co_cli.main import _setup_observability; "
+                "_setup_observability(); "
+                "import logging; "
                 "assert logging.getLogger('co_cli').level == logging.NOTSET, "
                 "'co_cli logger must not be forced to WARNING'"
             ),
