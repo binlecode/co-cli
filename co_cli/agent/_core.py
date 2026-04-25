@@ -15,7 +15,7 @@ from co_cli.config._core import Settings
 from co_cli.context.compaction import (
     dedup_tool_results,
     enforce_batch_budget,
-    summarize_history_window,
+    proactive_window_processor,
     truncate_tool_results,
 )
 from co_cli.deps import CoDeps, ToolInfo
@@ -143,7 +143,7 @@ def build_agent(
                 dedup_tool_results,
                 truncate_tool_results,
                 enforce_batch_budget,
-                summarize_history_window,
+                proactive_window_processor,
             ],
             toolsets=[tool_registry.toolset],
             capabilities=[CoToolLifecycle()],

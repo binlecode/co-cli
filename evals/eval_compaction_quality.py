@@ -75,7 +75,7 @@ from co_cli.context.compaction import (
     gather_compaction_context,
     group_by_turn,
     plan_compaction_boundaries,
-    summarize_history_window,
+    proactive_window_processor,
     summary_marker,
     truncate_tool_results,
 )
@@ -1061,7 +1061,7 @@ async def step_6_full_chain() -> bool:
     print("    PASS")
 
     # --- P5 ---
-    print("\n  [P5] summarize_history_window (LLM)")
+    print("\n  [P5] proactive_window_processor (LLM)")
     # Preview the enrichment context that P5 will assemble (before the LLM call)
     _p5_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     _p5_budget = resolve_compaction_budget(ctx.deps.config, _p5_ctx_window)
@@ -1085,7 +1085,7 @@ async def step_6_full_chain() -> bool:
     len_pre_p5 = len(msgs)
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            msgs = await summarize_history_window(ctx, msgs)
+            msgs = await proactive_window_processor(ctx, msgs)
     except TimeoutError:
         print("    FAIL: timed out")
         return False
@@ -1380,7 +1380,7 @@ async def step_7_multi_cycle() -> bool:
     print("    PASS")
 
     # --- P5 ---
-    print("\n  [P5] summarize_history_window (LLM)")
+    print("\n  [P5] proactive_window_processor (LLM)")
     # Preview enrichment context (same as Step 6)
     _p5b_ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     _p5b_budget = resolve_compaction_budget(ctx.deps.config, _p5b_ctx_window)
@@ -1406,7 +1406,7 @@ async def step_7_multi_cycle() -> bool:
     len_pre = len(msgs)
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            msgs = await summarize_history_window(ctx, msgs)
+            msgs = await proactive_window_processor(ctx, msgs)
     except TimeoutError:
         print("    FAIL: timed out")
         return False
@@ -1659,7 +1659,7 @@ async def step_9_circuit_breaker() -> bool:
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
     len_pre = len(msgs)
-    result = await summarize_history_window(ctx, msgs)
+    result = await proactive_window_processor(ctx, msgs)
 
     if len(result) >= len_pre:
         print(

@@ -38,9 +38,9 @@ from co_cli.context.compaction import (
     group_by_turn,
     groups_to_messages,
     plan_compaction_boundaries,
+    proactive_window_processor,
     recover_overflow_history,
     summarize_dropped_messages,
-    summarize_history_window,
     truncate_tool_results,
 )
 from co_cli.context.orchestrate import _history_with_pending_user_input
@@ -112,17 +112,17 @@ def _make_messages(n: int) -> list:
 
 
 # ---------------------------------------------------------------------------
-# summarize_history_window — inline summarisation and guard paths
+# proactive_window_processor — inline summarisation and guard paths
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_summarize_history_window_static_marker_when_no_model():
+async def test_proactive_window_processor_static_marker_when_no_model():
     """model=None → static marker injected (guard path, no LLM call)."""
     msgs = _make_messages(10)
     ctx = _make_processor_ctx()
     # model is None by default — guard skips LLM, uses static marker
-    result = await summarize_history_window(ctx, msgs)
+    result = await proactive_window_processor(ctx, msgs)
     marker_texts = [
         p.content
         for m in result
@@ -179,13 +179,13 @@ async def test_thrash_gate_emits_user_hint_once_per_session():
 
     assert ctx.deps.runtime.compaction_thrash_hint_emitted is False
     with _console.capture() as cap_first:
-        first = await summarize_history_window(ctx, msgs)
+        first = await proactive_window_processor(ctx, msgs)
     assert first is msgs
     assert ctx.deps.runtime.compaction_thrash_hint_emitted is True
     assert "/compact" in cap_first.get()
 
     with _console.capture() as cap_second:
-        second = await summarize_history_window(ctx, msgs)
+        second = await proactive_window_processor(ctx, msgs)
     assert second is msgs
     assert ctx.deps.runtime.compaction_thrash_hint_emitted is True
     assert "/compact" not in cap_second.get()
@@ -211,7 +211,7 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
     # count=4: skips_since_trip=1, not a probe cadence point → skip
     deps.runtime.compaction_skip_count = 4
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    result = await summarize_history_window(ctx, msgs)
+    result = await proactive_window_processor(ctx, msgs)
     marker_texts = [
         p.content
         for m in result
@@ -241,7 +241,7 @@ async def test_circuit_breaker_first_trip_is_skip():
     # count=3: skips_since_trip=0 → skip (first probe not due until count==13)
     deps.runtime.compaction_skip_count = 3
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    result = await summarize_history_window(ctx, msgs)
+    result = await proactive_window_processor(ctx, msgs)
     marker_texts = [
         p.content
         for m in result
@@ -272,9 +272,9 @@ async def test_circuit_breaker_probes_at_cadence():
     deps.runtime.compaction_skip_count = 13
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
-    # summarize_history_window chains two sequential LLM calls (summarizer +
+    # proactive_window_processor chains two sequential LLM calls (summarizer +
     # memory extraction); pytest-timeout=120s is the safety net.
-    await summarize_history_window(ctx, msgs)
+    await proactive_window_processor(ctx, msgs)
     # After a probe: success resets to 0, failure increments to 14.
     # Count must be 0 or 14 — 13 would mean the skip branch ran (bug).
     assert deps.runtime.compaction_skip_count in (0, 14)
@@ -537,7 +537,7 @@ async def test_compaction_output_preserves_orphan_search_tools_return():
     msgs.append(_assistant("done"))
 
     ctx = _make_processor_ctx()
-    result = await summarize_history_window(ctx, msgs)
+    result = await proactive_window_processor(ctx, msgs)
 
     # search_tools return must be present in the compacted output
     returns = [
@@ -1044,7 +1044,7 @@ async def test_apply_compaction_injects_snapshot_when_active_todos_exist():
         {"content": "preserve me across compaction", "status": "pending", "priority": "medium"},
     ]
     msgs = _make_messages(10)
-    result = await summarize_history_window(ctx, msgs)
+    result = await proactive_window_processor(ctx, msgs)
 
     contents = _snapshot_contents(result)
     assert len(contents) == 1
@@ -1062,7 +1062,7 @@ async def test_apply_compaction_static_marker_fallback_still_injects_snapshot():
         {"content": "static path survivor", "status": "in_progress", "priority": "high"},
     ]
     msgs = _make_messages(10)
-    result = await summarize_history_window(ctx, msgs)
+    result = await proactive_window_processor(ctx, msgs)
 
     contents = _snapshot_contents(result)
     assert len(contents) == 1
@@ -1075,7 +1075,7 @@ async def test_apply_compaction_no_snapshot_when_no_active_todos():
     ctx = _make_processor_ctx()
     ctx.deps.session.session_todos = []
     msgs = _make_messages(10)
-    result = await summarize_history_window(ctx, msgs)
+    result = await proactive_window_processor(ctx, msgs)
 
     assert _snapshot_contents(result) == []
 
@@ -1094,7 +1094,7 @@ async def test_apply_compaction_re_compaction_does_not_duplicate_snapshot():
     ]
 
     # Pass 1 — initial history → compacted with snapshot.
-    first_result = await summarize_history_window(ctx, _make_messages(10))
+    first_result = await proactive_window_processor(ctx, _make_messages(10))
     assert len(_snapshot_contents(first_result)) == 1
 
     # Extend with fresh turns so a second compaction pass is triggered.
@@ -1103,7 +1103,7 @@ async def test_apply_compaction_re_compaction_does_not_duplicate_snapshot():
         extended.append(_user(f"later turn {i}"))
         extended.append(_assistant(f"later response {i}"))
 
-    second_result = await summarize_history_window(ctx, extended)
+    second_result = await proactive_window_processor(ctx, extended)
     contents = _snapshot_contents(second_result)
     assert len(contents) == 1, (
         "re-compaction must not retain prior snapshot alongside the fresh one"

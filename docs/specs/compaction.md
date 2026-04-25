@@ -71,7 +71,7 @@ flowchart TD
     subgraph PerReq["M2 + M3 — per ModelRequestNode"]
         R1[truncate_tool_results<br/>M2a]
         R1b[enforce_batch_budget<br/>M2b]
-        R5[summarize_history_window<br/>M3]
+        R5[proactive_window_processor<br/>M3]
         R1 --> R1b --> R5
     end
 
@@ -254,7 +254,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    L3[summarize_history_window<br/>proactive]
+    L3[proactive_window_processor<br/>proactive]
     L5[recover_overflow_history<br/>overflow emergency]
     L6[emergency_recover_overflow_history<br/>structural fallback — no planner, no LLM]
 
@@ -454,7 +454,9 @@ The summarizer surface is split:
 
 `build_compaction_marker(dropped_count, None)` becomes `static_marker(dropped_count)`; with a non-None summary it becomes `summary_marker(dropped_count, summary)`.
 
-`summarize_history_window` (proactive) wraps the call with anti-thrashing-savings tracking:
+`proactive_window_processor` (proactive) is a thin wrapper over the shared
+`_compact_window_if_pressured` core. The core, when invoked with `apply_thrash_gate=True`,
+wraps the call with anti-thrashing-savings tracking:
 
 ```
 result, _ = await apply_compaction(ctx, messages, bounds, announce=True)
@@ -607,7 +609,7 @@ One successful compaction per pressure event per turn.
 | Processor re-fire after overflow recovery | Safe — planner returns `None` on overlap |
 | First-turn overflow (`len(groups) ≤ 2`) | Terminal — emergency fallback also returns `None`; structural limit, not a bug |
 
-**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `summarize_history_window` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes into the two-tier cascade inside `_attempt_overflow_recovery`: first `recover_overflow_history` (planner-based), then `emergency_recover_overflow_history` (structural fallback — drops all middle groups, keeps first + marker + todo snapshot + search_tools breadcrumbs + last). The turn is terminal only when both tiers return `None`, which happens exactly when `len(groups) ≤ 2` (first-turn structural limit). Do not add a retry loop at the proactive layer — proactive and normal overflow recovery share one planner, so a single failure mode does not need two handlers at the proactive tier.
+**Proactive → overflow handoff.** When `plan_compaction_boundaries` returns `None` during proactive compaction (single-turn pressure, or a prior compaction already consumed the middle), `proactive_window_processor` returns messages unchanged and the over-budget request is sent to the provider as-is. The provider rejects it with a context-length error, which `is_context_overflow` detects and `run_turn` routes into the two-tier cascade inside `_attempt_overflow_recovery`: first `recover_overflow_history` (planner-based), then `emergency_recover_overflow_history` (structural fallback — drops all middle groups, keeps first + marker + todo snapshot + search_tools breadcrumbs + last). The turn is terminal only when both tiers return `None`, which happens exactly when `len(groups) ≤ 2` (first-turn structural limit). Do not add a retry loop at the proactive layer — proactive and normal overflow recovery share one planner, so a single failure mode does not need two handlers at the proactive tier.
 
 ### 2.10 Security
 
@@ -662,7 +664,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | File | Purpose |
 |---|---|
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
-| `co_cli/context/compaction.py` | Public entry surface: `summarize_history_window`; `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `recover_overflow_history`, `emergency_recover_overflow_history`, `emergency_compact`; `apply_compaction` (shared assembly helper used by M3, planner-based overflow recovery, and manual `/compact`); `summarize_dropped_messages` (pure LLM call — raises on failure); `_summarization_gate_open` (model-presence + circuit-breaker predicate); `_gated_summarize_or_none` (gate + announce + summarizer + fallback orchestration owned by `apply_compaction`); `_preserve_search_tool_breadcrumbs`; re-exports of the processors, boundary planner, and marker builders from the private submodules. Constant `_CIRCUIT_BREAKER_PROBE_EVERY`. |
+| `co_cli/context/compaction.py` | Public entry surface: `proactive_window_processor` (M3 history-processor) and `pre_turn_window_compaction` (M0 pre-turn hygiene), both thin wrappers over the private `_compact_window_if_pressured(ctx, messages, *, ratio, apply_thrash_gate)` core that owns shared gate-and-dispatch (token computation, threshold check, anti-thrash gate when enabled, planner dispatch, post-run thrash counter updates); `recover_overflow_history`, `emergency_recover_overflow_history`, `emergency_compact`; `apply_compaction` (shared assembly helper used by M3, planner-based overflow recovery, and manual `/compact`); `summarize_dropped_messages` (pure LLM call — raises on failure); `_summarization_gate_open` (model-presence + circuit-breaker predicate); `_gated_summarize_or_none` (gate + announce + summarizer + fallback orchestration owned by `apply_compaction`); `_preserve_search_tool_breadcrumbs`; re-exports of the processors, boundary planner, and marker builders from the private submodules. Constant `_CIRCUIT_BREAKER_PROBE_EVERY`. |
 | `co_cli/context/_compaction_boundaries.py` | `TurnGroup`; `group_by_turn`, `groups_to_messages`, `find_first_run_end`; `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `_find_last_turn_start`. Constant `_MIN_RETAINED_TURN_GROUPS`. |
 | `co_cli/context/_compaction_markers.py` | Marker builders (`static_marker`, `summary_marker`, `build_compaction_marker`, `build_todo_snapshot`); `gather_compaction_context` (enrichment helper — file paths, session todos, prior summaries; per-source caps + total cap); `_cap` (per-source truncation helper); `SUMMARY_MARKER_PREFIX`, `TODO_SNAPSHOT_PREFIX`; constants `_FILE_PATHS_MAX_CHARS`, `_TODOS_MAX_CHARS`, `_PRIOR_SUMMARIES_MAX_CHARS`, `_CONTEXT_MAX_CHARS`. |
 | `co_cli/context/_history_processors.py` | Three registered history processors (`dedup_tool_results`, `truncate_tool_results`, `enforce_batch_budget`); `_build_call_id_to_args` (tool_call_id → args index for semantic markers); constants `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |

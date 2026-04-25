@@ -173,7 +173,7 @@ def plan_compaction_boundaries(
          ``tail_start`` backward to the start of the group containing it.
       6. Abort when ``tail_start <= head_end`` (head/tail overlap — nothing to drop).
 
-    Shared between proactive compaction (``summarize_history_window``) and
+    Shared between proactive compaction (``proactive_window_processor``) and
     overflow recovery (``recover_overflow_history``). ``_MIN_RETAINED_TURN_GROUPS=1``
     is a hardcoded correctness invariant: the last turn group is always kept even
     when its tokens alone exceed the tail budget.

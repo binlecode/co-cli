@@ -63,8 +63,7 @@ _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._http_error_classifier import is_context_overflow
-from co_cli.context.compaction import maybe_run_pre_turn_hygiene
-from co_cli.context.summarization import latest_response_input_tokens
+from co_cli.context.compaction import pre_turn_window_compaction
 from co_cli.deps import CoDeps
 from co_cli.display._core import Frontend, QuestionPrompt
 from co_cli.display._stream_renderer import StreamRenderer
@@ -571,11 +570,7 @@ async def run_turn(
       "error"    — unrecoverable error, display and prompt
     """
     deps.runtime.reset_for_turn()
-    message_history = await maybe_run_pre_turn_hygiene(
-        deps,
-        message_history,
-        reported_input_tokens=latest_response_input_tokens(message_history),
-    )
+    message_history = await pre_turn_window_compaction(deps, message_history)
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
     turn_state = _TurnState(

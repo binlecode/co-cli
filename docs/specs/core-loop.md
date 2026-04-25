@@ -78,7 +78,7 @@ flowchart TD
     D -->|DelegateToAgent| F["set active_skill_name; snapshot/apply skill_env; delegated_input becomes user_input"]
 
     F --> H
-    H --> I["run_turn(): deps.runtime.reset_for_turn(); maybe_run_pre_turn_hygiene(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
+    H --> I["run_turn(): deps.runtime.reset_for_turn(); pre_turn_window_compaction(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
     I --> J["_execute_stream_segment() via agent.run_stream_events(...)"]
     J --> K{"segment result / exception"}
 
@@ -268,13 +268,13 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-**Pre-turn hygiene (M0).** Before the agent loop starts, `run_turn()` calls `maybe_run_pre_turn_hygiene()` after `reset_for_turn()` and before `frontend.on_status`. This is a maintenance compaction using rough token estimates (no provider-reported count is available pre-turn). It fires when the estimated token count exceeds `HYGIENE_COMPACTION_RATIO` (0.88) of the budget — higher than the proactive threshold to avoid false positives from the char/4 estimator. Uses the same M3 planner and summarizer. Fails open: any exception returns history unchanged so the turn proceeds. When it fires, it sets `deps.runtime.history_compaction_applied`, which branches the transcript into a child session on finalization. See [compaction.md](compaction.md) for M0 details.
+**Pre-turn hygiene (M0).** Before the agent loop starts, `run_turn()` calls `pre_turn_window_compaction()` after `reset_for_turn()` and before `frontend.on_status`. This is a maintenance compaction using `max(estimate_message_tokens(messages), latest_response_input_tokens(messages))` — the same `max(estimate, reported)` token signal the proactive trigger uses, read from the last `ModelResponse.usage`. It fires when that token count exceeds `compaction.hygiene_ratio` (0.88) of the budget — higher than the proactive threshold to avoid false positives from the char/4 estimator. Both M0 and M3 are thin wrappers over the shared `_compact_window_if_pressured` core; M0 passes `apply_thrash_gate=False` so the safety-net trigger fires even when M3's anti-thrash gate has suppressed proactive runs. Fails open: any exception returns history unchanged so the turn proceeds. When it fires, it sets `deps.runtime.history_compaction_applied`, which branches the transcript into a child session on finalization. See [compaction.md](compaction.md) for M0 details.
 
 The main agent is built with three registered history processors (pure transformers) in this exact order:
 
 1. `truncate_tool_results`
 2. `enforce_batch_budget`
-3. `summarize_history_window`
+3. `proactive_window_processor`
 
 Two additional functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
 
@@ -287,7 +287,7 @@ Processor roles:
 | --- | --- |
 | `truncate_tool_results` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn (from last `UserPromptPart` onward) |
 | `enforce_batch_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `config.tools.batch_spill_chars`; fails open |
-| `summarize_history_window` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
+| `proactive_window_processor` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 
 Preflight is called before every model-bound segment but not on approval-resume segments (SDK skips `ModelRequestNode` on resume, so preflight would inject into a non-model path). Preflight injections are ephemeral — they are not stored back to `turn_state.current_history`, so retry iterations always start from the clean history without accumulated injections.
 
@@ -298,7 +298,7 @@ Ordering rationale:
 
 Compaction behavior:
 
-- `summarize_history_window()` gathers side-channel context via `gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
+- `proactive_window_processor()` gathers side-channel context via `gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds `PROACTIVE_COMPACTION_RATIO` (0.75) of the budget
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
@@ -373,7 +373,7 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | approvals outside most tool bodies | `_collect_deferred_tool_approvals()` / `_run_approval_loop()` | aligned |
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
 | error handling and interrupts owned by the loop | `run_turn()` | aligned |
-| compaction as an inline concern with circuit breaker | `summarize_history_window()` with `compaction_failure_count` | aligned |
+| compaction as an inline concern with circuit breaker | `proactive_window_processor()` with `compaction_failure_count` | aligned |
 | isolated specialist contexts | delegation agents use `fork_deps()` and stay outside the foreground loop | aligned |
 
 The intentional simplification remains:
@@ -401,7 +401,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/compaction.py` | public entry points (three registered history processors, `maybe_run_pre_turn_hygiene`, `summarize_history_window`, overflow-recovery entry points `recover_overflow_history` and `emergency_recover_overflow_history`); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `_history_processors.py` (dedup / truncate / batch-budget transformers) |
+| `co_cli/context/compaction.py` | public entry points (three registered history processors, `pre_turn_window_compaction` for M0 hygiene, `proactive_window_processor` for M3 — both thin wrappers over the private `_compact_window_if_pressured` core; overflow-recovery entry points `recover_overflow_history` and `emergency_recover_overflow_history`); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `_history_processors.py` (dedup / truncate / batch-budget transformers) |
 | `co_cli/context/prompt_text.py` | `recall_prompt_text` and `safety_prompt_text` — dynamic instruction implementations called via `agent.instructions()` wrappers in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/memory/state.py` | `MemoryRecallState` — session-scoped memory-recall debouncing state |

@@ -71,12 +71,12 @@ __all__ = [
     "gather_compaction_context",
     "group_by_turn",
     "groups_to_messages",
-    "maybe_run_pre_turn_hygiene",
     "plan_compaction_boundaries",
+    "pre_turn_window_compaction",
+    "proactive_window_processor",
     "recover_overflow_history",
     "static_marker",
     "summarize_dropped_messages",
-    "summarize_history_window",
     "summary_marker",
     "truncate_tool_results",
 ]
@@ -361,16 +361,19 @@ async def _run_window_compaction(
     return result
 
 
-async def summarize_history_window(
+async def _compact_window_if_pressured(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
+    *,
+    ratio: float,
+    apply_thrash_gate: bool,
 ) -> list[ModelMessage]:
-    """Drop middle messages when history exceeds the token budget threshold.
+    """Compact the history window when token pressure exceeds ``ratio * budget``.
 
-    Triggers when ``token_count > max(int(budget * cfg.proactive_ratio), cfg.min_context_length_tokens)``.
-    Boundaries come from ``plan_compaction_boundaries`` — the same planner
-    used by overflow recovery. Anti-thrashing gate skips proactive when the
-    last N proactive runs each yielded < cfg.min_proactive_savings savings.
+    Shared core for the M3 history-processor trigger and the M0 pre-turn trigger.
+    The caller supplies the threshold ratio and decides whether to consult the
+    anti-thrash gate; everything else (token counting, planner, summarizer,
+    thrash counter updates) lives here.
 
     Keeps:
       - **head** — first run's messages (up to first TextPart response)
@@ -383,23 +386,25 @@ async def summarize_history_window(
     triggers. When ``deps.model`` is absent (sub-agent context) or the
     circuit breaker is tripped (3+ consecutive failures), falls back to a
     static marker without attempting an LLM call.
-
-    Registered as the last history processor.
     """
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
+    if budget <= 0:
+        return messages
     cfg = ctx.deps.config.compaction
 
     reported = (
         0 if ctx.deps.runtime.compacted_in_current_turn else latest_response_input_tokens(messages)
     )
     token_count = max(estimate_message_tokens(messages), reported)
-    token_threshold = max(int(budget * cfg.proactive_ratio), cfg.min_context_length_tokens)
+    token_threshold = max(int(budget * ratio), cfg.min_context_length_tokens)
 
     if token_count <= token_threshold:
         return messages
 
-    if ctx.deps.runtime.consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window:
+    if apply_thrash_gate and (
+        ctx.deps.runtime.consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window
+    ):
         log.info("Compaction: proactive anti-thrashing gate active, skipping")
         if not ctx.deps.runtime.compaction_thrash_hint_emitted:
             from co_cli.display._core import console
@@ -415,42 +420,56 @@ async def summarize_history_window(
     if result is None:
         return messages
 
-    tokens_after = estimate_message_tokens(result)
-    savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
-    if savings < cfg.min_proactive_savings:
-        ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
-    else:
-        ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+    if apply_thrash_gate:
+        tokens_after = estimate_message_tokens(result)
+        savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
+        if savings < cfg.min_proactive_savings:
+            ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
+        else:
+            ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
     return result
 
 
-async def maybe_run_pre_turn_hygiene(
+async def proactive_window_processor(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage]:
+    """M3 history-processor: compact mid-turn when proactive_ratio is exceeded.
+
+    Registered as the last history processor on the orchestrator agent. Applies
+    the anti-thrash gate to suppress repeated low-yield compactions, and updates
+    the thrash counter based on observed savings.
+    """
+    return await _compact_window_if_pressured(
+        ctx,
+        messages,
+        ratio=ctx.deps.config.compaction.proactive_ratio,
+        apply_thrash_gate=True,
+    )
+
+
+async def pre_turn_window_compaction(
     deps: CoDeps,
     message_history: list[ModelMessage],
-    reported_input_tokens: int = 0,
 ) -> list[ModelMessage]:
-    """Pre-turn hygiene compaction: compact if token count exceeds cfg.hygiene_ratio * budget.
+    """M0 pre-turn hygiene: compact at ``run_turn()`` entry when ``hygiene_ratio`` is exceeded.
 
-    ``reported_input_tokens`` must be read from turn_usage before reset_for_turn() clears it.
-    Sets deps.runtime.history_compaction_applied when compaction runs.
-    Fails open: any exception returns message_history unchanged so the turn proceeds.
+    Fail-open: any exception returns ``message_history`` unchanged so the turn
+    proceeds. The anti-thrash gate is intentionally bypassed — pre-turn is the
+    safety net for sessions where the in-loop M3 trigger was suppressed.
+    The asymmetry vs ``proactive_window_processor`` (which propagates exceptions)
+    is intentional: the pre-turn lifecycle has no caller-side handler and a
+    raised exception would fail the whole turn.
     """
     try:
-        ctx_window = deps.model.context_window if deps.model else None
-        budget = resolve_compaction_budget(deps.config, ctx_window)
-        if budget <= 0:
-            return message_history
-        token_count = _effective_token_count(message_history, reported_input_tokens)
-        token_threshold = max(
-            int(budget * deps.config.compaction.hygiene_ratio),
-            deps.config.compaction.min_context_length_tokens,
-        )
-        if token_count <= token_threshold:
-            return message_history
         raw_model = deps.model.model if deps.model else None
         ctx = RunContext(deps=deps, model=raw_model, usage=RunUsage())
-        result = await _run_window_compaction(ctx, message_history, budget)
-        return result if result is not None else message_history
+        return await _compact_window_if_pressured(
+            ctx,
+            message_history,
+            ratio=deps.config.compaction.hygiene_ratio,
+            apply_thrash_gate=False,
+        )
     except Exception:
         log.warning("Pre-turn hygiene compaction failed — skipping", exc_info=True)
         return message_history

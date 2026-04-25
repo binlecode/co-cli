@@ -99,7 +99,7 @@ Three pure-transformer processors run in this exact order (registered in `build_
 | --- | --- |
 | `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
 | `enforce_batch_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `config.tools.batch_spill_chars`; fails open |
-| `summarize_history_window` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full design in [compaction.md](compaction.md) |
+| `proactive_window_processor` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full design in [compaction.md](compaction.md) |
 
 Two dynamic instruction functions are registered via `agent.instructions()` and run before every model request:
 
