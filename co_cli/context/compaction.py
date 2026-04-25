@@ -153,12 +153,16 @@ def _preserve_search_tool_breadcrumbs(
     dropped: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Keep SDK search-tools discovery state across compaction boundaries."""
-    return [
-        msg
-        for msg in dropped
-        if isinstance(msg, ModelRequest)
-        and any(isinstance(p, ToolReturnPart) and p.tool_name == "search_tools" for p in msg.parts)
-    ]
+    result = []
+    for msg in dropped:
+        if not isinstance(msg, ModelRequest):
+            continue
+        search_parts = [
+            p for p in msg.parts if isinstance(p, ToolReturnPart) and p.tool_name == "search_tools"
+        ]
+        if search_parts:
+            result.append(ModelRequest(parts=search_parts))
+    return result
 
 
 async def apply_compaction(

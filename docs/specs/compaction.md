@@ -261,7 +261,7 @@ flowchart TD
     P[plan_compaction_boundaries]
     E[gather_compaction_context<br/>enrichment helper]
     S[summarize_messages]
-    B[_preserve_search_tool_breadcrumbs<br/>dedup by kept_ids]
+    B[_preserve_search_tool_breadcrumbs<br/>filter search_tools parts only]
 
     MK_SUM[summary_marker]
     MK_ST[static_marker]
@@ -486,9 +486,9 @@ The three guardrails protect against re-executing side-effecting actions describ
 Prior-summary detection uses `startswith(SUMMARY_MARKER_PREFIX)` with a shared constant defined in one place and used by both builder and detector. The constant matches the literal start of the marker through the end of the "ran out of context." sentence.
 
 **Breadcrumb preservation** (`_preserve_search_tool_breadcrumbs`):
-- Return messages from `dropped` that contain a `search_tools` `ToolReturnPart`.
-- Skip any message whose `id(msg)` is already in `kept_ids`. Prevents quadratic accumulation across repeated compactions.
-- **Scope invariant: `search_tools` only.** The mechanism preserves `ToolReturnPart`s whose matching `ToolCallPart` is in the dropped range — technically orphan tool results. This works because `search_tools` is pydantic-ai's SDK-native deferred-tool-discovery mechanism, and its returns are handled by the SDK before reaching the provider (no orphan validation rejection). Do not extend this preservation to other tools without revisiting orphan-handling: providers typically validate `tool_use`/`tool_result` pairing.
+- For each `ModelRequest` in `dropped`, extract only the `ToolReturnPart`s whose `tool_name == "search_tools"`.
+- If any such parts exist, emit a new `ModelRequest` containing only those parts — never the full original message.
+- **Scope invariant: `search_tools` only.** Mixed-batch `ModelRequest`s (containing both `search_tools` and other tool returns) are rebuilt with only the `search_tools` parts, so non-`search_tools` `ToolReturnPart`s are never carried into the post-compact tail as orphans. This matters because `search_tools` is pydantic-ai's SDK-native deferred-tool-discovery mechanism whose returns are handled by the SDK before reaching the provider, while other tool results require paired `ToolCallPart`s that providers validate.
 
 **Fail-safe — circuit breaker:**
 
