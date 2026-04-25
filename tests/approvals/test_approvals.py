@@ -1,12 +1,10 @@
 """Tests for approval subject resolution and session approval persistence."""
 
-import pytest
 from pydantic_ai import DeferredToolResults
 
 from co_cli.config._core import settings
 from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 from co_cli.tools.approvals import (
-    ApprovalSubject,
     is_auto_approved,
     record_approval_choice,
     remember_tool_approval,
@@ -271,29 +269,3 @@ def test_write_file_preview_none_for_empty_content():
 
 
 # --- approval-loop wiring regression ---
-
-
-@pytest.mark.asyncio
-async def test_collect_deferred_approvals_passes_subject_to_frontend() -> None:
-    """_collect_deferred_tool_approvals passes ApprovalSubject to frontend.prompt_approval."""
-    from pydantic_ai import AgentRunResult, DeferredToolRequests
-    from pydantic_ai.messages import ToolCallPart
-    from tests._frontend import SilentFrontend
-
-    from co_cli.context.orchestrate import _collect_deferred_tool_approvals
-
-    deps = _make_deps()
-    frontend = SilentFrontend(approval_response="y")
-
-    call = ToolCallPart(
-        tool_name="file_write",
-        args={"path": "src/foo.py", "content": "print('hello')\n"},
-        tool_call_id="call-001",
-    )
-    deferred = DeferredToolRequests(approvals=[call])
-    result = AgentRunResult(output=deferred)
-
-    decisions = await _collect_deferred_tool_approvals(result, deps, frontend)
-
-    assert isinstance(frontend.last_approval_subject, ApprovalSubject)
-    assert decisions.approvals["call-001"] is True

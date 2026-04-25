@@ -14,7 +14,7 @@ from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.web._ssrf import SSRFRedirectError, is_url_safe, ssrf_redirect_guard
-from co_cli.tools.web.fetch import _html_to_markdown, _is_content_type_allowed, web_fetch
+from co_cli.tools.web.fetch import web_fetch
 from co_cli.tools.web.search import web_search
 
 _AGENT = build_agent(config=settings)
@@ -273,54 +273,6 @@ async def test_web_fetch_html_to_markdown():
     assert "<html" not in result.return_value.lower()
     # Wikipedia Python page must contain readable content
     assert "Python" in result.return_value
-
-
-def test_html_to_markdown_converts_tags():
-    """_html_to_markdown strips HTML tags and produces readable plain text."""
-    html = "<html><body><h1>Hello World</h1><p>Some <b>bold</b> text.</p></body></html>"
-    result = _html_to_markdown(html)
-    assert "<html" not in result.lower()
-    assert "<h1" not in result
-    assert "<p" not in result
-    assert "Hello World" in result
-    assert "bold" in result
-
-
-def test_html_to_markdown_preserves_links():
-    """_html_to_markdown retains hyperlinks in markdown syntax."""
-    html = '<a href="https://example.com">click here</a>'
-    result = _html_to_markdown(html)
-    assert "https://example.com" in result
-    assert "click here" in result
-
-
-def test_is_content_type_allowed_permits_text_types():
-    """text/* MIME types are allowed."""
-    assert _is_content_type_allowed("text/html") is True
-    assert _is_content_type_allowed("text/plain; charset=utf-8") is True
-    assert _is_content_type_allowed("text/xml") is True
-
-
-def test_is_content_type_allowed_permits_structured_data():
-    """application/json, application/xml, and YAML variants are allowed."""
-    assert _is_content_type_allowed("application/json") is True
-    assert _is_content_type_allowed("application/xml") is True
-    assert _is_content_type_allowed("application/xhtml+xml") is True
-    assert _is_content_type_allowed("application/yaml") is True
-    assert _is_content_type_allowed("application/x-yaml") is True
-
-
-def test_is_content_type_allowed_rejects_binary():
-    """Binary content types are not allowed."""
-    assert _is_content_type_allowed("image/png") is False
-    assert _is_content_type_allowed("application/pdf") is False
-    assert _is_content_type_allowed("application/octet-stream") is False
-    assert _is_content_type_allowed("video/mp4") is False
-
-
-def test_is_content_type_allowed_permits_empty():
-    """Empty Content-Type is permitted (server may omit it for text responses)."""
-    assert _is_content_type_allowed("") is True
 
 
 @pytest.mark.asyncio

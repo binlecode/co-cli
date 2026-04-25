@@ -5,8 +5,8 @@ The dream cycle is a batch lifecycle pass that runs on session end (when
 mining, knowledge merge, and automated decay — each bounded and each
 recoverable via ``knowledge_dir/_archive/``. Cross-cycle state (which
 sessions have already been mined, cumulative counters, last-run timestamp)
-persists to ``knowledge_dir/_dream_state.json``. See ``docs/specs/memory-knowledge.md``
-for the lifecycle model.
+persists to ``knowledge_dir/_dream_state.json``. See ``docs/specs/dream.md``
+for the dream lifecycle model.
 """
 
 from __future__ import annotations

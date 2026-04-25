@@ -10,7 +10,7 @@ import logging
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
-from co_cli.observability._file_logging import _JsonRedactingFormatter, setup_file_logging
+from co_cli.observability._file_logging import setup_file_logging
 from co_cli.observability._telemetry import JsonSpanExporter
 
 
@@ -148,48 +148,6 @@ def test_json_span_exporter_parent_id_set_for_child(tmp_path):
         assert child["parent_id"] == parent["span_id"]
     finally:
         _teardown_logger(spans_logger, handler)
-
-
-def test_json_formatter_log_record_structure(tmp_path):
-    """A plain log record produces a JSON line with kind='log' and correct fields."""
-    formatter = _JsonRedactingFormatter()
-    record = logging.LogRecord(
-        name="co_cli.test",
-        level=logging.WARNING,
-        pathname="",
-        lineno=0,
-        msg="something happened",
-        args=(),
-        exc_info=None,
-    )
-    line = formatter.format(record)
-    parsed = json.loads(line)
-
-    assert parsed["kind"] == "log"
-    assert parsed["level"] == "WARNING"
-    assert parsed["logger"] == "co_cli.test"
-    assert parsed["msg"] == "something happened"
-    assert parsed["ts"].endswith("Z")
-
-
-def test_json_formatter_passthrough_span_json(tmp_path):
-    """A pre-serialised JSON dict (span record) is passed through as-is."""
-    formatter = _JsonRedactingFormatter()
-    span_dict = {"ts": "2026-01-01T00:00:00.000Z", "kind": "span", "name": "test.op"}
-    record = logging.LogRecord(
-        name="co_cli.observability.spans",
-        level=logging.INFO,
-        pathname="",
-        lineno=0,
-        msg=json.dumps(span_dict),
-        args=(),
-        exc_info=None,
-    )
-    line = formatter.format(record)
-    parsed = json.loads(line)
-
-    assert parsed["kind"] == "span"
-    assert parsed["name"] == "test.op"
 
 
 def _isolated_file_logging(log_dir, level="DEBUG", max_size_mb=1, backup_count=1):

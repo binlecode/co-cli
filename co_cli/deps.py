@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
@@ -148,6 +149,9 @@ class CoRuntimeState:
     # Dedup key for enforce_batch_budget's "still over budget" warning.
     # Same batch repeated request-to-request emits the warning once, not per cycle.
     last_overbudget_batch_signature: tuple[str, ...] | None = None
+    # Background knowledge-extraction task slot — owned per-deps so sessions and
+    # forked sub-agent deps do not share the in-flight task.
+    extraction_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""

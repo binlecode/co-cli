@@ -2,14 +2,14 @@
 
 ## Product Intent
 
-**Goal:** Own the full persistent cognition surface: session transcripts as raw memory, the derived transcript index for episodic recall, the reusable knowledge store, and the extraction/consolidation bridge between them.
+**Goal:** Own the full persistent cognition surface: session transcripts as raw memory, the derived transcript index for episodic recall, the reusable knowledge store, and the per-turn extraction bridge between them.
 
 **Functional areas:**
 - Session transcripts, transcript branching, and session lifecycle commands
 - Oversized tool-result spill files and transcript placeholders
 - Derived transcript index (`session-index.db`) and episodic `memory_search()`
 - Reusable knowledge artifacts on disk plus the derived retrieval DB
-- Turn-time recall, explicit search, per-turn extraction, and batch dreaming
+- Turn-time recall, explicit search, per-turn extraction, and lifecycle handoff to dreaming
 
 **Non-goals:**
 - Multi-user or concurrent-write safety
@@ -17,15 +17,15 @@
 - Provider-side memory or server-managed context
 - Automatic TTL/pruning for session transcripts or spilled tool results
 
-**Success criteria:** Raw chronology is preserved in append-only transcripts; episodic recall routes through the transcript index; reusable recall routes through the knowledge layer; history replacement branches to child transcripts instead of rewriting parents; extraction and dreaming keep reusable knowledge current.
+**Success criteria:** Raw chronology is preserved in append-only transcripts; episodic recall routes through the transcript index; reusable recall routes through the knowledge layer; history replacement branches to child transcripts instead of rewriting parents; extraction and the dream lifecycle keep reusable knowledge current.
 
-**Status:** Stable. Memory is the session transcript layer plus a derived FTS5 session index. Knowledge is the reusable artifact layer in `knowledge_dir/*.md` plus the derived search DB. Extraction is shipped; dreaming is implemented and gated by `knowledge.consolidation_enabled` (default off).
+**Status:** Stable. Memory is the session transcript layer plus a derived FTS5 session index. Knowledge is the reusable artifact layer in `knowledge_dir/*.md` plus the derived search DB. Extraction is shipped; dream-cycle details live in [dream.md](dream.md).
 
 **Known gaps:** No concurrent-instance safety around transcript writes. A second `co chat` in the same user home can race session persistence. Deferred.
 
 ---
 
-This spec defines how `co-cli` stores raw memory, derives episodic recall from it, promotes durable facts into knowledge, and maintains that knowledge over time. Startup sequencing lives in [bootstrap.md](bootstrap.md). Turn orchestration lives in [core-loop.md](core-loop.md). Prompt assembly and per-turn recall injection live in [prompt-assembly.md](prompt-assembly.md). Compaction mechanics live in [compaction.md](compaction.md). Tool registration and approval live in [tools.md](tools.md).
+This spec defines how `co-cli` stores raw memory, derives episodic recall from it, promotes durable facts into knowledge, and maintains that knowledge over time. Startup sequencing lives in [bootstrap.md](bootstrap.md). Turn orchestration lives in [core-loop.md](core-loop.md). Prompt assembly and per-turn recall injection live in [prompt-assembly.md](prompt-assembly.md). Compaction mechanics live in [compaction.md](compaction.md). Dream-cycle mining, merge, decay, archive, and state live in [dream.md](dream.md). Tool registration and approval live in [tools.md](tools.md).
 
 ## 1. What & How
 
@@ -33,7 +33,7 @@ This spec defines how `co-cli` stores raw memory, derives episodic recall from i
 
 - **Memory** is the raw session timeline. It lives in append-only JSONL transcripts under `sessions/`, with oversized tool outputs spilled to `tool-results/`. A separate FTS5 DB indexes past transcripts for episodic search.
 - **Knowledge** is every reusable artifact the agent should recall across sessions. It lives as markdown files under `knowledge/`, with a derived retrieval DB for search/ranking.
-- **Bridge** is extraction and consolidation. Clean turns can distill durable signals from Memory into Knowledge, and optional dream cycles can retrospectively mine transcripts and maintain the knowledge corpus.
+- **Bridge** is per-turn extraction. Clean turns can distill durable signals from Memory into Knowledge. The optional dream cycle also reads Memory and maintains Knowledge; its details live in [dream.md](dream.md).
 
 ```mermaid
 flowchart TD
@@ -45,13 +45,12 @@ flowchart TD
 
     subgraph Bridge["Bridge"]
         Extractor["per-turn extractor"]
-        Dream["dream cycle"]
+        Dream["dream cycle (see dream.md)"]
     end
 
     subgraph Knowledge["Knowledge Layer"]
         KDir["knowledge/*.md"]
         SearchDB["co-cli-search.db"]
-        Archive["knowledge/_archive/"]
     end
 
     subgraph Recall["Retrieval"]
@@ -66,7 +65,6 @@ flowchart TD
     Sessions --> Spill
     Extractor --> KDir
     Dream --> KDir
-    Dream --> Archive
     KDir --> SearchDB
     SessionIdx --> MemorySearch
     SearchDB --> TurnRecall
@@ -211,7 +209,7 @@ Knowledge artifact schema:
 | `source_type` | `detected`, `web_fetch`, `manual`, `obsidian`, `drive`, or `consolidated` |
 | `source_ref` | Pointer to source session, URL, file path, or artifact ID |
 | `certainty` | `high`, `medium`, or `low` |
-| `decay_protected` | Exempt from automated decay and merge |
+| `decay_protected` | Lifecycle protection flag; dream merge/decay semantics live in [dream.md](dream.md) |
 | `last_recalled` | Most recent recall timestamp |
 | `recall_count` | Recall hit counter |
 
@@ -228,17 +226,15 @@ Search backends degrade in this order:
 | `fts5` | BM25 over chunked text | Embeddings unavailable |
 | `grep` | In-memory substring match over loaded markdown | KnowledgeStore unavailable |
 
-The main reusable-artifact commands are:
+The main reusable-artifact commands owned by this spec are:
 
 | Command | Purpose |
 | --- | --- |
 | `/knowledge list [query] [flags]` | List matching artifacts |
 | `/knowledge count [query] [flags]` | Count matching artifacts |
 | `/knowledge forget <query> [flags]` | Delete matching active artifacts after confirmation |
-| `/knowledge dream [--dry]` | Run or preview a dream cycle |
-| `/knowledge restore [slug]` | List archived artifacts or restore one |
-| `/knowledge decay-review [--dry]` | Preview decay candidates and optionally archive them |
-| `/knowledge stats` | Show corpus counts, archive counts, last-dream stats, and decay candidates |
+
+Dream lifecycle commands (`/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, `/knowledge stats`) live in [dream.md](dream.md).
 
 `/memory` is still present as a deprecated alias for `list`, `count`, and `forget`.
 
@@ -283,50 +279,13 @@ on failure:
     keep the old cursor for retry on a later turn
 ```
 
-The extractor is additive only. It writes new knowledge or merges into near-duplicates when consolidation is enabled; it never edits transcripts and never deletes transcript history.
+The extractor is additive only. It writes new knowledge or delegates near-duplicate handling to the knowledge write path when consolidation is enabled; it never edits transcripts and never deletes transcript history.
 
-### 2.6 Knowledge Lifecycle: Dream Cycle
+### 2.6 Dream Lifecycle Handoff
 
-Dreaming is optional batch maintenance for the Knowledge layer. It runs:
+Dream-cycle semantics live in [dream.md](dream.md). This spec only owns the handoff: transcripts remain append-only read inputs, active knowledge remains markdown plus a derived search index, and any dream-cycle artifact writes or archives must preserve those source-of-truth boundaries.
 
-- automatically on session end when `knowledge.consolidation_enabled=true` and `knowledge.consolidation_trigger="session_end"`
-- manually via `/knowledge dream`
-
-`run_dream_cycle()` executes three phases under an overall timeout (default 60s). Each phase is isolated so one failure does not block the others.
-
-Phase 1: transcript mining
-
-- loads recent transcripts from `sessions_dir`
-- skips sessions already recorded in `knowledge/_dream_state.json`
-- builds a wider transcript window (50 text + 50 tool entries)
-- chunks oversized windows at 12,000 chars with 2,000-char overlap
-- runs a dream-miner sub-agent that writes artifacts through `knowledge_save()`
-- marks empty/mined sessions as processed; leaves failed sessions unprocessed for retry
-
-Phase 2: merge
-
-- loads active artifacts grouped by `artifact_kind`
-- skips `decay_protected` artifacts
-- clusters by token-Jaccard similarity
-- merges up to 10 clusters per cycle, with cluster size capped at 5
-- writes one consolidated artifact and archives originals
-
-Phase 3: decay
-
-- computes decay candidates from age and recall metadata
-- archives up to 20 artifacts per cycle to `knowledge/_archive/`
-
-Dry-run mode:
-
-- skips mining
-- reports how many merge clusters and decay archives would be performed
-- does not write files or persist dream state
-
-Dream state persists:
-
-- `last_dream_at`
-- `processed_sessions`
-- cumulative counters for cycles, extracted, merged, and decayed artifacts
+The dream cycle is not part of turn-time recall or per-turn extraction. It is a separate lifecycle pass over the same Memory and Knowledge stores.
 
 ## 3. Config
 
@@ -350,12 +309,8 @@ Dream state persists:
 | `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI reranker URL |
 | `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | chunk size used during indexing |
 | `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | chunk overlap used during indexing |
-| `knowledge.consolidation_enabled` | `CO_KNOWLEDGE_CONSOLIDATION_ENABLED` | `false` | enables dedup-on-write and dream-cycle maintenance |
-| `knowledge.consolidation_trigger` | — | `session_end` | `session_end` or `manual` |
-| `knowledge.consolidation_lookback_sessions` | — | `5` | transcript lookback count for dream mining |
-| `knowledge.consolidation_similarity_threshold` | — | `0.75` | similarity threshold for dedup and merge |
-| `knowledge.max_artifact_count` | — | `300` | configured soft cap for corpus size; not directly enforced in current code |
-| `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | age threshold for decay candidacy |
+
+Dream-cycle and lifecycle maintenance settings, including consolidation trigger, lookback, merge threshold, artifact soft cap, and decay age, live in [dream.md](dream.md).
 
 ### Paths
 
@@ -382,14 +337,11 @@ Dream state persists:
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate/render helpers |
 | `co_cli/knowledge/_chunker.py` | chunking for indexed artifact text |
 | `co_cli/knowledge/_ranking.py` | confidence scoring and contradiction helpers |
-| `co_cli/knowledge/_similarity.py` | similarity, dedup, and merge helpers |
-| `co_cli/knowledge/_archive.py` | archive/restore helpers for reusable artifacts |
-| `co_cli/knowledge/_decay.py` | decay-candidate selection |
+| `co_cli/knowledge/_similarity.py` | similarity and dedup helpers |
 | `co_cli/knowledge/_distiller.py` | per-turn extraction pipeline and transcript-window builder |
-| `co_cli/knowledge/_dream.py` | dream-cycle state, mining, merge, decay, and orchestration |
 | `co_cli/tools/knowledge/read.py` | reusable-artifact search/list/read plus turn-time `_recall_for_context()` |
 | `co_cli/tools/knowledge/write.py` | artifact write/update/append helpers and article persistence |
 | `co_cli/bootstrap/core.py` | `restore_session()` and `_init_memory_index()` during startup |
 | `co_cli/agent/_instructions.py` | `recall_prompt()` — dynamic instruction wrapper for turn-time recall |
-| `co_cli/main.py` | `_finalize_turn()` extraction/persistence bridge and session-end dream trigger |
+| `co_cli/main.py` | `_finalize_turn()` extraction/persistence bridge |
 | `co_cli/commands/_commands.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions`, `/knowledge`, and `/memory` command handlers |

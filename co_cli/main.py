@@ -121,9 +121,7 @@ async def _finalize_turn(
                     if 0 <= cursor <= len(next_history)
                     else next_history[-20:]
                 )
-                fire_and_forget_extraction(
-                    delta, deps=deps, frontend=frontend, cursor_start=cursor
-                )
+                fire_and_forget_extraction(delta, deps=deps, cursor_start=cursor)
 
     try:
         deps.session.session_path = persist_session_history(
@@ -177,8 +175,8 @@ async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None
     """Drain pending extractions, run the dream cycle if enabled, release resources."""
     from co_cli.knowledge._distiller import drain_pending_extraction
 
-    await drain_pending_extraction()
     if deps is not None:
+        await drain_pending_extraction(deps)
         await _maybe_run_dream_cycle(deps)
 
         from co_cli.tools.background import kill_task

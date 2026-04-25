@@ -157,7 +157,7 @@ All built-in commands are registered in `BUILTIN_COMMANDS: dict[str, SlashComman
 | `/status` | `[task-id]` | System health check, or status of a specific task | `None` |
 | `/tools` | — | List registered agent tools with descriptions | `None` |
 | `/skills` | `[name]` | List loaded skills; show detail for named skill | `None` |
-| `/knowledge` | `list\|count\|forget\|dream\|restore\|decay-review\|stats [args] [flags]` | Manage knowledge artifacts and the consolidation cycle | `None` |
+| `/knowledge` | `list\|count\|forget\|dream\|restore\|decay-review\|stats [args] [flags]` | Manage knowledge artifacts; dream lifecycle details live in [dream.md](dream.md) | `None` |
 | `/memory` | `list\|count\|forget [query] [flags]` | [Deprecated — use `/knowledge`] Manage knowledge artifacts | `None` |
 | `/approvals` | `list\|clear\|...` | View and manage session approval rules | `None` |
 | `/background` | `<command>` | Run a shell command in the background | `None` |

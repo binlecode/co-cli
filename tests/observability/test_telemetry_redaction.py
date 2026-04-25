@@ -10,7 +10,7 @@ import sqlite3
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
-from co_cli.observability._telemetry import _MAX_REDACT_LEN, SQLiteSpanExporter
+from co_cli.observability._telemetry import SQLiteSpanExporter
 
 
 def _make_provider(db_path: str, patterns: list[str] | None = None) -> TracerProvider:
@@ -106,13 +106,13 @@ def test_span_identity_fields_not_modified(tmp_path):
 
 
 def test_value_exceeding_max_redact_len_stored_unredacted(tmp_path):
-    """Values longer than _MAX_REDACT_LEN bypass redaction (performance guard)."""
+    """Values longer than 65536 chars bypass redaction (performance guard)."""
     db = str(tmp_path / "spans.db")
     provider = _make_provider(db, patterns=[r"sk-[A-Za-z0-9]{20,}"])
     tracer = provider.get_tracer("test")
 
-    # Build a value that embeds a secret but exceeds the size threshold
-    large_value = "sk-abc123abc123abc123abc " + "x" * _MAX_REDACT_LEN
+    # Build a value that embeds a secret but exceeds the 65536-char threshold
+    large_value = "sk-abc123abc123abc123abc " + "x" * 65536
 
     with tracer.start_as_current_span("redact.large") as span:
         span.set_attribute("large_attr", large_value)

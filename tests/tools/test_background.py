@@ -7,6 +7,7 @@ and the four tool function signatures. All tests spawn real subprocesses (no moc
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -23,7 +24,7 @@ from tests._timeouts import (
 )
 
 from co_cli.deps import CoSessionState
-from co_cli.tools.background import BackgroundTaskState, _make_task_id, kill_task, spawn_task
+from co_cli.tools.background import BackgroundTaskState, kill_task, spawn_task
 
 
 def _fresh_session() -> CoSessionState:
@@ -32,7 +33,7 @@ def _fresh_session() -> CoSessionState:
 
 def _make_state(command: str, cwd: str = "/tmp", description: str = "") -> BackgroundTaskState:
     return BackgroundTaskState(
-        task_id=_make_task_id(),
+        task_id=uuid.uuid4().hex[:12],
         command=command,
         cwd=cwd,
         description=description,
@@ -61,13 +62,6 @@ def test_task_state_defaults():
     assert state.exit_code is None
     assert state.cleanup_incomplete is False
     assert state.cleanup_error is None
-
-
-def test_make_task_id_unique():
-    ids = {_make_task_id() for _ in range(20)}
-    assert len(ids) == 20
-    for tid in ids:
-        assert len(tid) == 12
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +119,7 @@ async def test_spawn_invalid_command():
     session = _fresh_session()
     # Invalid cwd causes spawn failure
     state = BackgroundTaskState(
-        task_id=_make_task_id(),
+        task_id=uuid.uuid4().hex[:12],
         command="echo test",
         cwd="/nonexistent_dir_xyz",
         description="",
@@ -195,8 +189,6 @@ async def test_kill_running_task():
     assert state.cleanup_incomplete is False
     assert state.cleanup_error is None
     assert state.process is None
-    assert state._monitor_task is not None
-    assert state._monitor_task.done() is True
 
 
 @pytest.mark.asyncio
@@ -256,9 +248,6 @@ async def test_tool_task_start_signature():
             await asyncio.sleep(0.1)
             if state.status != "running":
                 break
-    if state._monitor_task is not None:
-        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await state._monitor_task
 
 
 @pytest.mark.asyncio
@@ -288,12 +277,9 @@ async def test_tool_task_status_signature():
     assert result.metadata["is_binary"] is False
 
     state = deps.session.background_tasks[task_id]
-    if state.process is not None:
+    if state.status == "running":
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
             await kill_task(state)
-    elif state._monitor_task is not None:
-        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-            await state._monitor_task
 
 
 @pytest.mark.asyncio
@@ -346,8 +332,6 @@ async def test_tool_task_cancel_signature():
     assert state.cleanup_incomplete is False
     assert state.cleanup_error is None
     assert state.process is None
-    assert state._monitor_task is not None
-    assert state._monitor_task.done() is True
 
 
 @pytest.mark.asyncio
@@ -421,11 +405,8 @@ async def test_slash_background_command():
         from co_cli.tools.background import kill_task
 
         for s in deps.session.background_tasks.values():
-            if s.process is not None:
+            if s.status == "running":
                 await kill_task(s)
-            if s._monitor_task is not None:
-                async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-                    await s._monitor_task
 
 
 @pytest.mark.asyncio
@@ -437,12 +418,11 @@ async def test_slash_tasks_command():
 
     from co_cli.commands._commands import BUILTIN_COMMANDS, CommandContext
     from co_cli.deps import CoDeps
-    from co_cli.tools.background import BackgroundTaskState, _make_task_id
     from co_cli.tools.shell_backend import ShellBackend
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings())
     state = BackgroundTaskState(
-        task_id=_make_task_id(),
+        task_id=uuid.uuid4().hex[:12],
         command="echo done",
         cwd="/tmp",
         description="",
@@ -488,8 +468,6 @@ async def test_slash_cancel_command():
         assert state.cleanup_incomplete is False
         assert state.cleanup_error is None
         assert state.process is None
-        assert state._monitor_task is not None
-        assert state._monitor_task.done() is True
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +492,7 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
 
     task_description = "test-background-task-description"
     state = BackgroundTaskState(
-        task_id=_make_task_id(),
+        task_id=uuid.uuid4().hex[:12],
         command="echo hello",
         cwd=str(tmp_path),
         description=task_description,
@@ -549,7 +527,7 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
 
     task_description = "background task list description"
     state = BackgroundTaskState(
-        task_id=_make_task_id(),
+        task_id=uuid.uuid4().hex[:12],
         command="echo hello",
         cwd=str(tmp_path),
         description=task_description,

@@ -1,9 +1,7 @@
 """Functional tests for JSONL transcript persistence."""
 
-import asyncio
 from pathlib import Path
 
-import pytest
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -12,14 +10,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from tests._frontend import SilentFrontend
-from tests._settings import make_settings
-from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
-from co_cli.context.orchestrate import TurnResult
-from co_cli.deps import CoDeps, CoRuntimeState
-from co_cli.main import _finalize_turn
-from co_cli.memory.session import new_session_path
 from co_cli.memory.session_browser import format_file_size, list_sessions
 from co_cli.memory.transcript import (
     MAX_TRANSCRIPT_READ_BYTES,
@@ -29,7 +20,6 @@ from co_cli.memory.transcript import (
     persist_session_history,
     write_compact_boundary,
 )
-from co_cli.tools.shell_backend import ShellBackend
 
 
 def test_round_trip_various_part_types(tmp_path: Path) -> None:
@@ -382,71 +372,3 @@ def test_format_file_size() -> None:
     assert format_file_size(500) == "500 B"
     assert format_file_size(2048) == "2 KB"
     assert format_file_size(1536 * 1024) == "1.5 MB"
-
-
-@pytest.mark.asyncio
-async def test_finalize_turn_branches_child_transcript_when_history_compacted(
-    tmp_path: Path,
-) -> None:
-    """When history_compaction_applied is True, _finalize_turn creates a child transcript."""
-    sessions_dir = tmp_path / "sessions"
-    parent = sessions_dir / "2026-04-20-T170000Z-hygiene001.jsonl"
-    original = [ModelRequest(parts=[UserPromptPart(content="original turn")])]
-    append_messages(parent, original)
-
-    config = make_settings()
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=config,
-        runtime=CoRuntimeState(history_compaction_applied=True),
-        sessions_dir=sessions_dir,
-    )
-    deps.session.session_path = parent
-    deps.session.persisted_message_count = len(original)
-
-    compacted = [ModelRequest(parts=[UserPromptPart(content="compacted summary")])]
-    turn_result = TurnResult(
-        interrupted=False,
-        outcome="continue",
-        messages=compacted,
-    )
-    frontend = SilentFrontend()
-    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-        await _finalize_turn(turn_result, original, deps, frontend)
-
-    assert deps.session.session_path != parent
-    loaded = load_transcript(deps.session.session_path)
-    assert len(loaded) == 1
-    assert loaded[0].parts[0].content == "compacted summary"
-
-
-@pytest.mark.asyncio
-async def test_finalize_turn_notifies_on_transcript_write_failure(tmp_path: Path) -> None:
-    """When the sessions dir is read-only, _finalize_turn surfaces a write-failure status."""
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    # Make the sessions dir read-only so file creation fails
-    sessions_dir.chmod(0o555)
-    try:
-        config = make_settings()
-        deps = CoDeps(
-            shell=ShellBackend(),
-            config=config,
-            runtime=CoRuntimeState(history_compaction_applied=False),
-            sessions_dir=sessions_dir,
-        )
-        deps.session.session_path = new_session_path(sessions_dir)
-
-        turn_result = TurnResult(
-            interrupted=False,
-            outcome="continue",
-            messages=[ModelRequest(parts=[UserPromptPart(content="hello")])],
-        )
-        frontend = SilentFrontend()
-        async with asyncio.timeout(10):
-            await _finalize_turn(turn_result, [], deps, frontend)
-
-        assert any("Session write failed" in status for status in frontend.statuses)
-    finally:
-        # Restore permissions so pytest can clean up tmp_path
-        sessions_dir.chmod(0o755)

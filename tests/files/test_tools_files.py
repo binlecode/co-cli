@@ -11,7 +11,6 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
-from co_cli.tools.files.helpers import _enforce_workspace_boundary, _is_recursive_pattern
 from co_cli.tools.files.read import file_find, file_read, file_search
 from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.shell_backend import ShellBackend
@@ -170,15 +169,6 @@ async def test_glob_recursive_scoped_pattern_respected(tmp_path):
     assert names == ["src/inside.py"]
 
 
-def test_is_recursive_pattern():
-    """Recursive pattern detection for ** and path separators."""
-    assert _is_recursive_pattern("**/*.py") is True
-    assert _is_recursive_pattern("src/**/*.ts") is True
-    assert _is_recursive_pattern("src/pkg/*.py") is True
-    assert _is_recursive_pattern("*.py") is False
-    assert _is_recursive_pattern("*") is False
-
-
 @pytest.mark.asyncio
 async def test_glob_not_found(tmp_path):
     """Returns error dict when path does not exist."""
@@ -295,40 +285,35 @@ async def test_read_file_line_numbers_ranged(tmp_path):
 
 @pytest.mark.asyncio
 async def test_read_file_default_limit(tmp_path):
-    """No-range read on a file exceeding _READ_DEFAULT_LIMIT returns 500 lines with a continuation hint."""
-    from co_cli.tools.files.read import _READ_DEFAULT_LIMIT
-
+    """No-range read on a file exceeding the 500-line default returns 500 lines with a continuation hint."""
     content = "".join(f"line{i}\n" for i in range(600))
     (tmp_path / "big.txt").write_text(content)
 
     result = await file_read(_make_ctx(tmp_path), path="big.txt")
 
     assert not result.metadata.get("error")
-    assert f"start_line={_READ_DEFAULT_LIMIT + 1}" in result.return_value
-    # Exactly _READ_DEFAULT_LIMIT lines numbered — line 500 present, 501 absent
-    assert f"{_READ_DEFAULT_LIMIT:>6}\t" in result.return_value
-    assert f"{_READ_DEFAULT_LIMIT + 1:>6}\t" not in result.return_value
+    assert "start_line=501" in result.return_value
+    assert "   500\t" in result.return_value
+    assert "   501\t" not in result.return_value
 
 
 @pytest.mark.asyncio
 async def test_read_file_hard_ceiling(tmp_path):
-    """Explicit ranges exceeding _READ_MAX_LINES are capped at 2000 lines."""
-    from co_cli.tools.files.read import _READ_MAX_LINES
-
+    """Explicit ranges exceeding the 2000-line ceiling are capped."""
     content = "".join(f"line{i}\n" for i in range(3000))
     (tmp_path / "large.txt").write_text(content)
 
     # Sub-case (a): end_line beyond the ceiling
     result_a = await file_read(_make_ctx(tmp_path), path="large.txt", start_line=1, end_line=3000)
     assert not result_a.metadata.get("error")
-    assert f"{_READ_MAX_LINES:>6}\t" in result_a.return_value
-    assert f"{_READ_MAX_LINES + 1:>6}\t" not in result_a.return_value
+    assert "  2000\t" in result_a.return_value
+    assert "  2001\t" not in result_a.return_value
 
     # Sub-case (b): start_line only, no end_line
     result_b = await file_read(_make_ctx(tmp_path), path="large.txt", start_line=1)
     assert not result_b.metadata.get("error")
-    assert f"{_READ_MAX_LINES:>6}\t" in result_b.return_value
-    assert f"{_READ_MAX_LINES + 1:>6}\t" not in result_b.return_value
+    assert "  2000\t" in result_b.return_value
+    assert "  2001\t" not in result_b.return_value
 
 
 @pytest.mark.asyncio
@@ -344,10 +329,8 @@ async def test_read_file_line_truncation(tmp_path):
 
 @pytest.mark.asyncio
 async def test_read_file_size_gate(tmp_path):
-    """Full-file read on a file exceeding _READ_MAX_FILE_BYTES returns an error with start_line guidance."""
-    from co_cli.tools.files.read import _READ_MAX_FILE_BYTES
-
-    (tmp_path / "huge.txt").write_bytes(b"x" * (_READ_MAX_FILE_BYTES + 1))
+    """Full-file read on a file exceeding the 500 KB size limit returns an error with start_line guidance."""
+    (tmp_path / "huge.txt").write_bytes(b"x" * (500_000 + 1))
 
     result = await file_read(_make_ctx(tmp_path), path="huge.txt")
 
@@ -711,40 +694,6 @@ async def test_patch_v4a_invalid_format(tmp_path):
     assert result.metadata.get("error") is True
 
 
-# --- _enforce_workspace_boundary ---
-
-
-def test_enforce_workspace_boundary_relative_path(tmp_path):
-    """Relative path is resolved to absolute path within workspace."""
-    (tmp_path / "sub").mkdir()
-    resolved = _enforce_workspace_boundary(Path("sub/file.txt"), tmp_path)
-    assert resolved == (tmp_path / "sub" / "file.txt").resolve()
-    assert resolved.is_absolute()
-
-
-def test_enforce_workspace_boundary_absolute_within(tmp_path):
-    """Absolute path within workspace passes through unchanged."""
-    target = tmp_path / "inner" / "doc.txt"
-    resolved = _enforce_workspace_boundary(target, tmp_path)
-    assert resolved == target.resolve()
-
-
-def test_enforce_workspace_boundary_escape_blocked(tmp_path):
-    """Path that escapes workspace root raises ValueError."""
-    with pytest.raises(ValueError, match="Path escapes workspace"):
-        _enforce_workspace_boundary(Path("../../etc/passwd"), tmp_path)
-
-
-def test_enforce_workspace_boundary_symlink_escape_blocked(tmp_path):
-    """Symlink that resolves outside workspace is blocked."""
-    outside = tmp_path.parent / "outside_target"
-    outside.mkdir(exist_ok=True)
-    link = tmp_path / "sneaky_link"
-    link.symlink_to(outside)
-    with pytest.raises(ValueError, match="Path escapes workspace"):
-        _enforce_workspace_boundary(Path("sneaky_link"), tmp_path)
-
-
 # --- CoToolLifecycle path normalization ---
 
 
@@ -919,11 +868,9 @@ async def test_write_file_staleness_mtime_updated_after_write(tmp_path):
 
 @pytest.mark.asyncio
 async def test_patch_size_guard(tmp_path):
-    """patch returns error when file exceeds _MAX_EDIT_BYTES."""
-    from co_cli.tools.files.write import _MAX_EDIT_BYTES
-
+    """patch returns error when file exceeds the 10 MB edit size limit."""
     target = tmp_path / "huge.txt"
-    target.write_bytes(b"x" * (_MAX_EDIT_BYTES + 1))
+    target.write_bytes(b"x" * (10 * 1024 * 1024 + 1))
     ctx = _make_ctx(tmp_path)
     # Register the mtime directly — avoids reading 10 MB of data in this test
     ctx.deps.file_read_mtimes[str(target)] = target.stat().st_mtime

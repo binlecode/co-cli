@@ -8,12 +8,12 @@ prevents re-scanning already-extracted turns.
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
-    from co_cli.display._core import Frontend
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
@@ -124,13 +124,10 @@ def build_knowledge_extractor_agent() -> "Agent[CoDeps, str]":
 # Fire-and-forget async extraction
 # ---------------------------------------------------------------------------
 
-_in_flight: asyncio.Task[None] | None = None
-
 
 async def _run_extraction_async(
     delta: list,
     deps: "CoDeps",
-    frontend: "Frontend | None",
     *,
     cursor_start: int,
     advance_cursor: bool = True,
@@ -154,11 +151,11 @@ async def _run_extraction_async(
             if advance_cursor:
                 deps.session.last_extracted_message_idx = cursor_start + len(delta)
             return
-        _model = deps.model.model if deps.model else None
+        model = deps.model.model if deps.model else None
         agent = build_knowledge_extractor_agent()
         with tracer.start_as_current_span("co.memory.extraction") as span:
             span.set_attribute("agent.role", "memory_extractor")
-            await agent.run(window, deps=deps, model=_model)
+            await agent.run(window, deps=deps, model=model)
         if advance_cursor:
             deps.session.last_extracted_message_idx = cursor_start + len(delta)
     except asyncio.CancelledError:
@@ -167,47 +164,56 @@ async def _run_extraction_async(
         logger.debug("Background memory extraction failed", exc_info=True)
 
 
-def _on_extraction_done(task: asyncio.Task[None]) -> None:
-    """Callback to clear _in_flight and suppress unhandled exception warnings."""
-    global _in_flight
-    _in_flight = None
-    if not task.cancelled():
-        exc = task.exception()
-        if exc is not None:
-            logger.debug("Extraction task exception: %s", exc)
+def _make_extraction_done_callback(
+    deps: "CoDeps",
+) -> "Callable[[asyncio.Task[None]], None]":
+    """Build a done-callback that clears the slot only if it still holds this task.
+
+    The identity check guards against a future replacer stomping a fresh
+    task ref — the slot is owned by ``deps.runtime`` so multiple deps can
+    have their own in-flight tasks without interference.
+    """
+
+    def _on_done(task: asyncio.Task[None]) -> None:
+        if deps.runtime.extraction_task is task:
+            deps.runtime.extraction_task = None
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                logger.debug("Extraction task exception: %s", exc)
+
+    return _on_done
 
 
 def fire_and_forget_extraction(
     delta: list,
     deps: "CoDeps",
-    frontend: "Frontend | None" = None,
     *,
     cursor_start: int,
     advance_cursor: bool = True,
 ) -> None:
     """Launch extraction as a background task. Skips if one is already running."""
-    global _in_flight
-    if _in_flight is not None and not _in_flight.done():
+    existing = deps.runtime.extraction_task
+    if existing is not None and not existing.done():
         logger.debug("Extraction already in progress, skipping")
         return
 
-    _in_flight = asyncio.get_running_loop().create_task(
+    task = asyncio.get_running_loop().create_task(
         _run_extraction_async(
             delta,
             deps,
-            frontend,
             cursor_start=cursor_start,
             advance_cursor=advance_cursor,
         ),
         name="memory_extraction",
     )
-    _in_flight.add_done_callback(_on_extraction_done)
+    deps.runtime.extraction_task = task
+    task.add_done_callback(_make_extraction_done_callback(deps))
 
 
-async def drain_pending_extraction(timeout_ms: int = 10_000) -> None:
+async def drain_pending_extraction(deps: "CoDeps", timeout_ms: int = 10_000) -> None:
     """Await the in-flight extraction task with a timeout. Cancel on timeout."""
-    global _in_flight
-    task = _in_flight
+    task = deps.runtime.extraction_task
     if task is None or task.done():
         return
     try:
@@ -222,14 +228,14 @@ async def drain_pending_extraction(timeout_ms: int = 10_000) -> None:
     except Exception:
         logger.debug("Drain failed", exc_info=True)
     finally:
-        _in_flight = None
+        if deps.runtime.extraction_task is task:
+            deps.runtime.extraction_task = None
 
 
 async def extract_at_compaction_boundary(
     pre_compact: list,
     post_compact: list,
     deps: "CoDeps",
-    frontend: "Frontend | None" = None,
 ) -> None:
     """Extract knowledge from the pre-compact tail before history is discarded.
 
@@ -244,7 +250,7 @@ async def extract_at_compaction_boundary(
     because ``cursor_start`` indexes into ``pre_compact``, which is a different
     length than ``post_compact``.
     """
-    await drain_pending_extraction()
+    await drain_pending_extraction(deps)
 
     cursor = deps.session.last_extracted_message_idx
     if 0 <= cursor < len(pre_compact):
@@ -252,7 +258,6 @@ async def extract_at_compaction_boundary(
         await _run_extraction_async(
             delta,
             deps,
-            frontend,
             cursor_start=cursor,
             advance_cursor=False,
         )

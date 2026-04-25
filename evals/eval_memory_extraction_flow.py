@@ -189,7 +189,6 @@ async def run_background_round_trip(tmp_dir: Path) -> dict[str, Any]:
         fire_and_forget_extraction(
             messages,
             deps=deps,
-            frontend=SilentFrontend(),
             cursor_start=cursor_start,
         )
         launch_ms = (time.monotonic() - t) * 1000
@@ -202,7 +201,7 @@ async def run_background_round_trip(tmp_dir: Path) -> dict[str, Any]:
         )
 
         t = time.monotonic()
-        await drain_pending_extraction(timeout_ms=_EXTRACTION_TIMEOUT_SECS * 1000)
+        await drain_pending_extraction(deps, timeout_ms=_EXTRACTION_TIMEOUT_SECS * 1000)
         steps.append(
             {
                 "name": "drain_pending_extraction",
@@ -389,7 +388,6 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
         fire_and_forget_extraction(
             turn1_result.messages,
             deps=deps,
-            frontend=frontend,
             cursor_start=cursor_start,
         )
         steps.append(
@@ -402,7 +400,7 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
 
         # Drain — extractor LLM call (NOREASON) + save_memory + DB index
         t = time.monotonic()
-        await drain_pending_extraction(timeout_ms=_EXTRACTION_TIMEOUT_SECS * 1000)
+        await drain_pending_extraction(deps, timeout_ms=_EXTRACTION_TIMEOUT_SECS * 1000)
         drain_ms = (time.monotonic() - t) * 1000
         cursor_after = deps.session.last_extracted_message_idx
         files_written = sorted(memory_dir.glob("*.md"))

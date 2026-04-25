@@ -12,7 +12,6 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from tests._frontend import SilentFrontend
 from tests._settings import make_settings
 
 from co_cli.deps import CoDeps
@@ -178,8 +177,6 @@ async def test_last_extracted_idx_advances_on_empty_window(tmp_path: Path) -> No
         model=None,  # No model needed for empty window fast-path
     )
 
-    frontend = SilentFrontend()
-
     # Build a minimal message list that results in an empty window
     # Messages with no parts will result in `not window.strip()` being true
     messages = [
@@ -189,12 +186,56 @@ async def test_last_extracted_idx_advances_on_empty_window(tmp_path: Path) -> No
     cursor_start = 0
     delta = messages[cursor_start:]
 
-    fire_and_forget_extraction(delta, deps=deps, frontend=frontend, cursor_start=cursor_start)
+    fire_and_forget_extraction(delta, deps=deps, cursor_start=cursor_start)
     async with asyncio.timeout(5):
-        await drain_pending_extraction(timeout_ms=1000)
+        await drain_pending_extraction(deps, timeout_ms=1000)
 
     # Cursor must have advanced to cursor_start + len(delta)
     assert deps.session.last_extracted_message_idx == cursor_start + len(delta)
+
+
+@pytest.mark.asyncio
+async def test_extraction_task_slot_is_per_deps(tmp_path: Path) -> None:
+    """Two CoDeps instances must not share the in-flight extraction slot.
+
+    Regression for the module-level ``_in_flight`` hazard: firing on one deps
+    must not populate another deps' slot, and draining via one deps must not
+    affect the other.
+    """
+    memory_dir_a = tmp_path / "a"
+    memory_dir_b = tmp_path / "b"
+    memory_dir_a.mkdir(parents=True, exist_ok=True)
+    memory_dir_b.mkdir(parents=True, exist_ok=True)
+
+    deps_a = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(),
+        knowledge_dir=memory_dir_a,
+        model=None,
+    )
+    deps_b = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings(),
+        knowledge_dir=memory_dir_b,
+        model=None,
+    )
+    assert deps_a.runtime.extraction_task is None
+    assert deps_b.runtime.extraction_task is None
+
+    # Empty window so the task completes synchronously without an LLM.
+    messages: list = [ModelRequest(parts=[])]
+    fire_and_forget_extraction(messages, deps=deps_a, cursor_start=0)
+
+    # deps_a now owns a task; deps_b's slot must remain untouched.
+    assert deps_a.runtime.extraction_task is not None
+    assert deps_b.runtime.extraction_task is None
+
+    async with asyncio.timeout(5):
+        await drain_pending_extraction(deps_a, timeout_ms=1000)
+
+    # After drain, deps_a's slot is cleared; deps_b's slot is still untouched.
+    assert deps_a.runtime.extraction_task is None
+    assert deps_b.runtime.extraction_task is None
 
 
 @pytest.mark.asyncio
@@ -317,14 +358,13 @@ async def test_cursor_does_not_advance_on_extraction_failure(tmp_path: Path) -> 
         knowledge_dir=memory_dir,
         model=None,
     )
-    frontend = SilentFrontend()
     messages = [
         ModelRequest(parts=[UserPromptPart(content="I always prefer dark mode in editors")]),
     ]
     cursor_start = 0
-    fire_and_forget_extraction(messages, deps=deps, frontend=frontend, cursor_start=cursor_start)
+    fire_and_forget_extraction(messages, deps=deps, cursor_start=cursor_start)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        await drain_pending_extraction(timeout_ms=5_000)
+        await drain_pending_extraction(deps, timeout_ms=5_000)
 
     # Cursor must NOT have advanced — extraction failed
     assert deps.session.last_extracted_message_idx == 0
