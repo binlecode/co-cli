@@ -33,7 +33,7 @@ class TurnGroup:
     start_index: int
 
 
-_CompactionBoundaries = tuple[int, int, int]
+CompactionBoundaries = tuple[int, int, int]
 """(head_end, tail_start, dropped_count) — planner callers receive ``| None`` when no valid boundary exists."""
 
 
@@ -155,7 +155,7 @@ def plan_compaction_boundaries(
     messages: list[ModelMessage],
     budget: int,
     tail_fraction: float,
-) -> _CompactionBoundaries | None:
+) -> CompactionBoundaries | None:
     """Plan ``(head_end, tail_start, dropped_count)`` for a compaction pass.
 
     Algorithm:

@@ -25,8 +25,8 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 
 from co_cli.context._compaction_boundaries import (
+    CompactionBoundaries,
     TurnGroup,
-    _CompactionBoundaries,
     find_first_run_end,
     group_by_turn,
     groups_to_messages,
@@ -59,6 +59,7 @@ __all__ = [
     "COMPACTABLE_KEEP_RECENT",
     "SUMMARY_MARKER_PREFIX",
     "TODO_SNAPSHOT_PREFIX",
+    "CompactionBoundaries",
     "TurnGroup",
     "apply_compaction",
     "build_compaction_marker",
@@ -168,7 +169,7 @@ def _preserve_search_tool_breadcrumbs(
 async def apply_compaction(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
-    bounds: _CompactionBoundaries,
+    bounds: CompactionBoundaries,
     *,
     announce: bool,
     focus: str | None = None,
