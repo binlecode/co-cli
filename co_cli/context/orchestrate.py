@@ -512,7 +512,7 @@ def _check_output_limits(
 def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessage]:
     """Materialize the in-flight user prompt into history for retryable recovery paths."""
     if turn_state.current_input is None:
-        return list(turn_state.current_history)
+        return turn_state.current_history
     return [
         *turn_state.current_history,
         ModelRequest(parts=[UserPromptPart(content=turn_state.current_input)]),
