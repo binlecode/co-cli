@@ -16,15 +16,15 @@ from pydantic import (
     model_validator,
 )
 
-from co_cli.config._memory import MEMORY_ENV_MAP, MemorySettings
-from co_cli.config._observability import OBSERVABILITY_ENV_MAP, ObservabilitySettings
-from co_cli.config._shell import SHELL_ENV_MAP, ShellSettings
-from co_cli.config._tools import TOOLS_ENV_MAP, ToolsSettings
-from co_cli.config._web import WEB_ENV_MAP, WebSettings
 from co_cli.config.compaction import COMPACTION_ENV_MAP, CompactionSettings
 from co_cli.config.knowledge import KNOWLEDGE_ENV_MAP, KnowledgeSettings
 from co_cli.config.llm import LLM_ENV_MAP, LlmSettings, resolve_api_key_from_env
 from co_cli.config.mcp import DEFAULT_MCP_SERVERS, MCPServerSettings, parse_mcp_servers_from_env
+from co_cli.config.memory import MEMORY_ENV_MAP, MemorySettings
+from co_cli.config.observability import OBSERVABILITY_ENV_MAP, ObservabilitySettings
+from co_cli.config.shell import SHELL_ENV_MAP, ShellSettings
+from co_cli.config.tools import TOOLS_ENV_MAP, ToolsSettings
+from co_cli.config.web import WEB_ENV_MAP, WebSettings
 
 APP_NAME = "co-cli"
 
