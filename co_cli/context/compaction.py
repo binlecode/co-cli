@@ -245,6 +245,11 @@ async def recover_overflow_history(
         return None
 
     result, _ = await apply_compaction(ctx, messages, bounds, announce=False)
+    # Unconditional reset (asymmetric with proactive's yield-conditional bookkeeping):
+    # overflow is reactive, not speculative — a forced recovery already proves the
+    # system needed to compact. Crediting it as a clean resync prevents the gate from
+    # staying tripped and suppressing the next proactive run, which would just produce
+    # another overflow.
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
     return result
 
@@ -275,17 +280,18 @@ async def emergency_recover_overflow_history(
         *_preserve_search_tool_breadcrumbs(dropped),
         *groups_to_messages([groups[-1]]),
     ]
+    from co_cli.knowledge._distiller import extract_at_compaction_boundary
+
+    await extract_at_compaction_boundary(messages, result, ctx.deps)
     ctx.deps.runtime.history_compaction_applied = True
     ctx.deps.runtime.compacted_in_current_turn = True
+    # See recover_overflow_history for the unconditional-reset rationale.
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
     log.warning(
         "Emergency overflow recovery: planner returned None; dropped all middle groups "
         "(len(groups)=%d).",
         len(groups),
     )
-    from co_cli.knowledge._distiller import extract_at_compaction_boundary
-
-    await extract_at_compaction_boundary(messages, result, ctx.deps)
     return result
 
 
