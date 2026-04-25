@@ -282,8 +282,8 @@ def load_config(
         with open(user_config) as f:
             try:
                 data = json.load(f)
-            except Exception as e:
-                print(f"Error loading settings.json: {e}. Using defaults.")  # noqa: T201 — bootstrap error before logging is configured
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Malformed settings file {user_config}: {e}") from e
 
     context = {"env": _env} if _env is not None else None
     try:

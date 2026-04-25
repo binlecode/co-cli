@@ -32,14 +32,13 @@ def test_missing_user_config_uses_defaults(tmp_path):
     assert settings.theme == "light"
 
 
-def test_malformed_user_config_skipped(tmp_path, capsys):
-    """Malformed user settings.json is skipped gracefully, falling back to defaults."""
+def test_malformed_user_config_raises(tmp_path):
+    """Malformed user settings.json raises ValueError — fail fast, do not silently fall back."""
     user_settings = tmp_path / "settings.json"
     user_settings.write_text("not json{{{")
 
-    settings = load_config(_user_config_path=user_settings)
-    assert settings.theme == "light"
-    assert "Error loading settings.json" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="Malformed settings file"):
+        load_config(_user_config_path=user_settings)
 
 
 def test_knowledge_llm_reranker_missing_provider_rejected(tmp_path):
