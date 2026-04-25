@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -186,7 +187,11 @@ def _sync_knowledge_store(
     return store
 
 
-async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDeps:
+async def create_deps(
+    frontend: TerminalFrontend,
+    stack: AsyncExitStack,
+    theme_override: str | None = None,
+) -> CoDeps:
     """Assemble CoDeps from settings: config, registries, MCP, knowledge, skills.
 
     MCP servers are entered on the provided stack so they stay alive for the
@@ -199,7 +204,9 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     from co_cli.agent._mcp import discover_mcp_tools
     from co_cli.llm._factory import build_model
 
-    config = settings
+    config = copy.deepcopy(settings)
+    if theme_override:
+        config.theme = theme_override
     cwd = Path.cwd()
     paths = resolve_workspace_paths(config, cwd)
 

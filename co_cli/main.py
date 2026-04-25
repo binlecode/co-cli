@@ -260,7 +260,10 @@ def _apply_command_outcome(
     return True, message_history, "", {}
 
 
-async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
+async def _chat_loop(
+    reasoning_display: str = DEFAULT_REASONING_DISPLAY,
+    theme: str | None = None,
+):
     frontend = TerminalFrontend()
 
     completer = WordCompleter([f"/{name}" for name in BUILTIN_COMMANDS], sentence=True)
@@ -273,7 +276,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     deps: CoDeps | None = None
     try:
         try:
-            deps = await create_deps(frontend, stack)
+            deps = await create_deps(frontend, stack, theme_override=theme)
         except ValueError as e:
             console.print(f"[bold red]Startup error:[/bold red] {e}")
             raise SystemExit(1) from e
@@ -353,7 +356,6 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None) -> None:
     """Resolve startup options and enter the interactive chat loop."""
     if theme:
-        settings.theme = theme
         set_theme(theme)
     # Resolve effective mode: explicit flag > --verbose alias > persistent config default
     if reasoning_display is not None:
@@ -368,7 +370,7 @@ def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None)
     else:
         effective_mode = settings.reasoning_display
     try:
-        asyncio.run(_chat_loop(reasoning_display=effective_mode))
+        asyncio.run(_chat_loop(reasoning_display=effective_mode, theme=theme))
     except KeyboardInterrupt:
         pass  # Safety net: asyncio.run() may re-raise after task cancellation
 
