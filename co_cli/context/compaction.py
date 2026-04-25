@@ -122,7 +122,7 @@ async def summarize_dropped_messages(
         log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
         ctx.deps.runtime.compaction_failure_count += 1
         return None
-    if count >= 3:
+    elif count >= 3:
         log.info("Compaction: circuit breaker probe (count=%d)", count)
 
     if announce:
