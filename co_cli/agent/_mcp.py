@@ -1,5 +1,6 @@
 """MCP toolset building and tool discovery."""
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -18,14 +19,15 @@ class _MCPToolsetEntry:
 
     ``server`` is the raw MCPServer (before approval_required() wrapping) so
     ``list_tools()`` can be called directly without walking the wrapper chain.
-    ``approval`` and ``prefix`` are recorded at build time; discovery reads them
-    without inspecting wrapper topology.
+    ``approval``, ``prefix``, and ``timeout`` are recorded at build time; discovery
+    reads them without inspecting wrapper topology.
     """
 
     toolset: DeferredLoadingToolset
     server: Any  # MCPServer subclass — lazily imported; avoids top-level pydantic_ai.mcp import
     approval: bool
     prefix: str
+    timeout: float
 
 
 def _build_mcp_toolsets(config: Settings) -> list[_MCPToolsetEntry]:
@@ -67,6 +69,7 @@ def _build_mcp_toolsets(config: Settings) -> list[_MCPToolsetEntry]:
                 server=mcp_server,
                 approval=approval,
                 prefix=cfg.prefix or name,
+                timeout=cfg.timeout,
             )
         )
     return entries
@@ -90,7 +93,8 @@ async def discover_mcp_tools(
     for entry in mcp_entries:
         prefix = entry.prefix
         try:
-            tools = await entry.server.list_tools()
+            async with asyncio.timeout(entry.timeout):
+                tools = await entry.server.list_tools()
             for t in tools:
                 name = f"{prefix}_{t.name}" if prefix else t.name
                 if name not in exclude:

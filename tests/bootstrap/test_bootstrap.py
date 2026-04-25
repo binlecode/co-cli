@@ -426,6 +426,7 @@ async def test_discover_mcp_tools_records_tool_prefix_for_missing_binary() -> No
         server=server,
         approval=False,
         prefix="testprefix",
+        timeout=5.0,
     )
 
     _, errors, _ = await discover_mcp_tools([entry], exclude=set())
