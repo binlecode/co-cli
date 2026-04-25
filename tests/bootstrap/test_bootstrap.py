@@ -9,7 +9,7 @@ from pydantic_ai.mcp import MCPServerStdio
 from pydantic_ai.toolsets import DeferredLoadingToolset
 from tests._settings import make_settings
 
-from co_cli.agent._mcp import _MCPToolsetEntry, discover_mcp_tools
+from co_cli.agent._mcp import MCPToolsetEntry, discover_mcp_tools
 from co_cli.bootstrap.core import (
     _discover_knowledge_backend,
     _resolve_reranker,
@@ -421,7 +421,7 @@ async def test_discover_mcp_tools_records_tool_prefix_for_missing_binary() -> No
         args=[],
         tool_prefix="testprefix",
     )
-    entry = _MCPToolsetEntry(
+    entry = MCPToolsetEntry(
         toolset=DeferredLoadingToolset(server),
         server=server,
         approval=False,
@@ -437,7 +437,7 @@ async def test_discover_mcp_tools_records_tool_prefix_for_missing_binary() -> No
 
 def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     """Project skill directory with one valid skill: skill appears in loaded commands."""
-    from co_cli.commands._commands import _load_skills, get_skill_registry
+    from co_cli.commands._commands import get_skill_registry, load_skills
     from co_cli.config._core import settings
 
     skills_dir = tmp_path / "skills"
@@ -450,10 +450,10 @@ def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     )
     (skills_dir / "test-bootstrap-skill.md").write_text(skill_content, encoding="utf-8")
 
-    skill_commands = _load_skills(skills_dir, settings=settings)
+    skill_commands = load_skills(skills_dir, settings=settings)
 
     assert "test-bootstrap-skill" in skill_commands, (
-        "Project skill must appear in skill_commands after _load_skills"
+        "Project skill must appear in skill_commands after load_skills"
     )
     assert len(get_skill_registry(skill_commands)) >= 1, (
         "skill_count must be at least 1 when a valid project skill is loaded"
@@ -498,11 +498,11 @@ def test_restore_session_readonly_dir_does_not_raise(tmp_path: Path) -> None:
         os.chmod(readonly_dir, 0o755)
 
 
-def test_init_memory_index_indexes_past_sessions(tmp_path: Path) -> None:
-    """_init_memory_index opens the DB and syncs past sessions; deps.memory_index is set."""
+def testinit_memory_index_indexes_past_sessions(tmp_path: Path) -> None:
+    """init_memory_index opens the DB and syncs past sessions; deps.memory_index is set."""
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-    from co_cli.bootstrap.core import _init_memory_index
+    from co_cli.bootstrap.core import init_memory_index
     from co_cli.memory._store import MemoryIndex
     from co_cli.memory.transcript import append_messages
 
@@ -544,10 +544,10 @@ def test_init_memory_index_indexes_past_sessions(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path)
 
-    _init_memory_index(deps, current_path, TerminalFrontend())
+    init_memory_index(deps, current_path, TerminalFrontend())
 
     assert isinstance(deps.memory_index, MemoryIndex), (
-        "deps.memory_index must be a MemoryIndex after _init_memory_index"
+        "deps.memory_index must be a MemoryIndex after init_memory_index"
     )
     results = deps.memory_index.search("Fibonacci sequence")
     assert len(results) >= 1, "Indexed past session must be searchable by keyword"

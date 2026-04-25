@@ -465,7 +465,7 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
     # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
     user_skills_dir = ctx.deps.user_skills_dir
     errors: list[str] = []
-    new_skills = _load_skills(
+    new_skills = load_skills(
         ctx.deps.skills_dir, _settings, user_skills_dir=user_skills_dir, errors=errors
     )
     for msg in errors:
@@ -598,7 +598,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
     ctx.deps.user_skills_dir.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
 
-    new_skills = _load_skills(
+    new_skills = load_skills(
         ctx.deps.skills_dir, _settings, user_skills_dir=ctx.deps.user_skills_dir
     )
     set_skill_commands(new_skills, ctx.deps)
@@ -957,7 +957,7 @@ def _load_skill_file(
             errors.append(msg)
 
 
-def _load_skills(
+def load_skills(
     skills_dir: Path,
     settings: Any = None,
     *,

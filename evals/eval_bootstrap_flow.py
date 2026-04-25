@@ -3,7 +3,7 @@
 
 Validates the canonical startup path described in ``docs/specs/bootstrap.md``:
 
-  create_deps() -> build_agent() -> restore_session() -> _init_memory_index()
+  create_deps() -> build_agent() -> restore_session() -> init_memory_index()
   -> display_welcome_banner()
 
 The eval uses the real configured system, records the emitted startup statuses,
@@ -29,7 +29,7 @@ from evals._timeouts import EVAL_BOOTSTRAP_TIMEOUT_SECS
 
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import _init_memory_index, create_deps, restore_session
+from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
 from co_cli.commands._commands import BUILTIN_COMMANDS, _build_completer_words, get_skill_registry
 from co_cli.config._core import get_settings
 from co_cli.deps import CoDeps, ToolSourceEnum
@@ -302,7 +302,7 @@ def _run_session_case(
     deps: CoDeps | None,
     frontend: TrackingFrontend,
 ) -> EvalCaseResult:
-    """Run restore_session() and _init_memory_index() and validate ordering/state."""
+    """Run restore_session() and init_memory_index() and validate ordering/state."""
     if deps is None:
         return _make_skip_case("restore-session-index", "Skipped because create-deps failed")
 
@@ -322,7 +322,7 @@ def _run_session_case(
         )
 
         step_t0 = time.monotonic()
-        _init_memory_index(deps, current_session_path, frontend)
+        init_memory_index(deps, current_session_path, frontend)
         if deps.memory_index is None:
             index_detail = "memory_index=None"
         else:

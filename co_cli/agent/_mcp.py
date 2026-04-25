@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class _MCPToolsetEntry:
+class MCPToolsetEntry:
     """MCP toolset paired with its build-time policy and direct server reference.
 
     ``server`` is the raw MCPServer (before approval_required() wrapping) so
@@ -30,13 +30,13 @@ class _MCPToolsetEntry:
     timeout: float
 
 
-def _build_mcp_toolsets(config: Settings) -> list[_MCPToolsetEntry]:
+def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
     """Build MCP toolsets and record their policy at construction time."""
     if not config.mcp_servers:
         return []
     from pydantic_ai.mcp import MCPServerSSE, MCPServerStdio, MCPServerStreamableHTTP
 
-    entries: list[_MCPToolsetEntry] = []
+    entries: list[MCPToolsetEntry] = []
     for name, cfg in config.mcp_servers.items():
         if cfg.url:
             if cfg.url.rstrip("/").endswith("/sse"):
@@ -64,7 +64,7 @@ def _build_mcp_toolsets(config: Settings) -> list[_MCPToolsetEntry]:
         approval = cfg.approval == "ask"
         inner = mcp_server.approval_required() if approval else mcp_server
         entries.append(
-            _MCPToolsetEntry(
+            MCPToolsetEntry(
                 toolset=DeferredLoadingToolset(inner),
                 server=mcp_server,
                 approval=approval,
@@ -76,11 +76,11 @@ def _build_mcp_toolsets(config: Settings) -> list[_MCPToolsetEntry]:
 
 
 async def discover_mcp_tools(
-    mcp_entries: list[_MCPToolsetEntry], exclude: set[str]
+    mcp_entries: list[MCPToolsetEntry], exclude: set[str]
 ) -> tuple[list[str], dict[str, str], dict[str, ToolInfo]]:
     """Discover MCP tool names by connecting to servers and listing tools.
 
-    Reads policy (approval, prefix) from the recorded ``_MCPToolsetEntry``; no
+    Reads policy (approval, prefix) from the recorded ``MCPToolsetEntry``; no
     wrapper chain walking. Returns (tool_names, errors, mcp_index) where errors
     maps server prefix to the error string for each server where list_tools()
     failed, and mcp_index maps tool name to ToolInfo metadata. Tool names exclude

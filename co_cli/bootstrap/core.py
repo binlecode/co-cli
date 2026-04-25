@@ -232,9 +232,9 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     # Step 4: MCP connect + discovery
     degradations: dict[str, str] = {}
     if tool_registry.mcp_toolsets:
-        from co_cli.agent._mcp import _MCPToolsetEntry
+        from co_cli.agent._mcp import MCPToolsetEntry
 
-        connected: list[_MCPToolsetEntry] = []
+        connected: list[MCPToolsetEntry] = []
         for entry in tool_registry.mcp_toolsets:
             try:
                 await stack.enter_async_context(entry.toolset)
@@ -251,10 +251,10 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
             tool_registry.tool_index.update(mcp_index)
 
     # Step 5: load skills (filesystem reads — three-pass precedence merge)
-    from co_cli.commands._commands import _load_skills
+    from co_cli.commands._commands import load_skills
 
     skill_errors: list[str] = []
-    skill_commands = _load_skills(
+    skill_commands = load_skills(
         paths["skills_dir"],
         settings=config,
         user_skills_dir=paths["user_skills_dir"],
@@ -290,7 +290,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     )
 
 
-def _init_memory_index(
+def init_memory_index(
     deps: CoDeps,
     current_session_path: Path,
     frontend: TerminalFrontend,

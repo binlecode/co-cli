@@ -16,7 +16,7 @@ from pydantic_ai.messages import ModelMessage
 
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import _init_memory_index, create_deps, restore_session
+from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
 from co_cli.bootstrap.render_status import (
     check_security,
     get_status,
@@ -288,7 +288,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
         current_session_path = restore_session(deps, frontend)
-        _init_memory_index(deps, current_session_path, frontend)
+        init_memory_index(deps, current_session_path, frontend)
         _sweep_tool_results(deps)
         from co_cli.commands._commands import get_skill_registry
 

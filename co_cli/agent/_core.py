@@ -34,7 +34,7 @@ class ToolRegistry:
     """
 
     toolset: AbstractToolset[CoDeps]
-    mcp_toolsets: list  # list[_MCPToolsetEntry] — pydantic_ai.mcp type; avoid circular import
+    mcp_toolsets: list  # list[MCPToolsetEntry] — pydantic_ai.mcp type; avoid circular import
     tool_index: dict[str, ToolInfo]
 
 
