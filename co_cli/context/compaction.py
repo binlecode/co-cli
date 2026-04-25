@@ -189,8 +189,6 @@ async def apply_compaction(
     summary_text = await summarize_dropped_messages(ctx, dropped, announce=announce, focus=focus)
     marker = build_compaction_marker(dropped_count, summary_text)
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
-    ctx.deps.runtime.history_compaction_applied = True
-    ctx.deps.runtime.compacted_in_current_turn = True
     result = [
         *messages[:head_end],
         marker,
@@ -201,6 +199,8 @@ async def apply_compaction(
     from co_cli.knowledge._distiller import extract_at_compaction_boundary
 
     await extract_at_compaction_boundary(messages, result, ctx.deps)
+    ctx.deps.runtime.history_compaction_applied = True
+    ctx.deps.runtime.compacted_in_current_turn = True
     return result, summary_text
 
 
