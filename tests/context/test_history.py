@@ -740,7 +740,7 @@ async def test_recover_overflow_history_preserves_pending_user_turn():
         if isinstance(part, UserPromptPart) and isinstance(part.content, str)
     ]
     assert "current request" in user_texts
-    assert ctx.deps.runtime.history_compaction_applied is True
+    assert ctx.deps.runtime.compaction_applied_this_turn is True
 
 
 @pytest.mark.asyncio
@@ -758,8 +758,7 @@ async def test_emergency_recover_overflow_sets_runtime_flags():
     assert result is not None
     result_groups = group_by_turn(result)
     assert len(result_groups) == 3
-    assert ctx.deps.runtime.history_compaction_applied is True
-    assert ctx.deps.runtime.compacted_in_current_turn is True
+    assert ctx.deps.runtime.compaction_applied_this_turn is True
 
 
 @pytest.mark.asyncio
@@ -777,7 +776,7 @@ async def test_emergency_recover_overflow_returns_none_for_two_groups():
     result = await emergency_recover_overflow_history(ctx, msgs)
 
     assert result is None
-    assert ctx.deps.runtime.history_compaction_applied is False
+    assert ctx.deps.runtime.compaction_applied_this_turn is False
 
 
 @pytest.mark.asyncio

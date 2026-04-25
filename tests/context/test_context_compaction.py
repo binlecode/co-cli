@@ -411,24 +411,24 @@ async def test_pre_turn_hygiene_no_op_in_proactive_zone() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_turn_hygiene_sets_history_compaction_applied() -> None:
-    """history_compaction_applied is True after hygiene compaction fires."""
+async def test_pre_turn_hygiene_sets_compaction_applied_this_turn() -> None:
+    """compaction_applied_this_turn is True after hygiene compaction fires."""
     msgs = _make_messages(10, body_chars=40_000)
     deps = _make_hygiene_deps()
-    assert deps.runtime.history_compaction_applied is False
+    assert deps.runtime.compaction_applied_this_turn is False
     result = await pre_turn_window_compaction(deps, msgs)
     assert len(result) < len(msgs)
-    assert deps.runtime.history_compaction_applied is True
+    assert deps.runtime.compaction_applied_this_turn is True
 
 
 @pytest.mark.asyncio
 async def test_pre_turn_hygiene_no_flag_when_no_compaction() -> None:
-    """history_compaction_applied remains False when hygiene does not fire."""
+    """compaction_applied_this_turn remains False when hygiene does not fire."""
     msgs = _make_messages(4)
     deps = _make_hygiene_deps()
-    assert deps.runtime.history_compaction_applied is False
+    assert deps.runtime.compaction_applied_this_turn is False
     await pre_turn_window_compaction(deps, msgs)
-    assert deps.runtime.history_compaction_applied is False
+    assert deps.runtime.compaction_applied_this_turn is False
 
 
 @pytest.mark.asyncio

@@ -119,7 +119,7 @@ Two boundary rules keep the loop legible:
 
 - REPL-owned transcript state lives in `message_history` inside `main.py`
 - orchestration never mutates REPL history in place; it returns a `TurnResult` with the next transcript snapshot
-- transcript durability is tracked separately via `persisted_message_count` and `history_compaction_applied`
+- transcript durability is tracked separately via `persisted_message_count` and `compaction_applied_this_turn`
 
 ## 2. Core Logic
 
@@ -157,7 +157,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `safety_state` | updated by the `safety_prompt` dynamic instruction before each model-bound segment |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
-| `compaction_failure_count` | cross-turn circuit breaker for inline compaction (>= 3 trips breaker; every 10 skips a probe is attempted) |
+| `compaction_skip_count` | cross-turn circuit breaker for inline compaction (>= 3 trips breaker; every 10 skips a probe is attempted) |
 | `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
 
 ### 2.2 Stream Segment Contract
@@ -268,7 +268,7 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-**Pre-turn hygiene (M0).** Before the agent loop starts, `run_turn()` calls `pre_turn_window_compaction()` after `reset_for_turn()` and before `frontend.on_status`. This is a maintenance compaction using `max(estimate_message_tokens(messages), latest_response_input_tokens(messages))` — the same `max(estimate, reported)` token signal the proactive trigger uses, read from the last `ModelResponse.usage`. It fires when that token count exceeds `compaction.hygiene_ratio` (0.88) of the budget — higher than the proactive threshold to avoid false positives from the char/4 estimator. Both M0 and M3 are thin wrappers over the shared `_compact_window_if_pressured` core; M0 passes `apply_thrash_gate=False` so the safety-net trigger fires even when M3's anti-thrash gate has suppressed proactive runs. Fails open: any exception returns history unchanged so the turn proceeds. When it fires, it sets `deps.runtime.history_compaction_applied`, which branches the transcript into a child session on finalization. See [compaction.md](compaction.md) for M0 details.
+**Pre-turn hygiene (M0).** Before the agent loop starts, `run_turn()` calls `pre_turn_window_compaction()` after `reset_for_turn()` and before `frontend.on_status`. This is a maintenance compaction using `max(estimate_message_tokens(messages), latest_response_input_tokens(messages))` — the same `max(estimate, reported)` token signal the proactive trigger uses, read from the last `ModelResponse.usage`. It fires when that token count exceeds `compaction.hygiene_ratio` (0.88) of the budget — higher than the proactive threshold to avoid false positives from the char/4 estimator. Both M0 and M3 are thin wrappers over the shared `_compact_window_if_pressured` core; M0 passes `apply_thrash_gate=False` so the safety-net trigger fires even when M3's anti-thrash gate has suppressed proactive runs. Fails open: any exception returns history unchanged so the turn proceeds. When it fires, it sets `deps.runtime.compaction_applied_this_turn`, which branches the transcript into a child session on finalization. See [compaction.md](compaction.md) for M0 details.
 
 The main agent is built with three registered history processors (pure transformers) in this exact order:
 
@@ -303,9 +303,9 @@ Compaction behavior:
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
-- a circuit breaker (`deps.runtime.compaction_failure_count`) trips at 3 consecutive failures; tripped state uses static markers but probes the LLM once every `_CIRCUIT_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
+- a circuit breaker (`deps.runtime.compaction_skip_count`) trips at 3 consecutive failures; tripped state uses static markers but probes the LLM once every `_CIRCUIT_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
-- successful history replacement sets `deps.runtime.history_compaction_applied`, which later tells `_finalize_turn()` to persist into a child transcript instead of appending into the parent transcript
+- successful history replacement sets `deps.runtime.compaction_applied_this_turn`, which later tells `_finalize_turn()` to persist into a child transcript instead of appending into the parent transcript
 
 Memory recall is also per-turn, not sticky:
 
@@ -373,7 +373,7 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | approvals outside most tool bodies | `_collect_deferred_tool_approvals()` / `_run_approval_loop()` | aligned |
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
 | error handling and interrupts owned by the loop | `run_turn()` | aligned |
-| compaction as an inline concern with circuit breaker | `proactive_window_processor()` with `compaction_failure_count` | aligned |
+| compaction as an inline concern with circuit breaker | `proactive_window_processor()` with `compaction_skip_count` | aligned |
 | isolated specialist contexts | delegation agents use `fork_deps()` and stay outside the foreground loop | aligned |
 
 The intentional simplification remains:

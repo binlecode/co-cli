@@ -129,7 +129,7 @@ async def _finalize_turn(
             sessions_dir=deps.sessions_dir,
             messages=turn_result.messages,
             persisted_message_count=deps.session.persisted_message_count,
-            history_compacted=deps.runtime.history_compaction_applied,
+            history_compacted=deps.runtime.compaction_applied_this_turn,
         )
     except OSError as e:
         frontend.on_status(

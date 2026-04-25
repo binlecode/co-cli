@@ -114,7 +114,7 @@ Startup sequencing detail is in [bootstrap.md](bootstrap.md); turn execution in 
   - `skill_commands`: Discovered `SkillConfig` instances
 - **Mutable State** (split by lifecycle)
   - `session`: `CoSessionState` (persists across turns: `session_todos`, `background_tasks`, `session_approval_rules`, etc.)
-  - `runtime`: `CoRuntimeState` (managed by orchestration: `turn_usage`, `compaction_failure_count`, `compacted_in_current_turn`)
+  - `runtime`: `CoRuntimeState` (managed by orchestration: `turn_usage`, `compaction_skip_count`, `compaction_applied_this_turn`)
 - **Paths** (resolved workspace and user-global paths)
   - `workspace_root`, `knowledge_dir`, `sessions_dir`, etc.
 - **Degradations**
@@ -147,6 +147,7 @@ The specialized DESIGN docs own the detailed behavior inside each boundary:
 - REPL loop, completer, and slash commands: [tui.md](tui.md)
 - tool registration and approval behavior: [tools.md](tools.md)
 - skill loading and dispatch: [skills.md](skills.md)
+- personality configuration, character assets, and soul files: [personality.md](personality.md)
 - provider and model selection rules: [llm-models.md](llm-models.md)
 - tracing and log viewers: [observability.md](observability.md)
 

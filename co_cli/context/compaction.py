@@ -234,8 +234,7 @@ async def apply_compaction(
     from co_cli.knowledge._distiller import extract_at_compaction_boundary
 
     await extract_at_compaction_boundary(messages, result, ctx.deps)
-    ctx.deps.runtime.history_compaction_applied = True
-    ctx.deps.runtime.compacted_in_current_turn = True
+    ctx.deps.runtime.compaction_applied_this_turn = True
     return result, summary_text
 
 
@@ -319,8 +318,7 @@ async def emergency_recover_overflow_history(
     from co_cli.knowledge._distiller import extract_at_compaction_boundary
 
     await extract_at_compaction_boundary(messages, result, ctx.deps)
-    ctx.deps.runtime.history_compaction_applied = True
-    ctx.deps.runtime.compacted_in_current_turn = True
+    ctx.deps.runtime.compaction_applied_this_turn = True
     # See recover_overflow_history for the unconditional-reset rationale.
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
     log.warning(
@@ -394,7 +392,9 @@ async def _compact_window_if_pressured(
     cfg = ctx.deps.config.compaction
 
     reported = (
-        0 if ctx.deps.runtime.compacted_in_current_turn else latest_response_input_tokens(messages)
+        0
+        if ctx.deps.runtime.compaction_applied_this_turn
+        else latest_response_input_tokens(messages)
     )
     token_count = max(estimate_message_tokens(messages), reported)
     token_threshold = max(int(budget * ratio), cfg.min_context_length_tokens)

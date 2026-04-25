@@ -371,7 +371,7 @@ cfg = ctx.deps.config.compaction
 
 # Suppress stale API-reported count if compaction already ran in this turn —
 # the reported value reflects the pre-compaction context and would re-trigger spuriously.
-reported = 0 if ctx.deps.runtime.compacted_in_current_turn else latest_response_input_tokens(messages)
+reported = 0 if ctx.deps.runtime.compaction_applied_this_turn else latest_response_input_tokens(messages)
 estimate = estimate_message_tokens(messages)
 token_count = max(estimate, reported)       # floor — stale report cannot suppress
 
@@ -434,8 +434,7 @@ async def apply_compaction(ctx, messages, bounds, *, announce, focus=None):
     )
     marker = build_compaction_marker(dropped_count, summary)   # summary or static
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
-    ctx.deps.runtime.history_compaction_applied = True
-    ctx.deps.runtime.compacted_in_current_turn = True
+    ctx.deps.runtime.compaction_applied_this_turn = True
     result = [
         *messages[:head_end],
         marker,
@@ -501,9 +500,9 @@ Prior-summary detection uses `startswith(SUMMARY_MARKER_PREFIX)` with a shared c
 
 | State | Behavior |
 |---|---|
-| `compaction_failure_count == 0` (healthy) | Attempt summarizer; on success keep at 0; on failure fall back to static marker, increment to 1. |
-| `compaction_failure_count == 1 or 2` | Attempt summarizer; on success reset to 0; on failure fall back to static, increment. |
-| `compaction_failure_count >= 3` (tripped) | Skip summarizer; static marker; increment counter. Every `_CIRCUIT_BREAKER_PROBE_EVERY` (10) skips, attempt the LLM once — a probe. Probe success resets to 0; probe failure increments, next probe 10 skips later. |
+| `compaction_skip_count == 0` (healthy) | Attempt summarizer; on success keep at 0; on failure fall back to static marker, increment to 1. |
+| `compaction_skip_count == 1 or 2` | Attempt summarizer; on success reset to 0; on failure fall back to static, increment. |
+| `compaction_skip_count >= 3` (tripped) | Skip summarizer; static marker; increment counter. Every `_CIRCUIT_BREAKER_PROBE_EVERY` (10) skips, attempt the LLM once — a probe. Probe success resets to 0; probe failure increments, next probe 10 skips later. |
 | Any success at any state | Reset counter to 0. |
 
 Rationale: three-strikes trips the breaker to avoid burning LLM cost when the provider is genuinely broken. The periodic probe recovers sessions that tripped the breaker early on a transient hiccup — without the probe, the session would remain on static markers for its lifetime.
@@ -600,7 +599,7 @@ One successful compaction per pressure event per turn.
 
 | Failure mode | Fallback |
 |---|---|
-| Summarizer raises (transient) | Static marker for this request; warning logged; `compaction_failure_count += 1` |
+| Summarizer raises (transient) | Static marker for this request; warning logged; `compaction_skip_count += 1` |
 | Summarizer raises 3+ consecutive times | Circuit breaker trips; static markers used for most attempts; LLM probed once every 10 skips — probe success resets counter |
 | `ctx.deps.model is None` (sub-agent context) | Static marker without LLM attempt |
 | `plan_compaction_boundaries` returns `None` (proactive) | Return messages unchanged; next request re-checks |
