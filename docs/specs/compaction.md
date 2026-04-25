@@ -39,7 +39,7 @@ Covers how co-cli keeps context bounded under pressure. Prompt assembly and hist
 
 ## 1. What & How
 
-Compaction is **four mechanisms** operating at different lifecycle points, with one shared summarizer helper and one emergency entry point.
+Compaction is **four mechanisms** operating at different lifecycle points, plus a user-triggered manual entry, all sharing one summarizer helper and one emergency entry point.
 
 | Mechanism | When | Unit | Reversible? |
 |---|---|---|---|
@@ -48,9 +48,11 @@ Compaction is **four mechanisms** operating at different lifecycle points, with 
 | **M2 — Prepass recency clearing** | Before every `ModelRequestNode` | Individual parts in older messages | Irreversible for the session (content replaced with placeholder string) |
 | **M3 — Window compaction** | Before every `ModelRequestNode`, when `token_count > threshold` | Turn-group range | Lossy (middle replaced by summary marker) |
 
-**Helper:** `gather_compaction_context` — enrichment collected from sources that survive M2 (`ToolCallPart.args` for file paths, session todos, prior summaries). Called from inside M3 and the overflow entry.
+**Helper:** `gather_compaction_context` — enrichment collected from sources that survive M2 (`ToolCallPart.args` for file paths, session todos, prior summaries). Called from inside `summarize_dropped_messages` so every LLM-capable compaction path inherits it.
 
 **Emergency entry:** `recover_overflow_history` — same planner, same summarizer, same output shape as M3; gated by provider context-length rejection; one-shot per turn.
+
+**Manual entry:** `/compact [focus]` — user-triggered full-history replacement. Routes through the shared `apply_compaction` helper with bounds `(0, n, n)`, inheriting the same degradation policy as M3 (no-model, circuit-breaker, and provider-failure all fall back to a static marker rather than aborting). The `[focus]` argument threads through to `summarize_messages` for topic emphasis.
 
 **Triggering granularity is per request, not per turn.** pydantic-ai runs `history_processors` before every `ModelRequestNode`. A tool-calling turn with N calls fires N+1 processor passes. Matches the convergent peer pattern (fork-cc: "before request"; codex: pre-turn + mid-turn; hermes: in-loop; opencode: next-loop-pass).
 
@@ -421,41 +423,36 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 
 `_MIN_RETAINED_TURN_GROUPS = 1` is a hardcoded correctness invariant — not user-configurable. The last turn group is retained unconditionally even when its tokens alone exceed `tail_fraction * budget`. Active-user anchoring guarantees the latest `UserPromptPart` is never dropped into the compacted middle.
 
-**Compaction assembly:**
+**Compaction assembly** is the shared `apply_compaction` helper, called by proactive (M3), planner-based overflow recovery, and manual `/compact`:
+
 ```
-head = messages[:head_end]
-tail = messages[tail_start:]
-dropped = messages[head_end:tail_start]
-kept_ids = {id(m) for m in head} | {id(m) for m in tail}
+async def apply_compaction(ctx, messages, bounds, *, announce, focus=None):
+    head_end, tail_start, dropped_count = bounds
+    dropped = messages[head_end:tail_start]
+    summary = await summarize_dropped_messages(
+        ctx, dropped, announce=announce, focus=focus
+    )
+    marker = build_compaction_marker(dropped_count, summary)   # summary or static
+    todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
+    ctx.deps.runtime.history_compaction_applied = True
+    ctx.deps.runtime.compacted_in_current_turn = True
+    result = [
+        *messages[:head_end],
+        marker,
+        *([todo_snapshot] if todo_snapshot is not None else []),
+        *_preserve_search_tool_breadcrumbs(dropped),
+        *messages[tail_start:],
+    ]
+    await extract_at_compaction_boundary(messages, result, ctx.deps)
+    return result, summary
+```
 
-enrichment = gather_compaction_context(ctx, dropped)
+`summarize_dropped_messages` owns the degradation policy: returns `None` when `ctx.deps.model is None`, when the circuit breaker is tripped (and not at probe cadence), or when the summarizer raises any non-cancellation `Exception`. `build_compaction_marker(dropped_count, None)` becomes `static_marker(dropped_count)`; with a non-None summary it becomes `summary_marker(dropped_count, summary)`. `asyncio.CancelledError` propagates because it inherits from `BaseException`, not `Exception`.
 
-# Circuit breaker: skip or probe based on failure count.
-# count < 3: always attempt. count >= 3: skip unless probe turn (every 10 skips).
-count = ctx.deps.runtime.compaction_failure_count
-is_probe = count >= 3 and (count - 3) > 0 and (count - 3) % _CIRCUIT_BREAKER_PROBE_EVERY == 0
-if ctx.deps.model is None or (count >= 3 and not is_probe):
-    ctx.deps.runtime.compaction_failure_count += 1  # keep counting for probe cadence
-    marker = static_marker(dropped_count)
-else:
-    try:
-        summary = await summarize_messages(
-            ctx.deps,
-            dropped,
-            personality_active=bool(ctx.deps.config.personality),
-            context=enrichment,
-        )
-        ctx.deps.runtime.compaction_failure_count = 0
-        marker = summary_marker(dropped_count, summary)
-    except (ModelHTTPError, ModelAPIError) as e:
-        log.warning("Compaction summarization failed: %s", e)
-        ctx.deps.runtime.compaction_failure_count += 1
-        marker = static_marker(dropped_count)
+`summarize_history_window` (proactive) wraps the call with anti-thrashing-savings tracking:
 
-preserved = _preserve_search_tool_breadcrumbs(dropped, kept_ids)
-result = [*head, marker, *preserved, *tail]
-
-# Track savings for anti-thrashing gate.
+```
+result, _ = await apply_compaction(ctx, messages, bounds, announce=True)
 tokens_after = estimate_message_tokens(result)
 savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
 if savings < cfg.min_proactive_savings:
@@ -464,6 +461,8 @@ else:
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
 return result
 ```
+
+Manual `/compact` calls the same helper with full-history bounds `(0, n, n)` and an optional `focus=` argument from the slash command tail.
 
 **Marker structure.** A `ModelRequest` containing a `UserPromptPart` whose content is a prose envelope around the summary text. The envelope opens with a loud `[CONTEXT COMPACTION — REFERENCE ONLY]` tag and three guardrails that frame the summary as retrospective (not actionable) for the continuation model:
 
@@ -516,7 +515,7 @@ Rationale: three-strikes trips the breaker to avoid burning LLM cost when the pr
 
 Output: single `str`, capped at 4000 chars, passed as `context=` argument to `summarize_messages`. Returns `None` when no sources yield content.
 
-**Invariant:** shared byte-for-byte between M3's proactive path and the overflow emergency entry — both call `summarize_dropped_messages` which calls `gather_compaction_context`.
+**Invariant:** shared byte-for-byte across every LLM-capable compaction entry — proactive (M3), planner-based overflow recovery, and manual `/compact` — because all three route through `apply_compaction` → `summarize_dropped_messages` → `gather_compaction_context`.
 
 ### 2.5 Overflow recovery — emergency entry
 
@@ -658,7 +657,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | File | Purpose |
 |---|---|
 | `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
-| `co_cli/context/compaction.py` | Public entry surface: `summarize_history_window`; `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `recover_overflow_history`, `emergency_recover_overflow_history`, `emergency_compact`; `summarize_dropped_messages`; `_preserve_search_tool_breadcrumbs`; re-exports of the processors, boundary planner, and marker builders from the private submodules. Constant `_CIRCUIT_BREAKER_PROBE_EVERY`. |
+| `co_cli/context/compaction.py` | Public entry surface: `summarize_history_window`; `maybe_run_pre_turn_hygiene` (M0 pre-turn hygiene); `recover_overflow_history`, `emergency_recover_overflow_history`, `emergency_compact`; `apply_compaction` (shared assembly helper used by M3, planner-based overflow recovery, and manual `/compact`); `summarize_dropped_messages` (degradation gate — broad `Exception` catch + circuit breaker); `_preserve_search_tool_breadcrumbs`; re-exports of the processors, boundary planner, and marker builders from the private submodules. Constant `_CIRCUIT_BREAKER_PROBE_EVERY`. |
 | `co_cli/context/_compaction_boundaries.py` | `TurnGroup`; `group_by_turn`, `groups_to_messages`, `find_first_run_end`; `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `_find_last_turn_start`. Constant `_MIN_RETAINED_TURN_GROUPS`. |
 | `co_cli/context/_compaction_markers.py` | Marker builders (`static_marker`, `summary_marker`, `build_compaction_marker`, `build_todo_snapshot`); `gather_compaction_context` (enrichment helper — file paths, session todos, prior summaries); `SUMMARY_MARKER_PREFIX`, `TODO_SNAPSHOT_PREFIX`; constant `_CONTEXT_MAX_CHARS`. |
 | `co_cli/context/_history_processors.py` | Three registered history processors (`dedup_tool_results`, `truncate_tool_results`, `enforce_batch_budget`); `_build_call_id_to_args` (tool_call_id → args index for semantic markers); constants `COMPACTABLE_KEEP_RECENT`, `_CLEARED_PLACEHOLDER` (fallback for non-string content). |
@@ -673,8 +672,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | `co_cli/config/_llm.py` | `num_ctx`, `ctx_overflow_threshold`, `ctx_warn_threshold`. |
 | `co_cli/prompts/…` | Base system prompt assembly; static recency-clearing advisory. |
 | `evals/eval_compaction_quality.py` | Compaction fidelity regression: M2 clearing correctness, file-set retention, pending-task retention. |
-| `tests/test_history.py` | Planner unit tests (token scaling, turn-boundary snap, overlap, min-groups clamp, oversized-last-group retain, active-user anchoring, breadcrumb dedup); marker construction; prior-summary detection; Gap L orphan search_tools return structural preservation. |
-| `tests/test_tool_result_markers.py` | Per-tool `semantic_marker` format tests (all 8 compactable tools + generic fallback + shell exit detection); `is_cleared_marker` predicate tests; end-to-end `truncate_tool_results` replacement behavior for each compactable tool; non-string (multimodal) fallback to static placeholder. |
-| `tests/test_context_compaction.py` | Token estimation (args + list content), trigger floor via `max()`, budget resolution, summarizer prompt assembly; threshold floor (small-context floor blocks compaction); anti-thrashing gate activation, window-not-full passthrough, savings-clear unblocks gate. |
-| `tests/test_prompt_assembly.py` | Recency-clearing advisory present in cacheable prefix; advisory built from `COMPACTABLE_KEEP_RECENT`. |
-| `tests/test_tool_output_sizing.py` | M1 persistence threshold, preview placeholder format. |
+| `tests/context/test_history.py` | Planner unit tests (token scaling, turn-boundary snap, overlap, min-groups clamp, oversized-last-group retain, active-user anchoring, breadcrumb dedup); marker construction; prior-summary detection; Gap L orphan search_tools return structural preservation; manual `/compact` static-marker fallback (no model, circuit-breaker, todo preservation, search_tools breadcrumb). |
+| `tests/context/test_tool_result_markers.py` | Per-tool `semantic_marker` format tests (all 8 compactable tools + generic fallback + shell exit detection); `is_cleared_marker` predicate tests; end-to-end `truncate_tool_results` replacement behavior for each compactable tool; non-string (multimodal) fallback to static placeholder. |
+| `tests/context/test_context_compaction.py` | Token estimation (args + list content), trigger floor via `max()`, budget resolution, summarizer prompt assembly; threshold floor (small-context floor blocks compaction); anti-thrashing gate activation, window-not-full passthrough, savings-clear unblocks gate. |
+| `tests/files/test_tool_output_sizing.py` | M1 persistence threshold, preview placeholder format. |

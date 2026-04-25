@@ -327,63 +327,55 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
 
 
 async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
-    """Summarize conversation via LLM to reduce context."""
-    from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+    """Summarize conversation via LLM to reduce context.
+
+    Shares the automatic compaction degradation path: when the summarizer
+    provider fails, the model is absent, or the circuit breaker is tripped,
+    falls back to a static marker rather than leaving history unchanged.
+    """
+    from pydantic_ai import RunContext
     from pydantic_ai.messages import ModelResponse
     from pydantic_ai.messages import TextPart as _TextPart
+    from pydantic_ai.usage import RunUsage
 
-    from co_cli.context.compaction import build_compaction_marker, build_todo_snapshot
+    from co_cli.context.compaction import apply_compaction
     from co_cli.context.summarization import (
         estimate_message_tokens,
         resolve_compaction_budget,
-        summarize_messages,
     )
 
     if not ctx.message_history:
         console.print("[dim]Nothing to compact — history is empty.[/dim]")
         return None
 
-    if not ctx.deps.model:
-        console.print("[dim]Cannot compact — no model available.[/dim]")
-        return None
-
-    console.print("[dim]Compacting conversation...[/dim]")
     pre_tokens = estimate_message_tokens(ctx.message_history)
     old_len = len(ctx.message_history)
-    try:
-        summary = await summarize_messages(
-            ctx.deps, ctx.message_history, focus=args.strip() or None
-        )
-    except (ModelHTTPError, ModelAPIError) as e:
-        logger.warning("Compact summarization failed: %s", e)
-        summary = None
 
-    if summary is None:
-        console.print("[bold red]Compact failed:[/bold red] provider error (see logs)")
-        return None
-
-    todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
-    new_history: list[Any] = [build_compaction_marker(old_len, summary)]
-    if todo_snapshot is not None:
-        new_history.append(todo_snapshot)
+    raw_model = ctx.deps.model.model if ctx.deps.model else None
+    run_ctx: RunContext[CoDeps] = RunContext(deps=ctx.deps, model=raw_model, usage=RunUsage())
+    new_history, summary = await apply_compaction(
+        run_ctx,
+        ctx.message_history,
+        (0, old_len, old_len),
+        announce=True,
+        focus=args.strip() or None,
+    )
     new_history.append(
         ModelResponse(
-            parts=[
-                _TextPart(content="Understood. I have the conversation context."),
-            ]
+            parts=[_TextPart(content="Understood. I have the conversation context.")],
         )
     )
+
     post_tokens = estimate_message_tokens(new_history)
     budget = resolve_compaction_budget(
         ctx.deps.config, ctx.deps.model.context_window if ctx.deps.model else None
     )
+    fallback_note = "" if summary is not None else " (static marker — summary unavailable)"
     console.print(
         f"[info]Compacted: {old_len} → {len(new_history)} messages "
-        f"(est. {pre_tokens // 1000}K → {post_tokens // 1000}K of {budget // 1000}K budget)[/info]"
+        f"(est. {pre_tokens // 1000}K → {post_tokens // 1000}K of {budget // 1000}K budget)"
+        f"{fallback_note}[/info]"
     )
-    from co_cli.knowledge._distiller import extract_at_compaction_boundary
-
-    await extract_at_compaction_boundary(ctx.message_history, new_history, ctx.deps, ctx.frontend)
     return ReplaceTranscript(history=new_history, compaction_applied=True)
 
 
