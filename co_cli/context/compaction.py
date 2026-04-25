@@ -300,7 +300,6 @@ async def _run_window_compaction(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
     budget: int,
-    token_count: int,
 ) -> list[ModelMessage]:
     """Plan boundaries and apply compaction.
 
@@ -314,8 +313,7 @@ async def _run_window_compaction(
     if bounds is None:
         log.warning(
             "Compaction: boundary planning returned None "
-            "(tail group exceeds budget). token_count=%d budget=%d tail_fraction=%.2f — no compaction possible.",
-            token_count,
+            "(tail group exceeds budget). budget=%d tail_fraction=%.2f — no compaction possible.",
             budget,
             cfg.tail_fraction,
         )
@@ -370,7 +368,7 @@ async def summarize_history_window(
         log.info("Compaction: proactive anti-thrashing gate active, skipping")
         return messages
 
-    result = await _run_window_compaction(ctx, messages, budget, token_count)
+    result = await _run_window_compaction(ctx, messages, budget)
     if result is messages:
         return result
 
@@ -408,7 +406,7 @@ async def maybe_run_pre_turn_hygiene(
             return message_history
         raw_model = deps.model.model if deps.model else None
         ctx = RunContext(deps=deps, model=raw_model, usage=RunUsage())
-        return await _run_window_compaction(ctx, message_history, budget, token_count)
+        return await _run_window_compaction(ctx, message_history, budget)
     except Exception:
         log.warning("Pre-turn hygiene compaction failed — skipping", exc_info=True)
         return message_history

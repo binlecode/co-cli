@@ -127,7 +127,9 @@ class CoRuntimeState:
       turn_usage, tool_progress_callback, resume_tool_names,
       history_compaction_applied, compacted_in_current_turn
     Cross-turn (managed by orchestration layer):
-      active_skill_name, compaction_failure_count
+      active_skill_name, compaction_failure_count,
+      consecutive_low_yield_proactive_compactions, last_overbudget_batch_signature,
+      extraction_task
     """
 
     # Circuit breaker for inline compaction summarisation.
@@ -144,7 +146,7 @@ class CoRuntimeState:
     agent_depth: int = 0
     # Anti-thrashing counter: consecutive proactive compactions that saved less than
     # the configured minimum savings threshold.
-    # Reset by orchestrate.py when overflow recovery or hygiene fires.
+    # Reset by compaction.py when overflow recovery or hygiene fires.
     consecutive_low_yield_proactive_compactions: int = 0
     # Dedup key for enforce_batch_budget's "still over budget" warning.
     # Same batch repeated request-to-request emits the warning once, not per cycle.
