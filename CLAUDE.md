@@ -66,18 +66,19 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   | `*Enum` | Enumeration |
 - **Variable and function naming**: use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
 - **Suffix preservation**: preserve existing suffix conventions (e.g. `*Registry`, `*Info`) unless explicitly told otherwise. Before proposing a rename, verify the new name against peer codebases and existing conventions in this repo.
+- **Shared primitives**: for cross-cutting concerns, use the existing project primitive before adding another path. Config loading, console output, filesystem roots, tool outputs, approval flow, tracing, and test harnesses should each have one obvious implementation route.
 - **Display**: use the project's shared `console` object for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Quality gates**: `scripts/quality-gate.sh` is the single source of truth for all automated checks. `lint` = ruff (pre-commit enforced), `full` = lint + pytest. Tool configs live in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
 
 ### Agents, Tools, and Config
 
-- **Tool pattern**: tools use `agent.tool()` with `RunContext[CoDeps]`, following pydantic-ai conventions (deferred approval, history processors). All runtime resources come from `ctx.deps` — never import settings directly. Never hold module-level state in tool files: tool modules are imported once and shared across all runs in the same process, so mutable globals cause test interference and session bleed. Never put approval prompts inside tools — that bypasses the deferred-approval mechanism and breaks approval-resume.
-- **Tool approval**: tools that mutate system state (filesystem writes, shell execution, external service writes, process spawning) use `requires_approval=True`. Read-only operations do not. Approval UX lives in the chat loop.
+- **Tool pattern**: native tools use `@agent_tool(...)` with `RunContext[CoDeps]`; `_build_native_toolset()` registers them with pydantic-ai. All runtime resources come from `ctx.deps` — never import settings directly. Never hold module-level state in tool files: tool modules are imported once and shared across all runs in the same process, so mutable globals cause test interference and session bleed. Never put approval prompts inside tools — that bypasses the deferred-approval mechanism and breaks approval-resume.
+- **Tool approval**: tools that mutate system state (filesystem writes, external service writes, process spawning) use `approval=True` on `@agent_tool(...)`. Runtime-approval tools such as `shell` and `code_execute` may raise `ApprovalRequired` based on command policy. Read-only operations do not require approval. Approval UX lives in the chat loop.
 - **Tool return type**: tools returning user-facing data must use the project's `tool_output()` helper for structured returns; use `tool_error()` for failures. Never return a raw `str`, bare `dict`, or `list[dict]` — raw returns silently omit tracing metadata and the structured fields the chat loop depends on.
 - **CoDeps**: flat dataclass — access service handles, config, and paths via `ctx.deps.*` (e.g. `ctx.deps.shell`, `ctx.deps.config.memory.max_count`).
 - **Sub-agent isolation**: use the subagent deps factory in `deps.py`. Do not manually field-copy.
 - **Config**: `Settings` uses nested Pydantic sub-models in `co_cli/config/` (one file per group). Add new fields to an existing group if it fits; only create a new nested group when it has meaningful cohesion. Config precedence: env vars > `~/.co-cli/settings.json` > defaults. (No project-local `.co-cli/settings.json` layer exists today; all user state is user-global.)
-- **User-global paths**: `~/.co-cli/` (overridable via `CO_CLI_HOME`). No project-local state directory exists.
+- **User-global paths**: `~/.co-cli/` (overridable via `CO_HOME`). No project-local state directory exists.
 - **Versioning**: `MAJOR.MINOR.PATCH`; patch odd = bugfix, even = feature. Bump only in `pyproject.toml`. Git history is the changelog; releases use GitHub Releases — tag `vX.Y.Z` and push to trigger `.github/workflows/release.yml`.
 - **No `.env` files**: use `settings.json` or env vars.
 
@@ -123,18 +124,20 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Deep pass on first round**: read every function body, trace call paths, check for stale imports and dead code. Do not skim signatures or assume correctness from names.
 - **Evidence-based verdicts**: do not declare "ready" unless you can cite `file:line` references. If zero issues found, list every file read and what was checked. If scope is unclear, ask rather than rubber-stamp.
 - Always check `docs/reference/` for research/best-practice docs before reviews or design proposals.
-- **Design philosophy**: design from first principles — MVP-first but production-grade. Add abstractions only when a concrete need exists. When researching peers, focus on convergent best practices, not volume.
+- **Design philosophy**: design from first principles — MVP-first but production-grade. Add abstractions only when a concrete need exists, and simplify any implementation or abstraction that is hard to explain in one short paragraph unless the complexity is forced by an external contract. When researching peers, focus on convergent best practices, not volume.
 - **Peer research verification**: when comparing against peer tools, always confirm the correct repo/source before reading. Do a deep code scan (grep/read) to verify claimed gaps exist — do not report features as missing without evidence.
 
 ### Code Change Principles
 
 - Prefer fail-fast over redundant fallbacks. Clean up dead code during implementation, not as a separate pass.
+- Do not swallow foreground or user-visible errors with broad `except`, empty handlers, or log-and-continue paths. Let unexpected errors propagate. Convert expected non-fatal conditions into typed project-standard results or exceptions with actionable context; for tool failures, use `tool_error()`. Background cleanup, shutdown, and best-effort degradation paths may log and continue only when failing the main operation would be worse than losing the auxiliary work.
+- When ambiguity affects behavior, persistence, security, approval, or public API shape, stop and surface the assumption. For low-risk local implementation details, make the smallest coherent assumption and state it in the delivery summary.
 - After renames or file moves: (1) grep for ALL remaining references to the old name across the whole repo, (2) check test imports specifically — they are the most common miss, (3) run the full test suite. Done only when grep finds zero stale references AND tests pass.
 
 ### Known Pitfalls
 
 **DO NOT hardcode `~/.co-cli` or `Path.home() / ".co-cli"` in source code.**
-Use `USER_DIR` and derived constants (`SETTINGS_FILE`, `SEARCH_DB`, etc.) from `co_cli/config/_core.py`. Tests override `CO_CLI_HOME` to a temp dir — hardcoded paths bypass this and bleed state across test runs.
+Use `USER_DIR` and derived constants (`SETTINGS_FILE`, `SEARCH_DB`, etc.) from `co_cli/config/_core.py`. Tests override `CO_HOME` to a temp dir — hardcoded paths bypass this and bleed state across test runs.
 
 ## Workflow
 
