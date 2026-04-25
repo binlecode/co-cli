@@ -2,18 +2,15 @@
 
 import json
 import os
-import subprocess
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 from rich.table import Table
 
 from co_cli.bootstrap.check import check_agent_llm, check_settings
+from co_cli.bootstrap.project_info import project_info
 from co_cli.config._core import LOGS_DB, USER_DIR, Settings
 from co_cli.display._core import console
-
-_PYPROJECT = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
 
 
 @dataclass
@@ -58,21 +55,8 @@ def _resolve_llm_status(config: Settings) -> tuple[str, str]:
 def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
     """Gather system status into a plain dataclass (no display side-effects)."""
 
-    # -- version --
-    version = tomllib.loads(_PYPROJECT.read_text())["project"]["version"]
-
-    # -- git branch --
-    try:
-        git_branch: str | None = (
-            subprocess.check_output(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                stderr=subprocess.DEVNULL,
-            )
-            .decode()
-            .strip()
-        )
-    except Exception:
-        git_branch = None
+    # -- version + git branch --
+    info = project_info()
 
     # -- cwd --
     cwd = Path.cwd().name
@@ -124,8 +108,8 @@ def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
     db_size = f"{os.path.getsize(LOGS_DB) / 1024:.1f} KB" if LOGS_DB.exists() else "0 KB"
 
     return StatusResult(
-        version=version,
-        git_branch=git_branch,
+        version=info.version,
+        git_branch=info.git_branch,
         cwd=cwd,
         shell=shell,
         llm_provider=llm_provider,

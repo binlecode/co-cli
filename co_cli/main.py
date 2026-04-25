@@ -2,9 +2,7 @@ import asyncio
 import logging
 import os
 import time
-import tomllib
 from contextlib import AsyncExitStack
-from pathlib import Path
 
 import typer
 from prompt_toolkit import PromptSession
@@ -17,6 +15,7 @@ from pydantic_ai.messages import ModelMessage
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
+from co_cli.bootstrap.project_info import project_info
 from co_cli.bootstrap.render_status import (
     check_security,
     get_status,
@@ -51,9 +50,7 @@ from co_cli.observability._telemetry import setup_tracer_provider
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
 
-_VERSION = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())[
-    "project"
-]["version"]
+_VERSION = project_info().version
 
 # Python logging + OTel spans → co-cli.jsonl (single rotating JSONL file)
 setup_file_logging(
