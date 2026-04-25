@@ -14,8 +14,11 @@ Registered processors:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Iterator
 from dataclasses import replace
+
+log = logging.getLogger(__name__)
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
@@ -360,6 +363,13 @@ def enforce_batch_budget(
         if spilled != part.content:
             replacements.setdefault(msg_idx, {})[part_idx] = spilled
             aggregate -= old_size - len(spilled)
+
+    if aggregate > threshold:
+        log.warning(
+            "enforce_batch_budget: batch still over budget (%d > %d) after exhausting candidates",
+            aggregate,
+            threshold,
+        )
 
     if not replacements:
         return messages
