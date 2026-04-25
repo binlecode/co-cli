@@ -1,6 +1,5 @@
 """Functional tests for context history processors and compaction."""
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -17,7 +16,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 from tests._ollama import ensure_ollama_warm
 from tests._settings import make_settings
-from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
@@ -33,7 +31,6 @@ from co_cli.context.compaction import (
     SUMMARY_MARKER_PREFIX,
     TODO_SNAPSHOT_PREFIX,
     build_todo_snapshot,
-    emergency_compact,
     emergency_recover_overflow_history,
     enforce_batch_budget,
     find_first_run_end,
@@ -216,8 +213,9 @@ async def test_circuit_breaker_probes_at_cadence():
     deps.runtime.compaction_failure_count = 13
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        await summarize_history_window(ctx, msgs)
+    # summarize_history_window chains two sequential LLM calls (summarizer +
+    # memory extraction); pytest-timeout=120s is the safety net.
+    await summarize_history_window(ctx, msgs)
     # After a probe: success resets to 0, failure increments to 14.
     # Count must be 0 or 14 — 13 would mean the skip branch ran (bug).
     assert deps.runtime.compaction_failure_count in (0, 14)
@@ -235,8 +233,9 @@ async def test_compact_produces_two_message_history():
     msgs = _make_messages(6)
     ctx = _make_compact_ctx(message_history=msgs)
     await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        result = await dispatch("/compact", ctx)
+    # dispatch("/compact") chains two sequential LLM calls (summarize + memory
+    # extraction); pytest-timeout=120s is the safety net.
+    result = await dispatch("/compact", ctx)
     assert isinstance(result, ReplaceTranscript)
     assert len(result.history) == 2
     assert result.compaction_applied is True
@@ -647,53 +646,6 @@ def test_current_turn_protection_multi_tool():
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# emergency_compact — overflow recovery
-# ---------------------------------------------------------------------------
-
-
-def test_emergency_compact_5_groups():
-    """emergency_compact with 5 turn groups → 2 groups + static marker."""
-    msgs = []
-    for i in range(5):
-        msgs.append(_user(f"turn {i}"))
-        msgs.append(_assistant(f"response {i}"))
-    groups = group_by_turn(msgs)
-    assert len(groups) == 5
-
-    result = emergency_compact(msgs)
-    assert result is not None
-    # Should have: first group msgs + marker + last group msgs
-    result_groups = group_by_turn(result)
-    # First group + marker (which has UserPromptPart so it's a group) + last group
-    assert len(result_groups) == 3
-    # Marker should contain context-continuation text
-    marker_texts = [
-        p.content
-        for m in result
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if isinstance(p, UserPromptPart)
-        and isinstance(p.content, str)
-        and "This session is being continued" in p.content
-    ]
-    assert len(marker_texts) == 1
-
-
-def test_emergency_compact_two_groups_returns_none():
-    """emergency_compact with <=2 groups → returns None."""
-    msgs = [
-        _user("turn 1"),
-        _assistant("response 1"),
-        _user("turn 2"),
-        _assistant("response 2"),
-    ]
-    groups = group_by_turn(msgs)
-    assert len(groups) == 2
-    result = emergency_compact(msgs)
-    assert result is None
-
-
 @pytest.mark.asyncio
 async def test_recover_overflow_history_preserves_pending_user_turn():
     """Overflow recovery materializes the in-flight prompt into the kept tail group."""
@@ -1031,8 +983,10 @@ async def test_compact_command_inserts_todo_snapshot_between_summary_and_ack():
         {"content": "survive user compact", "status": "pending", "priority": "medium"},
     ]
     await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        result = await dispatch("/compact", ctx)
+    # dispatch("/compact") chains two sequential LLM calls (summarize + memory
+    # extraction), so a single per-await asyncio.timeout would aggregate them
+    # and violate the per-await policy. pytest-timeout=120s is the safety net.
+    result = await dispatch("/compact", ctx)
 
     assert isinstance(result, ReplaceTranscript)
     assert result.compaction_applied is True
@@ -1044,6 +998,112 @@ async def test_compact_command_inserts_todo_snapshot_between_summary_and_ack():
     middle = result.history[1]
     assert isinstance(middle, ModelRequest)
     assert middle.parts[0].content.startswith(TODO_SNAPSHOT_PREFIX)
+
+
+# ---------------------------------------------------------------------------
+# /compact slash command — degradation parity with automatic compaction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compact_command_no_model_uses_static_marker():
+    """/compact with deps.model=None replaces history with a static marker — no LLM call."""
+    msgs = _make_messages(6)
+    ctx = _make_compact_ctx(message_history=msgs)
+    ctx.deps.model = None
+
+    result = await dispatch("/compact", ctx)
+
+    assert isinstance(result, ReplaceTranscript)
+    assert result.compaction_applied is True
+    first = result.history[0]
+    assert isinstance(first, ModelRequest)
+    assert first.parts[0].content.startswith(SUMMARY_MARKER_PREFIX)
+    assert "earlier messages were removed" in first.parts[0].content
+    last = result.history[-1]
+    assert isinstance(last, ModelResponse)
+    assert "Understood" in last.parts[0].content
+
+
+@pytest.mark.asyncio
+async def test_compact_command_circuit_breaker_uses_static_marker_and_increments():
+    """/compact with circuit breaker tripped (count=3) → static marker, count → 4."""
+    msgs = _make_messages(6)
+    ctx = _make_compact_ctx(message_history=msgs)
+    ctx.deps.runtime.compaction_failure_count = 3
+
+    result = await dispatch("/compact", ctx)
+
+    assert isinstance(result, ReplaceTranscript)
+    assert result.compaction_applied is True
+    first = result.history[0]
+    assert isinstance(first, ModelRequest)
+    assert first.parts[0].content.startswith(SUMMARY_MARKER_PREFIX)
+    assert "earlier messages were removed" in first.parts[0].content
+    assert ctx.deps.runtime.compaction_failure_count == 4
+
+
+@pytest.mark.asyncio
+async def test_compact_command_static_fallback_preserves_active_todos():
+    """/compact static-marker fallback (no model) still injects the active todo snapshot."""
+    msgs = _make_messages(6)
+    ctx = _make_compact_ctx(message_history=msgs)
+    ctx.deps.model = None
+    ctx.deps.session.session_todos = [
+        {"content": "survive static fallback", "status": "pending", "priority": "medium"},
+    ]
+
+    result = await dispatch("/compact", ctx)
+
+    assert isinstance(result, ReplaceTranscript)
+    snapshots = _snapshot_contents(result.history)
+    assert len(snapshots) == 1
+    assert "survive static fallback" in snapshots[0]
+
+
+@pytest.mark.asyncio
+async def test_compact_command_preserves_search_tools_breadcrumb():
+    """/compact preserves dropped-range search_tools ToolReturnPart and ends with the ack."""
+    msgs: list = []
+    msgs.append(_user("start"))
+    msgs.append(_assistant("ok"))
+    msgs.append(_user("search for foo"))
+    msgs.append(
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="search_tools", args={"q": "foo"}, tool_call_id="st-1")]
+        )
+    )
+    msgs.append(
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="search_tools",
+                    content="discovered [foo_tool]",
+                    tool_call_id="st-1",
+                )
+            ]
+        )
+    )
+    msgs.append(_assistant("got it"))
+
+    ctx = _make_compact_ctx(message_history=msgs)
+    ctx.deps.model = None
+
+    result = await dispatch("/compact", ctx)
+
+    assert isinstance(result, ReplaceTranscript)
+    returns = [
+        part
+        for msg in result.history
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "search_tools"
+    ]
+    assert len(returns) == 1
+    assert returns[0].tool_call_id == "st-1"
+    last = result.history[-1]
+    assert isinstance(last, ModelResponse)
+    assert "Understood" in last.parts[0].content
 
 
 # ---------------------------------------------------------------------------

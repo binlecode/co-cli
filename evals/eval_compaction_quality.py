@@ -25,7 +25,7 @@ Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
            [Outcome 3: prior-summary detection and integration]
 
   --- Error recovery ---
-  Step 8 — Overflow: is_context_overflow + emergency_compact + one-shot guard
+  Step 8 — Overflow: is_context_overflow + one-shot guard
            [Outcome 4] [BC5: one-shot]
 
 Prerequisites: LLM provider configured (Ollama or cloud).
@@ -71,7 +71,6 @@ from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.compaction import (
     COMPACTABLE_KEEP_RECENT,
     SUMMARY_MARKER_PREFIX,
-    emergency_compact,
     find_first_run_end,
     gather_compaction_context,
     group_by_turn,
@@ -1519,8 +1518,6 @@ def step_8_overflow() -> bool:
       wrapped metadata.raw; or recognized overflow code); other status codes → False
     - Handles str body (Ollama), dict body (OpenAI/Gemini), and wrapped metadata.raw
     - Bare 400 without overflow evidence → False (falls to reformulation)
-    - emergency_compact: ≤2 groups → None, >2 → first + marker + last
-    - dropped_count = sum(len(g.messages) for g in groups[1:-1])
     - [BC5]: one-shot recovery
     """
     print("\n--- Step 8: Overflow recovery [Outcome 4, BC5] ---")
@@ -1593,55 +1590,6 @@ def step_8_overflow() -> bool:
             passed = False
         else:
             print(f"  PASS: {desc}")
-
-    # --- emergency_compact ---
-    print()
-
-    # >2 groups → first + marker + last
-    msgs: list[ModelMessage] = []
-    for i in range(5):
-        msgs += [_user(f"turn {i}"), _assistant(f"resp {i}")]
-    result = emergency_compact(msgs)
-    if result is None:
-        print("  FAIL: 5 groups → None")
-        passed = False
-    else:
-        groups = group_by_turn(result)
-        if len(groups) != 3:
-            print(f"  FAIL: expected 3 groups, got {len(groups)}")
-            passed = False
-        else:
-            print("  PASS: 5 groups → 3 (first + marker + last)")
-
-        # Verify dropped_count in marker
-        marker_text = None
-        for m in result:
-            if isinstance(m, ModelRequest):
-                for p in m.parts:
-                    if isinstance(p, UserPromptPart) and "earlier messages were removed" in str(
-                        p.content
-                    ):
-                        marker_text = str(p.content)
-        if marker_text and "6 earlier messages were removed" in marker_text:
-            print("  PASS: dropped_count = 6 (3 middle groups × 2 msgs)")
-            print(f"    marker: {marker_text!r}")
-        elif marker_text:
-            print(f"  WARN: marker: {marker_text[:80]}")
-        else:
-            print("  FAIL: no marker found")
-            passed = False
-
-    # ≤2 groups → None
-    for n in (1, 2):
-        msgs = []
-        for i in range(n):
-            msgs += [_user(f"t{i}"), _assistant(f"r{i}")]
-        r = emergency_compact(msgs)
-        if r is not None:
-            print(f"  FAIL: {n} groups should return None")
-            passed = False
-        else:
-            print(f"  PASS: {n} group(s) → None")
 
     # [BC5] one-shot guard — overflow_recovery_attempted field exists on _TurnState
     from co_cli.context.orchestrate import _TurnState
@@ -1956,7 +1904,6 @@ def step_11_edge_cases() -> bool:
     if len(r) != len(with_marker):
         print("  FAIL: 11d — P1 altered history with static marker")
         passed = False
-    # emergency_compact should still work — the marker is a UserPromptPart
     groups = group_by_turn(with_marker)
     if len(groups) < 3:
         print(f"  FAIL: 11d — grouping broke on static marker ({len(groups)} groups)")
@@ -2076,8 +2023,6 @@ def step_11_edge_cases() -> bool:
     assert r == [] or r is empty
     safety_text_empty = safety_prompt_text(_replace(ctx, messages=empty))
     assert safety_text_empty == ""
-    ec = emergency_compact(empty)
-    assert ec is None
     bounds = plan_compaction_boundaries(empty, 100_000, ctx.deps.config.compaction.tail_fraction)
     assert bounds is None
     print("  PASS: 11i — empty message list: all processors + helpers handle gracefully")

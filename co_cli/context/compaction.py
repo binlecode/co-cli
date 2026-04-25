@@ -64,7 +64,6 @@ __all__ = [
     "build_compaction_marker",
     "build_todo_snapshot",
     "dedup_tool_results",
-    "emergency_compact",
     "emergency_recover_overflow_history",
     "enforce_batch_budget",
     "find_first_run_end",
@@ -91,23 +90,6 @@ permanent bypass from a transient provider hiccup that happened to hit 3 in a
 row early in the session. First probe fires at failure_count == 3 + N (i.e. after
 N skips), then every N skips thereafter.
 """
-
-
-def emergency_compact(messages: list[ModelMessage]) -> list[ModelMessage] | None:
-    """Static emergency compaction for overflow recovery — no LLM call.
-
-    Keeps first group + last group + static marker between.
-    Returns None if ≤2 groups (nothing to compact).
-    """
-    groups = group_by_turn(messages)
-    if len(groups) <= 2:
-        return None
-    dropped_count = sum(len(g.messages) for g in groups[1:-1])
-    return [
-        *groups_to_messages([groups[0]]),
-        static_marker(dropped_count),
-        *groups_to_messages([groups[-1]]),
-    ]
 
 
 def _circuit_breaker_should_skip(failure_count: int) -> bool:
