@@ -495,13 +495,18 @@ def _check_output_limits(
             if ratio >= deps.config.llm.ctx_overflow_threshold:
                 frontend.on_status(
                     f"Context limit reached ({deps.runtime.turn_usage.input_tokens:,} / {effective_ctx:,} tokens)"
-                    " — Ollama likely truncated the prompt. Use /compact or /new."
+                    " — prompt may have been truncated. Use /compact or /new."
                 )
             elif ratio >= deps.config.llm.ctx_warn_threshold:
-                frontend.on_status(
-                    f"Context {ratio:.0%} full ({deps.runtime.turn_usage.input_tokens:,} / {effective_ctx:,} tokens)."
-                    " Consider /compact to free space."
-                )
+                # Only nudge when proactive compaction has given up (anti-thrash gate active).
+                # Below that threshold proactive will fire on the next request automatically,
+                # making a manual nudge redundant.
+                thrash_count = deps.runtime.consecutive_low_yield_proactive_compactions
+                if thrash_count >= deps.config.compaction.proactive_thrash_window:
+                    frontend.on_status(
+                        f"Context {ratio:.0%} full ({deps.runtime.turn_usage.input_tokens:,} / {effective_ctx:,} tokens)."
+                        " Consider /compact to free space."
+                    )
 
 
 def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessage]:
