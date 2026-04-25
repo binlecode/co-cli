@@ -145,6 +145,9 @@ class CoRuntimeState:
     # the configured minimum savings threshold.
     # Reset by orchestrate.py when overflow recovery or hygiene fires.
     consecutive_low_yield_proactive_compactions: int = 0
+    # Dedup key for enforce_batch_budget's "still over budget" warning.
+    # Same batch repeated request-to-request emits the warning once, not per cycle.
+    last_overbudget_batch_signature: tuple[str, ...] | None = None
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""

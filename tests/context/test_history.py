@@ -1267,6 +1267,70 @@ def test_enforce_batch_budget_no_batch_unchanged(tmp_path: Path) -> None:
     assert result is msgs
 
 
+def test_enforce_batch_budget_warns_once_per_batch(tmp_path: Path, caplog) -> None:
+    """Sustained over-budget batch warns once on first request, suppresses on repeats.
+
+    The history processor fires per-request inside a turn. When the batch is over
+    budget and there are no eligible candidates to spill (already persisted or
+    unspillable), we used to log on every cycle. Now: warn once per distinct batch
+    signature, then stay silent until the batch identity changes.
+    """
+    already_persisted_big = f"{PERSISTED_OUTPUT_TAG}\ntool: read_file\npath: /tmp/x\n" + (
+        "a" * 10_000
+    )
+    msgs = [
+        _user("go"),
+        _tool_call_msg("read_file", "c1"),
+        _tool_return_msg("read_file", already_persisted_big, "c1"),
+    ]
+    ctx = _make_batch_ctx(tmp_path, batch_spill_chars=100)
+
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING, logger="co_cli.context._history_processors"):
+        enforce_batch_budget(ctx, msgs)
+        first_warning_count = sum(
+            1 for rec in caplog.records if "still over budget" in rec.getMessage()
+        )
+        enforce_batch_budget(ctx, msgs)
+        enforce_batch_budget(ctx, msgs)
+        repeated_warning_count = sum(
+            1 for rec in caplog.records if "still over budget" in rec.getMessage()
+        )
+
+    assert first_warning_count == 1, "expected first cycle to log the warning once"
+    assert repeated_warning_count == 1, "repeat cycles on same batch must not re-log"
+
+
+def test_enforce_batch_budget_warns_again_on_new_batch(tmp_path: Path, caplog) -> None:
+    """A new batch (different tool_call_ids) re-arms the warning.
+
+    Suppression keys on the batch signature, not on a one-shot process flag — so
+    a fresh over-budget batch later in the conversation must warn again.
+    """
+    already_persisted = f"{PERSISTED_OUTPUT_TAG}\ntool: read_file\npath: /tmp/x\n" + ("a" * 10_000)
+    batch_one = [
+        _user("go"),
+        _tool_call_msg("read_file", "c1"),
+        _tool_return_msg("read_file", already_persisted, "c1"),
+    ]
+    batch_two = [
+        *batch_one,
+        _tool_call_msg("read_file", "c2"),
+        _tool_return_msg("read_file", already_persisted, "c2"),
+    ]
+    ctx = _make_batch_ctx(tmp_path, batch_spill_chars=100)
+
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING, logger="co_cli.context._history_processors"):
+        enforce_batch_budget(ctx, batch_one)
+        enforce_batch_budget(ctx, batch_two)
+        warnings = [rec for rec in caplog.records if "still over budget" in rec.getMessage()]
+
+    assert len(warnings) == 2, f"expected one warning per distinct batch, got {len(warnings)}"
+
+
 def test_enforce_batch_budget_fail_open_on_oserror(tmp_path: Path) -> None:
     """enforce_batch_budget returns original messages when persist fails (fail-open)."""
     big = "y" * 10_000

@@ -365,11 +365,14 @@ def enforce_batch_budget(
             aggregate -= old_size - len(spilled)
 
     if aggregate > threshold:
-        log.warning(
-            "enforce_batch_budget: batch still over budget (%d > %d) after exhausting candidates",
-            aggregate,
-            threshold,
-        )
+        signature = tuple(sorted(part.tool_call_id for _, _, part in batch_parts))
+        if ctx.deps.runtime.last_overbudget_batch_signature != signature:
+            log.warning(
+                "enforce_batch_budget: batch still over budget (%d > %d) after exhausting candidates",
+                aggregate,
+                threshold,
+            )
+            ctx.deps.runtime.last_overbudget_batch_signature = signature
 
     if not replacements:
         return messages
