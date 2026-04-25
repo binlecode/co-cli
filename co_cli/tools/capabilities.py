@@ -45,10 +45,15 @@ def _mcp_probe_line(name: str, probe: CheckResult) -> str:
     return f"  - {name}: {detail}"
 
 
-def _build_tool_surface_lines(result: RuntimeCheckResult) -> list[str]:
-    always_visible = result.tool_groups.get("always_visible", [])
-    deferred = result.tool_groups.get("deferred", [])
-    approval_required = result.tool_groups.get("approval_required", [])
+def _build_tool_surface_lines(deps: CoDeps) -> list[str]:
+    tool_index = deps.tool_index
+    always_visible = sorted(
+        name for name, tc in tool_index.items() if tc.visibility == VisibilityPolicyEnum.ALWAYS
+    )
+    deferred = sorted(
+        name for name, tc in tool_index.items() if tc.visibility == VisibilityPolicyEnum.DEFERRED
+    )
+    approval_required = sorted(name for name, tc in tool_index.items() if tc.approval)
     return [
         "Capability summary:",
         f"  Available now: {_format_tool_list(always_visible)}",
@@ -154,7 +159,7 @@ async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
     mcp_tool_count = sum(1 for tc in tool_index.values() if tc.source == ToolSourceEnum.MCP)
 
     lines: list[str] = []
-    lines.extend(_build_tool_surface_lines(result))
+    lines.extend(_build_tool_surface_lines(ctx.deps))
     lines.extend(_build_component_lines(result))
     lines.extend(_build_runtime_lines(ctx.deps, result, reranker))
     lines.extend(_build_mcp_lines(ctx.deps, result, mcp_tool_count))
@@ -164,9 +169,15 @@ async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
         display,
         ctx=ctx,
         # Tool surface
-        always_visible_tools=result.tool_groups.get("always_visible", []),
-        deferred_tools=result.tool_groups.get("deferred", []),
-        approval_required_tools=result.tool_groups.get("approval_required", []),
+        always_visible_tools=sorted(
+            name for name, tc in tool_index.items() if tc.visibility == VisibilityPolicyEnum.ALWAYS
+        ),
+        deferred_tools=sorted(
+            name
+            for name, tc in tool_index.items()
+            if tc.visibility == VisibilityPolicyEnum.DEFERRED
+        ),
+        approval_required_tools=sorted(name for name, tc in tool_index.items() if tc.approval),
         tool_count=st["tool_count"],
         native_tool_count=native_tool_count,
         mcp_tool_count=mcp_tool_count,

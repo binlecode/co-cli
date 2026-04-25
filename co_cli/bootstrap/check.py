@@ -25,8 +25,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from co_cli.deps import VisibilityPolicyEnum
-
 if TYPE_CHECKING:
     from co_cli.config._core import Settings
     from co_cli.deps import CoDeps
@@ -51,7 +49,6 @@ class RuntimeCheckResult:
     findings: list[dict[str, str]] = field(default_factory=list)
     fallbacks: list[str] = field(default_factory=list)
     mcp_probes: list[tuple[str, "CheckResult"]] = field(default_factory=list)  # bare server names
-    tool_groups: dict[str, list[str]] = field(default_factory=dict)
     component_status: list[dict[str, str]] = field(default_factory=list)
 
     def summary_lines(self) -> list[str]:
@@ -525,27 +522,13 @@ def check_runtime(
         "checks": checks,
     }
 
-    # Build tool groupings and source breakdown from tool_index
+    # Build status dict from session state
     tool_index = deps.tool_index
     source_counts: dict[str, int] = {}
     for tc in tool_index.values():
         source_name = tc.source.value
         source_counts[source_name] = source_counts.get(source_name, 0) + 1
 
-    always_visible_tools = sorted(
-        name for name, tc in tool_index.items() if tc.visibility == VisibilityPolicyEnum.ALWAYS
-    )
-    deferred_tools = sorted(
-        name for name, tc in tool_index.items() if tc.visibility == VisibilityPolicyEnum.DEFERRED
-    )
-    approval_required_tools = sorted(name for name, tc in tool_index.items() if tc.approval)
-    tool_groups: dict[str, list[str]] = {
-        "always_visible": always_visible_tools,
-        "deferred": deferred_tools,
-        "approval_required": approval_required_tools,
-    }
-
-    # Build status dict from session state
     status: dict[str, Any] = {
         "session_id": deps.session.session_path.stem[-8:],
         "active_skill": deps.runtime.active_skill_name,
@@ -599,6 +582,5 @@ def check_runtime(
         findings=findings,
         fallbacks=fallbacks,
         mcp_probes=[(name.removeprefix("mcp:"), result) for name, result in mcp_probes],
-        tool_groups=tool_groups,
         component_status=component_status,
     )
