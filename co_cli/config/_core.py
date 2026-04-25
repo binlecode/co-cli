@@ -155,7 +155,7 @@ class Settings(BaseModel):
 
     # Flat — single-field group
     mcp_servers: dict[str, MCPServerSettings] = Field(
-        default_factory=lambda: _DEFAULT_MCP_SERVERS.copy()
+        default_factory=lambda: {k: v.model_copy() for k, v in _DEFAULT_MCP_SERVERS.items()}
     )
 
     @field_validator("personality")
