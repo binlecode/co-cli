@@ -15,7 +15,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.config._compaction import CompactionSettings
+from co_cli.config.compaction import CompactionSettings
 from co_cli.context._history_processors import (
     _CLEARED_PLACEHOLDER,
     truncate_tool_results,

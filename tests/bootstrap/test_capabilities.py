@@ -10,7 +10,8 @@ from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
 from co_cli.agent._core import build_agent, build_tool_registry
 from co_cli.bootstrap.check import check_runtime
-from co_cli.config._core import MCPServerSettings, settings
+from co_cli.config._core import settings
+from co_cli.config.mcp import MCPServerSettings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools.capabilities import capabilities_check

@@ -10,7 +10,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config._llm import LlmSettings
+from co_cli.config.llm import LlmSettings
 
 _HTTP_CONNECT_TIMEOUT = 10.0
 _HTTP_READ_TIMEOUT = 300.0

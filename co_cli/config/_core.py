@@ -16,14 +16,15 @@ from pydantic import (
     model_validator,
 )
 
-from co_cli.config._compaction import CompactionSettings
-from co_cli.config._knowledge import KnowledgeSettings
-from co_cli.config._llm import LlmSettings, resolve_api_key_from_env
-from co_cli.config._memory import MemorySettings
-from co_cli.config._observability import ObservabilitySettings
-from co_cli.config._shell import ShellSettings
-from co_cli.config._tools import ToolsSettings
-from co_cli.config._web import WebSettings
+from co_cli.config._memory import MEMORY_ENV_MAP, MemorySettings
+from co_cli.config._observability import OBSERVABILITY_ENV_MAP, ObservabilitySettings
+from co_cli.config._shell import SHELL_ENV_MAP, ShellSettings
+from co_cli.config._tools import TOOLS_ENV_MAP, ToolsSettings
+from co_cli.config._web import WEB_ENV_MAP, WebSettings
+from co_cli.config.compaction import COMPACTION_ENV_MAP, CompactionSettings
+from co_cli.config.knowledge import KNOWLEDGE_ENV_MAP, KnowledgeSettings
+from co_cli.config.llm import LLM_ENV_MAP, LlmSettings, resolve_api_key_from_env
+from co_cli.config.mcp import DEFAULT_MCP_SERVERS, MCPServerSettings, parse_mcp_servers_from_env
 
 APP_NAME = "co-cli"
 
@@ -76,54 +77,6 @@ def _validate_personality(personality: str) -> list[str]:
     return validate_personality_files(personality)
 
 
-class MCPServerSettings(BaseModel):
-    """Configuration for a single MCP server (stdio or HTTP transport).
-
-    Stdio: set ``command`` (required). Subprocess launched by pydantic-ai.
-    HTTP:  set ``url`` instead. No subprocess — connects to a remote server.
-    Exactly one of ``command`` or ``url`` must be provided.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    command: str | None = Field(
-        default=None,
-        description="Executable to launch (e.g. 'npx', 'uvx', 'python'). Required for stdio transport.",
-    )
-    url: str | None = Field(
-        default=None,
-        description="Remote server URL for HTTP transport (StreamableHTTP or SSE). Mutually exclusive with command.",
-    )
-    args: list[str] = Field(
-        default_factory=list, description="Command-line arguments (stdio only)"
-    )
-    timeout: int = Field(default=5, ge=1, le=60)
-    env: dict[str, str] = Field(
-        default_factory=dict,
-        description="Extra environment variables passed to subprocess (stdio only)",
-    )
-    approval: Literal["ask", "auto"] = Field(default="ask")
-    prefix: str | None = Field(default=None)
-
-    @model_validator(mode="after")
-    def _require_command_or_url(self) -> "MCPServerSettings":
-        if self.url and self.command:
-            raise ValueError("MCPServerSettings: 'url' and 'command' are mutually exclusive")
-        if not self.url and not self.command:
-            raise ValueError("MCPServerSettings requires either 'command' or 'url'")
-        return self
-
-
-# Default MCP servers — shipped out-of-the-box, skip gracefully when npx absent.
-_DEFAULT_MCP_SERVERS: dict[str, MCPServerSettings] = {
-    "context7": MCPServerSettings(
-        command="npx",
-        args=["-y", "@upstash/context7-mcp@latest"],
-        approval="auto",
-    ),
-}
-
-
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -155,7 +108,7 @@ class Settings(BaseModel):
 
     # Flat — single-field group
     mcp_servers: dict[str, MCPServerSettings] = Field(
-        default_factory=lambda: {k: v.model_copy() for k, v in _DEFAULT_MCP_SERVERS.items()}
+        default_factory=lambda: {k: v.model_copy() for k, v in DEFAULT_MCP_SERVERS.items()}
     )
 
     @field_validator("personality")
@@ -196,62 +149,16 @@ class Settings(BaseModel):
             if val:
                 data[field] = val
 
-        # Nested fields
+        # Nested fields — each group owns its env-var map in its own module
         nested_env_map: dict[str, dict[str, str]] = {
-            "llm": {
-                "provider": "CO_LLM_PROVIDER",
-                "host": "CO_LLM_HOST",
-                "model": "CO_LLM_MODEL",
-                "num_ctx": "CO_LLM_NUM_CTX",
-                "ctx_warn_threshold": "CO_LLM_CTX_WARN_THRESHOLD",
-                "ctx_overflow_threshold": "CO_LLM_CTX_OVERFLOW_THRESHOLD",
-            },
-            "knowledge": {
-                "search_backend": "CO_KNOWLEDGE_SEARCH_BACKEND",
-                "embedding_provider": "CO_KNOWLEDGE_EMBEDDING_PROVIDER",
-                "embedding_model": "CO_KNOWLEDGE_EMBEDDING_MODEL",
-                "embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
-                "cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
-                "embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
-                "chunk_size": "CO_KNOWLEDGE_CHUNK_SIZE",
-                "chunk_overlap": "CO_KNOWLEDGE_CHUNK_OVERLAP",
-                "consolidation_enabled": "CO_KNOWLEDGE_CONSOLIDATION_ENABLED",
-                "decay_after_days": "CO_KNOWLEDGE_DECAY_AFTER_DAYS",
-            },
-            "memory": {
-                "recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
-                "injection_max_chars": "CO_MEMORY_INJECTION_MAX_CHARS",
-                "extract_every_n_turns": "CO_MEMORY_EXTRACT_EVERY_N_TURNS",
-            },
-            "shell": {
-                "max_timeout": "CO_SHELL_MAX_TIMEOUT",
-                "safe_commands": "CO_SHELL_SAFE_COMMANDS",
-            },
-            "web": {
-                "fetch_allowed_domains": "CO_WEB_FETCH_ALLOWED_DOMAINS",
-                "fetch_blocked_domains": "CO_WEB_FETCH_BLOCKED_DOMAINS",
-                "http_max_retries": "CO_WEB_HTTP_MAX_RETRIES",
-                "http_backoff_base_seconds": "CO_WEB_HTTP_BACKOFF_BASE_SECONDS",
-                "http_backoff_max_seconds": "CO_WEB_HTTP_BACKOFF_MAX_SECONDS",
-                "http_jitter_ratio": "CO_WEB_HTTP_JITTER_RATIO",
-            },
-            "observability": {
-                "log_level": "CO_LOG_LEVEL",
-                "log_max_size_mb": "CO_LOG_MAX_SIZE_MB",
-                "log_backup_count": "CO_LOG_BACKUP_COUNT",
-            },
-            "tools": {
-                "result_persist_chars": "CO_TOOLS_RESULT_PERSIST_CHARS",
-                "batch_spill_chars": "CO_TOOLS_BATCH_SPILL_CHARS",
-            },
-            "compaction": {
-                "proactive_ratio": "CO_COMPACTION_PROACTIVE_RATIO",
-                "hygiene_ratio": "CO_COMPACTION_HYGIENE_RATIO",
-                "tail_fraction": "CO_COMPACTION_TAIL_FRACTION",
-                "min_context_length_tokens": "CO_COMPACTION_MIN_CONTEXT_LENGTH_TOKENS",
-                "min_proactive_savings": "CO_COMPACTION_MIN_PROACTIVE_SAVINGS",
-                "proactive_thrash_window": "CO_COMPACTION_PROACTIVE_THRASH_WINDOW",
-            },
+            "llm": LLM_ENV_MAP,
+            "knowledge": KNOWLEDGE_ENV_MAP,
+            "memory": MEMORY_ENV_MAP,
+            "shell": SHELL_ENV_MAP,
+            "web": WEB_ENV_MAP,
+            "observability": OBSERVABILITY_ENV_MAP,
+            "tools": TOOLS_ENV_MAP,
+            "compaction": COMPACTION_ENV_MAP,
         }
         for group, fields in nested_env_map.items():
             for field, env_var in fields.items():
@@ -259,15 +166,15 @@ class Settings(BaseModel):
                 if val:
                     data.setdefault(group, {})[field] = val
 
-        # Provider-aware API key resolution lives in _llm.py.
+        # Provider-aware API key resolution lives in llm.py.
         api_key = resolve_api_key_from_env(env_source, data.get("llm", {}))
         if api_key:
             data.setdefault("llm", {})["api_key"] = api_key
 
         # MCP servers (flat — env override)
-        mcp_env = env_source.get("CO_MCP_SERVERS")
-        if mcp_env:
-            data["mcp_servers"] = json.loads(mcp_env)
+        mcp_servers = parse_mcp_servers_from_env(env_source)
+        if mcp_servers is not None:
+            data["mcp_servers"] = mcp_servers
 
         return data
 

@@ -2,6 +2,15 @@
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+COMPACTION_ENV_MAP: dict[str, str] = {
+    "proactive_ratio": "CO_COMPACTION_PROACTIVE_RATIO",
+    "hygiene_ratio": "CO_COMPACTION_HYGIENE_RATIO",
+    "tail_fraction": "CO_COMPACTION_TAIL_FRACTION",
+    "min_context_length_tokens": "CO_COMPACTION_MIN_CONTEXT_LENGTH_TOKENS",
+    "min_proactive_savings": "CO_COMPACTION_MIN_PROACTIVE_SAVINGS",
+    "proactive_thrash_window": "CO_COMPACTION_PROACTIVE_THRASH_WINDOW",
+}
+
 
 class CompactionSettings(BaseModel):
     """Tuning knobs for the context compaction system.

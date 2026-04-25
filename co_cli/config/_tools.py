@@ -9,6 +9,11 @@ Per-tool registry overrides (ToolInfo.max_result_size) take precedence over resu
 
 from pydantic import BaseModel, ConfigDict, Field
 
+TOOLS_ENV_MAP: dict[str, str] = {
+    "result_persist_chars": "CO_TOOLS_RESULT_PERSIST_CHARS",
+    "batch_spill_chars": "CO_TOOLS_BATCH_SPILL_CHARS",
+}
+
 
 class ToolsSettings(BaseModel):
     """Tool result persistence and spill thresholds."""

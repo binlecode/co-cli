@@ -19,8 +19,8 @@ from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
-from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import settings
+from co_cli.config.compaction import CompactionSettings
 from co_cli.context._compaction_boundaries import _find_last_turn_start
 from co_cli.context._compaction_markers import (
     _active_todos,

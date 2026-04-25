@@ -8,6 +8,16 @@ DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS = 8.0
 DEFAULT_WEB_HTTP_JITTER_RATIO = 0.2
 
 
+WEB_ENV_MAP: dict[str, str] = {
+    "fetch_allowed_domains": "CO_WEB_FETCH_ALLOWED_DOMAINS",
+    "fetch_blocked_domains": "CO_WEB_FETCH_BLOCKED_DOMAINS",
+    "http_max_retries": "CO_WEB_HTTP_MAX_RETRIES",
+    "http_backoff_base_seconds": "CO_WEB_HTTP_BACKOFF_BASE_SECONDS",
+    "http_backoff_max_seconds": "CO_WEB_HTTP_BACKOFF_MAX_SECONDS",
+    "http_jitter_ratio": "CO_WEB_HTTP_JITTER_RATIO",
+}
+
+
 class WebSettings(BaseModel):
     """Web fetch domain policy and HTTP retry settings."""
 

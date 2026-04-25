@@ -624,7 +624,7 @@ One successful compaction per pressure event per turn.
 | `llm.ctx_overflow_threshold` | — | `1.0` | Ratio at which `run_turn` warns of imminent Ollama truncation. |
 | `llm.ctx_warn_threshold` | — | `0.85` | Ratio at which `run_turn` surfaces "consider /compact". |
 
-**Compaction tuning** (`CompactionSettings` in `co_cli/config/_compaction.py`, wired into `Settings.compaction`):
+**Compaction tuning** (`CompactionSettings` in `co_cli/config/compaction.py`, wired into `Settings.compaction`):
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
@@ -662,7 +662,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 
 | File | Purpose |
 |---|---|
-| `co_cli/config/_compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
+| `co_cli/config/compaction.py` | `CompactionSettings` — all user-tunable compaction ratios, thresholds, and anti-thrashing knobs; wired into `Settings.compaction` in `_core.py`. |
 | `co_cli/context/compaction.py` | Public entry surface: `proactive_window_processor` (M3 history-processor) and `pre_turn_window_compaction` (M0 pre-turn hygiene), both thin wrappers over the private `_compact_window_if_pressured(ctx, messages, *, ratio, apply_thrash_gate)` core that owns shared gate-and-dispatch (token computation, threshold check, anti-thrash gate when enabled, planner dispatch, post-run thrash counter updates); `recover_overflow_history`, `emergency_recover_overflow_history`, `emergency_compact`; `apply_compaction` (shared assembly helper used by M3, planner-based overflow recovery, and manual `/compact`); `summarize_dropped_messages` (pure LLM call — raises on failure); `_summarization_gate_open` (model-presence + circuit-breaker predicate); `_gated_summarize_or_none` (gate + announce + summarizer + fallback orchestration owned by `apply_compaction`); `_preserve_search_tool_breadcrumbs`; re-exports of the processors, boundary planner, and marker builders from the private submodules. Constant `_CIRCUIT_BREAKER_PROBE_EVERY`. |
 | `co_cli/context/_compaction_boundaries.py` | `TurnGroup`; `group_by_turn`, `groups_to_messages`, `find_first_run_end`; `plan_compaction_boundaries` (shared planner — active-user anchoring, unconditional last-group retention); `_anchor_tail_to_last_user` (anchoring helper); `_find_last_turn_start`. Constant `_MIN_RETAINED_TURN_GROUPS`. |
 | `co_cli/context/_compaction_markers.py` | Marker builders (`static_marker`, `summary_marker`, `build_compaction_marker`, `build_todo_snapshot`); `gather_compaction_context` (enrichment helper — file paths, session todos, prior summaries; per-source caps + total cap); `_cap` (per-source truncation helper); `SUMMARY_MARKER_PREFIX`, `TODO_SNAPSHOT_PREFIX`; constants `_FILE_PATHS_MAX_CHARS`, `_TODOS_MAX_CHARS`, `_PRIOR_SUMMARIES_MAX_CHARS`, `_CONTEXT_MAX_CHARS`. |
@@ -675,7 +675,7 @@ Per-tool `max_result_size` (M1) overrides are a registration parameter in `co_cl
 | `co_cli/tools/tool_io.py` | `tool_output`; `persist_if_oversized` (M1 disk spill, requires explicit `max_size`); `_generate_preview` (newline-aware preview truncation); `check_tool_results_size`; `TOOL_RESULT_PREVIEW_SIZE`, `PERSISTED_OUTPUT_TAG`, `PERSISTED_OUTPUT_CLOSING_TAG`. |
 | `co_cli/agent/_native_toolset.py` | Per-tool `max_result_size` registration. |
 | `co_cli/config/_tools.py` | `ToolsSettings` with `result_persist_chars` and `batch_spill_chars`; env var wiring in `_core.py`. |
-| `co_cli/config/_llm.py` | `num_ctx`, `ctx_overflow_threshold`, `ctx_warn_threshold`. |
+| `co_cli/config/llm.py` | `num_ctx`, `ctx_overflow_threshold`, `ctx_warn_threshold`. |
 | `co_cli/prompts/…` | Base system prompt assembly; static recency-clearing advisory. |
 | `evals/eval_compaction_quality.py` | Compaction fidelity regression: M2 clearing correctness, file-set retention, pending-task retention. |
 | `tests/context/test_history.py` | Planner unit tests (token scaling, turn-boundary snap, overlap, min-groups clamp, oversized-last-group retain, active-user anchoring, breadcrumb dedup); marker construction; prior-summary detection; Gap L orphan search_tools return structural preservation; manual `/compact` static-marker fallback (no model, circuit-breaker, todo preservation, search_tools breadcrumb). |

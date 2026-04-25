@@ -484,8 +484,8 @@ def build_index(
 ) -> KnowledgeStore:
     """Create a fresh KnowledgeStore with the full synthetic corpus loaded."""
     from co_cli.config._core import Settings
-    from co_cli.config._knowledge import KnowledgeSettings, LlmModelSettings
-    from co_cli.config._llm import LlmSettings
+    from co_cli.config.knowledge import KnowledgeSettings, LlmModelSettings
+    from co_cli.config.llm import LlmSettings
 
     llm_reranker = (
         LlmModelSettings(provider="ollama", model=reranker_model) if reranker_model else None

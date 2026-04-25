@@ -16,7 +16,7 @@ import pytest
 from pydantic_ai import Agent
 from tests._timeouts import LLM_GEMINI_NOREASON_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
 
-from co_cli.config._llm import LlmSettings
+from co_cli.config.llm import LlmSettings
 from co_cli.llm._factory import build_model
 
 _GEMINI_MODEL = "gemini-3.1-pro-preview"

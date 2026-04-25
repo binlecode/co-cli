@@ -14,8 +14,8 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
-from co_cli.config._compaction import CompactionSettings
 from co_cli.config._core import Settings, settings
+from co_cli.config.compaction import CompactionSettings
 from co_cli.context.compaction import (
     pre_turn_window_compaction,
     proactive_window_processor,

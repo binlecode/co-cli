@@ -4,6 +4,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DEFAULT_SHELL_MAX_TIMEOUT = 600
 
+SHELL_ENV_MAP: dict[str, str] = {
+    "max_timeout": "CO_SHELL_MAX_TIMEOUT",
+    "safe_commands": "CO_SHELL_SAFE_COMMANDS",
+}
+
 # Conservative default safe commands for auto-approval.
 # UX convenience — approval is the security boundary.
 DEFAULT_SHELL_SAFE_COMMANDS: list[str] = [

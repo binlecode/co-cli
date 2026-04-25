@@ -120,6 +120,15 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
 # Environment helpers
 # ---------------------------------------------------------------------------
 
+LLM_ENV_MAP: dict[str, str] = {
+    "provider": "CO_LLM_PROVIDER",
+    "host": "CO_LLM_HOST",
+    "model": "CO_LLM_MODEL",
+    "num_ctx": "CO_LLM_NUM_CTX",
+    "ctx_warn_threshold": "CO_LLM_CTX_WARN_THRESHOLD",
+    "ctx_overflow_threshold": "CO_LLM_CTX_OVERFLOW_THRESHOLD",
+}
+
 _PROVIDER_API_KEY_VARS: dict[str, str] = {
     "gemini": "GEMINI_API_KEY",
 }

@@ -15,6 +15,20 @@ DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
 
 
+KNOWLEDGE_ENV_MAP: dict[str, str] = {
+    "search_backend": "CO_KNOWLEDGE_SEARCH_BACKEND",
+    "embedding_provider": "CO_KNOWLEDGE_EMBEDDING_PROVIDER",
+    "embedding_model": "CO_KNOWLEDGE_EMBEDDING_MODEL",
+    "embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
+    "cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
+    "embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
+    "chunk_size": "CO_KNOWLEDGE_CHUNK_SIZE",
+    "chunk_overlap": "CO_KNOWLEDGE_CHUNK_OVERLAP",
+    "consolidation_enabled": "CO_KNOWLEDGE_CONSOLIDATION_ENABLED",
+    "decay_after_days": "CO_KNOWLEDGE_DECAY_AFTER_DAYS",
+}
+
+
 # Default reranker model per provider — single source of truth, overridable via settings.json.
 _RERANKER_DEFAULT_MODEL: dict[str, str] = {
     "gemini": "gemini-3.1-flash-preview",

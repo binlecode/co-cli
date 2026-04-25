@@ -14,7 +14,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.config._compaction import CompactionSettings
+from co_cli.config.compaction import CompactionSettings
 from co_cli.context._compaction_boundaries import _find_last_turn_start
 from co_cli.context._dedup_tool_results import (
     build_dedup_part,

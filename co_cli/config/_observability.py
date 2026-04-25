@@ -2,6 +2,12 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+OBSERVABILITY_ENV_MAP: dict[str, str] = {
+    "log_level": "CO_LOG_LEVEL",
+    "log_max_size_mb": "CO_LOG_MAX_SIZE_MB",
+    "log_backup_count": "CO_LOG_BACKUP_COUNT",
+}
+
 # Default patterns redacted from span attribute values before SQLite storage.
 _DEFAULT_REDACT_PATTERNS: list[str] = [
     r"sk-[A-Za-z0-9]{20,}",
