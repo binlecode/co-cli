@@ -225,7 +225,6 @@ async def recover_overflow_history(
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
     cfg = ctx.deps.config.compaction
-    token_count = _effective_token_count(messages, latest_response_input_tokens(messages))
     bounds = plan_compaction_boundaries(
         messages,
         budget,
@@ -237,7 +236,7 @@ async def recover_overflow_history(
             "budget=%d tail_fraction=%.2f token_count=%d — caller must try emergency fallback.",
             budget,
             cfg.tail_fraction,
-            token_count,
+            _effective_token_count(messages, latest_response_input_tokens(messages)),
         )
         return None
 
