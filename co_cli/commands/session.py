@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from co_cli.commands._types import CommandContext, ReplaceTranscript
 from co_cli.display._core import console
+
+if TYPE_CHECKING:
+    from co_cli.deps import CoDeps
 
 
 async def _cmd_clear(ctx: CommandContext, args: str) -> list[Any]:
@@ -46,7 +49,6 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         estimate_message_tokens,
         resolve_compaction_budget,
     )
-    from co_cli.deps import CoDeps
 
     if not ctx.message_history:
         console.print("[dim]Nothing to compact — history is empty.[/dim]")
