@@ -204,9 +204,9 @@ async def summarize_session_around_query(
     )
 
     max_retries = 3
+    agent = build_session_summarizer_agent()
     for attempt in range(max_retries):
         try:
-            agent = build_session_summarizer_agent()
             result = await agent.run(
                 user_prompt,
                 model=deps.model.model,

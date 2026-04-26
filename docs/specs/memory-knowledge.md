@@ -174,7 +174,9 @@ Indexing rules:
 
 **Browse mode** (empty query): returns recent-session metadata — session ID, date, title, file size — with zero LLM cost. Excludes the current session from results. Use when the user asks what was worked on recently or wants to browse session history.
 
-**Search mode** (keyword query): FTS5 BM25 search over `messages_fts` → dedup to one entry per session → load transcript → truncate-around-query window (max 100,000 chars, biased 25% before / 75% after match anchor) → parallel noreason LLM summarization → return per-session prose summaries. `limit` is clamped to [1, 5] (default 3); raw FTS5 fetches `limit × 5` before dedup. Summarization runs under a 60-second global `asyncio.timeout`. On summarizer failure, the pre-computed truncated window is used as a raw-preview fallback.
+**Search mode** (keyword query): FTS5 BM25 search over `messages_fts` → dedup to one entry per session → load transcript → truncate-around-query window (max 100,000 chars, biased 25% before / 75% after match anchor) → parallel noreason LLM summarization → return per-session prose summaries. `limit` is clamped to [1, 5] (default 3); raw FTS5 fetches `limit × 5` before dedup. Summarization runs under a 60-second global `asyncio.timeout`; each individual summarizer call retries up to 3 times with linear backoff on transient errors or empty responses. On summarizer failure, the pre-computed truncated window is used as a raw-preview fallback.
+
+Truncation uses a three-tier match strategy to find the best window anchor: (1) full-phrase match, (2) proximity co-occurrence of all query terms within 200 characters, (3) individual term positions as last resort. The window is placed to cover the most match positions, biased 25% before / 75% after the chosen anchor.
 
 Result shape (search mode): `{session_id, when, source, summary}`.
 
@@ -346,7 +348,7 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, and size warnings |
 | `co_cli/memory/store.py` | `MemoryIndex` — derived FTS5 index over past session transcripts |
 | `co_cli/memory/indexer.py` | `extract_messages()` — JSONL line parser that feeds `MemoryIndex.index_session()` |
-| `co_cli/memory/_summary.py` | `_format_conversation()`, `_truncate_around_matches()`, and `summarize_session_around_query()` — transcript formatting, window extraction, and noreason LLM summarization pipeline |
+| `co_cli/memory/summary.py` | `_format_conversation()`, `_truncate_around_matches()`, and `summarize_session_around_query()` — transcript formatting, window extraction, and noreason LLM summarization pipeline |
 | `co_cli/memory/prompts/session_summarizer.md` | Summarizer prompt template for the noreason summarization agent |
 | `co_cli/tools/memory.py` | `memory_search()` episodic recall tool |
 | `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` schema and artifact loaders |

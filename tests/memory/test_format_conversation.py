@@ -1,4 +1,4 @@
-"""Tests for _format_conversation and _render_tool_return in co_cli.memory._summary."""
+"""Tests for _format_conversation and _render_tool_return in co_cli.memory.summary."""
 
 from pydantic_ai.messages import (
     ModelRequest,
@@ -10,7 +10,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.memory._summary import _format_conversation, _render_tool_return
+from co_cli.memory.summary import _format_conversation, _render_tool_return
 
 
 def test_user_prompt_part_renders_with_user_prefix() -> None:

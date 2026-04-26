@@ -1,6 +1,6 @@
-"""Tests for _truncate_around_matches in co_cli.memory._summary."""
+"""Tests for _truncate_around_matches in co_cli.memory.summary."""
 
-from co_cli.memory._summary import _truncate_around_matches
+from co_cli.memory.summary import _truncate_around_matches
 
 _MAX = 200  # small max for test determinism
 

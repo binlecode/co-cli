@@ -211,9 +211,10 @@ class MemoryIndex:
             JOIN sessions s ON m.session_id = s.session_id
             WHERE messages_fts MATCH ?
             ORDER BY rank
+            LIMIT ?
         """
         try:
-            rows = self._conn.execute(sql, (query,)).fetchall()
+            rows = self._conn.execute(sql, (query, limit * 20)).fetchall()
         except sqlite3.OperationalError as exc:
             logger.warning("Session search failed: %s", exc)
             return []

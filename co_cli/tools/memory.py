@@ -11,13 +11,13 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.memory._summary import (
+from co_cli.memory.session_browser import list_sessions
+from co_cli.memory.store import SessionSearchResult
+from co_cli.memory.summary import (
     _format_conversation,
     _truncate_around_matches,
     summarize_session_around_query,
 )
-from co_cli.memory.session_browser import list_sessions
-from co_cli.memory.store import SessionSearchResult
 from co_cli.memory.transcript import load_transcript
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
@@ -72,8 +72,6 @@ def _dedup_sessions(
     """Deduplicate FTS5 results to one entry per session, skipping current session."""
     seen: dict[str, SessionSearchResult] = {}
     for result in raw_results:
-        if result.session_id in seen:
-            continue
         if current_resolved and Path(result.session_path).resolve() == current_resolved:
             continue
         seen[result.session_id] = result

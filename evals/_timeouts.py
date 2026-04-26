@@ -65,3 +65,11 @@ EVAL_DB_TIMEOUT_SECS: int = 5
 Since SQLite FTS5 operates locally and sequentially on-disk, anything exceeding
 5 seconds strongly indicates a disk deadlock or transaction lock issue.
 """
+
+EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS: int = 360
+"""Per-turn upper bound for the open-ended deep-learning loop in step 15.
+
+M3 dropped zone is ~45K tokens (~181K chars); measured at ~289s on qwen3.5:35b-a3b noreason
+(34K prompt tokens → 218s at 25.5 tok/s, extrapolated to full drop zone). 360s adds ~70s
+headroom for web_fetch latency and agent reasoning per turn.
+"""

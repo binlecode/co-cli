@@ -11,6 +11,7 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,16 +46,17 @@ def _extract_title(path: Path, max_bytes: int = 4096) -> str:
             if not line:
                 continue
             try:
-                import json
-
                 data = json.loads(line)
-                if isinstance(data, list):
-                    for msg in data:
-                        for part in msg.get("parts", []):
-                            if part.get("part_kind") == "user-prompt":
-                                content = part.get("content", "")
-                                if content:
-                                    return content[:80] + ("..." if len(content) > 80 else "")
+                if not isinstance(data, list) or not data:
+                    continue
+                msg = data[0]
+                if not isinstance(msg, dict):
+                    continue
+                for part in msg.get("parts", []):
+                    if part.get("part_kind") == "user-prompt":
+                        content = part.get("content", "")
+                        if content:
+                            return content[:80] + ("..." if len(content) > 80 else "")
             except (ValueError, KeyError, TypeError):
                 continue
     except OSError:
