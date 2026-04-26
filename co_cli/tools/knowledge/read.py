@@ -411,9 +411,20 @@ async def knowledge_search(
         created_after: ISO8601 date string; only return items created on or after this date.
         created_before: ISO8601 date string; only return items created on or before this date.
 
+    DISAMBIGUATION — when the user asks about something that might be a saved fact OR
+    something said in a past conversation, try knowledge_search first (cheap, BM25 only,
+    no LLM cost); only call memory_search if there is no curated artifact match.
+    memory_search summarizes past conversations; knowledge_search returns curated artifacts.
+
+    Concrete examples:
+    - "what was my preferred test runner?" → knowledge_search (saved preference)
+    - "what's our convention for logging?" → knowledge_search (saved rule/decision)
+    - "what did we figure out about docker last time?" → memory_search (past conversation)
+    - "what was that auth bug we hit?" → memory_search (past conversation)
+
     Do NOT use to search what was SAID in past conversations — use memory_search
     for episodic recall of conversation transcripts. This tool searches distilled
-    knowledge artifacts; memory_search searches raw session history.
+    knowledge artifacts; memory_search searches what was said in past conversations.
     """
     # Article-index fast-path: returns continuation schema for read_article()
     if kind == "article":

@@ -5,6 +5,8 @@
 **Method:** Deep code scan of every source file, spec, and test in each subsystem. Every claim below cites `file:line`.
 **Version:** v0.7.160 (commit fc0967b)
 
+> **Post-report rename note:** `compaction_failure_count` (referenced throughout this report) was renamed to `compaction_skip_count` in a later refactor. The field still exists with the same semantics — only the name changed. Grep the live tree for `compaction_skip_count` when acting on any gap below.
+
 ---
 
 ## Table of Contents

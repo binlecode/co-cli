@@ -148,7 +148,7 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | `knowledge_search(query, *, kind=None, source=None, limit=10, tags=None, tag_match_mode="any", created_after=None, created_before=None)` | A | — | — | — | Unified search across local knowledge, Obsidian, and Drive; `kind="article"` returns article slugs for `knowledge_article_read` |
 | `knowledge_list(offset=0, limit=20, kind=None)` | A | — | — | — | Paginate knowledge artifact metadata |
 | `knowledge_article_read(slug)` | A | — | — | — | Fetch full markdown for a cached article by slug |
-| `memory_search(query, *, limit=5)` | A | — | — | — | Keyword search across historic session transcripts |
+| `memory_search(query="", *, limit=3)` | A | — | — | — | Episodic recall: empty query → recent-session browse (metadata, zero LLM cost); keyword query → LLM-summarized recaps of matching sessions; limit clamped to [1, 5] |
 | `knowledge_update(slug, old_content, new_content)` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
 | `knowledge_append(slug, content)` | D | ✓ | — | — | Append to a knowledge artifact |
 | `knowledge_article_save(content, title, origin_url, tags=None, related=None)` | D | ✓ | — | — | Persist web content as a local markdown artifact |
