@@ -5,7 +5,7 @@ appended to ``message_history`` — they drive the ``instructions`` field that
 pydantic-ai re-emits each turn.
 
 Functions:
-    recall_prompt_text   — async, returns date + personality memories + recalled knowledge
+    recall_prompt_text   — async, returns today's date (volatile suffix only)
     safety_prompt_text   — sync, returns doom-loop / shell-reflection warnings
 """
 
@@ -15,7 +15,6 @@ import hashlib
 import json
 import logging
 from datetime import date
-from typing import cast
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
@@ -24,68 +23,21 @@ from pydantic_ai.messages import (
     ModelResponse,
     ToolCallPart,
     ToolReturnPart,
-    UserPromptPart,
 )
 
 from co_cli.deps import CoDeps
-from co_cli.memory.state import MemoryRecallState
 
 log = logging.getLogger(__name__)
 
 
-def _get_last_user_message(messages: list[ModelMessage]) -> str | None:
-    """Extract the text of the most recent UserPromptPart from messages."""
-    for msg in reversed(messages):
-        if isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
-                    return part.content
-    return None
-
-
-def _count_user_turns(messages: list[ModelMessage]) -> int:
-    """Count ModelRequest messages that contain a non-system UserPromptPart."""
-    count = 0
-    for msg in messages:
-        if isinstance(msg, ModelRequest) and any(isinstance(p, UserPromptPart) for p in msg.parts):
-            count += 1
-    return count
-
-
 async def recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
-    """Per-turn dynamic instruction: date, personality memories, and recalled knowledge."""
-    state: MemoryRecallState = ctx.deps.session.memory_recall_state
-    user_turn_count = _count_user_turns(ctx.messages)
-    user_msg = _get_last_user_message(ctx.messages)
+    """Per-turn dynamic instruction: today's date.
 
-    parts: list[str] = []
-
-    parts.append(f"Today is {date.today().isoformat()}.")
-
-    if ctx.deps.config.personality:
-        from co_cli.prompts.personalities._injector import _load_personality_memories
-
-        personality_content = _load_personality_memories()
-        if personality_content:
-            parts.append(personality_content)
-
-    if user_msg and user_turn_count > state.last_recall_user_turn:
-        from co_cli.tools.knowledge.read import _recall_for_context
-
-        try:
-            result = await _recall_for_context(ctx, user_msg, max_results=3)
-            state.last_recall_user_turn = user_turn_count
-            state.recall_count += 1
-            if (result.metadata or {}).get("count", 0) > 0:
-                memory_content = cast("str", result.return_value)
-                max_chars = ctx.deps.config.memory.injection_max_chars
-                if len(memory_content) > max_chars:
-                    memory_content = memory_content[:max_chars]
-                parts.append(f"Relevant memories:\n{memory_content}")
-        except Exception:
-            log.debug("recall_prompt_text: _recall_for_context failed", exc_info=True)
-
-    return "\n\n".join(parts)
+    Personality memories are injected in the static system prompt via
+    ``build_static_instructions()`` for prefix-cache stability. Knowledge
+    recall is on-demand via ``knowledge_search`` / ``memory_search`` tools.
+    """
+    return f"Today is {date.today().isoformat()}."
 
 
 def _count_consecutive_same_calls(messages: list[ModelMessage]) -> int:

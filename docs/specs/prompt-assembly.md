@@ -89,7 +89,7 @@ Any content that can vary within a single session MUST be appended to the tail o
 
 **Rationale:** `@agent.instructions` output is concatenated into the static system-prompt block pydantic-ai sends to the provider. Providers cache the system-prompt block as the prefix of every request. Any per-request variance in that block invalidates the cache for the entire prefix, including fixed tool schemas and soul assets.
 
-New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date and `personality-context` memories are injected via `recall_prompt`, registered with `agent.instructions()` — the date can change at midnight, and personality-context memories can change mid-session.
+New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date is injected via `date_prompt`, registered with `agent.instructions()` — the date can change at midnight. Personality-context memories are in the static prompt (loaded once at agent construction) and do not require per-turn injection.
 
 ### 2.4 History Processors And Dynamic Instructions
 
@@ -106,11 +106,11 @@ Two dynamic instruction functions are registered via `agent.instructions()` and 
 | Dynamic instruction | Behavior |
 | --- | --- |
 | `safety_prompt` | detects identical-tool-call streaks and shell-error streaks; returns warning text injected into the instructions context |
-| `recall_prompt` | on every model-bound segment: appends current date and `personality-context` memories; once per new user turn: also appends top-3 recalled knowledge artifacts (writes counters to `deps.session.memory_recall_state`) |
+| `date_prompt` | appends today's date as the volatile dynamic suffix (personality memories are in the static prompt; knowledge recall is on-demand via tools) |
 
 **Ordering rationale:**
 - **#1–2 before #3**: truncation runs before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set, todos) to compensate.
-- **Dynamic instructions before model request**: `safety_prompt` and `recall_prompt` run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
+- **Dynamic instructions before model request**: `safety_prompt` and `date_prompt` run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
 
 ### 2.5 Approval Resume
 
@@ -122,22 +122,18 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `personality` | `CO_PERSONALITY` | `tars` | personality for static prompt assembly and memory injection |
+| `personality` | `CO_PERSONALITY` | `tars` | personality for static prompt assembly |
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | identical-tool-call streak for warning injection |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | shell-error streak for reflection-cap injection |
-| `memory.injection_max_chars` | `CO_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for recalled artifact injection |
-| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in turn-time recall scoring |
 
 ## 4. Files
 
 | File | Purpose |
 | --- | --- |
 | `co_cli/agent/_core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
-| `co_cli/agent/_instructions.py` | dynamic instruction callbacks: `recall_prompt`, `safety_prompt`, `add_shell_guidance`, `add_category_awareness_prompt` |
-| `co_cli/prompts/_assembly.py` | `build_static_instructions()`; rule-file validation |
-| `co_cli/prompts/personalities/_loader.py` | soul seed, mindset, character memory, examples, critique loading |
-| `co_cli/prompts/personalities/_injector.py` | per-turn `personality-context` memory injection |
+| `co_cli/agent/_instructions.py` | dynamic instruction callbacks: `date_prompt`, `safety_prompt`, `add_shell_guidance`, `add_category_awareness_prompt` |
+| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — soul + personality-context memories + rules; rule-file validation |
+| `co_cli/prompts/personalities/_loader.py` | soul seed, mindset, character memory, examples, critique, and `load_personality_memories()` |
 | `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
-| `co_cli/context/prompt_text.py` | `recall_prompt_text` and `safety_prompt_text` — dynamic instruction implementations called via `agent.instructions()` wrappers in `agent/_instructions.py` |
+| `co_cli/context/prompt_text.py` | `recall_prompt_text` (date-only dynamic instruction) and `safety_prompt_text` — called via `agent.instructions()` wrappers in `agent/_instructions.py` |
 | `co_cli/tools/_deferred_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
-| `co_cli/memory/state.py` | `MemoryRecallState` — session-scoped memory-recall debouncing state |

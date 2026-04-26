@@ -123,7 +123,7 @@ def build_agent(
         from co_cli.agent._instructions import (
             add_category_awareness_prompt,
             add_shell_guidance,
-            recall_prompt,
+            date_prompt,
             safety_prompt,
         )
         from co_cli.prompts._assembly import build_static_instructions
@@ -152,8 +152,8 @@ def build_agent(
         # Conditional prompt layers — runtime-gated (fresh per turn, never accumulated)
         agent.instructions(add_shell_guidance)
         agent.instructions(add_category_awareness_prompt)
-        # Dynamic per-turn context — date, personality memories, knowledge recall
-        agent.instructions(recall_prompt)
+        # Dynamic per-turn context — date only (personality memories in static prompt)
+        agent.instructions(date_prompt)
         # Dynamic per-turn safety warnings — doom loop, shell reflection cap
         agent.instructions(safety_prompt)
 

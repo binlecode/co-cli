@@ -1,9 +1,9 @@
 """Prompt assembly for the Co CLI agent.
 
-Static instruction scaffold assembly lives here: soul scaffold, rules, and
-examples. Runtime-only layers such as date, project instructions, always-on
-memories, and personality continuity memories are added later via
-``@agent.instructions`` in ``agent.py``.
+Static instruction scaffold assembly lives here: soul scaffold, character memories,
+mindsets, personality-context knowledge artifacts, behavioral rules, and examples.
+Runtime-only layers such as date and conditional safety warnings are added later
+via ``@agent.instructions`` in ``agent/_core.py``.
 """
 
 from __future__ import annotations
@@ -110,6 +110,7 @@ def build_static_instructions(config: Settings) -> str:
     if config.personality:
         from co_cli.prompts.personalities._loader import (
             load_character_memories,
+            load_personality_memories,
             load_soul_critique,
             load_soul_examples,
             load_soul_mindsets,
@@ -133,6 +134,13 @@ def build_static_instructions(config: Settings) -> str:
     # 3. Mindsets
     if mindsets:
         parts.append(mindsets)
+
+    # 3b. Personality memories — curated knowledge artifacts tagged personality-context;
+    # session-stable, loaded once at agent construction for prefix-cache stability.
+    if config.personality:
+        personality_memories_content = load_personality_memories()
+        if personality_memories_content:
+            parts.append(personality_memories_content)
 
     # 4. Behavioral rules (strict numbered order)
     for _order, _name, rule_path in _collect_rule_files():

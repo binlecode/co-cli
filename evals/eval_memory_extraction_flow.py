@@ -9,9 +9,8 @@ Validates the current production extraction path described in the memory spec:
   _finalize_turn cadence gate       — trigger extraction only on clean Nth turns.
 
   e2e-extraction-injection          — full memory loop: turn 1 → extraction fires
-      → save_memory → DB index → turn 2 → _recall_for_context → SystemPromptPart
-      injection. Closes the loop not covered by eval_memory_recall.py (which
-      seeds memories via sync_dir, not via extraction).
+      → save_memory → DB index. Validates extraction fires and content is indexed;
+      agent queries proactively via knowledge_search / memory_search in subsequent turns.
 
 Implementation-level direct-helper coverage belongs in pytest.
 
@@ -322,22 +321,15 @@ async def run_cadence_gate() -> dict[str, Any]:
 
 
 async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
-    """Full memory loop: turn 1 → extraction → DB index → recall_prompt_text.
+    """Full memory loop: turn 1 → extraction → DB index.
 
     Turn 1 (real LLM): user states a preference. fire_and_forget_extraction runs.
     After drain: extracted memory file is written and indexed in KnowledgeStore.
-    Inject probe (no LLM): read actual extracted body, build a RunContext with
-    that content as the user message, call recall_prompt_text directly, and
-    assert "Relevant memories:" appears in the returned text.
+    Validates extraction fires and content is indexed. Agent queries proactively
+    via knowledge_search / memory_search in subsequent turns.
 
-    Using the extracted body as the query guarantees a BM25 match regardless of
-    what the extractor LLM chose to save — no query/content mismatch risk.
     If the extractor saved nothing (valid judgment call), SOFT PASS.
     """
-    from pydantic_ai import RunContext as _RunContext
-    from pydantic_ai.usage import RunUsage
-
-    from co_cli.context.prompt_text import recall_prompt_text
     from co_cli.knowledge._frontmatter import parse_frontmatter
 
     steps: list[dict[str, Any]] = []
@@ -525,54 +517,10 @@ async def run_extraction_to_injection(tmp_dir: Path) -> dict[str, Any]:
             }
         )
 
-        # Probe recall_prompt_text directly — no second LLM call.
-        # Use the first word that hit the DB as the user message — a clean single-word
-        # query that _recall_for_context BM25 is guaranteed to rank > 0.
-        # Fresh deps: run_turn already set state.last_recall_user_turn = 1 on `deps`;
-        # reusing it would hit the duplicate-turn guard (user_turn_count <= state value).
-        probe_query = (
-            used_query if used_query else (body_words[0] if body_words else extracted_body[:60])
-        )
-        probe_messages = [ModelRequest(parts=[UserPromptPart(content=probe_query)])]
-        probe_deps = make_eval_deps(
-            knowledge_store=knowledge_store,
-            memory_dir=memory_dir,
-            model=llm_model,
-        )
-        from dataclasses import replace as _replace
-
-        ctx = _RunContext(deps=probe_deps, model=agent.model, usage=RunUsage())
-        ctx_probe = _replace(ctx, messages=probe_messages)
-        t = time.monotonic()
-        recall_text = await recall_prompt_text(ctx_probe)
-        steps.append(
-            {
-                "name": "recall_prompt_text (direct probe)",
-                "ms": (time.monotonic() - t) * 1000,
-                "detail": f"text length={len(recall_text)} chars",
-            }
-        )
-
-        injection: str | None = None
-        if "Relevant memories:" in recall_text:
-            injection = recall_text
-        steps.append(
-            {
-                "name": "recall injection check",
-                "ms": 0,
-                "detail": f"injected={injection is not None} preview={(injection[:80] if injection else None)!r}",
-            }
-        )
-
         if cursor_after <= cursor_start:
             verdict, failure = "FAIL", "cursor did not advance — extractor did not run"
         elif not db_results:
             verdict, failure = "FAIL", "extracted content not found in DB — index step failed"
-        elif injection is None:
-            verdict, failure = (
-                "FAIL",
-                "recall_prompt_text returned no recall content — recall path broken",
-            )
         else:
             verdict, failure = "PASS", None
     finally:

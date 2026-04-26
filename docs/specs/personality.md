@@ -29,37 +29,30 @@ Three personalities ship: `finch` (preparation-first mentor), `jeff` (warm colla
 `tars` (direct operator — default). Each personality lives in its own subdirectory under
 `co_cli/prompts/personalities/souls/{role}/`.
 
-Personality enters the agent via two paths:
+Personality enters the agent via one path:
 
-1. **Static** — `build_static_instructions()` assembles a six-section prompt at agent
-   construction. This is set once as `Agent(instructions=...)` and does not change
-   within a session.
+1. **Static** — `build_static_instructions()` assembles the full static prompt at agent
+   construction, including personality-context knowledge artifacts. This is set once as
+   `Agent(instructions=...)` and does not change within a session.
 
-2. **Per-turn** — `_load_personality_memories()` is called inside the `recall_prompt`
-   dynamic instruction before each model-bound segment. The result injects the top-5 most recent
-   memories tagged `personality-context` from `~/.co-cli/knowledge/`, letting learned context
-   about the user accumulate over sessions without modifying the soul files. The disk scan result
-   is cached for the process lifetime; call `invalidate_personality_cache()` after any write that
-   changes `personality-context` tags.
+Personality-context memories (knowledge artifacts tagged `personality-context`) are loaded
+once at agent construction by `load_personality_memories()` in `personalities/_loader.py`
+and injected into the static system prompt. This keeps the cache-stable prefix intact across
+all turns. Runtime edits to personality-context artifacts require a session restart to take effect.
 
 ```
 Session start
     ↓
 build_static_instructions(config)
     ↓
-    [1] soul seed          — identity anchor, constraints, never-list
-    [2] character memories — planted narrative backstory
-    [3] mindsets           — 6 task-type behavioral guides
-    [4] behavioral rules   — 5 universal rule files (01–05)
-    [5] soul examples      — concrete trigger→response patterns
-    [6] review lens        — self-assessment frame
+    [1] soul seed               — identity anchor, constraints, never-list
+    [2] character memories      — planted narrative backstory
+    [3] mindsets                — 6 task-type behavioral guides
+    [3b] personality memories   — top-5 "personality-context" artifacts from ~/.co-cli/knowledge/
+    [4] behavioral rules        — 5 universal rule files (01–05)
+    [5] soul examples           — concrete trigger→response patterns
+    [6] review lens             — self-assessment frame
     → set as Agent.instructions (static, once per session)
-
-Each request
-    ↓
-recall_prompt()     — dynamic instruction (agent.instructions())
-    → calls _load_personality_memories() → top-5 "personality-context" memories
-    → injected as ## Learned Context block
 ```
 
 ---
@@ -112,23 +105,23 @@ subject to self-review.
 be numbered `01`–`05`, contiguous, and unique. Current rules: `01_identity.md`,
 `02_safety.md`, `03_reasoning.md`, `04_tool_protocol.md`, `05_workflow.md`.
 
-### Per-Turn Personality-Context Injection
+### Static Personality-Context Injection
 
-`_load_personality_memories()` in `personalities/_injector.py`:
+`load_personality_memories()` in `personalities/_loader.py`:
 
 ```
 if _personality_cache is not None:
     return _personality_cache                      # cached — no disk scan
-memories = load_knowledge_artifacts(knowledge_dir, tags=["personality-context"])
+memories = load_knowledge_artifacts(KNOWLEDGE_DIR, tags=["personality-context"])
 sorted by recency (updated_at or created_at)
 take top 5
 _personality_cache = "## Learned Context\n\n" + bullet list of bodies
 return _personality_cache
 ```
 
-The cache is process-scoped (module-level `_personality_cache`). Call
-`invalidate_personality_cache()` after any tool write that adds or removes the
-`personality-context` tag. The memory extraction pipeline (in [memory-knowledge.md](memory-knowledge.md))
+The cache is process-scoped (module-level `_personality_cache`). The function is called
+once at agent construction inside `build_static_instructions()`; result is injected into
+the static system prompt. The memory extraction pipeline (in [memory-knowledge.md](memory-knowledge.md))
 is responsible for tagging relevant observations as `personality-context`.
 
 ### Personality Discovery and Validation
@@ -157,13 +150,12 @@ for missing mindset files.
 
 | File | Purpose |
 |---|---|
-| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — six-section static prompt assembly |
-| `co_cli/prompts/personalities/_loader.py` | `load_soul_seed`, `load_soul_examples`, `load_soul_critique`, `load_character_memories`, `load_soul_mindsets` |
-| `co_cli/prompts/personalities/_injector.py` | `_load_personality_memories()` — per-turn personality-context injection |
+| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — static prompt assembly (soul + personality memories + rules) |
+| `co_cli/prompts/personalities/_loader.py` | `load_soul_seed`, `load_soul_examples`, `load_soul_critique`, `load_character_memories`, `load_soul_mindsets`, `load_personality_memories` |
 | `co_cli/prompts/personalities/_validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/prompts/personalities/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
 | `co_cli/prompts/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
 | `co_cli/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/_core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agent/_core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
-| `co_cli/agent/_instructions.py` | `recall_prompt()` — dynamic instruction for per-turn personality + knowledge recall |
+| `co_cli/agent/_instructions.py` | `date_prompt()` — dynamic instruction returning today's date |

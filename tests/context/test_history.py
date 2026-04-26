@@ -1249,59 +1249,28 @@ async def test_compact_command_preserves_search_tools_breadcrumb():
 
 
 # ---------------------------------------------------------------------------
-# recall_prompt_text — per-turn dynamic instruction (date + personality + knowledge recall)
+# recall_prompt_text — per-turn dynamic instruction (date only)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_recall_prompt_text_includes_personality_memories():
-    """When personality is set, recall_prompt_text includes the personality block in its output."""
-    from co_cli.prompts.personalities import _injector as _injector_module
-    from co_cli.prompts.personalities._injector import invalidate_personality_cache
+async def test_dynamic_instruction_is_date_only():
+    """recall_prompt_text returns exactly the date string and nothing else."""
+    from datetime import date as _date
 
-    sentinel = "## Learned Context\n\n- personality-tail-sentinel-XYZ789"
-    invalidate_personality_cache()
-    try:
-        _injector_module._personality_cache = sentinel
-        deps = CoDeps(
-            shell=ShellBackend(),
-            config=make_settings().model_copy(update={"personality": "finch"}),
-            model=_LLM_MODEL,
-            session=CoSessionState(),
-        )
-        ctx = RunContext(
-            deps=deps, model=_AGENT.model, usage=RunUsage(), messages=[_user("hello")]
-        )
-        result = await recall_prompt_text(ctx)
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=make_settings().model_copy(update={"personality": None}),
+        model=_LLM_MODEL,
+        session=CoSessionState(),
+        knowledge_dir=Path("/nonexistent-test-dir"),
+    )
+    msgs = [_user("ping"), _assistant("pong"), _user("ping again")]
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage(), messages=msgs)
+    result = await recall_prompt_text(ctx)
 
-        assert "personality-tail-sentinel-XYZ789" in result, (
-            f"personality memories missing from recall text; got: {result!r}"
-        )
-    finally:
-        invalidate_personality_cache()
-
-
-@pytest.mark.asyncio
-async def test_recall_prompt_text_always_includes_date():
-    """recall_prompt_text always includes a 'Today is' date line in its output."""
-    from co_cli.prompts.personalities._injector import invalidate_personality_cache
-
-    invalidate_personality_cache()
-    try:
-        deps = CoDeps(
-            shell=ShellBackend(),
-            config=make_settings().model_copy(update={"personality": None}),
-            model=_LLM_MODEL,
-            session=CoSessionState(),
-            knowledge_dir=Path("/nonexistent-test-dir"),
-        )
-        msgs = [_user("ping"), _assistant("pong"), _user("ping again")]
-        ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage(), messages=msgs)
-        result = await recall_prompt_text(ctx)
-
-        assert "Today is " in result, f"date missing from recall text; got: {result!r}"
-    finally:
-        invalidate_personality_cache()
+    expected = f"Today is {_date.today().isoformat()}."
+    assert result == expected, f"dynamic instruction should be date-only; got: {result!r}"
 
 
 # ---------------------------------------------------------------------------

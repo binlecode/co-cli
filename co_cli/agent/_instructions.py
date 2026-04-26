@@ -5,8 +5,8 @@ from pydantic_ai import RunContext
 from co_cli.deps import CoDeps
 
 
-async def recall_prompt(ctx: RunContext[CoDeps]) -> str:
-    """Per-turn: inject date, personality memories, and recalled knowledge."""
+async def date_prompt(ctx: RunContext[CoDeps]) -> str:
+    """Per-turn: inject today's date."""
     from co_cli.context.prompt_text import recall_prompt_text
 
     return await recall_prompt_text(ctx)

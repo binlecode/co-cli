@@ -65,86 +65,6 @@ def filter_artifacts(
     return result
 
 
-async def _recall_for_context(
-    ctx: RunContext[CoDeps],
-    query: str,
-    max_results: int = 5,
-    tags: list[str] | None = None,
-    tag_match_mode: Literal["any", "all"] = "any",
-    created_after: str | None = None,
-    created_before: str | None = None,
-) -> ToolReturn:
-    """Used by recall_prompt_text to surface relevant artifacts for the per-turn dynamic instruction.
-
-    Uses FTS5/BM25 DB search via knowledge_store. Returns empty when knowledge_store
-    is None (degraded mode — no crash).
-
-    Returns a dict with:
-    - display: formatted artifact list — show directly to the user
-    - count: number of artifacts found
-    - results: list of {path, title, snippet, tags, created, score} dicts
-
-    Args:
-        query: Keywords to search (e.g. "python testing", "database", "preference").
-        max_results: Max results to return (default 5).
-        tags: Exact tag filter list. None = no filter.
-        tag_match_mode: 'any' (OR — at least one tag matches) or 'all' (AND — all tags match).
-        created_after: ISO8601 date string; only return artifacts created on or after this date.
-        created_before: ISO8601 date string; only return artifacts created on or before this date.
-    """
-    if ctx.deps.knowledge_store is None:
-        return tool_output("", ctx=ctx, count=0, results=[])
-
-    results = ctx.deps.knowledge_store.search(
-        query,
-        source=IndexSourceEnum.KNOWLEDGE,
-        tags=tags,
-        tag_match_mode=tag_match_mode,
-        created_after=created_after,
-        created_before=created_before,
-        limit=max_results,
-    )
-
-    if not results:
-        return tool_output(
-            f"No artifacts found matching '{query}'",
-            ctx=ctx,
-            count=0,
-            results=[],
-        )
-
-    hit_paths = [r.path for r in results]
-    _recall_task = asyncio.create_task(_touch_recalled(hit_paths, ctx))
-    _recall_task.add_done_callback(lambda _t: None)
-
-    lines = [
-        f"Found {len(results)} artifact{'s' if len(results) != 1 else ''} matching '{query}':\n"
-    ]
-    result_dicts: list[dict[str, Any]] = []
-    for r in results:
-        created_short = (r.created or "")[:10]
-        lines.append(f"**{r.title or r.path}** (created {created_short})")
-        if r.tags:
-            lines.append(f"Tags: {r.tags}")
-        lines.append(f"{r.snippet or ''}\n")
-        result_dicts.append(
-            {
-                "path": r.path,
-                "title": r.title,
-                "snippet": r.snippet,
-                "tags": r.tags,
-                "created": r.created,
-                "score": r.score,
-            }
-        )
-    return tool_output(
-        "\n".join(lines),
-        ctx=ctx,
-        count=len(results),
-        results=result_dicts,
-    )
-
-
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def knowledge_list(
     ctx: RunContext[CoDeps],
@@ -552,6 +472,11 @@ async def knowledge_search(
 
     if not results:
         return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
+
+    hit_paths = [r.path for r in results if r.path]
+    if hit_paths:
+        _recall_task = asyncio.create_task(_touch_recalled(hit_paths, ctx))
+        _recall_task.add_done_callback(lambda _t: None)
 
     return _post_process_knowledge_results(ctx, query, results)
 

@@ -55,7 +55,6 @@ flowchart TD
 
     subgraph Recall["Retrieval"]
         MemorySearch["memory_search()"]
-        TurnRecall["recall_prompt()"]
         KnowledgeSearch["knowledge_search()"]
     end
 
@@ -67,7 +66,6 @@ flowchart TD
     Dream --> KDir
     KDir --> SearchDB
     SessionIdx --> MemorySearch
-    SearchDB --> TurnRecall
     SearchDB --> KnowledgeSearch
 ```
 
@@ -167,7 +165,7 @@ Raw transcripts are Memory; `session-index.db` is a derived search structure ove
 
 Indexing rules:
 
-- `_init_memory_index()` runs during bootstrap.
+- `init_memory_index()` runs during bootstrap.
 - `sync_sessions()` scans `sessions_dir`, skipping the current `session_path`.
 - Change detection is file-size-based because transcripts are append-only.
 - Reindexing deletes and reinserts message rows for that session ID.
@@ -213,10 +211,13 @@ Knowledge artifact schema:
 | `last_recalled` | Most recent recall timestamp |
 | `recall_count` | Recall hit counter |
 
-Knowledge retrieval has two paths:
+Recall is on-demand. Two tools surface persistent context: `knowledge_search()` over curated knowledge artifacts, `memory_search()` over past session transcripts. The agent decides when to call them; existing tool descriptions coach proactive use.
 
-- **Turn-time recall**: `recall_prompt()` runs before each model-bound segment. Once per new user turn, it calls `_recall_for_context()` and appends the top three recalled artifacts as a trailing `SystemPromptPart`, capped by `memory.injection_max_chars`.
-- **Explicit search**: `knowledge_search()` queries the knowledge store on demand.
+Personality memories (knowledge artifacts tagged `personality-context`) live in the **static system prompt** to preserve prefix-cache stability across turns. They are loaded once at agent construction by `load_personality_memories()` in `co_cli/prompts/personalities/_loader.py` and injected by `build_static_instructions()` in `co_cli/prompts/_assembly.py`. Runtime edits to personality-context artifacts require a session restart to take effect.
+
+The dynamic-instructions block (`date_prompt()` in `co_cli/agent/_instructions.py`) is intentionally kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable static prefix remains cache-stable across turns.
+
+**Explicit search**: `knowledge_search()` queries the knowledge store on demand. After an FTS5 hit, `_touch_recalled()` is called fire-and-forget to increment `recall_count` and stamp `last_recalled` on each matched artifact, preserving per-artifact recall telemetry for confidence scoring and half-life decay.
 
 Search backends degrade in this order:
 
@@ -257,7 +258,7 @@ fire_and_forget_extraction(delta, cursor_start=cursor)
 
 `fire_and_forget_extraction()` is single-flight: if one extraction task is already running, later launches are skipped. This is acceptable at cadence boundaries because the delta remains in history and will be re-offered at the next cadence tick.
 
-**Compaction-boundary extraction is synchronous.** Because compaction is about to discard the pre-compact tail, `extract_at_compaction_boundary()` drains any in-flight cadence task, awaits extraction inline, and only then pins `last_extracted_message_idx` to `len(post_compact)`. Extraction failures are best-effort: the cursor still pins so compaction can proceed.
+**Compaction-boundary extraction is synchronous.** Because compaction is about to discard the pre-compact tail, `extract_at_compaction_boundary()` drains any in-flight cadence task, awaits extraction inline, and only then pins `last_extracted_message_idx` to `len(post_compact)` and resets `last_extracted_turn_idx` to `0`. Extraction failures are best-effort: the cursor still pins so compaction can proceed.
 
 The extractor pipeline:
 
@@ -294,7 +295,6 @@ The dream cycle is not part of turn-time recall or per-turn extraction. It is a 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age-decay parameter used in recall scoring |
-| `memory.injection_max_chars` | `CO_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for recalled knowledge injected into the prompt |
 | `memory.extract_every_n_turns` | `CO_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | extraction cadence; `0` disables per-turn extraction |
 
 ### Knowledge Settings
@@ -331,6 +331,7 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/memory/session_browser.py` | lightweight session listing and picker metadata for `/resume` and `/sessions` |
 | `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, and size warnings |
 | `co_cli/memory/store.py` | `MemoryIndex` — derived FTS5 index over past session transcripts |
+| `co_cli/memory/indexer.py` | `extract_messages()` — JSONL line parser that feeds `MemoryIndex.index_session()` |
 | `co_cli/tools/memory.py` | `memory_search()` episodic recall tool |
 | `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` schema and artifact loaders |
 | `co_cli/knowledge/_store.py` | `KnowledgeStore` indexing/search backend and `sync_dir()` |
@@ -339,9 +340,12 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/knowledge/_ranking.py` | confidence scoring and contradiction helpers |
 | `co_cli/knowledge/_similarity.py` | similarity and dedup helpers |
 | `co_cli/knowledge/_distiller.py` | per-turn extraction pipeline and transcript-window builder |
-| `co_cli/tools/knowledge/read.py` | reusable-artifact search/list/read plus turn-time `_recall_for_context()` |
+| `co_cli/tools/knowledge/read.py` | reusable-artifact search/list/read; `knowledge_search()` calls `_touch_recalled()` fire-and-forget after FTS5 hits |
 | `co_cli/tools/knowledge/write.py` | artifact write/update/append helpers and article persistence |
 | `co_cli/bootstrap/core.py` | `restore_session()` and `_init_memory_index()` during startup |
-| `co_cli/agent/_instructions.py` | `recall_prompt()` — dynamic instruction wrapper for turn-time recall |
+| `co_cli/agent/_instructions.py` | `date_prompt()` — thin wrapper that delegates to `recall_prompt_text()` in `prompt_text.py`; returns today's date string |
+| `co_cli/context/prompt_text.py` | `recall_prompt_text()` — per-turn dynamic instruction; returns today's date only (personality memories are in static prompt; knowledge recall is on-demand) |
+| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — assembles soul, character memories, mindsets, personality-context artifacts, rules, and examples into the cacheable static system prompt |
+| `co_cli/prompts/personalities/_loader.py` | `load_personality_memories()` — loads `personality-context` tagged knowledge artifacts into the static prompt once at agent construction |
 | `co_cli/main.py` | `_finalize_turn()` extraction/persistence bridge |
 | `co_cli/commands/_commands.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions`, `/knowledge`, and `/memory` command handlers |

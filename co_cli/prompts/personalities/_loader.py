@@ -1,7 +1,7 @@
 """Soul loading for the file-driven personality system.
 
-Loads soul seeds, examples, critiques, mindsets, and character memories
-at agent construction time.
+Loads soul seeds, examples, critiques, mindsets, character memories, and
+personality-context knowledge artifacts at agent construction time.
 
 Personality is assembled from five sources in this order:
 - ``souls/{role}/seed.md``                    — identity declaration, trait essence, constraints
@@ -10,22 +10,64 @@ Personality is assembled from five sources in this order:
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by build_static_instructions)
 - ``souls/{role}/examples.md``               — concrete response patterns (optional, trailing rules)
 
+Personality-context knowledge artifacts (tagged ``personality-context`` in
+``~/.co-cli/knowledge/``) are loaded once at agent construction via
+``load_personality_memories()`` and injected into the static system prompt for
+prefix-cache stability.
+
 Each role is fully self-contained under ``souls/{role}/``. Adding a role requires
 only a new directory with the required files — no Python changes.
 
 Callers:
   _assembly.py          — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
-                          load_character_memories, load_soul_critique inside
-                          build_static_instructions(), invoked by build_agent()
+                          load_character_memories, load_soul_critique, load_personality_memories
+                          inside build_static_instructions(), invoked by build_agent()
 """
 
 from pathlib import Path
 
+from co_cli.config._core import KNOWLEDGE_DIR
+from co_cli.knowledge._artifact import load_knowledge_artifacts
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.prompts.personalities._validator import REQUIRED_MINDSET_TASK_TYPES
 
 # Independent copy — this module is importable without any other sibling module
 _PERSONALITIES_DIR = Path(__file__).parent
+
+_personality_cache: str | None = None
+
+
+def load_personality_memories() -> str:
+    """Load personality-context tagged artifacts for static system prompt injection.
+
+    Scans ``~/.co-cli/knowledge/`` for entries tagged with ``personality-context``.
+    Returns the top 5 (by recency) formatted as a ``## Learned Context`` section,
+    or empty string if none found.
+
+    Called by ``build_static_instructions()`` in ``prompts/_assembly.py`` once at
+    agent construction. Result is process-scoped; runtime mutations to personality-context
+    artifacts require a session restart to take effect.
+    """
+    global _personality_cache
+    if _personality_cache is not None:
+        return _personality_cache
+
+    personality_memories = load_knowledge_artifacts(KNOWLEDGE_DIR, tags=["personality-context"])
+    if not personality_memories:
+        result = ""
+    else:
+        personality_memories.sort(
+            key=lambda m: m.updated or m.created,
+            reverse=True,
+        )
+        personality_memories = personality_memories[:5]
+        lines = ["## Learned Context", ""]
+        for m in personality_memories:
+            lines.append(f"- {m.content}")
+        result = "\n".join(lines)
+
+    _personality_cache = result
+    return result
 
 
 def load_soul_seed(role: str) -> str:

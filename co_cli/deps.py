@@ -18,7 +18,6 @@ from co_cli.config._core import (
     USER_DIR,
     Settings,
 )
-from co_cli.memory.state import MemoryRecallState
 
 if TYPE_CHECKING:
     from co_cli.agent._core import ToolRegistry
@@ -103,7 +102,6 @@ class CoSessionState:
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     session_todos: list[dict] = field(default_factory=list)
     session_path: Path = field(default_factory=Path)
-    memory_recall_state: MemoryRecallState = field(default_factory=MemoryRecallState)
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY

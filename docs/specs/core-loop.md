@@ -279,7 +279,7 @@ The main agent is built with three registered history processors (pure transform
 Two additional functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
 
 - `safety_prompt` — doom-loop detection + shell reflection cap; active warnings returned as plain text
-- `recall_prompt` — injects current date, personality-context memories, and (once per new user turn) top-3 recalled knowledge artifacts; writes recall counters to `deps.session.memory_recall_state`
+- `date_prompt` — injects today's date as the volatile dynamic suffix (personality memories are in the static prompt; knowledge recall is on-demand via tools)
 
 Processor roles:
 
@@ -294,7 +294,7 @@ Preflight is called before every model-bound segment but not on approval-resume 
 Ordering rationale:
 
 - **#1–2 before #3**: truncation runs before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate.
-- **Dynamic instructions before model request**: `safety_prompt` and `recall_prompt` run via the SDK's `agent.instructions()` mechanism before every model-bound request. Their output is ephemeral context — not stored back to `turn_state.current_history`.
+- **Dynamic instructions before model request**: `safety_prompt` and `date_prompt` run via the SDK's `agent.instructions()` mechanism before every model-bound request. Their output is ephemeral context — not stored back to `turn_state.current_history`.
 
 Compaction behavior:
 
@@ -307,12 +307,11 @@ Compaction behavior:
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
 - successful history replacement sets `deps.runtime.compaction_applied_this_turn`, which later tells `_finalize_turn()` to persist into a child transcript instead of appending into the parent transcript
 
-Memory recall is also per-turn, not sticky:
+Knowledge recall is on-demand, not injected per-turn:
 
-- `recall_prompt` (dynamic instruction) writes counters to `deps.session.memory_recall_state`
-- it recalls only once per new user turn
-- failure to recall silently leaves history unchanged
-- the recall logic itself lives in `tools/knowledge/read.py::_recall_for_context()` (internal — called by `recall_prompt`, not registered as an agent tool)
+- `date_prompt` (dynamic instruction) returns today's date only; it does not access the knowledge store
+- personality memories live in the static system prompt (injected once at agent construction)
+- the agent calls `knowledge_search()` or `memory_search()` proactively when past context is relevant
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 
@@ -402,9 +401,8 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
 | `co_cli/context/compaction.py` | public entry points (three registered history processors, `pre_turn_window_compaction` for M0 hygiene, `proactive_window_processor` for M3 — both thin wrappers over the private `_compact_window_if_pressured` core; overflow-recovery entry points `recover_overflow_history` and `emergency_recover_overflow_history`); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `_history_processors.py` (dedup / truncate / batch-budget transformers) |
-| `co_cli/context/prompt_text.py` | `recall_prompt_text` and `safety_prompt_text` — dynamic instruction implementations called via `agent.instructions()` wrappers in `_instructions.py` |
+| `co_cli/context/prompt_text.py` | `recall_prompt_text` (date-only dynamic instruction) and `safety_prompt_text` — called via `agent.instructions()` wrappers in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
-| `co_cli/memory/state.py` | `MemoryRecallState` — session-scoped memory-recall debouncing state |
 | `co_cli/agent/_core.py` | main agent factory |
 | `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
