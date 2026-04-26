@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from co_cli.memory._indexer import extract_messages
+from co_cli.memory.indexer import extract_messages
 from co_cli.memory.session import parse_session_filename
 
 logger = logging.getLogger(__name__)

@@ -25,11 +25,13 @@ logger = logging.getLogger(__name__)
 # Files below this threshold are loaded in full — no boundary scan.
 # Above this, compact boundaries trigger pre-boundary skip on resume.
 # Matches fork-claude-code's SKIP_PRECOMPACT_THRESHOLD.
-SKIP_PRECOMPACT_THRESHOLD = 5 * 1024 * 1024  # 5 MB
+# 5 MB
+SKIP_PRECOMPACT_THRESHOLD = 5 * 1024 * 1024
 
 # Read-side OOM guard — bail before loading files above this size.
 # Matches fork-claude-code's MAX_TRANSCRIPT_READ_BYTES.
-MAX_TRANSCRIPT_READ_BYTES = 50 * 1024 * 1024  # 50 MB
+# 50 MB
+MAX_TRANSCRIPT_READ_BYTES = 50 * 1024 * 1024
 
 # Marker line written to JSONL when compaction replaces in-memory history.
 # On resume, everything before the last occurrence is skipped (for large files).

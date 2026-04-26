@@ -309,7 +309,7 @@ def init_memory_index(
     The current_session_path is excluded from the sync so the in-progress
     session is never indexed mid-session.
     """
-    from co_cli.memory._store import MemoryIndex
+    from co_cli.memory.store import MemoryIndex
 
     db_path = deps.sessions_dir.parent / "session-index.db"
     try:

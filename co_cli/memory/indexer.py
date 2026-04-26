@@ -21,7 +21,8 @@ class ExtractedMessage:
 
     line_index: int
     part_index: int
-    role: str  # 'user' | 'assistant'
+    # 'user' | 'assistant'
+    role: str
     content: str
     timestamp: str | None
 

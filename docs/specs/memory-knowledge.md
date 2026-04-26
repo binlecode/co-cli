@@ -330,7 +330,7 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/memory/transcript.py` | transcript append/load logic, child-session branching, and control records |
 | `co_cli/memory/session_browser.py` | lightweight session listing and picker metadata for `/resume` and `/sessions` |
 | `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, and size warnings |
-| `co_cli/memory/_store.py` | `MemoryIndex` — derived FTS5 index over past session transcripts |
+| `co_cli/memory/store.py` | `MemoryIndex` — derived FTS5 index over past session transcripts |
 | `co_cli/tools/memory.py` | `memory_search()` episodic recall tool |
 | `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` schema and artifact loaders |
 | `co_cli/knowledge/_store.py` | `KnowledgeStore` indexing/search backend and `sync_dir()` |

@@ -366,7 +366,7 @@ def testinit_memory_index_indexes_past_sessions(tmp_path: Path) -> None:
     """init_memory_index opens the DB and syncs past sessions; deps.memory_index is set."""
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-    from co_cli.memory._store import MemoryIndex
+    from co_cli.memory.store import MemoryIndex
     from co_cli.memory.transcript import append_messages
 
     sessions_dir = tmp_path / "sessions"
