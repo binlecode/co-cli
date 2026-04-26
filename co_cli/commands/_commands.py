@@ -7,74 +7,36 @@ import os
 import re
 import shutil
 import sys
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.messages import ModelRequest
 
 from co_cli.commands._skill_types import SkillConfig
+from co_cli.commands._types import (
+    CommandContext,
+    DelegateToAgent,
+    LocalOnly,
+    ReplaceTranscript,
+    SlashCommand,
+    SlashOutcome,
+)
+from co_cli.commands.session import (
+    _cmd_clear,
+    _cmd_compact,
+    _cmd_new,
+    _cmd_resume,
+    _cmd_sessions,
+)
 from co_cli.config._core import VALID_REASONING_DISPLAY_MODES
 from co_cli.deps import ApprovalKindEnum, CoDeps
-from co_cli.display._core import Frontend, console
+from co_cli.display._core import console
 from co_cli.knowledge._artifact import KnowledgeArtifact, load_knowledge_artifacts
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.tools.knowledge.read import grep_recall
 
 logger = logging.getLogger(__name__)
-
-
-# -- Types -----------------------------------------------------------------
-
-
-@dataclass
-class CommandContext:
-    """Input bag passed to every slash-command handler."""
-
-    message_history: list[Any]
-    deps: CoDeps
-    agent: Agent[CoDeps, str | DeferredToolRequests]
-    # Holds the live WordCompleter from chat_loop() — typed Any to keep _commands.py
-    # free of prompt_toolkit imports (design boundary). None outside REPL context.
-    completer: Any = None
-    frontend: Frontend | None = None
-
-
-@dataclass(frozen=True)
-class LocalOnly:
-    """Built-in or unknown slash command ran locally; return to prompt."""
-
-
-@dataclass(frozen=True)
-class ReplaceTranscript:
-    """Transcript-management command replaced message history."""
-
-    history: list[Any]
-    compaction_applied: bool = False
-
-
-@dataclass(frozen=True)
-class DelegateToAgent:
-    """Skill command delegated into an agent turn."""
-
-    delegated_input: str
-    skill_env: dict[str, str]
-    skill_name: str | None
-
-
-type SlashOutcome = LocalOnly | ReplaceTranscript | DelegateToAgent
-
-
-@dataclass(frozen=True)
-class SlashCommand:
-    """A registered slash command."""
-
-    name: str
-    description: str
-    handler: Callable[[CommandContext, str], Awaitable[list[Any] | ReplaceTranscript | None]]
 
 
 def set_skill_commands(new_skills: dict[str, SkillConfig], deps: CoDeps) -> None:
@@ -212,12 +174,6 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
     return None
 
 
-async def _cmd_clear(ctx: CommandContext, args: str) -> list[Any]:
-    """Clear conversation history."""
-    console.print("[info]Conversation history cleared.[/info]")
-    return []
-
-
 async def _cmd_status(ctx: CommandContext, args: str) -> None:
     """Show system health, or task status when <id> is given."""
     task_id = args.strip()
@@ -324,74 +280,6 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
         table.add_row(r["tool"], r["run_id"], r["role"], r["requests"], r["scope"])
     console.print(table)
     return None
-
-
-async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
-    """Summarize conversation via LLM to reduce context.
-
-    Shares the automatic compaction degradation path: when the summarizer
-    provider fails, the model is absent, or the circuit breaker is tripped,
-    falls back to a static marker rather than leaving history unchanged.
-    """
-    from pydantic_ai import RunContext
-    from pydantic_ai.messages import ModelResponse
-    from pydantic_ai.messages import TextPart as _TextPart
-    from pydantic_ai.usage import RunUsage
-
-    from co_cli.context.compaction import apply_compaction
-    from co_cli.context.summarization import (
-        estimate_message_tokens,
-        resolve_compaction_budget,
-    )
-
-    if not ctx.message_history:
-        console.print("[dim]Nothing to compact — history is empty.[/dim]")
-        return None
-
-    pre_tokens = estimate_message_tokens(ctx.message_history)
-    old_len = len(ctx.message_history)
-
-    raw_model = ctx.deps.model.model if ctx.deps.model else None
-    run_ctx: RunContext[CoDeps] = RunContext(deps=ctx.deps, model=raw_model, usage=RunUsage())
-    new_history, summary = await apply_compaction(
-        run_ctx,
-        ctx.message_history,
-        (0, old_len, old_len),
-        announce=True,
-        focus=args.strip() or None,
-    )
-    new_history.append(
-        ModelResponse(
-            parts=[_TextPart(content="Understood. I have the conversation context.")],
-        )
-    )
-
-    post_tokens = estimate_message_tokens(new_history)
-    budget = resolve_compaction_budget(
-        ctx.deps.config, ctx.deps.model.context_window if ctx.deps.model else None
-    )
-    fallback_note = "" if summary is not None else " (static marker — summary unavailable)"
-    console.print(
-        f"[info]Compacted: {old_len} → {len(new_history)} messages "
-        f"(est. {pre_tokens // 1000}K → {post_tokens // 1000}K of {budget // 1000}K budget)"
-        f"{fallback_note}[/info]"
-    )
-    return ReplaceTranscript(history=new_history, compaction_applied=True)
-
-
-async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
-    """Start a fresh session."""
-    from co_cli.memory.session import new_session_path
-
-    if not ctx.message_history:
-        console.print("[dim]Nothing to rotate — history is empty.[/dim]")
-        return None
-
-    # Rotate session path — transcript writer derives path from deps.session.session_path,
-    # so assigning a new path ensures the next write goes to a new file.
-    ctx.deps.session.session_path = new_session_path(ctx.deps.sessions_dir)
-    console.print("[dim]Session rotated.[/dim]")
-    return []
 
 
 def _cmd_skills_list(ctx: CommandContext) -> None:
@@ -775,39 +663,6 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
     return None
 
 
-async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
-    """Resume a past session via interactive picker."""
-    from co_cli.display._core import prompt_selection
-    from co_cli.memory.session_browser import format_file_size, list_sessions
-    from co_cli.memory.transcript import load_transcript
-
-    sessions = list_sessions(ctx.deps.sessions_dir)
-    if not sessions:
-        console.print("[dim]No past sessions found.[/dim]")
-        return None
-
-    # Build picker items and map back to session summaries
-    items: list[str] = []
-    for s in sessions:
-        date_str = s.last_modified.strftime("%Y-%m-%d %H:%M")
-        items.append(f"{s.title} ({date_str} \u00b7 {format_file_size(s.file_size)})")
-
-    selection = prompt_selection(items, title="Resume session")
-    if selection is None:
-        return None
-
-    # Map selection back to the corresponding session
-    selected_idx = items.index(selection)
-    selected = sessions[selected_idx]
-
-    messages = load_transcript(selected.path)
-    if not messages:
-        console.print("[dim]Could not load transcript (empty or too large).[/dim]")
-        return None
-    ctx.deps.session.session_path = selected.path
-    return ReplaceTranscript(history=messages)
-
-
 # -- Skills loader ---------------------------------------------------------
 
 
@@ -990,38 +845,6 @@ def load_skills(
             _load_skill_file(path, result, reserved, settings, root=user_skills_dir, errors=errors)
 
     return result
-
-
-# -- /sessions -------------------------------------------------------------
-
-
-async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
-    """List past sessions, optionally filtered by keyword."""
-    from rich.table import Table
-
-    from co_cli.memory.session_browser import format_file_size, list_sessions
-
-    summaries = list_sessions(ctx.deps.sessions_dir)
-    if args:
-        keyword = args.lower()
-        summaries = [s for s in summaries if keyword in s.title.lower()]
-
-    if not summaries:
-        console.print("[dim]No sessions found.[/dim]")
-        return None
-
-    table = Table(title="Sessions", border_style="accent", expand=False)
-    table.add_column("Title", style="accent")
-    table.add_column("Date")
-    table.add_column("Size")
-    for s in summaries:
-        table.add_row(
-            s.title,
-            s.last_modified.strftime("%Y-%m-%d %H:%M"),
-            format_file_size(s.file_size),
-        )
-    console.print(table)
-    return None
 
 
 # -- /memory ---------------------------------------------------------------
