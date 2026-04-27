@@ -30,7 +30,8 @@ from evals._timeouts import EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
-from co_cli.commands._commands import BUILTIN_COMMANDS, _build_completer_words, get_skill_registry
+from co_cli.commands._registry import BUILTIN_COMMANDS, _build_completer_words
+from co_cli.commands.skills import get_skill_registry
 from co_cli.config._core import get_settings
 from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.display._core import console

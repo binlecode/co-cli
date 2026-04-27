@@ -19,12 +19,8 @@ from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM, make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.commands._commands import (
-    CommandContext,
-    LocalOnly,
-    ReplaceTranscript,
-    dispatch,
-)
+from co_cli.commands._commands import dispatch
+from co_cli.commands._types import CommandContext, LocalOnly, ReplaceTranscript
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import Frontend, console
