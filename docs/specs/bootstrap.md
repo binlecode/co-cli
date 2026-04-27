@@ -253,7 +253,8 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/deps.py` | Defines `CoDeps`, path resolution, and sub-agent inheritance rules |
 | `co_cli/config/_core.py` | Defines `Settings`, layered config loading, and env override mapping |
 | `co_cli/skills/loader.py` | `load_skills` — two-tier skill file loading used during bootstrap and `/skills reload` |
-| `co_cli/commands/_commands.py` | Slash-command dispatch and `/skills` REPL commands; `get_skill_registry` |
+| `co_cli/commands/_commands.py` | Slash-command `dispatch` and `BUILTIN_COMMANDS` registrations |
+| `co_cli/commands/skills.py` | `/skills` REPL command family and `get_skill_registry` |
 | `co_cli/commands/_registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
 | `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/knowledge/_store.py` | Implements the indexed knowledge store used when bootstrap enables it |

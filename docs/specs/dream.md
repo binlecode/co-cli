@@ -321,7 +321,7 @@ Internal caps:
 | `co_cli/knowledge/_store.py` | Derived index updates for consolidated and archived artifacts |
 | `co_cli/tools/knowledge/write.py` | `knowledge_save()` write path used by dream mining |
 | `co_cli/main.py` | Session-end dream trigger after pending extraction drains |
-| `co_cli/commands/_commands.py` | `/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, and `/knowledge stats` |
+| `co_cli/commands/knowledge.py` | `/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, and `/knowledge stats` |
 | `tests/knowledge/test_knowledge_dream.py` | Dream state persistence behavior |
 | `tests/knowledge/test_knowledge_dream_cycle.py` | Dream-cycle orchestration, dry-run, timeout, and live full-cycle coverage |
 | `tests/knowledge/test_knowledge_decay.py` | Decay candidate selection behavior |

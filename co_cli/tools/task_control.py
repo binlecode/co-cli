@@ -18,8 +18,8 @@ from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.background import (
     BackgroundCleanupError,
     BackgroundTaskState,
-    _make_task_id,
     kill_task,
+    make_task_id,
     spawn_task,
 )
 from co_cli.tools.tool_io import tool_output
@@ -57,7 +57,7 @@ async def task_start(
         span.set_attribute("task.command", command)
         span.set_attribute("task.description", description)
         span.set_attribute("task.cwd", cwd)
-        task_id = _make_task_id()
+        task_id = make_task_id()
         state = BackgroundTaskState(
             task_id=task_id,
             command=command,

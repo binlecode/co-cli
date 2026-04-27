@@ -599,7 +599,10 @@ async def test_session_commands_reset_previous_compaction_summary() -> None:
     import tempfile
 
     from co_cli.commands._types import CommandContext
-    from co_cli.commands.session import _cmd_clear, _cmd_compact, _cmd_new, _cmd_resume
+    from co_cli.commands.clear import _cmd_clear
+    from co_cli.commands.compact import _cmd_compact
+    from co_cli.commands.new import _cmd_new
+    from co_cli.commands.resume import _cmd_resume
 
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
 
@@ -659,7 +662,7 @@ async def test_compact_command_resets_thrash_state() -> None:
     an LLM call. The gate reset must happen regardless of summarizer availability.
     """
     from co_cli.commands._types import CommandContext
-    from co_cli.commands.session import _cmd_compact
+    from co_cli.commands.compact import _cmd_compact
 
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
     deps.runtime.consecutive_low_yield_proactive_compactions = 2

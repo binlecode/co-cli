@@ -31,7 +31,7 @@ class BackgroundTaskState:
     _monitor_task: asyncio.Task | None = field(default=None, repr=False)
 
 
-def _make_task_id() -> str:
+def make_task_id() -> str:
     return uuid.uuid4().hex[:12]
 
 

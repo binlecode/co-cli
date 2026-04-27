@@ -135,7 +135,7 @@ co_cli/
 
 ## Implementation Plan
 
-### TASK-1 — Extract knowledge query helpers to `co_cli/knowledge/_query.py`
+### ✓ DONE — TASK-1 — Extract knowledge query helpers to `co_cli/knowledge/_query.py`
 
 **What moves from `_commands.py` → `co_cli/knowledge/_query.py`:**
 - `_apply_memory_filters(entries: list[KnowledgeArtifact], filters: dict[str, Any]) -> list[KnowledgeArtifact]`
@@ -160,7 +160,7 @@ done_when:
 
 ---
 
-### TASK-2 — Move skill commands to `co_cli/commands/skills.py`
+### ✓ DONE — TASK-2 — Move skill commands to `co_cli/commands/skills.py`
 
 **What moves (mechanical move — Plan 1 already refactored these):**
 - `_cmd_skills_list(ctx)`
@@ -213,7 +213,7 @@ done_when:
 
 ---
 
-### TASK-3 — Move knowledge/memory commands to `co_cli/commands/knowledge.py`
+### ✓ DONE — TASK-3 — Move knowledge/memory commands to `co_cli/commands/knowledge.py`
 
 **What moves from `_commands.py` → `co_cli/commands/knowledge.py`:**
 - `_MEMORY_USAGE`, `_KNOWLEDGE_USAGE` (constants)
@@ -249,7 +249,7 @@ done_when:
 
 ---
 
-### TASK-4 — Extract background task commands to three separate files
+### ✓ DONE — TASK-4 — Extract background task commands to three separate files
 
 **What moves from `_commands.py`:**
 - `_cmd_background(ctx, args)` → `co_cli/commands/background.py`
@@ -281,7 +281,7 @@ done_when:
 
 ---
 
-### TASK-5 — Extract remaining handlers into focused single-command files
+### ✓ DONE — TASK-5 — Extract remaining handlers into focused single-command files
 
 **What moves from `_commands.py`:**
 - `_cmd_help(ctx, args)` → `co_cli/commands/help.py` (imports `BUILTIN_COMMANDS` from `_registry`, **no lazy import**)
@@ -315,7 +315,7 @@ done_when:
 
 ---
 
-### TASK-6 — Split `session.py` into five per-command files
+### ✓ DONE — TASK-6 — Split `session.py` into five per-command files
 
 **What moves:** Each handler in `co_cli/commands/session.py` → its own file:
 - `_cmd_clear` → `co_cli/commands/clear.py`
@@ -330,8 +330,7 @@ After all five handlers move, `co_cli/commands/session.py` is **deleted** — no
 
 **Import sites to update:**
 - `co_cli/commands/_commands.py`: replace the existing `from co_cli.commands.session import (_cmd_clear, _cmd_new, _cmd_compact, _cmd_resume, _cmd_sessions)` block with five separate imports from the new files; registrations unchanged.
-
-`session.py` is imported only by `_commands.py` (verified at Plan 1 review). No tests, evals, or bootstrap code reference `co_cli.commands.session` directly.
+- `tests/context/test_context_compaction.py`: two lazy-import sites (line 602: `_cmd_clear, _cmd_compact, _cmd_new, _cmd_resume`; line 662: `_cmd_compact`) — update each to import from the new per-command file.
 
 **After this task:** `_commands.py` contains only handler imports + 17 `BUILTIN_COMMANDS["name"] = SlashCommand(...)` registrations + `dispatch()`. Target: ≤ 60 lines.
 
@@ -339,13 +338,14 @@ After all five handlers move, `co_cli/commands/session.py` is **deleted** — no
 
 ```
 files:
-  - co_cli/commands/clear.py        (create)
-  - co_cli/commands/new.py          (create)
-  - co_cli/commands/compact.py      (create)
-  - co_cli/commands/resume.py       (create)
-  - co_cli/commands/sessions.py     (create)
-  - co_cli/commands/session.py      (delete)
-  - co_cli/commands/_commands.py    (replace one import block with five separate imports)
+  - co_cli/commands/clear.py                       (create)
+  - co_cli/commands/new.py                         (create)
+  - co_cli/commands/compact.py                     (create)
+  - co_cli/commands/resume.py                      (create)
+  - co_cli/commands/sessions.py                    (create)
+  - co_cli/commands/session.py                     (delete)
+  - co_cli/commands/_commands.py                   (replace one import block with five separate imports)
+  - tests/context/test_context_compaction.py       (update two import sites)
 
 done_when:
   python -c "from co_cli.commands.clear import _cmd_clear; from co_cli.commands.new import _cmd_new; from co_cli.commands.compact import _cmd_compact; from co_cli.commands.resume import _cmd_resume; from co_cli.commands.sessions import _cmd_sessions" exits 0
@@ -353,7 +353,7 @@ done_when:
   grep -rn "from co_cli.commands.session" . --include="*.py" returns empty
   grep -c "^async def _cmd_\|^def _cmd_" co_cli/commands/_commands.py returns 0
   python -c "from co_cli.commands._registry import BUILTIN_COMMANDS; import co_cli.commands._commands; assert len(BUILTIN_COMMANDS) == 17" exits 0
-  uv run pytest tests/commands/ tests/context/test_history.py -x passes
+  uv run pytest tests/commands/ tests/context/ -x passes
 ```
 
 ---
@@ -390,3 +390,26 @@ The decisions material to Plan 2:
 Plan 2 ready for Gate 1 (after Plan 1 ships).
 
 > Run: `/orchestrate-dev handler-modularization` after Plan 1 lands and Plan 2's Gate 1 is approved.
+
+---
+
+## Delivery Summary — 2026-04-27
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | knowledge query helpers importable from `_query.py`; no defs in `_commands.py`; tests pass | ✓ pass |
+| TASK-2 | `_cmd_skills`/`get_skill_registry` importable from `commands.skills`; no skill defs in `_commands.py`; no `_commands.get_skill_registry` callers; no lazy `co_cli.` imports in skills.py; 17 commands; tests pass | ✓ pass |
+| TASK-3 | `_cmd_knowledge`/`_cmd_memory` importable from `commands.knowledge`; no subcommand defs in `_commands.py`; no `_apply_memory_filters`/`_format_memory_row` references in `_commands.py`; 17 commands; tests pass | ✓ pass |
+| TASK-4 | three handlers importable from new files; no defs in `_commands.py`; `_make_task_id` fully retired; 17 commands; tests pass | ✓ pass |
+| TASK-5 | six handlers importable from new files; no `co_cli.` lazy imports in help.py; help.py has no `_commands` module imports; 17 commands; tests pass | ✓ pass |
+| TASK-6 | five session-handler files importable; `session.py` deleted; no remaining `commands.session` imports; zero handler defs in `_commands.py`; 17 commands; tests pass | ✓ pass |
+
+**Tests:** scoped (tests/commands/, tests/bootstrap/, tests/context/, tests/tools/test_background.py) — 262 passed, 0 failed
+**Doc Sync:** fixed — `docs/specs/llm-models.md`, `docs/specs/skills.md`, `docs/specs/bootstrap.md`, `docs/specs/dream.md` updated to point handler references at new per-command modules; permanent `REPORT-*.md` and historical exec-plans left untouched per spec-conventions
+
+**Out-of-scope side fix:** `tests/bootstrap/test_bootstrap.py` line 304 import (`get_skill_registry`) updated from `_commands` to `skills` — TASK-2 broke this test under the post-task scoped-test gate; deferring to Plan 3 would have left the gate red. Plan 3's external-import migration scope reduces by one site.
+
+**Final `_commands.py`:** 129 lines (handler imports + 17 `BUILTIN_COMMANDS` registrations + `dispatch`). Plan target was ~50 lines / ≤60; the 17 multi-line registration blocks alone account for the gap. Zero handler bodies remain — the structural goal (one file per slash command) is fully met.
+
+**Overall: DELIVERED**
+All 6 tasks shipped. 17 slash commands reachable via `dispatch()`. `session.py` deleted. `_make_task_id` renamed to `make_task_id` (cross-package visibility fix).

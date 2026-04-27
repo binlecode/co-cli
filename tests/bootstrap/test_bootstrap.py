@@ -301,7 +301,7 @@ async def test_discover_mcp_tools_records_tool_prefix_for_missing_binary() -> No
 
 def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     """Project skill directory with one valid skill: skill appears in loaded commands."""
-    from co_cli.commands._commands import get_skill_registry
+    from co_cli.commands.skills import get_skill_registry
     from co_cli.config._core import settings
     from co_cli.skills.loader import load_skills
 

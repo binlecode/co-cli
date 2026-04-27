@@ -205,7 +205,7 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | `co_cli/deps.py` | `CoDeps` with `config: Settings`; `model: LlmModel \| None` as top-level field |
 | `co_cli/bootstrap/check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent/_core.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
-| `co_cli/commands/_commands.py` | Uses `deps.model` for `/compact` and `/new` via `summarize_messages(deps, ...)` |
+| `co_cli/commands/compact.py` | Uses `deps.model` for `/compact` via `summarize_messages(deps, ...)` (`/new` lives in `commands/new.py`) |
 | `co_cli/context/summarization.py` | `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `resolve_compaction_budget(config, context_window)` — reads `context_window` from `LlmModel` to set compaction token budget |
 | `co_cli/llm/_factory.py` | `LlmModel` — pre-built model + reasoning settings + noreason settings + context_window; `build_model(llm: LlmSettings)` — builds provider-aware model with both settings resolved |
 | `co_cli/llm/_call.py` | `llm_call(deps, prompt, *, instructions, message_history, output_type, model_settings)` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
