@@ -66,7 +66,8 @@ flowchart TD
         T3[gather_compaction_context<br/>enrichment helper]
         T4[summarize_messages]
         T5[head + marker + breadcrumbs + tail]
-        T1 -->|yes| T2 --> T3 --> T4 --> T5
+        T6[extract_at_compaction_boundary<br/>knowledge distill + cursor pin]
+        T1 -->|yes| T2 --> T3 --> T4 --> T5 --> T6
         T1 -->|no| Pass2[return messages]
     end
 
@@ -76,14 +77,16 @@ flowchart TD
         O3[recover_overflow_history<br/>same planner, same prompt]
         O3b{bounds valid?}
         O3c[emergency_recover_overflow_history<br/>structural fallback: first + marker + todo snapshot + search_tools breadcrumbs + last]
+        O_kd[extract_at_compaction_boundary<br/>knowledge distill + cursor pin]
         O4[retry once]
         O1 --> O2
         O2 -->|no| O3 --> O3b
-        O3b -->|yes| O4
+        O3b -->|yes| O_kd
         O3b -->|no| O3c
-        O3c -->|len groups &gt; 2| O4
+        O3c -->|len groups &gt; 2| O_kd
         O3c -->|len groups ≤ 2| O6[terminal error]
         O2 -->|yes| O6
+        O_kd --> O4
     end
 
     Emit --> PerReq
@@ -221,11 +224,11 @@ flowchart TD
     ThreshCheck{"token_count\n≤ threshold?"}
     FastPath(["return messages\n(fast path)"])
     ThrashCheck{"consecutive_low_yield\n≥ thrash_window?"}
-    ThrashGate(["return messages\n(anti-thrash gate)"])
+    ThrashGate(["emit banner once → return messages\n(anti-thrash gate)"])
 
-    subgraph Setup["Planner setup — budget=100K, TAIL_FRACTION=0.20"]
+    subgraph Setup["Planner setup — budget=resolve_compaction_budget(), TAIL_FRACTION=0.20"]
         direction LR
-        s_msgs["messages\nG0, G1, G2, G3"]:::head --> s_hinit["head_end\n= first_run_end + 1"]:::meta --> s_grps["groups = group_by_turn(messages)\n4 groups ≥ min+1 = 2 → proceed"]:::meta
+        s_bres["resolve_compaction_budget:\nctx_window (model spec) → num_ctx if non-zero (Ollama) → ctx_token_budget (100K fallback)"]:::meta --> s_msgs["messages\nG0, G1, G2, G3"]:::head --> s_hinit["head_end\n= first_run_end + 1"]:::meta --> s_grps["groups = group_by_turn(messages)\n4 groups ≥ min+1 = 2 → proceed"]:::meta
     end
 
     Check{len groups\n&lt; min+1?}
@@ -243,6 +246,13 @@ flowchart TD
 
     note_clamp["Gap A guarantee:\nif G3 alone = 60K &gt; 40K\nlen=1 ≥ min=1 → keep anyway"]:::prior
 
+    subgraph PostCompact["Post-compaction — apply + proactive feedback"]
+        direction LR
+        pc1["apply_compaction\n→ previous_compaction_summary = summary_text (only on success)\n→ extract_at_compaction_boundary (knowledge distill + cursor pin)\n→ compaction_applied_this_turn = True"]:::tail --> pc2["savings = (tokens_before_local − tokens_after_local) / tokens_before_local\nlocal-only estimate (apples-to-apples; trigger used max())"]:::meta --> pc3{"savings ≥\nmin_proactive_savings?"}
+        pc3 -->|"no"| pc4["consecutive_low_yield += 1"]:::marker
+        pc3 -->|"yes"| pc5["consecutive_low_yield = 0\nthrash_hint re-armed"]:::head
+    end
+
     Trigger --> ThreshCheck
     ThreshCheck -->|"yes"| FastPath
     ThreshCheck -->|"no"| ThrashCheck
@@ -252,6 +262,7 @@ flowchart TD
     Check -->|"yes"| Abort
     Check -->|"no"| Walk
     Walk --> Output
+    Output --> PostCompact
     w1 -.-> note_clamp
 
     classDef syspr fill:#fff3e0,stroke:#f57c00
@@ -261,12 +272,10 @@ flowchart TD
     classDef meta fill:#f0f0f0,stroke:#aaa
     classDef tail fill:#d4edda,stroke:#74c476
 
-    class t_local,t_rep,t_eff,s_hinit,s_grps meta
-    class s_msgs head
-    class w1,w2 tail
-    class w3 marker
-    class o_bounds head
-    class o_ret meta
+    class t_local,t_rep,t_eff,s_bres,s_hinit,s_grps,pc2,o_ret meta
+    class s_msgs,o_bounds,pc5 head
+    class w1,w2,pc1 tail
+    class w3,pc4 marker
     class note_clamp prior
 ```
 
@@ -395,7 +404,7 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 Summarizes `messages[head_end:tail_start]` via `_gated_summarize_or_none`, then assembles:
 `head | marker | [todo_snapshot] | [search breadcrumbs] | tail`
 
-Raw `summary_text` is stored in `ctx.deps.runtime.previous_compaction_summary` before `build_compaction_marker` adds the `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix; on failure the field is left untouched. Sets `compaction_applied_this_turn = True`.
+Raw `summary_text` is stored in `ctx.deps.runtime.previous_compaction_summary` before `build_compaction_marker` adds the `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix; on failure the field is left untouched. Sets `compaction_applied_this_turn = True`. Then calls `extract_at_compaction_boundary(pre_compact, post_compact, deps)` — drains any pending knowledge cadence extractions from the dropped range and pins the knowledge cursor to the compacted history length. Best-effort: extraction failures do not raise; compaction always succeeds. `emergency_recover_overflow_history` calls this hook directly (it bypasses `apply_compaction`).
 
 Summarizer surface:
 - `_summarization_gate_open(ctx)` — `False` when `ctx.deps.model is None` or circuit breaker tripped (and not at probe cadence).
@@ -450,6 +459,23 @@ On a non-`None` result, sets `current_history = compacted`, clears pending input
 **Two-branch prompt:**
 - **From-scratch** (`previous_summary is None`): `_SUMMARIZE_PROMPT` directly.
 - **Iterative update** (`previous_summary` set): `_build_iterative_template(previous_summary)` prepends `PREVIOUS SUMMARY:` and PRESERVE / ADD / MOVE / REMOVE discipline before the shared template.
+
+**Cross-compaction feedback loop** — `previous_compaction_summary` is read and written inside `apply_compaction` before every summarizer call, threading the prior summary across compaction boundaries:
+
+```mermaid
+flowchart LR
+    c1["Compaction N\nruntime.previous_compaction_summary = None\n→ from-scratch branch"]:::head
+    write1["runtime.previous_compaction_summary\n= summary_text_N\n(written only on success)"]:::tail
+    c2["Compaction N+1\nruntime.previous_compaction_summary = summary_text_N\n→ iterative-update branch"]:::head
+    write2["runtime.previous_compaction_summary\n= summary_text_N+1\n(written only on success)"]:::tail
+    fail["summarizer fails:\nfield left untouched — next\ncompaction reuses summary_text_N"]:::prior
+    c1 --> write1 --> c2 --> write2
+    write1 -.->|"on failure"| fail
+
+    classDef head fill:#e8f4f8,stroke:#6baed6
+    classDef tail fill:#d4edda,stroke:#74c476
+    classDef prior fill:#f5f5f5,stroke:#9e9e9e,stroke-dasharray:3 3
+```
 
 **Template sections:** `## Active Task`, `## Goal`, `## Key Decisions`, `## User Corrections`†, `## Errors & Fixes`, `## Working Set`, `## Progress`, `## Pending User Asks`†, `## Resolved Questions`†, `## Next Step` (verbatim drift anchor), `## Critical Context`†. (†omitted when empty)
 

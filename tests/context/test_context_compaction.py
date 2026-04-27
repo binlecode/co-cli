@@ -1,6 +1,7 @@
 """Tests for compaction budget resolution and token-triggered compaction."""
 
 import asyncio
+import types
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.usage import RequestUsage, RunUsage
+from tests._frontend import SilentFrontend
 from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
@@ -27,6 +29,7 @@ from co_cli.context.compaction import (
     recover_overflow_history,
     summary_marker,
 )
+from co_cli.context.orchestrate import _check_output_limits, _TurnState
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
@@ -710,3 +713,65 @@ async def test_savings_ratio_uses_local_estimate_only() -> None:
         assert ctx.deps.runtime.consecutive_low_yield_proactive_compactions == 1, (
             "local savings below threshold — counter should have incremented"
         )
+
+
+# ---------------------------------------------------------------------------
+# TASK-2: _check_output_limits uses latest single-request count, not cumulative sum
+# ---------------------------------------------------------------------------
+
+
+def _make_turn_state(history: list) -> _TurnState:
+    """Minimal _TurnState with a fake latest_result that has finish_reason='stop'."""
+    fake_result = types.SimpleNamespace(response=types.SimpleNamespace(finish_reason="stop"))
+    ts = _TurnState(current_input=None, current_history=history)
+    ts.latest_result = fake_result  # type: ignore[assignment]
+    return ts
+
+
+def test_check_output_limits_multi_segment_no_false_positive():
+    """Multi-segment turn: only the LAST ModelResponse's input_tokens is used for ratio.
+
+    3 segments: 40K + 45K + 50K = 135K cumulative. With effective_ctx=100K,
+    the old code (cumulative sum) would yield ratio=1.35 → false "Context limit reached".
+    The fixed code uses latest_response_input_tokens=50K → ratio=0.50 → no alert.
+    """
+    # supports_context_ratio_tracking() requires Ollama + num_ctx > 0
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 100_000})
+    )
+    assert config.llm.supports_context_ratio_tracking()
+    assert config.llm.effective_num_ctx() == 100_000
+
+    history = [
+        _user("turn 1"),
+        ModelResponse(parts=[TextPart("a")], usage=RequestUsage(input_tokens=40_000)),
+        _user("turn 2"),
+        ModelResponse(parts=[TextPart("b")], usage=RequestUsage(input_tokens=45_000)),
+        _user("turn 3"),
+        ModelResponse(parts=[TextPart("c")], usage=RequestUsage(input_tokens=50_000)),
+    ]
+    deps = CoDeps(shell=ShellBackend(), config=config)
+    frontend = SilentFrontend()
+    _check_output_limits(_make_turn_state(history), deps, frontend)
+    assert not any("Context limit reached" in s for s in frontend.statuses), (
+        f"False positive: got statuses={frontend.statuses!r} — ratio should be 0.50, not 1.35"
+    )
+
+
+def test_check_output_limits_single_segment_over_limit():
+    """Single segment over context limit → 'Context limit reached' is emitted."""
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 100_000})
+    )
+    assert config.llm.supports_context_ratio_tracking()
+
+    history = [
+        _user("question"),
+        ModelResponse(parts=[TextPart("answer")], usage=RequestUsage(input_tokens=120_000)),
+    ]
+    deps = CoDeps(shell=ShellBackend(), config=config)
+    frontend = SilentFrontend()
+    _check_output_limits(_make_turn_state(history), deps, frontend)
+    assert any("Context limit reached" in s for s in frontend.statuses), (
+        f"Expected overflow alert not emitted; got statuses={frontend.statuses!r}"
+    )

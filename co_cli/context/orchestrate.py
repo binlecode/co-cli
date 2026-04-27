@@ -63,6 +63,7 @@ _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 360
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.deps import CoDeps
 from co_cli.display._core import Frontend, QuestionPrompt
 from co_cli.display._stream_renderer import StreamRenderer
@@ -483,16 +484,17 @@ def _check_output_limits(
         frontend.on_status(
             "Response may be truncated (hit output token limit). Use /continue to extend."
         )
-    if deps.runtime.turn_usage is not None and deps.config.llm.supports_context_ratio_tracking():
+    latest_input = latest_response_input_tokens(turn_state.current_history)
+    if latest_input > 0 and deps.config.llm.supports_context_ratio_tracking():
         effective_ctx = deps.config.llm.effective_num_ctx()
-        ratio = deps.runtime.turn_usage.input_tokens / effective_ctx
+        ratio = latest_input / effective_ctx
         with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
-            ctx_span.set_attribute("ctx.input_tokens", deps.runtime.turn_usage.input_tokens)
+            ctx_span.set_attribute("ctx.input_tokens", latest_input)
             ctx_span.set_attribute("ctx.num_ctx", effective_ctx)
             ctx_span.set_attribute("ctx.ratio", ratio)
             if ratio >= 1.0:
                 frontend.on_status(
-                    f"Context limit reached ({deps.runtime.turn_usage.input_tokens:,} / {effective_ctx:,} tokens)"
+                    f"Context limit reached ({latest_input:,} / {effective_ctx:,} tokens)"
                     " — prompt may have been truncated. Use /compact or /new."
                 )
             elif ratio >= deps.config.compaction.compaction_ratio:
@@ -502,7 +504,7 @@ def _check_output_limits(
                 thrash_count = deps.runtime.consecutive_low_yield_proactive_compactions
                 if thrash_count >= deps.config.compaction.proactive_thrash_window:
                     frontend.on_status(
-                        f"Context {ratio:.0%} full ({deps.runtime.turn_usage.input_tokens:,} / {effective_ctx:,} tokens)."
+                        f"Context {ratio:.0%} full ({latest_input:,} / {effective_ctx:,} tokens)."
                         " Auto-compaction paused — try /compact for one more pass or /new for a fresh session."
                     )
 
