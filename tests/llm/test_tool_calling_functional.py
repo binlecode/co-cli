@@ -17,7 +17,8 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.result import DeferredToolRequests
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
-from tests._settings import make_settings
+from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
+from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent._core import build_tool_registry
@@ -28,10 +29,7 @@ from co_cli.tools.shell_backend import ShellBackend
 
 pytestmark = pytest.mark.local
 
-# Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
-_CONFIG_NO_MCP = make_settings(mcp_servers={})
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
-_SUMM_MODEL = _CONFIG_NO_MCP.llm.model
 
 # Tool selection tests use noreason settings with a direct Agent construction.
 # This gives fast, non-reasoning tool selection without the full main agent system prompt overhead.
@@ -92,7 +90,7 @@ async def test_tool_selection_and_arg_extraction(
     deps = _make_deps(f"test-tool-{expected_tool}")
     frontend = SilentFrontend(approval_response="y")
 
-    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     last_details = "no run executed"
     max_attempts = 3
     for _attempt in range(max_attempts):
@@ -142,7 +140,7 @@ async def test_tool_selection_and_arg_extraction(
 @pytest.mark.asyncio
 async def test_refusal_no_tool_for_simple_math():
     deps = _make_deps("test-refusal")
-    await ensure_ollama_warm(_SUMM_MODEL)
+    await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
         turn = await run_turn(
             agent=_AGENT_NOREASON,
@@ -164,7 +162,7 @@ async def test_intent_routing_observation_no_tool():
     """Observation-only statement must not trigger a tool call."""
     deps = _make_deps("test-intent-routing")
 
-    await ensure_ollama_warm(_SUMM_MODEL)
+    await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
         turn = await run_turn(
             agent=_AGENT_NOREASON,
@@ -187,7 +185,7 @@ async def test_clarify_handled_by_run_turn():
     deps = _make_deps("test-clarify")
     frontend = SilentFrontend(question_answer="Alice")
 
-    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     last_details = "no run executed"
     max_attempts = 3
     for _attempt in range(max_attempts):

@@ -27,7 +27,7 @@ _SHELL_EXIT_RE = re.compile(r"^exit (-?\d+):")
 
 
 def is_cleared_marker(content: object) -> bool:
-    """True when content was produced by ``truncate_tool_results`` as a replacement.
+    """True when content was produced by ``evict_old_tool_results`` as a replacement.
 
     Matches the static ``_CLEARED_PLACEHOLDER`` fallback (for non-string
     content) and per-tool semantic markers whose prefix is a known
@@ -150,7 +150,7 @@ def semantic_marker(tool_name: str, args: dict[str, Any], content: str) -> str:
 
     The marker carries tool name, the 1-3 most informative args, and a
     size/outcome signal derived from the original content. Used by
-    ``truncate_tool_results`` as the replacement string for older-than-5
+    ``evict_old_tool_results`` as the replacement string for older-than-5
     compactable returns. Tools without an explicit handler fall back to a
     generic ``[tool] k=v (N chars)`` marker so future compactable tools are
     forward-compatible without code changes here.

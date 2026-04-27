@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
+    ModelMessage,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -16,7 +17,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._frontend import SilentFrontend
-from tests._settings import make_settings
+from tests._settings import SETTINGS as _CONFIG
+from tests._settings import TEST_LLM, make_settings
 
 from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings
@@ -44,7 +46,6 @@ from co_cli.context.summarization import (
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
 
-_CONFIG = make_settings()
 _AGENT = build_agent(config=_CONFIG)
 
 
@@ -522,7 +523,7 @@ async def test_summarize_messages_iterative_branch_preserves_previous_content() 
         _user("Update the middleware to validate JWT tokens."),
         _assistant("Updated the middleware to call validate_token() on each request."),
     ]
-    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await summarize_messages(deps, messages, previous_summary=previous_summary)
     assert "HS512_SENTINEL_TOKEN" in result, (
@@ -544,7 +545,7 @@ async def test_previous_summary_written_back_after_successful_compaction() -> No
     msgs = _make_messages(6, body_chars=500)
     bounds = (0, len(msgs) - 2, len(msgs) - 2)
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     # pytest-timeout=120s is the safety net for the LLM summarization call.
     await apply_compaction(ctx, msgs, bounds, announce=False)
     new_summary = deps.runtime.previous_compaction_summary
@@ -839,3 +840,198 @@ async def test_apply_compaction_static_marker_when_no_model() -> None:
     assert not marker_content.startswith(SUMMARY_MARKER_PREFIX), (
         "static marker must not use SUMMARY_MARKER_PREFIX"
     )
+
+
+# ---------------------------------------------------------------------------
+# TASK-1 — Stale provider-token cross-turn suppression
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_compaction_estimate_set_after_apply_compaction() -> None:
+    """apply_compaction sets post_compaction_token_estimate and message_count_at_last_compaction."""
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
+    msgs = _make_messages(6, body_chars=100)
+    bounds = (0, len(msgs) - 2, len(msgs) - 2)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    result, _ = await apply_compaction(ctx, msgs, bounds, announce=False)
+
+    assert deps.runtime.post_compaction_token_estimate is not None
+    assert deps.runtime.post_compaction_token_estimate > 0
+    assert deps.runtime.message_count_at_last_compaction == len(result)
+
+
+@pytest.mark.asyncio
+async def test_stale_token_suppression_at_turn_boundary() -> None:
+    """proactive_window_processor uses the local estimate, not the stale ModelResponse count.
+
+    After compaction, the preserved tail's last ModelResponse carries the pre-compaction
+    input_tokens count. Without suppression, max(local, stale) picks the stale figure and
+    fires a spurious compaction. With the cross-turn estimate, reported = estimate (small),
+    so max(local, estimate) stays below threshold and no compaction fires.
+    """
+    # Budget=100K; threshold=65K. Body chars produce ~2K local estimate after compaction.
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
+    deps = CoDeps(shell=ShellBackend(), config=config)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    # Simulate having just compacted: set a small estimate (post-compaction context is small)
+    # but leave a stale 80K reported count in the last ModelResponse.
+    small_estimate = 2_000
+    deps.runtime.post_compaction_token_estimate = small_estimate
+    deps.runtime.message_count_at_last_compaction = 4
+
+    # History at turn N+1 boundary: only 4 messages (estimate still active — no new pair yet).
+    msgs = [
+        _user("turn 0"),
+        _assistant("reply 0"),
+        _user("turn 1"),
+        ModelResponse(
+            parts=[TextPart(content="reply 1")],
+            usage=RequestUsage(input_tokens=80_000),
+        ),
+    ]
+    assert len(msgs) == 4
+
+    result = await proactive_window_processor(ctx, msgs)
+    # Stale 80K count must be suppressed; local estimate (~1K) + reported estimate (~2K)
+    # both well below 65K threshold — no compaction fired.
+    assert result is msgs, (
+        "Stale 80K reported count must be suppressed by post_compaction_token_estimate; "
+        "no compaction should fire at the turn boundary"
+    )
+    # Estimate still active (len(msgs)==4 == count, not >= count+2)
+    assert deps.runtime.post_compaction_token_estimate == small_estimate
+
+
+@pytest.mark.asyncio
+async def test_stale_suppression_clears_after_fresh_response_lands() -> None:
+    """Estimate is cleared when a fresh ModelRequest+ModelResponse pair arrives.
+
+    len(messages) >= message_count_at_last_compaction + 2 signals that at least
+    one new request/response cycle has completed and the provider count is fresh.
+    """
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
+    deps = CoDeps(shell=ShellBackend(), config=config)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    deps.runtime.post_compaction_token_estimate = 2_000
+    deps.runtime.message_count_at_last_compaction = 4
+
+    # 6 messages = count(4) + 2 → fresh provider count available; estimate should clear.
+    msgs = [
+        _user("turn 0"),
+        _assistant("reply 0"),
+        _user("turn 1"),
+        _assistant("reply 1"),
+        _user("turn 2"),
+        ModelResponse(
+            parts=[TextPart(content="reply 2")],
+            usage=RequestUsage(input_tokens=10_000),
+        ),
+    ]
+    assert len(msgs) == 6
+
+    await proactive_window_processor(ctx, msgs)
+    # Estimate must be cleared once the fresh pair lands.
+    assert deps.runtime.post_compaction_token_estimate is None
+    assert deps.runtime.message_count_at_last_compaction is None
+
+
+@pytest.mark.asyncio
+async def test_session_commands_reset_stale_suppression_fields() -> None:
+    """/new and /clear reset post_compaction_token_estimate and message_count_at_last_compaction."""
+    from co_cli.commands._types import CommandContext
+    from co_cli.commands.clear import _cmd_clear
+    from co_cli.commands.new import _cmd_new
+
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
+    agent = _AGENT
+
+    deps.runtime.post_compaction_token_estimate = 5_000
+    deps.runtime.message_count_at_last_compaction = 10
+    ctx_clear = CommandContext(message_history=[_user("x")], deps=deps, agent=agent)
+    await _cmd_clear(ctx_clear, "")
+    assert deps.runtime.post_compaction_token_estimate is None
+    assert deps.runtime.message_count_at_last_compaction is None
+
+    deps.runtime.post_compaction_token_estimate = 5_000
+    deps.runtime.message_count_at_last_compaction = 10
+    ctx_new = CommandContext(message_history=[_user("x")], deps=deps, agent=agent)
+    await _cmd_new(ctx_new, "")
+    assert deps.runtime.post_compaction_token_estimate is None
+    assert deps.runtime.message_count_at_last_compaction is None
+
+
+@pytest.mark.asyncio
+async def test_three_turn_boundary_no_spurious_compaction() -> None:
+    """End-to-end: compaction in turn N must not retrigger at turn N+1 boundary.
+
+    Reproduces the bug TASK-1 fixes: after compaction in turn N, the preserved
+    tail's last ModelResponse carries the pre-compaction input_tokens. Without
+    suppression, turn N+1's first proactive pass picks max(local, stale=80K) and
+    fires a redundant compaction → low yield → consecutive_low_yield counter
+    increments. Two such turn boundaries trip the anti-thrash gate.
+
+    With the fix: post_compaction_token_estimate suppresses the stale figure at
+    the N+1 boundary; once a fresh ModelResponse lands the estimate auto-clears.
+    """
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
+    deps = CoDeps(shell=ShellBackend(), config=config)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    # ----- Turn N: simulate post-compaction state -----
+    # Synthesize what apply_compaction would leave: a small post-compaction history
+    # whose last ModelResponse still carries a pre-compaction 80K input_tokens.
+    post_compacted: list[ModelMessage] = [
+        _user("compaction marker stand-in"),
+        ModelResponse(
+            parts=[TextPart(content="reply 1")],
+            usage=RequestUsage(input_tokens=80_000),
+        ),
+    ]
+    deps.runtime.post_compaction_token_estimate = estimate_message_tokens(post_compacted)
+    deps.runtime.message_count_at_last_compaction = len(post_compacted)
+    deps.runtime.compaction_applied_this_turn = True
+
+    # ----- Turn N → N+1 boundary: orchestrator calls reset_for_turn() -----
+    deps.runtime.reset_for_turn()
+    assert not deps.runtime.compaction_applied_this_turn
+    # Cross-turn fields survive the reset.
+    assert deps.runtime.post_compaction_token_estimate is not None
+    assert deps.runtime.message_count_at_last_compaction == 2
+
+    # ----- Turn N+1: new user prompt, before first LLM call -----
+    turn_n1_msgs = [*post_compacted, _user("turn N+1 prompt")]
+    assert len(turn_n1_msgs) == deps.runtime.message_count_at_last_compaction + 1
+    low_yield_before = deps.runtime.consecutive_low_yield_proactive_compactions
+
+    result = await proactive_window_processor(ctx, turn_n1_msgs)
+
+    # Stale 80K must be suppressed → no compaction at boundary → no low-yield increment.
+    assert result is turn_n1_msgs, "no compaction should fire at the N+1 boundary"
+    assert deps.runtime.consecutive_low_yield_proactive_compactions == low_yield_before
+    # Estimate still active (count + 1 < count + 2).
+    assert deps.runtime.post_compaction_token_estimate is not None
+
+    # ----- Turn N+1 LLM call lands; new ModelResponse appended -----
+    turn_n1_msgs.append(
+        ModelResponse(
+            parts=[TextPart(content="reply 2")],
+            usage=RequestUsage(input_tokens=10_000),
+        )
+    )
+    assert len(turn_n1_msgs) == deps.runtime.message_count_at_last_compaction + 2
+
+    # ----- Turn N+1 → N+2 boundary -----
+    deps.runtime.reset_for_turn()
+    turn_n2_msgs = [*turn_n1_msgs, _user("turn N+2 prompt")]
+
+    result = await proactive_window_processor(ctx, turn_n2_msgs)
+
+    # Estimate auto-cleared once fresh pair landed; trigger now uses the new 10K count.
+    assert deps.runtime.post_compaction_token_estimate is None
+    assert deps.runtime.message_count_at_last_compaction is None
+    assert result is turn_n2_msgs, "no compaction at N+2 boundary either (10K << threshold)"
+    # Two clean boundaries → counter still at zero, anti-thrash gate stays disarmed.
+    assert deps.runtime.consecutive_low_yield_proactive_compactions == 0

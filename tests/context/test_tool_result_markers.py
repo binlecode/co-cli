@@ -17,7 +17,7 @@ from tests._settings import make_settings
 
 from co_cli.context._history_processors import (
     _CLEARED_PLACEHOLDER,
-    truncate_tool_results,
+    evict_old_tool_results,
 )
 from co_cli.context._tool_result_markers import (
     is_cleared_marker,
@@ -28,7 +28,7 @@ from co_cli.tools.shell_backend import ShellBackend
 
 
 def _processor_ctx() -> RunContext:
-    """Minimal RunContext for truncate_tool_results — no LLM call."""
+    """Minimal RunContext for evict_old_tool_results — no LLM call."""
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
@@ -193,7 +193,7 @@ def test_is_cleared_marker_rejects_non_string():
 
 
 # ---------------------------------------------------------------------------
-# truncate_tool_results end-to-end — replacement is a semantic marker
+# evict_old_tool_results end-to-end — replacement is a semantic marker
 # ---------------------------------------------------------------------------
 
 
@@ -242,7 +242,7 @@ def _build_shell_conversation(n: int) -> list:
 def test_truncate_replaces_older_shell_returns_with_semantic_markers():
     msgs = _build_shell_conversation(8)
     ctx = _processor_ctx()
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
 
     shell_contents = [
         part.content
@@ -290,7 +290,7 @@ def test_truncate_falls_back_to_static_placeholder_on_non_string_content():
     msgs.append(_user_msg("final"))
     msgs.append(_assistant_msg("done"))
 
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
 
     file_read_returns = [
         part
@@ -344,7 +344,7 @@ def test_truncate_uses_marker_per_compactable_tool(tool_name, args, verbatim_con
     msgs.append(_user_msg("final"))
     msgs.append(_assistant_msg("done"))
 
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
 
     markers = [
         part.content

@@ -7,7 +7,8 @@ import asyncio
 import pytest
 from pydantic import BaseModel
 from tests._ollama import ensure_ollama_warm
-from tests._settings import make_settings
+from tests._settings import SETTINGS as _CONFIG
+from tests._settings import TEST_LLM
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps
@@ -15,9 +16,7 @@ from co_cli.llm._call import llm_call
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
-_CONFIG = make_settings()
 _MODEL = build_model(_CONFIG.llm)
-_MODEL_NAME = _CONFIG.llm.model
 
 
 def _make_deps() -> CoDeps:
@@ -34,7 +33,7 @@ async def test_llm_call_with_message_history_forwards_context() -> None:
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
     deps = _make_deps()
-    await ensure_ollama_warm(_MODEL_NAME, _CONFIG.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     history = [
         ModelRequest(parts=[UserPromptPart(content="The secret word is: ZEPHYR")]),
         ModelResponse(parts=[TextPart(content="Understood.")]),
@@ -55,7 +54,7 @@ async def test_llm_call_output_type_returns_structured_output() -> None:
         value: str
 
     deps = _make_deps()
-    await ensure_ollama_warm(_MODEL_NAME, _CONFIG.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await llm_call(
             deps,

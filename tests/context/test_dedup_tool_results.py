@@ -22,7 +22,7 @@ from co_cli.context._dedup_tool_results import (
 )
 from co_cli.context._history_processors import (
     dedup_tool_results,
-    truncate_tool_results,
+    evict_old_tool_results,
 )
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
@@ -313,7 +313,7 @@ def test_dedup_then_truncate_pipeline_collapses_kept_window():
 
     ctx = _processor_ctx()
     after_dedup = dedup_tool_results(ctx, msgs)
-    after_truncate = truncate_tool_results(ctx, after_dedup)
+    after_truncate = evict_old_tool_results(ctx, after_dedup)
 
     returns = _extract_returns(after_truncate, "file_read")
     assert len(returns) == 10

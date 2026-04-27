@@ -127,7 +127,8 @@ class CoRuntimeState:
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions, last_overbudget_batch_signature,
-      extraction_task, previous_compaction_summary
+      extraction_task, previous_compaction_summary,
+      post_compaction_token_estimate, message_count_at_last_compaction
     """
 
     # Circuit breaker for inline compaction summarisation.
@@ -148,7 +149,7 @@ class CoRuntimeState:
     # One-shot guard for the user-visible "anti-thrashing gate active" console hint.
     # Set the first time the gate trips per session so subsequent trips stay log-only.
     compaction_thrash_hint_emitted: bool = False
-    # Dedup key for enforce_batch_budget's "still over budget" warning.
+    # Dedup key for evict_batch_tool_outputs's "still over budget" warning.
     # Same batch repeated request-to-request emits the warning once, not per cycle.
     last_overbudget_batch_signature: tuple[str, ...] | None = None
     # Background knowledge-extraction task slot — owned per-deps so sessions and
@@ -158,6 +159,12 @@ class CoRuntimeState:
     # feeds the iterative-update prompt branch on the next compaction. None on session
     # start; reset by /new and /clear; untouched by /compact failures and /resume.
     previous_compaction_summary: str | None = None
+    # Cross-turn stale-token suppression: set by apply_compaction / emergency_recover to
+    # a local char-based estimate of the post-compaction message list. Used by
+    # proactive_window_processor as the `reported` value until a fresh ModelResponse has
+    # landed (len(messages) >= message_count_at_last_compaction + 2). Cleared by /new and /clear.
+    post_compaction_token_estimate: int | None = None
+    message_count_at_last_compaction: int | None = None
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""

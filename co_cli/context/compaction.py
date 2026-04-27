@@ -268,6 +268,8 @@ async def apply_compaction(
 
     await extract_at_compaction_boundary(messages, result, ctx.deps)
     ctx.deps.runtime.compaction_applied_this_turn = True
+    ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
+    ctx.deps.runtime.message_count_at_last_compaction = len(result)
     return result, summary_text
 
 
@@ -354,6 +356,8 @@ async def emergency_recover_overflow_history(
 
     await extract_at_compaction_boundary(messages, result, ctx.deps)
     ctx.deps.runtime.compaction_applied_this_turn = True
+    ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
+    ctx.deps.runtime.message_count_at_last_compaction = len(result)
     # See recover_overflow_history for the unconditional-reset rationale.
     # hint re-arms with counter — banner-text contract
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
@@ -421,11 +425,19 @@ async def proactive_window_processor(
             return messages
         cfg = ctx.deps.config.compaction
 
-        reported = (
-            0
-            if ctx.deps.runtime.compaction_applied_this_turn
-            else latest_response_input_tokens(messages)
-        )
+        if ctx.deps.runtime.compaction_applied_this_turn:
+            reported = 0
+        elif ctx.deps.runtime.post_compaction_token_estimate is not None:
+            _count = ctx.deps.runtime.message_count_at_last_compaction
+            if _count is not None and len(messages) >= _count + 2:
+                # New ModelRequest + ModelResponse have landed — fresh provider count available.
+                ctx.deps.runtime.post_compaction_token_estimate = None
+                ctx.deps.runtime.message_count_at_last_compaction = None
+                reported = latest_response_input_tokens(messages)
+            else:
+                reported = ctx.deps.runtime.post_compaction_token_estimate
+        else:
+            reported = latest_response_input_tokens(messages)
         # Trigger threshold uses max(local, reported) — biases toward earlier compaction.
         # Savings ratio uses local-only on both sides — apples-to-apples yield comparison.
         tokens_before_local = estimate_message_tokens(messages)

@@ -8,7 +8,7 @@ Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
            [BC4: persist-to-disk threshold sourced from config.tools.result_persist_chars]
 
   --- Processor chain components (isolated validation) ---
-  Step 2 — P1 truncate_tool_results: recency clearing, keep 5 most recent per compactable type
+  Step 2 — P1 evict_old_tool_results: recency clearing, keep 5 most recent per compactable type
   Step 4 — P5 sub-component: context enrichment (gather_compaction_context)
            3 sources (file paths, todos, prior summaries), 4K cap, enrichment only on LLM path
            [BC2: capped, never blocks] [BC3: from ToolCallPart.args not ToolReturnPart]
@@ -72,11 +72,11 @@ from co_cli.context.compaction import (
     COMPACTABLE_KEEP_RECENT,
     SUMMARY_MARKER_PREFIX,
     apply_compaction,
+    evict_old_tool_results,
     gather_compaction_context,
     group_by_turn,
     plan_compaction_boundaries,
     summary_marker,
-    truncate_tool_results,
 )
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.prompt_text import safety_prompt_text
@@ -350,7 +350,7 @@ def step_1_precompact() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step 2: P1 truncate_tool_results [Outcome 5 prereq]
+# Step 2: P1 evict_old_tool_results [Outcome 5 prereq]
 # ---------------------------------------------------------------------------
 
 
@@ -362,7 +362,7 @@ def step_2_p1_truncate() -> bool:
     - Non-compactable tools pass through regardless of count
     - Last turn group always protected
     """
-    print(f"\n--- Step 2: P1 truncate_tool_results (keep={COMPACTABLE_KEEP_RECENT}) ---")
+    print(f"\n--- Step 2: P1 evict_old_tool_results (keep={COMPACTABLE_KEEP_RECENT}) ---")
     passed = True
     ctx = _make_ctx()
 
@@ -381,7 +381,7 @@ def step_2_p1_truncate() -> bool:
         return msgs
 
     msgs = _build_tool_conv("file_read", 5)
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
     cleared = _count_cleared(result)
     if cleared != 0:
         print(f"  FAIL: 5 calls should clear 0, got {cleared}")
@@ -391,7 +391,7 @@ def step_2_p1_truncate() -> bool:
 
     # 2b: Over threshold — 8 calls → 3 cleared
     msgs = _build_tool_conv("file_read", 8)
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
     cleared = _count_cleared(result)
     expected = 8 - COMPACTABLE_KEEP_RECENT
     if cleared != expected:
@@ -428,7 +428,7 @@ def step_2_p1_truncate() -> bool:
 
     # 2c: Non-compactable tool — 10 calls → 0 cleared
     msgs = _build_tool_conv("save_memory", 10)
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
     cleared = _count_cleared(result)
     if cleared != 0:
         print(f"  FAIL: non-compactable should clear 0, got {cleared}")
@@ -459,7 +459,7 @@ def step_2_p1_truncate() -> bool:
             _assistant(f"found {i}"),
         ]
     msgs_multi += [_user("final"), _assistant("ok")]
-    result = truncate_tool_results(ctx, msgs_multi)
+    result = evict_old_tool_results(ctx, msgs_multi)
     # Count cleared per type
     cleared_rf = sum(
         1
@@ -502,7 +502,7 @@ def step_2_p1_truncate() -> bool:
         _tool_return("file_read", "PROTECTED", "last"),
         _assistant("done"),
     ]
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
     # Find the last group's tool return
     groups = group_by_turn(result)
     last_returns = [
@@ -801,9 +801,9 @@ async def step_6_full_chain() -> bool:
     msgs = list(history)
 
     # --- P1 ---
-    print("\n  [P1] truncate_tool_results")
+    print("\n  [P1] evict_old_tool_results")
     chars_pre_p1 = _msg_chars(msgs)
-    msgs = truncate_tool_results(ctx, msgs)
+    msgs = evict_old_tool_results(ctx, msgs)
     p1_cleared = _count_cleared(msgs)
     chars_post_p1 = _msg_chars(msgs)
     expected_p1 = N_READ - COMPACTABLE_KEEP_RECENT
@@ -1096,9 +1096,9 @@ async def step_7_multi_cycle() -> bool:
     msgs = list(history)
 
     # --- P1 ---
-    print("\n  [P1] truncate_tool_results")
+    print("\n  [P1] evict_old_tool_results")
     chars_pre_p1 = _msg_chars(msgs)
-    msgs = truncate_tool_results(ctx, msgs)
+    msgs = evict_old_tool_results(ctx, msgs)
     p1_cleared = _count_cleared(msgs)
     chars_post_p1 = _msg_chars(msgs)
     print(f"    Cleared: {p1_cleared} (expected {expected_p1})")
@@ -1450,7 +1450,7 @@ def step_11_edge_cases() -> bool:
 
     # 11a: 1-turn history — all processors should no-op
     one_turn = [_user("hello"), _assistant("hi")]
-    r = truncate_tool_results(ctx, one_turn)
+    r = evict_old_tool_results(ctx, one_turn)
     if r is not one_turn:
         print("  FAIL: P1 modified 1-turn history")
         passed = False
@@ -1475,7 +1475,7 @@ def step_11_edge_cases() -> bool:
         _user("turn 3"),
         _assistant("resp 3"),
     ]
-    r = truncate_tool_results(ctx, with_marker)
+    r = evict_old_tool_results(ctx, with_marker)
     if len(r) != len(with_marker):
         print("  FAIL: 11b — P1 altered history with static marker")
         passed = False
@@ -1521,7 +1521,7 @@ def step_11_edge_cases() -> bool:
         _user("final"),
         _assistant("ok"),
     ]
-    r = truncate_tool_results(ctx, mixed_msgs)
+    r = evict_old_tool_results(ctx, mixed_msgs)
     # Find the mixed ModelRequest in result
     for m in r:
         if m is mixed_parts or (
@@ -2421,7 +2421,7 @@ async def _run_all() -> int:
     results["Step 1: Pre-compact persist_if_oversized [BC4]"] = step_1_precompact()
 
     # --- Processor chain components (flow order) ---
-    results["Step 2: P1 truncate_tool_results"] = step_2_p1_truncate()
+    results["Step 2: P1 evict_old_tool_results"] = step_2_p1_truncate()
     results["Step 4: Context enrichment [BC2,BC3]"] = step_4_context_enrichment()
     results["Step 5: Prompt assembly [Outcome 1,BC1]"] = step_5_prompt_assembly()
 

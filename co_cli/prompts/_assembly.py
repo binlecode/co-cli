@@ -93,7 +93,7 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
     3. Mindsets
     4. Behavioral rules (numbered, strict order)
     4b. Recency-clearing advisory (explains the ``[tool result cleared…]``
-        placeholders that appear after ``truncate_tool_results`` runs)
+        placeholders that appear after ``evict_old_tool_results`` runs)
     5. Soul examples
     6. Critique (self-assessment lens)
 

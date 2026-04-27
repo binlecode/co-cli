@@ -2,7 +2,7 @@
 
 Governs the two-layer tool-output defense:
 - result_persist_chars: per-tool persist-at-write threshold (see tool_io.persist_if_oversized)
-- batch_spill_chars:    per-batch aggregate spill threshold (see _history.enforce_batch_budget)
+- batch_spill_chars:    per-batch aggregate spill threshold (see _history.evict_batch_tool_outputs)
 
 Per-tool registry overrides (ToolInfo.max_result_size) take precedence over result_persist_chars.
 """
@@ -32,7 +32,7 @@ class ToolsSettings(BaseModel):
         default=200_000,
         ge=10_000,
         description=(
-            "Per-batch aggregate spill threshold in chars. Above this, enforce_batch_budget "
+            "Per-batch aggregate spill threshold in chars. Above this, evict_batch_tool_outputs "
             "evicts the largest non-persisted tool returns from the message list."
         ),
     )

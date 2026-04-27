@@ -56,8 +56,8 @@ No threshold tuning, no behavioral changes to the boundary planner's bounds outp
 
 **In:**
 
-- `co_cli/deps.py` — add `provider_tokens_stale: bool = False` to `CoRuntimeState`'s cross-turn fields. Cleared inside the next M3 trigger pass after a fresh `ModelResponse` has been observed (i.e., when `latest_response_input_tokens` reflects post-compaction context size).
-- `co_cli/context/compaction.py` — set `provider_tokens_stale = True` in `apply_compaction` (alongside `compaction_applied_this_turn = True`). Update the M3 trigger to suppress the reported count while either flag is set, and clear the cross-turn flag on a fresh trigger pass when no compaction is needed.
+- `co_cli/deps.py` — add `post_compaction_token_estimate: int | None = None` and `message_count_at_last_compaction: int | None = None` to `CoRuntimeState`'s cross-turn fields. Cleared by `/new` and `/clear`; auto-cleared inside the next M3 trigger pass once a fresh ModelRequest+ModelResponse pair has landed (`len(messages) >= count + 2`).
+- `co_cli/context/compaction.py` — populate both fields in `apply_compaction` and `emergency_recover_overflow_history` (alongside `compaction_applied_this_turn = True`). Update the M3 trigger to use `post_compaction_token_estimate` as the `reported` value while it is set, and auto-clear once the fresh-pair condition holds so subsequent runs fall through to `latest_response_input_tokens`.
 - `co_cli/context/orchestrate.py` — fix the ratio computation in `_check_output_limits` to use `latest_response_input_tokens(turn_state.current_history)` (or the latest segment usage) rather than `deps.runtime.turn_usage.input_tokens`.
 - `co_cli/context/_history_processors.py` — change `_build_latest_id_by_key` to scan the **full** message list, so `latest_id` resolves to a live source (in tail or in the kept-recent-5 window). Add a guard in `replacement_for` so back-references are only emitted when `latest_id_by_key` will survive truncation.
 - `co_cli/context/_compaction_markers.py` — introduce a distinct `STATIC_MARKER_PREFIX` for `static_marker`'s output and update `_gather_prior_summaries` to match only on `summary_marker` output. `is_cleared_marker` and downstream prefix detection updated symmetrically.
@@ -87,10 +87,10 @@ No threshold tuning, no behavioral changes to the boundary planner's bounds outp
 ## Behavioral Constraints
 
 - **No regression in compaction firing under genuine pressure.** All TASK-1 changes operate ONLY on the stale-token suppression path; the local-estimate trigger remains unchanged. If `estimate_message_tokens(messages) > threshold`, M3 still fires regardless of the new flag.
-- **No regression in turn-state isolation.** The new `provider_tokens_stale` cross-turn flag is reset on session reset (`/new`, `/clear`) the same way `previous_compaction_summary` is.
+- **No regression in turn-state isolation.** The new `post_compaction_token_estimate` and `message_count_at_last_compaction` cross-turn fields are reset on session reset (`/new`, `/clear`) the same way `previous_compaction_summary` is. `/resume` does not explicitly reset them: a CoDeps reconstructed from disk starts with the dataclass defaults (`None`), and a CoDeps reused across resume-into-existing-session tolerates staleness — the auto-clear condition (`len(messages) >= count + 2`) trips on the first proactive pass with a normal-sized post-resume history, after which `latest_response_input_tokens` is used for the resumed transcript.
 - **No regression in static-marker → summary-marker compatibility.** Old session transcripts loaded via `/resume` may contain markers with the old shared `SUMMARY_MARKER_PREFIX`. The new prefixes do not collide with the old prefix; old markers are still recognized as "summary-shaped" by the marker construction code paths, and the new `_gather_prior_summaries` discriminator falls through gracefully (treats unknown-prefix as summary, not as static — safer error direction).
 - **No silent breakage of pydantic-ai `search_tools`.** TASK-5's pairing fix must be reviewed against `pydantic-ai/_agent_graph.py` to confirm paired `ToolCallPart`/`ToolReturnPart` survive history processors. Fallback-drop-rather-than-orphan is the default if pairing fails, which is strictly safer than the current behavior.
-- **Validator is permissive on non-English summaries.** TASK-7's check is "at least one line starts with `## `" — works for any language since the section markers themselves are ASCII.
+- **Validator is permissive on non-English summaries.** TASK-7's check is non-empty after strip — rejects only blank output, accepts any language and any structure.
 - **All fail-open paths preserved.** Every TASK keeps `try/except` wrappers (or adds them) at the same boundaries as today: summarizer raises → static marker fallback; M2 processor errors → return messages unchanged; extraction failures → compaction continues.
 
 ---
@@ -190,21 +190,27 @@ Today: `_preserve_search_tool_breadcrumbs` emits orphan `ToolReturnPart`s. Fix t
 3. Emit a paired sequence: `ModelResponse(parts=[ToolCallPart(...)])` followed by `ModelRequest(parts=[ToolReturnPart(...)])`.
 4. If the call cannot be found (defensive — should not happen in practice), drop that breadcrumb rather than emit an orphan.
 
-### M2b file_read carve-out (Issue 6 → TASK-6)
+### M2b pinned-tool eviction exclusion (Issue 6 → TASK-6)
 
-In `enforce_batch_budget`'s candidate filter (line 345-349), add `part.tool_name != "file_read"` to the filter:
+In `evict_batch_tool_outputs`, pre-compute a `never_evict` set from the tool index and exclude those tools from the candidate filter:
 
 ```python
+never_evict = {
+    name for name, info in ctx.deps.tool_index.items()
+    if info.max_result_size == math.inf
+}
 candidates = [
     (msg_idx, part_idx, part)
     for msg_idx, part_idx, part in batch_parts
     if isinstance(part.content, str)
     and PERSISTED_OUTPUT_TAG not in part.content
-    and part.tool_name != "file_read"
+    and part.tool_name not in never_evict
 ]
 ```
 
-If the batch is over budget AND all over-budget content is `file_read` returns, `enforce_batch_budget` returns messages unchanged with the existing "still over budget" warning. Acceptable: the model has already received the content; the next M3 pass can compact the surrounding context if pressure persists.
+This honours the tool registry contract at M2b the same way M1 does — no hardcoded tool names. Currently only `file_read` registers `max_result_size=math.inf`, but any future tool doing the same is automatically protected.
+
+If the batch is over budget AND all over-budget content belongs to pinned tools, `evict_batch_tool_outputs` returns messages unchanged with the existing "still over budget" warning. Acceptable: the model has already received the content; the next M3 pass can compact the surrounding context if pressure persists.
 
 ### Summary validator (Issue 7 → TASK-7)
 
@@ -212,39 +218,40 @@ In `apply_compaction`, between the summarizer call and the field write:
 
 ```python
 def _is_valid_summary(text: str | None) -> bool:
-    if text is None:
-        return False
-    stripped = text.strip()
-    if not stripped:
-        return False
-    return any(line.startswith("## ") for line in stripped.splitlines())
+    return bool(text and text.strip())
 
-if summary_text is not None and _is_valid_summary(summary_text):
-    ctx.deps.runtime.previous_compaction_summary = summary_text
-elif summary_text is not None:
-    log.warning("Compaction summarizer returned malformed output (no '## ' sections); leaving previous_compaction_summary untouched.")
+if summary_text is not None and not _is_valid_summary(summary_text):
+    log.warning("Compaction summarizer returned empty output; downgrading to static marker.")
     summary_text = None  # downgrades the marker to static path below
+if summary_text is not None:
+    ctx.deps.runtime.previous_compaction_summary = summary_text
 marker = build_compaction_marker(dropped_count, summary_text)
 ```
 
-This routes garbage outputs into the static-marker path AND prevents `previous_compaction_summary` corruption. The downgrade is observable via the existing `compaction_skip_count` mechanism if the validation fails repeatedly (treat as a summarizer failure).
+Only empty/whitespace output is rejected — freeform prose without `## ` sections is accepted. The iterative-update prompt embeds the previous summary as freeform text anyway; structural headers are output requirements, not input requirements.
 
 ### Dead-code removal (Issue 8 → TASK-8)
 
-Delete `_anchor_tail_to_last_user` and `_find_last_turn_start`'s second consumer (`_anchor_tail_to_last_user` is the only caller besides `dedup_tool_results` and `truncate_tool_results`). Remove the call site at `plan_compaction_boundaries:207-208`. Add a one-line comment at the spot the call lived:
+Delete `_anchor_tail_to_last_user` and its sole call site. `_find_last_turn_start` itself stays — `dedup_tool_results` and `evict_old_tool_results` both call it for their tail boundary (`_history_processors.py:180,279`).
+
+Proof of unreachability: `group_by_turn` starts every new group at a `UserPromptPart`, so `groups[-1].start_index == last_user_idx`. The backward walk in the planner always adds `groups[-1]` unconditionally on its first iteration (`len(acc_groups) == 0 < _MIN_RETAINED_TURN_GROUPS`), so `tail_start <= last_user_idx` always holds — the condition `last_user_idx < tail_start` inside `_anchor_tail_to_last_user` is structurally unreachable.
+
+Remove the call site at `plan_compaction_boundaries:207-208`. Add a comment in its place:
 
 ```python
 # Last group always retained by _MIN_RETAINED_TURN_GROUPS=1 invariant —
 # active-user anchoring is structurally guaranteed.
 ```
 
-`_find_last_turn_start` itself stays — `dedup_tool_results` and `truncate_tool_results` still use it for their tail boundary.
+Also update the `plan_compaction_boundaries` docstring: remove Step 5 ("Active-user anchoring") entirely and collapse the step numbering to 5 steps. The stale step implies the anchoring can trigger — it cannot.
+
+**E2E dead-code scan:** A full scan of the compaction stack (`_compaction_boundaries`, `_compaction_markers`, `_history_processors`, `_dedup_tool_results`, `_tool_result_markers`, `compaction`, `summarization`, `orchestrate`, `prompt_text`) found **no other dead functions or unreachable branches**. TASK-8 is the only removal needed.
 
 ---
 
 ## Implementation Plan
 
-### TASK-1 — Stale provider-tokens cross-turn suppression
+### TASK-1 ✓ DONE — Stale provider-tokens cross-turn suppression
 
 **Files:**
 - `co_cli/deps.py` (add fields to `CoRuntimeState`)
@@ -305,7 +312,7 @@ done_when:
 
 ---
 
-### TASK-2 — Fix `_check_output_limits` ratio computation
+### TASK-2 ✓ DONE — Fix `_check_output_limits` ratio computation
 
 **Files:**
 - `co_cli/context/orchestrate.py` (`_check_output_limits`, line 470-507)
@@ -362,7 +369,7 @@ done_when:
 
 ---
 
-### TASK-3 — Dedup back-reference durability
+### TASK-3 ✓ DONE — Dedup back-reference durability
 
 **Files:**
 - `co_cli/context/_history_processors.py` (`_build_latest_id_by_key`, `dedup_tool_results`)
@@ -406,7 +413,7 @@ done_when:
 
 ---
 
-### TASK-4 — Static / summary marker prefix discriminator
+### TASK-4 ✓ DONE — Static / summary marker prefix discriminator
 
 **Files:**
 - `co_cli/context/_compaction_markers.py` (new `STATIC_MARKER_PREFIX`, update `static_marker`, update `_gather_prior_summaries`, add `is_compaction_marker` helper)
@@ -452,7 +459,7 @@ done_when:
 
 ---
 
-### TASK-5 — Pair search-tools breadcrumbs with their tool calls
+### TASK-5 ✓ DONE — Pair search-tools breadcrumbs with their tool calls
 
 **Files:**
 - `co_cli/context/compaction.py` (`_preserve_search_tool_breadcrumbs`)
@@ -510,19 +517,35 @@ done_when:
 
 ---
 
-### TASK-6 — M2b file_read carve-out
+### TASK-6 ✓ DONE — M2b pinned-tool eviction exclusion
 
 **Files:**
-- `co_cli/context/_history_processors.py` (`enforce_batch_budget`)
-- `tests/context/test_context_compaction.py` (file_read excluded from spill candidates)
+- `co_cli/context/_history_processors.py` (`evict_batch_tool_outputs`)
+- `tests/context/test_context_compaction.py` (pinned tools excluded from spill candidates)
 
 **Detailed change:**
 
-In `enforce_batch_budget` line 345-349, add `part.tool_name != "file_read"` to the candidate filter. Update the inline docstring to note the carve-out is to preserve the M1 invariant.
+In `evict_batch_tool_outputs`, pre-compute a `never_evict` set from the tool index before the candidate filter:
+
+```python
+never_evict = {
+    name for name, info in ctx.deps.tool_index.items()
+    if info.max_result_size == math.inf
+}
+candidates = [
+    (msg_idx, part_idx, part)
+    for msg_idx, part_idx, part in batch_parts
+    if isinstance(part.content, str)
+    and PERSISTED_OUTPUT_TAG not in part.content
+    and part.tool_name not in never_evict
+]
+```
+
+This honours the tool registry contract (`max_result_size=math.inf` means "never persist") at M2b, the same way M1 does. No hardcoded tool names. Update the docstring to note that tools with `max_result_size=math.inf` are excluded from candidates.
 
 **Test:**
 - Construct a batch with one `file_read` ToolReturnPart of 250K chars. batch_spill_chars = 200K.
-- Assert `enforce_batch_budget` returns messages unchanged.
+- Assert `evict_batch_tool_outputs` returns messages unchanged.
 - Assert the "still over budget" warning is emitted (existing logic).
 - Add a contrasting test: batch with `shell` ToolReturnPart of 250K chars. Assert it IS spilled.
 
@@ -532,13 +555,13 @@ files:
   - tests/context/test_context_compaction.py
 
 done_when:
-  grep -n 'tool_name != "file_read"' co_cli/context/_history_processors.py exits 0
+  grep -n 'never_evict' co_cli/context/_history_processors.py exits 0
   uv run pytest tests/context/test_context_compaction.py -x passes
 ```
 
 ---
 
-### TASK-7 — Summary validator before write-back
+### TASK-7 ✓ DONE — Summary validator before write-back
 
 **Files:**
 - `co_cli/context/compaction.py` (`apply_compaction` — add validator)
@@ -550,14 +573,11 @@ Add `_is_valid_summary` helper at module scope:
 
 ```python
 def _is_valid_summary(text: str | None) -> bool:
-    """Minimal sanity check: non-empty after strip AND has at least one '## ' section."""
-    if text is None:
-        return False
-    stripped = text.strip()
-    if not stripped:
-        return False
-    return any(line.startswith("## ") for line in stripped.splitlines())
+    """Rejects empty/whitespace-only output; accepts any non-empty string."""
+    return bool(text and text.strip())
 ```
+
+Rationale: the iterative-update prompt embeds `previous_compaction_summary` as freeform text — the structured `## ` sections are output requirements, not input requirements. A prose summary without headers is valid carry-forward context. Only empty/whitespace output is rejected, which prevents an empty string from taking the iterative branch unnecessarily.
 
 In `apply_compaction` line 230-232, replace:
 ```python
@@ -569,8 +589,7 @@ with:
 ```python
 if summary_text is not None and not _is_valid_summary(summary_text):
     log.warning(
-        "Compaction summarizer returned malformed output (no '## ' sections); "
-        "downgrading to static marker."
+        "Compaction summarizer returned empty output; downgrading to static marker."
     )
     summary_text = None
 if summary_text is not None:
@@ -580,8 +599,8 @@ marker = build_compaction_marker(dropped_count, summary_text)
 
 **Test:**
 - Mock `_gated_summarize_or_none` to return `""`. Assert `previous_compaction_summary` unchanged after `apply_compaction`. Assert resulting marker is a `static_marker` (matched via `STATIC_MARKER_PREFIX`).
-- Mock to return `"I cannot summarize"`. Same assertions.
-- Mock to return `"## Active Task\n[do thing]\n## Goal\n..."`. Assert `previous_compaction_summary` is set, marker is `summary_marker`.
+- Mock to return `"   "` (whitespace only). Same assertions.
+- Mock to return `"Good progress so far."` (valid freeform, no `## ` sections). Assert `previous_compaction_summary` is set, marker is `summary_marker`.
 
 ```text
 files:
@@ -595,7 +614,7 @@ done_when:
 
 ---
 
-### TASK-8 — Remove dead `_anchor_tail_to_last_user`
+### TASK-8 ✓ DONE — Remove dead `_anchor_tail_to_last_user`
 
 **Files:**
 - `co_cli/context/_compaction_boundaries.py` (delete function, remove call site, add comment)
@@ -615,7 +634,8 @@ done_when:
    # group_by_turn splits at every UserPromptPart, the latest user prompt
    # is structurally guaranteed to land in acc_groups[0] — no anchoring needed.
    ```
-4. Verify tests in `tests/context/test_history.py` for "active-user anchoring" still pass; if any test was specifically testing `_anchor_tail_to_last_user`'s extension behavior (rather than the planner's overall correctness), delete those tests.
+4. Update the `plan_compaction_boundaries` docstring: remove Step 5 ("Active-user anchoring: if the latest UserPromptPart falls in the dropped middle...") and renumber the remaining steps. Replace with a note on why anchoring is unnecessary (the invariant already guarantees it). The stale step is the only doc inaccuracy introduced by this removal.
+5. Verify tests in `tests/context/test_history.py` for "active-user anchoring" still pass; if any test was specifically testing `_anchor_tail_to_last_user`'s extension behavior (rather than the planner's overall correctness), delete those tests.
 
 **Test:**
 - Existing planner tests must still pass.
@@ -633,7 +653,7 @@ done_when:
 
 ---
 
-### TASK-9 — Sync `docs/specs/compaction.md`
+### TASK-9 ✓ DONE — Sync `docs/specs/compaction.md`
 
 **Files:**
 - `docs/specs/compaction.md` (Section 2.3 "M3 — Window compaction" — add stale-flag mention; Section 2.5 "Overflow recovery" — note breadcrumb pairing; Section 2.6 "Summarizer" — note validator; Section 2.9 "Error handling" — add validator-failure row; Section 4 "Files" — no changes; Section 5 "Test Gates" — human-maintained, may grow)
@@ -666,7 +686,7 @@ done_when:
 
 ---
 
-### TASK-10 — Version bump
+### TASK-10 ✓ DONE — Version bump
 
 **Files:**
 - `pyproject.toml` (patch version +1; current is `0.8.30` per the latest commit `496f574`)

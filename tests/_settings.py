@@ -20,3 +20,10 @@ def make_settings(**overrides) -> Settings:
     if _BASE is None:
         _BASE = load_config()
     return _BASE.model_copy(update={"llm": TEST_LLM, **overrides})
+
+
+# Suite-level singletons for direct import — avoids repeated make_settings() calls across modules.
+SETTINGS = make_settings()
+
+# Excludes MCP servers so agent.run() calls don't spawn their processes inline per call.
+SETTINGS_NO_MCP = make_settings(mcp_servers={})

@@ -8,7 +8,7 @@ import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.usage import RunUsage
-from tests._settings import make_settings
+from tests._settings import SETTINGS as _CONFIG
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli.agent._core import build_agent
@@ -20,7 +20,6 @@ from co_cli.memory.transcript import append_messages
 from co_cli.tools.memory import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
-_CONFIG = make_settings()
 _AGENT = build_agent(config=_CONFIG)
 _MODEL = _AGENT.model
 

@@ -16,7 +16,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 from tests._ollama import ensure_ollama_warm
-from tests._settings import make_settings
+from tests._settings import SETTINGS as _CONFIG
+from tests._settings import TEST_LLM, make_settings
 
 from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
@@ -53,7 +54,6 @@ from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
-_CONFIG = make_settings()
 _LLM_MODEL = build_model(_CONFIG.llm)
 # Cache agent model reference for RunContext construction — no LLM call made here.
 _AGENT = build_agent(config=_CONFIG)
@@ -269,7 +269,7 @@ async def test_circuit_breaker_probes_at_cadence():
     # count=13: skips_since_trip=10 → probe cadence → LLM attempted
     deps.runtime.compaction_skip_count = 13
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     # proactive_window_processor chains two sequential LLM calls (summarizer +
     # memory extraction); pytest-timeout=120s is the safety net.
     await proactive_window_processor(ctx, msgs)
@@ -289,7 +289,7 @@ async def test_compact_produces_two_message_history():
     """/compact returns the shared compaction marker so auto-compaction can detect prior summaries."""
     msgs = _make_messages(6)
     ctx = _make_compact_ctx(message_history=msgs)
-    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     # dispatch("/compact") chains two sequential LLM calls (summarize + memory
     # extraction); pytest-timeout=120s is the safety net.
     result = await dispatch("/compact", ctx)
@@ -1165,7 +1165,7 @@ async def test_compact_command_inserts_todo_snapshot_between_summary_and_ack():
     ctx.deps.session.session_todos = [
         {"content": "survive user compact", "status": "pending", "priority": "medium"},
     ]
-    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     # dispatch("/compact") chains two sequential LLM calls (summarize + memory
     # extraction), so a single per-await asyncio.timeout would aggregate them
     # and violate the per-await policy. pytest-timeout=120s is the safety net.
@@ -1602,11 +1602,12 @@ def test_planner_retains_oversized_last_group():
 
 
 def test_planner_active_user_anchoring_pulls_latest_user_into_tail():
-    """Active-user anchoring: latest user turn in the dropped middle gets pulled into the tail.
+    """Structural invariant: latest user turn is always in the retained tail.
 
-    Constructs a history where the budget-driven tail would start at the penultimate group
-    but the actual last user turn is in the middle (just before the tail boundary).
-    Anchoring must advance tail_start to include that user turn.
+    group_by_turn splits at every UserPromptPart, so the final group always
+    starts at the latest user message. _MIN_RETAINED_TURN_GROUPS=1 guarantees
+    that group is retained unconditionally — tail_start <= last_user_idx holds
+    even when the final group's token count exceeds tail_budget.
     """
     msgs = []
     # Groups 0-2: small head groups

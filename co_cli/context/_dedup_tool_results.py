@@ -3,7 +3,7 @@
 Collapses repeat returns of the same ``(tool_name, content)`` pair — e.g.
 five ``file_read`` calls of the same unchanged file — into one full copy
 plus back-reference markers for earlier identical returns. Runs before
-``truncate_tool_results`` so the kept recent window is shrunk, not only
+``evict_old_tool_results`` so the kept recent window is shrunk, not only
 the older-than-5 range that M2a collapses to per-tool semantic markers.
 
 Dedup is orthogonal to semantic markers: dedup replaces

@@ -23,6 +23,7 @@
 - **Test data isolation**: use `tmp_path` for all filesystem writes. For shared stores, use `test-` prefix identifiers and delete in `try/finally` — cleanup failure must fail the test.
 - **Scope pytest during implementation**: run only affected test files during dev (`uv run pytest tests/test_foo.py`). Run the full suite only before shipping. Never dismiss a failure as flaky — stop, diagnose, then fix.
 - **Production config only — no overrides**: do not pass `model=` or `model_settings=` to `agent.run()` — use the production orchestration path or invoke the agent with no override. Do not strip personality in tests. Use non-thinking model settings for tool-calling, signal-detection, and orchestration tests. Cache module-level agents rather than rebuilding per call.
+- **Centralized test config**: import `SETTINGS` or `SETTINGS_NO_MCP` from `tests._settings` instead of calling `make_settings()` at module scope. Never define `_CONFIG = make_settings()` or `_CONFIG_NO_MCP = make_settings(mcp_servers={})` locally — these are suite-level singletons. Reserve `make_settings(**overrides)` for tests that require a surgical override (e.g. a specific `num_ctx` or provider).
 - **Never copy inline logic into tests**: do not replicate display formatting or string construction in assertions.
 - **Google credentials**: never configure or inject — they resolve automatically via settings, `~/.co-cli/google_token.json`, or ADC.
 - **No pytest markers**: do not add markers (e.g. `integration`, `slow`) unless explicitly requested.

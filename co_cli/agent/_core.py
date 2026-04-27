@@ -14,9 +14,9 @@ from pydantic_ai.toolsets.combined import CombinedToolset
 from co_cli.config._core import Settings
 from co_cli.context.compaction import (
     dedup_tool_results,
-    enforce_batch_budget,
+    evict_batch_tool_outputs,
+    evict_old_tool_results,
     proactive_window_processor,
-    truncate_tool_results,
 )
 from co_cli.deps import CoDeps, ToolInfo
 from co_cli.tools._lifecycle import CoToolLifecycle
@@ -141,8 +141,8 @@ def build_agent(
             output_type=[str, DeferredToolRequests],
             history_processors=[
                 dedup_tool_results,
-                truncate_tool_results,
-                enforce_batch_budget,
+                evict_old_tool_results,
+                evict_batch_tool_outputs,
                 proactive_window_processor,
             ],
             toolsets=[tool_registry.toolset],

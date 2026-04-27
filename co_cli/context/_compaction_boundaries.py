@@ -127,30 +127,6 @@ def _find_last_turn_start(messages: list[ModelMessage]) -> int | None:
     return None
 
 
-def _anchor_tail_to_last_user(
-    messages: list[ModelMessage],
-    groups: list[TurnGroup],
-    head_end: int,
-    tail_start: int,
-) -> int:
-    """Extend tail_start back so the latest UserPromptPart is in the retained tail.
-
-    If the latest UserPromptPart is already in the tail or head, returns tail_start
-    unchanged (no-op). If it falls in the dropped middle, returns the start index
-    of the group containing it.
-    """
-    last_user_idx = _find_last_turn_start(messages)
-    if last_user_idx is None:
-        return tail_start
-
-    if head_end <= last_user_idx < tail_start:
-        for group in groups:
-            if group.start_index <= last_user_idx < group.start_index + len(group.messages):
-                return group.start_index
-
-    return tail_start
-
-
 def plan_compaction_boundaries(
     messages: list[ModelMessage],
     budget: int,
@@ -168,10 +144,13 @@ def plan_compaction_boundaries(
          groups have been accumulated. In that case the group is retained
          regardless.
       4. ``tail_start = accumulated_groups[0].start_index``.
-      5. Active-user anchoring: if the latest ``UserPromptPart`` falls in the
-         dropped middle (between ``head_end`` and ``tail_start``), extend
-         ``tail_start`` backward to the start of the group containing it.
-      6. Abort when ``tail_start <= head_end`` (head/tail overlap — nothing to drop).
+      5. Abort when ``tail_start <= head_end`` (head/tail overlap — nothing to drop).
+
+    Active-user anchoring is structurally guaranteed and requires no explicit
+    step: ``group_by_turn`` splits at every ``UserPromptPart``, so the last
+    group's ``start_index`` equals the latest user message index. The backward
+    walk retains that group unconditionally on its first iteration due to
+    ``_MIN_RETAINED_TURN_GROUPS=1``, so ``tail_start <= last_user_idx`` always holds.
 
     Shared between proactive compaction (``proactive_window_processor``) and
     overflow recovery (``recover_overflow_history``). ``_MIN_RETAINED_TURN_GROUPS=1``
@@ -205,7 +184,10 @@ def plan_compaction_boundaries(
         return None
 
     tail_start = acc_groups[0].start_index
-    tail_start = _anchor_tail_to_last_user(messages, groups, head_end, tail_start)
+    # Last group is always retained by _MIN_RETAINED_TURN_GROUPS=1: the walk
+    # adds the final group unconditionally on its first iteration. Since
+    # group_by_turn splits at every UserPromptPart, the latest user prompt
+    # is structurally guaranteed to land in acc_groups[0] — no anchoring needed.
 
     if tail_start <= head_end:
         return None
