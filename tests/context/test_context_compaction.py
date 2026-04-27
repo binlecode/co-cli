@@ -23,8 +23,8 @@ from co_cli.context.compaction import (
     SUMMARY_MARKER_PREFIX,
     apply_compaction,
     gather_compaction_context,
-    pre_turn_window_compaction,
     proactive_window_processor,
+    recover_overflow_history,
     summary_marker,
 )
 from co_cli.context.summarization import (
@@ -92,9 +92,9 @@ async def test_compaction_triggers_on_real_input_tokens():
     The planner walks groups by its own estimator, so the message bodies must
     carry real char weight for the walk to find anything to drop. body_chars
     ≈ 30_000 per message makes each group ≈ 15_000 tokens — more than one
-    group cannot fit under tail_fraction (0.40) * 100_000 = 40_000 tokens.
+    group cannot fit under tail_fraction (0.20) * 100_000 = 20_000 tokens.
     """
-    # 90_000 > int(100_000 * 0.80) = 80_000 → trigger fires
+    # 90_000 > int(100_000 * 0.65) = 65_000 → trigger fires
     msgs = _make_messages(10, last_input_tokens=90_000, body_chars=30_000)
     config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
     ctx = _make_ctx(config)
@@ -113,12 +113,12 @@ async def test_compaction_fallback_when_no_usage_data():
     and compaction still triggers correctly via the char-estimate fallback.
 
     Uses a tiny Ollama budget (llm_num_ctx=30) so the char-estimate
-    (~33 tokens from 10 messages) exceeds int(30 * 0.80) = 24.
+    (~33 tokens from 10 messages) exceeds int(30 * 0.65) = 19.
     """
     msgs_no_usage = _make_messages(10, last_input_tokens=0)
     assert latest_response_input_tokens(msgs_no_usage) == 0
 
-    # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 25
+    # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 19 (int(30 * 0.65))
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
     )
@@ -137,8 +137,8 @@ async def test_compaction_triggers_on_ollama_budget():
     """Ollama: input_tokens=7_200 with llm_num_ctx=8192 triggers compaction.
 
     budget = 8192 (raw context_window, no reserve subtraction).
-    7_200 > int(8192 * 0.80) = 6553 → trigger fires. body_chars sized so each
-    group exceeds tail_fraction * 8192 = ~3276 tokens.
+    7_200 > int(8192 * 0.65) = 5324 → trigger fires. body_chars sized so each
+    group exceeds tail_fraction * 8192 = ~1638 tokens.
     """
     msgs = _make_messages(10, last_input_tokens=7_200, body_chars=3_000)
     config = make_settings(
@@ -294,7 +294,7 @@ async def test_trigger_uses_max_floor():
     would pick reported=100 → no trigger. max() floor picks estimate (~100K) →
     trigger fires and planner drops the heavy middle group.
     """
-    # Budget = 100K (anthropic). threshold = 85K. Middle body ~100K tokens.
+    # Budget = 100K (anthropic). threshold = 65K. Middle body ~100K tokens.
     big_body = "x" * 400_000
     msgs = [
         ModelRequest(parts=[UserPromptPart(content="turn 0")]),
@@ -355,88 +355,32 @@ def test_build_summarizer_prompt_keeps_personality_after_context() -> None:
 
 
 # ---------------------------------------------------------------------------
-# pre_turn_window_compaction — TASK-1 / TASK-2 hygiene compaction tests
-#
-# Budget: ctx_token_budget=100_000 (default). model=None → ctx_window=None → budget=100_000.
-# Compaction threshold: int(100_000 * 0.80) = 80_000 tokens = 320_000 chars.
+# proactive_window_processor — migrated behavioral coverage from M0 tests
 # ---------------------------------------------------------------------------
 
-_HYGIENE_BUDGET = 100_000
-_HYGIENE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * CompactionSettings().compaction_ratio)
 
-
-def _make_hygiene_deps(*, ctx_token_budget: int = _HYGIENE_BUDGET) -> CoDeps:
+@pytest.mark.asyncio
+async def test_proactive_processor_fail_open_unusable_budget() -> None:
+    """When budget resolves to 0 (no context window known), processor skips and returns history unchanged."""
+    msgs = _make_messages(10, body_chars=40_000)
     config = make_settings(
-        llm=make_settings().llm.model_copy(
-            update={"provider": "anthropic", "ctx_token_budget": ctx_token_budget}
-        )
+        llm=make_settings().llm.model_copy(update={"provider": "anthropic", "ctx_token_budget": 0})
     )
-    return CoDeps(shell=ShellBackend(), config=config)
-
-
-@pytest.mark.asyncio
-async def test_pre_turn_hygiene_compacts_oversized_history() -> None:
-    """Rough-estimate tokens above compaction_ratio * budget triggers pre-turn compaction."""
-    # 10 messages x 40_000 chars = 400_000 chars / 4 = 100_000 tokens > 80_000 threshold
-    msgs = _make_messages(10, body_chars=40_000)
-    assert estimate_message_tokens(msgs) > _HYGIENE_THRESHOLD_TOKENS
-    deps = _make_hygiene_deps()
-    result = await pre_turn_window_compaction(deps, msgs)
-    assert len(result) < len(msgs)
-
-
-@pytest.mark.asyncio
-async def test_pre_turn_hygiene_no_op_below_threshold() -> None:
-    """History well below the compaction threshold is returned unchanged."""
-    # 4 messages x ~20 chars = ~80 chars / 4 = ~20 tokens ≪ 80_000 threshold
-    msgs = _make_messages(4)
-    assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
-    deps = _make_hygiene_deps()
-    result = await pre_turn_window_compaction(deps, msgs)
+    ctx = _make_ctx(config)
+    result = await proactive_window_processor(ctx, msgs)
     assert result is msgs
 
 
 @pytest.mark.asyncio
-async def test_pre_turn_hygiene_sets_compaction_applied_this_turn() -> None:
-    """compaction_applied_this_turn is True after hygiene compaction fires."""
-    msgs = _make_messages(10, body_chars=40_000)
-    deps = _make_hygiene_deps()
-    assert deps.runtime.compaction_applied_this_turn is False
-    result = await pre_turn_window_compaction(deps, msgs)
-    assert len(result) < len(msgs)
-    assert deps.runtime.compaction_applied_this_turn is True
-
-
-@pytest.mark.asyncio
-async def test_pre_turn_hygiene_no_flag_when_no_compaction() -> None:
-    """compaction_applied_this_turn remains False when hygiene does not fire."""
-    msgs = _make_messages(4)
-    deps = _make_hygiene_deps()
-    assert deps.runtime.compaction_applied_this_turn is False
-    await pre_turn_window_compaction(deps, msgs)
-    assert deps.runtime.compaction_applied_this_turn is False
-
-
-@pytest.mark.asyncio
-async def test_pre_turn_hygiene_fail_open_unusable_budget() -> None:
-    """When budget resolves to 0 (no context window known), hygiene skips and returns history unchanged."""
-    msgs = _make_messages(10, body_chars=40_000)
-    deps = _make_hygiene_deps(ctx_token_budget=0)
-    result = await pre_turn_window_compaction(deps, msgs)
-    assert result is msgs
-
-
-@pytest.mark.asyncio
-async def test_pre_turn_hygiene_latest_user_turn_survives() -> None:
-    """The most recent user message is preserved after pre-turn hygiene compaction."""
+async def test_proactive_latest_user_turn_survives() -> None:
+    """The most recent user message is preserved after proactive compaction."""
     last_user_content = "the final user message that must survive compaction"
     msgs = _make_messages(10, body_chars=40_000)
-    # Append the final user turn (oversized history + final message)
     msgs.append(ModelRequest(parts=[UserPromptPart(content=last_user_content)]))
-    deps = _make_hygiene_deps()
-    result = await pre_turn_window_compaction(deps, msgs)
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
+    ctx = _make_ctx(config)
+    result = await proactive_window_processor(ctx, msgs)
     assert len(result) < len(msgs)
-    # Find last user message in compacted result
     last_user = None
     for msg in reversed(result):
         if isinstance(msg, ModelRequest):
@@ -449,37 +393,25 @@ async def test_pre_turn_hygiene_latest_user_turn_survives() -> None:
     assert last_user == last_user_content
 
 
-# ---------------------------------------------------------------------------
-# Pre-turn hygiene uses max(char_estimate, latest_response_input_tokens) — the
-# provider-reported count on the last assistant ModelResponse must trip the
-# trigger even when the char estimate alone is below threshold.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_pre_turn_hygiene_fires_when_reported_tokens_exceed_threshold() -> None:
-    """Hygiene fires when the provider-reported count exceeds the threshold, even if char estimate is below it.
+async def test_proactive_fires_on_reported_tokens() -> None:
+    """Proactive fires when provider-reported count exceeds threshold, even if char estimate is below it.
 
     Simulates a code-heavy session where chars/4 underestimates actual tokens by ~1.5x.
-    Char estimate: ~70_000 tokens (below 80_000 threshold).
-    Reported count (carried on the last ModelResponse usage): 84_000 tokens
-    (above 80_000 threshold). Without the max-of-two trigger, hygiene would
-    not fire. With it, the provider-reported count drives the decision.
-    Uses 10 messages so M3 has enough turn groups to compact.
+    Budget 100K, threshold = int(100_000 * 0.65) = 65_000.
+    Char estimate: ~60_000 tokens (below threshold).
+    Reported count: 69_000 (above threshold). Without the max-of-two trigger,
+    proactive would not fire. With it, the provider-reported count drives the decision.
     """
-    # 10 messages x 28_000 chars = 280_000 chars / 4 = 70_000 tokens (below threshold)
-    # last_input_tokens stamps the provider-reported count onto the final assistant message,
-    # which is the production path: latest_response_input_tokens(message_history).
-    msgs = _make_messages(
-        10,
-        body_chars=28_000,
-        last_input_tokens=_HYGIENE_THRESHOLD_TOKENS + 4_000,
-    )
-    assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
-    deps = _make_hygiene_deps()
-    result = await pre_turn_window_compaction(deps, msgs)
+    # 10 messages x 24_000 chars = 240_000 chars / 4 = 60_000 tokens (below threshold)
+    threshold = int(100_000 * CompactionSettings().compaction_ratio)  # 65_000
+    msgs = _make_messages(10, body_chars=24_000, last_input_tokens=threshold + 4_000)
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
+    ctx = _make_ctx(config)
+    assert estimate_message_tokens(msgs) < threshold
+    result = await proactive_window_processor(ctx, msgs)
     assert len(result) < len(msgs), (
-        "hygiene must fire when latest_response_input_tokens exceeds threshold, "
+        "proactive must fire when latest_response_input_tokens exceeds threshold, "
         "even if char estimate alone is below it"
     )
 
@@ -531,31 +463,8 @@ async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> N
 
 
 @pytest.mark.asyncio
-async def test_hygiene_isolated_from_proactive_thrash_counter() -> None:
-    """Pre-turn hygiene neither reads nor writes the proactive thrash counter.
-
-    Hygiene fires regardless of gate state (no read), and a hygiene compaction
-    leaves the counter unchanged (no write — neither increment nor reset). The
-    counter is named and configured for proactive (M3) only; cross-layer writes
-    from hygiene (M0) would poison next-turn proactive and the orchestrate.py
-    UX nudge that gates on the same counter.
-    """
-    # 10 messages x 40_000 chars = 400_000 chars / 4 = 100_000 tokens > 88_000 threshold
-    msgs = _make_messages(10, body_chars=40_000)
-    deps = _make_hygiene_deps()
-    # Pre-seed at the gate threshold so we observe both possible writes:
-    # the buggy increment (would push to 3) and the prior cross-layer reset (would zero).
-    deps.runtime.consecutive_low_yield_proactive_compactions = 2
-    result = await pre_turn_window_compaction(deps, msgs)
-    # Hygiene is not gated — compaction must fire even with the proactive gate active.
-    assert len(result) < len(msgs)
-    # Counter is untouched: neither incremented (low-yield bug) nor reset (cross-layer rescue).
-    assert deps.runtime.consecutive_low_yield_proactive_compactions == 2
-
-
-@pytest.mark.asyncio
 async def test_savings_clear_unblocks_gate() -> None:
-    """Resetting the low-yield counter (as hygiene and overflow do) deactivates the gate.
+    """Resetting the low-yield counter (as overflow recovery does) deactivates the gate.
 
     Gate is active at the threshold. After resetting the counter, the next proactive
     pass must fire — confirming the reset contract is sufficient.
@@ -571,7 +480,7 @@ async def test_savings_clear_unblocks_gate() -> None:
     ctx = _make_ctx(config)
     # Populate stale low-yield state that would gate proactive compaction.
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 2
-    # Simulate orchestrate.py post-hygiene/overflow reset.
+    # Simulate overflow recovery reset.
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
     # After clear, proactive must fire
     result = await proactive_window_processor(ctx, msgs)
@@ -719,3 +628,82 @@ async def test_session_commands_reset_previous_compaction_summary() -> None:
         ctx_resume = CommandContext(message_history=[], deps=deps, agent=_AGENT)
         await _cmd_resume(ctx_resume, "")
     assert deps.runtime.previous_compaction_summary == "PRIOR"
+
+
+# ---------------------------------------------------------------------------
+# Correctness regression tests: thrash gate reset and savings ratio invariants
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_thrash_hint_re_arms_after_or1_reset() -> None:
+    """recover_overflow_history (OR-1) resets compaction_thrash_hint_emitted so hint re-emits on next thrash."""
+    # body_chars=30_000 → ~15K tokens per group, tail_budget=0.20*100K=20K → planner drops middle groups
+    msgs = _make_messages(10, body_chars=30_000)
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
+    ctx = _make_ctx(config)
+    ctx.deps.runtime.compaction_thrash_hint_emitted = True
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 2
+
+    result = await recover_overflow_history(ctx, msgs)
+    assert result is not None
+    assert ctx.deps.runtime.compaction_thrash_hint_emitted is False
+    assert ctx.deps.runtime.consecutive_low_yield_proactive_compactions == 0
+
+
+@pytest.mark.asyncio
+async def test_compact_command_resets_thrash_state() -> None:
+    """Manual /compact resets the thrash counter and re-arms the hint flag.
+
+    Uses model=None (deps default) so compaction applies a static marker without
+    an LLM call. The gate reset must happen regardless of summarizer availability.
+    """
+    from co_cli.commands._types import CommandContext
+    from co_cli.commands.session import _cmd_compact
+
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
+    deps.runtime.consecutive_low_yield_proactive_compactions = 2
+    deps.runtime.compaction_thrash_hint_emitted = True
+
+    msgs = _make_messages(4)
+    ctx = CommandContext(message_history=msgs, deps=deps, agent=_AGENT)
+    result = await _cmd_compact(ctx, "")
+
+    assert result is not None
+    assert deps.runtime.consecutive_low_yield_proactive_compactions == 0
+    assert deps.runtime.compaction_thrash_hint_emitted is False
+
+
+@pytest.mark.asyncio
+async def test_savings_ratio_uses_local_estimate_only() -> None:
+    """Savings ratio uses local token estimate denominator, not provider-reported count.
+
+    The trigger threshold uses max(local, reported) to bias toward earlier compaction.
+    The savings ratio must use local-only on both sides (tokens_before_local and
+    tokens_after_local) for an apples-to-apples yield comparison. Using the inflated
+    reported count as denominator would falsely inflate savings and prevent the thrash
+    gate from engaging on genuinely low-yield passes.
+    """
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
+    ctx = _make_ctx(config)
+    # Oversized history: local estimate well above threshold; reported count also above.
+    msgs = _make_messages(10, body_chars=32_000, last_input_tokens=70_000)
+    local_before = estimate_message_tokens(msgs)
+    threshold = int(100_000 * config.compaction.compaction_ratio)
+    assert local_before > threshold
+
+    result = await proactive_window_processor(ctx, msgs)
+    assert len(result) < len(msgs)
+
+    local_after = estimate_message_tokens(result)
+    # Compute the expected savings using local-only semantics (what the production code should do).
+    expected_savings = (local_before - local_after) / local_before if local_before > 0 else 0.0
+    # Counter state must match local-only semantics — not provider-inflated semantics.
+    if expected_savings >= config.compaction.min_proactive_savings:
+        assert ctx.deps.runtime.consecutive_low_yield_proactive_compactions == 0, (
+            "local savings cleared threshold — counter should have reset"
+        )
+    else:
+        assert ctx.deps.runtime.consecutive_low_yield_proactive_compactions == 1, (
+            "local savings below threshold — counter should have incremented"
+        )

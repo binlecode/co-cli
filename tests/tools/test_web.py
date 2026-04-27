@@ -84,10 +84,10 @@ async def test_web_search_functional():
     ctx = _make_ctx(brave_search_api_key=_brave_key_for_search_tests())
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_search(ctx, "python programming language")
-    assert result.return_value
     if (result.metadata or {}).get("error"):
         assert result.metadata["error"] is True
         return
+    assert "Web search results" in result.return_value
     assert result.metadata["count"] > 0
     assert isinstance(result.metadata["results"], list)
     first = result.metadata["results"][0]
@@ -102,9 +102,9 @@ async def test_web_search_domains_parameter():
     ctx = _make_policy_ctx(brave_search_api_key=_brave_key_for_search_tests())
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_search(ctx, "test", domains=["example.com"])
-    assert result.return_value
     if not (result.metadata or {}).get("error"):
         assert "results" in result.metadata
+        assert "Web search results" in result.return_value
 
 
 @pytest.mark.asyncio
@@ -265,7 +265,6 @@ async def test_web_fetch_html_to_markdown():
             ctx, "https://en.wikipedia.org/wiki/Python_(programming_language)"
         )
     assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
-    assert result.return_value
     assert "url" in result.metadata
     assert "content_type" in result.metadata
     assert "truncated" in result.metadata
@@ -282,7 +281,6 @@ async def test_web_fetch_json_content():
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/json")
     assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
-    assert result.return_value
     # JSON content must be preserved as-is, not converted
     assert "slideshow" in result.return_value.lower()
 
@@ -294,4 +292,4 @@ async def test_web_fetch_plain_text():
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/robots.txt")
     assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
-    assert result.return_value
+    assert "User-agent" in result.return_value

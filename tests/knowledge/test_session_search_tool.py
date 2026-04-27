@@ -109,7 +109,9 @@ async def test_session_search_graceful_when_index_none(tmp_path: Path) -> None:
 
     result = await memory_search(ctx, "anything")
 
-    assert result.return_value, "ToolReturn must have non-empty return_value"
+    assert "not available" in result.return_value, (
+        f"Expected graceful 'not available' message, got: {result.return_value!r}"
+    )
     assert result.metadata is not None
     assert result.metadata["count"] == 0, (
         f"count must be 0 when index is None, got {result.metadata['count']}"

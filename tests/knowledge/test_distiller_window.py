@@ -13,6 +13,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from tests._settings import make_settings
+from tests._timeouts import SUBPROCESS_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps
 from co_cli.knowledge._distiller import (
@@ -187,7 +188,7 @@ async def test_last_extracted_idx_advances_on_empty_window(tmp_path: Path) -> No
     delta = messages[cursor_start:]
 
     fire_and_forget_extraction(delta, deps=deps, cursor_start=cursor_start)
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         await drain_pending_extraction(deps, timeout_ms=1000)
 
     # Cursor must have advanced to cursor_start + len(delta)
@@ -230,7 +231,7 @@ async def test_extraction_task_slot_is_per_deps(tmp_path: Path) -> None:
     assert deps_a.runtime.extraction_task is not None
     assert deps_b.runtime.extraction_task is None
 
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         await drain_pending_extraction(deps_a, timeout_ms=1000)
 
     # After drain, deps_a's slot is cleared; deps_b's slot is still untouched.

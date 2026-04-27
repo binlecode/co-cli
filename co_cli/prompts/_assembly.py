@@ -84,7 +84,7 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
     return parsed
 
 
-def build_static_instructions(config: Settings) -> str:
+def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = None) -> str:
     """Build the static instructions string for the given model and personality.
 
     Assembles sections in explicit order:
@@ -138,7 +138,7 @@ def build_static_instructions(config: Settings) -> str:
     # 3b. Personality memories — curated knowledge artifacts tagged personality-context;
     # session-stable, loaded once at agent construction for prefix-cache stability.
     if config.personality:
-        personality_memories_content = load_personality_memories()
+        personality_memories_content = load_personality_memories(knowledge_dir=knowledge_dir)
         if personality_memories_content:
             parts.append(personality_memories_content)
 

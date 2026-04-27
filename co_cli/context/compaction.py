@@ -22,7 +22,6 @@ from pydantic_ai.messages import (
     ModelRequest,
     ToolReturnPart,
 )
-from pydantic_ai.usage import RunUsage
 
 from co_cli.context._compaction_boundaries import (
     CompactionBoundaries,
@@ -72,7 +71,6 @@ __all__ = [
     "group_by_turn",
     "groups_to_messages",
     "plan_compaction_boundaries",
-    "pre_turn_window_compaction",
     "proactive_window_processor",
     "recover_overflow_history",
     "static_marker",
@@ -294,7 +292,9 @@ async def recover_overflow_history(
     # system needed to compact. Crediting it as a clean resync prevents the gate from
     # staying tripped and suppressing the next proactive run, which would just produce
     # another overflow.
+    # hint re-arms with counter — banner-text contract
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+    ctx.deps.runtime.compaction_thrash_hint_emitted = False
     return result
 
 
@@ -330,7 +330,9 @@ async def emergency_recover_overflow_history(
     await extract_at_compaction_boundary(messages, result, ctx.deps)
     ctx.deps.runtime.compaction_applied_this_turn = True
     # See recover_overflow_history for the unconditional-reset rationale.
+    # hint re-arms with counter — banner-text contract
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+    ctx.deps.runtime.compaction_thrash_hint_emitted = False
     log.warning(
         "Emergency overflow recovery: planner returned None; dropped all middle groups "
         "(len(groups)=%d).",
@@ -369,117 +371,77 @@ async def _run_window_compaction(
     return result
 
 
-async def _compact_window_if_pressured(
-    ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-    *,
-    ratio: float,
-    apply_thrash_gate: bool,
-) -> list[ModelMessage]:
-    """Compact the history window when token pressure exceeds ``ratio * budget``.
-
-    Shared core for the M3 history-processor trigger and the M0 pre-turn trigger.
-    The caller supplies the threshold ratio and decides whether to consult the
-    anti-thrash gate; everything else (token counting, planner, summarizer,
-    thrash counter updates) lives here.
-
-    Keeps:
-      - **head** — first run's messages (up to first TextPart response)
-      - **tail** — planner-selected suffix bounded by ``cfg.tail_fraction * budget``
-    Drops:
-      - everything in between, replaced by an inline LLM summary when
-        possible, else a static marker (circuit-breaker fallback)
-
-    Summarisation runs inline via ``summarize_messages()`` when compaction
-    triggers. When ``deps.model`` is absent (sub-agent context) or the
-    circuit breaker is tripped (3+ consecutive failures), falls back to a
-    static marker without attempting an LLM call.
-    """
-    ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
-    budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
-    if budget <= 0:
-        return messages
-    cfg = ctx.deps.config.compaction
-
-    reported = (
-        0
-        if ctx.deps.runtime.compaction_applied_this_turn
-        else latest_response_input_tokens(messages)
-    )
-    token_count = max(estimate_message_tokens(messages), reported)
-    token_threshold = int(budget * ratio)
-
-    if token_count <= token_threshold:
-        return messages
-
-    if apply_thrash_gate and (
-        ctx.deps.runtime.consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window
-    ):
-        log.info("Compaction: proactive anti-thrashing gate active, skipping")
-        if not ctx.deps.runtime.compaction_thrash_hint_emitted:
-            from co_cli.display._core import console
-
-            console.print(
-                "[dim]Compaction paused: recent passes freed too little context. "
-                "Run /compact to force a manual pass.[/dim]"
-            )
-            ctx.deps.runtime.compaction_thrash_hint_emitted = True
-        return messages
-
-    result = await _run_window_compaction(ctx, messages, budget)
-    if result is None:
-        return messages
-
-    if apply_thrash_gate:
-        tokens_after = estimate_message_tokens(result)
-        savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
-        if savings < cfg.min_proactive_savings:
-            ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
-        else:
-            ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-    return result
-
-
 async def proactive_window_processor(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """M3 history-processor: compact mid-turn when compaction_ratio is exceeded.
+    """Mid-turn compaction trigger — the only auto-compaction layer.
 
-    Registered as the last history processor on the orchestrator agent. Applies
-    the anti-thrash gate to suppress repeated low-yield compactions, and updates
-    the thrash counter based on observed savings.
-    """
-    return await _compact_window_if_pressured(
-        ctx,
-        messages,
-        ratio=ctx.deps.config.compaction.compaction_ratio,
-        apply_thrash_gate=True,
-    )
+    Registered as the last history processor on the orchestrator agent. Fires
+    before each ModelRequestNode when token pressure exceeds compaction_ratio.
+    Anti-thrash gate engages after ``proactive_thrash_window`` consecutive low-
+    yield runs; once tripped, the system stops auto-compacting and surfaces
+    a user-actionable hint pointing at /compact and /new.
 
+    Fail-open: any Exception returns ``messages`` unchanged so the agent loop
+    proceeds. asyncio.CancelledError (via BaseException) propagates.
 
-async def pre_turn_window_compaction(
-    deps: CoDeps,
-    message_history: list[ModelMessage],
-) -> list[ModelMessage]:
-    """M0 pre-turn hygiene: compact at ``run_turn()`` entry when ``compaction_ratio`` is exceeded.
-
-    Fail-open: any exception returns ``message_history`` unchanged so the turn
-    proceeds. The anti-thrash gate is intentionally bypassed — pre-turn is the
-    safety net for sessions where the in-loop M3 trigger was suppressed.
-    The asymmetry vs ``proactive_window_processor`` (which propagates exceptions)
-    is intentional: the pre-turn lifecycle has no caller-side handler and a
-    raised exception would fail the whole turn.
+    Pre-turn lifecycle slot is intentionally compaction-free — see
+    docs/specs/compaction.md for the design choice.
     """
     try:
-        raw_model = deps.model.model if deps.model else None
-        ctx = RunContext(deps=deps, model=raw_model, usage=RunUsage())
-        return await _compact_window_if_pressured(
-            ctx,
-            message_history,
-            ratio=deps.config.compaction.compaction_ratio,
-            apply_thrash_gate=False,
+        ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
+        budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
+        if budget <= 0:
+            return messages
+        cfg = ctx.deps.config.compaction
+
+        reported = (
+            0
+            if ctx.deps.runtime.compaction_applied_this_turn
+            else latest_response_input_tokens(messages)
         )
+        # Trigger threshold uses max(local, reported) — biases toward earlier compaction.
+        # Savings ratio uses local-only on both sides — apples-to-apples yield comparison.
+        tokens_before_local = estimate_message_tokens(messages)
+        token_count = max(tokens_before_local, reported)
+        token_threshold = int(budget * cfg.compaction_ratio)
+
+        if token_count <= token_threshold:
+            return messages
+
+        if (
+            ctx.deps.runtime.consecutive_low_yield_proactive_compactions
+            >= cfg.proactive_thrash_window
+        ):
+            log.info("Compaction: anti-thrashing gate active, skipping")
+            if not ctx.deps.runtime.compaction_thrash_hint_emitted:
+                from co_cli.display._core import console
+
+                console.print(
+                    "[dim]Compaction paused: recent passes freed too little context. "
+                    "/compact to force one more pass, or /new for a fresh session.[/dim]"
+                )
+                ctx.deps.runtime.compaction_thrash_hint_emitted = True
+            return messages
+
+        result = await _run_window_compaction(ctx, messages, budget)
+        if result is None:
+            return messages
+
+        tokens_after_local = estimate_message_tokens(result)
+        savings = (
+            (tokens_before_local - tokens_after_local) / tokens_before_local
+            if tokens_before_local > 0
+            else 0.0
+        )
+        if savings < cfg.min_proactive_savings:
+            ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
+        else:
+            # hint re-arms with counter — banner-text contract
+            ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+            ctx.deps.runtime.compaction_thrash_hint_emitted = False
+        return result
     except Exception:
-        log.warning("Pre-turn hygiene compaction failed — skipping", exc_info=True)
-        return message_history
+        log.warning("Mid-turn compaction failed — skipping", exc_info=True)
+        return messages

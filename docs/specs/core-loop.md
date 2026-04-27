@@ -78,7 +78,7 @@ flowchart TD
     D -->|DelegateToAgent| F["set active_skill_name; snapshot/apply skill_env; delegated_input becomes user_input"]
 
     F --> H
-    H --> I["run_turn(): deps.runtime.reset_for_turn(); pre_turn_window_compaction(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
+    H --> I["run_turn(): deps.runtime.reset_for_turn(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
     I --> J["_execute_stream_segment() via agent.run_stream_events(...)"]
     J --> K{"segment result / exception"}
 
@@ -268,8 +268,6 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-**Pre-turn hygiene (M0).** Before the agent loop starts, `run_turn()` calls `pre_turn_window_compaction()` after `reset_for_turn()` and before `frontend.on_status`. This is a maintenance compaction using `max(estimate_message_tokens(messages), latest_response_input_tokens(messages))` — the same `max(estimate, reported)` token signal the proactive trigger uses, read from the last `ModelResponse.usage`. It fires when that token count exceeds `compaction.hygiene_ratio` (0.88) of the budget — higher than the proactive threshold to avoid false positives from the char/4 estimator. Both M0 and M3 are thin wrappers over the shared `_compact_window_if_pressured` core; M0 passes `apply_thrash_gate=False` so the safety-net trigger fires even when M3's anti-thrash gate has suppressed proactive runs. Fails open: any exception returns history unchanged so the turn proceeds. When it fires, it sets `deps.runtime.compaction_applied_this_turn`, which branches the transcript into a child session on finalization. See [compaction.md](compaction.md) for M0 details.
-
 The main agent is built with three registered history processors (pure transformers) in this exact order:
 
 1. `truncate_tool_results`
@@ -299,7 +297,7 @@ Ordering rationale:
 Compaction behavior:
 
 - `proactive_window_processor()` gathers side-channel context via `gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
-- it compacts when token count exceeds `PROACTIVE_COMPACTION_RATIO` (0.75) of the budget
+- it compacts when token count exceeds `cfg.compaction_ratio` (0.65) of the budget
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
@@ -400,7 +398,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/compaction.py` | public entry points (three registered history processors, `pre_turn_window_compaction` for M0 hygiene, `proactive_window_processor` for M3 — both thin wrappers over the private `_compact_window_if_pressured` core; overflow-recovery entry points `recover_overflow_history` and `emergency_recover_overflow_history`); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `_history_processors.py` (dedup / truncate / batch-budget transformers) |
+| `co_cli/context/compaction.py` | public entry points (three registered history processors, `proactive_window_processor` for M3; overflow-recovery entry points `recover_overflow_history` and `emergency_recover_overflow_history`); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `_history_processors.py` (dedup / truncate / batch-budget transformers) |
 | `co_cli/context/prompt_text.py` | `recall_prompt_text` (date-only dynamic instruction) and `safety_prompt_text` — called via `agent.instructions()` wrappers in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/agent/_core.py` | main agent factory |

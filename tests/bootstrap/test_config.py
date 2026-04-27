@@ -354,6 +354,25 @@ def test_compaction_ratio_custom_value_loads(tmp_path):
     assert settings.compaction.compaction_ratio == 0.75
 
 
+def test_compaction_defaults_are_hermes_shaped(tmp_path):
+    """compaction_ratio defaults to 0.65 and tail_fraction to 0.20 (hermes-aligned shape)."""
+    settings = load_config(_user_config_path=tmp_path / "nonexistent.json")
+    assert settings.compaction.compaction_ratio == 0.65
+    assert settings.compaction.tail_fraction == 0.20
+
+
+def test_settings_reject_tail_fraction_ge_compaction_ratio(tmp_path):
+    """tail_fraction >= compaction_ratio violates post-compact-state invariant and must be rejected."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(
+        json.dumps({"compaction": {"compaction_ratio": 0.50, "tail_fraction": 0.60}})
+    )
+    with pytest.raises(
+        ValueError, match=r"tail_fraction.*compaction_ratio|compaction_ratio.*tail_fraction"
+    ):
+        load_config(_user_config_path=user_settings)
+
+
 def test_unknown_top_level_key_rejected(tmp_path):
     """Unknown top-level key in settings.json must fail with file attribution, not silently drop."""
     user_settings = tmp_path / "settings.json"

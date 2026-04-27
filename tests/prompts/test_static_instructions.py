@@ -1,30 +1,32 @@
 """Tests for build_static_instructions — static system prompt assembly."""
 
-import pytest
+from pathlib import Path
+
+import yaml
 from tests._settings import make_settings
 
 from co_cli.prompts._assembly import build_static_instructions
 
 
-@pytest.fixture(autouse=True)
-def _clear_personality_cache():
-    """Reset the process-scoped personality memory cache before and after each test."""
-    import co_cli.prompts.personalities._loader as _loader_mod
-
-    _loader_mod._personality_cache = None
-    yield
-    _loader_mod._personality_cache = None
-
-
-def test_static_instructions_includes_personality_memories():
+def test_static_instructions_includes_personality_memories(tmp_path: Path) -> None:
     """When personality memories are present, they appear in the static instructions string."""
-    import co_cli.prompts.personalities._loader as _loader_mod
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
 
-    sentinel = "## Learned Context\n\n- personality-static-sentinel-XYZ789"
-    _loader_mod._personality_cache = sentinel
+    frontmatter = {
+        "id": "test-pc-001",
+        "kind": "knowledge",
+        "artifact_kind": "preference",
+        "created": "2026-01-01T00:00:00+00:00",
+        "tags": ["personality-context"],
+    }
+    (knowledge_dir / "test-pc-sentinel.md").write_text(
+        f"---\n{yaml.dump(frontmatter)}---\n\npersonality-static-sentinel-XYZ789\n",
+        encoding="utf-8",
+    )
 
     config = make_settings().model_copy(update={"personality": "finch"})
-    result = build_static_instructions(config)
+    result = build_static_instructions(config, knowledge_dir=knowledge_dir)
 
     assert "personality-static-sentinel-XYZ789" in result, (
         f"personality memories missing from static instructions; got excerpt: {result[:200]!r}"

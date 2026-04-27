@@ -91,11 +91,10 @@ flowchart TD
     HTTP --> Overflow
 ```
 
-Compaction is **four mechanisms** operating at different lifecycle points, plus a user-triggered manual entry, all sharing one summarizer helper and one emergency entry point.
+Compaction is **three mechanisms** operating at different lifecycle points, plus a user-triggered manual entry, all sharing one summarizer helper and one emergency entry point.
 
 | Mechanism | When | Unit | Reversible? |
 |---|---|---|---|
-| **M0 — Pre-turn hygiene** | `run_turn()` entry, before agent loop | Turn-group range | Lossy (middle replaced by summary marker); uses same M3 planner + summarizer |
 | **M1 — Emit-time cap** | Tool returns | One tool result | Irreversible (content to disk, placeholder in context) |
 | **M2 — Prepass recency clearing** | Before every `ModelRequestNode` | Individual parts in older messages | Irreversible for the session (content replaced with placeholder string) |
 | **M3 — Window compaction** | Before every `ModelRequestNode`, when `token_count > threshold` | Turn-group range | Lossy (middle replaced by summary marker) |
@@ -236,7 +235,7 @@ For `file_read` (7 returns), keep last 5 (#3–#7), clear #1 and #2. For `file_s
 
 ```mermaid
 flowchart TD
-    Start[messages: 4 turn groups<br/>G0, G1, G2, G3<br/>budget=100K, TAIL_FRACTION=0.40]
+    Start[messages: 4 turn groups<br/>G0, G1, G2, G3<br/>budget=100K, TAIL_FRACTION=0.20]
     Start --> Init[head_end = first_run_end + 1]
     Init --> Check{len groups &lt; min+1?}
     Check -->|yes| Abort[return None]
@@ -306,10 +305,10 @@ budget = resolve_compaction_budget(config, ctx_window)
 
 # Suppress stale API-reported count if compaction already ran this turn.
 reported = 0 if compaction_applied_this_turn else latest_response_input_tokens(messages)
-estimate = estimate_message_tokens(messages)
-token_count = max(estimate, reported)
+tokens_before_local = estimate_message_tokens(messages)
+token_count = max(tokens_before_local, reported)
 
-threshold = int(budget * cfg.proactive_ratio)
+threshold = int(budget * cfg.compaction_ratio)
 
 if token_count <= threshold:
     return messages   # fast path
@@ -411,12 +410,13 @@ Prior-summary detection uses `startswith(SUMMARY_MARKER_PREFIX)` — shared cons
 
 ```
 result, _ = await apply_compaction(ctx, messages, bounds, announce=True)
-tokens_after = estimate_message_tokens(result)
-savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
+tokens_after_local = estimate_message_tokens(result)
+savings = (tokens_before_local - tokens_after_local) / tokens_before_local if tokens_before_local > 0 else 0.0
 if savings < cfg.min_proactive_savings:
     consecutive_low_yield_proactive_compactions += 1
 else:
     consecutive_low_yield_proactive_compactions = 0
+    compaction_thrash_hint_emitted = False
 ```
 
 **Fail-safe — circuit breaker:**
@@ -530,9 +530,8 @@ One successful compaction per pressure event per turn.
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `compaction.proactive_ratio` | `CO_COMPACTION_PROACTIVE_RATIO` | `0.75` | Fraction of budget above which proactive compaction (M3) fires |
-| `compaction.hygiene_ratio` | `CO_COMPACTION_HYGIENE_RATIO` | `0.88` | Fraction of budget above which pre-turn hygiene (M0) fires |
-| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.40` | Fraction of budget targeted for the preserved tail |
+| `compaction.compaction_ratio` | `CO_COMPACTION_RATIO` | `0.65` | Fraction of budget above which proactive compaction (M3) fires |
+| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.20` | Fraction of budget targeted for the preserved tail |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Consecutive low-yield proactive compactions before anti-thrashing gate activates |
 
@@ -564,7 +563,7 @@ One successful compaction per pressure event per turn.
 | File | Role |
 |---|---|
 | `co_cli/config/compaction.py` | `CompactionSettings` — ratios, thresholds, and anti-thrashing knobs. |
-| `co_cli/context/compaction.py` | Public entry surface: M0/M3 processors, overflow recovery, `apply_compaction`, summarizer gate, re-exports. |
+| `co_cli/context/compaction.py` | Public entry surface: M3 processor, overflow recovery, `apply_compaction`, summarizer gate, re-exports. |
 | `co_cli/context/_compaction_boundaries.py` | Boundary planner: `TurnGroup`, `group_by_turn`, `plan_compaction_boundaries`, active-user anchoring. |
 | `co_cli/context/_compaction_markers.py` | Marker builders, `gather_compaction_context` enrichment helper, `SUMMARY_MARKER_PREFIX`. |
 | `co_cli/context/_history_processors.py` | M2 processors: `truncate_tool_results`, `enforce_batch_budget`, `dedup_tool_results`. |

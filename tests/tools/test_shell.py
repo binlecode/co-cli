@@ -58,7 +58,7 @@ async def test_shell_safe_command_runs_without_deferred_approval():
     ctx = _make_ctx(tool_call_approved=False, shell_safe_commands=["pwd"])
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await shell(ctx, "pwd")
-    assert result.return_value.strip()
+    assert result.return_value.strip() == os.getcwd()
 
 
 @pytest.mark.asyncio

@@ -73,6 +73,9 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
             parts=[_TextPart(content="Understood. I have the conversation context.")],
         )
     )
+    # Manual /compact unsticks the auto-compaction gate — banner-text contract
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+    ctx.deps.runtime.compaction_thrash_hint_emitted = False
 
     post_tokens = estimate_message_tokens(new_history)
     budget = resolve_compaction_budget(

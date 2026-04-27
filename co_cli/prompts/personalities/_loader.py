@@ -37,22 +37,24 @@ _PERSONALITIES_DIR = Path(__file__).parent
 _personality_cache: str | None = None
 
 
-def load_personality_memories() -> str:
+def load_personality_memories(knowledge_dir: Path | None = None) -> str:
     """Load personality-context tagged artifacts for static system prompt injection.
 
-    Scans ``~/.co-cli/knowledge/`` for entries tagged with ``personality-context``.
-    Returns the top 5 (by recency) formatted as a ``## Learned Context`` section,
-    or empty string if none found.
+    Scans ``~/.co-cli/knowledge/`` (or ``knowledge_dir`` when provided) for entries
+    tagged with ``personality-context``. Returns the top 5 (by recency) formatted as
+    a ``## Learned Context`` section, or empty string if none found.
 
     Called by ``build_static_instructions()`` in ``prompts/_assembly.py`` once at
     agent construction. Result is process-scoped; runtime mutations to personality-context
-    artifacts require a session restart to take effect.
+    artifacts require a session restart to take effect. Pass ``knowledge_dir`` to bypass
+    the cache (used in tests to supply a controlled directory).
     """
     global _personality_cache
-    if _personality_cache is not None:
+    if knowledge_dir is None and _personality_cache is not None:
         return _personality_cache
 
-    personality_memories = load_knowledge_artifacts(KNOWLEDGE_DIR, tags=["personality-context"])
+    effective_dir = knowledge_dir or KNOWLEDGE_DIR
+    personality_memories = load_knowledge_artifacts(effective_dir, tags=["personality-context"])
     if not personality_memories:
         result = ""
     else:
@@ -66,7 +68,8 @@ def load_personality_memories() -> str:
             lines.append(f"- {m.content}")
         result = "\n".join(lines)
 
-    _personality_cache = result
+    if knowledge_dir is None:
+        _personality_cache = result
     return result
 
 

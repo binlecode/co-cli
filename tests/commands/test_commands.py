@@ -8,12 +8,18 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai.result import DeferredToolRequests
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
 from tests._settings import make_settings
-from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
+from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.commands._commands import (
     CommandContext,
@@ -212,6 +218,39 @@ async def test_compact_noop_empty_history():
     ctx = _make_ctx(message_history=[])
     result = await dispatch("/compact", ctx)
     assert isinstance(result, LocalOnly)
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_compact_resets_thrash_gate():
+    """/compact resets consecutive_low_yield counter and hint flag after successful compaction.
+
+    Simulates a thrashed session: counter at threshold, hint emitted. After a
+    manual /compact the gate fields must be cleared so the next auto-compaction
+    can run unblocked.
+    """
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="Hello, tell me about recursion.")]),
+        ModelResponse(
+            parts=[TextPart(content="Recursion is a technique where a function calls itself.")]
+        ),
+        ModelRequest(parts=[UserPromptPart(content="Give an example in Python.")]),
+        ModelResponse(
+            parts=[TextPart(content="def fact(n): return 1 if n <= 1 else n * fact(n-1)")]
+        ),
+    ]
+    ctx = _make_ctx(message_history=history)
+    # Seed thrashed state: gate active, hint already emitted.
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 99
+    ctx.deps.runtime.compaction_thrash_hint_emitted = True
+
+    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        result = await dispatch("/compact", ctx)
+
+    assert isinstance(result, ReplaceTranscript)
+    assert ctx.deps.runtime.consecutive_low_yield_proactive_compactions == 0
+    assert ctx.deps.runtime.compaction_thrash_hint_emitted is False
 
 
 @pytest.mark.asyncio
