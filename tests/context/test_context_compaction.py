@@ -17,7 +17,7 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
-from co_cli.config._core import Settings, settings
+from co_cli.config._core import Settings
 from co_cli.config.compaction import CompactionSettings
 from co_cli.context.compaction import (
     SUMMARY_MARKER_PREFIX,
@@ -39,7 +39,7 @@ from co_cli.context.summarization import (
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
 
-_CONFIG = settings
+_CONFIG = make_settings()
 _AGENT = build_agent(config=_CONFIG)
 
 

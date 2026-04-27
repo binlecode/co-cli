@@ -260,14 +260,18 @@ async def create_deps(
             tool_registry.tool_index.update(mcp_index)
 
     # Step 5: load skills (filesystem reads — three-pass precedence merge)
-    from co_cli.commands._commands import load_skills
+    from co_cli.commands._registry import BUILTIN_COMMANDS, filter_namespace_conflicts
+    from co_cli.skills.loader import load_skills
 
     skill_errors: list[str] = []
-    skill_commands = load_skills(
+    loaded_skills = load_skills(
         paths["skills_dir"],
         settings=config,
         user_skills_dir=paths["user_skills_dir"],
         errors=skill_errors,
+    )
+    skill_commands = filter_namespace_conflicts(
+        loaded_skills, set(BUILTIN_COMMANDS.keys()), skill_errors
     )
     for msg in skill_errors:
         frontend.on_status(msg)

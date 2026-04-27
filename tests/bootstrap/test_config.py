@@ -296,7 +296,7 @@ def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
             {
                 "llm": {
                     "provider": "gemini",
-                    "model": "gemini-3.1-flash-preview",
+                    "model": "gemini-3-flash-preview",
                     "api_key": "settings-key-wins",
                 }
             }

@@ -1,8 +1,4 @@
-"""Skill configuration type for the commands package.
-
-Extracted from _commands.py to break the circular import between deps.py and
-commands/_commands.py. This dataclass has no dependency on deps.py.
-"""
+"""Skill configuration type for the skills domain."""
 
 from __future__ import annotations
 

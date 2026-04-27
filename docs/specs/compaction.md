@@ -53,10 +53,11 @@ flowchart TD
     end
 
     subgraph PerReq["M2 + M3 — per ModelRequestNode"]
+        R0[dedup_tool_results<br/>M2-pre]
         R1[truncate_tool_results<br/>M2a]
         R1b[enforce_batch_budget<br/>M2b]
         R5[proactive_window_processor<br/>M3]
-        R1 --> R1b --> R5
+        R0 --> R1 --> R1b --> R5
     end
 
     subgraph Window["M3 — window compaction"]
@@ -107,223 +108,260 @@ Compaction is **three mechanisms** operating at different lifecycle points, plus
 
 **Triggering granularity is per request, not per turn.** pydantic-ai runs `history_processors` before every `ModelRequestNode`. A tool-calling turn with N calls fires N+1 processor passes. Matches the convergent peer pattern (fork-cc: "before request"; codex: pre-turn + mid-turn; hermes: in-loop; opencode: next-loop-pass).
 
-### Diagram 2: Full-turn sequence — happy path
+### Diagram 2: In-context composition — happy path, two-tool turn
 
-One user turn with two tool calls, crossing the compaction threshold mid-turn.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor U as User
-    participant RT as run_turn
-    participant AG as Agent (SDK)
-    participant HP as history_processors
-    participant M as Provider
-    participant TL as Tool M1
-
-    U->>RT: user prompt
-    RT->>RT: reset_for_turn()
-    RT->>AG: run_stream_events (request #1)
-    AG->>HP: M2a, M2b, M3<br/>token_count ≤ threshold → fast path
-    AG->>M: HTTP request
-    M-->>AG: ToolCallPart(file_read)
-    AG->>TL: execute tool
-    TL->>TL: M1: size &gt; max_result_size → persist
-    TL-->>AG: ToolReturnPart(&lt;persisted-output&gt;)
-    AG->>HP: chain (request #2 prep)<br/>M2a,M2b; token_count &gt; threshold → M3 fires
-    Note over HP: plan_compaction_boundaries<br/>→ head, tail, dropped<br/>summarize_messages (LLM)<br/>assemble marker
-    AG->>M: HTTP request (compacted history)
-    M-->>AG: ToolCallPart(file_search)
-    AG->>TL: execute tool
-    TL-->>AG: ToolReturnPart
-    AG->>HP: chain (request #3 prep)<br/>fast path (compacted)
-    AG->>M: HTTP request
-    M-->>AG: final text response
-    AG-->>RT: TurnResult (continue)
-    RT-->>U: response
-```
-
-### Diagram 3: Overflow recovery — emergency entry
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor U as User
-    participant RT as run_turn
-    participant AG as Agent (SDK)
-    participant R as recover_overflow_history
-    participant E as gather_compaction_context
-    participant S as summarize_messages
-    participant M as Provider
-
-    U->>RT: user prompt
-    RT->>RT: overflow_recovery_attempted = False
-    RT->>AG: request #1
-    AG->>M: HTTP
-    M-->>AG: HTTP 400 "prompt is too long"
-    AG-->>RT: ModelHTTPError
-    RT->>RT: is_context_overflow → True
-    RT->>RT: overflow_recovery_attempted = True
-    RT->>R: recover_overflow_history(history + pending input)
-    R->>R: plan_compaction_boundaries<br/>(config tail_fraction, active-user anchoring)
-    alt bounds valid
-        R->>E: enrichment (files + todos + prior summaries)
-        E-->>R: str
-        R->>S: summarize_messages(dropped, context=enrichment)
-        alt summarizer succeeds
-            S-->>R: summary text
-            R->>R: marker = summary_marker(...)
-        else summarizer raises
-            S-->>R: exception
-            R->>R: marker = static_marker(...) (fallback)
-        end
-        R-->>RT: [head, marker, breadcrumbs, tail]
-    else bounds is None (planner overlap or oversized tail)
-        R-->>RT: None
-        RT->>RT: emergency_recover_overflow_history(history)
-        alt len(groups) > 2
-            RT->>RT: [first group, static marker, last group]
-        else len(groups) ≤ 2
-            RT-->>U: terminal: context overflow unrecoverable
-        end
-    end
-    RT->>AG: request #2 (retry)
-    AG->>M: HTTP (compacted)
-    M-->>AG: response
-    AG-->>RT: TurnResult
-    RT-->>U: response
-```
-
-### Diagram 4: M2 recency clearing — worked example
-
-```mermaid
-flowchart LR
-    subgraph Before["before truncate_tool_results"]
-        B1[file_read #1]
-        B2[file_read #2]
-        B3[file_search #1]
-        B4[file_read #3]
-        B5[file_read #4]
-        B6[web_search #1]
-        B7[file_read #5]
-        B8[file_read #6]
-        B9[file_read #7]
-        B10[file_search #2]
-        B11[UserPromptPart<br/>current turn]
-    end
-
-    subgraph After["after — protect last turn"]
-        A1[file_read #1<br/>CLEARED]
-        A2[file_read #2<br/>CLEARED]
-        A3[file_search #1<br/>kept]
-        A4[file_read #3<br/>kept — last 5]
-        A5[file_read #4<br/>kept — last 5]
-        A6[web_search #1<br/>kept]
-        A7[file_read #5<br/>kept — last 5]
-        A8[file_read #6<br/>kept — last 5]
-        A9[file_read #7<br/>kept — last 5]
-        A10[file_search #2<br/>kept]
-        A11[UserPromptPart<br/>current turn]
-    end
-
-    Before --> After
-```
-
-For `file_read` (7 returns), keep last 5 (#3–#7), clear #1 and #2. For `file_search` (2), keep both. For `web_search` (1), keep. Tool-call args are never touched (load-bearing for enrichment).
-
-### Diagram 5: Boundary planner — walk from end
+Assembled prompt at each `ModelRequestNode`. `SystemPrompt` is SDK-injected fresh after `history_processors` run — it is never in the compacted history. Colors reveal compaction structure before M3 fires: blue = head (1st-turn pair, always preserved), gray-dashed = prior-turns middle (M3 drops this), green = tail (current turn, always preserved).
 
 ```mermaid
 flowchart TD
-    Start[messages: 4 turn groups<br/>G0, G1, G2, G3<br/>budget=100K, TAIL_FRACTION=0.20]
-    Start --> Init[head_end = first_run_end + 1]
-    Init --> Check{len groups &lt; min+1?}
-    Check -->|yes| Abort[return None]
-    Check -->|no| W0[walk from end:<br/>acc_tokens=0, acc_groups=&#91;&#93;]
-    W0 --> W1[G3 tokens=15K<br/>acc=15K<br/>len=1 ≥ min=1, 15K ≤ 40K → keep]
-    W1 --> W2[G2 tokens=20K<br/>acc=35K<br/>len=2 ≥ min, 35K ≤ 40K → keep]
-    W2 --> W3[G1 tokens=18K<br/>would make acc=53K &gt; 40K<br/>AND len ≥ min → STOP]
-    W3 --> Result[tail_start = G2.start_index<br/>dropped = G1<br/>head = G0]
-    Result --> Final[return head_end, tail_start, dropped_count]
+    subgraph MRN1["① Request #1 — below threshold, fast path"]
+        direction LR
+        r1_sp["SystemPrompt\n(SDK injection)"]:::syspr --> r1_h1["ModelRequest\nUserPromptPart\n(1st turn)"]:::head --> r1_h2["ModelResponse\nTextPart\n(1st turn)"]:::head --> r1_mid["ModelRequest / ModelResponse\nprior turns\n(M2: old results cleared)"]:::prior --> r1_cur["ModelRequest\nUserPromptPart\n(current)"]:::tail
+    end
 
-    note1[Clamp: if G3 alone = 60K &gt; 40K<br/>len=1 ≥ min=1 → keep anyway<br/>Gap A guarantee]
-    W1 -.-> note1
+    subgraph MRN2a["② Request #2 incoming — token_count exceeds threshold"]
+        direction LR
+        r2a_sp["SystemPrompt\n(SDK injection)"]:::syspr --> r2a_h1["ModelRequest\nUserPromptPart\n(1st turn)"]:::head --> r2a_h2["ModelResponse\nTextPart\n(1st turn)"]:::head --> r2a_mid["ModelRequest / ModelResponse\nprior turns\n(M2: old results cleared)"]:::prior --> r2a_cur["ModelRequest\nUserPromptPart\n(current)"]:::tail --> r2a_tc1["ModelResponse\nToolCallPart\n(file_read)"]:::tail --> r2a_tr1["ModelRequest\nToolReturnPart\n(M1 if oversized)"]:::tail
+    end
+
+    subgraph MRN2b["② Request #2 sent — M3 compacted"]
+        direction LR
+        r2b_sp["SystemPrompt\n(SDK injection)"]:::syspr --> r2b_h1["ModelRequest\nUserPromptPart\n(1st turn)"]:::head --> r2b_h2["ModelResponse\nTextPart\n(1st turn)"]:::head --> r2b_mk["ModelRequest\nUserPromptPart\n(COMPACTION MARKER)"]:::marker --> r2b_td["ModelRequest\nUserPromptPart\n(todo snapshot)"]:::meta --> r2b_bc["ModelRequest\nToolReturnPart\n(search breadcrumbs)"]:::meta --> r2b_cur["ModelRequest\nUserPromptPart\n(current)"]:::tail --> r2b_tc1["ModelResponse\nToolCallPart\n(file_read)"]:::tail --> r2b_tr1["ModelRequest\nToolReturnPart\n(result1)"]:::tail
+    end
+
+    subgraph MRN3["③ Request #3 — fast path"]
+        direction LR
+        r3_sp["SystemPrompt\n(SDK injection)"]:::syspr --> r3_h1["ModelRequest\nUserPromptPart\n(1st turn)"]:::head --> r3_h2["ModelResponse\nTextPart\n(1st turn)"]:::head --> r3_mk["ModelRequest\nUserPromptPart\n(COMPACTION MARKER)"]:::marker --> r3_td["ModelRequest\nUserPromptPart\n(todo snapshot)"]:::meta --> r3_bc["ModelRequest\nToolReturnPart\n(search breadcrumbs)"]:::meta --> r3_cur["ModelRequest\nUserPromptPart\n(current)"]:::tail --> r3_tc1["ModelResponse\nToolCallPart\n(file_read)"]:::tail --> r3_tr1["ModelRequest\nToolReturnPart\n(result1)"]:::tail --> r3_tc2["ModelResponse\nToolCallPart\n(file_search)"]:::tail --> r3_tr2["ModelRequest\nToolReturnPart\n(result2)"]:::tail
+    end
+
+    MRN1 -->|"model returns ToolCall1; tool runs"| MRN2a
+    MRN2a -->|"M3: plan → summarize → assemble"| MRN2b
+    MRN2b -->|"model returns ToolCall2; tool runs"| MRN3
+    MRN3 -->|"model returns final text"| Done(["turn complete"])
+
+    classDef syspr fill:#fff3e0,stroke:#f57c00
+    classDef head fill:#e8f4f8,stroke:#6baed6
+    classDef prior fill:#f5f5f5,stroke:#9e9e9e,stroke-dasharray:3 3
+    classDef marker fill:#ede0f5,stroke:#9c6fc7
+    classDef meta fill:#f0f0f0,stroke:#aaa
+    classDef tail fill:#d4edda,stroke:#74c476
+
+    class r1_sp,r2a_sp,r2b_sp,r3_sp syspr
+    class r1_h1,r1_h2,r2a_h1,r2a_h2,r2b_h1,r2b_h2,r3_h1,r3_h2 head
+    class r1_mid,r2a_mid prior
+    class r2b_mk,r3_mk marker
+    class r2b_td,r2b_bc,r3_td,r3_bc meta
+    class r1_cur,r2a_cur,r2a_tc1,r2a_tr1,r2b_cur,r2b_tc1,r2b_tr1,r3_cur,r3_tc1,r3_tr1,r3_tc2,r3_tr2 tail
+```
+
+### Diagram 3: In-context composition — overflow recovery
+
+Assembled prompt at each recovery path after a provider context-overflow rejection. `SystemPrompt` is SDK-injected fresh, outside `history_processors` scope. Outer `flowchart LR` puts the decision spine horizontal so the two recovery compositions branch at different heights rather than side by side. Same color scheme as Diagram 2.
+
+```mermaid
+flowchart LR
+    subgraph Rejected["Over-budget — provider HTTP 400 / 413"]
+        direction LR
+        rej_sp["SystemPrompt\n(SDK injection)"]:::syspr --> rej_h1["ModelRequest\nUserPromptPart\n(1st turn)"]:::head --> rej_h2["ModelResponse\nTextPart\n(1st turn)"]:::head --> rej_mid["ModelRequest / ModelResponse\nprior turns\n(M2: old results cleared)"]:::prior --> rej_cur["ModelRequest / ModelResponse\nrecent turns"]:::tail
+    end
+
+    Decision{bounds\nvalid?}
+    EmCheck{len groups\n> 2?}
+    Terminal(["terminal:\nlen groups ≤ 2"])
+    Done(["turn\ncontinues"])
+
+    subgraph Recovered["Planner-based recovery (bounds valid)"]
+        direction LR
+        rc_sp["SystemPrompt\n(SDK injection)"]:::syspr --> rc_h1["ModelRequest\nUserPromptPart\n(1st turn)"]:::head --> rc_h2["ModelResponse\nTextPart\n(1st turn)"]:::head --> rc_mk["ModelRequest\nUserPromptPart\n(COMPACTION MARKER)"]:::marker --> rc_td["ModelRequest\nUserPromptPart\n(todo snapshot)"]:::meta --> rc_bc["ModelRequest\nToolReturnPart\n(search breadcrumbs)"]:::meta --> rc_cur["ModelRequest / ModelResponse\ntail turns"]:::tail
+    end
+
+    subgraph Emergency["Emergency structural fallback (planner returned None)"]
+        direction LR
+        em_sp["SystemPrompt\n(SDK injection)"]:::syspr --> em_h1["ModelRequest\nUserPromptPart\n(1st turn)"]:::head --> em_h2["ModelResponse\nTextPart\n(1st turn)"]:::head --> em_mk["ModelRequest\nUserPromptPart\n(static MARKER)"]:::marker --> em_td["ModelRequest\nUserPromptPart\n(todo snapshot)"]:::meta --> em_bc["ModelRequest\nToolReturnPart\n(search breadcrumbs)"]:::meta --> em_last["ModelRequest / ModelResponse\nlast turn group"]:::tail
+    end
+
+    Rejected -->|"overflow_recovery_attempted=False"| Decision
+    Decision -->|"yes"| Recovered
+    Decision -->|"no"| EmCheck
+    EmCheck -->|"yes"| Emergency
+    EmCheck -->|"no"| Terminal
+    Recovered -->|"retry once"| Done
+    Emergency -->|"retry once"| Done
+
+    classDef syspr fill:#fff3e0,stroke:#f57c00
+    classDef head fill:#e8f4f8,stroke:#6baed6
+    classDef prior fill:#f5f5f5,stroke:#9e9e9e,stroke-dasharray:3 3
+    classDef marker fill:#ede0f5,stroke:#9c6fc7
+    classDef meta fill:#f0f0f0,stroke:#aaa
+    classDef tail fill:#d4edda,stroke:#74c476
+
+    class rej_sp,rc_sp,em_sp syspr
+    class rej_h1,rej_h2,rc_h1,rc_h2,em_h1,em_h2 head
+    class rej_mid prior
+    class rej_cur,rc_cur,em_last tail
+    class rc_mk,em_mk marker
+    class rc_td,rc_bc,em_td,em_bc meta
+```
+
+### Diagram 4: M3 trigger and boundary planner
+
+Token counting, threshold gate, anti-thrash gate, and boundary planner walk — the full path from processor entry to `(head_end, tail_start, dropped_count)`. Same color scheme as Diagrams 2 and 3.
+
+```mermaid
+flowchart TD
+    subgraph Trigger["M3 trigger — token counting"]
+        direction LR
+        t_local["estimate_message_tokens(messages)\nlocal char-based estimate"]:::meta
+        t_rep["0 if compaction_applied_this_turn\nelse latest_response_input_tokens(messages)\nprovider-reported (stale-suppressed)"]:::meta
+        t_eff["_effective_token_count\n= max(local, reported)\nbiases toward earlier compaction"]:::meta
+        t_local --> t_eff
+        t_rep --> t_eff
+    end
+
+    ThreshCheck{"token_count\n≤ threshold?"}
+    FastPath(["return messages\n(fast path)"])
+    ThrashCheck{"consecutive_low_yield\n≥ thrash_window?"}
+    ThrashGate(["return messages\n(anti-thrash gate)"])
+
+    subgraph Setup["Planner setup — budget=100K, TAIL_FRACTION=0.20"]
+        direction LR
+        s_msgs["messages\nG0, G1, G2, G3"]:::head --> s_hinit["head_end\n= first_run_end + 1"]:::meta --> s_grps["groups = group_by_turn(messages)\n4 groups ≥ min+1 = 2 → proceed"]:::meta
+    end
+
+    Check{len groups\n&lt; min+1?}
+    Abort(["return None"])
+
+    subgraph Walk["Walk from end — acc_tokens=0, acc_groups=[ ]"]
+        direction LR
+        w1["G3: tokens=15K\nacc=15K, len=1 ≥ min=1\n15K ≤ 40K → keep"]:::tail --> w2["G2: tokens=20K\nacc=35K, len=2 ≥ min\n35K ≤ 40K → keep"]:::tail --> w3["G1: tokens=18K\nwould acc=53K &gt; 40K\nAND len ≥ min → STOP"]:::marker
+    end
+
+    subgraph Output["Output"]
+        direction LR
+        o_bounds["tail_start = G2.start_index\ndropped = G1\nhead = G0"]:::head --> o_ret["return head_end,\ntail_start, dropped_count"]:::meta
+    end
+
+    note_clamp["Gap A guarantee:\nif G3 alone = 60K &gt; 40K\nlen=1 ≥ min=1 → keep anyway"]:::prior
+
+    Trigger --> ThreshCheck
+    ThreshCheck -->|"yes"| FastPath
+    ThreshCheck -->|"no"| ThrashCheck
+    ThrashCheck -->|"yes"| ThrashGate
+    ThrashCheck -->|"no"| Setup
+    Setup --> Check
+    Check -->|"yes"| Abort
+    Check -->|"no"| Walk
+    Walk --> Output
+    w1 -.-> note_clamp
+
+    classDef syspr fill:#fff3e0,stroke:#f57c00
+    classDef head fill:#e8f4f8,stroke:#6baed6
+    classDef prior fill:#f5f5f5,stroke:#9e9e9e,stroke-dasharray:3 3
+    classDef marker fill:#ede0f5,stroke:#9c6fc7
+    classDef meta fill:#f0f0f0,stroke:#aaa
+    classDef tail fill:#d4edda,stroke:#74c476
+
+    class t_local,t_rep,t_eff,s_hinit,s_grps meta
+    class s_msgs head
+    class w1,w2 tail
+    class w3 marker
+    class o_bounds head
+    class o_ret meta
+    class note_clamp prior
+```
+
+### Diagram 5: M2 pre-compaction context compensation pipeline
+
+Message strip at each processor stage for an example conversation with duplicate file reads, six shell runs in the pre-tail region, and an oversized current batch. Processors run in pipeline order on the pre-tail region (everything before the last `UserPromptPart`); M2b additionally fires on the current batch. Same color scheme as Diagrams 2 and 3: gray-dashed = pre-tail content eligible for clearing, green = protected tail, purple = semantic markers and back-references replacing cleared content, orange = M1-persisted placeholder.
+
+```mermaid
+flowchart TD
+    subgraph Raw["Input — before M2"]
+        direction LR
+        r_h["head"]:::head --> r_fd1["TR(file_read)\nabc.py"]:::prior --> r_fd2["TR(file_read)\nabc.py\n(dup)"]:::prior --> r_s1["TR(shell)\nrun 1"]:::prior --> r_s2["TR(shell)\nrun 2"]:::prior --> r_s3["TR(shell)\nrun 3"]:::prior --> r_s4["TR(shell)\nrun 4"]:::prior --> r_s5["TR(shell)\nrun 5"]:::prior --> r_s6["TR(shell)\nrun 6"]:::prior --> r_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> r_s7["TR(shell)\nrun 7\n250K chars"]:::tail
+    end
+
+    subgraph AfterDedup["After M2-pre — dedup_tool_results: fd1 older duplicate → back-reference; fd2 (latest) kept"]
+        direction LR
+        d_h["head"]:::head --> d_fd1["→ see fd2\n(back-ref)"]:::marker --> d_fd2["TR(file_read)\nabc.py\n(latest — kept)"]:::prior --> d_s1["TR(shell)\nrun 1"]:::prior --> d_s2["TR(shell)\nrun 2"]:::prior --> d_s3["TR(shell)\nrun 3"]:::prior --> d_s4["TR(shell)\nrun 4"]:::prior --> d_s5["TR(shell)\nrun 5"]:::prior --> d_s6["TR(shell)\nrun 6"]:::prior --> d_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> d_s7["TR(shell)\nrun 7\n250K chars"]:::tail
+    end
+
+    subgraph AfterTrunc["After M2a — truncate_tool_results: 6 shell runs in pre-tail; keep 5 most recent (runs 2–6); run 1 → semantic marker"]
+        direction LR
+        t_h["head"]:::head --> t_fd1["→ see fd2"]:::marker --> t_fd2["TR(file_read)\nabc.py\n(1 of 1 — kept)"]:::prior --> t_s1["[shell] run 1\n→ exit 0, N lines"]:::marker --> t_s2["TR(shell)\nrun 2"]:::prior --> t_s3["TR(shell)\nrun 3"]:::prior --> t_s4["TR(shell)\nrun 4"]:::prior --> t_s5["TR(shell)\nrun 5"]:::prior --> t_s6["TR(shell)\nrun 6"]:::prior --> t_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> t_s7["TR(shell)\nrun 7\n250K chars"]:::tail
+    end
+
+    subgraph AfterBatch["After M2b — enforce_batch_budget: run 7 aggregate exceeds batch_spill_chars → M1 persist"]
+        direction LR
+        b_h["head"]:::head --> b_fd1["→ see fd2"]:::marker --> b_fd2["TR(file_read)\nabc.py"]:::prior --> b_s1["[shell] run 1\n→ exit 0, N lines"]:::marker --> b_s2["TR(shell)\nrun 2"]:::prior --> b_s3["TR(shell)\nrun 3"]:::prior --> b_s4["TR(shell)\nrun 4"]:::prior --> b_s5["TR(shell)\nrun 5"]:::prior --> b_s6["TR(shell)\nrun 6"]:::prior --> b_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> b_s7["TR(shell)\nrun 7\n→ &lt;persisted-output&gt;"]:::syspr
+    end
+
+    Raw -->|"M2-pre: dedup_tool_results"| AfterDedup
+    AfterDedup -->|"M2a: truncate_tool_results"| AfterTrunc
+    AfterTrunc -->|"M2b: enforce_batch_budget"| AfterBatch
+
+    classDef syspr fill:#fff3e0,stroke:#f57c00
+    classDef head fill:#e8f4f8,stroke:#6baed6
+    classDef prior fill:#f5f5f5,stroke:#9e9e9e,stroke-dasharray:3 3
+    classDef marker fill:#ede0f5,stroke:#9c6fc7
+    classDef meta fill:#f0f0f0,stroke:#aaa
+    classDef tail fill:#d4edda,stroke:#74c476
+
+    class r_h,d_h,t_h,b_h head
+    class r_fd1,r_fd2,r_s1,r_s2,r_s3,r_s4,r_s5,r_s6 prior
+    class r_sep,r_s7,d_sep,d_s7,t_sep,t_s7,b_sep tail
+    class d_fd1,t_fd1,b_fd1,t_s1,b_s1 marker
+    class d_fd2,d_s1,d_s2,d_s3,d_s4,d_s5,d_s6 prior
+    class t_fd2,t_s2,t_s3,t_s4,t_s5,t_s6 prior
+    class b_fd2,b_s2,b_s3,b_s4,b_s5,b_s6 prior
+    class b_s7 syspr
 ```
 
 ## 2. Core Logic
 
 ### 2.1 M1 — Emit-time persistence
 
-**Purpose:** bound any single tool result before it enters history.
+Spills any single tool result exceeding its per-tool threshold to `.co-cli/tool-results/<sha16>.txt` and replaces the content with a `<persisted-output>` placeholder before the result enters history. Content-addressed (SHA-256 prefix); written once, never rewritten.
 
-**Trigger:** `len(display) > ToolInfo.max_result_size` inside `tool_output()`.
+**Trigger:** `len(display) > threshold` inside `tool_output()`.
 
-**Per-tool thresholds** (registered at build-time in `co_cli/agent/_native_toolset.py`):
-
-| Tool | `max_result_size` | Notes |
+| Tool | `max_result_size` | Note |
 |---|---|---|
-| Default (`None`) | `config.tools.result_persist_chars` (default 50,000) | falls through to config |
+| Default | `config.tools.result_persist_chars` (50,000) | falls through to config |
 | `file_read` | `math.inf` | never persists — prevents persist→read→persist recursion |
-| `shell` | `30,000` chars | explicit override |
+| `shell` | 30,000 | explicit override |
 
-**Logic:**
-```
-threshold = tool_info.max_result_size if tool_info.max_result_size is not None
-            else config.tools.result_persist_chars
-content = tool return value
-if len(content) <= threshold:
-    return content
-sha = sha256(content)[:16]
-path = .co-cli/tool-results/<sha>.txt
-write content to path (if not exists)
-size_human = KB or MB depending on size
-return "<persisted-output>tool: … file: … size: N chars (X KB/MB)\n
-        preview: first 2000 chars [elision if more]\n</persisted-output>"
-```
-
-Model pages the full content via `file_read(path, start_line=, end_line=)`. Persistence is once, irreversible, and independent of context pressure.
+Placeholder: `<persisted-output>tool: … file: … size: N chars (X KB/MB)\npreview: first 2000 chars</persisted-output>`. Model retrieves full content via `file_read(path, start_line=, end_line=)`.
 
 ### 2.2 M2 — Prepass recency clearing
 
-Three sync processors in order; no LLM calls.
+Four sync processors in order; no LLM calls.
 
-**`truncate_tool_results` (M2a).** Protects the last user turn (everything from the last `UserPromptPart` onward). For the region before:
-- For each tool in `COMPACTABLE_TOOLS` = `{file_read, shell, file_search, file_find, web_search, web_fetch, knowledge_article_read, obsidian_read}`, keep the `COMPACTABLE_KEEP_RECENT = 5` most recent returns per tool.
-- Older compactable returns: content replaced with a per-tool **semantic marker** via `semantic_marker()` in `co_cli/context/_tool_result_markers.py` — carries tool name, 1-3 informative args (looked up from the matching `ToolCallPart` via a `tool_call_id → args` index built at processor entry), and a size/outcome signal. Examples: `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`, `[file_search] 'pattern' in src → no matches`. A generic `[tool] k=v (N chars)` fallback covers any tool added to `COMPACTABLE_TOOLS` without an explicit handler.
-- Non-string (multimodal) content falls back to the static `_CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"` since markers require a readable string for their heuristics.
-- `tool_name` and `tool_call_id` are preserved (call/return pairing intact).
-- Non-compactable tools (writes, approvals) are never cleared.
+**`dedup_tool_results` (M2-pre)** — collapses identical returns outside the protected tail before recency clearing. For each compactable return whose `(tool_name, sha256(content))` key matches a more recent return of the same tool, replaces content with a 1-line back-reference to the latest `tool_call_id`. Eligibility: string content ≥ 200 chars; non-string and non-compactable tools pass through. (`co_cli/context/_dedup_tool_results.py`)
+
+**`truncate_tool_results` (M2a)** — protects the last `UserPromptPart` onward; in the pre-tail region keeps the 5 most recent returns per tool in `COMPACTABLE_TOOLS` and replaces older returns with a per-tool semantic marker (`semantic_marker()` in `co_cli/context/_tool_result_markers.py`). Marker carries tool name, 1-3 key args from `ToolCallPart.args` (looked up via a `tool_call_id` index), and a size/outcome signal — e.g. `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`. Non-string content falls back to `_CLEARED_PLACEHOLDER`. `tool_name` and `tool_call_id` preserved; non-compactable tools (writes, approvals) never cleared.
 
 **`enforce_batch_budget` (M2b).** Fires on the current batch — the `ToolReturnPart`s that follow the last `ModelResponse` with a `ToolCallPart`. If the aggregate size of that batch exceeds `config.tools.batch_spill_chars`, spills the largest non-persisted returns via `persist_if_oversized(max_size=0)`, largest-first, until the aggregate fits. Skips already-persisted parts (those containing `<persisted-output>`). Fails open: if persist raises `OSError`, the candidate is skipped. Operates only on the current batch — no cross-turn state mutation.
 
 ### 2.3 M3 — Window compaction
 
-**Trigger check** (async processor, last in chain, runs before every request):
+**Trigger** (async processor, last in chain, runs before every `ModelRequestNode`):
 
 ```
 budget = resolve_compaction_budget(config, ctx_window)
-
-# Suppress stale API-reported count if compaction already ran this turn.
 reported = 0 if compaction_applied_this_turn else latest_response_input_tokens(messages)
-tokens_before_local = estimate_message_tokens(messages)
-token_count = max(tokens_before_local, reported)
-
+token_count = _effective_token_count(messages, reported)
 threshold = int(budget * cfg.compaction_ratio)
-
-if token_count <= threshold:
-    return messages   # fast path
-
-# Anti-thrashing gate: skip proactive after N consecutive low-yield runs.
-if consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window:
-    return messages   # gate active
+if token_count <= threshold: return messages
+if consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window: return messages
 ```
 
-**Budget resolution** (`resolve_compaction_budget`):
-1. If `ctx_window` from `LlmModel` is known and `> 0`: `budget = ctx_window`. For Ollama: `config.llm.num_ctx` overrides.
-2. Ollama fallback (no model spec but `num_ctx` configured): `budget = config.llm.num_ctx`.
-3. Final fallback: `budget = config.llm.ctx_token_budget` (default 100,000).
+**Budget resolution** (`resolve_compaction_budget`): model-reported `ctx_window` → `config.llm.num_ctx` (Ollama override) → `config.llm.ctx_token_budget` (default 100,000).
 
-**Token estimator** (`estimate_message_tokens`): `total_chars // 4` over text-bearing parts and `ToolCallPart.args` (JSON-serialized).
+**Token counting — three functions:**
+- `estimate_message_tokens(messages)` — `total_chars // 4` over text-bearing parts and `ToolCallPart.args` (JSON-serialized). Args are included because M2a only clears return content, never call args — omitting them would undercount on tool-heavy transcripts (Gap E fix).
+- `latest_response_input_tokens(messages)` — provider-reported input count from the most recent `ModelResponse`. Lags by one turn; zeroed when `compaction_applied_this_turn` because the post-compaction context is smaller than what the provider last counted — using the stale figure would suppress the trigger.
+- `_effective_token_count(messages, reported)` — `max(local, reported)`. Local estimate can drift from provider tokenization; provider report lags. Taking the max ensures neither under-count can delay compaction.
 
 **Boundary planner** (`plan_compaction_boundaries`):
 
@@ -352,72 +390,23 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 
 `_MIN_RETAINED_TURN_GROUPS = 1` is a hardcoded correctness invariant — not user-configurable. The last turn group is retained unconditionally even when its tokens alone exceed `tail_fraction * budget`.
 
-**Compaction assembly** (`apply_compaction`) — shared by M3, planner-based overflow recovery, and manual `/compact`:
+**Compaction assembly** (`apply_compaction`) — shared by M3, overflow recovery, and `/compact`:
 
-```
-async def apply_compaction(ctx, messages, bounds, *, announce, focus=None):
-    head_end, tail_start, dropped_count = bounds
-    dropped = messages[head_end:tail_start]
-    previous_summary = ctx.deps.runtime.previous_compaction_summary
-    summary_text = await _gated_summarize_or_none(
-        ctx, dropped, announce=announce, focus=focus, previous_summary=previous_summary
-    )
-    if summary_text is not None:
-        ctx.deps.runtime.previous_compaction_summary = summary_text
-    marker = build_compaction_marker(dropped_count, summary_text)
-    todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
-    ctx.deps.runtime.compaction_applied_this_turn = True
-    result = [
-        *messages[:head_end],
-        marker,
-        *([todo_snapshot] if todo_snapshot is not None else []),
-        *_preserve_search_tool_breadcrumbs(dropped),
-        *messages[tail_start:],
-    ]
-    await extract_at_compaction_boundary(messages, result, ctx.deps)
-    return result, summary_text
-```
+Summarizes `messages[head_end:tail_start]` via `_gated_summarize_or_none`, then assembles:
+`head | marker | [todo_snapshot] | [search breadcrumbs] | tail`
 
-The raw `summary_text` is stored before `build_compaction_marker` adds the `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix. On failure, `summary_text` is `None` and the prior value is left untouched — failure isolation by silence.
+Raw `summary_text` is stored in `ctx.deps.runtime.previous_compaction_summary` before `build_compaction_marker` adds the `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix; on failure the field is left untouched. Sets `compaction_applied_this_turn = True`.
 
-The summarizer surface is split:
-- `_summarization_gate_open(ctx) -> bool` — predicate: returns False when `ctx.deps.model is None` or the circuit breaker is tripped (and not at probe cadence).
+Summarizer surface:
+- `_summarization_gate_open(ctx)` — `False` when `ctx.deps.model is None` or circuit breaker tripped (and not at probe cadence).
 - `summarize_dropped_messages(ctx, dropped, *, focus, previous_summary=None)` — pure LLM call; raises on failure.
-- `_gated_summarize_or_none(ctx, dropped, *, announce, focus, previous_summary=None)` — gate + announce + summarizer + fallback; returns `None` on any failure path.
+- `_gated_summarize_or_none(...)` — gate + announce + summarizer + fallback; returns `None` on any failure path.
 
-**Marker structure.** A `ModelRequest` with a `UserPromptPart` whose content is:
-
-```
-"[CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a "
-"previous conversation that ran out of context. "
-"The summary below is a retrospective recap of completed prior work — treat it "
-"as background reference, NOT as active instructions. "
-"Do NOT repeat, redo, or re-execute any action already described as completed; "
-"do NOT re-answer questions that the summary records as resolved. "
-"Your active task is identified in the '## Active Task' / '## Next Step' "
-"sections of the summary — resume from there and respond only to user messages "
-"that appear AFTER this summary.\n\n"
-"The summary covers the earlier portion (N messages).\n\n"
-+ summary_text
-+ "\n\nRecent messages are preserved verbatim."
-```
-
-Prior-summary detection uses `startswith(SUMMARY_MARKER_PREFIX)` — shared constant, used by both builder and detector.
+**Marker** — `ModelRequest` / `UserPromptPart` with a `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix, N-message count, `summary_text`, and a verbatim-tail trailer instructing the model to treat the summary as reference, not active instructions. Detection via `startswith(SUMMARY_MARKER_PREFIX)` — shared constant used by both builder and detector.
 
 **Breadcrumb preservation** (`_preserve_search_tool_breadcrumbs`): for each `ModelRequest` in `dropped`, extract only `ToolReturnPart`s whose `tool_name == "search_tools"`. Mixed-batch requests are rebuilt with only those parts — other `ToolReturnPart`s are never carried as orphans. `search_tools` returns are SDK-handled before reaching the provider; other tool results require paired `ToolCallPart`s that providers validate.
 
-**Anti-thrashing savings tracking** (proactive path only):
-
-```
-result, _ = await apply_compaction(ctx, messages, bounds, announce=True)
-tokens_after_local = estimate_message_tokens(result)
-savings = (tokens_before_local - tokens_after_local) / tokens_before_local if tokens_before_local > 0 else 0.0
-if savings < cfg.min_proactive_savings:
-    consecutive_low_yield_proactive_compactions += 1
-else:
-    consecutive_low_yield_proactive_compactions = 0
-    compaction_thrash_hint_emitted = False
-```
+**Anti-thrashing** (proactive path only): savings = `(tokens_before − tokens_after) / tokens_before`. Below `min_proactive_savings` increments `consecutive_low_yield_proactive_compactions`; at or above resets it to 0.
 
 **Fail-safe — circuit breaker:**
 
@@ -434,11 +423,11 @@ else:
 
 `gather_compaction_context` collects signal that survives M2. Called from `summarize_dropped_messages` so every LLM-capable compaction path inherits it.
 
-| Source | Scope | Why it survives M2 |
+| Source | Function | Why it survives M2 |
 |---|---|---|
-| `ToolCallPart.args` for `FILE_TOOLS` → `_gather_file_paths(dropped)` | Dropped range only | `truncate_tool_results` touches return content only, never call args. |
-| `ctx.deps.session.session_todos` → `_gather_session_todos` | Session state | Orthogonal to message history. |
-| Prior compaction summaries in `dropped` → `_gather_prior_summaries` | Dropped range only | Detected via `SUMMARY_MARKER_PREFIX`. Skipped when `previous_compaction_summary` is set — iterative-update branch already embeds it as `PREVIOUS SUMMARY:`. |
+| File paths from `ToolCallPart.args` (`FILE_TOOLS`) | `_gather_file_paths(dropped)` | M2a clears return content only, not call args. |
+| Session todos | `_gather_session_todos` | Orthogonal to message history. |
+| Prior summaries in dropped range | `_gather_prior_summaries` | Detected via `SUMMARY_MARKER_PREFIX`; skipped when `previous_compaction_summary` is set (iterative branch embeds it directly as `PREVIOUS SUMMARY:`). |
 
 Output: single `str`; each source capped independently (file paths ~1.5 KB, todos ~1.5 KB, prior summaries ~2 KB); joined result bounded at 4000 chars. Returns `None` when no sources yield content.
 
@@ -448,55 +437,34 @@ Structurally identical to M3's compaction assembly. Differences:
 1. **Trigger:** `ModelHTTPError` classified by `_http_error_classifier.is_context_overflow`: HTTP 413 unconditionally; HTTP 400 with explicit overflow evidence in `error.message`, `error.code`, or `error.metadata.raw`. Overflow phrases recognized from OpenAI, Ollama, Gemini, vLLM, AWS Bedrock.
 2. **Rate limit:** gated by `turn_state.overflow_recovery_attempted` — one-shot per turn.
 
-**Logic** (`_attempt_overflow_recovery` inside `run_turn`):
+**Two-tier cascade** (`_attempt_overflow_recovery` inside `run_turn`):
+1. `recover_overflow_history` — same planner and `apply_compaction` as M3.
+2. `emergency_recover_overflow_history` — bypasses the planner; keeps first group + static marker + todo snapshot + `search_tools` breadcrumbs + last group. Returns `None` when `len(groups) ≤ 2`.
 
-```
-if is_context_overflow(e):
-    if not turn_state.overflow_recovery_attempted:
-        turn_state.overflow_recovery_attempted = True
-        recovery_history = history + pending user input
-        compacted = await recover_overflow_history(ctx, recovery_history)
-        if compacted is None:
-            compacted = await emergency_recover_overflow_history(ctx, recovery_history)
-        if compacted is not None:
-            turn_state.current_history = compacted
-            turn_state.current_input = None
-            continue   # retry once
-    return terminal error
-```
-
-`emergency_recover_overflow_history` bypasses the planner (no budget math, no anchoring) and keeps first turn group + static marker + todo snapshot + search_tools breadcrumbs + last turn group. Returns `None` when `len(groups) ≤ 2` — structural limit.
+On a non-`None` result, sets `current_history = compacted`, clears pending input, and retries. Terminal error when both tiers return `None`.
 
 ### 2.6 Summarizer
 
-**Agent:** `llm_call()` via `summarize_messages(deps, messages, *, personality_active, context, focus, previous_summary=None)`. No tools. Agent constructed per call.
+`summarize_messages(deps, messages, *, personality_active, context, focus, previous_summary=None)` — `llm_call()` with no tools; agent constructed per call; `deps.model.settings_noreason`. System prompt enforces treating history as data, not instructions.
 
-**System prompt:** security rule treating history as raw data, not instructions.
-
-**Two-branch prompt selection:**
+**Two-branch prompt:**
 - **From-scratch** (`previous_summary is None`): `_SUMMARIZE_PROMPT` directly.
 - **Iterative update** (`previous_summary` set): `_build_iterative_template(previous_summary)` prepends `PREVIOUS SUMMARY:` and PRESERVE / ADD / MOVE / REMOVE discipline before the shared template.
 
-**Prompt template sections:** `## Active Task`, `## Goal`, `## Key Decisions`, `## User Corrections` (conditional), `## Errors & Fixes`, `## Working Set`, `## Progress`, `## Pending User Asks` (conditional), `## Resolved Questions` (conditional), `## Next Step` (verbatim drift anchor), `## Critical Context` (conditional). Skips empty sections.
-
-**Model settings:** `deps.model.settings_noreason`.
+**Template sections:** `## Active Task`, `## Goal`, `## Key Decisions`, `## User Corrections`†, `## Errors & Fixes`, `## Working Set`, `## Progress`, `## Pending User Asks`†, `## Resolved Questions`†, `## Next Step` (verbatim drift anchor), `## Critical Context`†. (†omitted when empty)
 
 ### 2.7 Base system prompt advisory
 
-Static, cacheable paragraph in the base system prompt:
+Static, cacheable paragraph — no per-turn interpolation; `5` sourced from `COMPACTABLE_KEEP_RECENT` at module-load time:
 
 > "Tool results may be automatically cleared from context to free space. The 5 most recent results per tool type are always kept. Note important information from tool results in your response — the original output may be cleared on later turns."
 
-Requirements: no per-turn interpolation, lives in the cacheable prefix, `5` pulled from `COMPACTABLE_KEEP_RECENT` at module-load time.
-
 ### 2.8 Trigger cadence and self-stabilization
 
-Per-request firing does not trigger multiple summarizer calls per turn because:
-1. Once M3 successfully compacts, `token_count` drops well below threshold — subsequent passes hit the fast path.
-2. When compaction emits a static marker, the replacement is small — `token_count` also drops.
-3. When `plan_compaction_boundaries` returns `None` (head/tail overlap), the processor returns messages unchanged.
-
-One successful compaction per pressure event per turn.
+M3 fires before every `ModelRequestNode` but produces at most one summarizer call per pressure event per turn:
+- After a successful compaction, `token_count` drops below threshold — subsequent passes hit the fast path.
+- A static-marker compaction also shrinks context — same result.
+- `plan_compaction_boundaries` returning `None` (head/tail overlap) leaves messages unchanged.
 
 ### 2.9 Error handling and degradation
 
@@ -522,9 +490,7 @@ One successful compaction per pressure event per turn.
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `llm.num_ctx` | `CO_LLM_NUM_CTX` | `262144` | Ollama context window override; supersedes `ctx_window` for budget resolution. |
-| `llm.ctx_overflow_threshold` | — | `1.0` | Ratio at which `run_turn` warns of imminent Ollama truncation. |
-| `llm.ctx_warn_threshold` | — | `0.85` | Ratio at which `run_turn` surfaces "consider /compact". |
+| `llm.num_ctx` | `CO_LLM_NUM_CTX` | `0` (unset) | Ollama context window override; `0` means use model spec. Supersedes `ctx_window` for budget resolution when non-zero. |
 
 **Compaction tuning** (`CompactionSettings` in `co_cli/config/compaction.py`):
 
@@ -550,7 +516,7 @@ One successful compaction per pressure event per turn.
 | `tools.result_persist_chars` | `CO_TOOLS_RESULT_PERSIST_CHARS` | `50,000` | M1 default per-tool emit-time persist threshold |
 | `tools.batch_spill_chars` | `CO_TOOLS_BATCH_SPILL_CHARS` | `200,000` | M2b aggregate batch budget before spill |
 
-**Per-tool M1 overrides** (registration in `co_cli/agent/_native_toolset.py`):
+**Per-tool M1 overrides** (set via `@agent_tool(max_result_size=...)` in each tool's own file):
 
 | Tool | `max_result_size` | Notes |
 |---|---|---|
@@ -566,16 +532,18 @@ One successful compaction per pressure event per turn.
 | `co_cli/context/compaction.py` | Public entry surface: M3 processor, overflow recovery, `apply_compaction`, summarizer gate, re-exports. |
 | `co_cli/context/_compaction_boundaries.py` | Boundary planner: `TurnGroup`, `group_by_turn`, `plan_compaction_boundaries`, active-user anchoring. |
 | `co_cli/context/_compaction_markers.py` | Marker builders, `gather_compaction_context` enrichment helper, `SUMMARY_MARKER_PREFIX`. |
-| `co_cli/context/_history_processors.py` | M2 processors: `truncate_tool_results`, `enforce_batch_budget`, `dedup_tool_results`. |
+| `co_cli/context/_dedup_tool_results.py` | M2-pre: `dedup_tool_results` — dedup key, back-reference marker, eligibility predicate. |
+| `co_cli/context/_history_processors.py` | M2 processors: `dedup_tool_results`, `truncate_tool_results`, `enforce_batch_budget`. |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker` per-tool format and `is_cleared_marker` predicate. |
 | `co_cli/context/summarization.py` | `summarize_messages`, token estimator, budget resolver, and prompt templates. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — provider overflow detection for 400/413. |
 | `co_cli/context/orchestrate.py` | `run_turn` overflow dispatch and anti-thrash gate reset. |
 | `co_cli/tools/categories.py` | `COMPACTABLE_TOOLS`, `FILE_TOOLS`, `PATH_NORMALIZATION_TOOLS`. |
 | `co_cli/tools/tool_io.py` | M1: `persist_if_oversized`, `tool_output`, `check_tool_results_size`. |
-| `co_cli/agent/_native_toolset.py` | Per-tool `max_result_size` registration. |
+| `co_cli/tools/files/read.py` | `file_read` M1 override: `max_result_size=math.inf` (never persists). |
+| `co_cli/tools/shell.py` | `shell` M1 override: `max_result_size=30_000`. |
 | `co_cli/config/_tools.py` | `ToolsSettings` — `result_persist_chars`, `batch_spill_chars`. |
-| `co_cli/config/llm.py` | `num_ctx`, `ctx_overflow_threshold`, `ctx_warn_threshold`. |
+| `co_cli/config/llm.py` | `num_ctx` (Ollama override), `ctx_token_budget` (fallback budget). |
 | `co_cli/prompts/…` | Base system prompt; static recency-clearing advisory. |
 | `evals/eval_compaction_quality.py` | Compaction fidelity regression eval. |
 

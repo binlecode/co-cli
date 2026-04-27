@@ -13,12 +13,12 @@ from co_cli.commands._commands import (
     DelegateToAgent,
     LocalOnly,
     ReplaceTranscript,
-    SkillConfig,
     dispatch,
 )
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import console
+from co_cli.skills._skill_types import SkillConfig
 from co_cli.tools.shell_backend import ShellBackend
 
 

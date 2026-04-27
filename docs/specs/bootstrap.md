@@ -60,7 +60,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ build_model(config.llm)
 │  ├─ build_tool_registry(config)
 │  ├─ enter MCP toolsets on stack; discover_mcp_tools(); merge MCP tool_index
-│  ├─ _load_skills(skills_dir, settings=config, user_skills_dir=...)
+│  ├─ load_skills(skills_dir, settings=config, user_skills_dir=...) → filter_namespace_conflicts()
 │  ├─ _discover_knowledge_backend(config, frontend, degradations)
 │  ├─ _sync_knowledge_store(store, config, frontend, knowledge_dir)
 │  │      indexes every .md in knowledge_dir under source="knowledge"; on failure closes store and falls back to grep
@@ -252,7 +252,9 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/bootstrap/render_status.py` | On-demand status and security reporting, not inline bootstrap |
 | `co_cli/deps.py` | Defines `CoDeps`, path resolution, and sub-agent inheritance rules |
 | `co_cli/config/_core.py` | Defines `Settings`, layered config loading, and env override mapping |
-| `co_cli/commands/_commands.py` | Loads skills during bootstrap and later refreshes them in the REPL |
+| `co_cli/skills/loader.py` | `load_skills` — two-tier skill file loading used during bootstrap and `/skills reload` |
+| `co_cli/commands/_commands.py` | Slash-command dispatch and `/skills` REPL commands; `get_skill_registry` |
+| `co_cli/commands/_registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
 | `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/knowledge/_store.py` | Implements the indexed knowledge store used when bootstrap enables it |
 | `co_cli/memory/store.py` | `MemoryIndex` — FTS5 session index opened and synced during bootstrap |

@@ -3,24 +3,25 @@
 from __future__ import annotations
 
 import logging
-import os
-import re
-import shutil
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from pydantic_ai.messages import ModelRequest
 
-from co_cli.commands._skill_types import SkillConfig
+from co_cli.commands._registry import (
+    BUILTIN_COMMANDS,
+    SlashCommand,
+    _refresh_completer,
+    filter_namespace_conflicts,
+)
 from co_cli.commands._types import (
     CommandContext,
     DelegateToAgent,
     LocalOnly,
     ReplaceTranscript,
-    SlashCommand,
     SlashOutcome,
+    _confirm,
 )
 from co_cli.commands.session import (
     _cmd_clear,
@@ -30,18 +31,27 @@ from co_cli.commands.session import (
     _cmd_sessions,
 )
 from co_cli.config._core import VALID_REASONING_DISPLAY_MODES
-from co_cli.deps import ApprovalKindEnum, CoDeps
+from co_cli.deps import ApprovalKindEnum
 from co_cli.display._core import console
 from co_cli.knowledge._artifact import KnowledgeArtifact, load_knowledge_artifacts
-from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.skills._skill_types import SkillConfig
+from co_cli.skills.installer import (
+    SkillFetchError,
+    discover_skill_files,
+    fetch_skill_content,
+    find_skill_source_url,
+    read_skill_meta,
+    write_skill_file,
+)
+from co_cli.skills.loader import (
+    _diagnose_requires_failures,
+    _scan_skill_content,
+    load_skills,
+)
+from co_cli.skills.registry import set_skill_commands
 from co_cli.tools.knowledge.read import grep_recall
 
 logger = logging.getLogger(__name__)
-
-
-def set_skill_commands(new_skills: dict[str, SkillConfig], deps: CoDeps) -> None:
-    """Replace deps.skill_commands with the new skill set."""
-    deps.skill_commands = new_skills
 
 
 def get_skill_registry(skill_commands: dict[str, SkillConfig]) -> list[dict]:
@@ -51,103 +61,6 @@ def get_skill_registry(skill_commands: dict[str, SkillConfig]) -> list[dict]:
         for s in skill_commands.values()
         if s.description and not s.disable_model_invocation
     ]
-
-
-# Env vars that skill-env may never override — security boundary.
-_SKILL_ENV_BLOCKED: frozenset[str] = frozenset(
-    {
-        "PATH",
-        "PYTHONPATH",
-        "PYTHONHOME",
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "DYLD_INSERT_LIBRARIES",
-        "HOME",
-        "USER",
-        "SHELL",
-        "SUDO_UID",
-    }
-)
-
-# Static security patterns for skill content scanning (TASK-4).
-_SKILL_SCAN_PATTERNS: list[tuple[str, re.Pattern]] = [
-    (
-        "credential_exfil",
-        re.compile(
-            r"(curl|wget|nc)\s[^\n]*\$\{?[A-Z_]*(KEY|TOKEN|SECRET|PASSWORD|API)[A-Z_]*\}?",
-            re.IGNORECASE,
-        ),
-    ),
-    ("pipe_to_shell", re.compile(r"(curl|wget)\s[^|\n]+\|\s*(ba)?sh", re.IGNORECASE)),
-    (
-        "destructive_shell",
-        re.compile(
-            r"rm\s+-rf\s*/|dd\s+if=/dev/(zero|random|urandom)|:\(\)\s*\{",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "prompt_injection",
-        re.compile(
-            r"ignore\s+(all\s+)?previous\s+instructions|you\s+are\s+now\s+(a|an)\s",
-            re.IGNORECASE,
-        ),
-    ),
-]
-
-
-def _scan_skill_content(content: str) -> list[str]:
-    """Scan skill content for security patterns.
-
-    Returns a list of tagged warning strings. Empty list = content is clean.
-    Each entry has the form '[tag] line N: <line>'.
-    """
-    warnings: list[str] = []
-    for i, line in enumerate(content.splitlines(), 1):
-        for tag, pattern in _SKILL_SCAN_PATTERNS:
-            if pattern.search(line):
-                warnings.append(f"[{tag}] line {i}: {line}")
-    return warnings
-
-
-def _build_completer_words(skill_commands: dict) -> list[str]:
-    """Single source of truth for the REPL tab-completer word list."""
-    return [f"/{name}" for name in BUILTIN_COMMANDS] + [
-        f"/{name}" for name, s in skill_commands.items() if s.user_invocable
-    ]
-
-
-def _refresh_completer(ctx: CommandContext) -> None:
-    """Refresh the REPL completer words after a skill_commands mutation."""
-    if ctx.completer is None:
-        return
-    ctx.completer.words = _build_completer_words(ctx.deps.skill_commands)
-
-
-def _inject_source_url(content: str, url: str) -> str:
-    """Inject or update source-url field in skill frontmatter."""
-    if not content.startswith("---\n"):
-        return f"---\nsource-url: {url}\n---\n{content}"
-    rest = content[4:]
-    close_match = re.search(r"\n---(\n|$)", rest)
-    if close_match is None:
-        return f"---\nsource-url: {url}\n---\n{content}"
-    close_start = close_match.start()
-    fm_block = rest[:close_start]
-    after_close = rest[close_match.end() :]
-    lines = fm_block.splitlines()
-    new_lines = []
-    replaced = False
-    for line in lines:
-        if line.startswith("source-url:"):
-            new_lines.append(f"source-url: {url}")
-            replaced = True
-        else:
-            new_lines.append(line)
-    if not replaced:
-        new_lines.append(f"source-url: {url}")
-    new_fm = "\n".join(new_lines)
-    return f"---\n{new_fm}\n---\n{after_close}"
 
 
 # -- Handlers --------------------------------------------------------------
@@ -309,14 +222,7 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
 
     from co_cli.config._core import settings as _settings
 
-    bundled_dir = ctx.deps.skills_dir
-    user_dir = ctx.deps.user_skills_dir
-
-    all_paths: list[Path] = []
-    if bundled_dir.exists():
-        all_paths.extend(sorted(bundled_dir.glob("*.md")))
-    if user_dir.exists():
-        all_paths.extend(sorted(user_dir.glob("*.md")))
+    all_paths = discover_skill_files(ctx.deps.skills_dir, ctx.deps.user_skills_dir)
 
     if not all_paths:
         console.print("[dim]No skill files found.[/dim]")
@@ -333,8 +239,7 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
             table.add_row(path.name, "[success]✓ Loaded[/success]", "")
         else:
             try:
-                text = path.read_text(encoding="utf-8")
-                meta, _ = parse_frontmatter(text)
+                meta = read_skill_meta(path)
                 requires = (
                     meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
                 )
@@ -356,11 +261,12 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
     new_skills = load_skills(
         ctx.deps.skills_dir, _settings, user_skills_dir=user_skills_dir, errors=errors
     )
+    new_skills = filter_namespace_conflicts(new_skills, set(BUILTIN_COMMANDS.keys()), errors)
     for msg in errors:
         console.print(f"[warning]{msg}[/warning]")
-    all_paths = sorted(user_skills_dir.glob("*.md")) if user_skills_dir.exists() else []
-    for p in all_paths:
-        if p.stem in new_skills:
+    for name in new_skills:
+        p = user_skills_dir / f"{name}.md"
+        if p.exists():
             try:
                 for w in _scan_skill_content(p.read_text(encoding="utf-8")):
                     console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
@@ -420,75 +326,39 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
         console.print("[bold red]Usage:[/bold red] /skills install <path|url>")
         return
 
-    # Fetch content
-    if target.startswith("http://") or target.startswith("https://"):
-        try:
-            import urllib.parse
-
-            import httpx
-
-            resp = httpx.get(target, timeout=10)
-            resp.raise_for_status()
-        except Exception as e:
-            console.print(f"[bold red]Failed to fetch skill:[/bold red] {e}")
-            return
-        content_type = resp.headers.get("content-type", "")
-        if not content_type.startswith("text/"):
-            console.print(
-                f"[bold red]Unexpected content-type (expected text/*):[/bold red] {content_type}"
-            )
-            return
-        content = resp.text
-        content = _inject_source_url(content, target)
-        filename = Path(urllib.parse.urlparse(target).path).name
-    else:
-        try:
-            p = Path(target)
-            content = p.read_text(encoding="utf-8")
-            filename = p.name
-        except Exception as e:
-            console.print(f"[bold red]Failed to read skill:[/bold red] {e}")
-            return
-
-    if not filename.endswith(".md"):
-        console.print(f"[bold red]Skill file must end with .md:[/bold red] {filename}")
+    try:
+        content, filename = fetch_skill_content(target)
+    except SkillFetchError as e:
+        console.print(f"[bold red]Failed to fetch skill:[/bold red] {e}")
         return
 
-    # Security scan — blocking before install (user must confirm)
     warnings = _scan_skill_content(content)
     if warnings:
         console.print("[bold yellow]Security scan warnings:[/bold yellow]")
         for w in warnings:
             console.print(f"  [yellow]{w}[/yellow]")
-        confirmed = (
-            ctx.frontend.prompt_confirm("Install anyway? [y/N] ")
-            if ctx.frontend
-            else console.input("Install anyway? [y/N] ").strip().lower() == "y"
-        )
-        if not confirmed:
+        if not _confirm(ctx, "Install anyway? [y/N] "):
             console.print("[dim]Install cancelled.[/dim]")
             return
 
-    # Confirm overwrite if file already exists (skip when force=True)
     dest = ctx.deps.user_skills_dir / filename
-    if dest.exists() and not force:
-        msg = f"Overwrite existing skill '{filename}'? [y/N] "
-        confirmed = (
-            ctx.frontend.prompt_confirm(msg)
-            if ctx.frontend
-            else console.input(msg).strip().lower() == "y"
-        )
-        if not confirmed:
-            console.print("[dim]Install cancelled.[/dim]")
+    if (
+        dest.exists()
+        and not force
+        and not _confirm(ctx, f"Overwrite existing skill '{filename}'? [y/N] ")
+    ):
+        console.print("[dim]Install cancelled.[/dim]")
         return
 
-    # Write to user_skills_dir
-    ctx.deps.user_skills_dir.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content, encoding="utf-8")
+    write_skill_file(content, filename, ctx.deps.user_skills_dir)
 
+    errors: list[str] = []
     new_skills = load_skills(
-        ctx.deps.skills_dir, _settings, user_skills_dir=ctx.deps.user_skills_dir
+        ctx.deps.skills_dir, _settings, user_skills_dir=ctx.deps.user_skills_dir, errors=errors
     )
+    new_skills = filter_namespace_conflicts(new_skills, set(BUILTIN_COMMANDS.keys()), errors)
+    for msg in errors:
+        console.print(f"[warning]{msg}[/warning]")
     set_skill_commands(new_skills, ctx.deps)
     _refresh_completer(ctx)
 
@@ -508,9 +378,7 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     if not skill_file.exists():
         console.print(f"[bold red]Skill '{name}' not found in user skills dir.[/bold red]")
         return
-    text = skill_file.read_text(encoding="utf-8")
-    meta, _ = parse_frontmatter(text)
-    source_url = meta.get("source-url", "").strip() if isinstance(meta, dict) else ""
+    source_url = find_skill_source_url(skill_file)
     if not source_url:
         console.print(
             f"[bold red]Skill '{name}' has no source-url — not installed from a URL.[/bold red]"
@@ -661,190 +529,6 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
         return None
     console.print(f"[success]✓ Cancelled task {task_id}[/success]")
     return None
-
-
-# -- Skills loader ---------------------------------------------------------
-
-
-def _diagnose_requires_failures(requires: dict, settings: Any = None) -> list[str]:
-    """Evaluate the requires block and return human-readable failure strings.
-
-    Empty list means all requirements are met.
-    """
-    failures: list[str] = []
-
-    bins = requires.get("bins", [])
-    if bins:
-        missing = [b for b in bins if not shutil.which(b)]
-        if missing:
-            failures.append(f"missing bins: {', '.join(missing)}")
-
-    any_bins = requires.get("anyBins", [])
-    if any_bins and not any(shutil.which(b) for b in any_bins):
-        failures.append(f"none of anyBins found: {', '.join(any_bins)}")
-
-    env_vars = requires.get("env", [])
-    if env_vars:
-        missing_env = [e for e in env_vars if not os.getenv(e)]
-        if missing_env:
-            failures.append(f"missing env vars: {', '.join(missing_env)}")
-
-    platforms = requires.get("os", [])
-    if platforms and not sys.platform.startswith(tuple(platforms)):
-        failures.append(f"os not satisfied: need {platforms}, got {sys.platform}")
-
-    settings_fields = requires.get("settings", [])
-    if settings_fields:
-        if settings is None:
-            failures.append(f"missing settings: {', '.join(settings_fields)}")
-        else:
-            missing_settings = [f for f in settings_fields if not getattr(settings, f, None)]
-            if missing_settings:
-                failures.append(f"missing settings: {', '.join(missing_settings)}")
-
-    return failures
-
-
-def _check_requires(name: str, requires: dict, settings: Any = None) -> bool:
-    """Evaluate the requires block. Returns True when all conditions are met."""
-    # bins: all listed binaries must exist on PATH
-    bins = requires.get("bins", [])
-    if bins and not all(shutil.which(b) for b in bins):
-        logger.info(f"Skipping skill {name}: requires bins not satisfied: {bins}")
-        return False
-
-    # anyBins: at least one binary must exist on PATH (only checked when non-empty)
-    any_bins = requires.get("anyBins", [])
-    if any_bins and not any(shutil.which(b) for b in any_bins):
-        logger.info(f"Skipping skill {name}: requires anyBins not satisfied: {any_bins}")
-        return False
-
-    # env: all listed environment variables must be set (non-empty)
-    env_vars = requires.get("env", [])
-    if env_vars and not all(os.getenv(e) for e in env_vars):
-        logger.info(f"Skipping skill {name}: requires env not satisfied: {env_vars}")
-        return False
-
-    # os: sys.platform must start with one of the listed platform prefixes
-    platforms = requires.get("os", [])
-    if platforms and not sys.platform.startswith(tuple(platforms)):
-        logger.info(f"Skipping skill {name}: requires os not satisfied: {platforms}")
-        return False
-
-    # settings: named Settings fields must be non-None and non-empty.
-    # Fail closed: if settings gate is required but settings object is unavailable, skip the skill.
-    settings_fields = requires.get("settings", [])
-    if settings_fields and (
-        settings is None or not all(getattr(settings, f, None) for f in settings_fields)
-    ):
-        logger.info(f"Skipping skill {name}: requires settings not satisfied: {settings_fields}")
-        return False
-
-    return True
-
-
-def _is_safe_skill_path(path: Path, root: Path) -> bool:
-    """Return True when path is safe to load (not a symlink pointing outside root)."""
-    if not path.is_symlink():
-        return True
-    try:
-        return path.resolve().is_relative_to(root.resolve())
-    except (OSError, ValueError):
-        return False
-
-
-def _load_skill_file(
-    path: Path,
-    result: dict[str, SkillConfig],
-    reserved: set[str],
-    settings: Any = None,
-    *,
-    root: Path,
-    scan: bool = True,
-    errors: list[str] | None = None,
-) -> None:
-    """Parse a single skill .md file and add to result dict if valid."""
-    if not _is_safe_skill_path(path, root):
-        logger.warning(
-            f"Skill path containment violation — skipping {path} (expected root: {root})"
-        )
-        return
-    name = path.stem
-    try:
-        text = path.read_text(encoding="utf-8")
-        meta, body = parse_frontmatter(text)
-
-        if name in reserved:
-            logger.warning(f"Skill '{name}' conflicts with built-in command, skipping")
-            return
-
-        requires = meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
-        if not _check_requires(name, requires, settings):
-            return
-
-        # Security scan — warning-only for existing/developer-owned assets
-        if scan:
-            for w in _scan_skill_content(text):
-                logger.warning(f"Security scan warning in {path}: {w}")
-
-        # Extract skill-env with type guard; filter blocked and non-string values
-        raw_env = meta.get("skill-env", {})
-        skill_env: dict[str, str] = {}
-        if isinstance(raw_env, dict):
-            for k, v in raw_env.items():
-                if isinstance(k, str) and isinstance(v, str) and k not in _SKILL_ENV_BLOCKED:
-                    skill_env[k] = v
-
-        result[name] = SkillConfig(
-            name=name,
-            description=meta.get("description", ""),
-            body=body.strip(),
-            argument_hint=meta.get("argument-hint", ""),
-            user_invocable=meta.get("user-invocable", True),
-            disable_model_invocation=meta.get("disable-model-invocation", False),
-            requires=requires,
-            skill_env=skill_env,
-        )
-    except Exception as e:
-        msg = f"Skill {path.name!r} skipped: {e}"
-        logger.warning(msg)
-        if errors is not None:
-            errors.append(msg)
-
-
-def load_skills(
-    skills_dir: Path,
-    settings: Any = None,
-    *,
-    user_skills_dir: Path | None = None,
-    errors: list[str] | None = None,
-) -> dict[str, SkillConfig]:
-    """Scan skills directories and return a dict of SkillConfig objects.
-
-    Load order (lowest to highest precedence):
-      1. Co-bundled skills (skills_dir = co_cli/skills/) — version-controlled, not user-editable
-      2. User skills (user_skills_dir = ~/.co-cli/skills/) — override bundled on name collision
-
-    Reserved names are derived from BUILTIN_COMMANDS.keys() at call time so newly
-    added built-in commands are automatically protected without touching this
-    function.
-    """
-    result: dict[str, SkillConfig] = {}
-    reserved = set(BUILTIN_COMMANDS.keys())
-
-    # Pass 1: Co-bundled skills (version-controlled — skip security scan)
-    if skills_dir.exists():
-        for path in sorted(skills_dir.glob("*.md")):
-            _load_skill_file(
-                path, result, reserved, settings, root=skills_dir, scan=False, errors=errors
-            )
-
-    # Pass 2: User skills (override bundled on name collision)
-    if user_skills_dir is not None and user_skills_dir.exists():
-        for path in sorted(user_skills_dir.glob("*.md")):
-            _load_skill_file(path, result, reserved, settings, root=user_skills_dir, errors=errors)
-
-    return result
 
 
 # -- /memory ---------------------------------------------------------------
@@ -1215,41 +899,47 @@ async def _cmd_reasoning(ctx: CommandContext, args: str) -> None:
 
 # -- Registry --------------------------------------------------------------
 
-BUILTIN_COMMANDS: dict[str, SlashCommand] = {
-    "help": SlashCommand("help", "List available slash commands", _cmd_help),
-    "clear": SlashCommand("clear", "Clear conversation history", _cmd_clear),
-    "new": SlashCommand("new", "Start a fresh session", _cmd_new),
-    "status": SlashCommand("status", "Show system health or /status <task-id>", _cmd_status),
-    "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
-    "history": SlashCommand(
-        "history", "Show delegation history (delegation agents + background tasks)", _cmd_history
-    ),
-    "compact": SlashCommand(
-        "compact", "Summarize conversation via LLM to reduce context", _cmd_compact
-    ),
-    "knowledge": SlashCommand(
-        "knowledge",
-        "Manage knowledge artifacts — /knowledge list|count|forget|dream|restore|decay-review|stats [args]",
-        _cmd_knowledge,
-    ),
-    "memory": SlashCommand(
-        "memory",
-        "[Deprecated] Use /knowledge — /memory list|count|forget [query] [flags]",
-        _cmd_memory,
-    ),
-    "approvals": SlashCommand("approvals", "Manage session approval rules", _cmd_approvals),
-    "skills": SlashCommand("skills", "List and inspect loaded skills", _cmd_skills),
-    "background": SlashCommand("background", "Run a command in the background", _cmd_background),
-    "tasks": SlashCommand("tasks", "List background tasks", _cmd_tasks),
-    "cancel": SlashCommand("cancel", "Cancel a running background task", _cmd_cancel),
-    "resume": SlashCommand("resume", "Resume a past session", _cmd_resume),
-    "sessions": SlashCommand("sessions", "List past sessions", _cmd_sessions),
-    "reasoning": SlashCommand(
-        "reasoning",
-        "Show or set reasoning display: /reasoning [off|summary|full|next]",
-        _cmd_reasoning,
-    ),
-}
+BUILTIN_COMMANDS["help"] = SlashCommand("help", "List available slash commands", _cmd_help)
+BUILTIN_COMMANDS["clear"] = SlashCommand("clear", "Clear conversation history", _cmd_clear)
+BUILTIN_COMMANDS["new"] = SlashCommand("new", "Start a fresh session", _cmd_new)
+BUILTIN_COMMANDS["status"] = SlashCommand(
+    "status", "Show system health or /status <task-id>", _cmd_status
+)
+BUILTIN_COMMANDS["tools"] = SlashCommand("tools", "List registered agent tools", _cmd_tools)
+BUILTIN_COMMANDS["history"] = SlashCommand(
+    "history", "Show delegation history (delegation agents + background tasks)", _cmd_history
+)
+BUILTIN_COMMANDS["compact"] = SlashCommand(
+    "compact", "Summarize conversation via LLM to reduce context", _cmd_compact
+)
+BUILTIN_COMMANDS["knowledge"] = SlashCommand(
+    "knowledge",
+    "Manage knowledge artifacts — /knowledge list|count|forget|dream|restore|decay-review|stats [args]",
+    _cmd_knowledge,
+)
+BUILTIN_COMMANDS["memory"] = SlashCommand(
+    "memory",
+    "[Deprecated] Use /knowledge — /memory list|count|forget [query] [flags]",
+    _cmd_memory,
+)
+BUILTIN_COMMANDS["approvals"] = SlashCommand(
+    "approvals", "Manage session approval rules", _cmd_approvals
+)
+BUILTIN_COMMANDS["skills"] = SlashCommand("skills", "List and inspect loaded skills", _cmd_skills)
+BUILTIN_COMMANDS["background"] = SlashCommand(
+    "background", "Run a command in the background", _cmd_background
+)
+BUILTIN_COMMANDS["tasks"] = SlashCommand("tasks", "List background tasks", _cmd_tasks)
+BUILTIN_COMMANDS["cancel"] = SlashCommand(
+    "cancel", "Cancel a running background task", _cmd_cancel
+)
+BUILTIN_COMMANDS["resume"] = SlashCommand("resume", "Resume a past session", _cmd_resume)
+BUILTIN_COMMANDS["sessions"] = SlashCommand("sessions", "List past sessions", _cmd_sessions)
+BUILTIN_COMMANDS["reasoning"] = SlashCommand(
+    "reasoning",
+    "Show or set reasoning display: /reasoning [off|summary|full|next]",
+    _cmd_reasoning,
+)
 
 
 # -- Dispatch --------------------------------------------------------------

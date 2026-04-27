@@ -23,15 +23,14 @@ from co_cli.bootstrap.render_status import (
     render_status_table,
 )
 from co_cli.commands._commands import (
-    BUILTIN_COMMANDS,
     CommandContext,
     DelegateToAgent,
     ReplaceTranscript,
-    _build_completer_words,
 )
 from co_cli.commands._commands import (
     dispatch as dispatch_command,
 )
+from co_cli.commands._registry import BUILTIN_COMMANDS, _build_completer_words
 from co_cli.config._core import (
     DEFAULT_REASONING_DISPLAY,
     LOGS_DB,

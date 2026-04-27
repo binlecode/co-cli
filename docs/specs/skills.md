@@ -27,8 +27,8 @@ Skills in `co-cli` are prompt overlays loaded from markdown files and exposed th
 
 ```mermaid
 flowchart LR
-    SkillFile[skill .md file] --> Loader[_load_skills]
-    Loader --> Registry[session.skill_commands + session.skill_registry]
+    SkillFile[skill .md file] --> Loader[load_skills]
+    Loader --> Registry[deps.skill_commands + get_skill_registry()]
     Registry --> Dispatch[name args]
     Dispatch --> AgentBody[expanded skill body]
     AgentBody --> MainLoop[main.py]
@@ -40,12 +40,12 @@ flowchart LR
 
 ### Skill Model
 
-The in-memory shape is `SkillConfig` in `co_cli/commands/_skill_types.py`.
+The in-memory shape is `SkillConfig` in `co_cli/skills/_skill_types.py`.
 
 | Field | Purpose |
 | --- | --- |
 | `name` | slash-command name derived from file stem |
-| `description` | listing text shown in `/skills` and exposed in `session.skill_registry` |
+| `description` | listing text shown in `/skills` and exposed via `get_skill_registry()` |
 | `body` | prompt body injected into the main agent on dispatch |
 | `argument_hint` | UI hint for `/help` and `/skills` |
 | `user_invocable` | whether the skill appears as a slash command |
@@ -64,7 +64,7 @@ Supported frontmatter fields parsed from the skill file:
 | `description` | human-readable summary |
 | `argument-hint` | argument usage hint |
 | `user-invocable` | include in slash-command completer and `/help` |
-| `disable-model-invocation` | hide from `session.skill_registry` |
+| `disable-model-invocation` | hide from `get_skill_registry()` output |
 | `requires` | gate loading on bins, anyBins, env, os, or settings |
 | `skill-env` | turn-scoped env injection, filtered through a blocked-key list |
 | `source-url` | installation provenance; read at upgrade time by `_upgrade_skill()`, not stored in `SkillConfig` |
@@ -215,8 +215,12 @@ There is no separate skills config object today.
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/commands/_skill_types.py` | `SkillConfig` frozen dataclass |
-| `co_cli/commands/_commands.py` | skill loader (`_load_skill_file`, `_is_safe_skill_path`), scanner, dispatch, and `/skills` commands |
+| `co_cli/skills/_skill_types.py` | `SkillConfig` frozen dataclass |
+| `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `_scan_skill_content`, `_check_requires` |
+| `co_cli/skills/installer.py` | `fetch_skill_content`, `write_skill_file`, `discover_skill_files`, `find_skill_source_url`, `read_skill_meta` |
+| `co_cli/skills/registry.py` | `set_skill_commands()` — replaces `deps.skill_commands` |
+| `co_cli/commands/_commands.py` | dispatch, `/skills` command family, and `get_skill_registry` |
+| `co_cli/commands/_registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, `_build_completer_words` |
 | `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` (top-level); `active_skill_name` (runtime) |

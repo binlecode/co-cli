@@ -21,10 +21,10 @@ from co_cli.config._core import (
 
 if TYPE_CHECKING:
     from co_cli.agent._core import ToolRegistry
-    from co_cli.commands._skill_types import SkillConfig
     from co_cli.knowledge._store import KnowledgeStore
     from co_cli.llm._factory import LlmModel
     from co_cli.memory.store import MemoryIndex
+    from co_cli.skills._skill_types import SkillConfig
     from co_cli.tools.background import BackgroundTaskState
     from co_cli.tools.resource_lock import ResourceLockStore
     from co_cli.tools.shell_backend import ShellBackend

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,10 +49,10 @@ class DelegateToAgent:
 type SlashOutcome = LocalOnly | ReplaceTranscript | DelegateToAgent
 
 
-@dataclass(frozen=True)
-class SlashCommand:
-    """A registered slash command."""
+def _confirm(ctx: CommandContext, msg: str) -> bool:
+    """Prompt user with msg; return True iff they confirmed (frontend or fallback)."""
+    from co_cli.display._core import console
 
-    name: str
-    description: str
-    handler: Callable[[CommandContext, str], Awaitable[list[Any] | ReplaceTranscript | None]]
+    if ctx.frontend:
+        return ctx.frontend.prompt_confirm(msg)
+    return console.input(msg).strip().lower() == "y"

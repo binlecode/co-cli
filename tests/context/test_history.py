@@ -19,7 +19,6 @@ from tests._settings import make_settings
 
 from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
-from co_cli.config._core import settings
 from co_cli.context._compaction_boundaries import _find_last_turn_start
 from co_cli.context._compaction_markers import (
     _active_todos,
@@ -49,7 +48,7 @@ from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
-_CONFIG = settings
+_CONFIG = make_settings()
 _LLM_MODEL = build_model(_CONFIG.llm)
 # Cache agent model reference for RunContext construction — no LLM call made here.
 _AGENT = build_agent(config=_CONFIG)

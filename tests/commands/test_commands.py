@@ -27,7 +27,6 @@ from co_cli.commands._commands import (
     ReplaceTranscript,
     dispatch,
 )
-from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import Frontend, console
@@ -35,9 +34,8 @@ from co_cli.knowledge._store import KnowledgeStore
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
-_CONFIG = settings
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
-_CONFIG_NO_MCP = _CONFIG.model_copy(update={"mcp_servers": {}})
+_CONFIG_NO_MCP = make_settings(mcp_servers={})
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
 _SUMM_MODEL = _CONFIG_NO_MCP.llm.model
 
