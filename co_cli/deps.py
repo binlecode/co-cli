@@ -127,7 +127,7 @@ class CoRuntimeState:
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions, last_overbudget_batch_signature,
-      extraction_task
+      extraction_task, previous_compaction_summary
     """
 
     # Circuit breaker for inline compaction summarisation.
@@ -154,6 +154,10 @@ class CoRuntimeState:
     # Background knowledge-extraction task slot — owned per-deps so sessions and
     # forked sub-agent deps do not share the in-flight task.
     extraction_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    # Raw LLM-generated summary text from the most recent successful compaction —
+    # feeds the iterative-update prompt branch on the next compaction. None on session
+    # start; reset by /new and /clear; untouched by /compact failures and /resume.
+    previous_compaction_summary: str | None = None
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""

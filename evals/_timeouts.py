@@ -15,14 +15,6 @@ Calculated as: 4 sequential LLM reasoning calls (~80s total for a 35B model)
 This guarantees enough time for complex RAG loops but prevents infinite ModelRetry loops.
 """
 
-
-EVAL_SUMMARIZATION_TIMEOUT_SECS: int = 60
-"""Upper bound for background summarization tasks during evals.
-Sized for the heaviest compaction eval step (Step 6: 50 dropped messages,
-~58K chars, measured at ~41s on local Ollama). 60s gives ~19s headroom
-for model load variation without over-extending to benchmark territory.
-"""
-
 EVAL_MEMORY_EXTRACTION_TIMEOUT_SECS: int = 15
 """Upper bound for one memory-extractor LLM call in evals.
 
@@ -33,14 +25,12 @@ failing fast on regressions that would otherwise hide behind 60-120s turn
 timeouts.
 """
 
-EVAL_BOOTSTRAP_TIMEOUT_SECS: int = 30
-"""Upper bound for create_deps() during bootstrap-flow evals.
+EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS: int = 30
+"""End-to-end timeout for the bootstrap eval scenario (create_deps() + probes).
 
-Bootstrap does not execute foreground LLM turns, but it can perform MCP
-connection, local database setup, knowledge-store initialization, and startup
-probes. 30s is enough to allow those real startup checks to complete while
-still surfacing hangs in MCP connect, SQLite initialization, or local service
-reachability quickly.
+Individual IO-bound operations inside create_deps() (MCP connect, SQLite
+init, Ollama context probe) should carry their own timeouts. This constant
+bounds the full scenario run so a hang in any unguarded step still fails fast.
 """
 
 EVAL_PROBE_TIMEOUT_SECS: int = 5
@@ -64,12 +54,4 @@ EVAL_DB_TIMEOUT_SECS: int = 5
 """Upper bound for file and database indexing, compaction, and sqlite loads.
 Since SQLite FTS5 operates locally and sequentially on-disk, anything exceeding
 5 seconds strongly indicates a disk deadlock or transaction lock issue.
-"""
-
-EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS: int = 360
-"""Per-turn upper bound for the open-ended deep-learning loop in step 15.
-
-M3 dropped zone is ~45K tokens (~181K chars); measured at ~289s on qwen3.5:35b-a3b noreason
-(34K prompt tokens → 218s at 25.5 tok/s, extrapolated to full drop zone). 360s adds ~70s
-headroom for web_fetch latency and agent reasoning per turn.
 """

@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 # Per-segment hang-prevention timeout. Applied to each individual agent.run_stream_events()
 # call inside _execute_stream_segment(). Not a behavioral spec — a safety net that prevents
 # an unresponsive LLM from hanging a turn indefinitely.
-_LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 60
+_LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 360
 
 from co_cli.config._core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._http_error_classifier import is_context_overflow
@@ -491,12 +491,12 @@ def _check_output_limits(
             ctx_span.set_attribute("ctx.input_tokens", deps.runtime.turn_usage.input_tokens)
             ctx_span.set_attribute("ctx.num_ctx", effective_ctx)
             ctx_span.set_attribute("ctx.ratio", ratio)
-            if ratio >= deps.config.llm.ctx_overflow_threshold:
+            if ratio >= 1.0:
                 frontend.on_status(
                     f"Context limit reached ({deps.runtime.turn_usage.input_tokens:,} / {effective_ctx:,} tokens)"
                     " — prompt may have been truncated. Use /compact or /new."
                 )
-            elif ratio >= deps.config.llm.ctx_warn_threshold:
+            elif ratio >= deps.config.compaction.compaction_ratio:
                 # Only nudge when proactive compaction has given up (anti-thrash gate active).
                 # Below that threshold proactive will fire on the next request automatically,
                 # making a manual nudge redundant.

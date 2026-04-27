@@ -20,7 +20,6 @@ from tests._settings import make_settings
 from co_cli.agent._core import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
 from co_cli.config._core import settings
-from co_cli.config.compaction import CompactionSettings
 from co_cli.context._compaction_boundaries import _find_last_turn_start
 from co_cli.context._compaction_markers import (
     _active_todos,
@@ -66,7 +65,6 @@ def _make_processor_ctx() -> RunContext:
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -153,7 +151,6 @@ async def test_summarize_dropped_messages_raises_on_summarizer_failure():
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -204,7 +201,6 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
         model=_LLM_MODEL,
     )
@@ -234,7 +230,6 @@ async def test_circuit_breaker_first_trip_is_skip():
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
         model=_LLM_MODEL,
     )
@@ -264,7 +259,6 @@ async def test_circuit_breaker_probes_at_cadence():
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
         model=_LLM_MODEL,
     )
@@ -951,7 +945,6 @@ def test_gather_compaction_context_caps_file_paths_without_starving_other_source
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
         session=CoSessionState(
             session_todos=[{"content": "ship the followup", "status": "in_progress"}]
@@ -990,7 +983,6 @@ def test_gather_compaction_context_file_paths_section_respects_per_source_cap():
         shell=ShellBackend(),
         config=make_settings(
             llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-            compaction=CompactionSettings(min_context_length_tokens=0),
         ),
         session=CoSessionState(),
     )

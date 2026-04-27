@@ -15,7 +15,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.config.compaction import CompactionSettings
 from co_cli.context._history_processors import (
     _CLEARED_PLACEHOLDER,
     truncate_tool_results,
@@ -32,9 +31,7 @@ def _processor_ctx() -> RunContext:
     """Minimal RunContext for truncate_tool_results — no LLM call."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=make_settings(
-            compaction=CompactionSettings(min_context_length_tokens=0),
-        ),
+        config=make_settings(),
     )
     return RunContext(deps=deps, model=None, usage=RunUsage())
 

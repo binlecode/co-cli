@@ -133,6 +133,7 @@ async def summarize_dropped_messages(
     dropped: list[ModelMessage],
     *,
     focus: str | None = None,
+    previous_summary: str | None = None,
 ) -> str:
     """Pure summarizer call over ``dropped`` — no gate, no fallback.
 
@@ -147,6 +148,7 @@ async def summarize_dropped_messages(
         personality_active=bool(ctx.deps.config.personality),
         context=enrichment,
         focus=focus,
+        previous_summary=previous_summary,
     )
 
 
@@ -156,6 +158,7 @@ async def _gated_summarize_or_none(
     *,
     announce: bool,
     focus: str | None,
+    previous_summary: str | None = None,
 ) -> str | None:
     """Run the summarizer if the gate is open, else return None.
 
@@ -172,7 +175,9 @@ async def _gated_summarize_or_none(
         console.print("[dim]Compacting conversation...[/dim]")
 
     try:
-        summary_text = await summarize_dropped_messages(ctx, dropped, focus=focus)
+        summary_text = await summarize_dropped_messages(
+            ctx, dropped, focus=focus, previous_summary=previous_summary
+        )
     except Exception:
         log.warning(
             "Compaction summarization failed — falling back to static marker", exc_info=True
@@ -220,7 +225,12 @@ async def apply_compaction(
     """
     head_end, tail_start, dropped_count = bounds
     dropped = messages[head_end:tail_start]
-    summary_text = await _gated_summarize_or_none(ctx, dropped, announce=announce, focus=focus)
+    previous_summary = ctx.deps.runtime.previous_compaction_summary
+    summary_text = await _gated_summarize_or_none(
+        ctx, dropped, announce=announce, focus=focus, previous_summary=previous_summary
+    )
+    if summary_text is not None:
+        ctx.deps.runtime.previous_compaction_summary = summary_text
     marker = build_compaction_marker(dropped_count, summary_text)
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
     result = [
@@ -397,7 +407,7 @@ async def _compact_window_if_pressured(
         else latest_response_input_tokens(messages)
     )
     token_count = max(estimate_message_tokens(messages), reported)
-    token_threshold = max(int(budget * ratio), cfg.min_context_length_tokens)
+    token_threshold = int(budget * ratio)
 
     if token_count <= token_threshold:
         return messages
@@ -434,7 +444,7 @@ async def proactive_window_processor(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """M3 history-processor: compact mid-turn when proactive_ratio is exceeded.
+    """M3 history-processor: compact mid-turn when compaction_ratio is exceeded.
 
     Registered as the last history processor on the orchestrator agent. Applies
     the anti-thrash gate to suppress repeated low-yield compactions, and updates
@@ -443,7 +453,7 @@ async def proactive_window_processor(
     return await _compact_window_if_pressured(
         ctx,
         messages,
-        ratio=ctx.deps.config.compaction.proactive_ratio,
+        ratio=ctx.deps.config.compaction.compaction_ratio,
         apply_thrash_gate=True,
     )
 
@@ -452,7 +462,7 @@ async def pre_turn_window_compaction(
     deps: CoDeps,
     message_history: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """M0 pre-turn hygiene: compact at ``run_turn()`` entry when ``hygiene_ratio`` is exceeded.
+    """M0 pre-turn hygiene: compact at ``run_turn()`` entry when ``compaction_ratio`` is exceeded.
 
     Fail-open: any exception returns ``message_history`` unchanged so the turn
     proceeds. The anti-thrash gate is intentionally bypassed — pre-turn is the
@@ -467,7 +477,7 @@ async def pre_turn_window_compaction(
         return await _compact_window_if_pressured(
             ctx,
             message_history,
-            ratio=deps.config.compaction.hygiene_ratio,
+            ratio=deps.config.compaction.compaction_ratio,
             apply_thrash_gate=False,
         )
     except Exception:

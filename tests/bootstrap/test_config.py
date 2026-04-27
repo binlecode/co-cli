@@ -346,35 +346,12 @@ def test_tools_batch_spill_chars_below_minimum_raises(tmp_path):
         load_config(_user_config_path=user_settings)
 
 
-def test_compaction_proactive_ratio_at_or_above_hygiene_rejected(tmp_path):
-    """proactive_ratio >= hygiene_ratio inverts trigger ordering and must fail at load time."""
+def test_compaction_ratio_custom_value_loads(tmp_path):
+    """Custom compaction_ratio must load cleanly from settings.json."""
     user_settings = tmp_path / "settings.json"
-    user_settings.write_text(
-        json.dumps({"compaction": {"proactive_ratio": 0.90, "hygiene_ratio": 0.88}})
-    )
-    with pytest.raises(ValueError, match=r"proactive_ratio.*hygiene_ratio|strictly less"):
-        load_config(_user_config_path=user_settings)
-
-
-def test_compaction_equal_ratios_rejected(tmp_path):
-    """Equal proactive and hygiene ratios collapse the safety-net layer and must fail."""
-    user_settings = tmp_path / "settings.json"
-    user_settings.write_text(
-        json.dumps({"compaction": {"proactive_ratio": 0.80, "hygiene_ratio": 0.80}})
-    )
-    with pytest.raises(ValueError, match=r"proactive_ratio.*hygiene_ratio|strictly less"):
-        load_config(_user_config_path=user_settings)
-
-
-def test_compaction_valid_ratio_ordering_loads(tmp_path):
-    """Default ordering (proactive < hygiene) must continue to load cleanly."""
-    user_settings = tmp_path / "settings.json"
-    user_settings.write_text(
-        json.dumps({"compaction": {"proactive_ratio": 0.70, "hygiene_ratio": 0.85}})
-    )
+    user_settings.write_text(json.dumps({"compaction": {"compaction_ratio": 0.75}}))
     settings = load_config(_user_config_path=user_settings)
-    assert settings.compaction.proactive_ratio == 0.70
-    assert settings.compaction.hygiene_ratio == 0.85
+    assert settings.compaction.compaction_ratio == 0.75
 
 
 def test_unknown_top_level_key_rejected(tmp_path):

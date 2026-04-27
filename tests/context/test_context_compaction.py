@@ -1,5 +1,8 @@
 """Tests for compaction budget resolution and token-triggered compaction."""
 
+import asyncio
+from pathlib import Path
+
 import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
@@ -17,8 +20,12 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings, settings
 from co_cli.config.compaction import CompactionSettings
 from co_cli.context.compaction import (
+    SUMMARY_MARKER_PREFIX,
+    apply_compaction,
+    gather_compaction_context,
     pre_turn_window_compaction,
     proactive_window_processor,
+    summary_marker,
 )
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
@@ -27,6 +34,7 @@ from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
     resolve_compaction_budget,
+    summarize_messages,
 )
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
@@ -86,7 +94,7 @@ async def test_compaction_triggers_on_real_input_tokens():
     ≈ 30_000 per message makes each group ≈ 15_000 tokens — more than one
     group cannot fit under tail_fraction (0.40) * 100_000 = 40_000 tokens.
     """
-    # 90_000 > int(100_000 * 0.75) = 75_000 → trigger fires
+    # 90_000 > int(100_000 * 0.80) = 80_000 → trigger fires
     msgs = _make_messages(10, last_input_tokens=90_000, body_chars=30_000)
     config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
     ctx = _make_ctx(config)
@@ -105,16 +113,14 @@ async def test_compaction_fallback_when_no_usage_data():
     and compaction still triggers correctly via the char-estimate fallback.
 
     Uses a tiny Ollama budget (llm_num_ctx=30) so the char-estimate
-    (~33 tokens from 10 messages) exceeds int(30 * 0.75) = 22.
+    (~33 tokens from 10 messages) exceeds int(30 * 0.80) = 24.
     """
     msgs_no_usage = _make_messages(10, last_input_tokens=0)
     assert latest_response_input_tokens(msgs_no_usage) == 0
 
     # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 25
-    # min_context_length_tokens=0 disables the guard so the tiny synthetic budget works.
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-        compaction=CompactionSettings(min_context_length_tokens=0),
     )
     ctx = _make_ctx(config)
     result = await proactive_window_processor(ctx, msgs_no_usage)
@@ -131,13 +137,12 @@ async def test_compaction_triggers_on_ollama_budget():
     """Ollama: input_tokens=7_200 with llm_num_ctx=8192 triggers compaction.
 
     budget = 8192 (raw context_window, no reserve subtraction).
-    7_200 > int(8192 * 0.75) = 6144 → trigger fires. body_chars sized so each
+    7_200 > int(8192 * 0.80) = 6553 → trigger fires. body_chars sized so each
     group exceeds tail_fraction * 8192 = ~3276 tokens.
     """
     msgs = _make_messages(10, last_input_tokens=7_200, body_chars=3_000)
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 8192}),
-        compaction=CompactionSettings(min_context_length_tokens=0),
     )
     assert config.llm.uses_ollama()
     ctx = _make_ctx(config)
@@ -353,13 +358,11 @@ def test_build_summarizer_prompt_keeps_personality_after_context() -> None:
 # pre_turn_window_compaction — TASK-1 / TASK-2 hygiene compaction tests
 #
 # Budget: ctx_token_budget=100_000 (default). model=None → ctx_window=None → budget=100_000.
-# Hygiene threshold: int(100_000 * 0.88) = 88_000 tokens = 352_000 chars.
-# Proactive threshold: int(100_000 * 0.75) = 75_000 tokens = 300_000 chars.
+# Compaction threshold: int(100_000 * 0.80) = 80_000 tokens = 320_000 chars.
 # ---------------------------------------------------------------------------
 
 _HYGIENE_BUDGET = 100_000
-_HYGIENE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * CompactionSettings().hygiene_ratio)
-_PROACTIVE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * 0.75)
+_HYGIENE_THRESHOLD_TOKENS = int(_HYGIENE_BUDGET * CompactionSettings().compaction_ratio)
 
 
 def _make_hygiene_deps(*, ctx_token_budget: int = _HYGIENE_BUDGET) -> CoDeps:
@@ -373,8 +376,8 @@ def _make_hygiene_deps(*, ctx_token_budget: int = _HYGIENE_BUDGET) -> CoDeps:
 
 @pytest.mark.asyncio
 async def test_pre_turn_hygiene_compacts_oversized_history() -> None:
-    """Rough-estimate tokens above HYGIENE_COMPACTION_RATIO * budget triggers pre-turn compaction."""
-    # 10 messages x 40_000 chars = 400_000 chars / 4 = 100_000 tokens > 88_000 threshold
+    """Rough-estimate tokens above compaction_ratio * budget triggers pre-turn compaction."""
+    # 10 messages x 40_000 chars = 400_000 chars / 4 = 100_000 tokens > 80_000 threshold
     msgs = _make_messages(10, body_chars=40_000)
     assert estimate_message_tokens(msgs) > _HYGIENE_THRESHOLD_TOKENS
     deps = _make_hygiene_deps()
@@ -384,27 +387,10 @@ async def test_pre_turn_hygiene_compacts_oversized_history() -> None:
 
 @pytest.mark.asyncio
 async def test_pre_turn_hygiene_no_op_below_threshold() -> None:
-    """History well below the hygiene threshold is returned unchanged."""
-    # 4 messages x ~20 chars = ~80 chars / 4 = ~20 tokens ≪ 88_000 threshold
+    """History well below the compaction threshold is returned unchanged."""
+    # 4 messages x ~20 chars = ~80 chars / 4 = ~20 tokens ≪ 80_000 threshold
     msgs = _make_messages(4)
     assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
-    deps = _make_hygiene_deps()
-    result = await pre_turn_window_compaction(deps, msgs)
-    assert result is msgs
-
-
-@pytest.mark.asyncio
-async def test_pre_turn_hygiene_no_op_in_proactive_zone() -> None:
-    """History in the proactive zone (above 0.75 but below 0.88) is not touched by hygiene.
-
-    The proactive processor (model-call time) handles this range — hygiene must not fire.
-    """
-    # 10 messages x 32_000 chars = 320_000 chars / 4 = 80_000 tokens
-    # 75_000 < 80_000 < 88_000: in proactive zone, below hygiene threshold
-    msgs = _make_messages(10, body_chars=32_000)
-    estimate = estimate_message_tokens(msgs)
-    assert estimate > _PROACTIVE_THRESHOLD_TOKENS
-    assert estimate <= _HYGIENE_THRESHOLD_TOKENS
     deps = _make_hygiene_deps()
     result = await pre_turn_window_compaction(deps, msgs)
     assert result is msgs
@@ -475,18 +461,18 @@ async def test_pre_turn_hygiene_fires_when_reported_tokens_exceed_threshold() ->
     """Hygiene fires when the provider-reported count exceeds the threshold, even if char estimate is below it.
 
     Simulates a code-heavy session where chars/4 underestimates actual tokens by ~1.5x.
-    Char estimate: 80_000 tokens (below 88_000 threshold).
-    Reported count (carried on the last ModelResponse usage): 92_000 tokens
-    (above 88_000 threshold). Without the max-of-two trigger, hygiene would
+    Char estimate: ~70_000 tokens (below 80_000 threshold).
+    Reported count (carried on the last ModelResponse usage): 84_000 tokens
+    (above 80_000 threshold). Without the max-of-two trigger, hygiene would
     not fire. With it, the provider-reported count drives the decision.
     Uses 10 messages so M3 has enough turn groups to compact.
     """
-    # 10 messages x 32_000 chars = 320_000 chars / 4 = 80_000 tokens (below threshold)
+    # 10 messages x 28_000 chars = 280_000 chars / 4 = 70_000 tokens (below threshold)
     # last_input_tokens stamps the provider-reported count onto the final assistant message,
     # which is the production path: latest_response_input_tokens(message_history).
     msgs = _make_messages(
         10,
-        body_chars=32_000,
+        body_chars=28_000,
         last_input_tokens=_HYGIENE_THRESHOLD_TOKENS + 4_000,
     )
     assert estimate_message_tokens(msgs) < _HYGIENE_THRESHOLD_TOKENS
@@ -498,48 +484,9 @@ async def test_pre_turn_hygiene_fires_when_reported_tokens_exceed_threshold() ->
     )
 
 
-@pytest.mark.asyncio
-async def test_pre_turn_hygiene_respects_min_context_length_floor() -> None:
-    """At small budgets, hygiene must respect min_context_length_tokens the same way proactive does.
-
-    budget=50_000, hygiene_ratio=0.88 → raw threshold 44_000 tokens.
-    min_context_length_tokens=64_000 (default) raises the effective threshold to 64_000.
-    Token count of ~50_000 sits above the raw threshold but below the floor — hygiene must no-op.
-    """
-    msgs = _make_messages(10, body_chars=20_000)
-    estimate = estimate_message_tokens(msgs)
-    deps = _make_hygiene_deps(ctx_token_budget=50_000)
-    floor = deps.config.compaction.min_context_length_tokens
-    raw_threshold = int(50_000 * deps.config.compaction.hygiene_ratio)
-    assert raw_threshold < estimate < floor, (
-        f"fixture out of band: need raw_threshold ({raw_threshold}) < estimate ({estimate}) < floor ({floor})"
-    )
-    result = await pre_turn_window_compaction(deps, msgs)
-    assert result is msgs
-
-
 # ---------------------------------------------------------------------------
-# TASK-3 regression tests: threshold floor + anti-thrashing gate
+# TASK-3 regression tests: anti-thrashing gate
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_threshold_floor_prevents_compaction_on_small_context() -> None:
-    """min_context_length_tokens floor blocks compaction when token_count < floor.
-
-    With default min_context_length_tokens=64_000 and num_ctx=30, the effective threshold
-    is max(int(30*0.75), 64_000) = 64_000. A tiny message set (~33 tokens) is well
-    below that floor — compaction must not fire.
-    """
-    msgs = _make_messages(10, last_input_tokens=0)
-    # Default min_context_length_tokens=64_000 — floor should prevent compaction
-    config = make_settings(
-        llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30})
-    )
-    ctx = _make_ctx(config)
-    result = await proactive_window_processor(ctx, msgs)
-    # Floor prevents compaction — result returned unchanged
-    assert result is msgs
 
 
 @pytest.mark.asyncio
@@ -553,7 +500,6 @@ async def test_anti_thrashing_gate_suppresses_proactive_after_low_yield_runs() -
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
-            min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
         ),
@@ -572,7 +518,6 @@ async def test_anti_thrashing_gate_does_not_suppress_when_window_not_full() -> N
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
-            min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
         ),
@@ -619,7 +564,6 @@ async def test_savings_clear_unblocks_gate() -> None:
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
         compaction=CompactionSettings(
-            min_context_length_tokens=0,
             min_proactive_savings=0.10,
             proactive_thrash_window=2,
         ),
@@ -632,3 +576,146 @@ async def test_savings_clear_unblocks_gate() -> None:
     # After clear, proactive must fire
     result = await proactive_window_processor(ctx, msgs)
     assert len(result) < len(msgs)
+
+
+# ---------------------------------------------------------------------------
+# Iterative summary — TASK-4 tests for previous_compaction_summary feature
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_summarize_messages_iterative_branch_preserves_previous_content() -> None:
+    """summarize_messages with previous_summary takes the iterative update path.
+
+    A distinctive token planted in previous_summary must appear in the returned
+    summary — the PRESERVE discipline requires the model to carry it forward.
+    """
+    from tests._ollama import ensure_ollama_warm
+    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+
+    from co_cli.llm._factory import build_model
+
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
+    previous_summary = (
+        "## Active Task\nI asked you to implement JWT authentication.\n\n"
+        "## Goal\nMigrate from session-based to JWT auth. Decision: use HS512_SENTINEL_TOKEN.\n\n"
+        "## Key Decisions\nSigning algorithm chosen: HS512_SENTINEL_TOKEN (unusual for audit).\n\n"
+        "## Progress\nIn progress: token middleware implementation."
+    )
+    messages = [
+        _user("Update the middleware to validate JWT tokens."),
+        _assistant("Updated the middleware to call validate_token() on each request."),
+    ]
+    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        result = await summarize_messages(deps, messages, previous_summary=previous_summary)
+    assert "HS512_SENTINEL_TOKEN" in result, (
+        f"distinctive token from previous_summary absent from iterative update output: {result[:400]}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_previous_summary_written_back_after_successful_compaction() -> None:
+    """apply_compaction writes raw summary text (no SUMMARY_MARKER_PREFIX) to previous_compaction_summary."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.llm._factory import build_model
+
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
+    deps.runtime.previous_compaction_summary = "EXISTING_SENTINEL_PRIOR_SUMMARY"
+    msgs = _make_messages(6, body_chars=500)
+    bounds = (0, len(msgs) - 2, len(msgs) - 2)
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
+    # pytest-timeout=120s is the safety net for the LLM summarization call.
+    await apply_compaction(ctx, msgs, bounds, announce=False)
+    new_summary = deps.runtime.previous_compaction_summary
+    assert new_summary is not None
+    assert new_summary != "EXISTING_SENTINEL_PRIOR_SUMMARY", (
+        "previous_compaction_summary must be updated after successful compaction"
+    )
+    assert not new_summary.startswith(SUMMARY_MARKER_PREFIX), (
+        "stored summary must be raw template content, not the prefixed in-context marker"
+    )
+
+
+@pytest.mark.asyncio
+async def test_previous_summary_unchanged_when_summarizer_gate_closed() -> None:
+    """previous_compaction_summary is not modified when the summarizer gate is closed (no model)."""
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG)  # model=None → gate closed
+    deps.runtime.previous_compaction_summary = "PRESERVED_VALUE_SENTINEL"
+    msgs = _make_messages(6, body_chars=100)
+    bounds = (0, len(msgs) - 2, len(msgs) - 2)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    _, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
+    assert summary_text is None, "no model → static marker, summary_text must be None"
+    assert deps.runtime.previous_compaction_summary == "PRESERVED_VALUE_SENTINEL", (
+        "prior value must be untouched when summarizer does not run"
+    )
+
+
+def test_gather_compaction_context_suppresses_prior_summaries_when_field_set() -> None:
+    """Prior-summary enrichment is suppressed when previous_compaction_summary is non-None."""
+    dropped = [summary_marker(5, "## Goal\nRefactor auth — PRIOR_CONTENT_SENTINEL")]
+
+    # Control: field None → prior summary IS gathered as enrichment
+    deps_control = CoDeps(shell=ShellBackend(), config=_CONFIG)
+    ctx_control = RunContext(deps=deps_control, model=None, usage=RunUsage())
+    result_control = gather_compaction_context(ctx_control, dropped)
+    assert result_control is not None
+    assert "Prior summary" in result_control, (
+        "prior summary should appear in enrichment when previous_compaction_summary is None"
+    )
+
+    # Test: field non-None → prior summary NOT gathered (would duplicate the iterative prompt)
+    deps_set = CoDeps(shell=ShellBackend(), config=_CONFIG)
+    deps_set.runtime.previous_compaction_summary = "EXISTING_SUMMARY"
+    ctx_set = RunContext(deps=deps_set, model=None, usage=RunUsage())
+    result_set = gather_compaction_context(ctx_set, dropped)
+    assert result_set is None or "Prior summary:" not in result_set, (
+        "prior-summary enrichment must be suppressed when previous_compaction_summary is set"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_commands_reset_previous_compaction_summary() -> None:
+    """
+    /new and /clear reset previous_compaction_summary to None.
+    /compact (empty history) and /resume (no sessions) do not touch the field.
+    """
+    import tempfile
+
+    from co_cli.commands._types import CommandContext
+    from co_cli.commands.session import _cmd_clear, _cmd_compact, _cmd_new, _cmd_resume
+
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
+
+    # /clear resets the field
+    deps.runtime.previous_compaction_summary = "PRIOR"
+    ctx_clear = CommandContext(message_history=[_user("x")], deps=deps, agent=_AGENT)
+    await _cmd_clear(ctx_clear, "")
+    assert deps.runtime.previous_compaction_summary is None
+
+    # /new resets the field (non-empty history triggers session rotation)
+    deps.runtime.previous_compaction_summary = "PRIOR"
+    ctx_new = CommandContext(message_history=[_user("x")], deps=deps, agent=_AGENT)
+    await _cmd_new(ctx_new, "")
+    assert deps.runtime.previous_compaction_summary is None
+
+    # /compact with empty history early-returns; field is NOT reset
+    deps.runtime.previous_compaction_summary = "PRIOR"
+    ctx_compact = CommandContext(message_history=[], deps=deps, agent=_AGENT)
+    await _cmd_compact(ctx_compact, "")
+    assert deps.runtime.previous_compaction_summary == "PRIOR"
+
+    # /resume with no sessions early-returns; field is NOT reset
+    deps.runtime.previous_compaction_summary = "PRIOR"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        deps.sessions_dir = Path(tmpdir)
+        ctx_resume = CommandContext(message_history=[], deps=deps, agent=_AGENT)
+        await _cmd_resume(ctx_resume, "")
+    assert deps.runtime.previous_compaction_summary == "PRIOR"

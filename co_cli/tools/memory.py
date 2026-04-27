@@ -24,6 +24,14 @@ from co_cli.tools.tool_io import tool_output
 
 logger = logging.getLogger(__name__)
 
+_SUMMARIZATION_TIMEOUT_SECS: int = 60
+"""Gather budget for concurrent session summarization in memory_search.
+
+Sized for the worst-case batch: multiple sessions, each requiring one
+hermes-style LLM summarization call. 60s covers parallel invocations
+on a local 35B model while still failing fast on hangs.
+"""
+
 
 def _browse_recent(
     ctx: RunContext[CoDeps],
@@ -225,7 +233,7 @@ async def memory_search(
     ]
 
     try:
-        async with asyncio.timeout(60):
+        async with asyncio.timeout(_SUMMARIZATION_TIMEOUT_SECS):
             summaries = await asyncio.gather(*coros, return_exceptions=True)
     except TimeoutError:
         span.set_attribute("memory.summarizer.timed_out", True)

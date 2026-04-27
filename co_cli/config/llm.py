@@ -125,8 +125,6 @@ LLM_ENV_MAP: dict[str, str] = {
     "host": "CO_LLM_HOST",
     "model": "CO_LLM_MODEL",
     "num_ctx": "CO_LLM_NUM_CTX",
-    "ctx_warn_threshold": "CO_LLM_CTX_WARN_THRESHOLD",
-    "ctx_overflow_threshold": "CO_LLM_CTX_OVERFLOW_THRESHOLD",
 }
 
 _PROVIDER_API_KEY_VARS: dict[str, str] = {
@@ -182,8 +180,6 @@ class LlmSettings(BaseModel):
     # Bootstrap sets this from the runtime probe; user can also set it in settings.json.
     num_ctx: int = Field(default=0)
     ctx_token_budget: int = Field(default=100_000)
-    ctx_warn_threshold: float = Field(default=0.85)
-    ctx_overflow_threshold: float = Field(default=1.0)
     reasoning: InferenceSettings = Field(default_factory=InferenceSettings)
     noreason: InferenceSettings = Field(default_factory=InferenceSettings)
 

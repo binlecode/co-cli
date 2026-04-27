@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-DEFAULT_SHELL_MAX_TIMEOUT = 600
+DEFAULT_SHELL_MAX_TIMEOUT = 300
 
 SHELL_ENV_MAP: dict[str, str] = {
     "max_timeout": "CO_SHELL_MAX_TIMEOUT",

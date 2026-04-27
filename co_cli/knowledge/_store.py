@@ -280,7 +280,7 @@ class KnowledgeStore:
             self._llm_api_key,
         )
 
-        self._conn = sqlite3.connect(str(self._db_path))  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
+        self._conn = sqlite3.connect(str(self._db_path), timeout=5)  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
         self._conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()

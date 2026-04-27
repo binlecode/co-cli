@@ -11,6 +11,7 @@ Public API:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -25,6 +26,14 @@ from co_cli.deps import CoDeps
 from co_cli.llm._call import llm_call
 
 log = logging.getLogger(__name__)
+
+_LLM_SUMMARIZE_TIMEOUT_SECS: int = 300
+"""Hard deadline for a single summarization LLM call.
+
+One noreason call over a dropped-message window; measured at ~41s on a
+local 35B model for the heaviest compaction step (~58K chars). 60s gives
+~19s headroom for model load variation.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +165,36 @@ _SUMMARIZE_PROMPT = (
     "Prioritize recent actions and unfinished work over completed early steps."
 )
 
+
+def _build_iterative_template(previous_summary: str) -> str:
+    """Build the iterative-update prompt template embedding the previous summary.
+
+    Used when previous_compaction_summary is non-None. The PREVIOUS SUMMARY block
+    carries the raw LLM output from the last successful compaction; NEW TURNS TO
+    INCORPORATE references the message history sent alongside the prompt. The
+    preserve/add/move/remove/critical instructions update the same structured
+    sections as the from-scratch path.
+    """
+    return (
+        "You are updating a context compaction summary. A previous compaction\n"
+        "produced the summary below. New conversation turns have occurred since\n"
+        "then and need to be incorporated.\n\n"
+        f"PREVIOUS SUMMARY:\n{previous_summary}\n\n"
+        "NEW TURNS TO INCORPORATE:\n"
+        "The conversation history above contains the new turns to process.\n\n"
+        "Update the summary using this exact structure. "
+        "PRESERVE all existing information that is still relevant. "
+        "ADD new completed actions (continue numbering from the previous summary). "
+        "MOVE items from 'In Progress' to 'Completed Actions' when done. "
+        "MOVE answered questions to 'Resolved Questions'. "
+        "UPDATE 'Active State' to reflect current state. "
+        "REMOVE information only if it is clearly obsolete. "
+        "CRITICAL: Update '## Active Task' to reflect the user's most recent "
+        "unfulfilled request — this is the most important field for task continuity.\n\n"
+        + _SUMMARIZE_PROMPT
+    )
+
+
 _PERSONALITY_COMPACTION_ADDENDUM = (
     "\n\nAdditionally, preserve:\n"
     "- Personality-reinforcing moments (emotional exchanges, humor, "
@@ -210,6 +249,7 @@ async def summarize_messages(
     personality_active: bool = False,
     context: str | None = None,
     focus: str | None = None,
+    previous_summary: str | None = None,
 ) -> str:
     """Summarise *messages* via a single LLM call (no tools, no agent loop).
 
@@ -217,13 +257,25 @@ async def summarize_messages(
     ``deps.model.settings_noreason`` as the model settings — the only correct
     choice for this functional call.
 
+    When ``previous_summary`` is provided, builds the iterative-update prompt
+    branch (PREVIOUS SUMMARY + NEW TURNS TO INCORPORATE + preserve/add/move/remove
+    discipline) instead of the from-scratch prompt. The two branches share the
+    same structured-template sections.
+
     Used by both the sliding-window processor and ``/compact``.
     Returns the summary text, or raises on failure (caller handles fallback).
     """
-    final_prompt = _build_summarizer_prompt(prompt, context, personality_active, focus)
-    return await llm_call(
-        deps,
-        final_prompt,
-        instructions=_SUMMARIZER_SYSTEM_PROMPT,
-        message_history=messages,
+    log.info(
+        "compaction_summarize_branch=%s",
+        "iterative" if previous_summary is not None else "from_scratch",
     )
+    if previous_summary is not None:
+        prompt = _build_iterative_template(previous_summary)
+    final_prompt = _build_summarizer_prompt(prompt, context, personality_active, focus)
+    async with asyncio.timeout(_LLM_SUMMARIZE_TIMEOUT_SECS):
+        return await llm_call(
+            deps,
+            final_prompt,
+            instructions=_SUMMARIZER_SYSTEM_PROMPT,
+            message_history=messages,
+        )

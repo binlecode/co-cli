@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 from contextlib import AsyncExitStack
@@ -244,7 +245,8 @@ async def create_deps(
         connected: list[MCPToolsetEntry] = []
         for entry in tool_registry.mcp_toolsets:
             try:
-                await stack.enter_async_context(entry.toolset)
+                async with asyncio.timeout(entry.timeout):
+                    await stack.enter_async_context(entry.toolset)
                 connected.append(entry)
             except Exception as e:
                 frontend.on_status(f"MCP server failed to connect: {e}")

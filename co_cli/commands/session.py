@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 async def _cmd_clear(ctx: CommandContext, args: str) -> list[Any]:
     """Clear conversation history."""
+    ctx.deps.runtime.previous_compaction_summary = None
     console.print("[info]Conversation history cleared.[/info]")
     return []
 
@@ -28,6 +29,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     # Rotate session path — transcript writer derives path from deps.session.session_path,
     # so assigning a new path ensures the next write goes to a new file.
     ctx.deps.session.session_path = new_session_path(ctx.deps.sessions_dir)
+    ctx.deps.runtime.previous_compaction_summary = None
     console.print("[dim]Session rotated.[/dim]")
     return []
 

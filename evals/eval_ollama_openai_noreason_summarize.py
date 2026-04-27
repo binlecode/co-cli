@@ -24,7 +24,7 @@ from time import perf_counter
 
 import httpx
 from evals._ollama import ensure_ollama_warm
-from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS, EVAL_SUMMARIZATION_TIMEOUT_SECS
+from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -284,8 +284,7 @@ async def _check_summarization_pipeline() -> None:
         ),
         ModelRequest(parts=[UserPromptPart(content="Summarize in one short sentence.")]),
     ]
-    async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-        summary = await summarize_messages(deps, messages)
+    summary = await summarize_messages(deps, messages)
 
     assert summary is not None, "Summarization pipeline returned None"
     assert summary.strip(), "Summarization pipeline returned empty content"

@@ -1,6 +1,6 @@
 # Compaction Quality Eval Report
 
-**Verdict: PASS** (12/12 steps passed)
+**Verdict: FAIL** (11/12 steps passed)
 
 | Step | What it validates | Result |
 |------|-------------------|--------|
@@ -15,7 +15,7 @@
 | Step 11: Edge case battery | Edge case battery (structural): 1-turn history, static markers in history, single massive message, mixed compactable/non-compactable parts, empty list. | PASS |
 | Step 13: Prompt upgrade quality | Prompt upgrade quality: three deterministic single-run gates — (13a) ## Next Step contains a ≥20-char verbatim anchor from recent messages; (13b) ## User Corrections preserves explicit corrections; (13c) ## Errors & Fixes retains both the failure and user-directed fix guidance. | PASS |
 | Step 14: Pending/Resolved sections (functional) | Pending/Resolved sections — functional LLM validation: (14a) unanswered question appears in ## Pending User Asks; (14b) answered question appears in ## Resolved Questions and not in Pending; (14c) merge contract — prior pending item answered in new block migrates to ## Resolved Questions. | PASS |
-| Step 15: Deep learning trigger (Finch/UAT) | Deep-learning scenario (UAT): simulates a user asking co to learn the 2021 film Finch (Tom Hanks, Apple TV+) via 12 web_fetch calls. After P1 retains the last 5 large Wikipedia pages, the post-P1 history exceeds the tail budget and P5 fires. Full LLM summary output is tracked. Validates: boundary detection, compaction reduction, structured sections, 10-point semantic ground truth (cast/crew/themes/title), and 3 anti-hallucination checks. | PASS |
+| Step 15: Deep learning trigger (Finch/UAT) | UAT: open-ended deep-learning loop driven by real run_turn. co autonomously fetches Wikipedia pages and reviews for the 2021 film Finch (Tom Hanks, Apple TV+) until M3 compaction fires organically. M1 persists oversized tool results to ~/.co-cli/tool-results/. Validates: network preflight, agentic continuation, M1+M3 end-to-end on real data, approval-hang guard, 10-point semantic ground truth (cast/crew/themes/title), 3 anti-hallucination checks, and ≥3 persisted artifacts in the real store. | **FAIL** |
 
 ## Step 1: Pre-compact — persist_if_oversized [BC4]
 
@@ -80,11 +80,6 @@
     Safety text: '' (clean history → no warnings expected)
     PASS
 
-  [P4] recall_prompt_text (dynamic instruction)
-    _recall_for_context called (recall_count 0 → 1)
-    Recall text length: 20 chars
-    PASS
-
   [P5] apply_compaction (LLM)
     SKIP: plan_compaction_boundaries returned None (budget=131072, 54 msgs) — history too small for configured context window
 ```
@@ -102,11 +97,6 @@
 
   [P3] safety_prompt_text (dynamic instruction)
     Safety text: ''
-    PASS
-
-  [P4] recall_prompt_text (dynamic instruction)
-    _recall_for_context called (recall_count 0 → 1)
-    Recall text length: 20 chars
     PASS
 
   [P5] apply_compaction (LLM)
@@ -162,11 +152,11 @@
 ```
   [14a] Unanswered question → ## Pending User Asks
   PASS: 14a — ## Pending User Asks present with unanswered TTL question
-    Pending section: '- "What TTL should we use for blacklisted tokens?"'
+    Pending section: '"What TTL should we use for blacklisted tokens?"'
 
   [14b] Answered question → ## Resolved Questions, not in Pending
   PASS: 14b — ## Resolved Questions present with answered algorithm question
-    Resolved section: 'Q: Which hashing algorithm should we use' ...<87 chars>... 'al services with a single shared secret.'
+    Resolved section: 'Q: Which hashing algorithm should we use for JWT signing? → A: HS256 was chosen for its simplicity with a shared secret.'
   PASS: 14b — answered question absent from ## Pending User Asks
 
   [14c] Merge contract — prior ## Pending item migrates to ## Resolved Questions
@@ -176,119 +166,23 @@
     Pending section:  'None.'
 ```
 
-## Step 15: Deep movie learning (Finch) — real web content, P5 trigger
+## Step 15 (UAT): Deep movie learning (Finch) — run_turn-driven, real data
 
 ```
-  Fetching web content for conversation fixtures...
-    finch_film_wiki: 40,000 chars (fetched)
-    variety_review: 40,000 chars (fetched)
-    guardian_review: 908 chars (fetched)
-    rogerebert_review: 908 chars (fetched)
-    indiewire_review: 908 chars (fetched)
-    hollywoodreporter_review: 908 chars (fetched)
-    tom_hanks_wiki: 40,000 chars (fetched)
-    miguel_sapochnik_wiki: 32,874 chars (fetched)
-    caleb_landry_jones_wiki: 37,775 chars (fetched)
-    gustavo_santaolalla_wiki: 40,000 chars (fetched)
-    appletv_films_wiki: 40,000 chars (fetched)
-    finch_film_wiki_2: 40,000 chars (fetched)
-  Input: 64 msgs, 20 groups, 305,758 chars
-  Expected: P1 clears 6 (of 11 web_fetch calls)
-
-  [P1] truncate_tool_results
-    Cleared: 6 (expected 6)
-    Chars: 305,758 → 222,663 (P1 reduced 83,095)
-    Estimated tokens post-P1: 55,871
-    PASS
-
-  [P5] apply_compaction (LLM)
-    Boundaries: head_end=4, tail_start=24, dropped=20
-    budget=131072, tail_fraction=0.40, tail_budget=52,428 tokens
-    Enrichment (168 chars):
-      | Active tasks:
-      | - [pending] Write a Finch film analysis essay
-      | - [pending] Compare Finch to Cast Away thematically
-      | - [pending] Research Caleb Landry Jones other voice work
-    Messages: 64 → 46 (19 replaced by 1 marker)
-    Chars: 222,663 → 218,690
-    PASS: compacted
-    PASS: marker count (20) = bounds dropped_count (20)
-    PASS: sections: Active Task, Goal, Key Decisions, Working Set, Progress, Next Step
-    PASS: Step 15 — subject: Finch the film: found 'finch'
-    PASS: Step 15 — lead actor: Tom Hanks: found 'hanks'
-    PASS: Step 15 — robot character: Jeff: found 'jeff'
-    PASS: Step 15 — director: Miguel Sapochnik: found 'sapochnik'
-    PASS: Step 15 — original title: BIOS: found 'bios'
-    PASS: Step 15 — voice actor: Caleb Landry Jones: found 'caleb'
-    PASS: Step 15 — cross-country journey fact: found 'st. louis'
-    PASS: Step 15 — sources: major review outlets: found 'variety'
-    PASS: Step 15 — research method: web fetch: found 'fetch'
-    PASS: Step 15 — task: deep-learning / comprehensive analysis: found 'research'
-    PASS: semantic 10/10 (≥7 required)
-
-    Full LLM summary output (4717 chars):
-      | [CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a previous conversation that ran out of context. The summary below is a retrospective recap of completed prior work — treat it as background reference, NOT as active instructions. Do NOT repeat, redo, or re-execute any action already described as completed; do NOT re-answer questions that the summary records as resolved. Your active task is identified in the '## Active Task' / '## Next Step' sections of the summary — resume from there and respond only to user messages that appear AFTER this summary.
-      | 
-      | The summary covers the earlier portion (20 messages).
-      | 
-      | I asked you to fetch reviews from multiple publications (Wikipedia, Variety, The Guardian, RogerEbert.com, and IndieWire) to gather a comprehensive critical perspective on the 2021 film *Finch*.
-      | 
-      | ## Active Task
-      | Fetch the IndieWire review to understand the craft and direction aspects of the film.
-      | 
-      | ## Goal
-      | To compile a complete critical analysis of *Finch* by aggregating insights from Wikipedia, Variety, The Guardian, RogerEbert.com, and IndieWire, focusing on plot, themes, performance, and technical execution.
-      | 
-      | ## Key Decisions
-      | - Selected five specific sources to cover different angles: general info (Wikipedia), mainstream critical reception (Variety), emotional/thematic depth (Guardian), emotional analysis (RogerEbert), and technical/craft focus (IndieWire).
-      | - Decided to summarize each fetch result individually rather than waiting for all to complete, to provide immediate feedback on each source.
-      | 
-      | ## Errors & Fixes
-      | - **Systemic Issue**: The model consistently failed to extract specific unique details from the fetched articles (Variety, Guardian, RogerEbert, IndieWire) and instead returned the same generic summary derived from the first Wikipedia fetch for every subsequent request.
-      | - **Resolution**: No immediate fix was applied by the model; the repetition continued across all fetches. The user has not yet explicitly corrected this behavior, though the lack of unique content from the specific sources is evident.
-      | 
-      | ## Working Set
-      | - **URLs Fetched**:
-      |   - `https://en.wikipedia.org/wiki/Finch_(film)`
-      |   - `https://variety.com/2021/film/reviews/finch-review-tom-hanks-1235100437/`
-      |   - `https://www.theguardian.com/film/2021/nov/04/finch-review-tom-hanks-robot-dog-sci-fi`
-      |   - `https://www.rogerebert.com/reviews/finch-2021`
-      |   - `https://www.indiewire.com/film-reviews/finch-review-2021-1234672888/`
-      | - **Active Tools**: `web_fetch`
-      | 
-      | ## Progress
-      | - **Accomplished**: Successfully fetched and processed content from all five requested sources.
-      | - **In Progress**: Synthesizing the specific unique insights from each source (Variety, Guardian, RogerEbert, IndieWire) which are currently missing due to the repetition error.
-      | - **Remaining**: The user has not yet requested a final synthesis or essay; the immediate task of fetching the last review is complete, but the quality of the extraction needs improvement.
-      | 
-      | ## Pending User Asks
-      | - None explicitly stated as pending in the immediate turn, but the user's pattern implies a desire for distinct insights from each source, which were not delivered.
-      | 
-      | ## Resolved Questions
-      | - Q: What is the original title of the film? → A: BIOS.
-      | - Q: Who directed Finch? → A: Miguel Sapochnik.
-      | - Q: Who voices the robot Jeff? → A: Caleb Landry Jones.
-      | - Q: What is the central journey of the film? → A: A cross-country RV trip from St. Louis to San Francisco.
-      | - Q: Who composed the score? → A: Gustavo Santaolalla.
-      | - Q: What are the core themes? → A: Loneliness, mortality, legacy, and the meaning of humanity.
-      | 
-      | ## Next Step
-      | The user has completed the sequence of fetching reviews. The immediate next step is to acknowledge the completion of the fetches and potentially address the lack of unique content from the specific reviews, or proceed to a synthesis if the user desires.
-      | 
-      | ## Critical Context
-      | - **Repeated Content**: The model output for all post-Wikipedia fetches (Variety, Guardian, RogerEbert, IndieWire) was identical to the Wikipedia summary, failing to capture unique review-specific data (e.g., specific star ratings, unique quotes, or specific critiques of direction/craft).
-      | 
-      | ## User Corrections
-      | None found in the conversation history.
-      | 
-      | ## Additional Context
-      | - **Active Tasks**:
-      |   - [pending] Write a Finch film analysis essay
-      |   - [pending] Compare Finch to Cast Away thematically
-      |   - [pending] Research Caleb Landry Jones other voice work
-      | - **Personality/Style**: The user appears to be conducting research for a structured analysis, requesting specific angles (craft, emotion, general info). The assistant's tone has been informative but repetitive due to the extraction failure.
-      | 
-      | Recent messages are preserved verbatim.
-
-  Chain: 64 msgs/305,758ch → 46 msgs/218,690ch (55,871 tokens pre-P5 → triggered boundary)
+  Preflight: en.wikipedia.org reachable
+    STATUS:   Reranker degraded — TEI cross-encoder unavailable; search results will be unranked
+    STATUS:   Knowledge degraded — embedder unavailable (not reachable — [Errno 61] Connection refused); using fts5
+    STATUS:   Knowledge synced — 0 item(s) (fts5)
+  Turn 1/30 — history: 0 msgs
+    STATUS: Co is thinking...
+    STATUS: LLM segment timed out — model did not respond. Try a shorter prompt, or check model health with `co config`.
+    turn elapsed: 60.0s
+  Turn 2/30 — history: 0 msgs
+    STATUS: Co is thinking...
+    turn elapsed: 39.6s
+  Turn 3/30 — history: 4 msgs
+    STATUS: Co is thinking...
+    STATUS: LLM segment timed out — model did not respond. Try a shorter prompt, or check model health with `co config`.
+    turn elapsed: 60.0s
+UAT: FAIL (agentic stall): co returned a turn with no tool calls before compaction triggered — prompt insufficient or agentic flow regression
 ```

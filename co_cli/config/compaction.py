@@ -1,12 +1,10 @@
 """Compaction settings sub-model."""
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 COMPACTION_ENV_MAP: dict[str, str] = {
-    "proactive_ratio": "CO_COMPACTION_PROACTIVE_RATIO",
-    "hygiene_ratio": "CO_COMPACTION_HYGIENE_RATIO",
+    "compaction_ratio": "CO_COMPACTION_RATIO",
     "tail_fraction": "CO_COMPACTION_TAIL_FRACTION",
-    "min_context_length_tokens": "CO_COMPACTION_MIN_CONTEXT_LENGTH_TOKENS",
     "min_proactive_savings": "CO_COMPACTION_MIN_PROACTIVE_SAVINGS",
     "proactive_thrash_window": "CO_COMPACTION_PROACTIVE_THRASH_WINDOW",
 }
@@ -21,21 +19,13 @@ class CompactionSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    proactive_ratio: float = Field(
-        default=0.75,
-        description="Fraction of budget above which proactive compaction fires.",
-    )
-    hygiene_ratio: float = Field(
-        default=0.88,
-        description="Fraction of budget above which pre-turn hygiene compaction fires.",
+    compaction_ratio: float = Field(
+        default=0.80,
+        description="Fraction of budget above which compaction fires (M0 pre-turn and M3 proactive).",
     )
     tail_fraction: float = Field(
         default=0.40,
         description="Fraction of budget targeted for the preserved tail in plan_compaction_boundaries.",
-    )
-    min_context_length_tokens: int = Field(
-        default=64_000,
-        description="Absolute floor on the proactive trigger threshold. Compaction never fires until token_count exceeds this value, regardless of the budget-ratio result.",
     )
     min_proactive_savings: float = Field(
         default=0.10,
@@ -45,14 +35,3 @@ class CompactionSettings(BaseModel):
         default=2,
         description="Number of consecutive low-yield proactive compactions before the anti-thrashing gate activates.",
     )
-
-    @model_validator(mode="after")
-    def _check_ratio_ordering(self) -> "CompactionSettings":
-        if self.proactive_ratio >= self.hygiene_ratio:
-            raise ValueError(
-                "compaction.proactive_ratio must be strictly less than compaction.hygiene_ratio "
-                f"(got proactive_ratio={self.proactive_ratio}, hygiene_ratio={self.hygiene_ratio}). "
-                "The hygiene ratio is the safety net at run_turn entry; placing it at or below "
-                "the proactive ratio inverts the trigger order and breaks the safety-net semantics."
-            )
-        return self

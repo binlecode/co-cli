@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from evals._frontend import CapturingFrontend
-from evals._timeouts import EVAL_BOOTSTRAP_TIMEOUT_SECS
+from evals._timeouts import EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS
 
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
@@ -35,8 +35,8 @@ from co_cli.config._core import get_settings
 from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.display._core import console
 
-_REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-bootstrap.md"
-_REPORT_HEADER = "# Eval Report: Bootstrap Flow"
+_REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-bootstrap-flow-quality.md"
+_REPORT_HEADER = "# Eval Report: Bootstrap Flow Quality"
 _CURRENT_SECTION_MARKER = "**Bootstrap timeout:**"
 
 
@@ -57,10 +57,16 @@ class EvalCaseResult:
 
 
 class TrackingFrontend(CapturingFrontend):
-    """Verbose eval frontend that records startup statuses."""
+    """Verbose eval frontend that records startup statuses with relative timestamps."""
 
     def __init__(self) -> None:
         super().__init__(verbose=True)
+        self._t0 = time.monotonic()
+        self.status_timeline: list[tuple[float, str]] = []
+
+    def on_status(self, message: str) -> None:
+        super().on_status(message)
+        self.status_timeline.append(((time.monotonic() - self._t0) * 1000, message))
 
 
 def _load_compatible_report_sections() -> list[str]:
@@ -80,6 +86,8 @@ def _load_compatible_report_sections() -> list[str]:
         if _CURRENT_SECTION_MARKER not in section:
             continue
         if "`create-deps`" not in section or "`banner-boundary`" not in section:
+            continue
+        if "`mcp_state`" not in section:
             continue
         compatible_sections.append(section)
     return compatible_sections
@@ -119,7 +127,7 @@ def _make_skip_case(case_id: str, reason: str) -> EvalCaseResult:
 def _write_report(
     *,
     cases: list[EvalCaseResult],
-    statuses: list[str],
+    status_timeline: list[tuple[float, str]],
     log_messages: list[str],
     total_ms: float,
 ) -> None:
@@ -128,14 +136,16 @@ def _write_report(
     run_ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     passed = sum(1 for case in cases if case.verdict == "PASS")
     degraded = (
-        "yes" if any(status.startswith("  Knowledge degraded") for status in statuses) else "no"
+        "yes"
+        if any(msg.startswith("  Knowledge degraded") for _, msg in status_timeline)
+        else "no"
     )
 
     lines: list[str] = [
         f"## Run: {run_ts}",
         "",
         f"**Model:** {config.llm.provider} / {config.llm.model or 'default'}  ",
-        f"**Bootstrap timeout:** {EVAL_BOOTSTRAP_TIMEOUT_SECS}s for `create_deps()`  ",
+        f"**Bootstrap timeout:** {EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS}s for `create_deps()`  ",
         f"**Workspace:** {Path.cwd()}  ",
         f"**Total runtime:** {total_ms:.0f}ms  ",
         f"**Result:** {passed}/{len(cases)} passed  ",
@@ -159,9 +169,9 @@ def _write_report(
         lines.append("")
 
     lines += ["### Startup Status Timeline", ""]
-    if statuses:
-        for status in statuses:
-            lines.append(f"- `{status}`")
+    if status_timeline:
+        for elapsed_ms, msg in status_timeline:
+            lines.append(f"- `+{elapsed_ms:.0f}ms` `{msg}`")
     else:
         lines.append("- No startup statuses captured.")
 
@@ -191,7 +201,7 @@ async def _run_create_deps_case(
 
     try:
         step_t0 = time.monotonic()
-        async with asyncio.timeout(EVAL_BOOTSTRAP_TIMEOUT_SECS):
+        async with asyncio.timeout(EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS):
             deps = await create_deps(frontend, stack)
         steps.append(
             EvalStep(
@@ -200,7 +210,9 @@ async def _run_create_deps_case(
                 detail=(
                     f"backend={deps.config.knowledge.search_backend} "
                     f"tools={len(deps.tool_index)} "
-                    f"skills={len(deps.skill_commands)}"
+                    f"mcp_tools={_count_mcp_tools(deps)} "
+                    f"skills={len(deps.skill_commands)} "
+                    f"degradations={len(deps.degradations)}"
                 ),
             )
         )
@@ -218,6 +230,25 @@ async def _run_create_deps_case(
                     f"model_skills={len(skill_registry)} "
                     f"completer_words={len(completer_words)}"
                 ),
+            )
+        )
+
+        step_t0 = time.monotonic()
+        mcp_configured = len(deps.config.mcp_servers or {})
+        mcp_failures = {k[4:]: v for k, v in deps.degradations.items() if k.startswith("mcp.")}
+        mcp_connected = mcp_configured - len(mcp_failures)
+        mcp_detail = (
+            f"configured={mcp_configured} connected={mcp_connected} "
+            f"failed={len(mcp_failures)} tools={_count_mcp_tools(deps)}"
+        )
+        if mcp_failures:
+            failure_list = " ".join(f"{srv}:{err}" for srv, err in mcp_failures.items())
+            mcp_detail += f" failures=[{failure_list}]"
+        steps.append(
+            EvalStep(
+                name="mcp_state",
+                ms=(time.monotonic() - step_t0) * 1000,
+                detail=mcp_detail,
             )
         )
 
@@ -241,7 +272,7 @@ async def _run_create_deps_case(
             failure = None
     except TimeoutError:
         verdict = "FAIL"
-        failure = f"create_deps() exceeded {EVAL_BOOTSTRAP_TIMEOUT_SECS}s timeout"
+        failure = f"create_deps() exceeded {EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS}s timeout"
     except Exception as exc:
         verdict = "FAIL"
         failure = f"create_deps() raised {exc.__class__.__name__}: {exc}"
@@ -435,7 +466,7 @@ async def main() -> None:
     preflight_error = config.llm.validate_config()
     if preflight_error:
         cases = [_make_skip_case("create-deps", preflight_error)]
-        _write_report(cases=cases, statuses=[], log_messages=[], total_ms=0.0)
+        _write_report(cases=cases, status_timeline=[], log_messages=[], total_ms=0.0)
         return
 
     frontend = TrackingFrontend()
@@ -476,7 +507,7 @@ async def main() -> None:
 
     _write_report(
         cases=cases,
-        statuses=frontend.statuses,
+        status_timeline=frontend.status_timeline,
         log_messages=log_messages,
         total_ms=(time.monotonic() - total_t0) * 1000,
     )

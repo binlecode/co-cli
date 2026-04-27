@@ -51,7 +51,7 @@ class _RerankerCallable:
         resp = httpx.post(
             f"{self.ollama_host}/api/generate",
             json={"model": self.model, "prompt": prompt, "format": "json", "stream": False},
-            timeout=60.0,
+            timeout=30.0,
         )
         resp.raise_for_status()
         return _parse_ranked_indices(json.loads(resp.json()["response"]), n)

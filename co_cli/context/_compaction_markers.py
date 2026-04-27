@@ -170,7 +170,10 @@ def gather_compaction_context(
     Sources, all scoped to the dropped range or session state:
     1. File working set from ToolCallPart.args in ``dropped``
     2. Pending session todos from ``ctx.deps.session``
-    3. Prior-summary text from ``dropped``
+    3. Prior-summary text from ``dropped`` — skipped when
+       ``ctx.deps.runtime.previous_compaction_summary`` is non-None, because the
+       iterative-update prompt branch already embeds that content as PREVIOUS SUMMARY;
+       including it again as enrichment would duplicate it inside the prompt.
 
     Each source is capped independently so a long entry in one source cannot
     starve the others. The joined result is then bounded by ``_CONTEXT_MAX_CHARS``
@@ -178,12 +181,17 @@ def gather_compaction_context(
 
     Returns None when no context was gathered.
     """
+    prior_summaries = (
+        None
+        if ctx.deps.runtime.previous_compaction_summary is not None
+        else _gather_prior_summaries(dropped)
+    )
     context_parts = [
         p
         for p in [
             _cap(_gather_file_paths(dropped), _FILE_PATHS_MAX_CHARS),
             _cap(_gather_session_todos(ctx.deps.session.session_todos), _TODOS_MAX_CHARS),
-            _cap(_gather_prior_summaries(dropped), _PRIOR_SUMMARIES_MAX_CHARS),
+            _cap(prior_summaries, _PRIOR_SUMMARIES_MAX_CHARS),
         ]
         if p is not None
     ]
