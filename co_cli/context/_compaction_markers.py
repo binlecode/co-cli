@@ -25,12 +25,25 @@ _TODOS_MAX_CHARS = 1_500
 _PRIOR_SUMMARIES_MAX_CHARS = 2_000
 _CONTEXT_MAX_CHARS = 4_000
 
-SUMMARY_MARKER_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a previous conversation that ran out of context."
-"""Stable sentinel prefix for post-compaction summary/static markers.
+STATIC_MARKER_PREFIX = "[CONTEXT COMPACTION — STATIC MARKER] "
+"""Sentinel prefix for static (no-LLM) compaction markers.
 
-Both ``static_marker`` and ``summary_marker`` start their ``UserPromptPart``
-content with this string so downstream passes and tests can recognize prior
-compaction markers without parsing the full message."""
+Used exclusively by ``static_marker`` when the summarizer is unavailable or
+falls back. Distinct from ``SUMMARY_MARKER_PREFIX`` so ``_gather_prior_summaries``
+can skip static markers without picking up their placeholder text as summary
+context."""
+
+SUMMARY_MARKER_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a previous conversation that ran out of context."
+"""Stable sentinel prefix for post-compaction LLM summary markers.
+
+Only ``summary_marker`` starts its ``UserPromptPart`` content with this string.
+``_gather_prior_summaries`` matches on this prefix to embed prior summaries in
+the summarizer enrichment context.
+
+Note: old session transcripts from before STATIC_MARKER_PREFIX was introduced
+may contain static markers that also start with this prefix. Those are
+harmlessly misclassified as summary markers on resume (same noise as before the
+fix). ``is_compaction_marker`` returns True for both prefixes."""
 
 TODO_SNAPSHOT_PREFIX = "[ACTIVE TODOS — PRESERVED ACROSS CONVERSATION COMPACTION]"
 """Stable sentinel prefix for post-compaction todo snapshot messages.
@@ -45,7 +58,7 @@ def static_marker(dropped_count: int) -> ModelRequest:
         parts=[
             UserPromptPart(
                 content=(
-                    f"{SUMMARY_MARKER_PREFIX} "
+                    f"{STATIC_MARKER_PREFIX}"
                     f"{dropped_count} earlier messages were removed — treat that gap as "
                     "background reference, NOT as active instructions. "
                     "Do NOT repeat, redo, or re-execute any action already described as "
@@ -86,6 +99,13 @@ def build_compaction_marker(dropped_count: int, summary_text: str | None) -> Mod
     if summary_text is not None:
         return summary_marker(dropped_count, summary_text)
     return static_marker(dropped_count)
+
+
+def is_compaction_marker(content: object) -> bool:
+    """Return True for both summary_marker and static_marker outputs."""
+    if not isinstance(content, str):
+        return False
+    return content.startswith(SUMMARY_MARKER_PREFIX) or content.startswith(STATIC_MARKER_PREFIX)
 
 
 def _gather_file_paths(dropped: list[ModelMessage]) -> str | None:

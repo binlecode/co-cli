@@ -32,11 +32,13 @@ from co_cli.context._compaction_boundaries import (
     plan_compaction_boundaries,
 )
 from co_cli.context._compaction_markers import (
+    STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
     TODO_SNAPSHOT_PREFIX,
     build_compaction_marker,
     build_todo_snapshot,
     gather_compaction_context,
+    is_compaction_marker,
     static_marker,
     summary_marker,
 )
@@ -56,6 +58,7 @@ from co_cli.deps import CoDeps
 
 __all__ = [
     "COMPACTABLE_KEEP_RECENT",
+    "STATIC_MARKER_PREFIX",
     "SUMMARY_MARKER_PREFIX",
     "TODO_SNAPSHOT_PREFIX",
     "CompactionBoundaries",
@@ -70,6 +73,7 @@ __all__ = [
     "gather_compaction_context",
     "group_by_turn",
     "groups_to_messages",
+    "is_compaction_marker",
     "plan_compaction_boundaries",
     "proactive_window_processor",
     "recover_overflow_history",

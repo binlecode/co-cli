@@ -26,6 +26,7 @@ from co_cli.context._compaction_markers import (
     _gather_session_todos,
 )
 from co_cli.context.compaction import (
+    STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
     TODO_SNAPSHOT_PREFIX,
     build_todo_snapshot,
@@ -35,10 +36,13 @@ from co_cli.context.compaction import (
     gather_compaction_context,
     group_by_turn,
     groups_to_messages,
+    is_compaction_marker,
     plan_compaction_boundaries,
     proactive_window_processor,
     recover_overflow_history,
+    static_marker,
     summarize_dropped_messages,
+    summary_marker,
     truncate_tool_results,
 )
 from co_cli.context.orchestrate import _history_with_pending_user_input
@@ -127,7 +131,7 @@ async def test_proactive_window_processor_static_marker_when_no_model():
         for p in m.parts
         if hasattr(p, "content") and isinstance(p.content, str)
     ]
-    assert any("This session is being continued" in t for t in marker_texts)
+    assert any(t.startswith(STATIC_MARKER_PREFIX) for t in marker_texts)
     assert len(result) < len(msgs)
 
 
@@ -215,7 +219,7 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
         if hasattr(p, "content") and isinstance(p.content, str)
     ]
     # Circuit breaker active → static marker, no LLM call
-    assert any("This session is being continued" in t for t in marker_texts)
+    assert any(t.startswith(STATIC_MARKER_PREFIX) for t in marker_texts)
     assert len(result) < len(msgs)
     # Skip increments count for probe cadence tracking
     assert deps.runtime.compaction_skip_count == 5
@@ -243,7 +247,7 @@ async def test_circuit_breaker_first_trip_is_skip():
         for p in m.parts
         if hasattr(p, "content") and isinstance(p.content, str)
     ]
-    assert any("This session is being continued" in t for t in marker_texts)
+    assert any(t.startswith(STATIC_MARKER_PREFIX) for t in marker_texts)
     assert len(result) < len(msgs)
     # count=3 is skipped; counter advances for cadence tracking
     assert deps.runtime.compaction_skip_count == 4
@@ -1151,7 +1155,7 @@ async def test_compact_command_no_model_uses_static_marker():
     assert result.compaction_applied is True
     first = result.history[0]
     assert isinstance(first, ModelRequest)
-    assert first.parts[0].content.startswith(SUMMARY_MARKER_PREFIX)
+    assert first.parts[0].content.startswith(STATIC_MARKER_PREFIX)
     assert "earlier messages were removed" in first.parts[0].content
     last = result.history[-1]
     assert isinstance(last, ModelResponse)
@@ -1171,7 +1175,7 @@ async def test_compact_command_circuit_breaker_uses_static_marker_and_increments
     assert result.compaction_applied is True
     first = result.history[0]
     assert isinstance(first, ModelRequest)
-    assert first.parts[0].content.startswith(SUMMARY_MARKER_PREFIX)
+    assert first.parts[0].content.startswith(STATIC_MARKER_PREFIX)
     assert "earlier messages were removed" in first.parts[0].content
     assert ctx.deps.runtime.compaction_skip_count == 4
 
@@ -1520,3 +1524,50 @@ def test_planner_active_user_anchoring_pulls_latest_user_into_tail():
     )
     # The final user turn must be in the tail (not dropped)
     assert final_user_idx >= tail_start
+
+
+# ---------------------------------------------------------------------------
+# TASK-4: static / summary marker prefix discriminator
+# ---------------------------------------------------------------------------
+
+
+def test_static_marker_not_matched_by_gather_prior_summaries():
+    """_gather_prior_summaries skips static markers; only summary markers match."""
+    static_msg = static_marker(5)
+    summary_msg = summary_marker(5, "## Active Task\nRefactor auth\n## Goal\nShip it")
+
+    result = _gather_prior_summaries([static_msg, summary_msg])
+
+    assert result is not None
+    assert "## Active Task" in result
+    assert "Refactor auth" in result
+    # Static marker text must NOT appear in enrichment
+    assert "earlier messages were removed" not in result
+
+
+def test_static_marker_uses_static_prefix_not_summary_prefix():
+    """static_marker content starts with STATIC_MARKER_PREFIX, not SUMMARY_MARKER_PREFIX."""
+    msg = static_marker(3)
+    content = msg.parts[0].content
+    assert isinstance(content, str)
+    assert content.startswith(STATIC_MARKER_PREFIX)
+    assert not content.startswith(SUMMARY_MARKER_PREFIX)
+
+
+def test_summary_marker_uses_summary_prefix():
+    """summary_marker content starts with SUMMARY_MARKER_PREFIX."""
+    msg = summary_marker(3, "## Goal\nDo thing")
+    content = msg.parts[0].content
+    assert isinstance(content, str)
+    assert content.startswith(SUMMARY_MARKER_PREFIX)
+    assert not content.startswith(STATIC_MARKER_PREFIX)
+
+
+def test_is_compaction_marker_true_for_both():
+    """is_compaction_marker returns True for both static_marker and summary_marker outputs."""
+    static_content = static_marker(5).parts[0].content
+    summary_content = summary_marker(5, "## Goal\nDo thing").parts[0].content
+    assert is_compaction_marker(static_content)
+    assert is_compaction_marker(summary_content)
+    assert not is_compaction_marker("random text")
+    assert not is_compaction_marker(None)
