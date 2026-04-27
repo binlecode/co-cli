@@ -22,7 +22,9 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings
 from co_cli.config.compaction import CompactionSettings
 from co_cli.context.compaction import (
+    STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
+    _is_valid_summary,
     apply_compaction,
     gather_compaction_context,
     proactive_window_processor,
@@ -774,4 +776,66 @@ def test_check_output_limits_single_segment_over_limit():
     _check_output_limits(_make_turn_state(history), deps, frontend)
     assert any("Context limit reached" in s for s in frontend.statuses), (
         f"Expected overflow alert not emitted; got statuses={frontend.statuses!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TASK-7 — Summary validator
+# ---------------------------------------------------------------------------
+
+
+def test_is_valid_summary_rejects_empty_and_whitespace() -> None:
+    """_is_valid_summary returns False for empty/whitespace-only strings and None."""
+    assert not _is_valid_summary(None)
+    assert not _is_valid_summary("")
+    assert not _is_valid_summary("   ")
+    assert not _is_valid_summary("\t\n")
+
+
+def test_is_valid_summary_accepts_non_empty_strings() -> None:
+    """_is_valid_summary returns True for any non-empty string, regardless of structure."""
+    assert _is_valid_summary("Good progress so far.")
+    assert _is_valid_summary("## Active Task\nRefactor auth module.")
+    assert _is_valid_summary("x")
+
+
+@pytest.mark.asyncio
+async def test_apply_compaction_static_marker_when_no_model() -> None:
+    """When the summarizer gate is closed (no model), apply_compaction produces a static marker.
+
+    This exercises the same end-state as the empty-summary validator path: both
+    result in summary_text=None, previous_compaction_summary unchanged, and
+    the compaction marker starting with STATIC_MARKER_PREFIX.
+    """
+    from pydantic_ai.messages import UserPromptPart
+
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
+    sentinel = "SENTINEL_TASK7"
+    deps.runtime.previous_compaction_summary = sentinel
+    msgs = _make_messages(6, body_chars=100)
+    bounds = (0, len(msgs) - 2, len(msgs) - 2)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    result, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
+
+    assert summary_text is None, "no model → static marker, summary_text must be None"
+    assert deps.runtime.previous_compaction_summary == sentinel, (
+        "previous_compaction_summary must be unchanged when summarizer does not run"
+    )
+    # The marker message is the first element after the (empty) head.
+    marker_msg = result[0]
+    assert isinstance(marker_msg, ModelRequest)
+    marker_content = next(
+        (
+            p.content
+            for p in marker_msg.parts
+            if isinstance(p, UserPromptPart) and isinstance(p.content, str)
+        ),
+        None,
+    )
+    assert marker_content is not None
+    assert marker_content.startswith(STATIC_MARKER_PREFIX), (
+        f"Expected STATIC_MARKER_PREFIX, got: {marker_content[:80]!r}"
+    )
+    assert not marker_content.startswith(SUMMARY_MARKER_PREFIX), (
+        "static marker must not use SUMMARY_MARKER_PREFIX"
     )

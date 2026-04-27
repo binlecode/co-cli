@@ -9,7 +9,7 @@ external callers have a single import surface.
 Submodule map:
     _compaction_boundaries  — TurnGroup, group_by_turn, plan_compaction_boundaries
     _compaction_markers     — static/summary/todo markers, enrichment context
-    _history_processors     — dedup_tool_results, truncate_tool_results, enforce_batch_budget
+    _history_processors     — dedup_tool_results, evict_old_tool_results, evict_batch_tool_outputs
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ from co_cli.context._compaction_markers import (
 from co_cli.context._history_processors import (
     COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
-    enforce_batch_budget,
-    truncate_tool_results,
+    evict_batch_tool_outputs,
+    evict_old_tool_results,
 )
 from co_cli.context.summarization import (
     estimate_message_tokens,
@@ -70,7 +70,8 @@ __all__ = [
     "build_todo_snapshot",
     "dedup_tool_results",
     "emergency_recover_overflow_history",
-    "enforce_batch_budget",
+    "evict_batch_tool_outputs",
+    "evict_old_tool_results",
     "find_first_run_end",
     "gather_compaction_context",
     "group_by_turn",
@@ -82,7 +83,6 @@ __all__ = [
     "static_marker",
     "summarize_dropped_messages",
     "summary_marker",
-    "truncate_tool_results",
 ]
 
 log = logging.getLogger(__name__)
@@ -154,6 +154,11 @@ async def summarize_dropped_messages(
         focus=focus,
         previous_summary=previous_summary,
     )
+
+
+def _is_valid_summary(text: str | None) -> bool:
+    """Rejects empty/whitespace-only output; accepts any non-empty string."""
+    return bool(text and text.strip())
 
 
 async def _gated_summarize_or_none(
@@ -244,6 +249,9 @@ async def apply_compaction(
     summary_text = await _gated_summarize_or_none(
         ctx, dropped, announce=announce, focus=focus, previous_summary=previous_summary
     )
+    if summary_text is not None and not _is_valid_summary(summary_text):
+        log.warning("Compaction summarizer returned empty output; downgrading to static marker.")
+        summary_text = None
     if summary_text is not None:
         ctx.deps.runtime.previous_compaction_summary = summary_text
     marker = build_compaction_marker(dropped_count, summary_text)
