@@ -37,6 +37,7 @@ from co_cli.context.orchestrate import _check_output_limits, _TurnState
 from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
+    _build_iterative_template,
     _build_summarizer_prompt,
     estimate_message_tokens,
     latest_response_input_tokens,
@@ -351,6 +352,45 @@ def test_summarize_prompt_skip_guard() -> None:
     assert "Skip if none" in result
 
 
+def test_summarize_prompt_progress_structure() -> None:
+    """Progress sections are four structured ## headings in temporal order."""
+    prompt = _SUMMARIZE_PROMPT
+    assert "## Completed Actions" in prompt
+    assert "## In Progress" in prompt
+    assert "## Remaining Work" in prompt
+    assert "## Working Set" in prompt
+    ca = prompt.index("## Completed Actions")
+    ip = prompt.index("## In Progress")
+    rw = prompt.index("## Remaining Work")
+    ws = prompt.index("## Working Set")
+    assert ca < ip < rw < ws, "sections must appear in temporal order"
+    assert "## Progress\n" not in prompt, "old flat ## Progress section must be removed"
+    assert "[tool: name]" in prompt, "tool attribution hint must be present"
+    # Constraint 12: other sections not moved
+    assert prompt.index("## Active Task") < prompt.index("## Goal")
+    assert prompt.index("## Errors & Fixes") < ca
+
+
+def test_iterative_template_references_only_existing_sections() -> None:
+    """Every quoted section name in the iterative preamble maps to a ## heading in _SUMMARIZE_PROMPT."""
+    import re
+
+    output = _build_iterative_template("prev")
+    assert "Active State" not in output, "orphaned 'Active State' reference must be removed"
+    assert "Completed Actions" in output
+    assert "In Progress" in output
+    assert "Resolved Questions" in output
+    # Scope regex to the preamble only — not the appended _SUMMARIZE_PROMPT (which has its own quotes)
+    preamble = output[: output.index(_SUMMARIZE_PROMPT)]
+    quoted_sections = re.findall(r"'([^']+)'", preamble)
+    for section in quoted_sections:
+        # Quoted names may already include the ## prefix
+        heading = section if section.startswith("## ") else f"## {section}"
+        assert heading in _SUMMARIZE_PROMPT, (
+            f"iterative template references '{section}' which does not exist in _SUMMARIZE_PROMPT"
+        )
+
+
 def test_build_summarizer_prompt_keeps_personality_after_context() -> None:
     """When both addenda are present, personality guidance must stay after context."""
     ctx_text = "Active tasks:\n- [pending] fix bug"
@@ -507,7 +547,7 @@ async def test_summarize_messages_iterative_branch_preserves_previous_content() 
     summary — the PRESERVE discipline requires the model to carry it forward.
     """
     from tests._ollama import ensure_ollama_warm
-    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+    from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
     from co_cli.llm._factory import build_model
 
@@ -524,7 +564,9 @@ async def test_summarize_messages_iterative_branch_preserves_previous_content() 
         _assistant("Updated the middleware to call validate_token() on each request."),
     ]
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+    # Iterative template embeds the previous summary — larger prompt than a bare-context
+    # call; use LLM_TOOL_CONTEXT_TIMEOUT_SECS (20s) for the prefill budget.
+    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
         result = await summarize_messages(deps, messages, previous_summary=previous_summary)
     assert "HS512_SENTINEL_TOKEN" in result, (
         f"distinctive token from previous_summary absent from iterative update output: {result[:400]}"
