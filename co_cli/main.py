@@ -125,11 +125,11 @@ async def _finalize_turn(
             persisted_message_count=deps.session.persisted_message_count,
             history_compacted=deps.runtime.compaction_applied_this_turn,
         )
+        deps.session.persisted_message_count = len(turn_result.messages)
     except OSError as e:
         frontend.on_status(
             f"Session write failed — conversation may not be saved. Check disk space. ({e})"
         )
-    deps.session.persisted_message_count = len(turn_result.messages)
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":
@@ -226,6 +226,7 @@ def _apply_command_outcome(
     outcome: object,
     message_history: list[ModelMessage],
     deps: CoDeps,
+    frontend: Frontend,
 ) -> tuple[bool, list[ModelMessage], str, dict[str, str | None]]:
     """Map a command outcome to loop control signals.
 
@@ -234,14 +235,19 @@ def _apply_command_outcome(
     """
     if isinstance(outcome, ReplaceTranscript):
         if outcome.compaction_applied:
-            deps.session.session_path = persist_session_history(
-                session_path=deps.session.session_path,
-                sessions_dir=deps.sessions_dir,
-                messages=outcome.history,
-                persisted_message_count=deps.session.persisted_message_count,
-                history_compacted=True,
-            )
-            deps.session.persisted_message_count = len(outcome.history)
+            try:
+                deps.session.session_path = persist_session_history(
+                    session_path=deps.session.session_path,
+                    sessions_dir=deps.sessions_dir,
+                    messages=outcome.history,
+                    persisted_message_count=deps.session.persisted_message_count,
+                    history_compacted=True,
+                )
+                deps.session.persisted_message_count = len(outcome.history)
+            except OSError as e:
+                frontend.on_status(
+                    f"Session write failed — conversation may not be saved. Check disk space. ({e})"
+                )
         else:
             deps.session.persisted_message_count = len(outcome.history)
         return True, outcome.history, "", {}
@@ -282,7 +288,7 @@ async def _chat_loop(
         current_session_path = restore_session(deps, frontend)
         init_memory_index(deps, current_session_path, frontend)
         _sweep_tool_results(deps)
-        from co_cli.commands._commands import get_skill_registry
+        from co_cli.commands.skills import get_skill_registry
 
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
 
@@ -317,7 +323,7 @@ async def _chat_loop(
                     )
                     outcome = await dispatch_command(user_input, cmd_ctx)
                     should_continue, message_history, user_input, _saved_env = (
-                        _apply_command_outcome(outcome, message_history, deps)
+                        _apply_command_outcome(outcome, message_history, deps, frontend)
                     )
                     if should_continue:
                         continue
