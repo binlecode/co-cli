@@ -117,7 +117,7 @@ The resolution layers three tiers:
 
 ```
 1. provider defaults (_PROVIDER_NOREASON_DEFAULTS) — e.g. ollama: extra_body.reasoning_effort="none", top_k, min_p; gemini: thinking_config.thinking_level="minimal"
-2. model-specific overrides (_MODEL_NOREASON_DEFAULTS) — e.g. gemini-3-pro: thinking_level="low"; gemini-2.5-flash: thinking_budget=0
+2. model-specific overrides (_MODEL_NOREASON_DEFAULTS) — e.g. gemini-2.5-flash: thinking_budget=0
 3. user explicit overrides (llm.noreason settings) — any non-None field wins over tiers 1+2
 ```
 
@@ -125,7 +125,6 @@ Provider branching in `noreason_model_settings()`:
 
 - **Ollama** → `ModelSettings(temperature, top_p, max_tokens, extra_body={reasoning_effort="none", top_k, min_p, presence_penalty, repeat_penalty, num_ctx, num_predict})`
 - **Gemini flash** → `GoogleModelSettings(google_thinking_config={"thinking_level": "minimal"})`
-- **Gemini pro** → `GoogleModelSettings(google_thinking_config={"thinking_level": "low"})`
 - **Gemini 2.5 flash / flash-lite** → `GoogleModelSettings(google_thinking_config={"thinking_budget": 0})`
 
 Application flow:

@@ -2,7 +2,7 @@
 
 Requires GEMINI_API_KEY (or CO_LLM_API_KEY) env var set to a valid Gemini API key.
 Tests verify that:
-- noreason settings (thinking_level=low) return a valid response
+- noreason settings (thinking_level=MINIMAL) return a valid response
 - reasoning settings return a valid response
 - both modes produce non-empty output without crashing
 """
@@ -16,10 +16,9 @@ import pytest
 from pydantic_ai import Agent
 from tests._timeouts import LLM_GEMINI_NOREASON_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
 
-from co_cli.config.llm import LlmSettings
+from co_cli.config.llm import DEFAULT_GEMINI_MODEL, LlmSettings
 from co_cli.llm._factory import build_model
 
-_GEMINI_MODEL = "gemini-3.1-pro-preview"
 _API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("CO_LLM_API_KEY")
 _has_api_key = bool(_API_KEY)
 
@@ -29,7 +28,7 @@ pytestmark = pytest.mark.skipif(
 
 _LLM_SETTINGS = LlmSettings(
     provider="gemini",
-    model=_GEMINI_MODEL,
+    model=DEFAULT_GEMINI_MODEL,
     api_key=_API_KEY,
 )
 
@@ -42,7 +41,7 @@ def _build() -> build_model:
 
 @pytest.mark.asyncio
 async def test_gemini_noreason_returns_response() -> None:
-    """Noreason settings (thinking_level=low) return a valid non-empty response."""
+    """Noreason settings (thinking_level=MINIMAL) return a valid non-empty response."""
     m = _build()
     agent = Agent(m.model, output_type=str)
     async with asyncio.timeout(LLM_GEMINI_NOREASON_TIMEOUT_SECS):
@@ -68,7 +67,7 @@ async def test_gemini_reasoning_returns_response() -> None:
 
 @pytest.mark.asyncio
 async def test_gemini_noreason_faster_than_reasoning() -> None:
-    """Noreason (thinking_level=low) completes within non-reasoning timeout; reasoning within reasoning timeout."""
+    """Noreason (thinking_level=MINIMAL) completes within non-reasoning timeout; reasoning within reasoning timeout."""
     m = _build()
     agent = Agent(m.model, output_type=str)
 

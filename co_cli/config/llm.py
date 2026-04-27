@@ -15,6 +15,7 @@ from pydantic_ai.settings import ModelSettings
 DEFAULT_LLM_PROVIDER = "ollama"
 DEFAULT_LLM_HOST = "http://localhost:11434"
 DEFAULT_LLM_MODEL = "qwen3.5:35b-a3b-think"
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 
 
 # ---------------------------------------------------------------------------
@@ -64,34 +65,19 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
         },
     },
     "gemini": {
-        "gemini-3.1-flash-preview": {
+        "gemini-3-flash-preview": {
             "reasoning": {
                 "temperature": 1.0,
                 "top_p": 0.95,
                 "max_tokens": 65536,
                 "context_window": 1048576,
             },
-            # Flash supports "minimal" thinking level.
+            # MINIMAL is the lowest ThinkingLevel for Gemini 3 models; keeps helper calls fast.
             "noreason": {
                 "temperature": 0.7,
                 "top_p": 0.8,
                 "max_tokens": 16384,
-                "thinking_config": {"thinking_level": "minimal"},
-            },
-        },
-        "gemini-3.1-pro-preview": {
-            "reasoning": {
-                "temperature": 1.0,
-                "top_p": 0.95,
-                "max_tokens": 65536,
-                "context_window": 1048576,
-            },
-            # Pro does not support "minimal"; "low" is the minimum (per Google docs).
-            "noreason": {
-                "temperature": 0.7,
-                "top_p": 0.8,
-                "max_tokens": 16384,
-                "thinking_config": {"thinking_level": "low"},
+                "thinking_config": {"thinking_level": "MINIMAL"},
             },
         },
         # Gemini 2.5 Flash/Flash-Lite: noreason-only — thinking_budget=0 disables thinking.
