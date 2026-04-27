@@ -1,5 +1,6 @@
 """Functional tests for context history processors and compaction."""
 
+import math
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,8 @@ from co_cli.context.compaction import (
     TODO_SNAPSHOT_PREFIX,
     build_todo_snapshot,
     emergency_recover_overflow_history,
-    enforce_batch_budget,
+    evict_batch_tool_outputs,
+    evict_old_tool_results,
     find_first_run_end,
     gather_compaction_context,
     group_by_turn,
@@ -43,11 +45,10 @@ from co_cli.context.compaction import (
     static_marker,
     summarize_dropped_messages,
     summary_marker,
-    truncate_tool_results,
 )
 from co_cli.context.orchestrate import _history_with_pending_user_input
 from co_cli.context.prompt_text import recall_prompt_text
-from co_cli.deps import CoDeps, CoSessionState
+from co_cli.deps import CoDeps, CoSessionState, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.llm._factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
@@ -604,7 +605,7 @@ def test_preserve_search_tool_breadcrumbs_non_search_tools_dropped():
 
 
 # ---------------------------------------------------------------------------
-# truncate_tool_results — compactable-set micro-compact tests (TASK-4b)
+# evict_old_tool_results — compactable-set micro-compact tests (TASK-4b)
 # ---------------------------------------------------------------------------
 
 
@@ -655,7 +656,7 @@ def test_compactable_older_than_5_cleared():
     """Compactable tool returns older than 5 most recent are replaced with markers."""
     msgs = _make_tool_conversation(n_read_file=8)
     ctx = _make_processor_ctx()
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
 
     read_file_contents = []
     for msg in result:
@@ -676,7 +677,7 @@ def test_non_compactable_pass_through():
     """Non-compactable tool returns pass through intact regardless of count."""
     msgs = _make_tool_conversation(n_read_file=0, n_save_memory=10)
     ctx = _make_processor_ctx()
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
 
     save_memory_contents = []
     for msg in result:
@@ -727,7 +728,7 @@ def test_current_turn_protection_multi_tool():
     msgs.append(_assistant("done with all three"))
 
     ctx = _make_processor_ctx()
-    result = truncate_tool_results(ctx, msgs)
+    result = evict_old_tool_results(ctx, msgs)
 
     # The 3 read_file returns in the last turn must be intact
     boundary = _find_last_turn_start(result) or 0
@@ -1314,7 +1315,7 @@ async def test_dynamic_instruction_is_date_only():
 
 
 # ---------------------------------------------------------------------------
-# enforce_batch_budget — per-batch aggregate spill
+# evict_batch_tool_outputs — per-batch aggregate spill
 # ---------------------------------------------------------------------------
 
 
@@ -1341,8 +1342,8 @@ def _tool_return_msg(name: str, content: str, call_id: str) -> ModelRequest:
     )
 
 
-def test_enforce_batch_budget_under_cap_unchanged(tmp_path: Path) -> None:
-    """enforce_batch_budget returns messages unchanged when aggregate is below threshold."""
+def test_evict_batch_tool_outputs_under_cap_unchanged(tmp_path: Path) -> None:
+    """evict_batch_tool_outputs returns messages unchanged when aggregate is below threshold."""
     content = "x" * 100
     msgs = [
         _user("go"),
@@ -1350,14 +1351,14 @@ def test_enforce_batch_budget_under_cap_unchanged(tmp_path: Path) -> None:
         _tool_return_msg("tool_a", content, "c1"),
     ]
     ctx = _make_batch_ctx(tmp_path, batch_spill_chars=500)
-    result = enforce_batch_budget(ctx, msgs)
+    result = evict_batch_tool_outputs(ctx, msgs)
     part = result[2].parts[0]
     assert part.content == content
     assert not (tmp_path / "tool-results").exists()
 
 
-def test_enforce_batch_budget_over_cap_single_spilled(tmp_path: Path) -> None:
-    """enforce_batch_budget spills the largest tool return when aggregate exceeds threshold."""
+def test_evict_batch_tool_outputs_over_cap_single_spilled(tmp_path: Path) -> None:
+    """evict_batch_tool_outputs spills the largest tool return when aggregate exceeds threshold."""
     big = "y" * 10_000
     msgs = [
         _user("read"),
@@ -1365,13 +1366,13 @@ def test_enforce_batch_budget_over_cap_single_spilled(tmp_path: Path) -> None:
         _tool_return_msg("read_file", big, "c1"),
     ]
     ctx = _make_batch_ctx(tmp_path, batch_spill_chars=100)
-    result = enforce_batch_budget(ctx, msgs)
+    result = evict_batch_tool_outputs(ctx, msgs)
     part = result[2].parts[0]
     assert PERSISTED_OUTPUT_TAG in part.content
 
 
-def test_enforce_batch_budget_evicts_largest_first(tmp_path: Path) -> None:
-    """enforce_batch_budget evicts the largest tool return first until under threshold."""
+def test_evict_batch_tool_outputs_evicts_largest_first(tmp_path: Path) -> None:
+    """evict_batch_tool_outputs evicts the largest tool return first until under threshold."""
     big = "y" * 10_000
     small = "z" * 1_000
     call_msg = ModelResponse(
@@ -1389,14 +1390,14 @@ def test_enforce_batch_budget_evicts_largest_first(tmp_path: Path) -> None:
     msgs = [_user("go"), call_msg, ret_msg]
     # threshold=5_000 → aggregate=11_000 > 5_000; evict big (10K) → aggregate falls below 5K
     ctx = _make_batch_ctx(tmp_path, batch_spill_chars=5_000)
-    result = enforce_batch_budget(ctx, msgs)
+    result = evict_batch_tool_outputs(ctx, msgs)
     parts = result[2].parts
     assert PERSISTED_OUTPUT_TAG in parts[0].content
     assert parts[1].content == small
 
 
-def test_enforce_batch_budget_skips_already_persisted(tmp_path: Path) -> None:
-    """enforce_batch_budget skips tool returns that already contain PERSISTED_OUTPUT_TAG."""
+def test_evict_batch_tool_outputs_skips_already_persisted(tmp_path: Path) -> None:
+    """evict_batch_tool_outputs skips tool returns that already contain PERSISTED_OUTPUT_TAG."""
     already_persisted = f"{PERSISTED_OUTPUT_TAG}\ntool: read_file\nfile: /tmp/x.txt\n..."
     msgs = [
         _user("go"),
@@ -1404,21 +1405,21 @@ def test_enforce_batch_budget_skips_already_persisted(tmp_path: Path) -> None:
         _tool_return_msg("read_file", already_persisted, "c1"),
     ]
     ctx = _make_batch_ctx(tmp_path, batch_spill_chars=10)
-    result = enforce_batch_budget(ctx, msgs)
+    result = evict_batch_tool_outputs(ctx, msgs)
     part = result[2].parts[0]
     # Already-persisted content must not be modified
     assert part.content == already_persisted
 
 
-def test_enforce_batch_budget_no_batch_unchanged(tmp_path: Path) -> None:
-    """enforce_batch_budget is a no-op when no ToolCallPart exists in history."""
+def test_evict_batch_tool_outputs_no_batch_unchanged(tmp_path: Path) -> None:
+    """evict_batch_tool_outputs is a no-op when no ToolCallPart exists in history."""
     msgs = [_user("hello"), _assistant("world")]
     ctx = _make_batch_ctx(tmp_path, batch_spill_chars=10)
-    result = enforce_batch_budget(ctx, msgs)
+    result = evict_batch_tool_outputs(ctx, msgs)
     assert result is msgs
 
 
-def test_enforce_batch_budget_warns_once_per_batch(tmp_path: Path, caplog) -> None:
+def test_evict_batch_tool_outputs_warns_once_per_batch(tmp_path: Path, caplog) -> None:
     """Sustained over-budget batch warns once on first request, suppresses on repeats.
 
     The history processor fires per-request inside a turn. When the batch is over
@@ -1439,12 +1440,12 @@ def test_enforce_batch_budget_warns_once_per_batch(tmp_path: Path, caplog) -> No
     import logging as _logging
 
     with caplog.at_level(_logging.WARNING, logger="co_cli.context._history_processors"):
-        enforce_batch_budget(ctx, msgs)
+        evict_batch_tool_outputs(ctx, msgs)
         first_warning_count = sum(
             1 for rec in caplog.records if "still over budget" in rec.getMessage()
         )
-        enforce_batch_budget(ctx, msgs)
-        enforce_batch_budget(ctx, msgs)
+        evict_batch_tool_outputs(ctx, msgs)
+        evict_batch_tool_outputs(ctx, msgs)
         repeated_warning_count = sum(
             1 for rec in caplog.records if "still over budget" in rec.getMessage()
         )
@@ -1453,7 +1454,7 @@ def test_enforce_batch_budget_warns_once_per_batch(tmp_path: Path, caplog) -> No
     assert repeated_warning_count == 1, "repeat cycles on same batch must not re-log"
 
 
-def test_enforce_batch_budget_warns_again_on_new_batch(tmp_path: Path, caplog) -> None:
+def test_evict_batch_tool_outputs_warns_again_on_new_batch(tmp_path: Path, caplog) -> None:
     """A new batch (different tool_call_ids) re-arms the warning.
 
     Suppression keys on the batch signature, not on a one-shot process flag — so
@@ -1475,15 +1476,15 @@ def test_enforce_batch_budget_warns_again_on_new_batch(tmp_path: Path, caplog) -
     import logging as _logging
 
     with caplog.at_level(_logging.WARNING, logger="co_cli.context._history_processors"):
-        enforce_batch_budget(ctx, batch_one)
-        enforce_batch_budget(ctx, batch_two)
+        evict_batch_tool_outputs(ctx, batch_one)
+        evict_batch_tool_outputs(ctx, batch_two)
         warnings = [rec for rec in caplog.records if "still over budget" in rec.getMessage()]
 
     assert len(warnings) == 2, f"expected one warning per distinct batch, got {len(warnings)}"
 
 
-def test_enforce_batch_budget_fail_open_on_oserror(tmp_path: Path) -> None:
-    """enforce_batch_budget returns original messages when persist fails (fail-open)."""
+def test_evict_batch_tool_outputs_fail_open_on_oserror(tmp_path: Path) -> None:
+    """evict_batch_tool_outputs returns original messages when persist fails (fail-open)."""
     big = "y" * 10_000
     msgs = [
         _user("go"),
@@ -1502,10 +1503,78 @@ def test_enforce_batch_budget_fail_open_on_oserror(tmp_path: Path) -> None:
         tool_results_dir=bad_dir,
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    result = enforce_batch_budget(ctx, msgs)
+    result = evict_batch_tool_outputs(ctx, msgs)
     # Fail-open: persist failed → content unchanged
     part = result[2].parts[0]
     assert part.content == big
+
+
+def _make_batch_ctx_with_tool_index(
+    tmp_path: Path,
+    batch_spill_chars: int,
+    tool_index: dict,
+) -> RunContext:
+    """RunContext with controlled batch_spill_chars, tmp tool_results_dir, and tool_index."""
+    config = make_settings(
+        tools=make_settings().tools.model_copy(update={"batch_spill_chars": batch_spill_chars})
+    )
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=config,
+        tool_results_dir=tmp_path / "tool-results",
+        tool_index=tool_index,
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+
+def test_evict_batch_tool_outputs_skips_pinned_tool(tmp_path: Path, caplog) -> None:
+    """evict_batch_tool_outputs leaves tool returns with max_result_size=inf unchanged.
+
+    file_read registers max_result_size=math.inf — its batch content must never be
+    spilled to disk by M2b, even when the aggregate exceeds batch_spill_chars.
+    """
+    big = "r" * 250_000
+    msgs = [
+        _user("read"),
+        _tool_call_msg("file_read", "c1"),
+        _tool_return_msg("file_read", big, "c1"),
+    ]
+    info = ToolInfo(
+        name="file_read",
+        description="read a file",
+        approval=False,
+        source=ToolSourceEnum.NATIVE,
+        visibility=VisibilityPolicyEnum.ALWAYS,
+        max_result_size=math.inf,
+    )
+    ctx = _make_batch_ctx_with_tool_index(
+        tmp_path, batch_spill_chars=200_000, tool_index={"file_read": info}
+    )
+
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING, logger="co_cli.context._history_processors"):
+        result = evict_batch_tool_outputs(ctx, msgs)
+
+    part = result[2].parts[0]
+    assert part.content == big
+    assert PERSISTED_OUTPUT_TAG not in part.content
+    assert any("still over budget" in rec.getMessage() for rec in caplog.records)
+
+
+def test_evict_batch_tool_outputs_spills_non_pinned_tool(tmp_path: Path) -> None:
+    """evict_batch_tool_outputs spills tool returns for tools without a pinned max_result_size."""
+    big = "s" * 250_000
+    msgs = [
+        _user("run"),
+        _tool_call_msg("shell", "c1"),
+        _tool_return_msg("shell", big, "c1"),
+    ]
+    # shell is not in tool_index — treated as spillable
+    ctx = _make_batch_ctx_with_tool_index(tmp_path, batch_spill_chars=200_000, tool_index={})
+    result = evict_batch_tool_outputs(ctx, msgs)
+    part = result[2].parts[0]
+    assert PERSISTED_OUTPUT_TAG in part.content
 
 
 # ---------------------------------------------------------------------------

@@ -7,14 +7,15 @@ messages where at least one part changed.
 
 Registered processors:
     dedup_tool_results     — collapses identical-content tool returns to back-references
-    truncate_tool_results  — content-clears compactable tool results by recency
-    enforce_batch_budget   — spills oversized tool returns in the current batch
+    evict_old_tool_results   — content-clears compactable tool results by recency
+    evict_batch_tool_outputs — spills oversized tool returns in the current batch
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 
@@ -84,7 +85,7 @@ def _rewrite_tool_returns(
     rebuilt via ``replace(msg, parts=...)`` when at least one part changed —
     otherwise the original message object is preserved.
 
-    Shared by ``truncate_tool_results`` and ``dedup_tool_results`` so both
+    Shared by ``evict_old_tool_results`` and ``dedup_tool_results`` so both
     obey the same "boundary-protected, non-mutating" contract by construction.
     """
     result: list[ModelMessage] = []
@@ -125,12 +126,12 @@ def _build_latest_id_by_key(messages: list[ModelMessage]) -> dict[str, str]:
 
 
 def _build_durable_call_ids(messages: list[ModelMessage], boundary: int) -> set[str]:
-    """Return tool_call_ids that will survive ``truncate_tool_results``.
+    """Return tool_call_ids that will survive ``evict_old_tool_results``.
 
     A part is durable if it lives in the protected tail (``messages[boundary:]``)
     or is among the ``COMPACTABLE_KEEP_RECENT`` most recent per tool_name in
     ``messages[:boundary]``. Used by ``dedup_tool_results`` to avoid emitting
-    back-references that ``truncate_tool_results`` will subsequently clear.
+    back-references that ``evict_old_tool_results`` will subsequently clear.
     """
     durable: set[str] = set()
     # Tail-protected: compactable returns at or after boundary always survive.
@@ -165,15 +166,15 @@ def dedup_tool_results(
 
     Protects the last turn via the same ``_find_last_turn_start`` boundary
     M2a uses. Non-string content and non-compactable tools pass through
-    unchanged (same safety envelope as ``truncate_tool_results``).
+    unchanged (same safety envelope as ``evict_old_tool_results``).
 
     Back-references are only emitted when the target ``latest_id`` is durable
-    (will survive ``truncate_tool_results``). A non-durable target means the
+    (will survive ``evict_old_tool_results``). A non-durable target means the
     back-reference would point to a cleared semantic marker rather than live
     content — those cases pass through unchanged.
 
     Registered as the **first** history processor — runs before
-    ``truncate_tool_results`` so the kept recent window has already been
+    ``evict_old_tool_results`` so the kept recent window has already been
     collapsed for identical repeats before recency-based clearing applies.
     """
     boundary = _find_last_turn_start(messages)
@@ -255,7 +256,7 @@ def _build_cleared_part(
     )
 
 
-def truncate_tool_results(
+def evict_old_tool_results(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
@@ -351,7 +352,7 @@ def _apply_batch_replacements(
     return result
 
 
-def enforce_batch_budget(
+def evict_batch_tool_outputs(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
@@ -364,7 +365,10 @@ def enforce_batch_budget(
     candidates remain. Fails open: if persist_if_oversized returns unchanged
     content (OSError fallback), that candidate is skipped.
 
-    Registered after truncate_tool_results.
+    Tools registered with max_result_size=math.inf are excluded from candidates —
+    the same contract that M1 (evict_old_tool_results) honours via COMPACTABLE_TOOLS.
+
+    Registered after evict_old_tool_results.
     Not added to delegation sub-agent chains (short-lived, unnecessary overhead).
     """
     from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, persist_if_oversized
@@ -378,10 +382,15 @@ def enforce_batch_budget(
     if aggregate <= threshold:
         return messages
 
+    never_evict = {
+        name for name, info in ctx.deps.tool_index.items() if info.max_result_size == math.inf
+    }
     candidates = [
         (msg_idx, part_idx, part)
         for msg_idx, part_idx, part in batch_parts
-        if isinstance(part.content, str) and PERSISTED_OUTPUT_TAG not in part.content
+        if isinstance(part.content, str)
+        and PERSISTED_OUTPUT_TAG not in part.content
+        and part.tool_name not in never_evict
     ]
     candidates.sort(key=lambda entry: _tool_return_part_size(entry[2]), reverse=True)
 
@@ -404,7 +413,7 @@ def enforce_batch_budget(
         signature = tuple(sorted(part.tool_call_id for _, _, part in batch_parts))
         if ctx.deps.runtime.last_overbudget_batch_signature != signature:
             log.warning(
-                "enforce_batch_budget: batch still over budget (%d > %d) after exhausting candidates",
+                "evict_batch_tool_outputs: batch still over budget (%d > %d) after exhausting candidates",
                 aggregate,
                 threshold,
             )
