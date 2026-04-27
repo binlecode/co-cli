@@ -20,6 +20,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
+    ModelResponse,
+    ToolCallPart,
     ToolReturnPart,
 )
 
@@ -193,16 +195,27 @@ async def _gated_summarize_or_none(
 def _preserve_search_tool_breadcrumbs(
     dropped: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """Keep SDK search-tools discovery state across compaction boundaries."""
-    result = []
+    """Keep paired search_tools tool-call/return cycles across compaction boundaries."""
+    call_part_by_id: dict[str, ToolCallPart] = {}
+    for msg in dropped:
+        if isinstance(msg, ModelResponse):
+            for part in msg.parts:
+                if isinstance(part, ToolCallPart) and part.tool_name == "search_tools":
+                    call_part_by_id[part.tool_call_id] = part
+
+    result: list[ModelMessage] = []
     for msg in dropped:
         if not isinstance(msg, ModelRequest):
             continue
-        search_parts = [
-            p for p in msg.parts if isinstance(p, ToolReturnPart) and p.tool_name == "search_tools"
-        ]
-        if search_parts:
-            result.append(ModelRequest(parts=search_parts))
+        for part in msg.parts:
+            if not (isinstance(part, ToolReturnPart) and part.tool_name == "search_tools"):
+                continue
+            call_part = call_part_by_id.get(part.tool_call_id)
+            if call_part is None:
+                # Orphan return without paired call — drop rather than emit broken shape.
+                continue
+            result.append(ModelResponse(parts=[call_part]))
+            result.append(ModelRequest(parts=[part]))
     return result
 
 

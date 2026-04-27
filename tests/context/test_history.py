@@ -492,21 +492,15 @@ def test_planner_min_groups_tail_keeps_last_group():
 
 
 @pytest.mark.asyncio
-async def test_compaction_output_preserves_orphan_search_tools_return():
-    """Gap L: after compaction, a search_tools ToolReturnPart from the dropped range
-    survives in the output, even though its matching ToolCallPart was in dropped.
-
-    Verifies the documented invariant: search_tools breadcrumbs are orphan returns
-    by design — the SDK handles them without rejecting the request. This test
-    checks the structural preservation; provider acceptance is exercised by the
-    LLM-backed /compact integration test and production.
+async def test_compaction_output_preserves_paired_search_tools_breadcrumb():
+    """TASK-5: after compaction, search_tools breadcrumbs are emitted as paired
+    ModelResponse(ToolCallPart) + ModelRequest(ToolReturnPart) — not orphan returns.
     """
     msgs = []
     # Head run
     msgs.append(_user("start"))
     msgs.append(_assistant("ok"))
-    # Dropped middle with a search_tools call/return (the call will be dropped;
-    # the return will be preserved as an orphan by _preserve_search_tool_breadcrumbs)
+    # Dropped middle with a search_tools call/return
     msgs.append(_user("search for something"))
     msgs.append(
         ModelResponse(
@@ -536,7 +530,18 @@ async def test_compaction_output_preserves_orphan_search_tools_return():
     ctx = _make_processor_ctx()
     result = await proactive_window_processor(ctx, msgs)
 
-    # search_tools return must be present in the compacted output
+    # The paired ToolCallPart must be present in the output
+    calls = [
+        part
+        for msg in result
+        if isinstance(msg, ModelResponse)
+        for part in msg.parts
+        if isinstance(part, ToolCallPart) and part.tool_name == "search_tools"
+    ]
+    assert len(calls) == 1
+    assert calls[0].tool_call_id == "st-1"
+
+    # The matching ToolReturnPart must also be present with same tool_call_id
     returns = [
         part
         for msg in result
@@ -547,15 +552,55 @@ async def test_compaction_output_preserves_orphan_search_tools_return():
     assert len(returns) == 1
     assert returns[0].tool_call_id == "st-1"
 
-    # The matching ToolCallPart must NOT be present (confirming it's an orphan)
-    calls = [
-        part
-        for msg in result
+    # Verify call precedes return in message order
+    call_idx = next(
+        i
+        for i, msg in enumerate(result)
         if isinstance(msg, ModelResponse)
-        for part in msg.parts
-        if isinstance(part, ToolCallPart) and part.tool_name == "search_tools"
+        and any(isinstance(p, ToolCallPart) and p.tool_name == "search_tools" for p in msg.parts)
+    )
+    return_idx = next(
+        i
+        for i, msg in enumerate(result)
+        if isinstance(msg, ModelRequest)
+        and any(isinstance(p, ToolReturnPart) and p.tool_name == "search_tools" for p in msg.parts)
+    )
+    assert call_idx < return_idx
+
+
+def test_preserve_search_tool_breadcrumbs_orphan_is_dropped():
+    """TASK-5: an orphan ToolReturnPart (no matching call in dropped) is not emitted."""
+    from co_cli.context.compaction import _preserve_search_tool_breadcrumbs
+
+    dropped = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="search_tools",
+                    content="discovered [bar_tool]",
+                    tool_call_id="st-orphan",
+                )
+            ]
+        )
     ]
-    assert len(calls) == 0
+    result = _preserve_search_tool_breadcrumbs(dropped)
+    assert result == []
+
+
+def test_preserve_search_tool_breadcrumbs_non_search_tools_dropped():
+    """TASK-5: non-search_tools ToolReturnParts are not emitted."""
+    from co_cli.context.compaction import _preserve_search_tool_breadcrumbs
+
+    dropped = [
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="shell", args={"cmd": "ls"}, tool_call_id="sh-1")]
+        ),
+        ModelRequest(
+            parts=[ToolReturnPart(tool_name="shell", content="file.txt", tool_call_id="sh-1")]
+        ),
+    ]
+    result = _preserve_search_tool_breadcrumbs(dropped)
+    assert result == []
 
 
 # ---------------------------------------------------------------------------
