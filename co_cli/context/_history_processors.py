@@ -110,9 +110,9 @@ def _build_latest_id_by_key(messages: list[ModelMessage]) -> dict[str, str]:
     """For each ``(tool_name, content-hash)`` key, record the ``tool_call_id`` of the latest occurrence.
 
     Reverse scan over ToolReturnParts eligible for dedup; the first
-    observation in reverse order is the latest in forward order. Caller is
-    responsible for scoping ``messages`` (typically ``messages[:boundary]``)
-    so the tail is excluded from dedup consideration.
+    observation in reverse order is the latest in forward order. The full
+    message list (including the protected tail) is scanned so that tail copies
+    are preferred as the back-reference target when they exist.
     """
     latest: dict[str, str] = {}
     for part in _iter_tool_returns_reversed(messages):
@@ -122,6 +122,34 @@ def _build_latest_id_by_key(messages: list[ModelMessage]) -> dict[str, str]:
         if key not in latest:
             latest[key] = part.tool_call_id
     return latest
+
+
+def _build_durable_call_ids(messages: list[ModelMessage], boundary: int) -> set[str]:
+    """Return tool_call_ids that will survive ``truncate_tool_results``.
+
+    A part is durable if it lives in the protected tail (``messages[boundary:]``)
+    or is among the ``COMPACTABLE_KEEP_RECENT`` most recent per tool_name in
+    ``messages[:boundary]``. Used by ``dedup_tool_results`` to avoid emitting
+    back-references that ``truncate_tool_results`` will subsequently clear.
+    """
+    durable: set[str] = set()
+    # Tail-protected: compactable returns at or after boundary always survive.
+    for msg in messages[boundary:]:
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part in msg.parts:
+            if isinstance(part, ToolReturnPart) and part.tool_name in COMPACTABLE_TOOLS:
+                durable.add(part.tool_call_id)
+    # Pre-tail: mirror truncate's keep-recent logic using tool_call_id strings.
+    seen_counts: dict[str, int] = {}
+    for part in _iter_tool_returns_reversed(messages[:boundary]):
+        if part.tool_name not in COMPACTABLE_TOOLS:
+            continue
+        count = seen_counts.get(part.tool_name, 0)
+        if count < COMPACTABLE_KEEP_RECENT:
+            durable.add(part.tool_call_id)
+        seen_counts[part.tool_name] = count + 1
+    return durable
 
 
 def dedup_tool_results(
@@ -139,21 +167,29 @@ def dedup_tool_results(
     M2a uses. Non-string content and non-compactable tools pass through
     unchanged (same safety envelope as ``truncate_tool_results``).
 
+    Back-references are only emitted when the target ``latest_id`` is durable
+    (will survive ``truncate_tool_results``). A non-durable target means the
+    back-reference would point to a cleared semantic marker rather than live
+    content — those cases pass through unchanged.
+
     Registered as the **first** history processor — runs before
-    ``truncate_tool_results`` so the kept recent window is already deduped
-    before recency-based clearing applies.
+    ``truncate_tool_results`` so the kept recent window has already been
+    collapsed for identical repeats before recency-based clearing applies.
     """
     boundary = _find_last_turn_start(messages)
     if not boundary:
         return messages
 
-    latest_id_by_key = _build_latest_id_by_key(messages[:boundary])
+    latest_id_by_key = _build_latest_id_by_key(messages)
+    durable_call_ids = _build_durable_call_ids(messages, boundary)
 
     def replacement_for(part: ToolReturnPart) -> ToolReturnPart | None:
         if not is_dedup_candidate(part):
             return None
         latest_id = latest_id_by_key.get(dedup_key(part))
         if latest_id is None or latest_id == part.tool_call_id:
+            return None
+        if latest_id not in durable_call_ids:
             return None
         return build_dedup_part(part, latest_id)
 

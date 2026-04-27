@@ -347,3 +347,89 @@ def test_dedup_no_user_prompt_returns_unchanged():
     msgs = [_assistant_msg("only assistant")]
     result = dedup_tool_results(_processor_ctx(), msgs)
     assert result == msgs
+
+
+# ---------------------------------------------------------------------------
+# Durability tests — TASK-3 back-reference fidelity
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_blocks_back_ref_when_target_not_in_keep_window():
+    """latest_id outside keep-recent-5 → no back-reference emitted; parts pass through.
+
+    Scenario: content A appears at fr0 and fr1, then 5 shell calls with
+    distinct content push A's latest occurrence (fr1) out of the keep-recent-5
+    window. Dedup must NOT emit a back-ref for fr0 because fr1 will be cleared
+    by truncate.
+    """
+    content_a = "alpha content " * 50  # 700 chars, above threshold
+
+    msgs: list = []
+    # Two identical file_reads (fr0, fr1).
+    msgs.extend(_tool_turn("file_read", {"path": "a.py"}, "fr0", content_a))
+    msgs.extend(_tool_turn("file_read", {"path": "a.py"}, "fr1", content_a))
+    # Five more file_reads with different content — push fr1 out of keep-recent-5.
+    for idx in range(2, 7):
+        msgs.extend(_tool_turn("file_read", {"path": "a.py"}, f"fr{idx}", f"distinct-{idx} " * 50))
+    msgs.extend(_tail())
+
+    result = dedup_tool_results(_processor_ctx(), msgs)
+    returns = _extract_returns(result, "file_read")
+
+    # fr0 and fr1 must retain full content — back-ref target (fr1) is not durable.
+    fr0 = next(r for r in returns if r.tool_call_id == "fr0")
+    fr1 = next(r for r in returns if r.tool_call_id == "fr1")
+    assert fr0.content == content_a, "fr0 must not be rewritten: target fr1 is non-durable"
+    assert fr1.content == content_a, "fr1 must retain full content: it is the latest occurrence"
+
+
+def test_dedup_prefers_tail_copy_as_back_ref_target():
+    """When identical content exists in both pre-tail and protected tail, dedup
+    emits back-refs pointing at the tail copy (not the pre-tail copy).
+
+    The tail copy is always durable; with the old code (pre-tail scan only)
+    the tail occurrence was invisible and the pre-tail copy was used instead.
+    """
+    content_b = "beta content " * 50  # 650 chars, above threshold
+
+    msgs: list = []
+    # One older file_read inside the pre-tail keep window (will be kept by truncate).
+    msgs.extend(_tool_turn("file_read", {"path": "b.py"}, "fr_old", content_b))
+    # Final user turn (protected tail) also has an identical file_read.
+    msgs.append(_user_msg("re-read in last turn"))
+    msgs.append(
+        ModelResponse(parts=[ToolCallPart(tool_name="file_read", args={}, tool_call_id="fr_tail")])
+    )
+    msgs.append(
+        ModelRequest(
+            parts=[
+                ToolReturnPart(tool_name="file_read", content=content_b, tool_call_id="fr_tail")
+            ]
+        )
+    )
+    msgs.append(_assistant_msg("done"))
+
+    result = dedup_tool_results(_processor_ctx(), msgs)
+
+    fr_old_part = next(
+        p
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for p in msg.parts
+        if isinstance(p, ToolReturnPart) and p.tool_call_id == "fr_old"
+    )
+    fr_tail_part = next(
+        p
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for p in msg.parts
+        if isinstance(p, ToolReturnPart) and p.tool_call_id == "fr_tail"
+    )
+    # fr_old must be a back-ref pointing at fr_tail (the tail copy is preferred).
+    assert isinstance(fr_old_part.content, str)
+    assert fr_old_part.content.startswith("[Duplicate tool output"), (
+        "fr_old must be rewritten to a back-ref"
+    )
+    assert "fr_tail" in fr_old_part.content, "back-ref must name the tail copy's call_id"
+    # Tail copy retains full content — it is the target, not rewritten.
+    assert fr_tail_part.content == content_b, "tail copy must keep full content"
