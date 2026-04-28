@@ -615,8 +615,8 @@ async def test_previous_summary_written_back_after_successful_compaction() -> No
     bounds = (0, len(msgs) - 2, len(msgs) - 2)
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    # pytest-timeout=120s is the safety net for the LLM summarization call.
-    await apply_compaction(ctx, msgs, bounds, announce=False)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        await apply_compaction(ctx, msgs, bounds, announce=False)
     new_summary = deps.runtime.previous_compaction_summary
     assert new_summary is not None
     assert new_summary != "EXISTING_SENTINEL_PRIOR_SUMMARY", (
