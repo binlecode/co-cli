@@ -24,11 +24,14 @@ from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings
 from co_cli.config.compaction import CompactionSettings
 from co_cli.context.compaction import (
+    COMPACTABLE_KEEP_RECENT,
     STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
     _is_valid_summary,
     apply_compaction,
+    evict_old_tool_results,
     gather_compaction_context,
+    plan_compaction_boundaries,
     proactive_window_processor,
     recover_overflow_history,
     summary_marker,
@@ -44,7 +47,7 @@ from co_cli.context.summarization import (
     resolve_compaction_budget,
     summarize_messages,
 )
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=_CONFIG)
@@ -874,7 +877,6 @@ def test_gather_compaction_context_scoped_to_dropped() -> None:
 def test_gather_compaction_context_cap() -> None:
     """Enrichment result never exceeds _CONTEXT_MAX_CHARS = 4000 chars."""
     from co_cli.context._compaction_markers import _CONTEXT_MAX_CHARS
-    from co_cli.deps import CoSessionState
 
     big_todos = [{"content": "x" * 500, "status": "pending"} for _ in range(20)]
     many_file_calls = ModelResponse(
@@ -1132,3 +1134,547 @@ async def test_three_turn_boundary_no_spurious_compaction() -> None:
     assert result is turn_n2_msgs, "no compaction at N+2 boundary either (10K << threshold)"
     # Two clean boundaries → counter still at zero, anti-thrash gate stays disarmed.
     assert deps.runtime.consecutive_low_yield_proactive_compactions == 0
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by the functional compaction tests below
+# ---------------------------------------------------------------------------
+
+
+def _tool_call(name: str, args: dict, call_id: str) -> ModelResponse:
+    return ModelResponse(parts=[ToolCallPart(tool_name=name, args=args, tool_call_id=call_id)])
+
+
+def _tool_return(name: str, content: str, call_id: str) -> ModelRequest:
+    return ModelRequest(
+        parts=[ToolReturnPart(tool_name=name, content=content, tool_call_id=call_id)]
+    )
+
+
+def _analysis(topic: str, extra: str = "") -> str:
+    return (
+        f"I've analyzed {topic}. The authentication flow starts at the login endpoint. "
+        f"The current implementation uses Django's session framework via SessionMiddleware. "
+        f"Token-based auth would eliminate the session table dependency entirely. "
+        f"The CSRF protection relies on session cookies — JWT migration needs a replacement. "
+        f"Implementation: HS256 algorithm, 15-minute access token TTL, HttpOnly refresh cookie, "
+        f"Redis token blacklist, rate limiting on the token endpoint, dual-auth middleware for "
+        f"zero-downtime migration. Security: jti claim + Redis blacklist prevents token replay. "
+        f"{extra}"
+        f"I'll proceed with the next file to build the full picture before making changes."
+    )
+
+
+def _fake_file(name: str, lines: int = 30) -> str:
+    return "\n".join(
+        f"# {name} line {i}: {'def ' if i % 10 == 0 else '    '}handler_{i}(request): pass"
+        for i in range(lines)
+    )
+
+
+def _extract_section(summary: str, section_name: str) -> str:
+    header = f"## {section_name}"
+    start = summary.find(header)
+    if start == -1:
+        return ""
+    content_start = summary.find("\n", start)
+    if content_start == -1:
+        return ""
+    content_start += 1
+    next_header = summary.find("\n## ", content_start)
+    return (
+        summary[content_start:next_header] if next_header != -1 else summary[content_start:]
+    ).strip()
+
+
+def _has_verbatim_anchor(summary_text: str, source_messages: list[ModelMessage]) -> bool:
+    next_step = _extract_section(summary_text, "Next Step")
+    if not next_step:
+        return False
+    recent_texts = " ".join(
+        p.content
+        for m in source_messages[-3:]
+        for p in m.parts
+        if (isinstance(p, UserPromptPart) and isinstance(p.content, str))
+        or (isinstance(p, TextPart) and isinstance(p.content, str))
+    )
+    return any(next_step[i : i + 20] in recent_texts for i in range(len(next_step) - 20 + 1))
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker: static marker when skip_count ≥ 3
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_uses_static_marker() -> None:
+    """apply_compaction with compaction_skip_count=3 produces static marker, no LLM call."""
+    # Use a small context window so plan_compaction_boundaries finds bounds without massive history.
+    # 2048 tokens x 0.65 compaction_ratio ~= 1331 token threshold -> ~5324 chars needed.
+    small_ctx_config = make_settings(llm=TEST_LLM.model_copy(update={"num_ctx": 2048}))
+    msgs: list[ModelMessage] = []
+    for i in range(8):
+        msgs += [_user(f"turn {i}"), _assistant(f"response {i} " + "x" * 700)]
+
+    deps = CoDeps(shell=ShellBackend(), config=small_ctx_config, session=CoSessionState())
+    deps.runtime.compaction_skip_count = 3
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
+    budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
+    bounds = plan_compaction_boundaries(msgs, budget, ctx.deps.config.compaction.tail_fraction)
+    if bounds is None:
+        pytest.skip("history too small for configured context window")
+
+    len_pre = len(msgs)
+    result, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
+
+    assert len(result) < len_pre, "circuit breaker must still compact (static marker)"
+    assert summary_text is None, "circuit breaker must produce static marker, not LLM summary"
+
+    has_static = any(
+        isinstance(p, UserPromptPart) and "earlier messages were removed" in str(p.content)
+        for m in result
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+    )
+    assert has_static, "static marker text must appear in result"
+
+
+# ---------------------------------------------------------------------------
+# Full chain P1→P5 with LLM
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_full_chain_p1_to_p5_llm() -> None:
+    """P1 clears old tool results, P5 LLM summarizer fires; marker count matches dropped count."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.context.compaction import (
+        plan_compaction_boundaries,
+    )
+    from co_cli.llm._factory import build_model
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+
+    N_READ = 10
+    history: list[ModelMessage] = [
+        _user("Refactor auth from sessions to JWT."),
+        ModelResponse(parts=[TextPart(content=_analysis("project structure", "Starting.\n\n"))]),
+    ]
+    files = [
+        f"auth/{n}.py"
+        for n in [
+            "views",
+            "middleware",
+            "tokens",
+            "permissions",
+            "decorators",
+            "backends",
+            "serializers",
+            "signals",
+            "utils",
+            "constants",
+        ]
+    ]
+    for i, fname in enumerate(files):
+        cid = f"rf{i}"
+        history += [
+            _user(f"Read {fname}"),
+            _tool_call("file_read", {"file_path": fname}, cid),
+            _tool_return("file_read", _fake_file(fname, 20 + i * 3), cid),
+            ModelResponse(parts=[TextPart(content=_analysis(fname))]),
+        ]
+    history += [_user("Status?"), _assistant("Views and middleware done. Tests remain.")]
+
+    from co_cli.deps import CoSessionState as _CoSessionState
+
+    session = _CoSessionState()
+    session.session_todos = [{"content": "Add PyJWT to requirements", "status": "pending"}]
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model, session=session)
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+    msgs = evict_old_tool_results(ctx, list(history))
+    cleared = sum(
+        1
+        for m in msgs
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, ToolReturnPart) and "[tool result cleared" in str(p.content)
+    )
+    assert cleared == N_READ - COMPACTABLE_KEEP_RECENT, (
+        f"P1 must clear {N_READ - COMPACTABLE_KEEP_RECENT} old tool results, got {cleared}"
+    )
+
+    ctx_window = deps.model.context_window if deps.model else None
+    budget = resolve_compaction_budget(deps.config, ctx_window)
+    bounds = plan_compaction_boundaries(msgs, budget, deps.config.compaction.tail_fraction)
+    if bounds is None:
+        pytest.skip("history too small for context window")
+
+    len_pre = len(msgs)
+    result, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
+
+    assert len(result) < len_pre, "P5 must reduce message count"
+    assert summary_text is not None, "P5 LLM must produce a summary (model is set)"
+
+    marker_count = sum(
+        1
+        for m in result
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, UserPromptPart) and SUMMARY_MARKER_PREFIX in str(p.content)
+    )
+    assert marker_count == 1, f"exactly 1 summary marker expected, got {marker_count}"
+
+    low = summary_text.lower()
+    assert any(kw in low for kw in ("jwt", "session")), "goal must appear in summary"
+
+
+# ---------------------------------------------------------------------------
+# Iterative summary: 3-pass cross-compaction preservation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_iterative_summary_3_pass_preservation() -> None:
+    """Distinctive token from cycle-1 survives into the cycle-3 in-context marker."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.llm._factory import build_model
+
+    DISTINCTIVE_TOKEN = "JWT_ROTATION_7779"
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model, session=CoSessionState())
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+    def _cycle(seed: list[ModelMessage], label: str) -> tuple[list[ModelMessage], str | None]:
+        ctx_window = deps.model.context_window if deps.model else None
+        budget = resolve_compaction_budget(deps.config, ctx_window)
+        bounds = plan_compaction_boundaries(seed, budget, deps.config.compaction.tail_fraction)
+        if bounds is None:
+            return seed, None
+        import asyncio as _asyncio
+
+        history, summary = _asyncio.get_event_loop().run_until_complete(
+            apply_compaction(ctx, seed, bounds, announce=False)
+        )
+        return history, summary
+
+    cycle1 = [
+        _user(f"Implement JWT auth. Key rotation interval: {DISTINCTIVE_TOKEN} seconds."),
+        _assistant(
+            f"Implementing JWT with key rotation every {DISTINCTIVE_TOKEN}s.\n"
+            + _analysis("auth/tokens.py")
+        ),
+        _user("Read middleware."),
+        _tool_call("file_read", {"file_path": "auth/middleware.py"}, "c1"),
+        _tool_return("file_read", _fake_file("auth/middleware", 25), "c1"),
+        _assistant(_analysis("auth/middleware.py")),
+        _user("Status?"),
+        _assistant("Token service and middleware reviewed."),
+    ]
+
+    ctx_window = deps.model.context_window if deps.model else None
+    budget = resolve_compaction_budget(deps.config, ctx_window)
+    bounds1 = plan_compaction_boundaries(cycle1, budget, deps.config.compaction.tail_fraction)
+    if bounds1 is None:
+        pytest.skip("cycle 1 history too small")
+
+    history1, summary1 = await apply_compaction(ctx, cycle1, bounds1, announce=False)
+    if summary1 is None:
+        pytest.skip("cycle 1 used static marker — no model or circuit breaker active")
+
+    cycle2 = [
+        *history1,
+        _user("Write tests."),
+        _tool_call("file_read", {"file_path": "tests/test_tokens.py"}, "c2"),
+        _tool_return("file_read", _fake_file("test_tokens", 20), "c2"),
+        _assistant(_analysis("tests/test_tokens.py")),
+        _user("Status?"),
+        _assistant("Tests written."),
+    ]
+    bounds2 = plan_compaction_boundaries(cycle2, budget, deps.config.compaction.tail_fraction)
+    if bounds2 is None:
+        pytest.skip("cycle 2 history too small")
+
+    history2, summary2 = await apply_compaction(ctx, cycle2, bounds2, announce=False)
+    if summary2 is None:
+        pytest.skip("cycle 2 used static marker")
+
+    cycle3 = [
+        *history2,
+        _user("Deploy to staging."),
+        _tool_call("file_read", {"file_path": "deploy/config.yaml"}, "c3"),
+        _tool_return("file_read", _fake_file("deploy/config", 15), "c3"),
+        _assistant(_analysis("deploy/config.yaml")),
+        _user("Final status?"),
+        _assistant("JWT migration complete."),
+    ]
+    bounds3 = plan_compaction_boundaries(cycle3, budget, deps.config.compaction.tail_fraction)
+    if bounds3 is None:
+        pytest.skip("cycle 3 history too small")
+
+    history3, summary3 = await apply_compaction(ctx, cycle3, bounds3, announce=False)
+    if summary3 is None:
+        pytest.skip("cycle 3 used static marker")
+
+    marker3 = next(
+        (
+            p.content
+            for m in history3
+            if isinstance(m, ModelRequest)
+            for p in m.parts
+            if isinstance(p, UserPromptPart) and SUMMARY_MARKER_PREFIX in str(p.content)
+        ),
+        None,
+    )
+    assert marker3 is not None, "cycle-3 summary marker must be present in history"
+    assert DISTINCTIVE_TOKEN in marker3, (
+        f"{DISTINCTIVE_TOKEN} must survive 3 compaction passes (cross-compaction memory broken)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Summarizer prompt quality: verbatim anchor, corrections, error-feedback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_summarizer_verbatim_anchor_in_next_step() -> None:
+    """## Next Step must contain a ≥20-char verbatim substring from the last 3 messages."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.llm._factory import build_model
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+
+    dropped = [
+        _user("I need to migrate auth from sessions to JWT. Read the current implementation."),
+        _tool_call("file_read", {"file_path": "auth/views.py"}, "c1"),
+        _tool_return("file_read", "[session middleware code — 80 lines]", "c1"),
+        _assistant(
+            "I've read auth/views.py. The session middleware handles login at /auth/login."
+        ),
+        _user("Now edit auth/views.py to add JWT token generation on successful login."),
+        _assistant(
+            "I'll add a generate_jwt() call after the authenticate() check in the login view."
+        ),
+    ]
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
+    summary = await summarize_messages(deps, dropped)
+    assert _has_verbatim_anchor(summary, dropped), (
+        "## Next Step must contain a ≥20-char verbatim anchor from the last 3 messages"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_summarizer_user_correction_captured() -> None:
+    """Final user directive (python-jose) must appear in ## Active Task or ## User Corrections."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.llm._factory import build_model
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+
+    msgs = [
+        _user("Implement JWT auth."),
+        _assistant("I'll use PyJWT library for token generation."),
+        _user("no, use the built-in hmac module instead of PyJWT"),
+        _assistant("Switching to hmac. I'll implement sign_token() using hmac.new()."),
+        _user("wait, that's not what I wanted — use python-jose, not hmac"),
+        _assistant("Understood, switching to python-jose."),
+    ]
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
+    summary = await summarize_messages(deps, msgs)
+
+    active_task = _extract_section(summary, "Active Task")
+    user_corrections = _extract_section(summary, "User Corrections")
+    jose_present = (
+        "python-jose" in active_task.lower() or "python-jose" in user_corrections.lower()
+    )
+    hmac_only = "hmac" in active_task.lower() and "python-jose" not in active_task.lower()
+
+    assert not hmac_only, (
+        "## Active Task must not state the rejected choice (hmac) without python-jose"
+    )
+    assert jose_present, "'python-jose' must appear in ## Active Task or ## User Corrections"
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_summarizer_errors_and_fixes_retained() -> None:
+    """## Errors & Fixes must contain the test failure and the user-directed correction."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.llm._factory import build_model
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+
+    msgs = [
+        _user("Run the tests."),
+        _assistant("Running tests..."),
+        _tool_call("run_shell", {"cmd": "pytest"}, "s1"),
+        _tool_return(
+            "run_shell", "FAILED: test_jwt_auth — AssertionError: token missing 'exp' claim", "s1"
+        ),
+        _assistant("The test failed. I'll add the exp claim to the token payload."),
+        _tool_call("edit_file", {"file_path": "auth/tokens.py"}, "e1"),
+        _tool_return("edit_file", "Edited", "e1"),
+        _user(
+            "still failing — you added exp to the wrong method, it should be in create_token() not refresh_token()"
+        ),
+        _assistant("You're right. Adding exp to create_token() instead."),
+    ]
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
+    summary = await summarize_messages(deps, msgs)
+
+    errors_section = _extract_section(summary, "Errors & Fixes")
+    low = errors_section.lower()
+    assert errors_section, "## Errors & Fixes section must be present"
+    assert any(kw in low for kw in ("exp", "test_jwt_auth", "failed")), (
+        "## Errors & Fixes must reference the test failure"
+    )
+    assert "create_token" in low, (
+        "## Errors & Fixes must reference the user-directed correction (create_token)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pending/Resolved sections
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_summarizer_pending_user_asks() -> None:
+    """Unanswered question must appear in ## Pending User Asks."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.llm._factory import build_model
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+
+    msgs = [
+        _user("Implement JWT token blacklisting."),
+        _assistant("I'll implement the Redis-based token blacklist."),
+        _tool_call("file_read", {"file_path": "auth/tokens.py"}, "c1"),
+        _tool_return("file_read", _fake_file("auth/tokens", 15), "c1"),
+        _assistant("I've read the tokens module. Implementing the blacklist service now."),
+        _user("What TTL should we use for blacklisted tokens?"),
+        _assistant(
+            "I'll continue implementing the service structure. We can decide the TTL later."
+        ),
+        _tool_call("edit_file", {"file_path": "auth/blacklist.py"}, "c2"),
+        _tool_return("edit_file", "Edited", "c2"),
+        _assistant("Blacklist service skeleton done. TTL left as a placeholder."),
+    ]
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
+    summary = await summarize_messages(deps, msgs)
+
+    pending = _extract_section(summary, "Pending User Asks")
+    assert pending, "## Pending User Asks must be present for unanswered TTL question"
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_summarizer_resolved_questions() -> None:
+    """Explicitly answered question must appear in ## Resolved Questions, not Pending."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.llm._factory import build_model
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+
+    msgs = [
+        _user("Which hashing algorithm should we use for JWT signing?"),
+        _assistant(
+            "We should use HS256. It is a symmetric HMAC algorithm — simpler to configure than "
+            "RS256 since it uses a single shared secret. For an internal service, HS256 is standard."
+        ),
+        _user("Makes sense. Let's proceed with HS256."),
+        _assistant("I'll implement JWT signing with HS256 in the token service now."),
+        _tool_call("edit_file", {"file_path": "auth/tokens.py"}, "c3"),
+        _tool_return("edit_file", "Edited", "c3"),
+        _assistant(
+            "JWT signing implemented with HS256. Token payload includes user_id, email, exp claims."
+        ),
+    ]
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
+    summary = await summarize_messages(deps, msgs)
+
+    resolved = _extract_section(summary, "Resolved Questions")
+    pending = _extract_section(summary, "Pending User Asks")
+
+    assert resolved or "## Resolved Questions" in summary, (
+        "## Resolved Questions must be present for explicitly answered algorithm question"
+    )
+    algo_in_pending = pending and any(
+        kw in pending.lower() for kw in ("hs256", "algorithm", "hashing")
+    )
+    assert not algo_in_pending, (
+        "answered algorithm question must not appear in ## Pending User Asks"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.local
+async def test_summarizer_pending_migrates_to_resolved() -> None:
+    """Prior ## Pending item answered in new block must migrate to ## Resolved Questions."""
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.llm._factory import build_model
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+
+    prior_summary = (
+        "## Goal\nImplement JWT authentication with Redis token blacklisting.\n\n"
+        "## Key Decisions\nUsing PyJWT with HS256 signing.\n\n"
+        "## Working Set\nauth/tokens.py, auth/middleware.py\n\n"
+        "## Pending User Asks\nWhat Redis TTL should we use for blacklisted tokens?\n\n"
+        "## Next Step\nImplement the Redis token blacklist service."
+    )
+    dropped = [
+        summary_marker(8, prior_summary),
+        _user("Use 15 minutes TTL for blacklisted access tokens and 7 days for refresh tokens."),
+        _assistant(
+            "Setting Redis TTL: 15 minutes (900 seconds) for blacklisted access tokens and "
+            "7 days (604800 seconds) for refresh tokens."
+        ),
+        _tool_call("edit_file", {"file_path": "auth/blacklist.py"}, "c4"),
+        _tool_return("edit_file", "Edited", "c4"),
+        _assistant(
+            "Updated auth/blacklist.py: ACCESS_TOKEN_BLACKLIST_TTL = 900, REFRESH_TOKEN_BLACKLIST_TTL = 604800."
+        ),
+    ]
+    llm_model = build_model(_CONFIG.llm)
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
+
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    context = gather_compaction_context(ctx, dropped=dropped)
+    summary = await summarize_messages(deps, dropped, context=context)
+
+    resolved = _extract_section(summary, "Resolved Questions")
+    pending = _extract_section(summary, "Pending User Asks")
+
+    has_resolved = bool(resolved) or "## Resolved Questions" in summary
+    ttl_in_pending = bool(pending) and any(
+        kw in pending.lower() for kw in ("ttl", "redis", "blacklist")
+    )
+
+    assert has_resolved, "## Resolved Questions must appear after prior pending item is answered"
+    assert not ttl_in_pending, "answered TTL question must not remain in ## Pending User Asks"

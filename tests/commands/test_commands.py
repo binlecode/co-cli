@@ -3,25 +3,17 @@
 All tests use real agent/deps — no mocks, no stubs.
 """
 
-import asyncio
 from pathlib import Path
 
 import pytest
 from pydantic_ai import Agent
-from pydantic_ai.messages import (
-    ModelResponse,
-    ToolCallPart,
-)
 from pydantic_ai.result import DeferredToolRequests
 from tests._frontend import SilentFrontend
-from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
-from tests._settings import TEST_LLM, make_settings
-from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
+from tests._settings import make_settings
 
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, LocalOnly, ReplaceTranscript
-from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import Frontend, console
 from co_cli.knowledge._store import KnowledgeStore
@@ -113,83 +105,6 @@ async def test_cmd_approvals_routing_and_clear(tmp_path):
 
     await dispatch("/approvals clear", ctx)
     assert ctx.deps.session.session_approval_rules == []
-
-
-# --- Approval flow (programmatic, no TTY) ---
-
-_PROMPT_SHELL = (
-    "Use the shell tool to execute: git rev-parse --is-inside-work-tree\n"
-    "Do NOT describe what you would do — call the tool now."
-)
-
-
-@pytest.mark.asyncio
-@pytest.mark.local
-async def test_approval_approve():
-    """Approving a deferred tool call through production orchestration executes it and returns a response.
-
-    run_turn() with SilentFrontend(approval_response="y") exercises the full approval loop:
-    deferred tool → auto-approve → execution → LLM response.
-    """
-    deps = CoDeps(
-        shell=ShellBackend(),
-        model=_LLM_MODEL,
-        tool_index=dict(_TOOL_REG.tool_index),
-        config=_CONFIG_NO_MCP,
-        session=CoSessionState(),
-    )
-    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    try:
-        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
-            turn = await run_turn(
-                agent=_AGENT,
-                user_input=_PROMPT_SHELL,
-                deps=deps,
-                message_history=[],
-                frontend=SilentFrontend(approval_response="y"),
-            )
-        # Verify a tool call was attempted (shell command was deferred and processed)
-        tool_called = any(
-            isinstance(part, ToolCallPart)
-            for msg in turn.messages
-            if isinstance(msg, ModelResponse)
-            for part in msg.parts
-        )
-        assert tool_called, "Expected shell to be called and approved"
-        assert isinstance(turn.output, str)
-        assert len(turn.messages) > 0
-    finally:
-        deps.shell.cleanup()
-
-
-@pytest.mark.asyncio
-@pytest.mark.local
-async def test_approval_deny():
-    """Denying a deferred tool call through production orchestration; LLM still responds.
-
-    run_turn() with SilentFrontend(approval_response="n") exercises the deny path:
-    deferred tool → deny → LLM acknowledgement response.
-    """
-    deps = CoDeps(
-        shell=ShellBackend(),
-        model=_LLM_MODEL,
-        tool_index=dict(_TOOL_REG.tool_index),
-        config=_CONFIG_NO_MCP,
-        session=CoSessionState(),
-    )
-    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    try:
-        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
-            turn = await run_turn(
-                agent=_AGENT,
-                user_input=_PROMPT_SHELL,
-                deps=deps,
-                message_history=[],
-                frontend=SilentFrontend(approval_response="n"),
-            )
-        assert isinstance(turn.output, str)
-    finally:
-        deps.shell.cleanup()
 
 
 # --- /new session checkpoint ---

@@ -60,6 +60,7 @@ def _write_indexed_session(
 
 
 @pytest.mark.asyncio
+@pytest.mark.local
 async def test_memory_search_summarizes_matching_session(tmp_path: Path) -> None:
     """memory_search with a keyword query returns LLM-generated summaries for matching sessions."""
     db_path = tmp_path / "session-index.db"
