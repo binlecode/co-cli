@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from rich.table import Table
 
-from co_cli.commands._types import CommandContext
+from co_cli.commands.types import CommandContext
 from co_cli.display._core import console
 
 _DELEGATION_TOOLS = frozenset(

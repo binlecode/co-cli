@@ -20,8 +20,8 @@ from tests._settings import SETTINGS as _CONFIG
 from tests._settings import TEST_LLM, make_settings
 
 from co_cli.agent._core import build_agent
-from co_cli.commands._commands import dispatch
-from co_cli.commands._types import CommandContext, ReplaceTranscript
+from co_cli.commands.core import dispatch
+from co_cli.commands.types import CommandContext, ReplaceTranscript
 from co_cli.context._compaction_boundaries import _find_last_turn_start
 from co_cli.context._compaction_markers import (
     _active_todos,

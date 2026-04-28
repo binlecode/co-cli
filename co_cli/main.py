@@ -22,9 +22,9 @@ from co_cli.bootstrap.render_status import (
     render_security_findings,
     render_status_table,
 )
-from co_cli.commands._commands import dispatch as dispatch_command
-from co_cli.commands._registry import BUILTIN_COMMANDS, _build_completer_words
-from co_cli.commands._types import CommandContext, DelegateToAgent, ReplaceTranscript
+from co_cli.commands.core import dispatch as dispatch_command
+from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
+from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
 from co_cli.config._core import (
     DEFAULT_REASONING_DISPLAY,
     LOGS_DB,
@@ -276,7 +276,7 @@ async def _chat_loop(
             raise SystemExit(1) from e
         deps.session.reasoning_display = reasoning_display
 
-        completer.words = _build_completer_words(deps.skill_commands)
+        completer.words = build_completer_words(deps.skill_commands)
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
         current_session_path = restore_session(deps, frontend)

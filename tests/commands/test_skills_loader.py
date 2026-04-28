@@ -8,8 +8,8 @@ import pytest
 from prompt_toolkit.completion import WordCompleter
 
 from co_cli.agent._core import build_agent
-from co_cli.commands._commands import dispatch
-from co_cli.commands._types import CommandContext, DelegateToAgent, LocalOnly, ReplaceTranscript
+from co_cli.commands.core import dispatch
+from co_cli.commands.types import CommandContext, DelegateToAgent, LocalOnly, ReplaceTranscript
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import console

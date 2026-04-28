@@ -646,11 +646,11 @@ async def test_session_commands_reset_previous_compaction_summary() -> None:
     """
     import tempfile
 
-    from co_cli.commands._types import CommandContext
     from co_cli.commands.clear import _cmd_clear
     from co_cli.commands.compact import _cmd_compact
     from co_cli.commands.new import _cmd_new
     from co_cli.commands.resume import _cmd_resume
+    from co_cli.commands.types import CommandContext
 
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
 
@@ -709,8 +709,8 @@ async def test_compact_command_resets_thrash_state() -> None:
     Uses model=None (deps default) so compaction applies a static marker without
     an LLM call. The gate reset must happen regardless of summarizer availability.
     """
-    from co_cli.commands._types import CommandContext
     from co_cli.commands.compact import _cmd_compact
+    from co_cli.commands.types import CommandContext
 
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
     deps.runtime.consecutive_low_yield_proactive_compactions = 2
@@ -840,6 +840,61 @@ def test_is_valid_summary_accepts_non_empty_strings() -> None:
     assert _is_valid_summary("Good progress so far.")
     assert _is_valid_summary("## Active Task\nRefactor auth module.")
     assert _is_valid_summary("x")
+
+
+def test_gather_compaction_context_scoped_to_dropped() -> None:
+    """File paths are extracted only from the dropped slice (Gap M).
+
+    Paths outside the dropped slice must not appear in the enrichment result
+    since gather_compaction_context receives only the dropped messages as its source.
+    """
+    dropped = [
+        _user("mid"),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="file_read", args={"file_path": "/mid.py"}, tool_call_id="m1"
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[ToolReturnPart(tool_name="file_read", content="z", tool_call_id="m1")]
+        ),
+        _assistant("mid"),
+    ]
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    result = gather_compaction_context(ctx, dropped)
+    assert result is not None
+    assert "/mid.py" in result
+    assert "/head.py" not in result
+    assert "/tail.py" not in result
+
+
+def test_gather_compaction_context_cap() -> None:
+    """Enrichment result never exceeds _CONTEXT_MAX_CHARS = 4000 chars."""
+    from co_cli.context._compaction_markers import _CONTEXT_MAX_CHARS
+    from co_cli.deps import CoSessionState
+
+    big_todos = [{"content": "x" * 500, "status": "pending"} for _ in range(20)]
+    many_file_calls = ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="file_read",
+                args={"file_path": f"/a/b/c/d/e/file_{i:03d}.py"},
+                tool_call_id=f"c{i}",
+            )
+            for i in range(20)
+        ]
+    )
+    dropped = [_user("work"), many_file_calls, _assistant("done")]
+    session = CoSessionState()
+    session.session_todos = big_todos
+    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, session=session)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    result = gather_compaction_context(ctx, dropped)
+    if result is not None:
+        assert len(result) <= _CONTEXT_MAX_CHARS
 
 
 @pytest.mark.asyncio
@@ -983,9 +1038,9 @@ async def test_stale_suppression_clears_after_fresh_response_lands() -> None:
 @pytest.mark.asyncio
 async def test_session_commands_reset_stale_suppression_fields() -> None:
     """/new and /clear reset post_compaction_token_estimate and message_count_at_last_compaction."""
-    from co_cli.commands._types import CommandContext
     from co_cli.commands.clear import _cmd_clear
     from co_cli.commands.new import _cmd_new
+    from co_cli.commands.types import CommandContext
 
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG)
     agent = _AGENT

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from co_cli.commands._types import CommandContext, ReplaceTranscript
+from co_cli.commands.types import CommandContext, ReplaceTranscript
 from co_cli.display._core import console
 
 

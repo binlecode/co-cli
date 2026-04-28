@@ -387,8 +387,8 @@ async def test_slash_background_command():
     """Slash /background spawns a task and stores it in session state."""
     from tests._settings import make_settings
 
-    from co_cli.commands._registry import BUILTIN_COMMANDS
-    from co_cli.commands._types import CommandContext
+    from co_cli.commands.registry import BUILTIN_COMMANDS
+    from co_cli.commands.types import CommandContext
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
 
@@ -417,8 +417,8 @@ async def test_slash_tasks_command():
 
     from tests._settings import make_settings
 
-    from co_cli.commands._registry import BUILTIN_COMMANDS
-    from co_cli.commands._types import CommandContext
+    from co_cli.commands.registry import BUILTIN_COMMANDS
+    from co_cli.commands.types import CommandContext
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
 
@@ -445,8 +445,8 @@ async def test_slash_cancel_command():
     """Slash /cancel cancels a running task in session state."""
     from tests._settings import make_settings
 
-    from co_cli.commands._registry import BUILTIN_COMMANDS
-    from co_cli.commands._types import CommandContext
+    from co_cli.commands.registry import BUILTIN_COMMANDS
+    from co_cli.commands.types import CommandContext
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
 

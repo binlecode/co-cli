@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from co_cli.commands._types import CommandContext
+from co_cli.commands.types import CommandContext
 from co_cli.display._core import console
 from co_cli.tools.background import BackgroundCleanupError, kill_task
 

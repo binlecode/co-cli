@@ -4,17 +4,6 @@ from __future__ import annotations
 
 import logging
 
-from co_cli.commands._registry import (
-    BUILTIN_COMMANDS,
-    SlashCommand,
-)
-from co_cli.commands._types import (
-    CommandContext,
-    DelegateToAgent,
-    LocalOnly,
-    ReplaceTranscript,
-    SlashOutcome,
-)
 from co_cli.commands.approvals import _cmd_approvals
 from co_cli.commands.background import _cmd_background
 from co_cli.commands.cancel import _cmd_cancel
@@ -25,12 +14,23 @@ from co_cli.commands.history import _cmd_history
 from co_cli.commands.knowledge import _cmd_knowledge, _cmd_memory
 from co_cli.commands.new import _cmd_new
 from co_cli.commands.reasoning import _cmd_reasoning
+from co_cli.commands.registry import (
+    BUILTIN_COMMANDS,
+    SlashCommand,
+)
 from co_cli.commands.resume import _cmd_resume
 from co_cli.commands.sessions import _cmd_sessions
 from co_cli.commands.skills import _cmd_skills
 from co_cli.commands.status import _cmd_status
 from co_cli.commands.tasks import _cmd_tasks
 from co_cli.commands.tools import _cmd_tools
+from co_cli.commands.types import (
+    CommandContext,
+    DelegateToAgent,
+    LocalOnly,
+    ReplaceTranscript,
+    SlashOutcome,
+)
 from co_cli.display._core import console
 
 logger = logging.getLogger(__name__)

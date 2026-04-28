@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from rich.table import Table
 
-from co_cli.commands._registry import (
+from co_cli.commands.registry import (
     BUILTIN_COMMANDS,
     _refresh_completer,
     filter_namespace_conflicts,
 )
-from co_cli.commands._types import CommandContext, _confirm
+from co_cli.commands.types import CommandContext, _confirm
 from co_cli.config._core import settings
 from co_cli.display._core import console
 from co_cli.skills._skill_types import SkillConfig

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from co_cli.commands._types import CommandContext
+from co_cli.commands.types import CommandContext
 from co_cli.display._core import console
 from co_cli.tools.background import BackgroundTaskState, make_task_id, spawn_task
 

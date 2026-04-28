@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from co_cli.commands._types import CommandContext
+from co_cli.commands.types import CommandContext
 from co_cli.display._core import console
 
 

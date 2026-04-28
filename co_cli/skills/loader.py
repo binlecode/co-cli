@@ -3,7 +3,7 @@
 Loads .md skill files from bundled and user directories. Does not know about
 slash-command namespaces, reserved names, or the CLI relay layer. Callers that
 need to filter by reserved name should apply filter_namespace_conflicts()
-(defined in co_cli.commands._registry) after calling load_skills().
+(defined in co_cli.commands.registry) after calling load_skills().
 """
 
 from __future__ import annotations
@@ -252,7 +252,7 @@ def load_skills(
 
     Returns every parseable skill that passes skill-internal validation (requires, env, .md,
     security scan). Reserved-name filtering is the caller's responsibility — apply
-    filter_namespace_conflicts() from co_cli.commands._registry after this call.
+    filter_namespace_conflicts() from co_cli.commands.registry after this call.
     """
     result: dict[str, SkillConfig] = {}
 

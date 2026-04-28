@@ -30,7 +30,7 @@ from evals._timeouts import EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
-from co_cli.commands._registry import BUILTIN_COMMANDS, _build_completer_words
+from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
 from co_cli.commands.skills import get_skill_registry
 from co_cli.config._core import get_settings
 from co_cli.deps import CoDeps, ToolSourceEnum
@@ -220,7 +220,7 @@ async def _run_create_deps_case(
 
         step_t0 = time.monotonic()
         skill_registry = get_skill_registry(deps.skill_commands)
-        completer_words = _build_completer_words(deps.skill_commands)
+        completer_words = build_completer_words(deps.skill_commands)
         steps.append(
             EvalStep(
                 name="registry_state",
