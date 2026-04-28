@@ -23,6 +23,7 @@ from tests._settings import TEST_LLM, make_settings
 from co_cli.agent._core import build_agent
 from co_cli.config._core import Settings
 from co_cli.config.compaction import CompactionSettings
+from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.compaction import (
     COMPACTABLE_KEEP_RECENT,
     STATIC_MARKER_PREFIX,
@@ -1188,8 +1189,12 @@ def _extract_section(summary: str, section_name: str) -> str:
 
 
 def _has_verbatim_anchor(summary_text: str, source_messages: list[ModelMessage]) -> bool:
-    next_step = _extract_section(summary_text, "Next Step")
-    if not next_step:
+    # "Next Step" carries a verbatim drift anchor per template; "Active Task" is defined as
+    # "Verbatim most recent user request" — both satisfy the verbatim-anchor contract.
+    section = _extract_section(summary_text, "Next Step") or _extract_section(
+        summary_text, "Active Task"
+    )
+    if not section:
         return False
     recent_texts = " ".join(
         p.content
@@ -1198,7 +1203,7 @@ def _has_verbatim_anchor(summary_text: str, source_messages: list[ModelMessage])
         if (isinstance(p, UserPromptPart) and isinstance(p.content, str))
         or (isinstance(p, TextPart) and isinstance(p.content, str))
     )
-    return any(next_step[i : i + 20] in recent_texts for i in range(len(next_step) - 20 + 1))
+    return any(section[i : i + 20] in recent_texts for i in range(len(section) - 20 + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -1223,8 +1228,7 @@ async def test_circuit_breaker_uses_static_marker() -> None:
     ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
     budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
     bounds = plan_compaction_boundaries(msgs, budget, ctx.deps.config.compaction.tail_fraction)
-    if bounds is None:
-        pytest.skip("history too small for configured context window")
+    assert bounds is not None, f"history must exceed tail budget (budget={budget})"
 
     len_pre = len(msgs)
     result, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
@@ -1248,6 +1252,7 @@ async def test_circuit_breaker_uses_static_marker() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.local
+@pytest.mark.timeout(180)
 async def test_full_chain_p1_to_p5_llm() -> None:
     """P1 clears old tool results, P5 LLM summarizer fires; marker count matches dropped count."""
     from tests._ollama import ensure_ollama_warm
@@ -1293,8 +1298,11 @@ async def test_full_chain_p1_to_p5_llm() -> None:
 
     session = _CoSessionState()
     session.session_todos = [{"content": "Add PyJWT to requirements", "status": "pending"}]
-    llm_model = build_model(_CONFIG.llm)
-    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model, session=session)
+    # Small num_ctx ensures the test history exceeds the tail budget (tail_fraction=0.20)
+    # so plan_compaction_boundaries always returns valid bounds regardless of model spec.
+    cfg = make_settings(llm=make_settings().llm.model_copy(update={"num_ctx": 8192}))
+    llm_model = build_model(cfg.llm)
+    deps = CoDeps(shell=ShellBackend(), config=cfg, model=llm_model, session=session)
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
     msgs = evict_old_tool_results(ctx, list(history))
@@ -1303,7 +1311,7 @@ async def test_full_chain_p1_to_p5_llm() -> None:
         for m in msgs
         if isinstance(m, ModelRequest)
         for p in m.parts
-        if isinstance(p, ToolReturnPart) and "[tool result cleared" in str(p.content)
+        if isinstance(p, ToolReturnPart) and is_cleared_marker(p.content)
     )
     assert cleared == N_READ - COMPACTABLE_KEEP_RECENT, (
         f"P1 must clear {N_READ - COMPACTABLE_KEEP_RECENT} old tool results, got {cleared}"
@@ -1312,8 +1320,9 @@ async def test_full_chain_p1_to_p5_llm() -> None:
     ctx_window = deps.model.context_window if deps.model else None
     budget = resolve_compaction_budget(deps.config, ctx_window)
     bounds = plan_compaction_boundaries(msgs, budget, deps.config.compaction.tail_fraction)
-    if bounds is None:
-        pytest.skip("history too small for context window")
+    assert bounds is not None, (
+        f"history must exceed tail budget (budget={budget}, tail={budget * deps.config.compaction.tail_fraction:.0f})"
+    )
 
     len_pre = len(msgs)
     result, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
@@ -1341,6 +1350,7 @@ async def test_full_chain_p1_to_p5_llm() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.local
+@pytest.mark.timeout(300)
 async def test_iterative_summary_3_pass_preservation() -> None:
     """Distinctive token from cycle-1 survives into the cycle-3 in-context marker."""
     from tests._ollama import ensure_ollama_warm
@@ -1351,80 +1361,83 @@ async def test_iterative_summary_3_pass_preservation() -> None:
 
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
-    llm_model = build_model(_CONFIG.llm)
-    deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model, session=CoSessionState())
+    # num_ctx=8192 → tail_budget=1638 tokens. Each cycle uses two 100-line file reads
+    # (~1500 tokens each) so every history exceeds the budget and compaction fires
+    # deterministically. The larger budget gives the LLM enough room to carry the
+    # distinctive token across iterative summaries.
+    cfg = make_settings(llm=make_settings().llm.model_copy(update={"num_ctx": 8192}))
+    llm_model = build_model(cfg.llm)
+    deps = CoDeps(shell=ShellBackend(), config=cfg, model=llm_model, session=CoSessionState())
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
-    def _cycle(seed: list[ModelMessage], label: str) -> tuple[list[ModelMessage], str | None]:
-        ctx_window = deps.model.context_window if deps.model else None
-        budget = resolve_compaction_budget(deps.config, ctx_window)
-        bounds = plan_compaction_boundaries(seed, budget, deps.config.compaction.tail_fraction)
-        if bounds is None:
-            return seed, None
-        import asyncio as _asyncio
+    ctx_window = deps.model.context_window if deps.model else None
+    budget = resolve_compaction_budget(deps.config, ctx_window)
 
-        history, summary = _asyncio.get_event_loop().run_until_complete(
-            apply_compaction(ctx, seed, bounds, announce=False)
-        )
-        return history, summary
-
+    # Messages [0-1] become the HEAD (find_first_run_end anchors on the first
+    # ModelResponse with TextPart). Anything after that is eligible for dropping.
+    # Put DISTINCTIVE_TOKEN in message [3] so it lands in the dropped middle and
+    # the summarizer picks it up for cycle-1's compaction marker.
     cycle1 = [
-        _user(f"Implement JWT auth. Key rotation interval: {DISTINCTIVE_TOKEN} seconds."),
+        _user("Implement JWT auth."),
+        _assistant(_analysis("auth/tokens.py")),  # head ends here
+        _user("What key rotation policy applies?"),
         _assistant(
-            f"Implementing JWT with key rotation every {DISTINCTIVE_TOKEN}s.\n"
-            + _analysis("auth/tokens.py")
+            f"Per the security review, we must use {DISTINCTIVE_TOKEN} as the rotation "
+            f"interval identifier — it is non-negotiable and must be preserved throughout. "
+            + _analysis("auth/policy.py")
         ),
+        _user("Read views."),
+        _tool_call("file_read", {"file_path": "auth/views.py"}, "c1a"),
+        _tool_return("file_read", _fake_file("auth/views", 80), "c1a"),
+        _assistant(_analysis("auth/views.py")),
         _user("Read middleware."),
-        _tool_call("file_read", {"file_path": "auth/middleware.py"}, "c1"),
-        _tool_return("file_read", _fake_file("auth/middleware", 25), "c1"),
+        _tool_call("file_read", {"file_path": "auth/middleware.py"}, "c1b"),
+        _tool_return("file_read", _fake_file("auth/middleware", 80), "c1b"),
         _assistant(_analysis("auth/middleware.py")),
         _user("Status?"),
         _assistant("Token service and middleware reviewed."),
     ]
 
-    ctx_window = deps.model.context_window if deps.model else None
-    budget = resolve_compaction_budget(deps.config, ctx_window)
     bounds1 = plan_compaction_boundaries(cycle1, budget, deps.config.compaction.tail_fraction)
-    if bounds1 is None:
-        pytest.skip("cycle 1 history too small")
-
+    assert bounds1 is not None, f"cycle 1 must exceed tail budget (budget={budget})"
     history1, summary1 = await apply_compaction(ctx, cycle1, bounds1, announce=False)
-    if summary1 is None:
-        pytest.skip("cycle 1 used static marker — no model or circuit breaker active")
+    assert summary1 is not None, "cycle 1: LLM summarizer must fire (model is set)"
 
     cycle2 = [
         *history1,
         _user("Write tests."),
-        _tool_call("file_read", {"file_path": "tests/test_tokens.py"}, "c2"),
-        _tool_return("file_read", _fake_file("test_tokens", 20), "c2"),
+        _tool_call("file_read", {"file_path": "tests/test_tokens.py"}, "c2a"),
+        _tool_return("file_read", _fake_file("test_tokens", 100), "c2a"),
         _assistant(_analysis("tests/test_tokens.py")),
+        _user("Read test helpers."),
+        _tool_call("file_read", {"file_path": "tests/conftest.py"}, "c2b"),
+        _tool_return("file_read", _fake_file("tests/conftest", 100), "c2b"),
+        _assistant(_analysis("tests/conftest.py")),
         _user("Status?"),
         _assistant("Tests written."),
     ]
     bounds2 = plan_compaction_boundaries(cycle2, budget, deps.config.compaction.tail_fraction)
-    if bounds2 is None:
-        pytest.skip("cycle 2 history too small")
-
+    assert bounds2 is not None, f"cycle 2 must exceed tail budget (budget={budget})"
     history2, summary2 = await apply_compaction(ctx, cycle2, bounds2, announce=False)
-    if summary2 is None:
-        pytest.skip("cycle 2 used static marker")
+    assert summary2 is not None, "cycle 2: LLM summarizer must fire (model is set)"
 
     cycle3 = [
         *history2,
         _user("Deploy to staging."),
-        _tool_call("file_read", {"file_path": "deploy/config.yaml"}, "c3"),
-        _tool_return("file_read", _fake_file("deploy/config", 15), "c3"),
+        _tool_call("file_read", {"file_path": "deploy/config.yaml"}, "c3a"),
+        _tool_return("file_read", _fake_file("deploy/config", 100), "c3a"),
         _assistant(_analysis("deploy/config.yaml")),
+        _user("Read deploy script."),
+        _tool_call("file_read", {"file_path": "deploy/run.sh"}, "c3b"),
+        _tool_return("file_read", _fake_file("deploy/run", 100), "c3b"),
+        _assistant(_analysis("deploy/run.sh")),
         _user("Final status?"),
         _assistant("JWT migration complete."),
     ]
     bounds3 = plan_compaction_boundaries(cycle3, budget, deps.config.compaction.tail_fraction)
-    if bounds3 is None:
-        pytest.skip("cycle 3 history too small")
-
+    assert bounds3 is not None, f"cycle 3 must exceed tail budget (budget={budget})"
     history3, summary3 = await apply_compaction(ctx, cycle3, bounds3, announce=False)
-    if summary3 is None:
-        pytest.skip("cycle 3 used static marker")
+    assert summary3 is not None, "cycle 3: LLM summarizer must fire (model is set)"
 
     marker3 = next(
         (
