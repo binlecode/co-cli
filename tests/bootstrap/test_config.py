@@ -397,3 +397,14 @@ def test_unknown_mcp_server_key_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match=str(user_settings)):
         load_config(_user_config_path=user_settings)
+
+
+def test_invalid_mcp_server_in_file_not_masked_by_env_override(tmp_path):
+    """Invalid file mcp_servers must be caught even when CO_MCP_SERVERS env overrides it."""
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(
+        json.dumps({"mcp_servers": {"my-server": {"command": "npx", "typo_key": "value"}}})
+    )
+    valid_env_mcp = json.dumps({"env-server": {"command": "node", "args": []}})
+    with pytest.raises(ValueError, match=str(user_settings)):
+        load_config(_user_config_path=user_settings, _env={"CO_MCP_SERVERS": valid_env_mcp})

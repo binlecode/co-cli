@@ -194,6 +194,14 @@ def load_config(
             except json.JSONDecodeError as e:
                 raise ValueError(f"Malformed settings file {user_config}: {e}") from e
 
+    # Pre-flight: validate raw file data before env overrides so fill_from_env
+    # cannot mask invalid values by replacing them with env-sourced ones.
+    if user_config.exists() and data:
+        try:
+            Settings.model_validate(data, context={"env": {}})
+        except ValidationError as exc:
+            raise ValueError(f"Invalid configuration — check: {user_config}:\n{exc}") from exc
+
     context = {"env": _env} if _env is not None else None
     try:
         resolved = Settings.model_validate(data, context=context)
