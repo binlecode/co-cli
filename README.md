@@ -110,12 +110,6 @@ uv run co chat
 > "Check my calendar for today and draft an email to the team."
 > "Run `ls -la` to see what files are in this directory."
 
-#### `co config` — System Health Check
-Verify LLM provider, shell, and config health (pre-agent, no session required).
-```bash
-uv run co config
-```
-
 #### `co tail` — Real-Time Span Viewer
 Tail agent spans live from a second terminal while `co chat` is running.
 ```bash
@@ -139,7 +133,7 @@ Inside `co chat`, type `/` followed by a command name. Tab completion is availab
 |---------|--------|
 | `/help` | List all slash commands |
 | `/clear` | Clear conversation history |
-| `/status` | Show live system health inside chat (uses active session deps) |
+| `/doctor` | Run a full health check via `capabilities_check` (shows tools, integrations, fallbacks) |
 | `/tools` | List registered agent tools |
 | `/history` | Show conversation turn count and total messages |
 | `/compact` | Summarize conversation via LLM to reduce context (2-message compacted history) |

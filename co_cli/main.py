@@ -16,12 +16,6 @@ from co_cli.agent.core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
 from co_cli.bootstrap.project_info import project_info
-from co_cli.bootstrap.render_status import (
-    check_security,
-    get_status,
-    render_security_findings,
-    render_status_table,
-)
 from co_cli.commands.core import dispatch as dispatch_command
 from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
 from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
@@ -268,6 +262,9 @@ async def _chat_loop(
             console.print("[dim]Previous session available — /resume to continue[/dim]")
 
         display_welcome_banner(deps)
+        from co_cli.bootstrap.security import check_security, render_security_findings
+
+        render_security_findings(check_security())
         frontend.clear_status()
 
         message_history: list[ModelMessage] = []
@@ -359,15 +356,6 @@ def chat(
 ):
     """Start an interactive chat session with Co."""
     _start_chat(theme=theme, verbose=verbose, reasoning_display=reasoning_display)
-
-
-@app.command()
-def config():
-    """Show system configuration and integration health (pre-agent check)."""
-    sys_status = get_status(settings)
-    console.print(render_status_table(sys_status))
-    findings = check_security()
-    render_security_findings(findings)
 
 
 @app.command()

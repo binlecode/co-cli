@@ -1,13 +1,12 @@
 """System-wide integration health checks.
 
-Data types: CheckResult, CheckItem, DoctorResult, RuntimeCheckResult.
+Data types: CheckResult, RuntimeCheckResult.
 
-IO check functions (called on-demand by runtime diagnostics and status display):
+IO check functions (called on-demand by runtime diagnostics):
   check_agent_llm, check_reranker_llm, check_embedder,
   check_cross_encoder, check_ollama_model, check_mcp_server, check_tei.
 
-Public entry points:
-  check_settings(config)  — bootstrap/render_status.py (settings-level check)
+Public entry point:
   check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
 
 Bootstrap callers (direct, not via entry points):
@@ -70,47 +69,6 @@ class CheckResult:
     status: Literal["ok", "warn", "error", "skipped"]
     detail: str
     extra: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class CheckItem:
-    name: str
-    status: Literal["ok", "warn", "error", "skipped"]
-    detail: str
-    extra: str = ""
-
-
-@dataclass
-class DoctorResult:
-    checks: list[CheckItem] = field(default_factory=list)
-
-    @property
-    def has_errors(self) -> bool:
-        return any(c.status == "error" for c in self.checks)
-
-    @property
-    def has_warnings(self) -> bool:
-        return any(c.status == "warn" for c in self.checks)
-
-    def by_name(self, name: str) -> CheckItem | None:
-        for c in self.checks:
-            if c.name == name:
-                return c
-        return None
-
-    def summary_lines(self) -> list[str]:
-        lines = []
-        for c in self.checks:
-            if c.status == "ok":
-                icon = "✓"
-            elif c.status == "skipped":
-                icon = "·"
-            elif c.status == "warn":
-                icon = "⚠"
-            else:
-                icon = "✗"
-            lines.append(f"  {icon} {c.name} — {c.detail}")
-        return lines
 
 
 def check_ollama_model(host: str, model: str) -> CheckResult:
@@ -300,7 +258,7 @@ def check_cross_encoder(config: "Settings") -> CheckResult:
 
 
 def check_mcp_server(command: str | None, url: str | None) -> CheckResult:
-    """Check a single MCP server. Caller provides name for CheckItem mapping."""
+    """Check a single MCP server."""
     if url:
         return CheckResult(
             ok=True,
@@ -393,55 +351,6 @@ def _check_skills(skill_registry: list[dict]) -> CheckResult:
         status="ok" if skill_count > 0 else "skipped",
         detail=f"{skill_count} skill(s) loaded" if skill_count > 0 else "no skills found",
     )
-
-
-def check_settings(config: "Settings") -> DoctorResult:
-    """Run settings-level integration health checks.
-
-    Checks google, obsidian, brave, and MCP servers using values from config.
-    No runtime services — callers that need knowledge/skills checks use check_runtime(deps).
-    """
-    from co_cli.config.core import ADC_PATH, GOOGLE_TOKEN_PATH
-
-    checks: list[CheckItem] = []
-
-    google_result = _check_google(config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
-    checks.append(
-        CheckItem(
-            name="google",
-            status=google_result.status,
-            detail=google_result.detail,
-            extra=google_result.extra.get("path", ""),
-        )
-    )
-
-    obsidian_vault = str(config.obsidian_vault_path) if config.obsidian_vault_path else None
-    obsidian_result = _check_obsidian(obsidian_vault)
-    checks.append(
-        CheckItem(
-            name="obsidian",
-            status=obsidian_result.status,
-            detail=obsidian_result.detail,
-            extra=obsidian_result.extra.get("path", ""),
-        )
-    )
-
-    brave_result = _check_brave(config.brave_search_api_key)
-    checks.append(CheckItem(name="brave", status=brave_result.status, detail=brave_result.detail))
-
-    # mcp: loop over config.mcp_servers, call check_mcp_server
-    for name, cfg in (config.mcp_servers or {}).items():
-        result = check_mcp_server(cfg.command, cfg.url)
-        checks.append(
-            CheckItem(
-                name=f"mcp:{name}",
-                status=result.status,
-                detail=result.detail,
-                extra=str(result.extra.get("value", "")),
-            )
-        )
-
-    return DoctorResult(checks=checks)
 
 
 def _emit_progress(

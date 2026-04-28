@@ -13,7 +13,6 @@ git config core.hooksPath .githooks  # Activate version-controlled git hooks
 
 ```bash
 uv run co chat                   # Interactive REPL
-uv run co status                 # System health check
 uv run co logs                   # Datasette trace viewer (table)
 uv run co traces                 # Nested HTML trace viewer
 

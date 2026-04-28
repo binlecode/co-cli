@@ -175,14 +175,14 @@
     STATUS:   Knowledge synced — 0 item(s) (fts5)
   Turn 1/30 — history: 0 msgs
     STATUS: Co is thinking...
-    STATUS: LLM segment timed out — model did not respond. Try a shorter prompt, or check model health with `co config`.
+    STATUS: LLM segment timed out — model did not respond. Try a shorter prompt, or ask Co 'what can you do right now?' or run /doctor.
     turn elapsed: 60.0s
   Turn 2/30 — history: 0 msgs
     STATUS: Co is thinking...
     turn elapsed: 39.6s
   Turn 3/30 — history: 4 msgs
     STATUS: Co is thinking...
-    STATUS: LLM segment timed out — model did not respond. Try a shorter prompt, or check model health with `co config`.
+    STATUS: LLM segment timed out — model did not respond. Try a shorter prompt, or ask Co 'what can you do right now?' or run /doctor.
     turn elapsed: 60.0s
 UAT: FAIL (agentic stall): co returned a turn with no tool calls before compaction triggered — prompt insufficient or agentic flow regression
 ```

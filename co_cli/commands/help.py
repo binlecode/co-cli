@@ -23,6 +23,6 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
                 table.add_row(f"/{skill.name}{hint}", skill.description or "(skill)")
     console.print(table)
     console.print(
-        "[dim]Usage: /status shows system health; /status <task-id> shows a background task.[/dim]"
+        "[dim]Tip: /tasks <task-id> shows detail for a background task; /doctor runs a full health check.[/dim]"
     )
     return None

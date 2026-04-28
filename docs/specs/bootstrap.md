@@ -11,7 +11,7 @@
 - Session restore and welcome banner
 
 **Non-goals:**
-- Runtime health checks (owned by `/status` tool)
+- Runtime health checks (owned by `capabilities_check` agent tool)
 - Per-component initialization internals
 
 **Success criteria:** Bootstrap completes with degradations recorded; optional failures don't abort startup; welcome banner printed.
@@ -37,7 +37,7 @@ CLI start
 
 Bootstrap owns all steps up to "enter REPL". Turn execution is in [core-loop.md](core-loop.md). Teardown drains background work, cleans up the shell backend, and closes async resources (MCP connections, async exit stack).
 
-Canonical startup flow for `co-cli`, from settings resolution to the point where the REPL prompt is ready. Bootstrap owns sequencing, degradation, and the runtime object handed to the agent. It does not own runtime health checks; `check_runtime()` is invoked later by `/status`, not during startup.
+Canonical startup flow for `co-cli`, from settings resolution to the point where the REPL prompt is ready. Bootstrap owns sequencing, degradation, and the runtime object handed to the agent. It does not own runtime health checks; `check_runtime()` is invoked later by `capabilities_check` (the agent tool exercised by `/doctor`), not during startup.
 
 ```
 co_cli.main  (module import)
@@ -75,6 +75,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ frontend.on_status("  {skill_count} skill(s) loaded")
 ├─ [if restored path exists] console.print("Previous session available — /resume to continue")
 ├─ display_welcome_banner(deps)
+├─ render_security_findings(check_security())   ← printed once per session
 ├─ frontend.clear_status()
 │
 ▼
@@ -207,7 +208,7 @@ The session index is derived and rebuildable: deleting `~/.co-cli/session-index.
 
 ### Step 13. Print startup status and enter the REPL boundary
 
-After session restore, `_chat_loop()` reports loaded skill count, optionally shows the resume hint when a transcript exists, calls `display_welcome_banner(deps)`, then clears the transient status line. The banner is the boundary between bootstrap and normal interactive operation.
+After session restore, `_chat_loop()` reports loaded skill count, optionally shows the resume hint when a transcript exists, calls `display_welcome_banner(deps)`, runs `render_security_findings(check_security())` to print any security posture warnings, then clears the transient status line. The banner and security warnings together form the boundary between bootstrap and normal interactive operation.
 
 Everything from `create_deps()` through banner display runs inside `_chat_loop()` cleanup guards. If startup exits early, the shell backend, background tasks, pending extraction work, and MCP stack still unwind.
 
@@ -249,7 +250,7 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/bootstrap/core.py` | Owns `create_deps()`, `restore_session()`, and `_init_memory_index()` |
 | `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama `num_ctx` checks |
 | `co_cli/bootstrap/banner.py` | Renders the welcome banner that marks bootstrap completion |
-| `co_cli/bootstrap/render_status.py` | On-demand status and security reporting, not inline bootstrap |
+| `co_cli/bootstrap/security.py` | Security posture checks run once at startup (`check_security`, `render_security_findings`) |
 | `co_cli/deps.py` | Defines `CoDeps`, path resolution, and sub-agent inheritance rules |
 | `co_cli/config/core.py` | Defines `Settings`, layered config loading, and env override mapping |
 | `co_cli/skills/loader.py` | `load_skills` — two-tier skill file loading used during bootstrap and `/skills reload` |

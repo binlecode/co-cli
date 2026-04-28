@@ -4,8 +4,8 @@ _Date: 2026-04-21_
 
 This doc covers gaps in `co-cli`'s **skill system** — how skill bodies are authored, discovered, and surfaced to the agent. Scope is `co-cli`'s own skill implementation (bundled `co_cli/skills/*.md`, user-global `~/.co-cli/skills/*.md`), not the Claude Code harness skill files (`.claude/skills/*`).
 
-**Related research:**
-- `RESEARCH-prompt-gaps-main-flow.md` — gaps in the main orchestrator agent prompt (skill dispatch flows through this)
+**Related work:**
+- `docs/exec-plans/active/2026-04-28-081359-main-flow-prompt-parity.md` — phased plan for main orchestrator agent prompt gaps (skill dispatch flows through this; supersedes the retired `RESEARCH-prompt-gaps-main-flow.md`)
 - `RESEARCH-prompt-gaps-llm-tools.md` — gaps in LLM-calling tools
 
 **Priority note:** This is a forward-looking gap analysis. `co-cli` ships exactly one bundled skill today (`co_cli/skills/doctor.md`), so the immediate surface area is small. The gaps named here become load-bearing when (a) more bundled skills are added, or (b) users start installing skills seriously.

@@ -144,6 +144,7 @@ async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
 
     Call this when the user asks what you can do, whether a specific capability
     is available, or why something is unavailable or degraded.
+    Also use for runtime health checks and system check questions: is X up, why is Y degraded, can I do Z right now.
     """
     progress = ctx.deps.runtime.tool_progress_callback
     if progress is not None:

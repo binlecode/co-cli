@@ -64,15 +64,47 @@ def _make_ctx(
 
 
 @pytest.mark.asyncio
-async def test_cmd_help_includes_status_usage():
-    """/help should carry enough /status usage detail to defer per-command help."""
+async def test_cmd_help_includes_tasks_usage():
+    """/help should list /tasks and mention task-id usage."""
     ctx = _make_ctx()
     with console.capture() as cap:
         await dispatch("/help", ctx)
     output = cap.get()
 
-    assert "/status" in output
-    assert "/status <task-id>" in output
+    assert "/tasks" in output
+    assert "task-id" in output
+
+
+@pytest.mark.asyncio
+async def test_cmd_tasks_task_id_shows_detail():
+    """/tasks <task-id> renders the single-task detail table."""
+    from collections import deque
+
+    from co_cli.tools.background import BackgroundTaskState
+
+    task_id = "abcdef123456"
+    state = BackgroundTaskState(
+        task_id=task_id,
+        command="echo hello",
+        cwd="/tmp",
+        description="test task",
+        status="completed",
+        started_at="2026-04-28T00:00:00",
+        completed_at="2026-04-28T00:00:01",
+        exit_code=0,
+        output_lines=deque(["line one", "line two"], maxlen=500),
+    )
+    ctx = _make_ctx()
+    ctx.deps.session.background_tasks[task_id] = state
+
+    with console.capture() as cap:
+        result = await dispatch(f"/tasks {task_id}", ctx)
+
+    assert isinstance(result, LocalOnly)
+    output = cap.get()
+    assert task_id in output
+    assert "completed" in output
+    assert "echo hello" in output
 
 
 # --- State-changing commands ---

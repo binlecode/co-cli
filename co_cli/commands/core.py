@@ -21,7 +21,6 @@ from co_cli.commands.registry import (
 from co_cli.commands.resume import _cmd_resume
 from co_cli.commands.sessions import _cmd_sessions
 from co_cli.commands.skills import _cmd_skills
-from co_cli.commands.status import _cmd_status
 from co_cli.commands.tasks import _cmd_tasks
 from co_cli.commands.tools import _cmd_tools
 from co_cli.commands.types import (
@@ -41,9 +40,6 @@ logger = logging.getLogger(__name__)
 BUILTIN_COMMANDS["help"] = SlashCommand("help", "List available slash commands", _cmd_help)
 BUILTIN_COMMANDS["clear"] = SlashCommand("clear", "Clear conversation history", _cmd_clear)
 BUILTIN_COMMANDS["new"] = SlashCommand("new", "Start a fresh session", _cmd_new)
-BUILTIN_COMMANDS["status"] = SlashCommand(
-    "status", "Show system health or /status <task-id>", _cmd_status
-)
 BUILTIN_COMMANDS["tools"] = SlashCommand("tools", "List registered agent tools", _cmd_tools)
 BUILTIN_COMMANDS["history"] = SlashCommand(
     "history", "Show delegation history (delegation agents + background tasks)", _cmd_history
@@ -68,7 +64,11 @@ BUILTIN_COMMANDS["skills"] = SlashCommand("skills", "List and inspect loaded ski
 BUILTIN_COMMANDS["background"] = SlashCommand(
     "background", "Run a command in the background", _cmd_background
 )
-BUILTIN_COMMANDS["tasks"] = SlashCommand("tasks", "List background tasks", _cmd_tasks)
+BUILTIN_COMMANDS["tasks"] = SlashCommand(
+    "tasks",
+    "List background tasks or show task detail: /tasks [status-filter | task-id]",
+    _cmd_tasks,
+)
 BUILTIN_COMMANDS["cancel"] = SlashCommand(
     "cancel", "Cancel a running background task", _cmd_cancel
 )
