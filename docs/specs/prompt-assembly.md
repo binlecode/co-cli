@@ -12,8 +12,8 @@
 
 **Non-goals:**
 - Compaction internals (owned by [compaction.md](compaction.md))
-- Memory/session persistence and transcript recall (owned by [memory-knowledge.md](memory-knowledge.md))
-- Reusable knowledge schema and retrieval (owned by [memory-knowledge.md](memory-knowledge.md))
+- Memory/session persistence and transcript recall (owned by [memory.md](memory.md))
+- Reusable knowledge schema and retrieval (owned by [memory.md](memory.md))
 - Provider wire format past the pydantic-ai SDK boundary
 
 **Success criteria:** Prompt-prefix cache hit rate preserved across turns; dynamic content appended to the tail, never woven into `@agent.instructions`; approval resumes add zero new tokens.
@@ -22,7 +22,7 @@
 
 ---
 
-Covers how `co-cli` shapes the prompt for each model request. Startup sequencing lives in [bootstrap.md](bootstrap.md); turn orchestration in [core-loop.md](core-loop.md); compaction mechanics in [compaction.md](compaction.md); memory/session and knowledge internals in [memory-knowledge.md](memory-knowledge.md); tool registration in [tools.md](tools.md).
+Covers how `co-cli` shapes the prompt for each model request. Startup sequencing lives in [bootstrap.md](bootstrap.md); turn orchestration in [core-loop.md](core-loop.md); compaction mechanics in [compaction.md](compaction.md); memory/session and knowledge internals in [memory.md](memory.md); tool registration in [tools.md](tools.md).
 
 ## 1. What & How
 
@@ -118,7 +118,7 @@ Approval resumes reuse the main agent with zero additional tokens. The pydantic-
 
 ## 3. Config
 
-Only the settings that directly shape prompt text are listed here. Compaction thresholds live in [compaction.md](compaction.md); recall parameters live in [memory-knowledge.md](memory-knowledge.md).
+Only the settings that directly shape prompt text are listed here. Compaction thresholds live in [compaction.md](compaction.md); recall parameters live in [memory.md](memory.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |

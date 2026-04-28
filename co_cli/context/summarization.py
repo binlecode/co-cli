@@ -124,7 +124,10 @@ _SUMMARIZE_PROMPT = (
     "— starting any other way breaks the handoff contract for the continuation model.\n\n"
     "Use these sections:\n\n"
     "## Active Task\n"
-    "[Verbatim most recent user request — 1–2 sentences, do not paraphrase.]\n\n"
+    "[CRITICAL — THE MOST IMPORTANT FIELD. Copy the user's most recent request using\n"
+    "their exact words — do NOT paraphrase or rephrase. Quote the user directly.\n"
+    "Example: \"User asked: 'Now refactor the auth module to use JWT instead of sessions'\"\n"
+    "If no outstanding task exists, write 'None.']\n\n"
     "## Goal\n"
     "[What the user wants to accomplish. Constraints and preferences.]\n\n"
     "## Key Decisions\n"
@@ -148,8 +151,11 @@ _SUMMARIZE_PROMPT = (
     "## Resolved Questions\n"
     "[Q: <question> → A: <one-sentence answer>. Skip if none.]\n\n"
     "## Next Step\n"
-    "[Immediate next action + verbatim quote (1–2 lines) from the most recent message\n"
-    "as a drift anchor. If task just completed with no explicit continuation, say so.]\n\n"
+    "[Immediate next action. MUST include a verbatim quote — copy 1–2 lines exactly\n"
+    "from the most recent user or assistant message as a drift anchor. No paraphrase.\n"
+    "Example: \"Next: implement the login view. Verbatim: 'add JWT token generation on\n"
+    "successful login'\"\n"
+    "If the task just completed with no explicit continuation, say so.]\n\n"
     "## Critical Context\n"
     "[Exact values that cannot be reconstructed: error strings, config values,\n"
     "line numbers, command outputs. Skip if none.]\n\n"
@@ -160,7 +166,8 @@ _SUMMARIZE_PROMPT = (
     "If you find any: insert a '## User Corrections' section\n"
     "immediately after '## Key Decisions', with verbatim or near-verbatim quotes — these are\n"
     "high-signal intent changes that must survive compaction.\n"
-    "If none found, omit this section entirely.\n\n"
+    "If none found, DO NOT write this section at all — not even 'None found'.\n"
+    "A '## User Corrections' section with placeholder text is WRONG. Simply omit it.\n\n"
     "If a prior summary exists in the conversation, integrate its content — do not discard it.\n"
     "Apply these transitions:\n"
     "- Items in a prior '## Pending User Asks' that are now answered → move to '## Resolved Questions'.\n"
@@ -195,9 +202,9 @@ def _build_iterative_template(previous_summary: str) -> str:
         "MOVE items from 'In Progress' to 'Completed Actions' when done. "
         "MOVE answered questions to 'Resolved Questions'. "
         "REMOVE information only if it is clearly obsolete. "
-        "CRITICAL: Update '## Active Task' to reflect the user's most recent "
-        "unfulfilled request — this is the most important field for task continuity.\n\n"
-        + _SUMMARIZE_PROMPT
+        "CRITICAL: Update '## Active Task' with the user's most recent unfulfilled request "
+        "using their exact words — copy verbatim, do not paraphrase. "
+        "This is the most important field for task continuity.\n\n" + _SUMMARIZE_PROMPT
     )
 
 

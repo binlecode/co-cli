@@ -121,7 +121,7 @@ return _personality_cache
 
 The cache is process-scoped (module-level `_personality_cache`). The function is called
 once at agent construction inside `build_static_instructions()`; result is injected into
-the static system prompt. The memory extraction pipeline (in [memory-knowledge.md](memory-knowledge.md))
+the static system prompt. The memory extraction pipeline (in [memory.md](memory.md))
 is responsible for tagging relevant observations as `personality-context`.
 
 ### Personality Discovery and Validation

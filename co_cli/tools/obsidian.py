@@ -7,9 +7,13 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.knowledge.search_util import snippet_around
+from co_cli.memory.search_util import snippet_around
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
+
+
+def _obsidian_available(deps: CoDeps) -> bool:
+    return deps.obsidian_vault_path is not None and deps.obsidian_vault_path.exists()
 
 
 def _extract_frontmatter_tags(content: str) -> set[str]:
@@ -155,6 +159,7 @@ def _grep_search_notes(
     is_concurrent_safe=True,
     integration="obsidian",
     requires_config="obsidian_vault_path",
+    check_fn=_obsidian_available,
 )
 def obsidian_search(
     ctx: RunContext[CoDeps],
@@ -173,8 +178,8 @@ def obsidian_search(
     query is broad.
 
     This tool searches the user's Obsidian note vault (local markdown files).
-    For stored preferences and decisions, use knowledge_search instead. For cloud
-    documents, use drive_search.
+    For stored preferences and decisions, use memory_search instead. For cloud
+    documents, use google_drive_search.
 
     Returns a dict with:
     - display: pre-formatted results with filenames and snippets — show
@@ -219,6 +224,7 @@ def obsidian_search(
     is_concurrent_safe=True,
     integration="obsidian",
     requires_config="obsidian_vault_path",
+    check_fn=_obsidian_available,
 )
 def obsidian_list(
     ctx: RunContext[CoDeps],
@@ -231,7 +237,7 @@ def obsidian_list(
 
     Use this for a directory overview or to discover note paths before calling
     obsidian_read. For keyword search within note content, use obsidian_search
-    instead. For stored preferences and decisions, use knowledge_list.
+    instead. For stored preferences and decisions, use memory_list.
 
     Keep paginating until has_more is false when you need a complete listing.
 
@@ -313,6 +319,7 @@ def obsidian_list(
     is_concurrent_safe=True,
     integration="obsidian",
     requires_config="obsidian_vault_path",
+    check_fn=_obsidian_available,
 )
 def obsidian_read(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
     """Read the full markdown content of a note from the Obsidian vault.

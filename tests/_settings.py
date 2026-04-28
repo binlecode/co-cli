@@ -13,7 +13,7 @@ def _load_base() -> Settings:
 
 
 # Suite-level LLM — read from user's real config (provider, model, host from settings.json).
-# To override the model used by @pytest.mark.local tests, set llm.model in ~/.co-cli/settings.json.
+# To override the model used by LLM-dependent tests, set llm.model in ~/.co-cli/settings.json.
 TEST_LLM = _load_base().llm
 
 

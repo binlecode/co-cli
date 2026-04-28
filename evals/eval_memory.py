@@ -34,11 +34,11 @@ from co_cli.agent.core import build_agent
 from co_cli.config.core import get_settings, settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.knowledge.store import KnowledgeStore
+from co_cli.memory.knowledge_store import KnowledgeStore
 from co_cli.memory.session import new_session_path
 from co_cli.memory.transcript import load_transcript, persist_session_history
-from co_cli.tools.knowledge.write import append_knowledge, save_knowledge, update_knowledge
-from co_cli.tools.memory import search_memory
+from co_cli.tools.memory.recall import memory_search
+from co_cli.tools.memory.write import memory_create, memory_modify
 from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-memory.md"
@@ -328,7 +328,7 @@ async def run_empty_history_new_session(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
-    """save_knowledge indexes into DB; search_memory finds it by unique sentinel."""
+    """memory_create indexes into DB; memory_search finds it by unique sentinel."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "save-recall" / "memory"
@@ -341,7 +341,7 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
 
     try:
         t = time.monotonic()
-        save_result = await save_knowledge(
+        save_result = await memory_create(
             ctx,
             content=f"User prefers {sentinel} for all testing.",
             artifact_kind="preference",
@@ -349,18 +349,18 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
         )
         steps.append(
             {
-                "name": "save_knowledge",
+                "name": "memory_create",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"saved={save_result.metadata.get('saved')}",
             }
         )
 
         t = time.monotonic()
-        search_result = await search_memory(ctx, sentinel)
+        search_result = await memory_search(ctx, sentinel)
         found_count = search_result.metadata.get("count", 0)
         steps.append(
             {
-                "name": "search_memory (FTS5)",
+                "name": "memory_search (FTS5)",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"count={found_count}",
             }
@@ -369,7 +369,7 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
         if found_count < 1:
             verdict, failure = (
                 "FAIL",
-                f"search_memory returned 0 after save (sentinel={sentinel!r})",
+                f"memory_search returned 0 after save (sentinel={sentinel!r})",
             )
         else:
             verdict, failure = "PASS", None
@@ -386,7 +386,7 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
-    """update_knowledge rewrites content and reindexes; search finds new, not original."""
+    """memory_modify rewrites content and reindexes; search finds new, not original."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "update-recall" / "memory"
@@ -400,7 +400,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
     try:
         t = time.monotonic()
-        await save_knowledge(
+        await memory_create(
             ctx,
             content=f"Uses {original} for testing.",
             artifact_kind="preference",
@@ -409,13 +409,13 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         slug = _slug_from_ctx(ctx)
         steps.append(
             {
-                "name": "save_knowledge",
+                "name": "memory_create",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"slug={slug}",
             }
         )
 
-        before_results = await search_memory(ctx, original)
+        before_results = await memory_search(ctx, original)
         before_count = before_results.metadata.get("count", 0)
         steps.append(
             {
@@ -426,22 +426,23 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         )
 
         t = time.monotonic()
-        update_result = await update_knowledge(
+        update_result = await memory_modify(
             ctx,
             slug=slug,
-            old_content=f"Uses {original} for testing.",
-            new_content=f"Now uses {updated} exclusively.",
+            action="replace",
+            target=f"Uses {original} for testing.",
+            content=f"Now uses {updated} exclusively.",
         )
         steps.append(
             {
-                "name": "update_knowledge + reindex",
+                "name": "memory_modify + reindex",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"updated={update_result.metadata.get('updated')}",
             }
         )
 
         t = time.monotonic()
-        new_results = await search_memory(ctx, updated)
+        new_results = await memory_search(ctx, updated)
         new_count = new_results.metadata.get("count", 0)
         steps.append(
             {
@@ -451,7 +452,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
             }
         )
 
-        old_results = await search_memory(ctx, original)
+        old_results = await memory_search(ctx, original)
         old_still_found = old_results.metadata.get("count", 0)
         steps.append(
             {
@@ -482,7 +483,7 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
-    """append_knowledge adds content and reindexes; search finds appended keyword."""
+    """memory_modify adds content and reindexes; search finds appended keyword."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "append-recall" / "memory"
@@ -496,7 +497,7 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
     try:
         t = time.monotonic()
-        await save_knowledge(
+        await memory_create(
             ctx,
             content=f"Base content: {base_keyword}.",
             artifact_kind="rule",
@@ -505,24 +506,26 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         slug = _slug_from_ctx(ctx)
         steps.append(
             {
-                "name": "save_knowledge",
+                "name": "memory_create",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"slug={slug}",
             }
         )
 
         t = time.monotonic()
-        await append_knowledge(ctx, slug=slug, content=f"Appended: {appended_keyword}.")
+        await memory_modify(
+            ctx, slug=slug, action="append", content=f"Appended: {appended_keyword}."
+        )
         steps.append(
             {
-                "name": "append_knowledge + reindex",
+                "name": "memory_modify + reindex",
                 "ms": (time.monotonic() - t) * 1000,
                 "detail": f"appended keyword={appended_keyword!r}",
             }
         )
 
         t = time.monotonic()
-        append_results = await search_memory(ctx, appended_keyword)
+        append_results = await memory_search(ctx, appended_keyword)
         append_count = append_results.metadata.get("count", 0)
         steps.append(
             {
@@ -533,7 +536,7 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
         )
 
         t = time.monotonic()
-        base_results = await search_memory(ctx, base_keyword)
+        base_results = await memory_search(ctx, base_keyword)
         base_count = base_results.metadata.get("count", 0)
         steps.append(
             {
@@ -562,7 +565,7 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
-    """update_knowledge completes cleanly when knowledge_store=None; no crash, file updated."""
+    """memory_modify completes cleanly when knowledge_store=None; no crash, file updated."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "edit-no-db" / "memory"
@@ -575,7 +578,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
     updated = f"{_SENTINEL_BASE}-no-db-updated"
 
     try:
-        await save_knowledge(
+        await memory_create(
             ctx_with_db,
             content=f"Content: {original}.",
             artifact_kind="rule",
@@ -587,7 +590,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
     slug = _slug_from_ctx(ctx_with_db)
     steps.append(
         {
-            "name": "save_knowledge (with DB, for file creation)",
+            "name": "memory_create (with DB, for file creation)",
             "ms": 0,
             "detail": f"slug={slug}",
         }
@@ -599,11 +602,12 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
     exception_raised = False
     exception_msg = ""
     try:
-        await update_knowledge(
+        await memory_modify(
             ctx_no_db,
             slug=slug,
-            old_content=f"Content: {original}.",
-            new_content=f"Content: {updated}.",
+            action="replace",
+            target=f"Content: {original}.",
+            content=f"Content: {updated}.",
         )
     except Exception as exc:
         exception_raised = True
@@ -611,7 +615,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
 
     steps.append(
         {
-            "name": "update_knowledge (knowledge_store=None)",
+            "name": "memory_modify (knowledge_store=None)",
             "ms": (time.monotonic() - t) * 1000,
             "detail": f"exception={exception_raised}",
         }
@@ -629,7 +633,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
     )
 
     if exception_raised:
-        verdict, failure = "FAIL", f"update_knowledge raised exception without DB: {exception_msg}"
+        verdict, failure = "FAIL", f"memory_modify raised exception without DB: {exception_msg}"
     elif not file_updated:
         verdict, failure = "FAIL", "file not updated on disk when knowledge_store=None"
     else:

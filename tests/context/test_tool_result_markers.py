@@ -127,18 +127,16 @@ def test_web_fetch_marker_includes_url():
     assert "chars" in marker
 
 
-def test_knowledge_article_read_not_found_marker():
-    marker = semantic_marker(
-        "knowledge_article_read", {"slug": "missing"}, "Article 'missing' not found."
-    )
-    assert marker == "[knowledge_article_read] 'missing' → not found"
+def test_memory_read_not_found_marker():
+    marker = semantic_marker("memory_read", {"slug": "missing"}, "Article 'missing' not found.")
+    assert marker == "[memory_read] 'missing' → not found"
 
 
-def test_knowledge_article_read_success_marker():
+def test_memory_read_success_marker():
     marker = semantic_marker(
-        "knowledge_article_read", {"slug": "py-asyncio"}, "# Title\nSource: http://x\n\nbody"
+        "memory_read", {"slug": "py-asyncio"}, "# Title\nSource: http://x\n\nbody"
     )
-    assert marker.startswith("[knowledge_article_read] 'py-asyncio'")
+    assert marker.startswith("[memory_read] 'py-asyncio'")
     assert "chars" in marker
 
 
@@ -319,7 +317,7 @@ def test_truncate_falls_back_to_static_placeholder_on_non_string_content():
         ("file_find", {"path": ".", "pattern": "*"}, "[file] a\n[file] b"),
         ("web_search", {"query": "q"}, "Web search results for 'q':\n\n1. Title"),
         ("web_fetch", {"url": "https://e.com"}, "Content from https://e.com:\n\nbody"),
-        ("knowledge_article_read", {"slug": "s"}, "# Title\n\nbody"),
+        ("memory_read", {"slug": "s"}, "# Title\n\nbody"),
         ("obsidian_read", {"filename": "n.md"}, "note body"),
     ],
 )

@@ -28,7 +28,7 @@ CLI start
   -> create_deps
   -> build_agent
   -> restore_session
-  -> _init_memory_index
+  -> init_session_store
   -> enter REPL
       -> local command or agent turn
       -> approvals / tools / persistence / post-turn writes as needed
@@ -71,7 +71,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 │
 ├─ restore_session(deps, frontend) → current_session_path
-├─ _init_memory_index(deps, current_session_path, frontend)
+├─ init_session_store(deps, current_session_path, frontend)
 ├─ frontend.on_status("  {skill_count} skill(s) loaded")
 ├─ [if restored path exists] console.print("Previous session available — /resume to continue")
 ├─ display_welcome_banner(deps)
@@ -188,14 +188,14 @@ else:
     deps.session.session_path = new_session_path(deps.sessions_dir)  # path only, no file write
 ```
 
-No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing memory/session lifecycle are owned by [memory-knowledge.md](memory-knowledge.md).
+No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing memory/session lifecycle are owned by [memory.md](memory.md).
 
 ### Step 12b. Initialise the memory index
 
-After `restore_session()` returns, `_init_memory_index()` opens or creates the user-global FTS5 session index (`~/.co-cli/session-index.db`) and syncs past sessions into it. The current session path is excluded from sync.
+After `restore_session()` returns, `init_session_store()` opens or creates the user-global FTS5 session index (`~/.co-cli/session-index.db`) and syncs past sessions into it. The current session path is excluded from sync.
 
 ```text
-store = MemoryIndex(db_path=sessions_dir.parent / "session-index.db")
+store = SessionStore(db_path=sessions_dir.parent / "session-index.db")
 store.sync_sessions(sessions_dir, exclude=current_session_path)
 deps.memory_index = store
 
@@ -247,7 +247,7 @@ These settings most directly affect bootstrap behavior.
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | Owns module-load logging and telemetry setup, `_chat_loop()` startup orchestration, and the REPL boundary |
-| `co_cli/bootstrap/core.py` | Owns `create_deps()`, `restore_session()`, and `_init_memory_index()` |
+| `co_cli/bootstrap/core.py` | Owns `create_deps()`, `restore_session()`, and `init_session_store()` |
 | `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama `num_ctx` checks |
 | `co_cli/bootstrap/banner.py` | Renders the welcome banner that marks bootstrap completion |
 | `co_cli/bootstrap/security.py` | Security posture checks run once at startup (`check_security`, `render_security_findings`) |
@@ -258,6 +258,6 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/commands/skills.py` | `/skills` REPL command family and `get_skill_registry` |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
 | `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
-| `co_cli/knowledge/store.py` | Implements the indexed knowledge store used when bootstrap enables it |
-| `co_cli/memory/store.py` | `MemoryIndex` — FTS5 session index opened and synced during bootstrap |
+| `co_cli/memory/knowledge_store.py` | Implements the indexed knowledge store used when bootstrap enables it |
+| `co_cli/memory/session_store.py` | `SessionStore` — FTS5 session index opened and synced during bootstrap |
 | `co_cli/memory/indexer.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |

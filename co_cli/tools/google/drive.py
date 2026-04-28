@@ -7,7 +7,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.google._auth import _get_google_service
+from co_cli.tools.google._auth import _get_google_service, _google_available
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _DRIVE_NOT_CONFIGURED = (
@@ -66,8 +66,9 @@ def _format_drive_results(
     integration="google_drive",
     requires_config="google_credentials_path",
     retries=3,
+    check_fn=_google_available,
 )
-def drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
+def google_drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
     """Search files in Google Drive by name or content. Returns up to 10
     results per page. Matches files whose name contains the query OR whose
     full text body contains the query.
@@ -77,7 +78,7 @@ def drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolRetu
     complete results (counts, summaries, exhaustive listings). Pages must be
     requested sequentially — you cannot skip to page 3 without fetching page 2.
 
-    To read a file's content, pass its id to drive_read.
+    To read a file's content, pass its id to google_drive_read.
 
     Returns a dict with:
     - display: pre-formatted results with clickable URLs — show directly to user
@@ -132,14 +133,15 @@ def drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolRetu
     integration="google_drive",
     requires_config="google_credentials_path",
     retries=3,
+    check_fn=_google_available,
 )
-def drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
+def google_drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
     """Fetch the content of a file from Google Drive and return it as text.
 
     Google Workspace documents (Docs, Sheets, Slides) are exported as plain
     text. Other files are downloaded as-is and decoded as UTF-8.
 
-    Use file IDs from drive_search results. Do not guess file IDs.
+    Use file IDs from google_drive_search results. Do not guess file IDs.
 
     Returns the file content as a ToolReturn — show directly to the user
     or pass to further processing.
@@ -149,7 +151,7 @@ def drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
     - Large files may be slow or truncated by API limits
 
     Args:
-        file_id: The Google Drive file ID (from drive_search results,
+        file_id: The Google Drive file ID (from google_drive_search results,
                  e.g. "1e2ijrBd74oruWB0b-xGTiQvSwxGO6KK9HPTGaXnmOtI").
     """
     service, err = _get_google_service(ctx, "drive", "v3", _DRIVE_NOT_CONFIGURED)
@@ -176,7 +178,7 @@ def drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
                     content=text,
                     hash=_hashlib.sha256(text.encode()).hexdigest(),
                 )
-                from co_cli.knowledge.chunker import chunk_text
+                from co_cli.memory.chunker import chunk_text
 
                 drive_chunks = chunk_text(
                     text,

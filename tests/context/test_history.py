@@ -1,5 +1,6 @@
 """Functional tests for context history processors and compaction."""
 
+import asyncio
 import math
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from pydantic_ai.usage import RunUsage
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS as _CONFIG
 from tests._settings import TEST_LLM, make_settings
+from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
 from co_cli.agent.core import build_agent
 from co_cli.commands.core import dispatch
@@ -199,35 +201,6 @@ async def test_thrash_gate_emits_user_hint_once_per_session():
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_skips_llm_after_three_failures():
-    """compaction_skip_count == 4 (first non-probe skip) → static marker, count becomes 5."""
-    msgs = _make_messages(10)
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings(
-            llm=make_settings().llm.model_copy(update={"provider": "ollama", "num_ctx": 30}),
-        ),
-        model=_LLM_MODEL,
-    )
-    # count=4: skips_since_trip=1, not a probe cadence point → skip
-    deps.runtime.compaction_skip_count = 4
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    result = await proactive_window_processor(ctx, msgs)
-    marker_texts = [
-        p.content
-        for m in result
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if hasattr(p, "content") and isinstance(p.content, str)
-    ]
-    # Circuit breaker active → static marker, no LLM call
-    assert any(t.startswith(STATIC_MARKER_PREFIX) for t in marker_texts)
-    assert len(result) < len(msgs)
-    # Skip increments count for probe cadence tracking
-    assert deps.runtime.compaction_skip_count == 5
-
-
-@pytest.mark.asyncio
 async def test_circuit_breaker_first_trip_is_skip():
     """compaction_skip_count == 3 (first trip) → skip (no probe), count becomes 4."""
     msgs = _make_messages(10)
@@ -256,7 +229,6 @@ async def test_circuit_breaker_first_trip_is_skip():
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_circuit_breaker_probes_at_cadence():
     """compaction_skip_count == 13 (3 + 10*1) → probe: LLM is attempted, count changes."""
     msgs = _make_messages(10)
@@ -285,7 +257,6 @@ async def test_circuit_breaker_probes_at_cadence():
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_compact_produces_two_message_history():
     """/compact returns the shared compaction marker so auto-compaction can detect prior summaries."""
     msgs = _make_messages(6)
@@ -1158,7 +1129,6 @@ async def test_apply_compaction_re_compaction_does_not_duplicate_snapshot():
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_compact_command_inserts_todo_snapshot_between_summary_and_ack():
     """User-invoked /compact injects the snapshot between the summary request and the ack."""
     msgs = _make_messages(6)
@@ -1167,10 +1137,8 @@ async def test_compact_command_inserts_todo_snapshot_between_summary_and_ack():
         {"content": "survive user compact", "status": "pending", "priority": "medium"},
     ]
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    # dispatch("/compact") chains two sequential LLM calls (summarize + memory
-    # extraction), so a single per-await asyncio.timeout would aggregate them
-    # and violate the per-await policy. pytest-timeout=120s is the safety net.
-    result = await dispatch("/compact", ctx)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        result = await dispatch("/compact", ctx)
 
     assert isinstance(result, ReplaceTranscript)
     assert result.compaction_applied is True

@@ -20,13 +20,13 @@
 
 **Success criteria:** Dreaming strengthens Co's mission as a trusted local personal operator: raw memory stays intact, reusable knowledge becomes more coherent, stale low-use artifacts leave active recall, every mutation remains local and inspectable, and automatic work is bounded by config, timeouts, caps, and recoverability.
 
-**Status:** Stable. The dream cycle is implemented in `co_cli/knowledge/dream.py`, available via `/knowledge dream`, and optionally run on session end when `knowledge.consolidation_enabled=true` and `knowledge.consolidation_trigger="session_end"`. It is off by default.
+**Status:** Stable. The dream cycle is implemented in `co_cli/memory/dream.py`, available via `/knowledge dream`, and optionally run on session end when `knowledge.consolidation_enabled=true` and `knowledge.consolidation_trigger="session_end"`. It is off by default.
 
 **Known gaps:** There is no wall-clock scheduler; the only automatic trigger is session shutdown. Mining only considers the configured recent transcript lookback and does not revisit already processed sessions after prompt or model changes. Similarity clustering is lexical token-Jaccard, so semantically similar but differently worded artifacts may not merge. `knowledge.max_artifact_count` is a soft setting and is not directly enforced by the dream cycle. A timeout can interrupt the cycle after earlier phase side effects have already happened; state persistence happens only on a completed non-dry run.
 
 ---
 
-This spec owns the dream-cycle lifecycle. The broader persistent cognition model lives in [memory-knowledge.md](memory-knowledge.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [system.md](system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for dream miner and merge calls lives in [llm-models.md](llm-models.md).
+This spec owns the dream-cycle lifecycle. The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [system.md](system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for dream miner and merge calls lives in [llm-models.md](llm-models.md).
 
 ## 1. What & How
 
@@ -48,7 +48,7 @@ flowchart TD
     end
 
     subgraph Cycle["Dream Cycle — mine → merge → decay"]
-        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ knowledge_save() via miner Agent\n→ new knowledge/*.md artifacts"]
+        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ memory_create via miner Agent\n→ new knowledge/*.md artifacts"]
         Merge["Phase 2: Merge\nactive same-kind similar clusters\n→ llm_call() for consolidated body\n→ write consolidated artifact, archive originals"]
         Decay["Phase 3: Decay\nold, unrecalled, non-protected artifacts\n→ archive to knowledge/_archive/"]
         State["Persist DreamState\n(processed_sessions, last_dream_at, cumulative stats)"]
@@ -96,7 +96,7 @@ Automatic trigger:
 session teardown
   -> if knowledge.consolidation_enabled is true
   -> if knowledge.consolidation_trigger is "session_end"
-  -> run dream cycle under the shutdown timeout
+  -> run dream cycle (timeout managed internally by run_dream_cycle)
   -> log result
   -> never fail shutdown because dreaming failed
 ```
@@ -147,7 +147,7 @@ for each unprocessed session:
 
 Mining uses the shared transcript-window builder (`_window.py`). It keeps user and assistant text plus selected tool calls/results, skips file-read style output, and drops large non-prose tool returns. Dream mining uses wider caps than agent-explicit knowledge saves because its purpose is cross-turn pattern discovery.
 
-The dream miner is a **tool-using pydantic-ai Agent** equipped with the `knowledge_save()` tool. It is instructed to save only durable artifacts, especially:
+The dream miner is a **tool-using pydantic-ai Agent** equipped with the `memory_create` tool. It is instructed to save only durable artifacts, especially:
 
 - cross-turn patterns
 - implicit preferences
@@ -194,7 +194,7 @@ Merge invariants:
 - If archiving fails after the consolidated artifact is written, the consolidated artifact remains; the failure is logged and the cycle continues.
 - The merge prompt may combine and deduplicate existing facts, but must not invent new facts.
 
-The merge call is a **direct `llm_call`** (no tool access, body text only) — in contrast with the mining phase which uses a tool-equipped Agent that calls `knowledge_save()` to write artifacts.
+The merge call is a **direct `llm_call`** (no tool access, body text only) — in contrast with the mining phase which uses a tool-equipped Agent that calls `memory_create` to write artifacts.
 
 The consolidated artifact uses `source_type: consolidated` and inherits the union of tags from the originals. The active index is updated for the consolidated artifact, and archived originals are removed from the index.
 
@@ -253,7 +253,7 @@ persist completed-cycle state
 
 The whole cycle runs under an `asyncio.timeout()` bound. On timeout, the result is marked `timed_out=true`, a timeout error string is appended, and partial result counts are returned. Timeout does not roll back any file writes that completed before cancellation.
 
-Session shutdown wraps the dream call in its own timeout and catches all dream errors. Dreaming must never prevent terminal cleanup, shell cleanup, or async resource closure.
+Session shutdown catches all dream errors. Dreaming must never prevent terminal cleanup, shell cleanup, or async resource closure.
 
 ### 2.8 User Inspection And Recovery
 
@@ -317,17 +317,17 @@ Internal caps:
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/knowledge/dream.py` | Dream state, mining, merge, decay, dry-run, timeout, and orchestration |
-| `co_cli/knowledge/prompts/dream_miner.md` | Instructions for retrospective transcript mining |
-| `co_cli/knowledge/prompts/dream_merge.md` | Instructions for same-kind artifact consolidation |
-| `co_cli/knowledge/_window.py` | Shared transcript-window builder used by dream mining |
-| `co_cli/knowledge/similarity.py` | Token-Jaccard similarity and clustering helpers |
-| `co_cli/knowledge/decay.py` | Decay candidate selection |
-| `co_cli/knowledge/archive.py` | Archive and restore mechanics |
-| `co_cli/knowledge/artifact.py` | Knowledge artifact schema and active top-level artifact loading |
-| `co_cli/knowledge/frontmatter.py` | Knowledge markdown rendering and frontmatter validation |
-| `co_cli/knowledge/store.py` | Derived index updates for consolidated and archived artifacts |
-| `co_cli/tools/knowledge/write.py` | `knowledge_save()` write path used by dream mining |
+| `co_cli/memory/dream.py` | Dream state, mining, merge, decay, dry-run, timeout, and orchestration |
+| `co_cli/memory/prompts/dream_miner.md` | Instructions for retrospective transcript mining |
+| `co_cli/memory/prompts/dream_merge.md` | Instructions for same-kind artifact consolidation |
+| `co_cli/memory/_window.py` | Shared transcript-window builder used by dream mining |
+| `co_cli/memory/similarity.py` | Token-Jaccard similarity and clustering helpers |
+| `co_cli/memory/decay.py` | Decay candidate selection |
+| `co_cli/memory/archive.py` | Archive and restore mechanics |
+| `co_cli/memory/artifact.py` | Knowledge artifact schema and active top-level artifact loading |
+| `co_cli/memory/frontmatter.py` | Knowledge markdown rendering and frontmatter validation |
+| `co_cli/memory/knowledge_store.py` | Derived index updates for consolidated and archived artifacts |
+| `co_cli/tools/memory/write.py` | `memory_create` tool used by dream mining |
 | `co_cli/main.py` | Session-end dream trigger (`_maybe_run_dream_cycle`) |
 | `co_cli/commands/knowledge.py` | `/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, and `/knowledge stats` |
 
@@ -335,12 +335,12 @@ Internal caps:
 
 | Property | Test file |
 | --- | --- |
-| Dream state load/save and forgiving corrupt-state recovery | `tests/knowledge/test_knowledge_dream.py` |
-| Dream cycle orchestration: mine → merge → decay ordering, phase isolation | `tests/knowledge/test_knowledge_dream_cycle.py` |
-| Dry-run counts, no-write guarantee, and state non-persistence | `tests/knowledge/test_knowledge_dream_cycle.py` |
-| Cycle timeout: partial result, `timed_out=True`, errors list | `tests/knowledge/test_knowledge_dream_cycle.py` |
-| Live full-cycle coverage (local, LLM) | `tests/knowledge/test_knowledge_dream_cycle.py` |
-| Decay candidate selection: cutoff, `decay_protected`, `last_recalled` | `tests/knowledge/test_knowledge_decay.py` |
-| Archive move and filename collision resolution | `tests/knowledge/test_knowledge_archive.py` |
-| Restore: unambiguous slug succeeds; ambiguous or missing slug returns False | `tests/knowledge/test_knowledge_archive.py` |
-| Token-Jaccard similarity and union-find clustering | `tests/knowledge/test_knowledge_similarity.py` |
+| Dream state load/save and forgiving corrupt-state recovery | `tests/memory/test_knowledge_dream.py` |
+| Dream cycle orchestration: mine → merge → decay ordering, phase isolation | `tests/memory/test_knowledge_dream_cycle.py` |
+| Dry-run counts, no-write guarantee, and state non-persistence | `tests/memory/test_knowledge_dream_cycle.py` |
+| Cycle timeout: partial result, `timed_out=True`, errors list | `tests/memory/test_knowledge_dream_cycle.py` |
+| Live full-cycle coverage (local, LLM) | `tests/memory/test_knowledge_dream_cycle.py` |
+| Decay candidate selection: cutoff, `decay_protected`, `last_recalled` | `tests/memory/test_knowledge_decay.py` |
+| Archive move and filename collision resolution | `tests/memory/test_knowledge_archive.py` |
+| Restore: unambiguous slug succeeds; ambiguous or missing slug returns False | `tests/memory/test_knowledge_archive.py` |
+| Token-Jaccard similarity and union-find clustering | `tests/memory/test_knowledge_similarity.py` |

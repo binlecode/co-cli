@@ -7,7 +7,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.google._auth import _get_google_service
+from co_cli.tools.google._auth import _get_google_service, _google_available
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _CALENDAR_NOT_CONFIGURED = (
@@ -86,8 +86,9 @@ def _fetch_events(service, **kwargs) -> list[dict]:
     integration="google_calendar",
     requires_config="google_credentials_path",
     retries=3,
+    check_fn=_google_available,
 )
-def calendar_list(
+def google_calendar_list(
     ctx: RunContext[CoDeps],
     days_back: int = 0,
     days_ahead: int = 1,
@@ -97,7 +98,7 @@ def calendar_list(
     internally — all matching events up to max_results are returned in one call.
 
     Use this for schedule overviews (today, this week). For keyword search
-    across events, use calendar_search instead.
+    across events, use google_calendar_search instead.
 
     Returns a dict with:
     - display: pre-formatted event list with times, title, location, attendees,
@@ -157,8 +158,9 @@ def calendar_list(
     integration="google_calendar",
     requires_config="google_credentials_path",
     retries=3,
+    check_fn=_google_available,
 )
-def calendar_search(
+def google_calendar_search(
     ctx: RunContext[CoDeps],
     query: str,
     days_back: int = 0,
@@ -170,7 +172,7 @@ def calendar_search(
     returned in one call.
 
     Use this when looking for specific meetings or topics. For a general
-    schedule overview, use calendar_list instead.
+    schedule overview, use google_calendar_list instead.
 
     Returns a dict with:
     - display: pre-formatted event list with times, title, location, attendees,

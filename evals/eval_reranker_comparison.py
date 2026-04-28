@@ -29,7 +29,7 @@ from pathlib import Path
 
 from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
 
-from co_cli.knowledge.store import KnowledgeStore, SearchResult
+from co_cli.memory.knowledge_store import KnowledgeStore, SearchResult
 
 # ---------------------------------------------------------------------------
 # Harder synthetic corpus -- 5 topics x 6 docs

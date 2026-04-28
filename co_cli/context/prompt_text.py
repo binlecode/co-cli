@@ -35,7 +35,7 @@ async def recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
 
     Personality memories are injected in the static system prompt via
     ``build_static_instructions()`` for prefix-cache stability. Knowledge
-    recall is on-demand via ``knowledge_search`` / ``memory_search`` tools.
+    recall is on-demand via the ``memory_search`` tool.
     """
     return f"Today is {date.today().isoformat()}."
 

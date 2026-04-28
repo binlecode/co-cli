@@ -6,7 +6,7 @@ then architecture-level gaps and anti-patterns.
 
 ## Sources
 
-### `co-cli` (37 native tools)
+### `co-cli` (~35 native tools)
 
 - [`co_cli/agent/_native_toolset.py`](/Users/binle/workspace_genai/co-cli/co_cli/agent/_native_toolset.py) — `NATIVE_TOOLS` tuple, `@agent_tool` policy, approval-resume filter
 - [`co_cli/agent/_mcp.py`](/Users/binle/workspace_genai/co-cli/co_cli/agent/_mcp.py)
@@ -15,7 +15,8 @@ then architecture-level gaps and anti-patterns.
 - [`co_cli/tools/approvals.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - [`co_cli/tools/agent_tool.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/agent_tool.py)
 - [`co_cli/tools/tool_io.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_io.py)
-- Tool implementations: `co_cli/tools/{user_input,capabilities,todo,memory,shell,execute_code,task_control,background,obsidian,agents}.py`, `co_cli/tools/{files,knowledge,web,google}/*.py`
+- Tool implementations: `co_cli/tools/{user_input,capabilities,todo,shell,execute_code,task_control,background,obsidian,agents}.py`, `co_cli/tools/{files,memory,web,google}/*.py`
+- Memory library: `co_cli/memory/` — T2 artifact store (`knowledge_store.py`), T1 session store (`session_store.py`), dream/decay/summarization, FTS5 search
 - [`docs/specs/tools.md`](/Users/binle/workspace_genai/co-cli/docs/specs/tools.md)
 
 ### Hermes (~50 registered tools)
@@ -58,8 +59,8 @@ Columns: **co-cli tool** · **hermes equivalent** · **Parity** (✓ = same sema
 | co-cli tool | hermes equivalent | Parity | Gap & porting notes |
 |---|---|---|---|
 | `clarify(question, options=None, user_answer=None)` (`user_input.py`) | `clarify` (`clarify_tool.py`) | ~ | Same user-facing intent. co resumes via `ToolApproved(override_args={"user_answer": ...})` inside the SDK's deferred-tool mechanism; hermes passes a `callback` kw to its blocking gateway. Hermes's model is robust to duplicate calls in one step (see Anti-Pattern 1) — co-cli's one-shot contract relies on prompt discipline. |
-| `capabilities_check()` (`capabilities.py`) | *(none — hermes exposes `registry.get_available_toolsets()` to the CLI but not to the model)* | ✗ | co-cli uniquely exposes a doctor tool to the model for `/doctor`. No port needed — hermes's `check_fn` model means the registry itself is the introspection surface. |
-| `todo_write(todos)` / `todo_read()` (`todo.py`) | `todo` (`todo_tool.py`, single op-based) | ~ | Hermes collapses read/write into one `todo` tool with a `merge` flag and persisted store. co-cli keeps them separate (simpler schema) and stores in-session state only (TodoState in CoDeps). **Port consideration:** hermes's `merge` semantics are a useful addition for incremental updates without re-submitting the full list. |
+| `capabilities_check()` (`capabilities.py`) | *(none — hermes exposes `registry.get_available_toolsets()` to the CLI but not to the model)* | ✗ | co-cli uniquely exposes the runtime capability surface to the model: available tools (always/deferred/approval-gated), degraded integrations, MCP server health, and reasoning model status. `/doctor` wraps it with a triage format but is not the only consumer — the model calls it directly for any "what can you do / why is X broken" query. No port needed — hermes's `check_fn` model means the registry itself is the introspection surface. |
+| `todo_write(todos)` / `todo_read()` (`todo.py`) | `todo` (`todo_tool.py`, single op-based) | ~ | Hermes collapses read/write into one `todo` tool with a `merge` flag and persisted store. co-cli keeps them separate and stores state in `CoSessionState.session_todos` (plain `list[dict]`, session-scoped only). co-cli's schema adds a `priority` field (high/medium/low) per item that hermes's tool lacks. **Port consideration:** hermes's `merge` semantics are a useful addition for incremental updates without re-submitting the full list. |
 
 ### 1.2 Workspace & File Operations
 
@@ -71,18 +72,20 @@ Columns: **co-cli tool** · **hermes equivalent** · **Parity** (✓ = same sema
 | `file_write(path, content)` | `write_file` | ✓ | Both deferred-approval; both write atomically. co-cli adds `resource_locks` + `file_read_mtimes` staleness check — **hermes lacks both**. |
 | `file_patch(path, old_string, new_string, replace_all, show_diff)` | `patch` | ~ | Both support fuzzy matching. Hermes's `patch` uses a v4a-style multi-hunk patch format via `patch_parser.py`; co-cli also has v4a support (`files/_v4a.py`) plus a simpler `old_string`/`new_string` fallback. co-cli's auto-lint on `.py` + read-before-write enforcement (`file_partial_reads`) are **co-cli-only** guardrails worth keeping. |
 
-### 1.3 Knowledge, Memory & Session Recall
+### 1.3 Memory & Session Recall
+
+> **Refactor note (2026-Q1):** `co_cli/knowledge/` was unified into `co_cli/memory/` and
+> six `knowledge_*` tools were replaced by five unified `memory_*` tools. T2 (artifacts)
+> and T1 (session transcripts) are now co-equal tiers of the same module and tool surface.
 
 | co-cli tool | hermes equivalent | Parity | Gap & porting notes |
 |---|---|---|---|
-| `knowledge_search(query, kind, source, limit, tags, tag_match_mode, created_after, created_before)` (`knowledge/read.py`) | *(none — hermes has `session_search` only)* | ✗ | Unique to co-cli. Unified FTS5 search across local artifacts + Obsidian + Drive. No hermes equivalent because hermes has no knowledge-artifact concept. |
-| `knowledge_list(offset, limit, kind)` | *(none)* | ✗ | Unique to co-cli. |
-| `knowledge_article_read(slug)` | *(none)* | ✗ | Unique to co-cli. |
-| `memory_search(query, limit=5)` (`memory.py`) | `session_search(query, role_filter, limit)` (`session_search_tool.py`) | ~ | Closest match, different scope: co's `memory_search` is a keyword scan over past transcripts; hermes's `session_search` returns LLM-summarized session snapshots plus supports FTS5 boolean syntax (`OR`, `NOT`, `"phrase"`, `prefix*`). **Port candidate:** add boolean operators and role filter to `memory_search`; optionally add "no-query → recent sessions" mode. |
-| `knowledge_update(slug, old_content, new_content)` (`knowledge/write.py`) | *(none)* | ✗ | Unique to co-cli. Hermes's `memory` tool has `action=replace` with `old_text` but operates on a single frozen `MEMORY.md`, not on addressable artifacts. |
-| `knowledge_append(slug, content)` | *(none)* | ✗ | Unique to co-cli. |
-| `knowledge_article_save(content, title, origin_url, tags, related)` | *(none)* | ✗ | Unique to co-cli. |
-| *(none)* | `memory(action, target, content, old_text)` (`memory_tool.py`) | — | **Hermes-only.** Single op-based tool for frozen-snapshot memory (MEMORY.md + USER.md injected into system prompt at session start). co-cli covers the same use case through the *auto memory* prompt layer + `knowledge_append/update` — different architecture, not a missing tool. |
+| `memory_search(query, kind, limit)` (`tools/memory/recall.py`) | `session_search(query, role_filter, limit)` (`session_search_tool.py`) | ~ | Substantially narrowed. `memory_search` now covers both T2 artifacts (BM25 FTS5) and T1 session transcripts (LLM-summarized) in one parallel async call. FTS5 boolean syntax (`OR`, `NOT`, `"phrase"`, `prefix*`) is in. Empty query triggers a no-LLM recent-sessions browse mode, matching hermes's no-query mode. **Remaining gap:** no `role_filter` (assistant vs user messages); co-cli's T1 tier always summarizes around the query. |
+| `memory_list(offset, limit, kind)` (`tools/memory/read.py`) | *(none)* | ✗ | Unique to co-cli. Paginated inventory of T2 artifacts. |
+| `memory_read(slug)` (`tools/memory/read.py`) | *(none)* | ✗ | Unique to co-cli. Full body of a T2 artifact on demand. |
+| `memory_create(content, artifact_kind, title, description, tags, source_url, decay_protected)` (`tools/memory/write.py`) | *(none)* | ✗ | Unique to co-cli. Saves new T2 artifacts with URL-keyed dedup and optional Jaccard consolidation. |
+| `memory_modify(slug, action, content, target)` (`tools/memory/write.py`) | *(none)* | ✗ | Unique to co-cli. `action="append"` or `"replace"` with exact-match guard. Hermes's `memory` tool has `action=replace` with `old_text` but operates on a frozen `MEMORY.md`, not addressable artifacts. |
+| *(none)* | `memory(action, target, content, old_text)` (`memory_tool.py`) | — | **Hermes-only.** Frozen-snapshot memory (MEMORY.md + USER.md injected into system prompt). co-cli covers the same use case through the *auto memory* prompt layer + `memory_create/modify` — different architecture, not a missing tool. |
 
 ### 1.4 Web
 
@@ -124,7 +127,7 @@ Capabilities co-cli does not have, grouped by porting recommendation.
 |---|---|---|
 | `skills_list`, `skill_view`, `skill_manage(action: create\|edit\|patch\|delete\|write_file\|remove_file)` | `skills_tool.py`, `skill_manager_tool.py` | co-cli has a skill system (`co_cli/skills/`) but exposes skill discovery through slash commands and static prompt layers, not through model-callable tools. A read-only `skills_list` + `skill_view` would let the model discover and self-load skills mid-turn without user-issued slash commands. `skill_manage` is more invasive (writes to `~/.claude/skills`) and overlaps with the knowledge-artifact system. |
 | `vision_analyze(image_path or url, question)` | `vision_tools.py` | co-cli has no vision tool. Adding one is cheap — the model wrapper already exists in pydantic-ai — and unlocks screenshot analysis, diagram reading, PDF-page inspection. |
-| `session_search` (as a replacement for `memory_search`) | `session_search_tool.py` | See §1.3. Adopting FTS5 boolean syntax + no-query recent-sessions mode is a cleaner UX than today's keyword-only `memory_search`. |
+| `session_search` boolean syntax + no-query mode | `session_search_tool.py` | **Implemented.** `memory_search` now covers T2 artifacts + T1 sessions in one call with FTS5 boolean syntax and empty-query browse mode. Remaining gap: `role_filter` for filtering by assistant vs user messages. |
 | `terminal.watch_patterns` / `terminal.pty` | `terminal_tool.py` | See §1.5 for the feature-level port. |
 
 ### 2.2 Probably Out of Scope
@@ -289,7 +292,7 @@ Symptom of §3.5 (no named toolset profiles).
 | **Medium** | `ModelRetry` / `tool_error` unenforced (§4.3) | Retry-budget waste | Medium — ruff rule or base-class signal |
 | **Medium** | No `check_fn` runtime availability (§3.1) | Tools callable after credential expiry | Medium — hook into visibility filter |
 | **Medium** | `NATIVE_TOOLS` manual tuple (§3.3) | Tool silently omitted | Low — module scan for `@agent_tool`-decorated functions at import |
-| **Medium** | Add `session_search` boolean syntax + role filter to `memory_search` (§1.3) | UX gap for cross-session recall | Low — FTS5 already in place |
+| ~~Medium~~ **Done** | ~~Add `session_search` boolean syntax + role filter to `memory_search`~~ T2+T1 unified `memory_search` with FTS5 boolean syntax + empty-query browse mode (§1.3) | ~~UX gap~~ | Shipped in memory module refactor |
 | **Medium** | Add model-callable `skills_list` / `skill_view` (§2.1) | Skill discovery requires user slash commands | Medium — read-only tools over existing registry |
 | **Low** | Add `vision_analyze` tool (§2.1) | No vision capability | Medium — new tool + model wrapper |
 | **Low** | Named toolset profiles for delegation (§3.5, §4.6) | Tool-list drift in delegation | Medium — `toolsets.py`-style registry |

@@ -27,8 +27,8 @@ Callers:
 from pathlib import Path
 
 from co_cli.config.core import KNOWLEDGE_DIR
-from co_cli.knowledge.artifact import load_knowledge_artifacts
-from co_cli.knowledge.frontmatter import parse_frontmatter
+from co_cli.memory.artifact import load_knowledge_artifacts
+from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.personality.prompts.validator import REQUIRED_MINDSET_TASK_TYPES
 
 _SOULS_DIR = Path(__file__).parent / "souls"

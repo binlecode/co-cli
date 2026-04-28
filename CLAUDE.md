@@ -36,7 +36,16 @@ See `docs/specs/system.md` for architecture, `CoDeps`, capability surface, and s
 
 ### Knowledge System
 
-All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge artifacts (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db`. See `docs/specs/memory-knowledge.md` for the Memory + Knowledge model and `docs/specs/prompt-assembly.md` for how recall injects into the turn.
+Three-tier memory model: T0 (system prompt personality context, auto-injected), T1 (past session transcripts), T2 (persistent knowledge artifacts). All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt beyond T0 personality-context artifacts.
+
+Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store T2 artifacts (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (T2 artifacts + Obsidian); T1 session transcripts have a separate index at `~/.co-cli/session-index.db`. Implementation lives in `co_cli/memory/` (both T1 session memory and T2 knowledge artifacts as co-equal kinds) with the unified tool surface in `co_cli/tools/memory/`. See `docs/specs/memory.md` for the full Memory model and `docs/specs/prompt-assembly.md` for how recall injects into the turn.
+
+Five unified `memory_*` tools cover all tiers:
+- `memory_search` — recall across T2 artifacts (BM25) + T1 sessions (LLM-summarized) in one call
+- `memory_list` — paginated inventory of T2 artifacts
+- `memory_read` — full body of a specific T2 artifact by slug
+- `memory_create` — save a new T2 artifact (all kinds: preference, feedback, rule, article, reference, note, decision)
+- `memory_modify` — append or surgically replace a passage in an existing T2 artifact
 
 ## Engineering Rules
 

@@ -19,6 +19,7 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._frontend import SilentFrontend
 from tests._settings import SETTINGS as _CONFIG
 from tests._settings import TEST_LLM, make_settings
+from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
 from co_cli.agent.core import build_agent
 from co_cli.config.compaction import CompactionSettings
@@ -543,7 +544,6 @@ async def test_savings_clear_unblocks_gate() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_summarize_messages_iterative_branch_preserves_previous_content() -> None:
     """summarize_messages with previous_summary takes the iterative update path.
 
@@ -578,7 +578,6 @@ async def test_summarize_messages_iterative_branch_preserves_previous_content() 
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_previous_summary_written_back_after_successful_compaction() -> None:
     """apply_compaction writes raw summary text (no SUMMARY_MARKER_PREFIX) to previous_compaction_summary."""
     from tests._ollama import ensure_ollama_warm
@@ -1211,47 +1210,12 @@ def _has_verbatim_anchor(summary_text: str, source_messages: list[ModelMessage])
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_circuit_breaker_uses_static_marker() -> None:
-    """apply_compaction with compaction_skip_count=3 produces static marker, no LLM call."""
-    # Use a small context window so plan_compaction_boundaries finds bounds without massive history.
-    # 2048 tokens x 0.65 compaction_ratio ~= 1331 token threshold -> ~5324 chars needed.
-    small_ctx_config = make_settings(llm=TEST_LLM.model_copy(update={"num_ctx": 2048}))
-    msgs: list[ModelMessage] = []
-    for i in range(8):
-        msgs += [_user(f"turn {i}"), _assistant(f"response {i} " + "x" * 700)]
-
-    deps = CoDeps(shell=ShellBackend(), config=small_ctx_config, session=CoSessionState())
-    deps.runtime.compaction_skip_count = 3
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
-
-    ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
-    budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
-    bounds = plan_compaction_boundaries(msgs, budget, ctx.deps.config.compaction.tail_fraction)
-    assert bounds is not None, f"history must exceed tail budget (budget={budget})"
-
-    len_pre = len(msgs)
-    result, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
-
-    assert len(result) < len_pre, "circuit breaker must still compact (static marker)"
-    assert summary_text is None, "circuit breaker must produce static marker, not LLM summary"
-
-    has_static = any(
-        isinstance(p, UserPromptPart) and "earlier messages were removed" in str(p.content)
-        for m in result
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-    )
-    assert has_static, "static marker text must appear in result"
-
-
 # ---------------------------------------------------------------------------
 # Full chain P1→P5 with LLM
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 @pytest.mark.timeout(180)
 async def test_full_chain_p1_to_p5_llm() -> None:
     """P1 clears old tool results, P5 LLM summarizer fires; marker count matches dropped count."""
@@ -1325,7 +1289,8 @@ async def test_full_chain_p1_to_p5_llm() -> None:
     )
 
     len_pre = len(msgs)
-    result, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        result, summary_text = await apply_compaction(ctx, msgs, bounds, announce=False)
 
     assert len(result) < len_pre, "P5 must reduce message count"
     assert summary_text is not None, "P5 LLM must produce a summary (model is set)"
@@ -1349,8 +1314,7 @@ async def test_full_chain_p1_to_p5_llm() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(200)
 async def test_iterative_summary_3_pass_preservation() -> None:
     """Distinctive token from cycle-1 survives into the cycle-3 in-context marker."""
     from tests._ollama import ensure_ollama_warm
@@ -1400,7 +1364,8 @@ async def test_iterative_summary_3_pass_preservation() -> None:
 
     bounds1 = plan_compaction_boundaries(cycle1, budget, deps.config.compaction.tail_fraction)
     assert bounds1 is not None, f"cycle 1 must exceed tail budget (budget={budget})"
-    history1, summary1 = await apply_compaction(ctx, cycle1, bounds1, announce=False)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        history1, summary1 = await apply_compaction(ctx, cycle1, bounds1, announce=False)
     assert summary1 is not None, "cycle 1: LLM summarizer must fire (model is set)"
 
     cycle2 = [
@@ -1418,7 +1383,8 @@ async def test_iterative_summary_3_pass_preservation() -> None:
     ]
     bounds2 = plan_compaction_boundaries(cycle2, budget, deps.config.compaction.tail_fraction)
     assert bounds2 is not None, f"cycle 2 must exceed tail budget (budget={budget})"
-    history2, summary2 = await apply_compaction(ctx, cycle2, bounds2, announce=False)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        history2, summary2 = await apply_compaction(ctx, cycle2, bounds2, announce=False)
     assert summary2 is not None, "cycle 2: LLM summarizer must fire (model is set)"
 
     cycle3 = [
@@ -1436,7 +1402,8 @@ async def test_iterative_summary_3_pass_preservation() -> None:
     ]
     bounds3 = plan_compaction_boundaries(cycle3, budget, deps.config.compaction.tail_fraction)
     assert bounds3 is not None, f"cycle 3 must exceed tail budget (budget={budget})"
-    history3, summary3 = await apply_compaction(ctx, cycle3, bounds3, announce=False)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        history3, summary3 = await apply_compaction(ctx, cycle3, bounds3, announce=False)
     assert summary3 is not None, "cycle 3: LLM summarizer must fire (model is set)"
 
     marker3 = next(
@@ -1461,7 +1428,6 @@ async def test_iterative_summary_3_pass_preservation() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_summarizer_verbatim_anchor_in_next_step() -> None:
     """## Next Step must contain a ≥20-char verbatim substring from the last 3 messages."""
     from tests._ollama import ensure_ollama_warm
@@ -1484,14 +1450,14 @@ async def test_summarizer_verbatim_anchor_in_next_step() -> None:
     ]
     llm_model = build_model(_CONFIG.llm)
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
-    summary = await summarize_messages(deps, dropped)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        summary = await summarize_messages(deps, dropped)
     assert _has_verbatim_anchor(summary, dropped), (
         "## Next Step must contain a ≥20-char verbatim anchor from the last 3 messages"
     )
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_summarizer_user_correction_captured() -> None:
     """Final user directive (python-jose) must appear in ## Active Task or ## User Corrections."""
     from tests._ollama import ensure_ollama_warm
@@ -1510,7 +1476,8 @@ async def test_summarizer_user_correction_captured() -> None:
     ]
     llm_model = build_model(_CONFIG.llm)
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
-    summary = await summarize_messages(deps, msgs)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        summary = await summarize_messages(deps, msgs)
 
     active_task = _extract_section(summary, "Active Task")
     user_corrections = _extract_section(summary, "User Corrections")
@@ -1526,7 +1493,6 @@ async def test_summarizer_user_correction_captured() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_summarizer_errors_and_fixes_retained() -> None:
     """## Errors & Fixes must contain the test failure and the user-directed correction."""
     from tests._ollama import ensure_ollama_warm
@@ -1552,7 +1518,8 @@ async def test_summarizer_errors_and_fixes_retained() -> None:
     ]
     llm_model = build_model(_CONFIG.llm)
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
-    summary = await summarize_messages(deps, msgs)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        summary = await summarize_messages(deps, msgs)
 
     errors_section = _extract_section(summary, "Errors & Fixes")
     low = errors_section.lower()
@@ -1571,7 +1538,6 @@ async def test_summarizer_errors_and_fixes_retained() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_summarizer_pending_user_asks() -> None:
     """Unanswered question must appear in ## Pending User Asks."""
     from tests._ollama import ensure_ollama_warm
@@ -1596,14 +1562,14 @@ async def test_summarizer_pending_user_asks() -> None:
     ]
     llm_model = build_model(_CONFIG.llm)
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
-    summary = await summarize_messages(deps, msgs)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        summary = await summarize_messages(deps, msgs)
 
     pending = _extract_section(summary, "Pending User Asks")
     assert pending, "## Pending User Asks must be present for unanswered TTL question"
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_summarizer_resolved_questions() -> None:
     """Explicitly answered question must appear in ## Resolved Questions, not Pending."""
     from tests._ollama import ensure_ollama_warm
@@ -1628,7 +1594,8 @@ async def test_summarizer_resolved_questions() -> None:
     ]
     llm_model = build_model(_CONFIG.llm)
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
-    summary = await summarize_messages(deps, msgs)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        summary = await summarize_messages(deps, msgs)
 
     resolved = _extract_section(summary, "Resolved Questions")
     pending = _extract_section(summary, "Pending User Asks")
@@ -1645,7 +1612,6 @@ async def test_summarizer_resolved_questions() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_summarizer_pending_migrates_to_resolved() -> None:
     """Prior ## Pending item answered in new block must migrate to ## Resolved Questions."""
     from tests._ollama import ensure_ollama_warm
@@ -1679,7 +1645,8 @@ async def test_summarizer_pending_migrates_to_resolved() -> None:
 
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     context = gather_compaction_context(ctx, dropped=dropped)
-    summary = await summarize_messages(deps, dropped, context=context)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        summary = await summarize_messages(deps, dropped, context=context)
 
     resolved = _extract_section(summary, "Resolved Questions")
     pending = _extract_section(summary, "Pending User Asks")

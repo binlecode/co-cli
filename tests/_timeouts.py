@@ -16,11 +16,11 @@ pytest-timeout (pyproject.toml: timeout = 120) is the safety net. It catches:
 
 Why 120s: the largest single per-await budget is LLM_REASONING_TIMEOUT_SECS
 (60s). 120s = 2x that, leaving room for fixture setup/teardown around one
-reasoning call. A test that legitimately needs more than 120s total would have
-to make two sequential unwrapped reasoning awaits — that is a test bug, not a
-budget gap. Raise LLM_REASONING_TIMEOUT_SECS if model latency increases; raise
-the pytest ceiling only if a test correctly wraps multiple sequential reasoning
-calls and the sum exceeds 120s.
+reasoning call. A test that legitimately needs more than 120s total must wrap
+each sequential LLM call with its own asyncio.timeout and use
+@pytest.mark.timeout(N) to raise the outer safety net to N = sum(per-call
+budgets) + overhead. Raise individual constants if model latency increases;
+raise the pytest ceiling only when correctly-wrapped sequential calls sum past it.
 
 Usage::
 
@@ -36,8 +36,19 @@ LLM_NON_REASONING_TIMEOUT_SECS: int = 10
 
 >10s means the model is reasoning when it should not be — a bug in model
 config or api_params (e.g. think=false not honored by Ollama for this model).
-Use only for bare-context calls (summarizer, signal detector, compaction) — no
-registered tools in the agent.
+Use only for low-output bare-context calls (signal detectors, ~10–30 tokens) —
+no registered tools in the agent. For compaction summaries (400–900 tokens
+output) use LLM_COMPACTION_SUMMARY_TIMEOUT_SECS instead.
+"""
+
+LLM_COMPACTION_SUMMARY_TIMEOUT_SECS: int = 60
+"""Compaction LLM summarizer calls (reasoning disabled, no tool schemas).
+
+Output is long-form structured text (400–900 tokens). At ~30 tok/s on local
+35B hardware, worst observed output (883 tokens) takes ~29s. 60s gives 2×
+headroom without masking a stalled call.
+Distinct from LLM_NON_REASONING_TIMEOUT_SECS, which is calibrated for
+low-output calls where >10s indicates a misconfigured reasoning mode.
 """
 
 LLM_TOOL_CONTEXT_TIMEOUT_SECS: int = 20

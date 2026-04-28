@@ -19,12 +19,15 @@ from co_cli.tools.capabilities import capabilities_check
 from co_cli.tools.execute_code import code_execute
 from co_cli.tools.files.read import file_find, file_read, file_search
 from co_cli.tools.files.write import file_patch, file_write
-from co_cli.tools.google.calendar import calendar_list, calendar_search
-from co_cli.tools.google.drive import drive_read, drive_search
-from co_cli.tools.google.gmail import gmail_draft, gmail_list, gmail_search
-from co_cli.tools.knowledge.read import knowledge_article_read, knowledge_list, knowledge_search
-from co_cli.tools.knowledge.write import knowledge_append, knowledge_article_save, knowledge_update
-from co_cli.tools.memory import memory_search
+from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search
+from co_cli.tools.google.drive import google_drive_read, google_drive_search
+from co_cli.tools.google.gmail import google_gmail_draft, google_gmail_list, google_gmail_search
+from co_cli.tools.memory.read import memory_list, memory_read
+from co_cli.tools.memory.recall import memory_search
+from co_cli.tools.memory.write import (
+    memory_create,
+    memory_modify,
+)
 from co_cli.tools.obsidian import obsidian_list, obsidian_read, obsidian_search
 from co_cli.tools.shell import shell
 from co_cli.tools.task_control import (
@@ -47,9 +50,8 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     todo_write,
     todo_read,
     # Knowledge reads
-    knowledge_search,
-    knowledge_list,
-    knowledge_article_read,
+    memory_list,
+    memory_read,
     memory_search,
     # Workspace reads
     file_find,
@@ -64,9 +66,8 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     file_write,
     file_patch,
     # Knowledge writes (deferred)
-    knowledge_update,
-    knowledge_append,
-    knowledge_article_save,
+    memory_create,
+    memory_modify,
     # Background tasks (deferred)
     task_start,
     task_status,
@@ -83,13 +84,13 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     obsidian_search,
     obsidian_read,
     # Google (requires google_credentials_path)
-    drive_search,
-    drive_read,
-    gmail_list,
-    gmail_search,
-    calendar_list,
-    calendar_search,
-    gmail_draft,
+    google_drive_search,
+    google_drive_read,
+    google_gmail_list,
+    google_gmail_search,
+    google_calendar_list,
+    google_calendar_search,
+    google_gmail_draft,
 )
 
 
@@ -108,6 +109,15 @@ def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
         return True
     entry = ctx.deps.tool_index.get(tool_def.name)
     return entry is not None and entry.visibility == VisibilityPolicyEnum.ALWAYS
+
+
+def _make_prepare(fn: Callable[[CoDeps], bool]):
+    """Return a per-turn prepare callback that hides a tool when fn(deps) is False."""
+
+    async def prepare(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> ToolDefinition | None:
+        return tool_def if fn(ctx.deps) else None
+
+    return prepare
 
 
 def _build_native_toolset(
@@ -143,6 +153,8 @@ def _build_native_toolset(
         }
         if info.retries is not None:
             kwargs["retries"] = info.retries
+        if info.check_fn is not None:
+            kwargs["prepare"] = _make_prepare(info.check_fn)
         toolset.add_function(fn, **kwargs)
         index[info.name] = info
 

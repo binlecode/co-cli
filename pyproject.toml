@@ -92,6 +92,3 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["tests"]
 timeout = 120
-markers = [
-    "local: requires local infrastructure (Ollama, GPU) or private credentials — skipped in CI",
-]

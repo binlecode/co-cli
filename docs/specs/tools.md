@@ -46,8 +46,8 @@ co_cli/tools/_shell_policy.py
   -> shell/code_execute approval policy
 co_cli/tools/files/read.py
 co_cli/tools/files/write.py
-co_cli/tools/knowledge/read.py
-co_cli/tools/knowledge/write.py
+co_cli/tools/memory/read.py
+co_cli/tools/memory/write.py
 ```
 
 ## 2. Tool Lifecycle, Approval, & Concurrency
@@ -188,13 +188,13 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `drive_search(query, page=1)` | D | — | — | ✓ | Search Google Drive by filename or indexed text |
-| `drive_read(file_id)` | D | — | — | ✓ | Read a Google Drive file as text |
-| `gmail_list(max_results=5)` | D | — | — | ✓ | Fetch recent inbox messages |
-| `gmail_search(query, max_results=5)` | D | — | — | ✓ | Search Gmail with advanced operators |
-| `calendar_list(days_back=0, days_ahead=1, max_results=25)` | D | — | — | ✓ | List primary-calendar events in a bounded window around today |
-| `calendar_search(query, days_back=0, days_ahead=30, max_results=25)` | D | — | — | ✓ | Search primary-calendar events by keyword |
-| `gmail_draft(to, subject, body)` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
+| `google_drive_search(query, page=1)` | D | — | — | ✓ | Search Google Drive by filename or indexed text |
+| `google_drive_read(file_id)` | D | — | — | ✓ | Read a Google Drive file as text |
+| `google_gmail_list(max_results=5)` | D | — | — | ✓ | Fetch recent inbox messages |
+| `google_gmail_search(query, max_results=5)` | D | — | — | ✓ | Search Gmail with advanced operators |
+| `google_calendar_list(days_back=0, days_ahead=1, max_results=25)` | D | — | — | ✓ | List primary-calendar events in a bounded window around today |
+| `google_calendar_search(query, days_back=0, days_ahead=30, max_results=25)` | D | — | — | ✓ | Search primary-calendar events by keyword |
+| `google_gmail_draft(to, subject, body)` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
 
 **Total: 37 native tools** (14 ALWAYS · 23 DEFERRED · 7 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically)
 

@@ -28,7 +28,6 @@ def _make_deps() -> CoDeps:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_llm_call_with_message_history_forwards_context() -> None:
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
@@ -48,7 +47,6 @@ async def test_llm_call_with_message_history_forwards_context() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_llm_call_output_type_returns_structured_output() -> None:
     class Color(BaseModel):
         value: str

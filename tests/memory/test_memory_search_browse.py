@@ -12,9 +12,9 @@ from tests._settings import SETTINGS as _CONFIG
 from co_cli.agent.core import build_agent
 from co_cli.deps import CoDeps
 from co_cli.memory.session import session_filename
-from co_cli.memory.store import MemoryIndex
+from co_cli.memory.session_store import SessionStore
 from co_cli.memory.transcript import append_messages
-from co_cli.tools.memory import memory_search
+from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=_CONFIG)
@@ -30,11 +30,11 @@ def _make_ctx(deps: CoDeps) -> RunContext:
     )
 
 
-def _make_deps(tmp_path: Path, *, memory_index: MemoryIndex | None = None) -> CoDeps:
+def _make_deps(tmp_path: Path, *, session_store: SessionStore | None = None) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         config=_CONFIG,
-        memory_index=memory_index,
+        session_store=session_store,
         sessions_dir=tmp_path / "sessions",
         tool_results_dir=tmp_path / "tool-results",
     )
@@ -42,7 +42,7 @@ def _make_deps(tmp_path: Path, *, memory_index: MemoryIndex | None = None) -> Co
 
 def _write_indexed_session(
     sessions_dir: Path,
-    store: MemoryIndex,
+    store: SessionStore,
     *,
     name_suffix: str,
     content: str,
@@ -68,7 +68,7 @@ def _write_indexed_session(
 async def test_browse_mode_returns_recent_sessions(tmp_path: Path) -> None:
     """Empty-query browse returns recent session metadata without making LLM calls."""
     db_path = tmp_path / "session-index.db"
-    store = MemoryIndex(db_path)
+    store = SessionStore(db_path)
     try:
         sessions_dir = tmp_path / "sessions"
         _write_indexed_session(
@@ -79,7 +79,7 @@ async def test_browse_mode_returns_recent_sessions(tmp_path: Path) -> None:
             response="Here are the docker networking steps",
         )
 
-        deps = _make_deps(tmp_path, memory_index=store)
+        deps = _make_deps(tmp_path, session_store=store)
         ctx = _make_ctx(deps)
 
         result = await memory_search(ctx, query="")
@@ -98,6 +98,7 @@ async def test_browse_mode_returns_recent_sessions(tmp_path: Path) -> None:
         assert "when" in first, "Browse results must include when"
         assert "title" in first, "Browse results must include title"
         assert "file_size" in first, "Browse results must include file_size"
+        assert first["tier"] == "sessions", "Browse results must carry tier='sessions'"
 
         # Browse mode does NOT produce LLM summaries
         assert "summary" not in first, (
@@ -111,7 +112,7 @@ async def test_browse_mode_returns_recent_sessions(tmp_path: Path) -> None:
 async def test_browse_mode_zero_llm_cost(tmp_path: Path) -> None:
     """Browse mode with deps.model=None succeeds — confirms no LLM is invoked."""
     db_path = tmp_path / "session-index.db"
-    store = MemoryIndex(db_path)
+    store = SessionStore(db_path)
     try:
         sessions_dir = tmp_path / "sessions"
         _write_indexed_session(
@@ -126,7 +127,7 @@ async def test_browse_mode_zero_llm_cost(tmp_path: Path) -> None:
         deps = CoDeps(
             shell=ShellBackend(),
             config=_CONFIG,
-            memory_index=store,
+            session_store=store,
             model=None,
             sessions_dir=tmp_path / "sessions",
             tool_results_dir=tmp_path / "tool-results",
@@ -146,9 +147,9 @@ async def test_browse_mode_zero_llm_cost(tmp_path: Path) -> None:
 async def test_browse_mode_empty_sessions_returns_zero(tmp_path: Path) -> None:
     """Browse mode with no sessions returns count=0 and empty results list."""
     db_path = tmp_path / "session-index.db"
-    store = MemoryIndex(db_path)
+    store = SessionStore(db_path)
     try:
-        deps = _make_deps(tmp_path, memory_index=store)
+        deps = _make_deps(tmp_path, session_store=store)
         ctx = _make_ctx(deps)
 
         result = await memory_search(ctx, query="")

@@ -1,1 +1,1 @@
-"""Memory layer — FTS5 keyword search over past session transcripts."""
+"""Memory layer — session transcripts (T1) and reusable knowledge artifacts (T2)."""

@@ -14,7 +14,7 @@ from pydantic_ai.messages import ModelMessage
 
 from co_cli.agent.core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
+from co_cli.bootstrap.core import create_deps, init_session_store, restore_session
 from co_cli.bootstrap.project_info import project_info
 from co_cli.commands.core import dispatch as dispatch_command
 from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
@@ -160,8 +160,8 @@ def _sweep_tool_results(deps: CoDeps) -> None:
 async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
     """Run the dream cycle on session end when enabled via knowledge config.
 
-    Bounded by a 60-second timeout. Errors are logged and never propagated —
-    session shutdown must not fail because consolidation hit a snag.
+    Errors are logged and never propagated — session shutdown must not fail
+    because consolidation hit a snag.
     """
     knowledge_config = deps.config.knowledge
     if not knowledge_config.consolidation_enabled:
@@ -169,12 +169,11 @@ async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
     if knowledge_config.consolidation_trigger != "session_end":
         return
 
-    from co_cli.knowledge.dream import run_dream_cycle
+    from co_cli.memory.dream import run_dream_cycle
 
     logger = logging.getLogger(__name__)
     try:
-        async with asyncio.timeout(60):
-            result = await run_dream_cycle(deps)
+        result = await run_dream_cycle(deps)
         if result.any_changes:
             logger.info(
                 "Dream cycle: %d extracted, %d merged, %d archived",
@@ -182,8 +181,6 @@ async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
                 result.merged,
                 result.decayed,
             )
-    except TimeoutError:
-        logger.warning("Dream cycle timed out after 60s")
     except Exception:
         logger.warning("Dream cycle failed", exc_info=True)
 
@@ -252,7 +249,7 @@ async def _chat_loop(
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
         current_session_path = restore_session(deps, frontend)
-        init_memory_index(deps, current_session_path, frontend)
+        init_session_store(deps, current_session_path, frontend)
         _sweep_tool_results(deps)
         from co_cli.commands.skills import get_skill_registry
 

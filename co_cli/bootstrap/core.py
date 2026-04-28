@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal
 from opentelemetry import trace
 
 if TYPE_CHECKING:
-    from co_cli.knowledge.store import KnowledgeStore
+    from co_cli.memory.knowledge_store import KnowledgeStore
 
 from co_cli.config.core import Settings, get_settings
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
@@ -112,7 +112,7 @@ def _discover_knowledge_backend(
     config.knowledge.search_backend = resolved_backend
 
     # --- Construct store with resolved config ---
-    from co_cli.knowledge.store import KnowledgeStore as _KS
+    from co_cli.memory.knowledge_store import KnowledgeStore as _KS
 
     def _degrade_to(backend: KnowledgeBackendLiteral, reason: str) -> None:
         config.knowledge.search_backend = backend
@@ -303,28 +303,28 @@ async def create_deps(
     )
 
 
-def init_memory_index(
+def init_session_store(
     deps: CoDeps,
     current_session_path: Path,
     frontend: TerminalFrontend,
 ) -> None:
-    """Open the memory index DB and sync past sessions into it.
+    """Open the session store DB and sync past sessions into it.
 
-    Initialises deps.memory_index in-place.  On any error, logs a warning,
-    sets deps.memory_index = None, and continues (graceful degradation).
+    Initialises deps.session_store in-place.  On any error, logs a warning,
+    sets deps.session_store = None, and continues (graceful degradation).
     The current_session_path is excluded from the sync so the in-progress
     session is never indexed mid-session.
     """
-    from co_cli.memory.store import MemoryIndex
+    from co_cli.memory.session_store import SessionStore
 
     db_path = deps.sessions_dir.parent / "session-index.db"
     try:
-        store = MemoryIndex(db_path)
+        store = SessionStore(db_path)
         store.sync_sessions(deps.sessions_dir, exclude=current_session_path)
-        deps.memory_index = store
+        deps.session_store = store
     except Exception as exc:
         logger.warning("Session index unavailable: %s", exc)
-        deps.memory_index = None
+        deps.session_store = None
         frontend.on_status(f"  Session index unavailable — {exc}")
 
 

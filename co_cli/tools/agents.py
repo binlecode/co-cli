@@ -175,7 +175,7 @@ async def web_research(
     self-contained research question.
 
     When NOT to use: a single URL fetch or a factual question you can answer
-    from memory or the knowledge base — use web_fetch or knowledge_search
+    from memory or the knowledge base — use web_fetch or memory_search
     directly instead.
 
     Returns the agent's findings as a text result. Automatically retries once
@@ -283,7 +283,7 @@ async def knowledge_analyze(
     context via inputs when the agent needs prior results to reason over.
 
     When NOT to use: a single keyword search against the knowledge base —
-    use knowledge_search directly instead.
+    use memory_search directly instead.
 
     Returns the agent's findings as a text result.
 
@@ -300,8 +300,8 @@ async def knowledge_analyze(
         raise ModelRetry("Analysis agent is unavailable — handle this task directly.")
 
     from co_cli.agent.core import build_agent
-    from co_cli.tools.google.drive import drive_search
-    from co_cli.tools.knowledge.read import knowledge_search
+    from co_cli.tools.google.drive import google_drive_search
+    from co_cli.tools.memory.recall import memory_search
 
     _default_max_requests = 8
     budget = max_requests or _default_max_requests
@@ -314,7 +314,7 @@ async def knowledge_analyze(
         config=ctx.deps.config,
         model=ctx.deps.model.model,
         instructions=_analyst_instructions(ctx.deps),
-        tool_fns=[knowledge_search, drive_search],
+        tool_fns=[memory_search, google_drive_search],
         output_type=AgentOutput,
     )
     return await _delegate_agent(

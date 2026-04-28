@@ -25,7 +25,7 @@ async def shell(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolRe
     - file_find instead of ls/find
     - web_fetch instead of curl for web pages
     - obsidian_search / obsidian_read instead of grep/cat on the Obsidian vault
-    - drive_search / drive_read instead of manual API calls
+    - google_drive_search / google_drive_read instead of manual API calls
     - file_write / file_patch instead of shell redirection for workspace file creation or editing
     - task_start instead of shell for detached long-running work
 

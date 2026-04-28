@@ -24,6 +24,7 @@ def agent_tool(
     requires_config: str | None = None,
     retries: int | None = None,
     max_result_size: int | float | None = None,
+    check_fn: Callable | None = None,
 ) -> Callable[[F], F]:
     """Decorator that attaches ToolInfo policy metadata to a native tool function.
 
@@ -50,6 +51,7 @@ def agent_tool(
             requires_config=requires_config,
             retries=retries,
             max_result_size=max_result_size,
+            check_fn=check_fn,
         )
         setattr(fn, AGENT_TOOL_ATTR, info)
         return fn

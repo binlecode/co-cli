@@ -16,8 +16,8 @@ from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, LocalOnly, ReplaceTranscript
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.core import Frontend, console
-from co_cli.knowledge.store import KnowledgeStore
 from co_cli.llm.factory import build_model
+from co_cli.memory.knowledge_store import KnowledgeStore
 from co_cli.tools.shell_backend import ShellBackend
 
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)

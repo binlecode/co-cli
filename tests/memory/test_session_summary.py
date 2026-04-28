@@ -17,9 +17,9 @@ from co_cli.agent.core import build_agent
 from co_cli.deps import CoDeps
 from co_cli.llm.factory import build_model
 from co_cli.memory.session import session_filename
-from co_cli.memory.store import MemoryIndex
+from co_cli.memory.session_store import SessionStore
 from co_cli.memory.transcript import append_messages
-from co_cli.tools.memory import memory_search
+from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=_CONFIG)
@@ -37,7 +37,7 @@ def _make_ctx(deps: CoDeps) -> RunContext:
 
 def _write_indexed_session(
     sessions_dir: Path,
-    store: MemoryIndex,
+    store: SessionStore,
     *,
     name_suffix: str,
     content: str,
@@ -60,11 +60,10 @@ def _write_indexed_session(
 
 
 @pytest.mark.asyncio
-@pytest.mark.local
 async def test_memory_search_summarizes_matching_session(tmp_path: Path) -> None:
     """memory_search with a keyword query returns LLM-generated summaries for matching sessions."""
     db_path = tmp_path / "session-index.db"
-    store = MemoryIndex(db_path)
+    store = SessionStore(db_path)
     try:
         sessions_dir = tmp_path / "sessions"
 
@@ -92,7 +91,7 @@ async def test_memory_search_summarizes_matching_session(tmp_path: Path) -> None
         deps = CoDeps(
             shell=ShellBackend(),
             config=_CONFIG,
-            memory_index=store,
+            session_store=store,
             model=build_model(_CONFIG.llm),
             sessions_dir=sessions_dir,
             tool_results_dir=tmp_path / "tool-results",
@@ -132,7 +131,7 @@ async def test_memory_search_summarizes_matching_session(tmp_path: Path) -> None
 async def test_memory_search_returns_session_id_and_when(tmp_path: Path) -> None:
     """Summarization results include session_id, when, source, and summary fields."""
     db_path = tmp_path / "session-index.db"
-    store = MemoryIndex(db_path)
+    store = SessionStore(db_path)
     try:
         sessions_dir = tmp_path / "sessions"
 
@@ -147,7 +146,7 @@ async def test_memory_search_returns_session_id_and_when(tmp_path: Path) -> None
         deps = CoDeps(
             shell=ShellBackend(),
             config=_CONFIG,
-            memory_index=store,
+            session_store=store,
             model=build_model(_CONFIG.llm),
             sessions_dir=sessions_dir,
             tool_results_dir=tmp_path / "tool-results",

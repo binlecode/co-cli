@@ -105,7 +105,7 @@ Startup sequencing detail is in [bootstrap.md](bootstrap.md); turn execution in 
   - `shell`: `ShellBackend` handle
   - `model`: `LlmModel` handle
   - `knowledge_store`: Optional `KnowledgeStore` integration
-  - `memory_index`: Optional `MemoryIndex`
+  - `session_store`: Optional `SessionStore`
   - `resource_locks`: Shared `ResourceLockStore`
   - `file_read_mtimes`: Staleness detection registry
 - **Registries** (bootstrap-built tool definitions)
@@ -142,7 +142,7 @@ The specialized DESIGN docs own the detailed behavior inside each boundary:
 - turn execution, approvals, and retries: [core-loop.md](core-loop.md)
 - prompt assembly, instruction layers, and history processors: [prompt-assembly.md](prompt-assembly.md)
 - compaction mechanisms (emit-time, prepass, window, overflow): [compaction.md](compaction.md)
-- memory and knowledge layers, session transcripts, retrieval, and knowledge bridge: [memory-knowledge.md](memory-knowledge.md)
+- memory and knowledge layers, session transcripts, retrieval, and knowledge bridge: [memory.md](memory.md)
 - dream-cycle mining, merge, decay, archive, and state: [dream.md](dream.md)
 - REPL loop, completer, and slash commands: [tui.md](tui.md)
 - tool registration and approval behavior: [tools.md](tools.md)

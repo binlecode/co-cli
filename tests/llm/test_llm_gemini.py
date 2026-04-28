@@ -34,7 +34,6 @@ def _build() -> build_model:
     return build_model(_LLM_SETTINGS)
 
 
-@pytest.mark.local
 @pytest.mark.asyncio
 async def test_gemini_noreason_returns_response() -> None:
     """Noreason settings (thinking_level=MINIMAL) return a valid non-empty response."""
@@ -48,7 +47,6 @@ async def test_gemini_noreason_returns_response() -> None:
     assert result.output.strip(), "Noreason call must return non-empty output"
 
 
-@pytest.mark.local
 @pytest.mark.asyncio
 async def test_gemini_reasoning_returns_response() -> None:
     """Reasoning settings return a valid non-empty response."""
@@ -62,7 +60,6 @@ async def test_gemini_reasoning_returns_response() -> None:
     assert result.output.strip(), "Reasoning call must return non-empty output"
 
 
-@pytest.mark.local
 @pytest.mark.asyncio
 async def test_gemini_noreason_faster_than_reasoning() -> None:
     """Noreason (thinking_level=MINIMAL) completes within non-reasoning timeout; reasoning within reasoning timeout."""

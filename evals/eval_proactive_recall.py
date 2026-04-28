@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Eval: proactive recall tool selection — memory_search vs knowledge_search disambiguation.
+"""Eval: proactive recall tool selection — memory_search for all recall tasks.
 
-Validates that the agent correctly disambiguates between memory_search (past conversation)
-and knowledge_search (saved artifact) based on prompt intent and the tie-breaker rule
-embedded in each tool's schema description.
+Validates that the agent calls memory_search for all recall tasks regardless of whether
+the target is a saved artifact or a past conversation, since memory_search now covers both.
 
 Three cases:
   past_conversation   — "what did we figure out about docker last time?" → memory_search
-  saved_preference    — "what was my preferred test runner?" → knowledge_search
-  saved_convention    — "what's our convention for logging?" → knowledge_search (tie-breaker)
+  saved_preference    — "what was my preferred test runner?" → memory_search
+  saved_convention    — "what's our convention for logging?" → memory_search
 
 Prerequisites: LLM provider configured (ollama or gemini).
 
@@ -135,21 +134,21 @@ async def run_all_cases() -> list[dict[str, Any]]:
         )
     )
 
-    # Case 2: saved-preference phrasing → knowledge_search (not memory_search)
+    # Case 2: saved-preference phrasing → memory_search (searches T2 artifacts)
     results.append(
         await _run_case(
             "saved_preference",
             "what was my preferred test runner?",
-            expect_tool="knowledge_search",
+            expect_tool="memory_search",
         )
     )
 
-    # Case 3: convention phrasing → knowledge_search (tie-breaker rule)
+    # Case 3: convention phrasing → memory_search (searches T2 rules/decisions)
     results.append(
         await _run_case(
             "saved_convention",
             "what's our convention for logging?",
-            expect_tool="knowledge_search",
+            expect_tool="memory_search",
         )
     )
 

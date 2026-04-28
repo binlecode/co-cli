@@ -70,6 +70,23 @@ def ensure_google_credentials(
     return None
 
 
+def _google_available(deps: Any) -> bool:
+    """Per-turn availability check for all Google tools.
+
+    Before first resolution: pass through so the tool body can run
+    ensure_google_credentials (which may include interactive gcloud login).
+    After resolution: hide if creds are absent or permanently expired.
+    Expired-but-refreshable tokens (refresh_token present) are still shown —
+    googleapiclient auto-refreshes on the first API call.
+    """
+    if not deps.session.google_creds_resolved:
+        return True
+    creds = deps.session.google_creds
+    if creds is None:
+        return False
+    return not (creds.expired and not creds.refresh_token)
+
+
 def get_cached_google_creds(deps: Any) -> Any | None:
     """Return cached Google credentials, resolving on first call.
 

@@ -55,7 +55,7 @@ The in-memory shape is `SkillConfig` in `co_cli/skills/skill_types.py`.
 
 ### File Format
 
-Skills are markdown files parsed with `parse_frontmatter()` from `co_cli/knowledge/frontmatter.py`.
+Skills are markdown files parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter.py`.
 
 Supported frontmatter fields parsed from the skill file:
 
@@ -225,7 +225,7 @@ There is no separate skills config object today.
 | `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` (top-level); `active_skill_name` (runtime) |
-| `co_cli/knowledge/frontmatter.py` | markdown frontmatter parsing used by skill loader |
+| `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/skills/` | package-default shipped skills |
 | `~/.co-cli/skills/` | user-global skill files; override bundled skills on name collision |
 | `docs/specs/bootstrap.md` | when skills load during startup |

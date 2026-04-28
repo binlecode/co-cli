@@ -27,8 +27,6 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
-pytestmark = pytest.mark.local
-
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
 
 # Tool selection tests use noreason settings with a direct Agent construction.
