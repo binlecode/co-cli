@@ -57,12 +57,7 @@ step_status "lint" pass
 echo ""
 echo "[2/2] tests"
 PYTEST_ARGS=(-v)
-if [[ "${CI:-}" == "true" ]]; then
-    PYTEST_ARGS+=(-m "not local")
-    echo "  → pytest -m 'not local'  (CI: skipping local-infrastructure tests)"
-else
-    echo "  → pytest"
-fi
+echo "  → pytest"
 mkdir -p .pytest-logs
 LOG=".pytest-logs/$(date +%Y%m%d-%H%M%S)-gate.log"
 uv run pytest "${PYTEST_ARGS[@]}" 2>&1 | tee "$LOG"

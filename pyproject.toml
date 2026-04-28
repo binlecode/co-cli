@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.8.42"
+version = "0.8.43"
 description = "Co — personal AI assistant CLI with approval-gated shell, Google Drive/Gmail/Calendar, Obsidian, and OTel tracing"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -93,5 +93,5 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 timeout = 120
 markers = [
-    "local: requires local infrastructure (Ollama, GPU) — skipped in CI",
+    "local: requires local infrastructure (Ollama, GPU) or private credentials — skipped in CI",
 ]

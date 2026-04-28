@@ -20,11 +20,6 @@ from co_cli.config.llm import DEFAULT_GEMINI_MODEL, LlmSettings
 from co_cli.llm._factory import build_model
 
 _API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("CO_LLM_API_KEY")
-_has_api_key = bool(_API_KEY)
-
-pytestmark = pytest.mark.skipif(
-    not _has_api_key, reason="GEMINI_API_KEY not set — Gemini tests skipped"
-)
 
 _LLM_SETTINGS = LlmSettings(
     provider="gemini",
@@ -39,6 +34,7 @@ def _build() -> build_model:
     return build_model(_LLM_SETTINGS)
 
 
+@pytest.mark.local
 @pytest.mark.asyncio
 async def test_gemini_noreason_returns_response() -> None:
     """Noreason settings (thinking_level=MINIMAL) return a valid non-empty response."""
@@ -52,6 +48,7 @@ async def test_gemini_noreason_returns_response() -> None:
     assert result.output.strip(), "Noreason call must return non-empty output"
 
 
+@pytest.mark.local
 @pytest.mark.asyncio
 async def test_gemini_reasoning_returns_response() -> None:
     """Reasoning settings return a valid non-empty response."""
@@ -65,6 +62,7 @@ async def test_gemini_reasoning_returns_response() -> None:
     assert result.output.strip(), "Reasoning call must return non-empty output"
 
 
+@pytest.mark.local
 @pytest.mark.asyncio
 async def test_gemini_noreason_faster_than_reasoning() -> None:
     """Noreason (thinking_level=MINIMAL) completes within non-reasoning timeout; reasoning within reasoning timeout."""

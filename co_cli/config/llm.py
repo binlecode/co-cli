@@ -14,7 +14,7 @@ from pydantic_ai.settings import ModelSettings
 
 DEFAULT_LLM_PROVIDER = "ollama"
 DEFAULT_LLM_HOST = "http://localhost:11434"
-DEFAULT_LLM_MODEL = "qwen3.5:35b-a3b-think"
+DEFAULT_LLM_MODEL = "qwen3.5:35b-a3b-agentic"
 DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 
 
@@ -30,7 +30,8 @@ DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 
 _INFERENCE_DEFAULTS: dict[str, Any] = {
     "ollama": {
-        # Settings sourced from ollama/Modelfile.qwen3.5-35b-a3b-think
+        # Settings sourced from ollama/Modelfile.qwen3.5-35b-a3b-agentic
+        # TODO: verify inference params against agentic Modelfile (was think variant)
         "qwen3.5": {
             "reasoning": {
                 "temperature": 1.0,

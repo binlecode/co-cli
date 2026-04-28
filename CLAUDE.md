@@ -124,7 +124,7 @@ Quick reference:
 
 ## Reference Repos
 
-Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-peer-personality-survey.md` for personality research.
+Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-personality-peer-survey.md` for personality research.
 
 | Repo | Relevance to co-cli |
 |------|---------------------|
