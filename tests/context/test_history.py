@@ -243,8 +243,7 @@ async def test_circuit_breaker_probes_at_cadence():
     deps.runtime.compaction_skip_count = 13
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    # proactive_window_processor chains two sequential LLM calls (summarizer +
-    # memory extraction); pytest-timeout=120s is the safety net.
+    # proactive_window_processor makes one LLM call (summarizer); pytest-timeout=120s is the safety net.
     await proactive_window_processor(ctx, msgs)
     # After a probe: success resets to 0, failure increments to 14.
     # Count must be 0 or 14 — 13 would mean the skip branch ran (bug).

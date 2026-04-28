@@ -592,7 +592,11 @@ async def test_summarize_messages_iterative_branch_preserves_previous_content() 
 
 @pytest.mark.asyncio
 async def test_previous_summary_written_back_after_successful_compaction() -> None:
-    """apply_compaction writes raw summary text (no SUMMARY_MARKER_PREFIX) to previous_compaction_summary."""
+    """apply_compaction writes a summary derived from actual conversation content.
+
+    Verifies: (a) field is updated, (b) raw text stored (no SUMMARY_MARKER_PREFIX),
+    (c) stored summary reflects real conversation content via sentinel token.
+    """
     from tests._ollama import ensure_ollama_warm
 
     from co_cli.llm.factory import build_model
@@ -600,7 +604,14 @@ async def test_previous_summary_written_back_after_successful_compaction() -> No
     llm_model = build_model(_CONFIG.llm)
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
     deps.runtime.previous_compaction_summary = "EXISTING_SENTINEL_PRIOR_SUMMARY"
-    msgs = _make_messages(6, body_chars=500)
+    msgs = [
+        _user("Let's implement the XORSHIFT32_SENTINEL authentication module."),
+        _assistant("I'll start by scaffolding the XORSHIFT32_SENTINEL module structure."),
+        _user("Add token validation using XORSHIFT32_SENTINEL as the algorithm identifier."),
+        _assistant("Added validate_token() that checks for the XORSHIFT32_SENTINEL algorithm."),
+        _user("How should we test the XORSHIFT32_SENTINEL validator?"),
+        _assistant("We can write a unit test that passes a JWT signed with XORSHIFT32_SENTINEL."),
+    ]
     bounds = (0, len(msgs) - 2, len(msgs) - 2)
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
@@ -613,6 +624,9 @@ async def test_previous_summary_written_back_after_successful_compaction() -> No
     )
     assert not new_summary.startswith(SUMMARY_MARKER_PREFIX), (
         "stored summary must be raw template content, not the prefixed in-context marker"
+    )
+    assert "XORSHIFT32_SENTINEL" in new_summary, (
+        f"stored summary must reflect actual conversation content: {new_summary[:400]}"
     )
 
 

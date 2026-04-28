@@ -271,7 +271,6 @@ async def memory_search(
 
     Search syntax (FTS5): keywords joined with OR for broad recall (auth OR login OR session),
     phrases for exact match ("connection pool"), boolean (python NOT java), prefix (deploy*).
-    IMPORTANT: FTS5 defaults to AND between terms — use explicit OR for broader matches.
 
     T2 result fields: tier, kind, title, snippet, score, path, slug
     T1 result fields: tier, session_id, when, source, summary
@@ -299,9 +298,7 @@ async def memory_search(
 
     if not all_results:
         return tool_output(
-            f"No results found for '{query}'. "
-            "Try a broader query: use OR between keywords (e.g. 'foo OR bar'), "
-            "try fewer terms, or try a single keyword.",
+            f"No results found for '{query}'.",
             ctx=ctx,
             count=0,
             results=[],
