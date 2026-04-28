@@ -3,31 +3,26 @@
 
 Steps follow the real execution flow (DESIGN-context.md §2, TODO specs):
 
-  --- Pre-compact layer (at tool return time) ---
-  Step 1 — persist_if_oversized: config-threshold persist, 2K preview, content-addressed disk write
-           [BC4: persist-to-disk threshold sourced from config.tools.result_persist_chars]
-
-  --- Processor chain components (isolated validation) ---
-  Step 2 — P1 evict_old_tool_results: recency clearing, keep 5 most recent per compactable type
-  Step 4 — P5 sub-component: context enrichment (gather_compaction_context)
-           3 sources (file paths, todos, prior summaries), 4K cap, enrichment only on LLM path
-           [BC2: capped, never blocks] [BC3: from ToolCallPart.args not ToolReturnPart]
-  Step 5 — P5 sub-component: prompt assembly (_build_summarizer_prompt)
-           template sections, context+personality ordering
-           [Outcome 1: structured template] [BC1: free-form fallback]
-  (P3 safety_prompt_text is validated as a dynamic instruction within Steps 6/7 — no isolated step needed.)
-
   --- Full chain execution (real LLM calls) ---
   Step 6 — Full processor chain P1→P3→P5 with numerical validation
            [Outcome 1-5 integrated] [Processor chain order verified]
   Step 7 — Multi-cycle: chain on prior summary, integration verified
            [Outcome 3: prior-summary detection and integration]
 
-  --- Error recovery ---
-  Step 8 — Overflow: is_context_overflow + one-shot guard
-           [Outcome 4] [BC5: one-shot]
+  --- Degradation ---
+  Step 9  — Circuit breaker fallback: LLM failure → static marker
+  Step 13 — Prompt upgrade quality: verbatim anchor, corrections, error-feedback
+  Step 14 — Pending/Resolved sections (functional LLM validation)
+  Step 16 — Iterative summary 3-pass cross-compaction memory preservation
+
+  --- UAT (real run_turn, real store) ---
+  Step 15 — Open-ended deep-learning loop (Finch/Apple TV+): M1+M3 on real data
 
 Prerequisites: LLM provider configured (Ollama or cloud).
+
+Note: isolated helper tests (persist_if_oversized, evict_old_tool_results,
+gather_compaction_context, _build_summarizer_prompt, is_context_overflow, edge
+cases) live in tests/context/ and tests/files/.
 
 Usage:
     uv run python evals/eval_compaction_flow_quality.py
@@ -40,13 +35,13 @@ import io
 import logging
 import re
 import sys
-import tempfile
 import time
 from contextlib import AsyncExitStack, redirect_stdout
 from pathlib import Path
 
 import httpx
 from evals._timeouts import (
+    EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS,
     EVAL_PROBE_TIMEOUT_SECS,
 )
 from evals.eval_bootstrap_flow_quality import TrackingFrontend
@@ -65,8 +60,6 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent._core import build_agent
 from co_cli.bootstrap.core import create_deps
 from co_cli.config._core import KNOWLEDGE_DIR, TOOL_RESULTS_DIR, settings
-from co_cli.context._compaction_markers import _CONTEXT_MAX_CHARS
-from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.compaction import (
     COMPACTABLE_KEEP_RECENT,
@@ -81,36 +74,35 @@ from co_cli.context.compaction import (
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.prompt_text import safety_prompt_text
 from co_cli.context.summarization import (
-    _PERSONALITY_COMPACTION_ADDENDUM,
-    _SUMMARIZE_PROMPT,
-    _build_summarizer_prompt,
     resolve_compaction_budget,
     summarize_messages,
 )
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm._factory import LlmModel, build_model
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_io import (
-    PERSISTED_OUTPUT_TAG,
-    TOOL_RESULT_PREVIEW_SIZE,
-    persist_if_oversized,
-)
 
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Config — pull from real settings, never override
+# Config — real settings with eval-local overrides
 # ---------------------------------------------------------------------------
 
 _LLM_MODEL = build_model(settings.llm)
-_EVAL_CONFIG = settings.model_copy(update={"mcp_servers": {}})
+# Cut context budget to 32k (half of 131k Ollama default) so M3 fires at ~21k
+# tokens rather than ~85k. 32768 is a legitimate local Ollama context size;
+# all compaction ratios scale against this budget, so M1→M3 layering is intact.
+_EVAL_CONFIG = settings.model_copy(
+    update={
+        "mcp_servers": {},
+        "llm": settings.llm.model_copy(update={"num_ctx": 32768}),
+    }
+)
 _AGENT = build_agent(config=_EVAL_CONFIG, model=_LLM_MODEL)
 _DEPS = CoDeps(
     shell=ShellBackend(),
     config=_EVAL_CONFIG,
     model=_LLM_MODEL,
 )
-_PERSIST_THRESHOLD = _EVAL_CONFIG.tools.result_persist_chars
 
 
 # ---------------------------------------------------------------------------
@@ -287,399 +279,6 @@ def _fake_file(name: str, lines: int = 60) -> str:
         f"# {name} line {i}: {'def ' if i % 10 == 0 else '    '}handler_{i}(request): pass"
         for i in range(lines)
     )
-
-
-# ---------------------------------------------------------------------------
-# Step 1: Pre-compact — persist_if_oversized [BC4]
-# ---------------------------------------------------------------------------
-
-
-def step_1_precompact() -> bool:
-    """Validate pre-compact layer: tool results over threshold persisted to disk with 2K preview."""
-    print("\n--- Step 1: Pre-compact — persist_if_oversized [BC4] ---")
-    passed = True
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        d = Path(tmpdir) / "tool-results"
-
-        # 1a: Under threshold → unchanged
-        small = _fake_file("auth/views.py", lines=15)
-        r = persist_if_oversized(small, d, "file_read", max_size=_PERSIST_THRESHOLD)
-        assert r == small, "under threshold should pass through"
-        print(f"  PASS: {len(small)} chars < {_PERSIST_THRESHOLD} → unchanged")
-        print(f"    content: {_snippet(small, 100)}")
-
-        # 1b: At boundary → unchanged
-        boundary = _fake_file("auth/middleware.py", lines=600)[:_PERSIST_THRESHOLD]
-        r = persist_if_oversized(boundary, d, "file_read", max_size=_PERSIST_THRESHOLD)
-        assert r == boundary
-        print(f"  PASS: {_PERSIST_THRESHOLD} == threshold → unchanged (boundary)")
-
-        # 1c: Over threshold → persisted + preview
-        big = _fake_file("search_results.log", lines=800) + "\n" * (_PERSIST_THRESHOLD - 10_000)
-        big = big + _fake_file("more_results.log", lines=200)
-        r = persist_if_oversized(big, d, "find_in_files", max_size=_PERSIST_THRESHOLD)
-        if PERSISTED_OUTPUT_TAG not in r:
-            print("  FAIL: over-threshold not persisted")
-            return False
-        print(f"  PASS: {len(big)} > {_PERSIST_THRESHOLD} → persisted with preview tag")
-        print(f"    snippet: {_snippet(r, 160)}")
-
-        # 1d: Preview capped at TOOL_RESULT_PREVIEW_SIZE
-        preview = r.split("preview:\n", 1)[1].split("\n</persisted-output>")[0]
-        if len(preview) > TOOL_RESULT_PREVIEW_SIZE + 10:
-            print(f"  FAIL: preview {len(preview)} exceeds {TOOL_RESULT_PREVIEW_SIZE}")
-            return False
-        print(f"  PASS: preview {len(preview)} chars ≤ {TOOL_RESULT_PREVIEW_SIZE}")
-
-        # 1e: Content-addressed file on disk
-        files = list(d.iterdir())
-        if not files or files[0].read_text() != big:
-            print("  FAIL: disk content mismatch")
-            return False
-        print(f"  PASS: content-addressed file on disk ({files[0].name})")
-
-        # 1f: Idempotent
-        persist_if_oversized(big, d, "find_in_files", max_size=_PERSIST_THRESHOLD)
-        if len(list(d.iterdir())) != 1:
-            print("  FAIL: duplicate file created")
-            return False
-        print("  PASS: idempotent — same content → same file")
-
-    return passed
-
-
-# ---------------------------------------------------------------------------
-# Step 2: P1 evict_old_tool_results [Outcome 5 prereq]
-# ---------------------------------------------------------------------------
-
-
-def step_2_p1_truncate() -> bool:
-    """Validate P1: recency-based clearing with exact counts.
-
-    Specs from TODO:
-    - Keep COMPACTABLE_KEEP_RECENT (5) most recent per tool type
-    - Non-compactable tools pass through regardless of count
-    - Last turn group always protected
-    """
-    print(f"\n--- Step 2: P1 evict_old_tool_results (keep={COMPACTABLE_KEEP_RECENT}) ---")
-    passed = True
-    ctx = _make_ctx()
-
-    # 2a: Exactly at threshold — 5 calls → 0 cleared
-    def _build_tool_conv(tool_name: str, n: int) -> list[ModelMessage]:
-        msgs: list[ModelMessage] = []
-        for i in range(n):
-            cid = f"t{i}"
-            msgs += [
-                _user(f"call {i}"),
-                _tool_call(tool_name, {}, cid),
-                _tool_return(tool_name, f"result {i}", cid),
-                _assistant(f"done {i}"),
-            ]
-        msgs += [_user("final"), _assistant("ok")]
-        return msgs
-
-    msgs = _build_tool_conv("file_read", 5)
-    result = evict_old_tool_results(ctx, msgs)
-    cleared = _count_cleared(result)
-    if cleared != 0:
-        print(f"  FAIL: 5 calls should clear 0, got {cleared}")
-        passed = False
-    else:
-        print("  PASS: 5 read_file → 0 cleared (at threshold)")
-
-    # 2b: Over threshold — 8 calls → 3 cleared
-    msgs = _build_tool_conv("file_read", 8)
-    result = evict_old_tool_results(ctx, msgs)
-    cleared = _count_cleared(result)
-    expected = 8 - COMPACTABLE_KEEP_RECENT
-    if cleared != expected:
-        print(f"  FAIL: 8 calls should clear {expected}, got {cleared}")
-        passed = False
-    else:
-        print(
-            f"  PASS: 8 read_file → {cleared} cleared (8 - {COMPACTABLE_KEEP_RECENT} = {expected})"
-        )
-        # Show first cleared and first intact as evidence
-        for m in result:
-            if isinstance(m, ModelRequest):
-                for p in m.parts:
-                    if (
-                        isinstance(p, ToolReturnPart)
-                        and p.tool_name == "file_read"
-                        and is_cleared_marker(p.content)
-                    ):
-                        print(f"    cleared: {_snippet(p.content)}")
-                        break
-        for m in reversed(result):
-            if isinstance(m, ModelRequest):
-                for p in m.parts:
-                    if (
-                        isinstance(p, ToolReturnPart)
-                        and p.tool_name == "file_read"
-                        and not is_cleared_marker(p.content)
-                    ):
-                        print(f"    kept:    {_snippet(p.content)}")
-                        break
-                else:
-                    continue
-                break
-
-    # 2c: Non-compactable tool — 10 calls → 0 cleared
-    msgs = _build_tool_conv("save_memory", 10)
-    result = evict_old_tool_results(ctx, msgs)
-    cleared = _count_cleared(result)
-    if cleared != 0:
-        print(f"  FAIL: non-compactable should clear 0, got {cleared}")
-        passed = False
-    else:
-        print("  PASS: 10 save_memory → 0 cleared (non-compactable)")
-
-    # 2d: Multiple compactable types — each tracked independently
-    # 8 read_file + 7 web_search → P1 clears 3 read_file + 2 web_search = 5 total
-    msgs_multi: list[ModelMessage] = []
-    cid = 0
-    for i in range(8):
-        c = f"rf{cid}"
-        cid += 1
-        msgs_multi += [
-            _user(f"read {i}"),
-            _tool_call("file_read", {}, c),
-            _tool_return("file_read", f"file content {i}", c),
-            _assistant(f"got {i}"),
-        ]
-    for i in range(7):
-        c = f"ws{cid}"
-        cid += 1
-        msgs_multi += [
-            _user(f"search {i}"),
-            _tool_call("web_search", {}, c),
-            _tool_return("web_search", f"search result {i}", c),
-            _assistant(f"found {i}"),
-        ]
-    msgs_multi += [_user("final"), _assistant("ok")]
-    result = evict_old_tool_results(ctx, msgs_multi)
-    # Count cleared per type
-    cleared_rf = sum(
-        1
-        for m in result
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if isinstance(p, ToolReturnPart)
-        and p.tool_name == "file_read"
-        and is_cleared_marker(p.content)
-    )
-    cleared_ws = sum(
-        1
-        for m in result
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if isinstance(p, ToolReturnPart)
-        and p.tool_name == "web_search"
-        and is_cleared_marker(p.content)
-    )
-    expected_rf = 8 - COMPACTABLE_KEEP_RECENT  # 3
-    expected_ws = 7 - COMPACTABLE_KEEP_RECENT  # 2
-    if cleared_rf != expected_rf or cleared_ws != expected_ws:
-        print(
-            f"  FAIL: multi-type: read_file cleared {cleared_rf} (expected {expected_rf}), "
-            f"web_search cleared {cleared_ws} (expected {expected_ws})"
-        )
-        passed = False
-    else:
-        print(
-            f"  PASS: multi-type: 8 read_file → {cleared_rf} cleared, "
-            f"7 web_search → {cleared_ws} cleared (independent per-type tracking)"
-        )
-
-    # 2e: Last turn group protected
-    msgs = _build_tool_conv("file_read", 7)
-    # Replace the final turn with a read_file call (should be protected)
-    msgs[-2:] = [
-        _user("final read"),
-        _tool_call("file_read", {}, "last"),
-        _tool_return("file_read", "PROTECTED", "last"),
-        _assistant("done"),
-    ]
-    result = evict_old_tool_results(ctx, msgs)
-    # Find the last group's tool return
-    groups = group_by_turn(result)
-    last_returns = [
-        p
-        for m in groups[-1].messages
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if isinstance(p, ToolReturnPart)
-    ]
-    if not last_returns or is_cleared_marker(last_returns[0].content):
-        print("  FAIL: last turn group tool result was cleared")
-        passed = False
-    else:
-        print("  PASS: last turn group protected (content intact)")
-
-    return passed
-
-
-# ---------------------------------------------------------------------------
-# Step 4: P5 context enrichment [Outcome 2, BC2, BC3]
-# ---------------------------------------------------------------------------
-
-
-def step_4_context_enrichment() -> bool:
-    """Validate gather_compaction_context: 4 sources, 4K cap, lazy execution.
-
-    Specs from TODO:
-    - Source 1: File paths from ToolCallPart.args via FILE_TOOLS (scans ALL messages) [BC3]
-    - Source 2: Pending session todos (filter completed/cancelled)
-    - Source 3: Always-on memories from filesystem
-    - Source 4: Prior-summary text from dropped messages matching [Summary of prefix
-    - Returns None when empty
-    - Capped at _CONTEXT_MAX_CHARS = 4_000 [BC2]
-    """
-    print(f"\n--- Step 4: Context enrichment (cap={_CONTEXT_MAX_CHARS}) [BC2,BC3] ---")
-    passed = True
-
-    # 4a: Source 1 — file paths from ToolCallPart.args [BC3: NOT from ToolReturnPart]
-    # Uses FILE_TOOLS members (read_file, patch) — both have file_path args
-    msgs: list[ModelMessage] = [
-        _user("work"),
-        _tool_call("file_read", {"file_path": "/app/models.py"}, "c1"),
-        _tool_return("file_read", "class User: ...", "c1"),
-        _tool_call("file_patch", {"file_path": "/app/views.py"}, "c2"),
-        _tool_return("file_patch", "ok", "c2"),
-        _assistant("done"),
-    ]
-    ctx = _make_ctx()
-    result = gather_compaction_context(ctx, dropped=msgs)
-    if result is None or "/app/models.py" not in result or "/app/views.py" not in result:
-        print("  FAIL: file paths not extracted from ToolCallPart.args")
-        passed = False
-    else:
-        print("  PASS: Source 1 — file paths from ToolCallPart.args")
-        print(f"    context: {_snippet(result, 120)}")
-
-    # 4b: Source 1 is scoped to dropped only (Gap M) — head/tail paths MUST NOT duplicate
-    # /head.py and /tail.py exist only in the kept head/tail regions; only /mid.py is in dropped.
-    dropped_msgs: list[ModelMessage] = [
-        _user("mid"),
-        _tool_call("file_read", {"file_path": "/mid.py"}, "m1"),
-        _tool_return("file_read", "z", "m1"),
-        _assistant("mid"),
-    ]
-    result = gather_compaction_context(ctx, dropped=dropped_msgs)
-    if result is None or "/mid.py" not in result:
-        print("  FAIL: /mid.py (in dropped) missing from enrichment")
-        passed = False
-    elif "/head.py" in result or "/tail.py" in result:
-        print("  FAIL: head/tail file paths leaked into enrichment — Gap M not fixed")
-        passed = False
-    else:
-        print("  PASS: Source 1 scoped to dropped only (Gap M)")
-
-    # 4c: Source 2 — session todos (pending only)
-    todos = [
-        {"content": "Update tests", "status": "pending"},
-        {"content": "Deploy to staging", "status": "completed"},
-        {"content": "Write docs", "status": "in_progress"},
-        {"content": "Cancel this", "status": "cancelled"},
-    ]
-    ctx = _make_ctx(session_todos=todos)
-    result = gather_compaction_context(ctx, dropped=[])
-    if result is None or "Update tests" not in result or "Write docs" not in result:
-        print("  FAIL: pending todos missing")
-        passed = False
-    elif "Deploy to staging" in result or "Cancel this" in result:
-        print("  FAIL: completed/cancelled todos should be filtered")
-        passed = False
-    else:
-        print("  PASS: Source 2 — pending todos included, completed/cancelled filtered")
-        print(f"    context: {_snippet(result, 160)}")
-
-    # 4e: Source 3 — prior-summary from dropped messages (production marker format)
-    dropped_with_summary: list[ModelMessage] = [
-        summary_marker(15, "## Goal\nRefactor auth module"),
-        _assistant("continuing..."),
-    ]
-    ctx = _make_ctx()
-    result = gather_compaction_context(ctx, dropped=dropped_with_summary)
-    if result is None or "Prior summary" not in result or "Refactor auth module" not in result:
-        print("  FAIL: prior summary not extracted from dropped messages")
-        passed = False
-    else:
-        print("  PASS: Source 3 — prior summary from dropped messages")
-        print(f"    context: {_snippet(result, 160)}")
-
-    # 4f: 4K cap [BC2]
-    big_todos = [{"content": "x" * 500, "status": "pending"} for _ in range(20)]
-    msgs_many_files: list[ModelMessage] = [
-        _user("work"),
-        ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name="file_read",
-                    args={"file_path": f"/a/b/c/d/e/file_{i:03d}.py"},
-                    tool_call_id=f"c{i}",
-                )
-                for i in range(20)
-            ]
-        ),
-        _assistant("done"),
-    ]
-    ctx = _make_ctx(session_todos=big_todos)
-    result = gather_compaction_context(ctx, dropped=msgs_many_files)
-    if result is not None and len(result) > _CONTEXT_MAX_CHARS:
-        print(f"  FAIL: context {len(result)} > {_CONTEXT_MAX_CHARS}")
-        passed = False
-    elif result is not None:
-        print(f"  PASS: context capped at {len(result)} ≤ {_CONTEXT_MAX_CHARS} [BC2]")
-    else:
-        print("  PASS: context was None (sources below threshold)")
-
-    return passed
-
-
-# ---------------------------------------------------------------------------
-# Step 5: P5 prompt assembly [Outcome 1, BC1]
-# ---------------------------------------------------------------------------
-
-
-def step_5_prompt_assembly() -> bool:
-    """Validate _build_summarizer_prompt and template structure.
-
-    Specs from TODO:
-    - Assembly order: template + context (## Additional Context) + personality (always last)
-    - summarize_messages() accepts context: str | None = None
-    - [BC1]: structured summary is prompt, not parser
-    """
-    print("\n--- Step 5: Prompt assembly [Outcome 1, BC1] ---")
-    passed = True
-
-    # 5a: (context, False) → template + context, no personality
-    r = _build_summarizer_prompt(_SUMMARIZE_PROMPT, "Files: foo.py", False)
-    if "## Additional Context" not in r or "foo.py" not in r:
-        print("  FAIL: context not injected")
-        passed = False
-    elif _PERSONALITY_COMPACTION_ADDENDUM in r:
-        print("  FAIL: personality present without personality_active")
-        passed = False
-    else:
-        print("  PASS: (context, False) → template + context")
-
-    # 5b: (context, True) → template + context + personality (personality LAST)
-    r = _build_summarizer_prompt(_SUMMARIZE_PROMPT, "todos here", True)
-    ctx_pos = r.index("## Additional Context")
-    pers_pos = r.index("Additionally, preserve")
-    if ctx_pos >= pers_pos:
-        print("  FAIL: personality must come after context")
-        passed = False
-    else:
-        print("  PASS: (context, True) → context before personality (correct order)")
-        # Show the assembly boundary: context section → personality section
-        boundary = r[ctx_pos : pers_pos + 60]
-        print(f"    boundary: {_snippet(boundary, 160)}")
-
-    return passed
 
 
 # ---------------------------------------------------------------------------
@@ -1262,96 +861,6 @@ async def step_7_multi_cycle() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step 8: Overflow recovery [Outcome 4, BC5]
-# ---------------------------------------------------------------------------
-
-
-def step_8_overflow() -> bool:
-    """Validate overflow detection + emergency compact + one-shot guard.
-
-    Specs from TODO:
-    - is_context_overflow: 413 → True unconditionally; 400 → True only with explicit
-      overflow evidence in the body (recognized phrase in message, flat message, or
-      wrapped metadata.raw; or recognized overflow code); other status codes → False
-    - Handles str body (Ollama), dict body (OpenAI/Gemini), and wrapped metadata.raw
-    - Bare 400 without overflow evidence → False (falls to reformulation)
-    - [BC5]: one-shot recovery
-    """
-    print("\n--- Step 8: Overflow recovery [Outcome 4, BC5] ---")
-    passed = True
-
-    # --- is_context_overflow ---
-    from pydantic_ai.exceptions import ModelHTTPError
-
-    def _err(code: int, body: object) -> ModelHTTPError:
-        return ModelHTTPError(status_code=code, model_name="test", body=body)
-
-    cases = [
-        (
-            413,
-            "context_length_exceeded: prompt is too long",
-            True,
-            "413 + context_length_exceeded",
-        ),
-        (
-            400,
-            {"error": {"message": "maximum context length is 8192"}},
-            True,
-            "400 + dict body (OpenAI)",
-        ),
-        (400, "prompt is too long for this model", True, "400 + str body (Ollama)"),
-        (400, {"error": {"message": "invalid JSON"}}, False, "bare 400 → False (reformulation)"),
-        (500, "context_length_exceeded", False, "500 → False (wrong code)"),
-        (400, None, False, "400 + None body → False"),
-        (
-            400,
-            {"error": {"message": "Request payload size exceeds the limit"}},
-            True,
-            "400 + Gemini exceeds-limit",
-        ),
-        (
-            400,
-            {"error": {"message": "Input token count exceeds the maximum"}},
-            True,
-            "400 + Gemini input-token-count",
-        ),
-        (
-            400,
-            {"error": {"code": "context_length_exceeded", "message": ""}},
-            True,
-            "400 + structured overflow code",
-        ),
-        (413, None, True, "413 + None body → True (status alone)"),
-        (
-            400,
-            {
-                "error": {
-                    "message": "Provider returned error",
-                    "metadata": {"raw": '{"error": {"message": "prompt is too long"}}'},
-                }
-            },
-            True,
-            "400 + wrapped metadata.raw",
-        ),
-        (
-            400,
-            {"error": {"message": "Provider returned error", "metadata": {"raw": "not json"}}},
-            False,
-            "400 + malformed metadata.raw → False",
-        ),
-    ]
-    for code, body, expected, desc in cases:
-        result = is_context_overflow(_err(code, body))
-        if result != expected:
-            print(f"  FAIL: {desc}: got {result}")
-            passed = False
-        else:
-            print(f"  PASS: {desc}")
-
-    return passed
-
-
-# ---------------------------------------------------------------------------
 # Step 9: Circuit breaker fallback [degradation path]
 # ---------------------------------------------------------------------------
 
@@ -1429,121 +938,6 @@ async def step_9_circuit_breaker() -> bool:
 
     # Verify compaction still reduces message count
     print(f"  PASS: messages reduced {len_pre} → {len(result)}")
-
-    return passed
-
-
-# ---------------------------------------------------------------------------
-# Step 11: Edge case battery [structural]
-# ---------------------------------------------------------------------------
-
-
-def step_11_edge_cases() -> bool:
-    """Rapid-fire edge case validation across the compaction flow.
-
-    All structural — no LLM calls. Validates that processors don't crash
-    or corrupt on degenerate inputs.
-    """
-    print("\n--- Step 11: Edge case battery [structural] ---")
-    passed = True
-    ctx = _make_ctx()
-
-    # 11a: 1-turn history — all processors should no-op
-    one_turn = [_user("hello"), _assistant("hi")]
-    r = evict_old_tool_results(ctx, one_turn)
-    if r is not one_turn:
-        print("  FAIL: P1 modified 1-turn history")
-        passed = False
-    from dataclasses import replace as _replace
-
-    safety_text_p3a = safety_prompt_text(_replace(ctx, messages=one_turn))
-    if safety_text_p3a:
-        print("  FAIL: P3 injected on 1-turn history")
-        passed = False
-    if passed:
-        print("  PASS: 11a — 1-turn history: all processors no-op")
-
-    # 11b: History contains a prior static marker (from emergency compact)
-    from co_cli.context.compaction import static_marker
-
-    with_marker = [
-        _user("turn 1"),
-        _assistant("resp 1"),
-        static_marker(5),
-        _user("turn 2"),
-        _assistant("resp 2"),
-        _user("turn 3"),
-        _assistant("resp 3"),
-    ]
-    r = evict_old_tool_results(ctx, with_marker)
-    if len(r) != len(with_marker):
-        print("  FAIL: 11b — P1 altered history with static marker")
-        passed = False
-    groups = group_by_turn(with_marker)
-    if len(groups) < 3:
-        print(f"  FAIL: 11b — grouping broke on static marker ({len(groups)} groups)")
-        passed = False
-    else:
-        print(
-            f"  PASS: 11b — static marker in history: P1 + grouping handle correctly ({len(groups)} groups)"
-        )
-
-    # 11c: Mixed compactable + non-compactable ToolReturnParts in same ModelRequest
-    mixed_parts = ModelRequest(
-        parts=[
-            ToolReturnPart(tool_name="file_read", content="file content", tool_call_id="c1"),
-            ToolReturnPart(tool_name="save_memory", content="saved ok", tool_call_id="c2"),
-            ToolReturnPart(tool_name="web_search", content="search result", tool_call_id="c3"),
-        ]
-    )
-    # Build history: 6 read_file turns (to exceed keep=5) + the mixed turn + final
-    mixed_msgs: list[ModelMessage] = []
-    for i in range(6):
-        cid = f"rf{i}"
-        mixed_msgs += [
-            _user(f"read {i}"),
-            _tool_call("file_read", {}, cid),
-            _tool_return("file_read", f"content {i}", cid),
-            _assistant(f"got {i}"),
-        ]
-    # Add mixed-parts turn
-    mixed_msgs += [
-        _user("do three things"),
-        ModelResponse(
-            parts=[
-                ToolCallPart(tool_name="file_read", args={}, tool_call_id="c1"),
-                ToolCallPart(tool_name="save_memory", args={}, tool_call_id="c2"),
-                ToolCallPart(tool_name="web_search", args={}, tool_call_id="c3"),
-            ]
-        ),
-        mixed_parts,
-        _assistant("all done"),
-        _user("final"),
-        _assistant("ok"),
-    ]
-    r = evict_old_tool_results(ctx, mixed_msgs)
-    # Find the mixed ModelRequest in result
-    for m in r:
-        if m is mixed_parts or (
-            isinstance(m, ModelRequest)
-            and len(m.parts) == 3
-            and any(
-                isinstance(p, ToolReturnPart) and p.tool_name == "save_memory" for p in m.parts
-            )
-        ):
-            save_mem = [
-                p
-                for p in m.parts
-                if isinstance(p, ToolReturnPart) and p.tool_name == "save_memory"
-            ]
-            if save_mem and save_mem[0].content != "saved ok":
-                print("  FAIL: 11d — non-compactable save_memory was cleared")
-                passed = False
-            elif save_mem:
-                print(
-                    "  PASS: 11d — mixed request: save_memory preserved, compactable tools cleared independently"
-                )
-            break
 
     return passed
 
@@ -1913,8 +1307,9 @@ async def step_15_finch_deep_learning() -> bool:
 
     Open-ended loop driven by real run_turn. co decides what to fetch and in what
     order; M1 persists oversized results at emit time; M3 fires organically when
-    context pressure crosses 75% of num_ctx. No hand-built history, no article caps,
-    no fallback content.
+    context pressure crosses 65% of num_ctx (32768 — halved from the Ollama default
+    so M3 triggers at ~21k tokens rather than ~85k). No hand-built history, no
+    article caps, no fallback content.
     """
     print("\n--- Step 15 (UAT): Deep movie learning (Finch) — run_turn-driven, real data ---")
 
@@ -1951,6 +1346,10 @@ async def step_15_finch_deep_learning() -> bool:
 
     async with AsyncExitStack() as stack:
         deps = await create_deps(frontend, stack)
+        # Halve the context budget so M3 fires at ~21k tokens rather than ~85k.
+        # 32768 is a legit local Ollama context size; all compaction ratios scale
+        # against this budget, so the layering (M1 → M3) is exercised correctly.
+        deps.config.llm.num_ctx = 32768
         agent = build_agent(
             config=deps.config,
             model=deps.model,
@@ -2032,13 +1431,21 @@ async def step_15_finch_deep_learning() -> bool:
             print(f"  Turn {turn_idx + 1}/{max_turns} — history: {prev_len} msgs")
 
             _turn_start = time.monotonic()
-            turn_result = await run_turn(
-                agent=agent,
-                user_input=user_input,
-                deps=deps,
-                message_history=message_history,
-                frontend=frontend,
-            )
+            try:
+                async with asyncio.timeout(EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS):
+                    turn_result = await run_turn(
+                        agent=agent,
+                        user_input=user_input,
+                        deps=deps,
+                        message_history=message_history,
+                        frontend=frontend,
+                    )
+            except TimeoutError:
+                print(
+                    f"UAT: FAIL (turn timeout): turn {turn_idx + 1} exceeded"
+                    f" {EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS} seconds"
+                )
+                return False
             _elapsed = time.monotonic() - _turn_start
             print(f"    turn elapsed: {_elapsed:.1f}s")
 
@@ -2417,26 +1824,12 @@ async def _run_all() -> int:
 
     results: dict[str, bool] = {}
 
-    # --- Pre-compact layer ---
-    results["Step 1: Pre-compact persist_if_oversized [BC4]"] = step_1_precompact()
-
-    # --- Processor chain components (flow order) ---
-    results["Step 2: P1 evict_old_tool_results"] = step_2_p1_truncate()
-    results["Step 4: Context enrichment [BC2,BC3]"] = step_4_context_enrichment()
-    results["Step 5: Prompt assembly [Outcome 1,BC1]"] = step_5_prompt_assembly()
-
     # --- Full chain (real LLM) ---
     results["Step 6: Full chain P1→P5 (LLM)"] = await step_6_full_chain()
     results["Step 7: Multi-cycle [Outcome 3]"] = await step_7_multi_cycle()
 
-    # --- Error recovery ---
-    results["Step 8: Overflow [Outcome 4,BC5]"] = step_8_overflow()
-
     # --- Degradation ---
     results["Step 9: Circuit breaker [degradation]"] = await step_9_circuit_breaker()
-
-    # --- Edge cases ---
-    results["Step 11: Edge case battery"] = step_11_edge_cases()
 
     # --- Prompt upgrade quality ---
     results["Step 13: Prompt upgrade quality"] = await step_13_prompt_upgrade_quality()
@@ -2474,15 +1867,9 @@ async def _run_all() -> int:
 
 
 _STEP_DESCRIPTIONS: dict[str, str] = {
-    "Step 1": "Tool results exceeding 50K chars are persisted to disk with a 2K preview placeholder. Content-addressed files ensure idempotency.",
-    "Step 2": "Older compactable tool results (beyond the 5 most recent per type) are cleared. Non-compactable tools and the last turn group are protected.",
-    "Step 4": "Side-channel context is gathered from 3 sources (file paths from ToolCallPart.args, pending todos, prior summaries) and capped at 4K chars. Always-on memories are injected separately by P4.",
-    "Step 5": "Prompt assembly: four input combinations (context × personality_active) validated against expected output structure. Verifies context appears after template sections, personality appears last.",
     "Step 6": "Full P1→P3→P4→P5 chain on a 14-turn conversation with tool calls, producing an LLM summary. Validates numerical counts at each stage.",
     "Step 7": "Chain on history containing a prior compaction summary. Validates that both prior context and new work are preserved across cycles.",
-    "Step 8": "Overflow detection (413/400 with context-length body), emergency compaction (keep first+last groups), and one-shot recovery guard.",
     "Step 9": "Circuit breaker degradation: after 3 consecutive LLM failures, compaction falls back to static marker without attempting an LLM call.",
-    "Step 11": "Edge case battery (structural): 1-turn history, static markers in history, single massive message, mixed compactable/non-compactable parts, empty list.",
     "Step 14": "Pending/Resolved sections — functional LLM validation: (14a) unanswered question appears in ## Pending User Asks; (14b) answered question appears in ## Resolved Questions and not in Pending; (14c) merge contract — prior pending item answered in new block migrates to ## Resolved Questions.",
     "Step 13": "Prompt upgrade quality: three deterministic single-run gates — (13a) ## Next Step contains a ≥20-char verbatim anchor from recent messages; (13b) ## User Corrections preserves explicit corrections; (13c) ## Errors & Fixes retains both the failure and user-directed fix guidance.",
     "Step 16": (

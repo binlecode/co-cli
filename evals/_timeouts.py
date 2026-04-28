@@ -45,6 +45,16 @@ just for the Time-To-First-Token (TTFT), plus another 50-100s for sustained
 generation. 300s (5 minutes) provides the necessary endurance margin.
 """
 
+EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS: int = 360
+"""Per-turn upper bound for the UAT deep-learning step (step_15 in compaction eval).
+
+Empirical basis: M3 proactive compaction over a ~45K-token dropped zone measured
+~289s end-to-end (summarizer LLM call + history rewrite + tool persistence).
+360s = 289s measured + 70s headroom for slower hardware and HTTP jitter.
+Keeps the turn from hanging indefinitely while still allowing realistic compaction
+to complete before declaring a failure.
+"""
+
 EVAL_API_TIMEOUT_SECS: int = 10
 """Upper bound for external API calls inside evals (e.g. searching, fetching APIs).
 Forces tools to return a ToolError to the LLM rather than hanging the eval.
