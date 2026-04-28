@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING, Literal
 from opentelemetry import trace
 
 if TYPE_CHECKING:
-    from co_cli.knowledge._store import KnowledgeStore
+    from co_cli.knowledge.store import KnowledgeStore
 
-from co_cli.config._core import Settings, get_settings
+from co_cli.config.core import Settings, get_settings
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
-from co_cli.display._core import TerminalFrontend
+from co_cli.display.core import TerminalFrontend
 from co_cli.memory.session import find_latest_session, new_session_path
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -112,7 +112,7 @@ def _discover_knowledge_backend(
     config.knowledge.search_backend = resolved_backend
 
     # --- Construct store with resolved config ---
-    from co_cli.knowledge._store import KnowledgeStore as _KS
+    from co_cli.knowledge.store import KnowledgeStore as _KS
 
     def _degrade_to(backend: KnowledgeBackendLiteral, reason: str) -> None:
         config.knowledge.search_backend = backend
@@ -201,9 +201,9 @@ async def create_deps(
 
     Raises ValueError on provider/model hard errors.
     """
-    from co_cli.agent._core import build_tool_registry
-    from co_cli.agent._mcp import discover_mcp_tools
-    from co_cli.llm._factory import build_model
+    from co_cli.agent.core import build_tool_registry
+    from co_cli.agent.mcp import discover_mcp_tools
+    from co_cli.llm.factory import build_model
 
     config = copy.deepcopy(get_settings())
     if theme_override:
@@ -240,7 +240,7 @@ async def create_deps(
     # Step 4: MCP connect + discovery
     degradations: dict[str, str] = {}
     if tool_registry.mcp_toolsets:
-        from co_cli.agent._mcp import MCPToolsetEntry
+        from co_cli.agent.mcp import MCPToolsetEntry
 
         connected: list[MCPToolsetEntry] = []
         for entry in tool_registry.mcp_toolsets:

@@ -1,4 +1,4 @@
-"""Delegation tools — focused task agents with inline agent configuration."""
+"""Agent delegation tools — spawn focused sub-agents for scoped tasks."""
 
 from copy import copy
 from typing import Any

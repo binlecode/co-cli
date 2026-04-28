@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 from prompt_toolkit.completion import WordCompleter
 
-from co_cli.agent._core import build_agent
+from co_cli.agent.core import build_agent
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent, LocalOnly, ReplaceTranscript
-from co_cli.config._core import settings
+from co_cli.config.core import settings
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.display._core import console
-from co_cli.skills._skill_types import SkillConfig
+from co_cli.display.core import console
+from co_cli.skills.skill_types import SkillConfig
 from co_cli.tools.shell_backend import ShellBackend
 
 

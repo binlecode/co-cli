@@ -47,7 +47,7 @@ flowchart TD
     J -->|no| L["final result"]
 
     L --> M["_finalize_turn()"]
-    M --> N["fire-and-forget memory extraction + transcript append<br/>(or child-session branch after history replacement)"]
+    M --> N["transcript append<br/>(or child-session branch after history replacement)"]
 ```
 
 | Stage | Owned by |
@@ -58,7 +58,6 @@ flowchart TD
 | Compaction trigger (processor #5) | [compaction.md](compaction.md) |
 | Turn-time recall (processor #4) | [memory-knowledge.md](memory-knowledge.md) |
 | Transcript append / child-session branching | [memory-knowledge.md](memory-knowledge.md) |
-| Fire-and-forget extraction | [memory-knowledge.md](memory-knowledge.md) |
 
 Detailed foreground turn flow:
 
@@ -100,7 +99,7 @@ flowchart TD
     O --> T["cleanup_skill_run_state() in finally"]
     R --> T
     S --> T
-    T --> U["_finalize_turn(): fire-and-forget memory extraction on clean turns; append transcript tail or branch child transcript after compaction; optional error banner"]
+    T --> U["_finalize_turn(): append transcript tail or branch child transcript after compaction; optional error banner"]
     U --> A
 ```
 
@@ -113,7 +112,7 @@ Execution owners:
 | `run_turn()` | one orchestrated LLM turn, including status updates, retries, approval resumes, output checks, and interrupt handling |
 | `_execute_stream_segment()` | one `agent.run_stream_events(...)` segment plus frontend event delivery and usage merge |
 | `_run_approval_loop()` | same-turn approval-resume cycle until output is no longer `DeferredToolRequests` |
-| `_finalize_turn()` | clean-turn memory extraction, transcript persistence/branching, and generic error banner |
+| `_finalize_turn()` | transcript persistence/branching and generic error banner |
 
 Two boundary rules keep the loop legible:
 
@@ -349,9 +348,8 @@ Interrupt handling is conservative:
 
 `_finalize_turn()` then performs the remaining non-orchestration work:
 
-1. fire-and-forget memory extraction when the turn was clean (not interrupted, not `outcome == "error"`)
-2. `append_messages()` — positional tail slice of new messages written to `deps.session.session_path`
-3. print a generic error banner when `turn_result.outcome == "error"`
+1. `append_messages()` — positional tail slice of new messages written to `deps.session.session_path`
+2. print a generic error banner when `turn_result.outcome == "error"`
 
 Skill dispatch is intentionally scoped to one delegated turn:
 
@@ -401,11 +399,11 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/context/compaction.py` | public entry points (three registered history processors, `proactive_window_processor` for M3; overflow-recovery entry points `recover_overflow_history` and `emergency_recover_overflow_history`); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `_history_processors.py` (dedup / truncate / batch-budget transformers) |
 | `co_cli/context/prompt_text.py` | `recall_prompt_text` (date-only dynamic instruction) and `safety_prompt_text` — called via `agent.instructions()` wrappers in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
-| `co_cli/agent/_core.py` | main agent factory |
+| `co_cli/agent/core.py` | main agent factory |
 | `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
-| `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
-| `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, approval prompts, and question prompting (`QuestionPrompt`, `prompt_question`) |
+| `co_cli/display/stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
+| `co_cli/display/core.py` | terminal frontend surfaces, tool panels, status rendering, approval prompts, and question prompting (`QuestionPrompt`, `prompt_question`) |
 | `co_cli/memory/session.py` | session filename generation and latest-session discovery |
 | `co_cli/skills/lifecycle.py` | skill-run environment save/restore and active-skill-name cleanup |

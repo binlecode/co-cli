@@ -9,11 +9,11 @@ from pydantic_ai.mcp import MCPServerStdio
 from pydantic_ai.toolsets import DeferredLoadingToolset
 from tests._settings import make_settings
 
-from co_cli.agent._mcp import MCPToolsetEntry, discover_mcp_tools
+from co_cli.agent.mcp import MCPToolsetEntry, discover_mcp_tools
 from co_cli.bootstrap.core import init_memory_index, restore_session
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
-from co_cli.display._core import TerminalFrontend
-from co_cli.knowledge._store import KnowledgeStore
+from co_cli.display.core import TerminalFrontend
+from co_cli.knowledge.store import KnowledgeStore
 from co_cli.memory.session import session_filename
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -302,7 +302,7 @@ async def test_discover_mcp_tools_records_tool_prefix_for_missing_binary() -> No
 def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     """Project skill directory with one valid skill: skill appears in loaded commands."""
     from co_cli.commands.skills import get_skill_registry
-    from co_cli.config._core import settings
+    from co_cli.config.core import settings
     from co_cli.skills.loader import load_skills
 
     skills_dir = tmp_path / "skills"

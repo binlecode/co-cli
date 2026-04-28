@@ -30,11 +30,11 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent._core import build_agent
-from co_cli.config._core import get_settings, settings
+from co_cli.agent.core import build_agent
+from co_cli.config.core import get_settings, settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.knowledge._store import KnowledgeStore
+from co_cli.knowledge.store import KnowledgeStore
 from co_cli.memory.session import new_session_path
 from co_cli.memory.transcript import load_transcript, persist_session_history
 from co_cli.tools.knowledge.write import append_knowledge, save_knowledge, update_knowledge

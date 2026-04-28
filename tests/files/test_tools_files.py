@@ -8,8 +8,8 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.agent._core import build_agent
-from co_cli.config._core import settings
+from co_cli.agent.core import build_agent
+from co_cli.config.core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.tools.files.read import file_find, file_read, file_search
 from co_cli.tools.files.write import file_patch, file_write
@@ -704,7 +704,7 @@ async def test_lifecycle_normalizes_relative_path(tmp_path):
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
 
-    from co_cli.tools._lifecycle import CoToolLifecycle
+    from co_cli.tools.lifecycle import CoToolLifecycle
 
     lifecycle = CoToolLifecycle()
     ctx = _make_ctx(tmp_path)
@@ -730,7 +730,7 @@ async def test_lifecycle_skips_non_file_tools(tmp_path):
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
 
-    from co_cli.tools._lifecycle import CoToolLifecycle
+    from co_cli.tools.lifecycle import CoToolLifecycle
 
     lifecycle = CoToolLifecycle()
     ctx = _make_ctx(tmp_path)

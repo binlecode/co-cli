@@ -19,20 +19,19 @@ Each role is fully self-contained under ``souls/{role}/``. Adding a role require
 only a new directory with the required files — no Python changes.
 
 Callers:
-  _assembly.py          — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
-                          load_character_memories, load_soul_critique, load_personality_memories
-                          inside build_static_instructions(), invoked by build_agent()
+  co_cli.context.assembly — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
+                            load_character_memories, load_soul_critique, load_personality_memories
+                            inside build_static_instructions(), invoked by build_agent()
 """
 
 from pathlib import Path
 
-from co_cli.config._core import KNOWLEDGE_DIR
-from co_cli.knowledge._artifact import load_knowledge_artifacts
-from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.prompts.personalities._validator import REQUIRED_MINDSET_TASK_TYPES
+from co_cli.config.core import KNOWLEDGE_DIR
+from co_cli.knowledge.artifact import load_knowledge_artifacts
+from co_cli.knowledge.frontmatter import parse_frontmatter
+from co_cli.personality.prompts.validator import REQUIRED_MINDSET_TASK_TYPES
 
-# Independent copy — this module is importable without any other sibling module
-_PERSONALITIES_DIR = Path(__file__).parent
+_SOULS_DIR = Path(__file__).parent / "souls"
 
 _personality_cache: str | None = None
 
@@ -44,7 +43,7 @@ def load_personality_memories(knowledge_dir: Path | None = None) -> str:
     tagged with ``personality-context``. Returns the top 5 (by recency) formatted as
     a ``## Learned Context`` section, or empty string if none found.
 
-    Called by ``build_static_instructions()`` in ``prompts/_assembly.py`` once at
+    Called by ``build_static_instructions()`` in ``co_cli/context/assembly.py`` once at
     agent construction. Result is process-scoped; runtime mutations to personality-context
     artifacts require a session restart to take effect. Pass ``knowledge_dir`` to bypass
     the cache (used in tests to supply a controlled directory).
@@ -93,7 +92,7 @@ def load_soul_seed(role: str) -> str:
     Raises:
         FileNotFoundError: If the seed file is missing.
     """
-    seed_file = _PERSONALITIES_DIR / "souls" / role / "seed.md"
+    seed_file = _SOULS_DIR / role / "seed.md"
     if not seed_file.exists():
         raise FileNotFoundError(f"Soul seed file not found: {seed_file}")
     return seed_file.read_text(encoding="utf-8").strip()
@@ -113,7 +112,7 @@ def load_soul_examples(role: str) -> str:
     Returns:
         Examples text from ``souls/{role}/examples.md``, or empty string if absent.
     """
-    examples_file = _PERSONALITIES_DIR / "souls" / role / "examples.md"
+    examples_file = _SOULS_DIR / role / "examples.md"
     if not examples_file.exists():
         return ""
     return examples_file.read_text(encoding="utf-8").strip()
@@ -128,7 +127,7 @@ def load_soul_critique(role: str) -> str:
     Returns:
         Critique text from ``souls/{role}/critique.md``, or empty string if absent.
     """
-    critique_file = _PERSONALITIES_DIR / "souls" / role / "critique.md"
+    critique_file = _SOULS_DIR / role / "critique.md"
     if not critique_file.exists():
         return ""
     return critique_file.read_text(encoding="utf-8").strip()
@@ -148,7 +147,7 @@ def load_character_memories(role: str) -> str:
         Formatted memory block (``## Character`` header + prose entries), or empty
         string if the directory is absent or no matching entries are found.
     """
-    memories_dir = _PERSONALITIES_DIR / "souls" / role / "memories"
+    memories_dir = _SOULS_DIR / role / "memories"
     if not memories_dir.exists():
         return ""
 
@@ -186,7 +185,7 @@ def load_soul_mindsets(role: str) -> str:
         ``## Mindsets`` block with all found task-type files joined, or empty
         string if none found.
     """
-    mindsets_dir = _PERSONALITIES_DIR / "souls" / role / "mindsets"
+    mindsets_dir = _SOULS_DIR / role / "mindsets"
     parts: list[str] = []
     for task_type in REQUIRED_MINDSET_TASK_TYPES:
         mindset_file = mindsets_dir / f"{task_type}.md"

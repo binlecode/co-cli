@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._frontmatter import parse_frontmatter, render_frontmatter
+from co_cli.knowledge.frontmatter import parse_frontmatter, render_frontmatter
 from co_cli.knowledge.mutator import _atomic_write, _reindex_knowledge_file
 
 logger = logging.getLogger(__name__)

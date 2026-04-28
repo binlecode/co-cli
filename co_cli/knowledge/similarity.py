@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from co_cli.knowledge._artifact import KnowledgeArtifact
 from co_cli.knowledge._stopwords import STOPWORDS
+from co_cli.knowledge.artifact import KnowledgeArtifact
 
 
 def token_jaccard(a: str, b: str) -> float:

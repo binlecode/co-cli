@@ -330,12 +330,12 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | File | Purpose |
 |------|---------|
-| `co_cli/observability/_telemetry.py` | `SQLiteSpanExporter` (spans → SQLite), `JsonSpanExporter` (spans → `co-cli.jsonl` via propagating logger), `setup_tracer_provider()` (provider factory for both exporters) |
-| `co_cli/observability/_file_logging.py` | `setup_file_logging()` — attaches two rotating JSONL handlers to root logger: `co-cli.jsonl` (INFO+) and `errors.jsonl` (WARNING+, 2 MB/2 backups hardcoded) |
-| `co_cli/observability/_viewer.py` | HTML generator — collapsible nested span tree, waterfall bars; shared `get_span_type()`, `format_duration()`, `extract_span_attrs()` |
-| `co_cli/observability/_tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
+| `co_cli/observability/telemetry.py` | `SQLiteSpanExporter` (spans → SQLite), `JsonSpanExporter` (spans → `co-cli.jsonl` via propagating logger), `setup_tracer_provider()` (provider factory for both exporters) |
+| `co_cli/observability/file_logging.py` | `setup_file_logging()` — attaches two rotating JSONL handlers to root logger: `co-cli.jsonl` (INFO+) and `errors.jsonl` (WARNING+, 2 MB/2 backups hardcoded) |
+| `co_cli/observability/viewer.py` | HTML generator — collapsible nested span tree, waterfall bars; shared `get_span_type()`, `format_duration()`, `extract_span_attrs()` |
+| `co_cli/observability/tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
 | `co_cli/main.py` | `@app.command()` wrappers for `traces` and `tail`; module-level OTel + file logging bootstrap |
-| `co_cli/config/_core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
+| `co_cli/config/core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
 | `co_cli/config/_observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) and span redaction (`redact_patterns`) |
 | `~/.co-cli/co-cli-logs.db` | SQLite span storage |
 | `~/.co-cli/logs/co-cli.jsonl` | Master rotating JSONL log — INFO+ Python logging records (`"kind": "log"`) and OTel span records (`"kind": "span"`) |

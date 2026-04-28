@@ -31,7 +31,7 @@ from co_cli.commands.types import (
     ReplaceTranscript,
     SlashOutcome,
 )
-from co_cli.display._core import console
+from co_cli.display.core import console
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic_ai.toolsets import DeferredLoadingToolset
 
-from co_cli.config._core import Settings
+from co_cli.config.core import Settings
 from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 
 logger = logging.getLogger(__name__)

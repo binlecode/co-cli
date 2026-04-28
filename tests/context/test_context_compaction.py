@@ -20,9 +20,9 @@ from tests._frontend import SilentFrontend
 from tests._settings import SETTINGS as _CONFIG
 from tests._settings import TEST_LLM, make_settings
 
-from co_cli.agent._core import build_agent
-from co_cli.config._core import Settings
+from co_cli.agent.core import build_agent
 from co_cli.config.compaction import CompactionSettings
+from co_cli.config.core import Settings
 from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.compaction import (
     COMPACTABLE_KEEP_RECENT,
@@ -553,7 +553,7 @@ async def test_summarize_messages_iterative_branch_preserves_previous_content() 
     from tests._ollama import ensure_ollama_warm
     from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     llm_model = build_model(_CONFIG.llm)
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
@@ -583,7 +583,7 @@ async def test_previous_summary_written_back_after_successful_compaction() -> No
     """apply_compaction writes raw summary text (no SUMMARY_MARKER_PREFIX) to previous_compaction_summary."""
     from tests._ollama import ensure_ollama_warm
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     llm_model = build_model(_CONFIG.llm)
     deps = CoDeps(shell=ShellBackend(), config=_CONFIG, model=llm_model)
@@ -1260,7 +1260,7 @@ async def test_full_chain_p1_to_p5_llm() -> None:
     from co_cli.context.compaction import (
         plan_compaction_boundaries,
     )
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
@@ -1355,7 +1355,7 @@ async def test_iterative_summary_3_pass_preservation() -> None:
     """Distinctive token from cycle-1 survives into the cycle-3 in-context marker."""
     from tests._ollama import ensure_ollama_warm
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     DISTINCTIVE_TOKEN = "JWT_ROTATION_7779"
 
@@ -1466,7 +1466,7 @@ async def test_summarizer_verbatim_anchor_in_next_step() -> None:
     """## Next Step must contain a ≥20-char verbatim substring from the last 3 messages."""
     from tests._ollama import ensure_ollama_warm
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
@@ -1496,7 +1496,7 @@ async def test_summarizer_user_correction_captured() -> None:
     """Final user directive (python-jose) must appear in ## Active Task or ## User Corrections."""
     from tests._ollama import ensure_ollama_warm
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
@@ -1531,7 +1531,7 @@ async def test_summarizer_errors_and_fixes_retained() -> None:
     """## Errors & Fixes must contain the test failure and the user-directed correction."""
     from tests._ollama import ensure_ollama_warm
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
@@ -1576,7 +1576,7 @@ async def test_summarizer_pending_user_asks() -> None:
     """Unanswered question must appear in ## Pending User Asks."""
     from tests._ollama import ensure_ollama_warm
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
@@ -1608,7 +1608,7 @@ async def test_summarizer_resolved_questions() -> None:
     """Explicitly answered question must appear in ## Resolved Questions, not Pending."""
     from tests._ollama import ensure_ollama_warm
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
@@ -1650,7 +1650,7 @@ async def test_summarizer_pending_migrates_to_resolved() -> None:
     """Prior ## Pending item answered in new block must migrate to ## Resolved Questions."""
     from tests._ollama import ensure_ollama_warm
 
-    from co_cli.llm._factory import build_model
+    from co_cli.llm.factory import build_model
 
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 

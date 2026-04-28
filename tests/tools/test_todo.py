@@ -4,8 +4,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.agent._core import build_agent
-from co_cli.config._core import settings
+from co_cli.agent.core import build_agent
+from co_cli.config.core import settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.todo import todo_read, todo_write

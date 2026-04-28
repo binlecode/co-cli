@@ -7,7 +7,7 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.knowledge._search_util import snippet_around
+from co_cli.knowledge.search_util import snippet_around
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 

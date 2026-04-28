@@ -12,7 +12,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
-from co_cli.config._core import LOGS_DB
+from co_cli.config.core import LOGS_DB
 
 logger = logging.getLogger(__name__)
 

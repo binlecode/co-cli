@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from co_cli.commands.types import CommandContext
-from co_cli.display._core import console
-from co_cli.knowledge._artifact import load_knowledge_artifacts
-from co_cli.knowledge._query import _apply_memory_filters, _format_memory_row
+from co_cli.display.core import console
+from co_cli.knowledge.artifact import load_knowledge_artifacts
+from co_cli.knowledge.query import _apply_memory_filters, _format_memory_row
 from co_cli.tools.knowledge.read import grep_recall
 
 _MEMORY_USAGE = (
@@ -130,7 +130,7 @@ async def _subcmd_memory_forget(
 
 async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
     """Manually trigger a dream cycle; honour ``--dry`` for a non-destructive preview."""
-    from co_cli.knowledge._dream import run_dream_cycle
+    from co_cli.knowledge.dream import run_dream_cycle
 
     tokens = rest.split()
     dry_run = "--dry" in tokens
@@ -150,8 +150,8 @@ async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
 
 async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
     """List archived artifacts, or restore one whose filename starts with the given slug."""
-    from co_cli.knowledge._archive import restore_artifact
-    from co_cli.knowledge._artifact import load_knowledge_artifact
+    from co_cli.knowledge.archive import restore_artifact
+    from co_cli.knowledge.artifact import load_knowledge_artifact
 
     tokens = [t for t in rest.split() if not t.startswith("--")]
     slug = tokens[0] if tokens else ""
@@ -187,8 +187,8 @@ async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
 
 async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None:
     """Preview decay candidates and, with confirmation, archive them."""
-    from co_cli.knowledge._archive import archive_artifacts
-    from co_cli.knowledge._decay import find_decay_candidates
+    from co_cli.knowledge.archive import archive_artifacts
+    from co_cli.knowledge.decay import find_decay_candidates
 
     tokens = rest.split()
     dry_run = "--dry" in tokens
@@ -224,8 +224,8 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
 
 async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     """Display knowledge health dashboard: artifact counts, archive size, dream state, decay."""
-    from co_cli.knowledge._decay import find_decay_candidates
-    from co_cli.knowledge._dream import load_dream_state
+    from co_cli.knowledge.decay import find_decay_candidates
+    from co_cli.knowledge.dream import load_dream_state
 
     knowledge_dir = ctx.deps.knowledge_dir
     artifacts = load_knowledge_artifacts(knowledge_dir)

@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 from tests._settings import make_settings
 
-from co_cli.prompts._assembly import build_static_instructions
+from co_cli.context.assembly import build_static_instructions
 
 
 def test_static_instructions_includes_personality_memories(tmp_path: Path) -> None:

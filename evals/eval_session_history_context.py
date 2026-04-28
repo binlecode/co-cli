@@ -39,8 +39,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agent._core import build_agent
-from co_cli.config._core import settings
+from co_cli.agent.core import build_agent
+from co_cli.config.core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.memory.session import new_session_path
 from co_cli.memory.transcript import load_transcript, persist_session_history

@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config._core import get_settings, settings
+from co_cli.config.core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 

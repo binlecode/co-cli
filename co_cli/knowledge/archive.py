@@ -16,8 +16,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from co_cli.knowledge._artifact import KnowledgeArtifact
-from co_cli.knowledge._store import KnowledgeStore
+from co_cli.knowledge.artifact import KnowledgeArtifact
+from co_cli.knowledge.store import KnowledgeStore
 
 logger = logging.getLogger(__name__)
 

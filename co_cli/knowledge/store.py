@@ -27,12 +27,12 @@ from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from co_cli.config._core import SEARCH_DB
-from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.config.core import SEARCH_DB
 from co_cli.knowledge._stopwords import STOPWORDS
+from co_cli.knowledge.frontmatter import parse_frontmatter
 
 if TYPE_CHECKING:
-    from co_cli.config._core import Settings
+    from co_cli.config.core import Settings
 
 try:
     import pysqlite3 as sqlite3
@@ -1190,7 +1190,7 @@ class KnowledgeStore:
         if not directory.exists():
             return 0
 
-        from co_cli.knowledge._chunker import chunk_text as _chunk_text
+        from co_cli.knowledge.chunker import chunk_text as _chunk_text
 
         current_paths: set[str] = set()
         indexed = 0

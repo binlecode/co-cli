@@ -13,20 +13,20 @@ from tests._settings import make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._artifact import (
+from co_cli.knowledge.artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
     SourceTypeEnum,
 )
-from co_cli.knowledge._dream import (
+from co_cli.knowledge.dream import (
     DreamResult,
     dream_state_path,
     load_dream_state,
     run_dream_cycle,
 )
-from co_cli.knowledge._frontmatter import render_knowledge_file
-from co_cli.knowledge._store import KnowledgeStore
-from co_cli.llm._factory import build_model
+from co_cli.knowledge.frontmatter import render_knowledge_file
+from co_cli.knowledge.store import KnowledgeStore
+from co_cli.llm.factory import build_model
 from co_cli.memory.transcript import append_messages
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -249,7 +249,7 @@ async def test_run_dream_cycle_accumulates_stats_across_cycles(tmp_path: Path) -
         state_first.stats.total_extracted = 5
         state_first.stats.total_merged = 2
         state_first.stats.total_decayed = 7
-        from co_cli.knowledge._dream import save_dream_state
+        from co_cli.knowledge.dream import save_dream_state
 
         save_dream_state(deps.knowledge_dir, state_first)
 

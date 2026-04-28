@@ -14,9 +14,9 @@ from pathlib import Path
 from pydantic_ai import Agent
 from pydantic_ai.agent import InstrumentationSettings
 
-from co_cli.config._core import LOGS_DIR, settings
-from co_cli.observability._file_logging import setup_file_logging
-from co_cli.observability._telemetry import setup_tracer_provider
+from co_cli.config.core import LOGS_DIR, settings
+from co_cli.observability.file_logging import setup_file_logging
+from co_cli.observability.telemetry import setup_tracer_provider
 
 _VERSION = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())[
     "project"

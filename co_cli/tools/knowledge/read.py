@@ -10,14 +10,14 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.knowledge._artifact import (
+from co_cli.knowledge.artifact import (
     ArtifactKindEnum,
     IndexSourceEnum,
     KnowledgeArtifact,
     load_knowledge_artifacts,
 )
-from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.knowledge._ranking import compute_confidence, detect_contradictions
+from co_cli.knowledge.frontmatter import parse_frontmatter
+from co_cli.knowledge.ranking import compute_confidence, detect_contradictions
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.knowledge.helpers import _touch_recalled
 from co_cli.tools.tool_io import tool_output

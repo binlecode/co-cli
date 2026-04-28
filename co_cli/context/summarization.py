@@ -21,9 +21,9 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from co_cli.config._core import Settings
+from co_cli.config.core import Settings
 from co_cli.deps import CoDeps
-from co_cli.llm._call import llm_call
+from co_cli.llm.call import llm_call
 
 log = logging.getLogger(__name__)
 

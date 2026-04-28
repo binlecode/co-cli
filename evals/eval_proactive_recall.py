@@ -30,8 +30,8 @@ from evals._frontend import SilentFrontend
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
-from co_cli.agent._core import build_agent, build_tool_registry
-from co_cli.config._core import settings
+from co_cli.agent.core import build_agent, build_tool_registry
+from co_cli.config.core import settings
 from co_cli.context.orchestrate import run_turn
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-proactive-recall.md"

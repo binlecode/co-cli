@@ -10,8 +10,8 @@ import logging
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
-from co_cli.observability._file_logging import setup_file_logging
-from co_cli.observability._telemetry import JsonSpanExporter
+from co_cli.observability.file_logging import setup_file_logging
+from co_cli.observability.telemetry import JsonSpanExporter
 
 
 def _make_span_provider(patterns: list[str] | None = None) -> tuple[TracerProvider, list[str]]:

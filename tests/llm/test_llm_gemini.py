@@ -17,7 +17,7 @@ from pydantic_ai import Agent
 from tests._timeouts import LLM_GEMINI_NOREASON_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
 
 from co_cli.config.llm import DEFAULT_GEMINI_MODEL, LlmSettings
-from co_cli.llm._factory import build_model
+from co_cli.llm.factory import build_model
 
 _API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("CO_LLM_API_KEY")
 

@@ -1,7 +1,7 @@
 """Functional tests for the terminal display frontend."""
 
-from co_cli.display._core import TerminalFrontend, console
-from co_cli.display._stream_renderer import StreamRenderer
+from co_cli.display.core import TerminalFrontend, console
+from co_cli.display.stream_renderer import StreamRenderer
 from co_cli.tools.approvals import resolve_approval_subject
 
 

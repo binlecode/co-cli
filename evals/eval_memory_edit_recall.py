@@ -31,10 +31,10 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent._core import build_agent
-from co_cli.config._core import get_settings, settings
+from co_cli.agent.core import build_agent
+from co_cli.config.core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.knowledge._store import KnowledgeStore
+from co_cli.knowledge.store import KnowledgeStore
 from co_cli.tools.knowledge.write import append_knowledge, save_knowledge, update_knowledge
 from co_cli.tools.memory import search_memory
 from co_cli.tools.shell_backend import ShellBackend

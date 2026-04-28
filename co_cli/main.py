@@ -12,7 +12,7 @@ from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.agent import InstrumentationSettings
 from pydantic_ai.messages import ModelMessage
 
-from co_cli.agent._core import build_agent
+from co_cli.agent.core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
 from co_cli.bootstrap.project_info import project_info
@@ -25,7 +25,7 @@ from co_cli.bootstrap.render_status import (
 from co_cli.commands.core import dispatch as dispatch_command
 from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
 from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
-from co_cli.config._core import (
+from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
     LOGS_DB,
     LOGS_DIR,
@@ -36,10 +36,10 @@ from co_cli.config._core import (
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.deps import CoDeps
-from co_cli.display._core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
+from co_cli.display.core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
 from co_cli.memory.transcript import persist_session_history
-from co_cli.observability._file_logging import setup_file_logging
-from co_cli.observability._telemetry import setup_tracer_provider
+from co_cli.observability.file_logging import setup_file_logging
+from co_cli.observability.telemetry import setup_tracer_provider
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
 
@@ -90,26 +90,7 @@ async def _finalize_turn(
     Does NOT handle skill-run cleanup — that is done by cleanup_skill_run_state() in finally.
     Does NOT handle /compact or built-in slash-command persistence.
     """
-    from co_cli.knowledge._distiller import fire_and_forget_extraction
-
     next_history = turn_result.messages
-
-    # Memory extraction — cadence-gated, fire-and-forget on clean turns.
-    # Compaction boundaries (turn-time or slash /compact) are handled by
-    # extract_at_compaction_boundary at the compaction site, which pins the
-    # cursor and resets the cadence counter, so we do not special-case them here.
-    if not turn_result.interrupted and turn_result.outcome != "error":
-        n = deps.config.memory.extract_every_n_turns
-        if n > 0:
-            deps.session.last_extracted_turn_idx += 1
-            if deps.session.last_extracted_turn_idx % n == 0:
-                cursor = deps.session.last_extracted_message_idx
-                delta = (
-                    next_history[cursor:]
-                    if 0 <= cursor <= len(next_history)
-                    else next_history[-20:]
-                )
-                fire_and_forget_extraction(delta, deps=deps, cursor_start=cursor)
 
     try:
         deps.session.session_path = persist_session_history(
@@ -160,11 +141,8 @@ async def _run_foreground_turn(
 
 
 async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None:
-    """Drain pending extractions, run the dream cycle if enabled, release resources."""
-    from co_cli.knowledge._distiller import drain_pending_extraction
-
+    """Run the dream cycle if enabled, release resources."""
     if deps is not None:
-        await drain_pending_extraction(deps)
         await _maybe_run_dream_cycle(deps)
 
         from co_cli.tools.background import kill_task
@@ -197,7 +175,7 @@ async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
     if knowledge_config.consolidation_trigger != "session_end":
         return
 
-    from co_cli.knowledge._dream import run_dream_cycle
+    from co_cli.knowledge.dream import run_dream_cycle
 
     logger = logging.getLogger(__name__)
     try:
@@ -397,7 +375,7 @@ def traces():
     """Open a visual trace viewer with nested spans (like Logfire)."""
     import webbrowser
 
-    from co_cli.observability._viewer import write_trace_html
+    from co_cli.observability.viewer import write_trace_html
 
     db_path = LOGS_DB
     if not db_path.exists():
@@ -424,7 +402,7 @@ def tail(
     ),
 ):
     """Tail agent spans in real time (like tail -f for OTel traces)."""
-    from co_cli.observability._tail import run_tail
+    from co_cli.observability.tail import run_tail
 
     run_tail(
         trace_id=trace_id,

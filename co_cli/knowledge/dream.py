@@ -26,20 +26,20 @@ from opentelemetry import trace as otel_trace
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from co_cli.knowledge._archive import archive_artifacts
-from co_cli.knowledge._artifact import (
+from co_cli.knowledge._window import build_transcript_window
+from co_cli.knowledge.archive import archive_artifacts
+from co_cli.knowledge.artifact import (
     IndexSourceEnum,
     KnowledgeArtifact,
     SourceTypeEnum,
     load_knowledge_artifacts,
 )
-from co_cli.knowledge._chunker import chunk_text
-from co_cli.knowledge._decay import find_decay_candidates
-from co_cli.knowledge._distiller import build_transcript_window
-from co_cli.knowledge._frontmatter import render_knowledge_file
-from co_cli.knowledge._similarity import token_jaccard
+from co_cli.knowledge.chunker import chunk_text
+from co_cli.knowledge.decay import find_decay_candidates
+from co_cli.knowledge.frontmatter import render_knowledge_file
 from co_cli.knowledge.mutator import _atomic_write
-from co_cli.llm._call import llm_call
+from co_cli.knowledge.similarity import token_jaccard
+from co_cli.llm.call import llm_call
 from co_cli.tools.knowledge.helpers import _slugify
 from co_cli.tools.knowledge.write import knowledge_save
 
@@ -409,8 +409,9 @@ async def _merge_similar_artifacts(deps: CoDeps) -> int:
     """Run the merge phase of the dream cycle.
 
     Returns the number of clusters merged. Respects per-cycle and per-cluster
-    caps. Skips clusters containing any decay-protected artifact. Archives
-    originals only after the merged artifact is durably written.
+    caps. Decay-protected artifacts are excluded before clustering and never
+    appear in any cluster. Archives originals only after the merged artifact
+    is durably written.
     """
     clusters = _identify_mergeable_clusters(deps)
     if not clusters:

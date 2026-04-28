@@ -7,7 +7,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset
 
-from co_cli.config._core import Settings
+from co_cli.config.core import Settings
 from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
 from co_cli.tools.agents import (

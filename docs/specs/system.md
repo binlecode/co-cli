@@ -142,7 +142,7 @@ The specialized DESIGN docs own the detailed behavior inside each boundary:
 - turn execution, approvals, and retries: [core-loop.md](core-loop.md)
 - prompt assembly, instruction layers, and history processors: [prompt-assembly.md](prompt-assembly.md)
 - compaction mechanisms (emit-time, prepass, window, overflow): [compaction.md](compaction.md)
-- memory and knowledge layers, session transcripts, retrieval, and extraction: [memory-knowledge.md](memory-knowledge.md)
+- memory and knowledge layers, session transcripts, retrieval, and knowledge bridge: [memory-knowledge.md](memory-knowledge.md)
 - dream-cycle mining, merge, decay, archive, and state: [dream.md](dream.md)
 - REPL loop, completer, and slash commands: [tui.md](tui.md)
 - tool registration and approval behavior: [tools.md](tools.md)
@@ -172,10 +172,10 @@ These settings most directly affect top-level system assembly.
 | --- | --- |
 | `co_cli/main.py` | Top-level CLI lifecycle, REPL loop, and teardown |
 | `co_cli/bootstrap/core.py` | Runtime assembly and startup flow |
-| `co_cli/agent/_core.py` | Foreground agent factory (`build_agent()`) |
+| `co_cli/agent/core.py` | Foreground agent factory (`build_agent()`) |
 | `co_cli/agent/_native_toolset.py` | Native toolset construction and tool registry |
-| `co_cli/agent/_mcp.py` | MCP toolset wiring and discovery |
+| `co_cli/agent/mcp.py` | MCP toolset wiring and discovery |
 | `co_cli/agent/_instructions.py` | Dynamic instruction callbacks and prompt assembly |
-| `co_cli/commands/_commands.py` | Slash-command dispatch and skill handoff into the REPL loop |
+| `co_cli/commands/core.py` | Slash-command dispatch and skill handoff into the REPL loop |
 | `co_cli/deps.py` | Shared runtime contract and workspace path resolution |
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |

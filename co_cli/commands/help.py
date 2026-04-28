@@ -6,7 +6,7 @@ from rich.table import Table
 
 from co_cli.commands.registry import BUILTIN_COMMANDS
 from co_cli.commands.types import CommandContext
-from co_cli.display._core import console
+from co_cli.display.core import console
 
 
 async def _cmd_help(ctx: CommandContext, args: str) -> None:

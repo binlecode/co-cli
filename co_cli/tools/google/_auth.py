@@ -7,7 +7,7 @@ from typing import Any
 
 from google.oauth2.credentials import Credentials
 
-from co_cli.config._core import ADC_PATH, GOOGLE_TOKEN_PATH
+from co_cli.config.core import ADC_PATH, GOOGLE_TOKEN_PATH
 from co_cli.tools.tool_io import tool_error
 
 ALL_GOOGLE_SCOPES = [

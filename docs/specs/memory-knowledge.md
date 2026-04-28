@@ -2,14 +2,14 @@
 
 ## Product Intent
 
-**Goal:** Own the full persistent cognition surface: session transcripts as raw memory, the derived transcript index for episodic recall, the reusable knowledge store, and the per-turn extraction bridge between them.
+**Goal:** Own the full persistent cognition surface: session transcripts as raw memory, the derived transcript index for episodic recall, the reusable knowledge store, and the dream-cycle bridge between them.
 
 **Functional areas:**
 - Session transcripts, transcript branching, and session lifecycle commands
 - Oversized tool-result spill files and transcript placeholders
 - Derived transcript index (`session-index.db`) and episodic `memory_search()`
 - Reusable knowledge artifacts on disk plus the derived retrieval DB
-- Turn-time recall, explicit search, per-turn extraction, and lifecycle handoff to dreaming
+- Turn-time recall, explicit search, and lifecycle handoff to dreaming
 
 **Non-goals:**
 - Multi-user or concurrent-write safety
@@ -17,9 +17,9 @@
 - Provider-side memory or server-managed context
 - Automatic TTL/pruning for session transcripts or spilled tool results
 
-**Success criteria:** Raw chronology is preserved in append-only transcripts; episodic recall routes through the transcript index; reusable recall routes through the knowledge layer; history replacement branches to child transcripts instead of rewriting parents; extraction and the dream lifecycle keep reusable knowledge current.
+**Success criteria:** Raw chronology is preserved in append-only transcripts; episodic recall routes through the transcript index; reusable recall routes through the knowledge layer; history replacement branches to child transcripts instead of rewriting parents; agent-explicit `knowledge_save` and the dream lifecycle keep reusable knowledge current.
 
-**Status:** Stable. Memory is the session transcript layer plus a derived FTS5 session index. Knowledge is the reusable artifact layer in `knowledge_dir/*.md` plus the derived search DB. Extraction is shipped; dream-cycle details live in [dream.md](dream.md).
+**Status:** Stable. Memory is the session transcript layer plus a derived FTS5 session index. Knowledge is the reusable artifact layer in `knowledge_dir/*.md` plus the derived search DB. Dream-cycle details live in [dream.md](dream.md).
 
 **Known gaps:** No concurrent-instance safety around transcript writes. A second `co chat` in the same user home can race session persistence. Deferred.
 
@@ -33,7 +33,7 @@ This spec defines how `co-cli` stores raw memory, derives episodic recall from i
 
 - **Memory** is the raw session timeline. It lives in append-only JSONL transcripts under `sessions/`, with oversized tool outputs spilled to `tool-results/`. A separate FTS5 DB indexes past transcripts for episodic search.
 - **Knowledge** is every reusable artifact the agent should recall across sessions. It lives as markdown files under `knowledge/`, with a derived retrieval DB for search/ranking.
-- **Bridge** is per-turn extraction. Clean turns can distill durable signals from Memory into Knowledge. The optional dream cycle also reads Memory and maintains Knowledge; its details live in [dream.md](dream.md).
+- **Bridge** is agent-explicit `knowledge_save` calls during a turn, and the optional dream cycle which retrospectively mines past transcripts. Dream-cycle details live in [dream.md](dream.md).
 
 ```mermaid
 flowchart TD
@@ -44,7 +44,6 @@ flowchart TD
     end
 
     subgraph Bridge["Bridge"]
-        Extractor["per-turn extractor"]
         Dream["dream cycle (see dream.md)"]
     end
 
@@ -59,10 +58,8 @@ flowchart TD
     end
 
     Sessions --> SessionIdx
-    Sessions --> Extractor
     Sessions --> Dream
     Sessions --> Spill
-    Extractor --> KDir
     Dream --> KDir
     KDir --> SearchDB
     SessionIdx --> MemorySearch
@@ -229,7 +226,7 @@ Recall is on-demand. Two tools surface persistent context: `knowledge_search()` 
 - "what did we figure out about docker last time?" → `memory_search` (past conversation)
 - "what was that auth bug we hit?" → `memory_search` (past conversation)
 
-Personality memories (knowledge artifacts tagged `personality-context`) live in the **static system prompt** to preserve prefix-cache stability across turns. They are loaded once at agent construction by `load_personality_memories()` in `co_cli/prompts/personalities/_loader.py` and injected by `build_static_instructions()` in `co_cli/prompts/_assembly.py`. Runtime edits to personality-context artifacts require a session restart to take effect.
+Personality memories (knowledge artifacts tagged `personality-context`) live in the **static system prompt** to preserve prefix-cache stability across turns. They are loaded once at agent construction by `load_personality_memories()` in `co_cli/personality/prompts/loader.py` and injected by `build_static_instructions()` in `co_cli/context/assembly.py`. Runtime edits to personality-context artifacts require a session restart to take effect.
 
 The dynamic-instructions block (`date_prompt()` in `co_cli/agent/_instructions.py`) is intentionally kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable static prefix remains cache-stable across turns.
 
@@ -255,54 +252,19 @@ Dream lifecycle commands (`/knowledge dream`, `/knowledge restore`, `/knowledge 
 
 `/memory` is still present as a deprecated alias for `list`, `count`, and `forget`.
 
-### 2.5 Memory -> Knowledge Bridge: Per-Turn Extraction
+### 2.5 Memory -> Knowledge Bridge: Agent-Explicit Writes and Dream
 
-`_finalize_turn()` launches extraction only on clean foreground turns:
+There is no online per-turn extraction. Knowledge accumulates through two paths:
 
-- not interrupted
-- `turn_result.outcome != "error"`
-- no inline history compaction on that turn
-- cadence gate `memory.extract_every_n_turns` fires
+1. **Agent-explicit `knowledge_save`** — the agent calls `knowledge_save(...)` at any point during a turn when it recognizes a durable signal worth preserving. This is the primary in-session write path and is always available.
 
-The bridge is delta-based:
-
-```text
-cursor = deps.session.last_extracted_message_idx
-delta = next_history[cursor:]           # fallback: last 20 messages if cursor is invalid
-fire_and_forget_extraction(delta, cursor_start=cursor)
-```
-
-`fire_and_forget_extraction()` is single-flight: if one extraction task is already running, later launches are skipped. This is acceptable at cadence boundaries because the delta remains in history and will be re-offered at the next cadence tick.
-
-**Compaction-boundary extraction is synchronous.** Because compaction is about to discard the pre-compact tail, `extract_at_compaction_boundary()` drains any in-flight cadence task, awaits extraction inline, and only then pins `last_extracted_message_idx` to `len(post_compact)` and resets `last_extracted_turn_idx` to `0`. Extraction failures are best-effort: the cursor still pins so compaction can proceed.
-
-The extractor pipeline:
-
-```text
-build_transcript_window(delta)
-  -> flatten UserPromptPart / TextPart / ToolCallPart / ToolReturnPart
-  -> keep the latest 10 text lines + latest 10 tool lines
-  -> preserve original order
-  -> skip read-tool output and oversized non-prose tool returns
-
-extractor agent.run(window)
-  -> calls knowledge_save(...)
-  -> writes markdown artifact(s) to knowledge_dir
-  -> reindexes written files into the knowledge DB
-
-on success:
-    advance last_extracted_message_idx
-on failure:
-    keep the old cursor for retry on a later turn
-```
-
-The extractor is additive only. It writes new knowledge or delegates near-duplicate handling to the knowledge write path when consolidation is enabled; it never edits transcripts and never deletes transcript history.
+2. **Dream cycle** — at session end (when `knowledge.consolidation_enabled=true`), the dream cycle retrospectively mines past transcripts and writes new artifacts. See [dream.md](dream.md) for the full lifecycle.
 
 ### 2.6 Dream Lifecycle Handoff
 
 Dream-cycle semantics live in [dream.md](dream.md). This spec only owns the handoff: transcripts remain append-only read inputs, active knowledge remains markdown plus a derived search index, and any dream-cycle artifact writes or archives must preserve those source-of-truth boundaries.
 
-The dream cycle is not part of turn-time recall or per-turn extraction. It is a separate lifecycle pass over the same Memory and Knowledge stores.
+The dream cycle is not part of turn-time recall or in-turn knowledge writes. It is a separate lifecycle pass over the same Memory and Knowledge stores.
 
 ## 3. Config
 
@@ -311,7 +273,6 @@ The dream cycle is not part of turn-time recall or per-turn extraction. It is a 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age-decay parameter used in recall scoring |
-| `memory.extract_every_n_turns` | `CO_MEMORY_EXTRACT_EVERY_N_TURNS` | `3` | extraction cadence; `0` disables per-turn extraction |
 
 ### Knowledge Settings
 
@@ -351,19 +312,19 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/memory/summary.py` | `_format_conversation()`, `_truncate_around_matches()`, and `summarize_session_around_query()` — transcript formatting, window extraction, and noreason LLM summarization pipeline |
 | `co_cli/memory/prompts/session_summarizer.md` | Summarizer prompt template for the noreason summarization agent |
 | `co_cli/tools/memory.py` | `memory_search()` episodic recall tool |
-| `co_cli/knowledge/_artifact.py` | `KnowledgeArtifact` schema and artifact loaders |
-| `co_cli/knowledge/_store.py` | `KnowledgeStore` indexing/search backend and `sync_dir()` |
-| `co_cli/knowledge/_frontmatter.py` | frontmatter parse/validate/render helpers |
-| `co_cli/knowledge/_chunker.py` | chunking for indexed artifact text |
-| `co_cli/knowledge/_ranking.py` | confidence scoring and contradiction helpers |
-| `co_cli/knowledge/_similarity.py` | similarity and dedup helpers |
-| `co_cli/knowledge/_distiller.py` | per-turn extraction pipeline and transcript-window builder |
+| `co_cli/knowledge/artifact.py` | `KnowledgeArtifact` schema and artifact loaders |
+| `co_cli/knowledge/store.py` | `KnowledgeStore` indexing/search backend and `sync_dir()` |
+| `co_cli/knowledge/frontmatter.py` | frontmatter parse/validate/render helpers |
+| `co_cli/knowledge/chunker.py` | chunking for indexed artifact text |
+| `co_cli/knowledge/ranking.py` | confidence scoring and contradiction helpers |
+| `co_cli/knowledge/similarity.py` | similarity and dedup helpers |
+| `co_cli/knowledge/_window.py` | transcript-window builder used by dream mining |
 | `co_cli/tools/knowledge/read.py` | reusable-artifact search/list/read; `knowledge_search()` calls `_touch_recalled()` fire-and-forget after FTS5 hits |
 | `co_cli/tools/knowledge/write.py` | artifact write/update/append helpers and article persistence |
 | `co_cli/bootstrap/core.py` | `restore_session()` and `_init_memory_index()` during startup |
 | `co_cli/agent/_instructions.py` | `date_prompt()` — thin wrapper that delegates to `recall_prompt_text()` in `prompt_text.py`; returns today's date string |
 | `co_cli/context/prompt_text.py` | `recall_prompt_text()` — per-turn dynamic instruction; returns today's date only (personality memories are in static prompt; knowledge recall is on-demand) |
-| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — assembles soul, character memories, mindsets, personality-context artifacts, rules, and examples into the cacheable static system prompt |
-| `co_cli/prompts/personalities/_loader.py` | `load_personality_memories()` — loads `personality-context` tagged knowledge artifacts into the static prompt once at agent construction |
-| `co_cli/main.py` | `_finalize_turn()` extraction/persistence bridge |
-| `co_cli/commands/_commands.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions`, `/knowledge`, and `/memory` command handlers |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — assembles soul, character memories, mindsets, personality-context artifacts, rules, and examples into the cacheable static system prompt |
+| `co_cli/personality/prompts/loader.py` | `load_personality_memories()` — loads `personality-context` tagged knowledge artifacts into the static prompt once at agent construction |
+| `co_cli/main.py` | `_finalize_turn()` persistence bridge and session-end dream trigger |
+| `co_cli/commands/core.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions`, `/knowledge`, and `/memory` command handlers |

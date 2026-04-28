@@ -27,14 +27,14 @@ from pathlib import Path
 from evals._frontend import CapturingFrontend
 from evals._timeouts import EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS
 
-from co_cli.agent._core import build_agent
+from co_cli.agent.core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, init_memory_index, restore_session
 from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
 from co_cli.commands.skills import get_skill_registry
-from co_cli.config._core import get_settings
+from co_cli.config.core import get_settings
 from co_cli.deps import CoDeps, ToolSourceEnum
-from co_cli.display._core import console
+from co_cli.display.core import console
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-bootstrap-flow-quality.md"
 _REPORT_HEADER = "# Eval Report: Bootstrap Flow Quality"

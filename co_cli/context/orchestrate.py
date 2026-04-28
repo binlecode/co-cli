@@ -61,12 +61,12 @@ logger = logging.getLogger(__name__)
 # an unresponsive LLM from hanging a turn indefinitely.
 _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 360
 
-from co_cli.config._core import REASONING_DISPLAY_SUMMARY
+from co_cli.config.core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.deps import CoDeps
-from co_cli.display._core import Frontend, QuestionPrompt
-from co_cli.display._stream_renderer import StreamRenderer
+from co_cli.display.core import Frontend, QuestionPrompt
+from co_cli.display.stream_renderer import StreamRenderer
 from co_cli.tools.approvals import (
     decode_tool_args,
     is_auto_approved,

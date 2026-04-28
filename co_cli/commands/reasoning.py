@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from co_cli.commands.types import CommandContext
-from co_cli.config._core import VALID_REASONING_DISPLAY_MODES
-from co_cli.display._core import console
+from co_cli.config.core import VALID_REASONING_DISPLAY_MODES
+from co_cli.display.core import console
 
 _REASONING_CYCLE = ["off", "summary", "full"]
 

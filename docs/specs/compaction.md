@@ -66,8 +66,7 @@ flowchart TD
         T3[gather_compaction_context<br/>enrichment helper]
         T4[summarize_messages]
         T5[head + marker + breadcrumbs + tail]
-        T6[extract_at_compaction_boundary<br/>knowledge distill + cursor pin]
-        T1 -->|yes| T2 --> T3 --> T4 --> T5 --> T6
+        T1 -->|yes| T2 --> T3 --> T4 --> T5
         T1 -->|no| Pass2[return messages]
     end
 
@@ -77,16 +76,14 @@ flowchart TD
         O3[recover_overflow_history<br/>same planner, same prompt]
         O3b{bounds valid?}
         O3c[emergency_recover_overflow_history<br/>structural fallback: first + marker + todo snapshot + search_tools breadcrumbs + last]
-        O_kd[extract_at_compaction_boundary<br/>knowledge distill + cursor pin]
         O4[retry once]
         O1 --> O2
         O2 -->|no| O3 --> O3b
-        O3b -->|yes| O_kd
+        O3b -->|yes| O4
         O3b -->|no| O3c
-        O3c -->|len groups &gt; 2| O_kd
+        O3c -->|len groups &gt; 2| O4
         O3c -->|len groups ≤ 2| O6[terminal error]
         O2 -->|yes| O6
-        O_kd --> O4
     end
 
     Emit --> PerReq
@@ -248,7 +245,7 @@ flowchart TD
 
     subgraph PostCompact["Post-compaction — apply + proactive feedback"]
         direction LR
-        pc1["apply_compaction\n→ previous_compaction_summary = summary_text (only on success)\n→ extract_at_compaction_boundary (knowledge distill + cursor pin)\n→ compaction_applied_this_turn = True"]:::tail --> pc2["savings = (tokens_before_local − tokens_after_local) / tokens_before_local\nlocal-only estimate (apples-to-apples; trigger used max())"]:::meta --> pc3{"savings ≥\nmin_proactive_savings?"}
+        pc1["apply_compaction\n→ previous_compaction_summary = summary_text (only on success)\n→ compaction_applied_this_turn = True"]:::tail --> pc2["savings = (tokens_before_local − tokens_after_local) / tokens_before_local\nlocal-only estimate (apples-to-apples; trigger used max())"]:::meta --> pc3{"savings ≥\nmin_proactive_savings?"}
         pc3 -->|"no"| pc4["consecutive_low_yield += 1"]:::marker
         pc3 -->|"yes"| pc5["consecutive_low_yield = 0\nthrash_hint re-armed"]:::head
     end
@@ -404,7 +401,7 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
 Summarizes `messages[head_end:tail_start]` via `_gated_summarize_or_none`, then assembles:
 `head | marker | [todo_snapshot] | [search breadcrumbs] | tail`
 
-Raw `summary_text` is stored in `ctx.deps.runtime.previous_compaction_summary` before `build_compaction_marker` adds the `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix; on failure the field is left untouched. Sets `compaction_applied_this_turn = True`. Then calls `extract_at_compaction_boundary(pre_compact, post_compact, deps)` — drains any pending knowledge cadence extractions from the dropped range and pins the knowledge cursor to the compacted history length. Best-effort: extraction failures do not raise; compaction always succeeds. `emergency_recover_overflow_history` calls this hook directly (it bypasses `apply_compaction`).
+Raw `summary_text` is stored in `ctx.deps.runtime.previous_compaction_summary` before `build_compaction_marker` adds the `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix; on failure the field is left untouched. Sets `compaction_applied_this_turn = True`.
 
 Summarizer surface:
 - `_summarization_gate_open(ctx)` — `False` when `ctx.deps.model is None` or circuit breaker tripped (and not at probe cadence).
@@ -535,7 +532,7 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `COMPACTABLE_KEEP_RECENT` | `5` | M2a: most-recent returns per tool to keep |
 | `_CIRCUIT_BREAKER_PROBE_EVERY` | `10` | Skips between probe attempts when circuit breaker is tripped |
 
-**M1 and M2b thresholds** (`co_cli/config/_tools.py`):
+**M1 and M2b thresholds** (`co_cli/config/tools.py`):
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
@@ -568,9 +565,9 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `co_cli/tools/tool_io.py` | M1: `persist_if_oversized`, `tool_output`, `check_tool_results_size`. |
 | `co_cli/tools/files/read.py` | `file_read` M1 override: `max_result_size=math.inf` (never persists). |
 | `co_cli/tools/shell.py` | `shell` M1 override: `max_result_size=30_000`. |
-| `co_cli/config/_tools.py` | `ToolsSettings` — `result_persist_chars`, `batch_spill_chars`. |
+| `co_cli/config/tools.py` | `ToolsSettings` — `result_persist_chars`, `batch_spill_chars`. |
 | `co_cli/config/llm.py` | `num_ctx` (Ollama override), `ctx_token_budget` (fallback budget). |
-| `co_cli/prompts/…` | Base system prompt; static recency-clearing advisory. |
+| `co_cli/context/rules/…` | Base system prompt; static recency-clearing advisory. |
 | `evals/eval_compaction_quality.py` | Compaction fidelity regression eval. |
 
 ## 5. Test Gates

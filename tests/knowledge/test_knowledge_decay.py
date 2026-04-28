@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from co_cli.config.knowledge import KnowledgeSettings
-from co_cli.knowledge._decay import find_decay_candidates
+from co_cli.knowledge.decay import find_decay_candidates
 
 
 def _iso(when: datetime) -> str:

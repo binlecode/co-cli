@@ -12,11 +12,11 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.agent._core import build_agent
-from co_cli.config._core import settings
+from co_cli.agent.core import build_agent
+from co_cli.config.core import settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
-from co_cli.knowledge._chunker import chunk_text
-from co_cli.knowledge._store import KnowledgeStore, SearchResult
+from co_cli.knowledge.chunker import chunk_text
+from co_cli.knowledge.store import KnowledgeStore, SearchResult
 from co_cli.tools.knowledge.read import knowledge_list, knowledge_search
 from co_cli.tools.knowledge.write import (
     knowledge_append,

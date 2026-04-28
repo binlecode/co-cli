@@ -10,7 +10,7 @@ import sqlite3
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
-from co_cli.observability._telemetry import SQLiteSpanExporter
+from co_cli.observability.telemetry import SQLiteSpanExporter
 
 
 def _make_provider(db_path: str, patterns: list[str] | None = None) -> TracerProvider:

@@ -64,7 +64,7 @@ All subagent tools are always registered.
 
 `LlmModel` is a dataclass pairing a pre-built model object (`Any`) with its reasoning `ModelSettings | None` (`settings`), its noreason `ModelSettings | None` (`settings_noreason`), and an optional `context_window: int | None` from resolved model settings. It is built once at session start via `build_model(config.llm)` and stored on `deps.model`.
 
-`build_model()` in `co_cli/llm/_factory.py` is provider-aware:
+`build_model()` in `co_cli/llm/factory.py` is provider-aware:
 
 - `ollama-openai` → `OpenAIChatModel(model_name, OpenAIProvider(base_url="{llm_host}/v1", api_key="ollama"))`
 - `gemini` → `GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))` — key injected directly, no env mutation
@@ -74,7 +74,7 @@ All subagent tools are always registered.
 
 ### Per-Call Settings
 
-The main agent uses the config-derived base `ModelSettings` from `deps.model.settings`. Functional (non-tool-loop) calls use `deps.model.settings_noreason` — resolved at build time from provider defaults, model-specific overrides, and user explicit config via `resolve_noreason_inference()`. `noreason_model_settings()` branches by provider: Ollama gets a standard `ModelSettings` with `extra_body.reasoning_effort="none"` (and other Ollama-specific keys); Gemini gets a `GoogleModelSettings` with `google_thinking_config` (model-specific thinking level or budget). Functional callers (summarizer, dream merge) use `llm_call()` in `co_cli/llm/_call.py`, which defaults to `deps.model.settings_noreason`.
+The main agent uses the config-derived base `ModelSettings` from `deps.model.settings`. Functional (non-tool-loop) calls use `deps.model.settings_noreason` — resolved at build time from provider defaults, model-specific overrides, and user explicit config via `resolve_noreason_inference()`. `noreason_model_settings()` branches by provider: Ollama gets a standard `ModelSettings` with `extra_body.reasoning_effort="none"` (and other Ollama-specific keys); Gemini gets a `GoogleModelSettings` with `google_thinking_config` (model-specific thinking level or budget). Functional callers (summarizer, dream merge) use `llm_call()` in `co_cli/llm/call.py`, which defaults to `deps.model.settings_noreason`.
 
 ### Model Dependency Checks
 
@@ -204,11 +204,11 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | `co_cli/config/` | Settings package: `_llm.py` owns `LlmSettings` (provider, model, host, context settings); `_core.py` owns `Settings` with nested sub-models |
 | `co_cli/deps.py` | `CoDeps` with `config: Settings`; `model: LlmModel \| None` as top-level field |
 | `co_cli/bootstrap/check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
-| `co_cli/agent/_core.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
+| `co_cli/agent/core.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/compact.py` | Uses `deps.model` for `/compact` via `summarize_messages(deps, ...)` (`/new` lives in `commands/new.py`) |
 | `co_cli/context/summarization.py` | `summarize_messages(deps, messages, *, personality_active, context)` — calls `llm_call()`; `resolve_compaction_budget(config, context_window)` — reads `context_window` from `LlmModel` to set compaction token budget |
-| `co_cli/llm/_factory.py` | `LlmModel` — pre-built model + reasoning settings + noreason settings + context_window; `build_model(llm: LlmSettings)` — builds provider-aware model with both settings resolved |
-| `co_cli/llm/_call.py` | `llm_call(deps, prompt, *, instructions, message_history, output_type, model_settings)` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
+| `co_cli/llm/factory.py` | `LlmModel` — pre-built model + reasoning settings + noreason settings + context_window; `build_model(llm: LlmSettings)` — builds provider-aware model with both settings resolved |
+| `co_cli/llm/call.py` | `llm_call(deps, prompt, *, instructions, message_history, output_type, model_settings)` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
 | `co_cli/config/llm.py` | `LlmSettings`, `NoReasonSettings`, `ReasoningSettings`; `resolve_reasoning_inference()`, `resolve_noreason_inference()`; `_PROVIDER_NOREASON_DEFAULTS`, `_MODEL_NOREASON_DEFAULTS`; `DEFAULT_NOREASON_*` constants |
 | `ollama/Modelfile.qwen3.5-35b-a3b-think` | Primary reasoning model — thinking enabled |
 | `ollama/Modelfile.qwen3.5-35b-a3b-code` | Coding sub-agent — deterministic params |

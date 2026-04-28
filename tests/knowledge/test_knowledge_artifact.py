@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from co_cli.knowledge._artifact import (
+from co_cli.knowledge.artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
     SourceTypeEnum,
     load_knowledge_artifact,
     load_knowledge_artifacts,
 )
-from co_cli.knowledge._frontmatter import (
+from co_cli.knowledge.frontmatter import (
     parse_frontmatter,
     render_knowledge_file,
     validate_knowledge_frontmatter,

@@ -1,7 +1,7 @@
 """Leaf slash-command registry — types, dict, completer helpers, namespace filter.
 
 This module imports only from stdlib, co_cli.commands.types, and
-co_cli.skills._skill_types. It must never import from sibling handler modules.
+co_cli.skills.skill_types. It must never import from sibling handler modules.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from co_cli.commands.types import CommandContext, ReplaceTranscript
-from co_cli.skills._skill_types import SkillConfig
+from co_cli.skills.skill_types import SkillConfig
 
 
 @dataclass(frozen=True)

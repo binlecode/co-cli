@@ -10,9 +10,9 @@ from typing import Any
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
-from co_cli.knowledge._artifact import ArtifactKindEnum, IndexSourceEnum, KnowledgeArtifact
-from co_cli.knowledge._chunker import chunk_text
-from co_cli.knowledge._frontmatter import parse_frontmatter, render_frontmatter
+from co_cli.knowledge.artifact import ArtifactKindEnum, IndexSourceEnum, KnowledgeArtifact
+from co_cli.knowledge.chunker import chunk_text
+from co_cli.knowledge.frontmatter import parse_frontmatter, render_frontmatter
 
 
 def _atomic_write(path: Path, content: str) -> None:

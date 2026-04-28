@@ -12,8 +12,8 @@ from tests._settings import TEST_LLM
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps
-from co_cli.llm._call import llm_call
-from co_cli.llm._factory import build_model
+from co_cli.llm.call import llm_call
+from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _MODEL = build_model(_CONFIG.llm)

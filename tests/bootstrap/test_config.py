@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from co_cli.config._core import load_config
+from co_cli.config.core import load_config
 
 
 def test_env_overrides_user_config(tmp_path):
@@ -130,21 +130,6 @@ def test_knowledge_lifecycle_env_overrides(tmp_path):
     )
     assert settings.knowledge.consolidation_enabled is True
     assert settings.knowledge.decay_after_days == 45
-
-
-def test_memory_extract_every_n_turns_env_override(tmp_path):
-    """CO_MEMORY_EXTRACT_EVERY_N_TURNS overrides the default extraction cadence."""
-    settings = load_config(
-        _user_config_path=tmp_path / "nonexistent.json",
-        _env={"CO_MEMORY_EXTRACT_EVERY_N_TURNS": "7"},
-    )
-    assert settings.memory.extract_every_n_turns == 7
-
-
-def test_memory_extract_every_n_turns_default(tmp_path):
-    """Without the env override, extract_every_n_turns keeps its documented default of 3."""
-    settings = load_config(_user_config_path=tmp_path / "nonexistent.json")
-    assert settings.memory.extract_every_n_turns == 3
 
 
 def test_knowledge_lifecycle_from_user_config(tmp_path):
@@ -313,8 +298,8 @@ def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
             "-c",
             (
                 "from pathlib import Path; "
-                "from co_cli.agent._core import build_agent; "
-                "from co_cli.config._core import load_config; "
+                "from co_cli.agent.core import build_agent; "
+                "from co_cli.config.core import load_config; "
                 "import os; "
                 f"loaded = load_config(_user_config_path=Path({str(user_settings)!r})); "
                 "build_agent(config=loaded); "

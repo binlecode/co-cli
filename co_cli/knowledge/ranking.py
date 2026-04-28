@@ -9,7 +9,7 @@ import math
 from datetime import UTC, datetime
 from pathlib import Path
 
-from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.knowledge.frontmatter import parse_frontmatter
 
 # Negation markers used for heuristic contradiction detection.
 _NEGATION_MARKERS: frozenset[str] = frozenset(

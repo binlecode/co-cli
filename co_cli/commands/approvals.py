@@ -6,7 +6,7 @@ from rich.table import Table
 
 from co_cli.commands.types import CommandContext
 from co_cli.deps import ApprovalKindEnum
-from co_cli.display._core import console
+from co_cli.display.core import console
 
 
 def _rule_label(kind: ApprovalKindEnum, value: str) -> tuple[str, str]:

@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from co_cli.config._core import LOGS_DB, USER_DIR
+from co_cli.config.core import LOGS_DB, USER_DIR
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html>

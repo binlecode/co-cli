@@ -31,9 +31,9 @@ from evals._timeouts import (
 from evals.eval_bootstrap_flow_quality import TrackingFrontend
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
-from co_cli.agent._core import build_agent
+from co_cli.agent.core import build_agent
 from co_cli.bootstrap.core import create_deps
-from co_cli.config._core import KNOWLEDGE_DIR, TOOL_RESULTS_DIR, settings
+from co_cli.config.core import KNOWLEDGE_DIR, TOOL_RESULTS_DIR, settings
 from co_cli.context.compaction import SUMMARY_MARKER_PREFIX
 from co_cli.context.orchestrate import run_turn
 

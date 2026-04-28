@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from rich.console import Console
 from rich.text import Text
 
-from co_cli.config._core import LOGS_DB
-from co_cli.observability._viewer import extract_span_attrs, format_duration, get_span_type
+from co_cli.config.core import LOGS_DB
+from co_cli.observability.viewer import extract_span_attrs, format_duration, get_span_type
 
 TYPE_STYLES = {
     "agent": "cyan",

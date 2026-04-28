@@ -27,7 +27,7 @@ model weights — everything is file-based, inspectable, and swappable via confi
 
 Three personalities ship: `finch` (preparation-first mentor), `jeff` (warm collaborator),
 `tars` (direct operator — default). Each personality lives in its own subdirectory under
-`co_cli/prompts/personalities/souls/{role}/`.
+`co_cli/personality/prompts/souls/{role}/`.
 
 Personality enters the agent via one path:
 
@@ -36,7 +36,7 @@ Personality enters the agent via one path:
    `Agent(instructions=...)` and does not change within a session.
 
 Personality-context memories (knowledge artifacts tagged `personality-context`) are loaded
-once at agent construction by `load_personality_memories()` in `personalities/_loader.py`
+once at agent construction by `load_personality_memories()` in `personality/prompts/loader.py`
 and injected into the static system prompt. This keeps the cache-stable prefix intact across
 all turns. Runtime edits to personality-context artifacts require a session restart to take effect.
 
@@ -90,7 +90,7 @@ for human reference — they are not loaded into the agent.
 section_1 = load_soul_seed(role)               # Required — placed first; identity anchor
 section_2 = load_character_memories(role)       # Optional — ## Character block, memories/*.md
 section_3 = load_soul_mindsets(role)            # Optional — ## Mindsets block, all 6 files
-section_4 = _collect_rule_files()               # Rules from prompts/rules/NN_rule_id.md (01–05)
+section_4 = _collect_rule_files()               # Rules from context/rules/NN_rule_id.md (01–05)
 section_5 = load_soul_examples(role)            # Optional — trigger→response patterns
 section_6 = load_soul_critique(role)            # Optional — ## Review lens, placed last
 
@@ -101,13 +101,13 @@ return "\n\n".join(non_empty_sections)
 on the model's operating space. Review lens is last so it frames all prior content as
 subject to self-review.
 
-**Rule files** (`prompts/rules/`) are personality-independent universal policies. Files must
+**Rule files** (`context/rules/`) are personality-independent universal policies. Files must
 be numbered `01`–`05`, contiguous, and unique. Current rules: `01_identity.md`,
 `02_safety.md`, `03_reasoning.md`, `04_tool_protocol.md`, `05_workflow.md`.
 
 ### Static Personality-Context Injection
 
-`load_personality_memories()` in `personalities/_loader.py`:
+`load_personality_memories()` in `personality/prompts/loader.py`:
 
 ```
 if _personality_cache is not None:
@@ -150,12 +150,12 @@ for missing mindset files.
 
 | File | Purpose |
 |---|---|
-| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — static prompt assembly (soul + personality memories + rules) |
-| `co_cli/prompts/personalities/_loader.py` | `load_soul_seed`, `load_soul_examples`, `load_soul_critique`, `load_character_memories`, `load_soul_mindsets`, `load_personality_memories` |
-| `co_cli/prompts/personalities/_validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
-| `co_cli/prompts/personalities/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
-| `co_cli/prompts/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
-| `co_cli/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
-| `co_cli/config/_core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
-| `co_cli/agent/_core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (soul + personality memories + rules) |
+| `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_examples`, `load_soul_critique`, `load_character_memories`, `load_soul_mindsets`, `load_personality_memories` |
+| `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
+| `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
+| `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
+| `co_cli/personality/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
+| `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
+| `co_cli/agent/core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
 | `co_cli/agent/_instructions.py` | `date_prompt()` — dynamic instruction returning today's date |

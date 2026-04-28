@@ -9,13 +9,13 @@ import pytest
 import yaml
 from tests._settings import make_settings
 
-from co_cli.knowledge._archive import archive_artifacts, restore_artifact
-from co_cli.knowledge._artifact import (
+from co_cli.knowledge.archive import archive_artifacts, restore_artifact
+from co_cli.knowledge.artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
     load_knowledge_artifact,
 )
-from co_cli.knowledge._store import KnowledgeStore
+from co_cli.knowledge.store import KnowledgeStore
 
 
 def _write_artifact(
@@ -132,7 +132,7 @@ def test_archive_artifacts_skips_missing_source_path(
     store = _make_store(tmp_path)
     try:
         store.sync_dir("knowledge", knowledge_dir)
-        with caplog.at_level(logging.WARNING, logger="co_cli.knowledge._archive"):
+        with caplog.at_level(logging.WARNING, logger="co_cli.knowledge.archive"):
             count = archive_artifacts([real_artifact, ghost_artifact], knowledge_dir, store)
 
         assert count == 1, "Missing files must not be counted as archived"
@@ -175,7 +175,7 @@ def test_restore_artifact_returns_false_on_ambiguous_slug(
             store,
         )
 
-        with caplog.at_level(logging.WARNING, logger="co_cli.knowledge._archive"):
+        with caplog.at_level(logging.WARNING, logger="co_cli.knowledge.archive"):
             result = restore_artifact("shared-prefix", knowledge_dir, store)
 
         assert result is False

@@ -20,7 +20,7 @@ Reasoning display modes:
 import time
 from typing import TYPE_CHECKING
 
-from co_cli.config._core import (
+from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
     REASONING_DISPLAY_FULL,
     REASONING_DISPLAY_OFF,
@@ -29,7 +29,7 @@ from co_cli.config._core import (
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
-    from co_cli.display._core import Frontend
+    from co_cli.display.core import Frontend
 
 _RENDER_INTERVAL = 0.05  # 20 FPS
 _PROGRESS_MAX_CHARS = 80

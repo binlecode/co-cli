@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from co_cli.commands.types import CommandContext, ReplaceTranscript
-from co_cli.display._core import console
+from co_cli.display.core import console
 
 
 async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Resume a past session via interactive picker."""
-    from co_cli.display._core import prompt_selection
+    from co_cli.display.core import prompt_selection
     from co_cli.memory.session_browser import format_file_size, list_sessions
     from co_cli.memory.transcript import load_transcript
 

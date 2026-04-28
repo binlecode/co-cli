@@ -179,7 +179,7 @@ async def _gated_summarize_or_none(
         return None
 
     if announce:
-        from co_cli.display._core import console
+        from co_cli.display.core import console
 
         console.print("[dim]Compacting conversation...[/dim]")
 
@@ -263,10 +263,6 @@ async def apply_compaction(
         *_preserve_search_tool_breadcrumbs(dropped),
         *messages[tail_start:],
     ]
-    # Deferred: compaction ↔ distiller circular import.
-    from co_cli.knowledge._distiller import extract_at_compaction_boundary
-
-    await extract_at_compaction_boundary(messages, result, ctx.deps)
     ctx.deps.runtime.compaction_applied_this_turn = True
     ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
     ctx.deps.runtime.message_count_at_last_compaction = len(result)
@@ -351,10 +347,6 @@ async def emergency_recover_overflow_history(
         *_preserve_search_tool_breadcrumbs(dropped),
         *groups_to_messages([groups[-1]]),
     ]
-    # Deferred: compaction ↔ distiller circular import.
-    from co_cli.knowledge._distiller import extract_at_compaction_boundary
-
-    await extract_at_compaction_boundary(messages, result, ctx.deps)
     ctx.deps.runtime.compaction_applied_this_turn = True
     ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
     ctx.deps.runtime.message_count_at_last_compaction = len(result)
@@ -453,7 +445,7 @@ async def proactive_window_processor(
         ):
             log.info("Compaction: anti-thrashing gate active, skipping")
             if not ctx.deps.runtime.compaction_thrash_hint_emitted:
-                from co_cli.display._core import console
+                from co_cli.display.core import console
 
                 console.print(
                     "[dim]Compaction paused: recent passes freed too little context. "

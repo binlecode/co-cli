@@ -11,7 +11,7 @@ from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.toolsets.combined import CombinedToolset
 
-from co_cli.config._core import Settings
+from co_cli.config.core import Settings
 from co_cli.context.compaction import (
     dedup_tool_results,
     evict_batch_tool_outputs,
@@ -19,7 +19,7 @@ from co_cli.context.compaction import (
     proactive_window_processor,
 )
 from co_cli.deps import CoDeps, ToolInfo
-from co_cli.tools._lifecycle import CoToolLifecycle
+from co_cli.tools.lifecycle import CoToolLifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,8 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
     Combines native and MCP toolsets under a single approval-resume filter.
     MCP tool_index entries are added later by discover_mcp_tools().
     """
-    from co_cli.agent._mcp import _build_mcp_toolsets
     from co_cli.agent._native_toolset import _approval_resume_filter, _build_native_toolset
+    from co_cli.agent.mcp import _build_mcp_toolsets
 
     native_toolset, native_index = _build_native_toolset(config)
     mcp_entries = _build_mcp_toolsets(config)
@@ -101,12 +101,12 @@ def build_agent(
     # Normalize model: accept LlmModel or raw pydantic-ai model.
     # Orchestrator path: model=None → build from config.
     # Delegation path: model is expected to be a raw pydantic-ai model.
-    from co_cli.llm._factory import LlmModel as _LlmModel
+    from co_cli.llm.factory import LlmModel as _LlmModel
 
     raw_model = model
     llm_settings = None
     if model is None:
-        from co_cli.llm._factory import build_model
+        from co_cli.llm.factory import build_model
 
         _llm = build_model(config.llm)
         raw_model = _llm.model
@@ -126,7 +126,7 @@ def build_agent(
             date_prompt,
             safety_prompt,
         )
-        from co_cli.prompts._assembly import build_static_instructions
+        from co_cli.context.assembly import build_static_instructions
 
         static_instructions = build_static_instructions(config)
 

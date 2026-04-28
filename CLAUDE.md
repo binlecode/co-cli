@@ -48,7 +48,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **`_prefix.py` helpers**: leading-underscore modules are package-private. If imported outside the package, drop the underscore.
 - **Quality gates**: `scripts/quality-gate.sh` is the single source of truth. Tool configs in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
 
-**Known Pitfall — DO NOT hardcode `~/.co-cli`**: use `USER_DIR` and derived constants from `co_cli/config/_core.py`. Tests override `CO_HOME` to a temp dir — hardcoded paths bypass this and bleed state across test runs.
+**Known Pitfall — DO NOT hardcode `~/.co-cli`**: use `USER_DIR` and derived constants from `co_cli/config/core.py`. Tests override `CO_HOME` to a temp dir — hardcoded paths bypass this and bleed state across test runs.
 
 <important if="you are writing or modifying Python code (naming, classes, display)">
 See `agent_docs/code-conventions.md` — class naming suffixes, variable naming, shared primitives, display

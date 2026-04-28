@@ -9,7 +9,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS as _CONFIG
 
-from co_cli.agent._core import build_agent
+from co_cli.agent.core import build_agent
 from co_cli.deps import CoDeps
 from co_cli.memory.session import session_filename
 from co_cli.memory.store import MemoryIndex

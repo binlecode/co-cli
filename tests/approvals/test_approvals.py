@@ -2,7 +2,7 @@
 
 from pydantic_ai import DeferredToolResults
 
-from co_cli.config._core import settings
+from co_cli.config.core import settings
 from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 from co_cli.tools.approvals import (
     is_auto_approved,

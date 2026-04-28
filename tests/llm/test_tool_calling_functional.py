@@ -21,10 +21,10 @@ from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agent._core import build_tool_registry
+from co_cli.agent.core import build_tool_registry
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.llm._factory import build_model
+from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 pytestmark = pytest.mark.local

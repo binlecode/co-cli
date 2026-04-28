@@ -26,15 +26,15 @@
 Section 2 owns the execution flow. This section only names the files that own the tool system.
 
 ```text
-co_cli/agent/_core.py
+co_cli/agent/core.py
   -> build_tool_registry(), build_agent()
 co_cli/agent/_native_toolset.py
   -> NATIVE_TOOLS, _build_native_toolset(), _approval_resume_filter()
-co_cli/agent/_mcp.py
+co_cli/agent/mcp.py
   -> _build_mcp_toolsets(), discover_mcp_tools()
-co_cli/tools/_lifecycle.py
+co_cli/tools/lifecycle.py
   -> before_tool_execute(), after_tool_execute()
-co_cli/tools/_deferred_prompt.py
+co_cli/tools/deferred_prompt.py
   -> category awareness prompt for DEFERRED tools
 co_cli/tools/approvals.py
   -> approval subject resolution and remembered session rules
@@ -120,7 +120,7 @@ Approval controls human permission; locks ensure structural correctness.
 
 Legend: **Tool** shows the callable signature · **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
 
-The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/_mcp.py`, are always DEFERRED, and are not included in the 37-tool native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface. The grouping below is capability-oriented so it can be compared directly with peer inventories such as Hermes without changing the underlying visibility or approval semantics.
+The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/mcp.py`, are always DEFERRED, and are not included in the 37-tool native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface. The grouping below is capability-oriented so it can be compared directly with peer inventories such as Hermes without changing the underlying visibility or approval semantics.
 
 ### Interaction & Session Control
 

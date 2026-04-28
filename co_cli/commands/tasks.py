@@ -5,7 +5,7 @@ from __future__ import annotations
 from rich.table import Table
 
 from co_cli.commands.types import CommandContext
-from co_cli.display._core import console
+from co_cli.display.core import console
 
 
 async def _cmd_tasks(ctx: CommandContext, args: str) -> None:

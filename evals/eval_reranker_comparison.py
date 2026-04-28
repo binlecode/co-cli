@@ -29,7 +29,7 @@ from pathlib import Path
 
 from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
 
-from co_cli.knowledge._store import KnowledgeStore, SearchResult
+from co_cli.knowledge.store import KnowledgeStore, SearchResult
 
 # ---------------------------------------------------------------------------
 # Harder synthetic corpus -- 5 topics x 6 docs
@@ -483,7 +483,7 @@ def build_index(
     ollama_host: str = "http://localhost:11434",
 ) -> KnowledgeStore:
     """Create a fresh KnowledgeStore with the full synthetic corpus loaded."""
-    from co_cli.config._core import Settings
+    from co_cli.config.core import Settings
     from co_cli.config.knowledge import KnowledgeSettings, LlmModelSettings
     from co_cli.config.llm import LlmSettings
 

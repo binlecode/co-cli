@@ -15,16 +15,16 @@ from tests._settings import make_settings
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, LocalOnly, ReplaceTranscript
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.display._core import Frontend, console
-from co_cli.knowledge._store import KnowledgeStore
-from co_cli.llm._factory import build_model
+from co_cli.display.core import Frontend, console
+from co_cli.knowledge.store import KnowledgeStore
+from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
 
 # Tool registry and agent built once at module level.
 # Uses noreason settings for fast, non-reasoning tool-calling tests.
-from co_cli.agent._core import build_tool_registry
+from co_cli.agent.core import build_tool_registry
 
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 _AGENT = Agent(

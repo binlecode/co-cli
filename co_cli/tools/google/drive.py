@@ -176,7 +176,7 @@ def drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
                     content=text,
                     hash=_hashlib.sha256(text.encode()).hexdigest(),
                 )
-                from co_cli.knowledge._chunker import chunk_text
+                from co_cli.knowledge.chunker import chunk_text
 
                 drive_chunks = chunk_text(
                     text,

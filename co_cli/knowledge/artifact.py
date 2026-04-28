@@ -15,7 +15,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.knowledge.frontmatter import parse_frontmatter
 
 logger = logging.getLogger(__name__)
 

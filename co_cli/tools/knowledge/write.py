@@ -11,19 +11,19 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.knowledge._artifact import (
+from co_cli.knowledge.artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
     SourceTypeEnum,
     load_knowledge_artifacts,
 )
-from co_cli.knowledge._frontmatter import (
+from co_cli.knowledge.frontmatter import (
     parse_frontmatter,
     render_frontmatter,
     render_knowledge_file,
 )
-from co_cli.knowledge._similarity import find_similar_artifacts, is_content_superset
 from co_cli.knowledge.mutator import _atomic_write, _reindex_knowledge_file, _update_artifact_body
+from co_cli.knowledge.similarity import find_similar_artifacts, is_content_superset
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.knowledge.helpers import (
     _find_article_by_url,

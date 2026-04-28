@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.knowledge.frontmatter import parse_frontmatter
 from co_cli.skills.loader import _inject_source_url
 
 logger = logging.getLogger(__name__)

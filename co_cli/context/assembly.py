@@ -15,10 +15,9 @@ from typing import TYPE_CHECKING
 from co_cli.context.compaction import COMPACTABLE_KEEP_RECENT
 
 if TYPE_CHECKING:
-    from co_cli.config._core import Settings
+    from co_cli.config.core import Settings
 
-_PROMPTS_DIR = Path(__file__).parent
-_RULES_DIR = _PROMPTS_DIR / "rules"
+_RULES_DIR = Path(__file__).parent / "rules"
 
 _RULE_FILENAME_RE = re.compile(r"^(?P<order>\d{2})_(?P<rule_id>[a-z0-9_]+)\.md$")
 
@@ -108,7 +107,7 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
     critique: str | None = None
 
     if config.personality:
-        from co_cli.prompts.personalities._loader import (
+        from co_cli.personality.prompts.loader import (
             load_character_memories,
             load_personality_memories,
             load_soul_critique,

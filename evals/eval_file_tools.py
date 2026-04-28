@@ -39,8 +39,8 @@ from evals._frontend import SilentFrontend
 from evals._observability import init_eval_observability
 from evals._tools import tool_names
 
-from co_cli.agent._core import build_agent, build_tool_registry
-from co_cli.config._core import settings
+from co_cli.agent.core import build_agent, build_tool_registry
+from co_cli.config.core import settings
 from co_cli.context.orchestrate import run_turn
 
 # ---------------------------------------------------------------------------

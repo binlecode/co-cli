@@ -19,7 +19,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS as _CONFIG
 from tests._settings import TEST_LLM, make_settings
 
-from co_cli.agent._core import build_agent
+from co_cli.agent.core import build_agent
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, ReplaceTranscript
 from co_cli.context._compaction_boundaries import _find_last_turn_start
@@ -51,7 +51,7 @@ from co_cli.context.compaction import (
 from co_cli.context.orchestrate import _history_with_pending_user_input
 from co_cli.context.prompt_text import recall_prompt_text
 from co_cli.deps import CoDeps, CoSessionState, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
-from co_cli.llm._factory import build_model
+from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
@@ -172,7 +172,7 @@ async def test_summarize_dropped_messages_raises_on_summarizer_failure():
 async def test_thrash_gate_emits_user_hint_once_per_session():
     """First trip: console hint mentioning /compact is emitted and the one-shot flag flips.
     Second trip: no further console output, flag stays True (hint suppressed)."""
-    from co_cli.display._core import console as _console
+    from co_cli.display.core import console as _console
 
     msgs = _make_messages(10)
     ctx = _make_processor_ctx()

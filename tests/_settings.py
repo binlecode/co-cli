@@ -1,6 +1,6 @@
 """Shared test settings — real config from real load_config(), cached and overridable."""
 
-from co_cli.config._core import Settings, load_config
+from co_cli.config.core import Settings, load_config
 
 _BASE: Settings | None = None
 

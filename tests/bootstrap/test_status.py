@@ -7,7 +7,7 @@ from co_cli.bootstrap.render_status import (
     check_security,
     get_status,
 )
-from co_cli.config._core import settings
+from co_cli.config.core import settings
 
 
 def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:

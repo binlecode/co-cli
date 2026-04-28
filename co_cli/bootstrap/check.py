@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from co_cli.config._core import Settings
+    from co_cli.config.core import Settings
     from co_cli.deps import CoDeps
 
 
@@ -401,7 +401,7 @@ def check_settings(config: "Settings") -> DoctorResult:
     Checks google, obsidian, brave, and MCP servers using values from config.
     No runtime services — callers that need knowledge/skills checks use check_runtime(deps).
     """
-    from co_cli.config._core import ADC_PATH, GOOGLE_TOKEN_PATH
+    from co_cli.config.core import ADC_PATH, GOOGLE_TOKEN_PATH
 
     checks: list[CheckItem] = []
 
@@ -463,7 +463,7 @@ def check_runtime(
     config and integration state with session state from deps. No startup policy —
     failures are recorded as findings, not raised as exceptions.
     """
-    from co_cli.config._core import ADC_PATH, GOOGLE_TOKEN_PATH
+    from co_cli.config.core import ADC_PATH, GOOGLE_TOKEN_PATH
 
     # IO checks
     _emit_progress(progress, "Doctor: checking provider and model availability...")

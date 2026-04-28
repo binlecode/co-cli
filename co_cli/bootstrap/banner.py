@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.bootstrap.project_info import project_info
-from co_cli.display._core import console
+from co_cli.display.core import console
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps

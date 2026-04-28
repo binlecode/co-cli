@@ -27,8 +27,8 @@
 The TUI layer is the user-facing shell of the chat session. It owns the REPL loop, input
 completion, slash command dispatch, and the boundary between user input and agent turns. The
 layer is implemented across three modules: `co_cli/main.py` (loop and lifecycle),
-`co_cli/commands/_commands.py` (command registry and handlers), and
-`co_cli/display/_core.py` (terminal output surface).
+`co_cli/commands/core.py` (command registry and handlers), and
+`co_cli/display/core.py` (terminal output surface).
 
 ```
 User input
@@ -201,11 +201,11 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | File | Purpose |
 |---|---|
 | `co_cli/main.py` | REPL loop (`_chat_loop`), foreground turn entry, CLI command (`chat`) |
-| `co_cli/commands/_commands.py` | All handlers, `dispatch()`, `get_skill_registry` |
-| `co_cli/commands/_registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, completer helpers |
-| `co_cli/commands/_types.py` | `CommandContext`, `SlashOutcome`, `LocalOnly`, `ReplaceTranscript`, `DelegateToAgent`, `_confirm` |
-| `co_cli/display/_core.py` | `Frontend` protocol, `TerminalFrontend`, `console`, `set_theme`, `PROMPT_CHAR` |
-| `co_cli/display/_stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy per segment |
+| `co_cli/commands/core.py` | All handlers, `dispatch()`, `get_skill_registry` |
+| `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, completer helpers |
+| `co_cli/commands/types.py` | `CommandContext`, `SlashOutcome`, `LocalOnly`, `ReplaceTranscript`, `DelegateToAgent`, `_confirm` |
+| `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `console`, `set_theme`, `PROMPT_CHAR` |
+| `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy per segment |
 | `co_cli/deps.py` | `CoSessionState` (user-preference + tool-visible state), `CoRuntimeState` (orchestration state) |
-| `co_cli/config/_core.py` | `VALID_REASONING_DISPLAY_MODES`, `DEFAULT_REASONING_DISPLAY`, mode constants |
-| `co_cli/skills/_skill_types.py` | `SkillConfig` — skill metadata including body, env vars, invocability flags |
+| `co_cli/config/core.py` | `VALID_REASONING_DISPLAY_MODES`, `DEFAULT_REASONING_DISPLAY`, mode constants |
+| `co_cli/skills/skill_types.py` | `SkillConfig` — skill metadata including body, env vars, invocability flags |

@@ -10,9 +10,8 @@ from co_cli.commands.registry import (
     filter_namespace_conflicts,
 )
 from co_cli.commands.types import CommandContext, _confirm
-from co_cli.config._core import settings
-from co_cli.display._core import console
-from co_cli.skills._skill_types import SkillConfig
+from co_cli.config.core import settings
+from co_cli.display.core import console
 from co_cli.skills.installer import (
     SkillFetchError,
     discover_skill_files,
@@ -27,6 +26,7 @@ from co_cli.skills.loader import (
     load_skills,
 )
 from co_cli.skills.registry import set_skill_commands
+from co_cli.skills.skill_types import SkillConfig
 
 
 def get_skill_registry(skill_commands: dict[str, SkillConfig]) -> list[dict]:

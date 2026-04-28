@@ -23,8 +23,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from pydantic_ai import Agent
 from pydantic_ai.agent import InstrumentationSettings
 
-from co_cli.config._core import LOGS_DB
-from co_cli.observability._telemetry import SQLiteSpanExporter
+from co_cli.config.core import LOGS_DB
+from co_cli.observability.telemetry import SQLiteSpanExporter
 
 # Per-test outcome tracking — avoids monkey-patching pytest Item objects.
 _test_outcomes: dict[str, str] = {}

@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from co_cli.display._core import QuestionPrompt
+from co_cli.display.core import QuestionPrompt
 from co_cli.tools.approvals import ApprovalSubject
 
 

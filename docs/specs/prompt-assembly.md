@@ -61,12 +61,12 @@ flowchart TD
 
 ### 2.1 Static Instruction Assembly
 
-`build_static_instructions()` (in `co_cli/prompts/_assembly.py`) assembles one literal string in fixed order:
+`build_static_instructions()` (in `co_cli/context/assembly.py`) assembles one literal string in fixed order:
 
 1. Soul seed from `souls/{role}/seed.md`
-2. Character memories from `co_cli/prompts/personalities/souls/{role}/memories/*.md` (read-only system assets)
-3. Mindsets from `co_cli/prompts/personalities/souls/{role}/mindsets/{task_type}.md`
-4. Numbered rules from `co_cli/prompts/rules/NN_rule_id.md` (contiguous from 01, unique prefixes, fail-fast validation)
+2. Character memories from `co_cli/personality/prompts/souls/{role}/memories/*.md` (read-only system assets)
+3. Mindsets from `co_cli/personality/prompts/souls/{role}/mindsets/{task_type}.md`
+4. Numbered rules from `co_cli/context/rules/NN_rule_id.md` (contiguous from 01, unique prefixes, fail-fast validation)
 5. Examples from `souls/{role}/examples.md` (optional)
 6. Critique appended as `## Review lens` (optional)
 
@@ -74,7 +74,7 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 
 ### 2.2 Dynamic Instruction Layers
 
-Registered in `build_agent()` (`co_cli/agent/_core.py`), evaluated fresh per request:
+Registered in `build_agent()` (`co_cli/agent/core.py`), evaluated fresh per request:
 
 | Layer | Condition | Content |
 | --- | --- | --- |
@@ -130,10 +130,10 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/agent/_core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
+| `co_cli/agent/core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
 | `co_cli/agent/_instructions.py` | dynamic instruction callbacks: `date_prompt`, `safety_prompt`, `add_shell_guidance`, `add_category_awareness_prompt` |
-| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — soul + personality-context memories + rules; rule-file validation |
-| `co_cli/prompts/personalities/_loader.py` | soul seed, mindset, character memory, examples, critique, and `load_personality_memories()` |
-| `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — soul + personality-context memories + rules; rule-file validation |
+| `co_cli/personality/prompts/loader.py` | soul seed, mindset, character memory, examples, critique, and `load_personality_memories()` |
+| `co_cli/personality/prompts/validator.py` | personality discovery and file validation |
 | `co_cli/context/prompt_text.py` | `recall_prompt_text` (date-only dynamic instruction) and `safety_prompt_text` — called via `agent.instructions()` wrappers in `agent/_instructions.py` |
-| `co_cli/tools/_deferred_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
+| `co_cli/tools/deferred_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |

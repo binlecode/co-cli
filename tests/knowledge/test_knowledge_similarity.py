@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from co_cli.knowledge._artifact import ArtifactKindEnum, KnowledgeArtifact
-from co_cli.knowledge._similarity import find_similar_artifacts, token_jaccard
+from co_cli.knowledge.artifact import ArtifactKindEnum, KnowledgeArtifact
+from co_cli.knowledge.similarity import find_similar_artifacts, token_jaccard
 
 
 def _artifact(

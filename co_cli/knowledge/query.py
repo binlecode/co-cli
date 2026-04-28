@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from co_cli.knowledge._artifact import KnowledgeArtifact
+from co_cli.knowledge.artifact import KnowledgeArtifact
 
 
 def _apply_memory_filters(

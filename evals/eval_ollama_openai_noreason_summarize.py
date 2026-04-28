@@ -31,10 +31,10 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config._core import settings as _settings
+from co_cli.config.core import settings as _settings
 from co_cli.context.summarization import summarize_messages
 from co_cli.deps import CoDeps
-from co_cli.llm._factory import LlmModel, build_model
+from co_cli.llm.factory import LlmModel, build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _THINK_MODEL = "qwen3.5:35b-a3b-think"

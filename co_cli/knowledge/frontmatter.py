@@ -1,6 +1,6 @@
 """YAML frontmatter parse, validate, and render for knowledge artifacts.
 
-See ``co_cli.knowledge._artifact.KnowledgeArtifact`` for the data model.
+See ``co_cli.knowledge.artifact.KnowledgeArtifact`` for the data model.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 if TYPE_CHECKING:
-    from co_cli.knowledge._artifact import KnowledgeArtifact
+    from co_cli.knowledge.artifact import KnowledgeArtifact
 
 logger = logging.getLogger(__name__)
 

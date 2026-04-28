@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.skills._skill_types import SkillConfig
+from co_cli.knowledge.frontmatter import parse_frontmatter
+from co_cli.skills.skill_types import SkillConfig
 
 logger = logging.getLogger(__name__)
 

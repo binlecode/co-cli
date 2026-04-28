@@ -13,9 +13,9 @@ from tests._settings import SETTINGS as _CONFIG
 from tests._settings import TEST_LLM
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
-from co_cli.agent._core import build_agent
+from co_cli.agent.core import build_agent
 from co_cli.deps import CoDeps
-from co_cli.llm._factory import build_model
+from co_cli.llm.factory import build_model
 from co_cli.memory.session import session_filename
 from co_cli.memory.store import MemoryIndex
 from co_cli.memory.transcript import append_messages

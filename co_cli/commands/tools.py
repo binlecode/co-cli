@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from co_cli.commands.types import CommandContext
-from co_cli.display._core import console
+from co_cli.display.core import console
 
 
 async def _cmd_tools(ctx: CommandContext, args: str) -> None:

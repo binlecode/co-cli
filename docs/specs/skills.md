@@ -40,7 +40,7 @@ flowchart LR
 
 ### Skill Model
 
-The in-memory shape is `SkillConfig` in `co_cli/skills/_skill_types.py`.
+The in-memory shape is `SkillConfig` in `co_cli/skills/skill_types.py`.
 
 | Field | Purpose |
 | --- | --- |
@@ -55,7 +55,7 @@ The in-memory shape is `SkillConfig` in `co_cli/skills/_skill_types.py`.
 
 ### File Format
 
-Skills are markdown files parsed with `parse_frontmatter()` from `co_cli/knowledge/_frontmatter.py`.
+Skills are markdown files parsed with `parse_frontmatter()` from `co_cli/knowledge/frontmatter.py`.
 
 Supported frontmatter fields parsed from the skill file:
 
@@ -215,17 +215,17 @@ There is no separate skills config object today.
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/skills/_skill_types.py` | `SkillConfig` frozen dataclass |
+| `co_cli/skills/skill_types.py` | `SkillConfig` frozen dataclass |
 | `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `_scan_skill_content`, `_check_requires` |
 | `co_cli/skills/installer.py` | `fetch_skill_content`, `write_skill_file`, `discover_skill_files`, `find_skill_source_url`, `read_skill_meta` |
 | `co_cli/skills/registry.py` | `set_skill_commands()` — replaces `deps.skill_commands` |
-| `co_cli/commands/_commands.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
+| `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
 | `co_cli/commands/skills.py` | `/skills` command family (list/check/install/reload/upgrade) and `get_skill_registry` |
-| `co_cli/commands/_registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, `_build_completer_words` |
+| `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, `_build_completer_words` |
 | `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` (top-level); `active_skill_name` (runtime) |
-| `co_cli/knowledge/_frontmatter.py` | markdown frontmatter parsing used by skill loader |
+| `co_cli/knowledge/frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/skills/` | package-default shipped skills |
 | `~/.co-cli/skills/` | user-global skill files; override bundled skills on name collision |
 | `docs/specs/bootstrap.md` | when skills load during startup |

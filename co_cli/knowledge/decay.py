@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from co_cli.config.knowledge import KnowledgeSettings
-from co_cli.knowledge._artifact import KnowledgeArtifact, load_knowledge_artifacts
+from co_cli.knowledge.artifact import KnowledgeArtifact, load_knowledge_artifacts
 
 logger = logging.getLogger(__name__)
 

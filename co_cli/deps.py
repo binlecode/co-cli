@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
@@ -9,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic_ai.usage import RunUsage
 
-from co_cli.config._core import (
+from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
     KNOWLEDGE_DIR,
     SEARCH_DB,
@@ -20,11 +19,11 @@ from co_cli.config._core import (
 )
 
 if TYPE_CHECKING:
-    from co_cli.agent._core import ToolRegistry
-    from co_cli.knowledge._store import KnowledgeStore
-    from co_cli.llm._factory import LlmModel
+    from co_cli.agent.core import ToolRegistry
+    from co_cli.knowledge.store import KnowledgeStore
+    from co_cli.llm.factory import LlmModel
     from co_cli.memory.store import MemoryIndex
-    from co_cli.skills._skill_types import SkillConfig
+    from co_cli.skills.skill_types import SkillConfig
     from co_cli.tools.background import BackgroundTaskState
     from co_cli.tools.resource_lock import ResourceLockStore
     from co_cli.tools.shell_backend import ShellBackend
@@ -105,10 +104,6 @@ class CoSessionState:
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
-    # Cursor for delta-based memory extraction — index of first unextracted message in history.
-    last_extracted_message_idx: int = 0
-    # Turn counter for cadence-gated extraction.
-    last_extracted_turn_idx: int = 0
     # Count of messages durably persisted to session_path.
     persisted_message_count: int = 0
 
@@ -127,7 +122,7 @@ class CoRuntimeState:
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions, last_overbudget_batch_signature,
-      extraction_task, previous_compaction_summary,
+      previous_compaction_summary,
       post_compaction_token_estimate, message_count_at_last_compaction
     """
 
@@ -152,9 +147,6 @@ class CoRuntimeState:
     # Dedup key for evict_batch_tool_outputs's "still over budget" warning.
     # Same batch repeated request-to-request emits the warning once, not per cycle.
     last_overbudget_batch_signature: tuple[str, ...] | None = None
-    # Background knowledge-extraction task slot — owned per-deps so sessions and
-    # forked sub-agent deps do not share the in-flight task.
-    extraction_task: asyncio.Task[None] | None = field(default=None, repr=False)
     # Raw LLM-generated summary text from the most recent successful compaction —
     # feeds the iterative-update prompt branch on the next compaction. None on session
     # start; reset by /new and /clear; untouched by /compact failures and /resume.

@@ -72,7 +72,7 @@ def _ensure_dirs() -> None:
 
 def _validate_personality(personality: str) -> list[str]:
     """Return startup warnings for missing personality files."""
-    from co_cli.prompts.personalities._validator import validate_personality_files
+    from co_cli.personality.prompts.validator import validate_personality_files
 
     return validate_personality_files(personality)
 
@@ -114,7 +114,7 @@ class Settings(BaseModel):
     @field_validator("personality")
     @classmethod
     def _validate_personality_name(cls, v: str) -> str:
-        from co_cli.prompts.personalities._validator import VALID_PERSONALITIES
+        from co_cli.personality.prompts.validator import VALID_PERSONALITIES
 
         if v not in VALID_PERSONALITIES:
             raise ValueError(f"personality must be one of {VALID_PERSONALITIES}, got: {v}")
@@ -235,7 +235,7 @@ def get_settings() -> Settings:
 
 
 def __getattr__(name: str):
-    """Lazy module attribute — ``from co_cli.config._core import settings`` works."""
+    """Lazy module attribute — ``from co_cli.config.core import settings`` works."""
     if name == "settings":
         return get_settings()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

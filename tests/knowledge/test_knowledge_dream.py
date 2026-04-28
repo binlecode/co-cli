@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from co_cli.knowledge._dream import (
+from co_cli.knowledge.dream import (
     DreamState,
     DreamStats,
     dream_state_path,
