@@ -146,3 +146,29 @@ Plan approved.
 
 **Overall: DELIVERED**
 Dead outer timeout wrapper and unreachable `except TimeoutError` removed from `_maybe_run_dream_cycle`; stale docstring and both `dream.py` comments corrected; spec updated to match.
+
+## Implementation Review — 2026-04-28
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | no `asyncio.timeout` / `except TimeoutError` / "Bounded by a 60-second timeout" in `_maybe_run_dream_cycle` | ✓ pass | `main.py:160-185` — wrapper has no `asyncio.timeout`, no `except TimeoutError`; docstring reads "Errors are logged and never propagated…" only |
+| TASK-2 | no "zero-chunk case" / "Hoist outside the chunk loop" in `dream.py`; dream tests pass | ✓ pass | `dream.py:121` — docstring "Instantiated once per session; call .run() per chunk"; `dream.py:201-202` — comment "defensive init — bound even if miner_agent raises on the first chunk" |
+
+### Issues Found & Fixed
+No issues found.
+
+### Tests
+- Command: `uv run pytest -v`
+- Result: 725 passed, 0 failed
+- Log: `.pytest-logs/20260428-161324-review-impl.log`
+
+### Doc Sync
+- Scope: narrow — comment/docstring-only changes, no public API changes; doc sync already completed by delivery
+- Result: clean — `dream.md` remaining `asyncio.timeout()` references verified accurate (describe internal `run_dream_cycle` timeout at `dream.py:508`, not the removed outer wrapper)
+
+### Behavioral Verification
+No user-facing changes — skipped. Task type is refactor (dead code removal and comment corrections); no CLI, tool, or output surface modified.
+
+### Overall: PASS
+Dead code removal and comment fixes are correct, complete, and verified. 725 tests pass. Ship when ready.

@@ -12,8 +12,10 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 from tests._settings import make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
+from co_cli.config.core import Settings
 from co_cli.deps import CoDeps
 from co_cli.llm.factory import build_model
+from co_cli.main import _maybe_run_dream_cycle
 from co_cli.memory.artifact import (
     ArtifactKindEnum,
     KnowledgeArtifact,
@@ -31,12 +33,14 @@ from co_cli.memory.transcript import append_messages
 from co_cli.tools.shell_backend import ShellBackend
 
 
-def _make_deps(tmp_path: Path, *, with_model: bool) -> tuple[CoDeps, KnowledgeStore]:
+def _make_deps(
+    tmp_path: Path, *, with_model: bool, config: Settings | None = None
+) -> tuple[CoDeps, KnowledgeStore]:
     knowledge_dir = tmp_path / "knowledge"
     sessions_dir = tmp_path / "sessions"
     knowledge_dir.mkdir()
     sessions_dir.mkdir()
-    config = make_settings()
+    config = config or make_settings()
     store = KnowledgeStore(config=config, knowledge_db_path=tmp_path / "search.db")
     model = build_model(config.llm) if with_model else None
     deps = CoDeps(
@@ -133,8 +137,7 @@ async def test_dry_run_counts_without_writing(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_decay_failure_does_not_prevent_state_persistence(tmp_path: Path) -> None:
-    """Each phase is independent — even when no work is done, state is saved."""
+async def test_state_persists_across_no_op_cycles(tmp_path: Path) -> None:
     deps, store = _make_deps(tmp_path, with_model=False)
     try:
         await run_dream_cycle(deps)
@@ -228,7 +231,8 @@ async def test_run_dream_cycle_enforces_timeout_bound(tmp_path: Path) -> None:
             ],
         )
 
-        result = await run_dream_cycle(deps, timeout_secs=0.001)
+        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
+            result = await run_dream_cycle(deps, timeout_secs=0.001)
 
         assert result.timed_out is True
         assert any("timeout" in err for err in result.errors)
@@ -259,5 +263,61 @@ async def test_run_dream_cycle_accumulates_stats_across_cycles(tmp_path: Path) -
         assert final_state.stats.total_extracted == 5 + result.extracted
         assert final_state.stats.total_merged == 2 + result.merged
         assert final_state.stats.total_decayed == 7 + result.decayed
+    finally:
+        store.close()
+
+
+# ---------------------------------------------------------------------------
+# _maybe_run_dream_cycle — session-end wrapper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_maybe_run_dream_cycle_skips_when_consolidation_disabled(
+    tmp_path: Path,
+) -> None:
+    base = make_settings()
+    config = base.model_copy(
+        update={"knowledge": base.knowledge.model_copy(update={"consolidation_enabled": False})}
+    )
+    deps, store = _make_deps(tmp_path, with_model=False, config=config)
+    try:
+        await _maybe_run_dream_cycle(deps)
+        assert not dream_state_path(deps.knowledge_dir).exists()
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_maybe_run_dream_cycle_skips_when_trigger_not_session_end(
+    tmp_path: Path,
+) -> None:
+    base = make_settings()
+    config = base.model_copy(
+        update={
+            "knowledge": base.knowledge.model_copy(
+                update={"consolidation_enabled": True, "consolidation_trigger": "manual"}
+            )
+        }
+    )
+    deps, store = _make_deps(tmp_path, with_model=False, config=config)
+    try:
+        await _maybe_run_dream_cycle(deps)
+        assert not dream_state_path(deps.knowledge_dir).exists()
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_mine_skips_empty_session_and_marks_processed(tmp_path: Path) -> None:
+    deps, store = _make_deps(tmp_path, with_model=False)
+    try:
+        session_path = deps.sessions_dir / "2026-04-28-T000000Z-emptyses.jsonl"
+        session_path.write_text("", encoding="utf-8")
+
+        await run_dream_cycle(deps)
+
+        state = load_dream_state(deps.knowledge_dir)
+        assert session_path.name in state.processed_sessions
     finally:
         store.close()

@@ -120,8 +120,7 @@ def resolve_compaction_budget(
 
 _SUMMARIZE_PROMPT = (
     "Distill the conversation history into a structured handoff summary.\n"
-    "REQUIRED: Write from the user's perspective. Your first sentence MUST start with 'I asked you...' "
-    "— starting any other way breaks the handoff contract for the continuation model.\n\n"
+    "Do NOT include any preamble, greeting, or prefix — output only the structured sections below.\n\n"
     "Use these sections:\n\n"
     "## Active Task\n"
     "[CRITICAL — THE MOST IMPORTANT FIELD. Copy the user's most recent request using\n"

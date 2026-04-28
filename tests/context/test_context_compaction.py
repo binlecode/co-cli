@@ -324,6 +324,19 @@ async def test_trigger_uses_max_floor():
     assert len(result) < len(msgs), "max() floor should have triggered compaction"
 
 
+def test_summarize_prompt_no_first_sentence_constraint() -> None:
+    """Prompt must not contain the 'I asked you' first-sentence constraint.
+
+    That constraint caused the model to echo the summarizer instruction as the
+    session task when history contained no real user task (prompt bleed). Task
+    identification is now delegated entirely to ## Active Task. Regression lock
+    against the constraint silently re-appearing.
+    """
+    assert "I asked you" not in _SUMMARIZE_PROMPT
+    assert "MUST start with" not in _SUMMARIZE_PROMPT
+    assert "Do NOT include any preamble" in _SUMMARIZE_PROMPT
+
+
 def test_summarize_prompt_active_task_section() -> None:
     """## Active Task is the first static section — appears before ## Goal."""
     result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
@@ -1188,12 +1201,18 @@ def _extract_section(summary: str, section_name: str) -> str:
 
 
 def _has_verbatim_anchor(summary_text: str, source_messages: list[ModelMessage]) -> bool:
-    # "Next Step" carries a verbatim drift anchor per template; "Active Task" is defined as
-    # "Verbatim most recent user request" — both satisfy the verbatim-anchor contract.
-    section = _extract_section(summary_text, "Next Step") or _extract_section(
-        summary_text, "Active Task"
-    )
-    if not section:
+    # Both "Next Step" and "Active Task" independently satisfy the verbatim-anchor contract.
+    # Check them independently so a reformatted ## Next Step (e.g. backtick-wrapped tokens)
+    # doesn't shadow a valid ## Active Task verbatim copy.
+    sections = [
+        s
+        for s in (
+            _extract_section(summary_text, "Next Step"),
+            _extract_section(summary_text, "Active Task"),
+        )
+        if s
+    ]
+    if not sections:
         return False
     recent_texts = " ".join(
         p.content
@@ -1202,7 +1221,11 @@ def _has_verbatim_anchor(summary_text: str, source_messages: list[ModelMessage])
         if (isinstance(p, UserPromptPart) and isinstance(p.content, str))
         or (isinstance(p, TextPart) and isinstance(p.content, str))
     )
-    return any(section[i : i + 20] in recent_texts for i in range(len(section) - 20 + 1))
+    return any(
+        section[i : i + 20] in recent_texts
+        for section in sections
+        for i in range(len(section) - 20 + 1)
+    )
 
 
 # ---------------------------------------------------------------------------

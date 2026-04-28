@@ -8,6 +8,7 @@ from pathlib import Path
 from co_cli.memory.dream import (
     DreamState,
     DreamStats,
+    _chunk_dream_window,
     dream_state_path,
     load_dream_state,
     save_dream_state,
@@ -81,3 +82,44 @@ def test_dream_stats_increment_and_persist(tmp_path: Path) -> None:
     assert reloaded.stats.total_cycles == 1
     assert reloaded.stats.total_extracted == 5
     assert reloaded.processed_sessions == ["2026-04-16-session.jsonl"]
+
+
+# ---------------------------------------------------------------------------
+# _chunk_dream_window
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_dream_window_returns_single_chunk_when_under_soft_limit() -> None:
+    window = "x" * 100
+    chunks = _chunk_dream_window(window)
+    assert chunks == [window]
+
+
+def test_chunk_dream_window_at_soft_limit_stays_single_chunk() -> None:
+    # Exactly 16000 chars — at the limit, no split (<=)
+    window = "x" * 16_000
+    chunks = _chunk_dream_window(window)
+    assert len(chunks) == 1
+    assert chunks[0] == window
+
+
+def test_chunk_dream_window_oversized_produces_multiple_overlapping_chunks() -> None:
+    # 30000 chars: step=10000, chunk_size=12000, overlap=2000
+    # chunk1: [0:12000], chunk2: [10000:22000], chunk3: [20000:30000]
+    window = "A" * 10_000 + "B" * 10_000 + "C" * 10_000
+    chunks = _chunk_dream_window(window)
+
+    assert len(chunks) == 3
+    assert chunks[0] == "A" * 10_000 + "B" * 2_000
+    assert chunks[1] == "B" * 10_000 + "C" * 2_000
+    assert chunks[2] == "C" * 10_000
+    # overlap: tail of chunk[i] equals head of chunk[i+1]
+    assert chunks[0][-2_000:] == chunks[1][:2_000]
+    assert chunks[1][-2_000:] == chunks[2][:2_000]
+
+
+def test_chunk_dream_window_first_and_last_chars_covered() -> None:
+    window = "START" + "m" * 20_000 + "END"
+    chunks = _chunk_dream_window(window)
+    assert chunks[0].startswith("START")
+    assert chunks[-1].endswith("END")
