@@ -37,6 +37,15 @@ on a local 35B model while still failing fast on hangs.
 _T1_SESSION_CAP = 3
 """Maximum number of T1 sessions to summarize regardless of limit."""
 
+_SESSION_FALLBACK_PREVIEW_CHARS = 500
+"""Raw preview length used when LLM summarization fails for a session."""
+
+_SNIPPET_DISPLAY_CHARS = 100
+"""Maximum chars shown from a T2 artifact snippet in formatted output."""
+
+_SESSION_SUMMARY_PREVIEW_CHARS = 300
+"""Maximum chars of a T1 session summary shown in formatted output."""
+
 
 def _browse_recent(
     ctx: RunContext[CoDeps],
@@ -122,7 +131,11 @@ def _build_results_payload(
     for (session_id, match_info, window), summary_result in zip(tasks, summaries, strict=True):
         if isinstance(summary_result, Exception) or not summary_result:
             failure_count += 1
-            preview = window[:500] + "\n…[truncated]" if window else "No preview available."
+            preview = (
+                window[:_SESSION_FALLBACK_PREVIEW_CHARS] + "\n…[truncated]"
+                if window
+                else "No preview available."
+            )
             summary = f"[Raw preview — summarization unavailable]\n{preview}"
         else:
             summary = summary_result
@@ -174,7 +187,7 @@ async def _search_artifacts(
             "tier": "artifacts",
             "kind": m.artifact_kind,
             "title": m.title or m.path.stem,
-            "snippet": m.content[:100],
+            "snippet": m.content[:_SNIPPET_DISPLAY_CHARS],
             "score": 0.0,
             "path": str(m.path),
             "slug": m.path.stem,
@@ -313,14 +326,16 @@ async def memory_search(
         lines.append("**Saved artifacts:**")
         for r in artifact_results:
             kind_str = f" [{r['kind']}]" if r.get("kind") else ""
-            lines.append(f"  **{r['title']}**{kind_str}: {(r.get('snippet') or '')[:100]}")
+            lines.append(
+                f"  **{r['title']}**{kind_str}: {(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
+            )
 
     if session_results:
         lines.append("\n**Past sessions:**")
         for idx, entry in enumerate(session_results, 1):
             summary_preview = entry.get("summary", "")
-            if len(summary_preview) > 300:
-                summary_preview = summary_preview[:297] + "..."
+            if len(summary_preview) > _SESSION_SUMMARY_PREVIEW_CHARS:
+                summary_preview = summary_preview[: _SESSION_SUMMARY_PREVIEW_CHARS - 3] + "..."
             lines.append(
                 f"  {idx}. [{entry['when']}] {entry['session_id']}\n     {summary_preview}"
             )

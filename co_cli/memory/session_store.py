@@ -17,10 +17,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from co_cli.memory.indexer import extract_messages
-from co_cli.memory.search_util import sanitize_fts5_query
+from co_cli.memory.search_util import normalize_bm25, run_fts, sanitize_fts5_query
 from co_cli.memory.session import parse_session_filename
 
 logger = logging.getLogger(__name__)
+
+_SESSION_DB_CONNECT_TIMEOUT_SECS = 5
+_SESSION_FTS_SNIPPET_TOKENS = 10
+_SESSION_SEARCH_OVERFETCH_FACTOR = 20
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -90,7 +94,9 @@ class SessionStore:
 
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=5)
+        self._conn = sqlite3.connect(
+            str(db_path), check_same_thread=False, timeout=_SESSION_DB_CONNECT_TIMEOUT_SECS
+        )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
@@ -202,13 +208,13 @@ class SessionStore:
         query = sanitize_fts5_query(query)
         if not query:
             return []
-        sql = """
+        sql = f"""
             SELECT
                 s.session_id,
                 s.session_path,
                 s.created_at,
                 m.role,
-                snippet(messages_fts, 0, '[', ']', '...', 10) AS snippet,
+                snippet(messages_fts, 0, '[', ']', '...', {_SESSION_FTS_SNIPPET_TOKENS}) AS snippet,
                 bm25(messages_fts) AS rank
             FROM messages_fts
             JOIN messages m ON messages_fts.rowid = m.id
@@ -217,17 +223,17 @@ class SessionStore:
             ORDER BY rank
             LIMIT ?
         """
-        try:
-            rows = self._conn.execute(sql, (query, limit * 20)).fetchall()
-        except sqlite3.OperationalError as exc:
-            logger.warning("Session search failed: %s", exc)
+        rows = run_fts(
+            self._conn, sql, (query, limit * _SESSION_SEARCH_OVERFETCH_FACTOR), label="Session"
+        )
+        if not rows:
             return []
 
-        # Deduplicate: keep best-scoring (lowest abs rank) message per session
+        # Deduplicate: keep highest-scoring (most relevant) message per session
         best: dict[str, SessionSearchResult] = {}
         for row in rows:
             sid = row["session_id"]
-            score = 1.0 / (1.0 + abs(row["rank"]))
+            score = normalize_bm25(row["rank"])
             if sid in best and score <= best[sid].score:
                 continue
             best[sid] = SessionSearchResult(

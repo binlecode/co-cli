@@ -33,9 +33,7 @@ def _reindex_knowledge_file(
 ) -> None:
     """Re-index a knowledge file's docs row and chunk rows after in-place mutation.
 
-    Both legs must stay in sync when the file body changes: docs_fts serves
-    non-chunks queries, chunks_fts serves chunk-level queries. sync_dir normally
-    handles both at once, but callers that mutate a single file need to refresh the DB inline.
+    sync_dir handles both at once; callers that mutate a single file call this to refresh inline.
     """
     store = ctx.deps.knowledge_store
     if store is None:

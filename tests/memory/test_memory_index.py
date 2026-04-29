@@ -298,3 +298,54 @@ def test_sync_sessions_exclude_omits_active_session(tmp_path: Path) -> None:
         assert "ddddeeff" not in indexed_ids, "Excluded session B must not be indexed"
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# BM25 score ordering: more-relevant session must score higher
+# ---------------------------------------------------------------------------
+
+
+def test_search_scores_higher_relevance_session_first(tmp_path: Path) -> None:
+    """BM25 score must be monotone with relevance: more occurrences → higher score.
+
+    Regression guard for the inverted formula bug (1/(1+abs(rank)) maps
+    high-magnitude rank to LOW score; abs(rank)/(1+abs(rank)) is correct).
+    """
+    sessions_dir = tmp_path / "sessions"
+    now_hi = datetime(2026, 4, 15, 10, 0, 0, tzinfo=UTC)
+    now_lo = datetime(2026, 4, 15, 11, 0, 0, tzinfo=UTC)
+    name_hi = session_filename(now_hi, "hihihi11-0000-0000-0000-000000000000")
+    name_lo = session_filename(now_lo, "lololo22-0000-0000-0000-000000000000")
+
+    # High-relevance session: query term "quasar" repeated many times
+    hi_content = " ".join(["quasar"] * 20)
+    _write_session(
+        sessions_dir,
+        name=name_hi,
+        messages=[ModelRequest(parts=[UserPromptPart(content=hi_content)])],
+    )
+    # Low-relevance session: query term appears once
+    _write_session(
+        sessions_dir,
+        name=name_lo,
+        messages=[ModelRequest(parts=[UserPromptPart(content="quasar is a distant object")])],
+    )
+
+    db_path = tmp_path / "session-index.db"
+    store = SessionStore(db_path)
+    try:
+        store.sync_sessions(sessions_dir)
+        results = store.search("quasar", limit=5)
+
+        assert len(results) == 2, f"Expected 2 results, got {len(results)}"
+        scores = {r.session_id: r.score for r in results}
+        hi_score = scores["hihihi11"]
+        lo_score = scores["lololo22"]
+        assert hi_score > lo_score, (
+            f"High-relevance session must score higher: hi={hi_score:.4f} lo={lo_score:.4f}"
+        )
+        assert results[0].session_id == "hihihi11", (
+            "Most relevant session must be first in returned list"
+        )
+    finally:
+        store.close()

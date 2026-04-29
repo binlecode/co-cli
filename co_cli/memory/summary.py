@@ -13,11 +13,12 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic_ai import Agent
+from pydantic_ai.direct import model_request
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    SystemPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -33,6 +34,8 @@ MAX_SESSION_CHARS = 100_000
 _TOOL_OUTPUT_TRUNCATION_THRESHOLD = 500
 _TOOL_OUTPUT_HEAD = 250
 _TOOL_OUTPUT_TAIL = 250
+_SESSION_PROXIMITY_WINDOW_CHARS = 200
+_SESSION_SUMMARIZER_MAX_RETRIES = 3
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "session_summarizer.md"
 
@@ -53,7 +56,9 @@ def _find_match_positions(text_lower: str, query_lower: str) -> list[int]:
         rarest = min(terms, key=lambda t: len(term_pos.get(t, [])))
         for pos in term_pos.get(rarest, []):
             if all(
-                any(abs(p - pos) < 200 for p in term_pos.get(t, [])) for t in terms if t != rarest
+                any(abs(p - pos) < _SESSION_PROXIMITY_WINDOW_CHARS for p in term_pos.get(t, []))
+                for t in terms
+                if t != rarest
             ):
                 positions.append(pos)
         if positions:
@@ -162,17 +167,6 @@ def _format_conversation(messages: list[ModelMessage]) -> str:
     return "\n\n".join(parts)
 
 
-def build_session_summarizer_agent() -> Agent[None, str]:
-    """Create a fresh session summarizer agent for a single .run() invocation.
-
-    No tools, no deps — instructions from session_summarizer.md.
-    Model and model_settings are passed at run() time via the caller.
-    """
-    return Agent(
-        instructions=_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-    )
-
-
 async def summarize_session_around_query(
     window: str,
     query: str,
@@ -195,6 +189,7 @@ async def summarize_session_around_query(
     session_id = session_meta.get("session_id", "unknown")
     when = session_meta.get("when", "unknown")
 
+    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
     user_prompt = (
         f"Search topic: {query}\n"
         f"Session ID: {session_id}\n"
@@ -203,16 +198,18 @@ async def summarize_session_around_query(
         f"Summarize this conversation with focus on: {query}"
     )
 
-    max_retries = 3
-    agent = build_session_summarizer_agent()
+    max_retries = _SESSION_SUMMARIZER_MAX_RETRIES
     for attempt in range(max_retries):
         try:
-            result = await agent.run(
-                user_prompt,
-                model=deps.model.model,
+            response = await model_request(
+                deps.model.model,
+                [
+                    ModelRequest(parts=[SystemPromptPart(content=system_prompt)]),
+                    ModelRequest.user_text_prompt(user_prompt),
+                ],
                 model_settings=deps.model.settings_noreason,
             )
-            content = result.output
+            content = "".join(p.content for p in response.parts if isinstance(p, TextPart))
             if content and content.strip():
                 return content.strip()
             logger.warning(

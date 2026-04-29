@@ -658,3 +658,36 @@ async def test_memory_modify_line_prefix_in_content_returns_tool_error(tmp_path:
     result = await memory_modify(ctx, slug, "append", "1→ User prefers pytest")
 
     assert "line-number prefixes" in result.return_value
+
+
+# ---------------------------------------------------------------------------
+# BM25 score ordering: more-relevant artifact must score higher
+# ---------------------------------------------------------------------------
+
+
+def test_fts_search_scores_higher_relevance_artifact_first(tmp_path: Path) -> None:
+    """BM25 score must be monotone with relevance: more occurrences → higher score.
+
+    Regression guard for the inverted formula bug (1/(1+abs(rank)) maps
+    high-magnitude rank to LOW score; abs(rank)/(1+abs(rank)) is correct).
+    """
+    knowledge_dir = tmp_path / "knowledge"
+    # High-relevance artifact: query term "quasar" repeated many times
+    hi_content = " ".join(["quasar"] * 20)
+    _write_memory(knowledge_dir, 1, hi_content)
+    # Low-relevance artifact: query term appears once
+    _write_memory(knowledge_dir, 2, "quasar is a distant luminous object")
+
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
+    try:
+        idx.sync_dir("knowledge", knowledge_dir)
+        results = idx.search("quasar", source="knowledge", limit=5)
+
+        assert len(results) == 2, f"Expected 2 results, got {len(results)}"
+        hi_score = results[0].score
+        lo_score = results[1].score
+        assert hi_score > lo_score, (
+            f"High-relevance artifact must score higher: hi={hi_score:.6f} lo={lo_score:.6f}"
+        )
+    finally:
+        idx.close()

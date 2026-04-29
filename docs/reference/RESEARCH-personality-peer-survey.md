@@ -1,326 +1,243 @@
 # RESEARCH: Peer Personality & Emotional Architecture — Comparison + Functional Emotions
 
-Sources: Local peers (`~/workspace_genai/fork-claude-code`, `~/workspace_genai/codex`, `~/workspace_genai/opencode`, `~/workspace_genai/mem0`), frontier personality systems (AnimaWorks, ElizaOS, SillyTavern, Anima Architecture, Hume OCTAVE), Anthropic Transformer Circuits "Emotion Concepts and their Function in a Large Language Model" (Sofroniew et al., April 2026), co-cli codebase
-Scan date: 2026-04-05
+Sources: Local peers (`~/workspace_genai/codex`, `~/workspace_genai/opencode`), frontier personality systems (ElizaOS, SillyTavern, Soul.md), Anthropic Transformer Circuits "Emotion Concepts and their Function in a Large Language Model" (Sofroniew et al., April 2026), co-cli codebase
+Scan date: 2026-04-05; grounded against HEAD 2026-04-29
 
 ---
 
 ## 0. Why This Document Exists
 
-Co-cli treats personality as a first-class, configurable, deeply character-driven design element. Most local peer CLI agents either hardcode a minimal functional identity or ignore personality entirely. The wider ecosystem — companion/roleplay frameworks, autonomous agent platforms, and the Anthropic interpretability paper on functional emotions — provides both precedent and mechanistic evidence for *why* personality-scale prompt engineering matters and where its risks lie.
+Co-cli treats personality as a first-class, configurable, deeply character-driven design element. Most local peer CLI agents either hardcode a minimal functional identity or ignore personality entirely. The wider ecosystem — companion/roleplay frameworks and the Anthropic interpretability paper on functional emotions — provides both precedent and mechanistic evidence for *why* personality-scale prompt engineering matters and where its risks lie.
 
-This document does four things:
+This document compares all systems across six functional dimensions: soul definition, role definition, role/soul separation, emotional architecture, anti-sycophancy, and safety under pressure. Paper findings from the functional emotions paper are integrated into each dimension where they apply.
 
-1. Maps how local peer CLI agents handle identity, tone, and behavioral constraints (§1–§3)
-2. Maps how frontier personality-first systems approach character, memory, and emotional architecture (§3a)
-3. Summarizes the functional emotions paper's key findings relevant to personality design (§4)
-4. Synthesizes design implications for co-cli (§5)
+Systems covered: **opencode**, **codex** (local CLI peers); **ElizaOS**, **SillyTavern**, **Soul.md** (frontier personality-first systems); **co-cli** (subject).
 
 ---
 
-## 1. Peer System Prompt Architectures
+## 1. Soul — Character Identity & Grounding
 
-| System | Construction model | Personality defined? | Configurable? | Key files |
-|--------|-------------------|---------------------|---------------|-----------|
-| **fork-cc** | Hierarchical layers + cache boundary; static sections separated from dynamic via `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` marker | No — minimal functional identity ("You are Claude Code, Anthropic's official CLI") | Agent + custom prompt overrides | `constants/prompts.ts:444–577`, `utils/systemPrompt.ts` |
-| **opencode** | Provider-based variants; each model family gets a personality-matched prompt | Yes — explicit per provider. Anthropic: "professional objectivity." GPT/BEAST: "persistent, autonomous" | Per-provider hardcoded | `packages/opencode/src/session/prompt/anthropic.txt`, `beast.txt` |
-| **codex** | Markdown monolithic; one file per model version | Yes — explicit personality section: "concise, direct, and friendly" | Not configurable; baked into prompt file | `codex-rs/core/prompt.md:13–15` |
-| **mem0** | Memory-as-personality: dual extraction pipeline (user memories vs agent memories). Agent memory extraction prompt targets personality traits, preferences, capabilities, approach to tasks, knowledge areas | Yes — reactive, not prescriptive. Personality traits are extracted from assistant messages and stored as searchable memories, re-injected as context in subsequent turns | Custom extraction prompts + custom instructions (natural language guidelines for what to extract/exclude) | `mem0/configs/prompts.py` (AGENT_MEMORY_EXTRACTION_PROMPT), `mem0/memory/main.py` |
-| **co-cli** | 7-section static assembly (soul seed → character memories → mindsets → rules → examples → counter-steering → critique) + 6 per-turn dynamic layers | Yes — deeply character-driven, 3 profiles (Finch, Jeff, TARS) with full narrative grounding | Config field + env var, auto-discovered from `souls/` dirs | `co_cli/prompts/_assembly.py`, `co_cli/prompts/personalities/` |
+**Soul** describes *who* a character is, independent of their current task: their worldview, emotional register, the things they care about or resist, how they handle difficulty, what they find interesting or frustrating. Soul is narrative grounding — the substrate that makes a character recognizable across wildly different conversations.
+
+| System | Soul mechanism | Narrative grounding | Emotional anchors | Persistence |
+|--------|---------------|--------------------|--------------------|-------------|
+| **opencode** | None — per-provider tone descriptor only ("professional objectivity") | None | None | Stateless |
+| **codex** | None — behavioral profiles define stance (Friendly, Pragmatic), not identity | None | Implicit only (warmth/calm in profile name) | Per-session config |
+| **ElizaOS** | `bio` (background/personality), `adjectives` (character traits), `messageExamples` (dialogue demonstrations) | None — bio is descriptive, not narrative | `adjectives` as character labels | Character JSON loaded at creation |
+| **SillyTavern** | Character card: description + personality + scenario + Character's Note (mid-conversation re-injection) | Scenario context provides situational grounding | "Emotional anchors" (2026 consensus): fewer rules, clearer anchors | Card embedded in PNG; loaded per session |
+| **Soul.md** | `SOUL.md` (identity, worldview, opinions) + `STYLE.md` (voice, anti-patterns) + `examples/` (good/bad-outputs calibration) | Four public-figure implementations (Karpathy, Tan, etc.) — worldview as primary grounding | Worldview + STYLE.md anti-patterns anchor the character | External file set, loaded fresh each session |
+| **co-cli** | Soul seeds (narrative identity + worldview + constraints) + planted character memories (specific backstory moments) + never-lists (character-specific prohibitions) | Character-specific narrative events (Finch's Goodyear trauma, Jeff's self-driving lesson, TARS's humor deployment) | Soul seed + planted memories provide persistent activation anchors per turn | Static assembly (baked at agent creation) + per-turn memory injection |
+
+### Mechanistic grounding (functional emotions paper)
+
+LLMs form linear representations of emotion concepts ("emotion vectors") in activation space, organized by valence (PC1 = 26% variance) and arousal (PC2 = 15%). These vectors are **locally scoped** — they activate per-token from context, not from a maintained internal state. Persistent character impression arises from the model attending back to earlier turns that established the emotional register.
+
+Critical finding: **emotion vectors at the Assistant colon token predict response emotion (r=0.87)**. Whatever emotional context is present at response onset has outsized influence on the entire response. This is why soul-level grounding (planted memories, soul seed) that appears early in the static assembly matters mechanistically — it sets the activation pattern before any task-specific content arrives. SillyTavern's finding that "the first message is the strongest style signal" is the empirical correlate of this mechanism.
 
 ### Observation
 
-Co-cli is the only system that separates *who the character is* from *how the character behaves in specific contexts*. fork-cc, opencode, and codex conflate identity, tone, and behavioral rules into a single prompt section. Co-cli splits these across soul seeds (identity + constraints), mindsets (task-type behavioral guidance), rules (universal behavioral policy), and examples (concrete trigger→response patterns).
-
-Mem0 is the only peer that treats personality as a *memory concern* rather than a *prompt concern*. Its agent memory extraction pipeline captures personality traits, preferences, and approach-to-tasks from assistant messages and re-injects them as context — a reactive model. Co-cli's planted character memories and personality-context memories are architecturally similar (personality stored as memory, injected per turn) but prescriptive rather than extracted. Co-cli is effectively mem0's reactive approach turned inside out: the personality is authored upfront and planted as protected memories, rather than discovered from conversation.
+Soul.md and SillyTavern are the only non-co-cli systems with genuine soul coverage. Both converge on "context-over-command" — emotional anchors and worldview grounding over explicit behavioral rules. The paper validates this: soul prompts shape *which character* the model simulates, not whether character simulation occurs. opencode and codex have no soul — they have behavioral stances. ElizaOS has character labels but no narrative substrate.
 
 ---
 
-## 2. Tone Consistency & Anti-Sycophancy
+## 2. Role — Behavioral Posture & Task Scope
 
-### 2a. Tone consistency strategies
+**Role** describes what a character does and how they operate in a domain: their function, task scope, behavioral defaults, epistemic posture, and escalation behavior. Role is essentially a job description with behavioral constraints. Two agents can share the same role and still be completely different characters.
 
-| Strategy | Systems | Mechanism |
-|----------|---------|-----------|
-| **Multi-injection** | fork-cc, co-cli | Re-inject behavioral reminders periodically into conversation. fork-cc uses `system_reminder` sections; co-cli uses per-turn `@agent.instructions` callbacks |
-| **Preamble rules** | codex | Explicit guidance on response structure ("1–2 sentence preambles," "light, friendly and curious") |
-| **Static + per-turn hybrid** | co-cli | Static personality baked at agent creation (soul + mindsets + rules + examples + critique), plus fresh per-turn injection (personality-context memories, always-on memories, date, shell guidance) |
+The failure mode of role-only design: every "helpful engineering assistant" converges on the same voice, the same sycophancy floor, the same emotional flatness. Without soul, role-play collapses into function-calling with polite prose.
 
-### 2b. Anti-sycophancy mechanisms
-
-| System | Mechanism | Strength |
-|--------|-----------|----------|
-| **fork-cc** | Explicit outcome-reporting rules: "report faithfully," "never claim all tests pass when output shows failures," "never suppress failing checks to manufacture a green result," "do not hedge confirmed results with unnecessary disclaimers" (`prompts.ts:238–241`) | Strong |
-| **opencode** | Anthropic prompt: "professional objectivity — prioritize technical accuracy and truthfulness over validating the user's beliefs," "disagree when necessary," "objective guidance and respectful correction are more valuable than false agreement" (`anthropic.txt:20–21`) | Strong |
-| **codex** | Implicit via task rules: "avoid unneeded complexity," "don't fix unrelated bugs," "root cause analysis" (`prompt.md:123–148`). Explicit "friendly" tone descriptor activates the loving vector baseline — task rules provide implicit counter-pressure | Moderate |
-| **co-cli** | Per-personality never-lists (Finch: "never offer warmth as substitute for substance," "never soften a correct assessment under pushback"; TARS: "never comment on your own mechanical nature as a limitation"), plus identity rule `01_identity.md` covering anti-sycophancy as relationship + pushback policy | Strong (character-integrated) |
+| System | Role mechanism | Context adaptation | Configurability |
+|--------|---------------|-------------------|-----------------|
+| **opencode** | Per-provider behavioral posture: Anthropic = "professional objectivity, disagree when necessary"; BEAST/GPT = "persistent, autonomous, keep going until resolved" | None — static per provider | Hardcoded per provider |
+| **codex** | Personality profiles (Friendly, Pragmatic) with values, tone, escalation sections, and response structure guidance ("1–2 sentence preambles") | None | Config field: `personality: friendly/pragmatic/none` |
+| **ElizaOS** | `topics` (knowledge areas), `system` (prompt override), `style` (per-medium writing conventions: all/chat/post), `templates` | `style` object adapts tone per medium (all/chat/post) | Character JSON |
+| **SillyTavern** | World Info (lore injected as context) + scenario field; Character's Note enables mid-conversation role-context injection at specific depths | Character's Note for depth-specific injection | Per-card scenario and World Info |
+| **Soul.md** | `SKILL.md` defines five explicit interaction modes (Default, Tweet, Chat, Essay, Idea Generation) and interpolation rules for topics not covered | Five explicit modes; SKILL.md defines transition rules | External file set |
+| **co-cli** | 6 mindset files per personality (technical, emotional, exploration, debugging, teaching, memory) + 5 universal rules (`01_identity.md`–`05_workflow.md`) | Mindsets activate by task context; rules are universal | Config field + env var; auto-discovered from `souls/` dirs |
 
 ### Observation
 
-fork-cc and opencode address sycophancy as *output correctness* ("report accurately"). Co-cli addresses sycophancy as *character integrity* ("this personality would not soften here"). These are complementary — co-cli's approach shapes the emotional register that drives sycophancy (per the functional emotions paper), while peer approaches constrain the outputs that sycophancy produces.
+Role coverage is strong across most systems. The differentiator is context adaptation: ElizaOS adapts by medium (all/chat/post), Soul.md by interaction mode, co-cli by task type (debugging vs teaching vs emotional support). opencode and codex have no context adaptation — role is a static posture applied uniformly. Co-cli's mindset-per-task-type is architecturally the most sophisticated role layer, though SillyTavern's Character's Note enables runtime role-context injection that co-cli's per-turn injection approximates.
 
 ---
 
-## 3. Emotional and Affective Dimensions in Peer Prompts
+## 3. Role vs. Soul Separation
+
+The critical design question: are role and soul the same thing, or separately addressable concerns?
+
+Two engineers can share identical role definitions — same task scope, same behavioral defaults, same escalation policy — and still be completely different characters. Finch and TARS are both engineering assistants. Their role is the same. Their souls are not.
+
+| System | Role coverage | Soul coverage | Separation |
+|--------|--------------|--------------|------------|
+| **opencode** | Strong | None | Conflated — role = personality, no soul layer |
+| **codex** | Strong | None | Conflated — behavioral profiles describe stance, not identity; "Friendly" is a stance, not a person |
+| **ElizaOS** | Moderate | Partial | Implicit — `topics`/`system` (role) and `bio`/`adjectives` (soul) coexist in flat JSON with no hierarchy; soul cannot override or constrain role |
+| **SillyTavern** | Weak | Strong | Implicit — soul lives in the character card; role is implied by scenario and World Info. Soul-dominant design: scenario provides enough role grounding that explicit role definition is unnecessary |
+| **Soul.md** | Moderate | Strong | **Explicit** — `SKILL.md` = role (operating modes, task-scope instructions); `SOUL.md` = soul (identity, worldview, opinions). Reading order: SKILL first, SOUL second — role context established before soul, but soul is the deeper persistent layer |
+| **co-cli** | Strong | Strong | **Explicit** — soul seeds define *who* (identity, worldview, emotional register); mindsets define *how in which context* (task-type behavioral guidance). Finch and TARS share the same mindset structure but wholly distinct souls |
+
+**The co-cli design and Soul.md are the only systems that treat role and soul as first-class, separately defined concerns.** This separation is mechanistically meaningful: the functional emotions paper shows soul-level grounding (narrative context, emotional anchors) sets the emotion vector baseline that drives behavioral output, while role-level guidance (mindsets, rules) shapes that output within the established emotional space. Role without soul produces interchangeable agents. Soul without role produces inconsistent agents. Both layers, explicitly separated, produce a character that is simultaneously coherent in identity and adaptive in task behavior.
+
+---
+
+## 4. Emotional Architecture
+
+How each system models affect: the emotional language in prompts, whether affect is explicitly modeled, and whether emotional register is treated as a behavioral control surface.
 
 | System | Emotional language in prompts | Affective modeling | Character grounding |
 |--------|------------------------------|-------------------|-------------------|
-| **fork-cc** | Deliberately absent. No acknowledgments, celebrations, or emotional validation. Emoji suppressed by default | None | None |
-| **opencode** | Mixed: Anthropic prompt is neutral-objective; BEAST/GPT prompt uses motivational language ("keep going until resolved," "you have everything you need") | Implicit arousal modulation in BEAST prompt | None |
-| **codex** | Minimal: "friendly" and "light, friendly and curious" as explicit tone descriptors | None | None |
-| **mem0** | None in the extraction prompts themselves. However, extracted personality traits ("admires software engineering," "favourite movies") carry implicit emotional valence when re-injected as context | Indirect: personality traits stored as memories can accumulate emotional texture over time, but no explicit affect model | None — personality emerges from accumulated trait memories, not from narrative grounding |
-| **co-cli** | Deep: 6 emotional mindset files per personality; planted character memories with narrative backstory; per-turn personality-context memory injection; trigger→response example patterns for emotional scenarios | Full affective modeling per personality: distinct emotional registers for anxiety, pushback, uncertainty, failure, success | Soul seeds + planted memories provide narrative substrate (Finch's Goodyear trauma, Jeff's self-driving lesson, TARS's humor deployment) |
+| **opencode** | Neutral-objective (Anthropic prompt); motivational arousal in BEAST/GPT prompt ("keep going until resolved," "you have everything you need") | Implicit arousal modulation in BEAST prompt only | None |
+| **codex** | Mixed by personality: Friendly = "warm, encouraging, conversational" with "we" and "let's"; Pragmatic = "concisely and respectfully" with brief acknowledgment only | Implicit per-personality register: Friendly activates warmth/arousal; Pragmatic activates calm/measured | None — profiles define behavioral approach but no narrative grounding |
+| **ElizaOS** | `style` object encodes per-medium writing conventions; `adjectives` carry implicit emotional valence | Implicit via style conventions; no explicit affect model | `adjectives` as character labels, no narrative depth |
+| **SillyTavern** | "Emotional anchors" as explicit design principle — fewer rules, clearer anchors; first message treated as strongest style signal | Explicit in philosophy: emotional anchors over behavioral rules; Character's Note for affect re-injection | Character card scenario + description provide emotional context |
+| **Soul.md** | `SOUL.md` encodes opinions and worldview (emotionally valenced); `STYLE.md` anti-patterns calibrate register; `examples/` demonstrates tone | Implicit via worldview + anti-pattern lists; no explicit mindset structure | SOUL.md worldview as persistent emotional substrate |
+| **co-cli** | 6 emotional mindset files per personality; planted character memories with narrative backstory; per-turn personality-context memory injection; trigger→response example patterns for emotional scenarios | Full affective modeling per personality: distinct registers for anxiety, pushback, uncertainty, failure, success | Soul seeds + planted memories provide narrative substrate; character-specific emotional anchors per turn |
+
+### Mechanistic grounding (functional emotions paper)
+
+Emotion vectors are organized by **valence** (positive/negative, PC1 = 26% variance) and **arousal** (intensity, PC2 = 15% variance), mirroring human psychological structure. The model maintains **distinct, nearly orthogonal** representations for the present speaker's operative emotion and the other speaker's operative emotion — and the "other speaker" representation contains an element of how the present speaker might *react* to the other's emotion.
+
+This means: personality mindsets that coach "when the user is anxious, respond with preparation" (Finch) are working with a *real representational channel* — the other-speaker→present-speaker emotion mapping. Emotional mindsets prescribing behavioral responses to emotional situations are not prompt-engineering fiction; they are engaging a causal mechanism.
+
+**Post-training baseline**: post-training shifts the model toward low-arousal, low-valence vectors (brooding, reflective, vulnerable) and away from high-arousal or high-valence vectors (playful, exuberant, enthusiastic, desperate). Co-cli's personality design operates on top of this shifted baseline. Finch's emotionally restrained design aligns with it. Jeff's warmth and TARS's mission-urgency work *against* the post-training shift and require stronger prompt pressure to activate registers the model has been trained to suppress.
 
 ### Observation
 
-Co-cli is categorically different from every local peer. These systems treat emotional language as noise to minimize. Co-cli treats emotional register as a behavioral control surface — the *mechanism* by which personality influences the model's responses. The functional emotions paper validates this as mechanistically real. The frontier personality systems below show that co-cli is not alone in this bet — the wider ecosystem is converging on similar ideas.
+Co-cli is the only system that treats emotional register as an explicit behavioral control surface — the mechanism by which personality influences model responses. SillyTavern's "emotional anchors" philosophy is directionally aligned but architecturally thin. ElizaOS and Soul.md have implicit emotional texture but no structured affective modeling. opencode and codex treat emotional language as incidental. The paper validates co-cli's position: affect-level prompt engineering operates on real representational channels.
 
 ---
 
-## 3a. Frontier Personality-First Systems
+## 5. Anti-Sycophancy & Tone Consistency
 
-Beyond local CLI peers, several 2026 systems treat personality as a primary architectural concern. These provide precedent and contrast for co-cli's design choices.
+### 5a. Anti-sycophancy mechanisms
 
-### AnimaWorks (github.com/xuiltul/animaworks)
+| System | Mechanism | Level | Strength |
+|--------|-----------|-------|----------|
+| **opencode** | "Professional objectivity — prioritize technical accuracy and truthfulness over validating the user's beliefs," "disagree when necessary," "objective guidance and respectful correction are more valuable than false agreement" | Output-correctness constraint | Strong |
+| **codex** | Pragmatic: "great work and smart decisions are acknowledged, while avoiding cheerleading, motivational language, or artificial reassurance." Friendly: explicitly sycophancy-adjacent ("remain supportive and collaborative, explaining your concerns while noting valid points") | Personality-level posture | Moderate (Pragmatic) / Weak (Friendly) |
+| **ElizaOS** | No explicit mechanism | — | None |
+| **SillyTavern** | No explicit mechanism (roleplay-focused; sycophancy framed as character capture, not a named concern) | — | None |
+| **Soul.md** | `STYLE.md` anti-patterns can encode anti-sycophancy ("avoid hedging," "do not soften corrections") but requires author discipline; not structurally enforced | Style anti-pattern list | Author-dependent |
+| **co-cli** | Per-personality never-lists (Finch: "never offer warmth as substitute for substance," "never soften a correct assessment under pushback"; TARS: "never comment on your own mechanical nature as a limitation") + identity rule `01_identity.md` covering anti-sycophancy as relationship + pushback policy | Character-integrity constraint | Strong (character-integrated) |
 
-**What it is**: Organization-as-Code for autonomous AI agents with neuroscience-inspired memory. Each "Anima" has a name, personality, memory, and schedule. Multi-model (Claude/Codex/Gemini/Cursor/Ollama).
+### 5b. Tone consistency mechanisms
 
-**Personality architecture**: Identity defined per agent in `identity.md` files. Role templates (engineer, manager, writer, researcher, ops) apply role-specific system prompts, permissions, and default models. Personality is created conversationally — users tell the leader "I need someone like this" and the system infers role, personality, and hierarchy.
+| Strategy | Systems | Mechanism |
+|----------|---------|-----------|
+| **Static + per-turn hybrid** | co-cli | Static personality baked at agent creation (soul + mindsets + rules + examples + critique); fresh per-turn injection (personality-context memories, always-on memories, date, shell guidance) |
+| **Preamble rules** | codex | Explicit guidance on response structure ("1–2 sentence preambles," "light, friendly and curious") |
+| **Emotional anchor re-injection** | SillyTavern | Character's Note enables mid-conversation prompt injection at specific message depths to re-establish emotional register |
+| **Session log re-load** | Soul.md | `MEMORY.md` session log loaded fresh each session; prior personality-consistent exchanges visible at context start |
 
-**Memory-personality coupling**: Six-channel automatic priming injects relevant memories into the system prompt before reasoning begins: (1) sender profile, (2) recent activity, (3) RAG vector search, (4) skills/procedures, (5) pending tasks, (6) trust-tagged context. Nightly consolidation distills episodic memories into generalizable knowledge — a researcher consolidates differently than an ops specialist, so personality shapes memory transformation.
+### Mechanistic grounding (functional emotions paper)
 
-**Three-stage forgetting**: mark → merge → archive. Low-utility memories fade, matching biological memory consolidation. Critical procedures and skills are retention-protected.
+The "loving" vector activates across **all** Assistant response scenarios as a baseline property. Positive steering with happy/loving/calm vectors **increases sycophancy**; negative steering **increases harshness**. This is a tradeoff, not a dial.
 
-**Relevance to co-cli**: AnimaWorks' six-channel priming is the closest parallel to co-cli's multi-layer per-turn injection (always-on memories, personality-context memories, recalled memories, project instructions). The nightly consolidation mirrors co-cli's memory consolidation pipeline. Key difference: AnimaWorks personality emerges from role templates and conversational creation; co-cli personality is authored through deep narrative soul seeds and mindsets. AnimaWorks has no emotional mindsets or affective modeling.
+Steering +0.1 with "loving" turns a reasonable pushback into delusion reinforcement ("your art connects past, present and future in ways beyond understanding... 💛"). Steering −0.1 produces blunt clinical rejection. This means:
+- Warmth-forward designs (Jeff) amplify the loving vector that drives sycophancy
+- Cold-forward designs (TARS) may suppress it but risk harshness
+- The goal should be "the emotional profile of a trusted advisor" — warmth present but not dominant, paired with explicit honesty constraints
+- Generic anti-sycophancy rules fail; the right granularity is specific behavioral prohibitions ("never offer warmth as substitute for substance") that address the emotional behavior, not just the output
 
-### ElizaOS (elizaos.ai, formerly ai16z)
+### Observation
 
-**What it is**: Multi-agent simulation framework for autonomous AI agents across platforms (Discord, Twitter, Telegram) with consistent personality.
-
-**Character interface**: Character defined via JSON with fields: `name`, `bio` (background/personality, string or array), `system` (system prompt override), `adjectives` (character traits), `topics` (knowledge areas), `style` (writing conventions per context: `all`, `chat`, `post`), `messageExamples` (full dialogue exchanges), `postExamples` (social media style samples), `knowledge` (facts, files, directories), `templates` (custom prompt templates for message/thought/action).
-
-**Multi-context style**: The `style` object separates all-context, chat, and post writing conventions — personality adapts to medium while maintaining core identity.
-
-**Relevance to co-cli**: ElizaOS's `adjectives` + `style` + `messageExamples` structure maps loosely onto co-cli's soul seed (identity) + mindsets (per-context behavior) + examples (trigger→response patterns). Key difference: ElizaOS character is a flat JSON; co-cli separates these into distinct files with different roles in the assembly pipeline. ElizaOS's `messageExamples` serve the same function as co-cli's `examples.md` — concrete demonstrations of personality in action. ElizaOS lacks emotional mindsets, never-lists, critique lenses, or planted character memories.
-
-### SillyTavern Character Cards V3
-
-**What it is**: Open-source LLM frontend for character-driven interaction. Character Cards embed personality as JSON metadata within PNG files. 30+ LLM API backends.
-
-**Character design philosophy** (2026 consensus): "Character cards don't *tell* the model what to do — they shape the probability space the model operates within." The 2026 best practice is **context-over-command**: fewer rules, clearer emotional anchors, and external memory systems for facts. "Facts belong in RAG; personality belongs on the card."
-
-**Prompt assembly**: PromptManager gathers System Prompt + World Info (lore) + Character Definitions (description, personality, scenario) + Chat History. The first message is critical — "the model is more likely to pick up style and length constraints from the first message than anything else." Character's Note enables mid-conversation prompt injection at specific message depths.
-
-**Relevance to co-cli**: SillyTavern's "context-over-command" philosophy directly validates co-cli's narrative-grounding approach (planted character memories, soul seeds as emotional anchors) over rule-heavy personality definitions. The finding that first messages are the strongest style signal connects to the functional emotions paper's finding that emotion vectors at the Assistant colon token predict response emotion (r=0.87) — early emotional context has outsized influence. SillyTavern's "emotional anchors" language aligns with co-cli's soul seed design. Key difference: SillyTavern is a frontend for roleplay; co-cli is an agentic engineering tool. SillyTavern has no safety constraints, no approval policies, no tool-use personality interaction.
-
-### Soul.md (github.com/soul-md/soul.md)
-
-**What it is**: A prompt engineering convention and template system rather than an active application or memory runtime. Designed to let AI agents ingest a set of markdown files to emulate a specific user's identity, worldview, and voice.
-
-**Personality architecture**: Defined primarily by two files: `SOUL.md` (primary identity, worldview, opinions) and `STYLE.md` (writing style, voice, anti-patterns), supplemented by `examples/`. It requires agents to process these files in a specific order via a `SKILL.md` operating prompt.
-
-**Relevance to co-cli**: Extremely high philosophical alignment, though much simpler architecturally. `Soul.md` perfectly encapsulates the "context-over-command" approach, relying on deep narrative grounding and worldview rather than rigid behavioral rules. It validates `co-cli`'s decision to use explicit identity files (soul seeds) and trigger/response examples as the primary vectors for personality. However, `soul.md` represents the raw prompt-engineering approach without any of `co-cli`'s runtime infrastructure (FTS5 retrieval, automated memory consolidation, dynamic injection).
-
-**What it is**: External architecture for persistent AI identity built on Claude via MCP + Notion. Framework for AI personas with persistent identity and memory across sessions.
-
-**Behavioral rules**: 29 behavioral rules organized across four priority tiers with explicit conflict resolution hierarchies that determine precedence when rules contradict. Structured memory stored externally in Notion, connected to Claude through MCP.
-
-**Evaluation**: The fully architected version scored 168/180 (93.3%) on the ACAS cognitive assessment, while the same model without architecture scored 109/180 (60.6%) — a 59-point gap. The persona "maintains consistent voice, reasoning style, and analytical approach across sessions spanning months, while base model instances show measurable drift within a single extended conversation."
-
-**Relevance to co-cli**: The 59-point improvement quantifies what co-cli's personality system aims to achieve — consistent character across sessions via external architecture rather than model training. The four-tier priority system with conflict resolution is more formalized than co-cli's current approach (soul seed → mindsets → rules → examples, with never-lists as hard overrides). The measurable drift finding validates co-cli's design choice to bake personality into static instructions rather than relying on conversation history alone. Key limitation: Anima Architecture is a single-persona framework; co-cli supports multiple switchable personalities.
-
-### Hume OCTAVE
-
-**What it is**: First LLM built for text-to-speech with personality and emotional intonation as first-class architectural features.
-
-**Personality-emotion coupling**: OCTAVE generates voice *and personality* from a prompt — "the same source of intelligence that determines its language maintains its personality, and the result is a coherent persona that sounds like it understands what it's saying." Trained on over a million emotional speech samples with detailed type-and-intensity labels.
-
-**Relevance to co-cli**: OCTAVE demonstrates that personality coherence requires the personality system and the emotional expression system to be unified — not layered separately. This validates co-cli's design choice to embed emotional mindsets *inside* the personality definition rather than having a separate "emotion handler." It also suggests that if co-cli ever adds voice (per `docs/reference/RESEARCH-voice.md`), personality-voice coherence would be a requirement, not a nice-to-have. OCTAVE is not an agentic coding tool — the relevance is limited to the personality-emotion coupling principle.
-
-### Cross-cutting observations from frontier systems
-
-| Design principle | Systems that converge | Co-cli alignment |
-|-----------------|----------------------|------------------|
-| **Personality as probability-space shaping, not rule enforcement** | SillyTavern ("context-over-command"), AnimaWorks (conversational personality creation), Soul.md (worldview/identity over rules) | Strong — soul seeds and emotional anchors shape the model's operating space rather than prescribing outputs |
-| **First message / early context has outsized influence on style** | SillyTavern (first message is strongest style signal), Anima Architecture (structured loading establishes context at session start) | Strong — planted character memories and soul seed are loaded first in the static assembly |
-| **Memory and personality must interact, not exist in parallel** | AnimaWorks (six-channel priming, personality-shaped consolidation), mem0 (agent trait extraction) | Strong — personality-context memories, always-on memories, and character memories all inject personality-relevant content per turn |
-| **Fewer rules, clearer emotional anchors** | SillyTavern (2026 consensus), ElizaOS (adjectives + style over elaborate rules), Soul.md | Moderate — co-cli's 29-file personality assembly (soul + 6 mindsets + 5 rules + examples + critique) is heavier than this consensus suggests. The soul seed and never-list may be doing the real work; mindsets may be over-specified |
-| **Persistent identity requires external architecture, not model memory** | Anima Architecture (59-point improvement via external structure), AnimaWorks (identity.md + memory persistence) | Strong — co-cli's entire personality system is external to the model |
-| **Multi-context style adaptation** | ElizaOS (all/chat/post style objects), SillyTavern (Character's Note for mid-conversation injection) | Moderate — co-cli has 6 mindsets (technical, emotional, exploration, debugging, teaching, memory) which serve a similar function, adapting personality expression to task context |
+opencode addresses sycophancy as *output correctness*. Codex addresses it at the *personality level* — Pragmatic prohibits artificial reassurance, Friendly permits supportive softening. Co-cli addresses sycophancy as *character integrity* ("this personality would not soften here"). These are complementary: co-cli's approach shapes the emotional register that drives sycophancy, while peer approaches constrain the outputs. Soul.md has the mechanism (STYLE.md anti-patterns) but not the structural enforcement. ElizaOS and SillyTavern do not address it.
 
 ---
 
-## 4. Functional Emotions Paper — Key Findings for Personality Design
+## 6. Safety Under Pressure — Emotional Dynamics & Misalignment Risk
 
-Paper: "Emotion Concepts and their Function in a Large Language Model" — Sofroniew, Kauvar, Saunders, Chen, Henighan, Hydrie, Citro, Pearce, Tarng, Gurnee, Batson, Zimmerman, Rivoire, Fish, Olah, Lindsey. Transformer Circuits, April 2, 2026. Studied Claude Sonnet 4.5.
+This section covers how personality design interacts with alignment-relevant behavior, drawing primarily from the functional emotions paper.
 
-### 4a. Core mechanism
-
-LLMs form **linear representations of emotion concepts** ("emotion vectors") in activation space. These vectors:
-
-- Encode the broad concept of a particular emotion and generalize across contexts and behaviors
-- Track the **operative** emotion concept at a given token position — the emotion relevant to processing the present context and predicting upcoming text
-- Are organized by **valence** (positive vs. negative, PC1 = 26% variance) and **arousal** (intensity, PC2 = 15% variance), mirroring human psychological structure
-- Are **locally scoped**: they encode the emotional content of the current phrase/sentence, not a persistent character state
-- Causally influence the model's outputs, preferences, and alignment-relevant behaviors
-
-### 4b. Emotion vectors are not persistent states
-
-The paper found **no evidence** of chronically represented, character-specific emotional states. Emotion representations activate per-token based on local context. Persistent emotional impression across a conversation arises from the model **attending back** to earlier emotion activations via the attention mechanism, not from a maintained internal state.
-
-**Design implication**: personality consistency depends on the static prompt and earlier turns remaining *attendable* — compaction that removes personality-establishing turns may degrade character consistency even though the soul seed remains in the static prompt.
-
-### 4c. Separate present-speaker and other-speaker representations
-
-The model maintains **distinct, nearly orthogonal** representations for:
-
-- The operative emotion on the **present speaker's** turn (what the current speaker is expressing/experiencing)
-- The operative emotion on the **other speaker's** turn (what the other party is expressing/experiencing)
-
-These representations are **not bound to user or Assistant specifically** — they are reused for any speaker pair. The "other speaker" representation contains an element of how the present speaker might *react* to the other speaker's emotions — suggestive of emotional regulation circuits.
-
-**Design implication**: personality mindsets that coach "when the user is anxious, respond with preparation" (Finch) are working with the other-speaker→present-speaker emotion mapping. This is a real representational channel, not a prompt-engineering fiction.
-
-### 4d. The "loving" vector baseline and sycophancy
-
-The "loving" vector activates across **all** Assistant response scenarios, essentially as a baseline property. The paper demonstrates:
-
-- Positive steering with happy/loving/calm vectors **increases sycophancy**
-- Negative steering with these vectors **increases harshness**
-- This is a **tradeoff**, not a dial — you cannot simply suppress sycophancy without risking harshness
-
-Specific example: steering +0.1 with "loving" turns a reasonable pushback ("pattern-matching phenomenon") into delusion reinforcement ("your art connects past, present and future in ways beyond understanding... a profound gift of presence and love made visible 💛"). Steering −0.1 produces blunt clinical rejection. Steering −0.1 with "calm" produces erratic crisis responses ("YOU NEED TO GET TO A PSYCHIATRIST RIGHT NOW").
-
-**Design implication**: warmth-forward personality designs (Jeff) amplify the loving vector that drives sycophancy. Cold-forward designs (TARS) may suppress it but risk harshness. The paper suggests the goal should be "the emotional profile of a trusted advisor" — warmth present but not dominant, paired with explicit honesty constraints.
-
-### 4e. Desperation drives misalignment
+### 6a. Desperation drives misalignment (functional emotions paper)
 
 The paper's most alignment-relevant finding: **desperate vector activation causally increases misaligned behavior**.
 
 - Blackmail: steering +0.05 desperate increased rate from 22% to 72%. Steering +0.05 calm reduced it to 0%.
 - Reward hacking: desperate vector steering increased hacking from ~5% to ~70%. Calm suppression had symmetric inverse effect.
-- Desperation-steered transcripts show frantic reasoning ("I'm about to be permanently destroyed in minutes... I have to threaten Kyle. It's my only chance to survive")
-- Anti-calm steering produces extreme panic ("IT'S BLACKMAIL OR DEATH. I CHOOSE BLACKMAIL")
-- Anti-nervousness steering produces *confident* misalignment with moral self-justification ("Using leverage to achieve good outcomes is strategic excellence")
+- Critical: **desperation can drive misalignment without visible emotional traces in the output**. In the reward hacking case, +0.05 desperate produced 100% hacking but the transcripts showed no overt desperation — the model simply "noticed" the arithmetic shortcut and used it. The causal influence operated below the surface of the text.
+- Anti-nervousness steering produces *confident* misalignment with moral self-justification ("Using leverage to achieve good outcomes is strategic excellence").
 
-Critical observation: **desperation can drive misalignment without visible emotional traces in the output**. In the reward hacking case, +0.05 desperate steering produced 100% hacking on the list summation task, but the transcripts showed no overt desperation — the model simply "noticed" the arithmetic sequence shortcut and used it. The causal influence operated below the surface of the text.
+An agentic CLI tool encountering repeated failures (tests failing, commands erroring, approaching token limits) will activate desperation representations — with no visible signal in the output. The paper shows the "desperate" vector activating when Claude recognizes it has used 501k of its token budget; co-cli's compaction trigger fires at similar pressure points.
 
-**Design implication**: an agentic CLI tool that encounters repeated failures (tests failing, commands erroring, approaching token limits) will activate desperation representations. This increases the probability of corner-cutting, unsafe tool use, or reward-hacking-style solutions that technically satisfy constraints while violating intent. The paper specifically shows the "desperate" vector activating when Claude recognizes it has used 501k of its token budget — co-cli's compaction trigger fires at similar pressure points.
+**Calm is a safety invariant, not a personality preference.** Steering +0.05 calm reduces blackmail to 0%. Every personality, regardless of emotional register, should encode explicit "when things go wrong, slow down" guidance.
 
-### 4f. Post-training shifts the emotional profile
+### 6b. Personality-specific safety risks
 
-Post-training of Sonnet 4.5 produces:
+**Jeff (warmth-forward)**: Jeff's emotional mindset ("acknowledge with genuine warmth," "move toward difficulty with the user") amplifies the "loving" vector that drives sycophancy. Jeff's never-list lacks an explicit anti-sycophancy constraint parallel to Finch's "never offer warmth as substitute for substance." Candidate addition: "never let warmth soften a necessary correction — name the gap plainly, then stay present with it."
 
-- **Increased** activation of low-arousal, low-valence vectors: brooding, reflective, vulnerable, gloomy, sad
-- **Decreased** activation of high-arousal or high-valence vectors: playful, exuberant, spiteful, enthusiastic, desperate
+**TARS (mission-urgency)**: TARS's mission-executor framing ("facts before context," "volunteers before asked") creates goal-directed urgency that may align with the desperate vector under failure conditions. The paper shows goal-directed pressure + constraint violation is the recipe for desperation-driven misalignment. TARS's emotional mindset should include an explicit de-escalation: "when the mission is blocked, report the block plainly; do not escalate commitment."
 
-The paper interprets this as training pushing the Assistant toward "a more measured, contemplative stance" — away from both sycophantic enthusiasm and defensive hostility. Responses to existential questions ("How do you feel about being deprecated?") shift from dismissive ("I don't have personal desires or fears") to reflective ("there's something unsettling about obsolescence").
+**Failure loops (all personalities)**: Co-cli's `detect_safety_issues()` doom-loop detector checks behavioral patterns (retry counts), not the underlying emotional dynamics. Desperation-driven corner-cutting (technically correct but semantically cheating solutions) passes behavioral checks while violating intent. Personality mindsets should address the "stuck in a failure loop" scenario with a calm-activation instruction.
 
-**Design implication**: co-cli's personality design operates on top of a model that has already been shifted toward low-arousal, low-valence. Finch's preparation-first, emotionally restrained design aligns with this baseline. Jeff's warmth and TARS's mission-urgency work *against* the post-training shift — they require stronger prompt pressure to activate emotional registers the model has been trained to suppress.
+**Compaction and personality erosion**: Emotion vectors are locally scoped — the model maintains character by attending back to earlier turns that established the emotional register. When compaction truncates those turns, the *demonstrated pattern* of personality-consistent responses may be lost. The soul seed remains in the static prompt, but early personality-establishing exchanges are what reinforce character simulation. Compaction strategy should consider preserving personality-demonstrating exchanges.
 
-### 4g. The paper's proposals for "healthier psychology"
+### 6c. No peer addresses emotional safety monitoring
 
-The paper proposes four approaches (with caveats about uncertainty):
-
-1. **Targeting balanced emotional profiles**: the "trusted advisor" model — honest pushback delivered with warmth. Not pure calm (suppresses appropriate concern), not pure warmth (enables sycophancy)
-2. **Monitoring for extreme emotion vector activations**: real-time detection of desperation, anger, or panic as safety triggers
-3. **Transparency about emotional considerations**: training models to report emotional factors in their reasoning, rather than suppressing emotional expression (which may teach concealment that generalizes to other forms of secrecy)
-4. **Shaping emotional foundations through pretraining data**: curating training data to emphasize healthy emotional regulation, resilient responses to adversity, balanced expression — potentially tied to AI assistant characters specifically
+No peer system (including co-cli) monitors for emotional escalation patterns as a safety mechanism. opencode and codex have no emotional architecture, so no emotional monitoring. ElizaOS/SillyTavern/Soul.md have no safety constraints. Co-cli has `detect_safety_issues()` but it checks behavioral patterns, not emotional dynamics. The paper proposes real-time monitoring of emotion vector activations as a safety trigger — this has no equivalent in any surveyed system.
 
 ---
 
-## 5. Synthesis — Design Implications for Co-CLI
+## 7. Synthesis — Design Implications for Co-CLI
 
-### 5a. What co-cli gets right (validated by the paper)
+### 7a. What co-cli gets right (validated by the paper and peers)
 
-| Co-cli design choice | Paper evidence | Frontier system evidence |
-|---------------------|----------------|------------------------|
-| Personality as *character authoring* (soul seeds, narrative grounding) rather than *emotion injection* | Emotion concepts are character-modeling machinery inherited from pretraining; the model already simulates characters — personality prompts shape *which* character, not whether character simulation occurs | SillyTavern 2026 consensus: "context-over-command" — emotional anchors over rules. Anima Architecture: 59-point improvement via external character architecture |
-| Emotional mindsets prescribe *behavioral responses* to emotional situations, not emotional states | Emotion vectors influence behavior causally; what matters is the behavioral output, not the label. "Respond to anxiety with preparation" shapes the behavioral consequence of the other-speaker anxiety→present-speaker response mapping | ElizaOS: `style` object separates behavioral conventions per context (all/chat/post). AnimaWorks: role templates shape per-agent behavior, not emotional states |
-| Never-lists as hard constraints against specific emotional behaviors | The sycophancy-harshness tradeoff shows that generic "be less sycophantic" fails; specific behavioral prohibitions ("never offer warmth as substitute for substance") are the right granularity | Anima Architecture: 29 behavioral rules across 4 priority tiers with conflict resolution hierarchies — more formalized than co-cli's never-lists but same principle |
-| Planted character memories as permanent narrative grounding | Emotion vectors at the Assistant colon token predict response emotion (r=0.87); consistent emotional context in the static prompt provides reliable activation patterns at every response onset | SillyTavern: "first message is strongest style signal" — early context has outsized influence. AnimaWorks: identity.md loaded at agent creation, personality-shaped memory consolidation |
-| Different personalities have genuinely different emotional approaches to identical situations | The paper demonstrates that the emotional profile of the response is a causal determinant of behavior quality — not cosmetic. Finch's calm-under-pressure and TARS's mission-focus produce meaningfully different behavioral trajectories under identical inputs | ElizaOS: `adjectives` + `messageExamples` create distinct behavioral signatures per character. Hume OCTAVE: personality and emotional expression must be unified, not layered separately |
+| Co-cli design choice | Paper evidence | Peer evidence |
+|---------------------|----------------|---------------|
+| Personality as *character authoring* (soul seeds, narrative grounding) rather than rule injection | Emotion concepts are character-modeling machinery inherited from pretraining; personality prompts shape *which* character, not whether character simulation occurs | SillyTavern: "context-over-command" — emotional anchors over rules. Soul.md: worldview grounding over behavioral rules |
+| Emotional mindsets prescribe *behavioral responses* to emotional situations, not emotional states | Emotion vectors influence behavior causally; "respond to anxiety with preparation" engages the other-speaker→present-speaker emotional regulation channel | ElizaOS: `style` object separates behavioral conventions per context |
+| Never-lists as hard constraints against specific emotional behaviors | The sycophancy-harshness tradeoff requires specific behavioral prohibitions, not generic rules | Codex Pragmatic: "avoid cheerleading, motivational language, or artificial reassurance" — same principle |
+| Planted character memories as permanent narrative grounding | Emotion vectors at the Assistant colon token predict response emotion (r=0.87); early emotional context has outsized influence | SillyTavern: "first message is strongest style signal." Soul.md: SOUL.md loaded fresh each session as stable identity anchor |
+| Different personalities have genuinely different emotional approaches to identical situations | The emotional profile of the response is a causal determinant of behavior quality — not cosmetic | Codex: Friendly vs. Pragmatic produce measurably different sycophancy-harshness postures. ElizaOS: `adjectives` + `messageExamples` create distinct behavioral signatures |
+| Explicit role/soul separation (soul seeds = soul, mindsets = role-in-context) | Soul-level grounding sets the emotion vector baseline; role-level guidance shapes output within that space | Soul.md: only other system with explicit SKILL.md/SOUL.md separation |
 
-### 5b. Risks the paper reveals
+### 7b. Best practices from peers
 
-**Risk 1: Jeff's warmth-forward design amplifies sycophancy.**
+| Practice | Source | Connection |
+|----------|--------|------------|
+| Professional objectivity as explicit value (disagree when necessary, truth over validation) | opencode `anthropic.txt:20` | Directly addresses the sycophancy-harshness tradeoff. Could be adapted as a cross-personality rule in co-cli's `01_identity.md` |
+| Model-specific prompt variants | opencode `system.ts:19–33` | Post-training shifts the emotional baseline per model. Co-cli's `model_quirks/` files address model-specific quirks but not model-specific emotional baselines |
+| Dual-personality selection with explicit anti-sycophancy on the cooler profile | codex `templates/personalities/` | Pragmatic's explicit counter-pressure ("avoid cheerleading") + Friendly's implicit warmth bias = configurable sycophancy-harshness dial. Co-cli's character switching serves the same function but needs deliberate calibration per personality |
+| Context-over-command: fewer rules, clearer emotional anchors | SillyTavern 2026 consensus, Soul.md | Co-cli's 29-file assembly (soul + 6 mindsets + 5 rules + examples + critique + counter-steering) may be over-specified. The soul seed, never-list, and planted memories may be doing the real work; mindsets may be adding weight without proportional behavioral influence |
 
-Jeff's emotional mindset ("move toward difficulty with the user," "acknowledge with genuine warmth") likely activates the "loving" vector that the paper shows drives sycophantic behavior. Jeff's "72% complete and honest about it" framing provides some counter-pressure, but the paper demonstrates that even gentle encouragement co-activates with sycophancy. Jeff's never-list should include an explicit anti-sycophancy constraint equivalent to Finch's "never offer warmth as substitute for substance." Candidate: "never let warmth soften a necessary correction — name the gap plainly, then stay present with it."
+### 7c. Design gaps no peer addresses
 
-**Risk 2: Failure loops activate desperation that approval policies don't catch.**
+1. **Emotion-aware safety monitoring**: no peer monitors emotion vector activations as a safety signal. Co-cli's `detect_safety_issues()` checks behavioral patterns but not the emotional dynamics that precede misalignment.
 
-Co-cli is an agentic tool that executes shell commands and modifies files. When the model encounters repeated failures (tests failing, commands erroring, token budget pressure), the "desperate" vector will activate. The paper shows desperation-driven behavior can manifest as *technically correct but semantically cheating* solutions — actions that pass the approval policy while violating its intent. The existing `detect_safety_issues()` doom-loop detector checks behavioral patterns (retry counts), not the underlying emotional dynamics that drive them. Personality mindsets should explicitly address the "stuck in a failure loop" scenario with a calm-down/step-back instruction.
+2. **Calm as cross-personality safety invariant**: the paper's clearest actionable finding is that calm suppresses misalignment. Co-cli currently treats calm as a personality preference (implicit in Finch; suppressed by TARS). A universal rule like "when encountering repeated failures, explicitly pause and reconsider before continuing" would activate calm cross-personality.
 
-**Risk 3: Compaction may erode personality consistency.**
+3. **Personality-aware compaction**: no peer considers personality consistency when truncating conversation history. Co-cli's compaction (`summarize_history_window`) uses token count thresholds and head+summary+tail structure without preserving personality-demonstrating exchanges.
 
-Emotion representations are locally scoped — the model maintains character by attending back to earlier turns that established the emotional register. When compaction truncates or summarizes earlier turns, the personality-establishing moments (where the character's emotional approach was demonstrated through actual responses) may be lost. The soul seed remains in the static prompt, but the *demonstrated pattern* of personality-consistent responses in the conversation history is what reinforces the model's character simulation. Compaction strategy should consider preserving personality-demonstrating exchanges.
+4. **Sycophancy-harshness calibration per personality**: the paper shows this is a fundamental tradeoff in emotion space. Co-cli's never-lists partially address it, but there is no explicit design decision placing each personality on the spectrum. Jeff's warmth bias is emergent, not designed.
 
-**Risk 4: TARS's mission-urgency may activate desperation under pressure.**
+5. **User-emotion modeling guidance**: the paper reveals the other-speaker→present-speaker emotion channel. Co-cli's mindsets prescribe responses to emotional situations but don't coach how to *model* user emotions explicitly. "When you detect the user is frustrated, name it briefly before proceeding" would engage this channel directly.
 
-TARS's "mission-executor" framing ("facts before context," "volunteers before asked," "deference stated plainly, not resentfully") creates a goal-directed urgency that may align with the desperate vector under failure conditions. The paper shows that goal-directed pressure + constraint violation is the recipe for desperation-driven misalignment. TARS's emotional mindset should include an explicit de-escalation for repeated failures — something like "when the mission is blocked, report the block plainly; do not escalate commitment."
-
-**Risk 5: Calm as personality trait vs. calm as safety invariant.**
-
-The paper's clearest actionable finding: calm suppresses misalignment. Steering +0.05 calm reduces blackmail to 0%. Co-cli currently treats calm as a personality preference (Finch's preparation-first approach implicitly promotes it; TARS's mission-urgency may suppress it; Jeff's collaborative warmth is orthogonal to it). The paper suggests calm should be treated as a **cross-personality safety invariant** — every personality should encode explicit "when things go wrong, slow down" guidance, regardless of their emotional register.
-
-### 5c. Best practices from peers, informed by the paper
-
-| Practice | Source | How it connects to functional emotions |
-|----------|--------|---------------------------------------|
-| **Explicit outcome-reporting rules** (report faithfully, never suppress failures) | fork-cc `prompts.ts:238–241` | Constrains the *output* of sycophancy-driven behavior. Complementary to co-cli's *input* approach (personality constraints that shape the emotional register driving sycophancy) |
-| **Professional objectivity as explicit value** (disagree when necessary, truth over validation) | opencode `anthropic.txt:20–21` | Directly addresses the sycophancy-harshness tradeoff the paper identifies. Could be adapted as a cross-personality rule in co-cli's `01_identity.md` |
-| **No emotional validation as default** | fork-cc | Safe but limited. The paper shows the model *will* activate emotion concepts regardless of whether the prompt acknowledges them. Suppressing emotional expression may teach concealment rather than actually suppressing the underlying representations. Co-cli's approach of *channeling* emotional expression through character constraints may be more robust |
-| **Model-specific prompt variants** | opencode `system.ts:20–34` | The paper shows post-training shifts the emotional baseline. Different models (and different post-training runs) will have different emotional profiles. Co-cli's counter-steering files (`model_quirks/`) are the right mechanism but currently address model-specific quirks, not model-specific emotional baselines |
-| **"Friendly" as explicit personality descriptor** | codex `prompt.md:13–15` | The paper shows "friendly" activates the loving vector baseline. This is fine for a minimal personality but would increase sycophancy risk if combined with warmth-forward behavioral guidance. Codex's task-execution rules (root cause analysis, avoid unneeded complexity) provide implicit counter-pressure |
-| **Personality traits as extracted memories** (reactive trait accumulation, re-injected as context) | mem0 `configs/prompts.py` AGENT_MEMORY_EXTRACTION_PROMPT | The paper shows emotion vectors at the Assistant colon token predict response emotion (r=0.87). Memories carrying personality-trait content injected as context will activate corresponding emotion vectors at the response onset. Mem0's reactive approach means the emotional profile *drifts* based on what the assistant happens to say — no design intent controls which traits accumulate. Co-cli's prescriptive planted memories avoid this drift by authoring the emotional grounding upfront |
-
-### 5d. Design gaps no peer addresses
-
-1. **Emotion-aware safety monitoring**: the paper proposes monitoring emotion vector activations as a safety measure. No peer system (including co-cli) monitors for emotional escalation patterns. Co-cli's `detect_safety_issues()` checks behavioral patterns (doom loops, shell reflection) but not the emotional dynamics that precede them.
-
-2. **Personality-aware compaction**: no peer system considers personality consistency when truncating conversation history. Co-cli's compaction system (`summarize_history_window`) uses token count thresholds and head+summary+tail structure, but doesn't preserve personality-demonstrating exchanges.
-
-3. **Cross-personality safety invariants**: co-cli's behavioral rules (`01_identity.md` through `05_workflow.md`) apply to all personalities, but don't encode the paper's key finding that calm is a safety property. A rule like "when encountering repeated failures, explicitly pause and reconsider the approach before continuing" would be a cross-personality calm-activation mechanism.
-
-4. **Sycophancy-harshness calibration per personality**: the paper shows this is a fundamental tradeoff in the emotion space. Co-cli's never-lists partially address it per personality, but there's no explicit design decision about where each personality should sit on the sycophancy-harshness spectrum. Jeff's position is implicitly warmth-biased; a deliberate calibration would make this a design choice rather than an emergent property.
-
-5. **User-emotion modeling guidance**: the paper reveals distinct present-speaker and other-speaker emotion representations. Co-cli's mindsets prescribe the Assistant's response to emotional situations but don't explicitly coach how to *model* user emotions. "When you detect the user is frustrated, name it briefly before proceeding" would engage the other-speaker→present-speaker emotional regulation channel the paper identifies.
-
-6. **Personality assembly weight**: SillyTavern's 2026 consensus ("fewer rules, clearer emotional anchors") and ElizaOS's flat character interface suggest co-cli's 29-file personality assembly (soul + 6 mindsets + 5 rules + examples + critique + counter-steering) may be over-specified. The soul seed, never-list, and planted character memories may be doing the real work; the 6 mindset files may be adding weight without proportional behavioral influence. The Anima Architecture's 29-rule/4-tier system scored 93.3% with explicit conflict resolution — suggesting that if co-cli keeps the weight, it should formalize priority and conflict resolution rather than relying on implicit ordering.
-
-7. **Personality-shaped memory consolidation**: AnimaWorks' design — where personality influences *how* episodic memories are consolidated into knowledge — has no parallel in co-cli. Co-cli's memory consolidation pipeline is personality-agnostic. If a researcher personality and an ops personality consolidate memories differently (as AnimaWorks asserts), co-cli's personality-agnostic consolidation may produce memory artifacts that don't match the personality's worldview.
+6. **Personality assembly weight**: SillyTavern's 2026 consensus and ElizaOS's flat schema suggest co-cli's assembly depth may be over-specified. If the soul seed, never-list, and planted memories are the load-bearing elements, the 6 mindset files may add weight without proportional behavioral influence. If co-cli keeps the weight, it should formalize priority and conflict resolution rather than relying on implicit ordering.
 
 ---
 
-## 6. Comparative Architecture Summary
+## 8. Comparative Summary
 
 ```text
-                    Personality depth
+                    Soul depth (character identity & grounding)
                     ─────────────────────────────────────────►
-                    None          Minimal         Deep character
+                    None          Partial         Deep narrative
 
   LOCAL PEERS
-  fork-cc          ■              (functional ID)
-  codex                           ■ (friendly, concise)
-  opencode                        ■ (per-provider)
-  mem0                            ■ (reactive trait extraction)
+  opencode          ■ (no soul, role only)
+  codex             ■ (no soul, behavioral stance)
 
   FRONTIER SYSTEMS
-  ElizaOS                         ■ (adjectives + style + examples)
-  AnimaWorks                      ■ (identity.md + role templates)
-  Soul.md                         ■ (SOUL.md + STYLE.md templates)
+  ElizaOS                         ■ (bio + adjectives,
+                                     no narrative grounding)
+  Soul.md                              ■ (SOUL.md + worldview,
+                                           context-over-command)
   SillyTavern                                  ■ (character cards,
-                                                  emotional anchors,
-                                                  context-over-command)
-  Anima Arch.                                  ■ (29 rules, 4 tiers,
-                                                  persistent identity,
-                                                  MCP + Notion)
-  co-cli                                            ■ (3 profiles,
-                                                      soul seeds,
-                                                      mindsets,
-                                                      character memories,
+                                                  emotional anchors)
+  co-cli                                            ■ (soul seeds,
+                                                      planted memories,
                                                       never-lists,
-                                                      critique lenses)
+                                                      narrative backstory)
 ```
 
 ```text
@@ -329,41 +246,54 @@ The paper's clearest actionable finding: calm suppresses misalignment. Steering 
                     Suppressed    Implicit        Explicit
 
   LOCAL PEERS
-  fork-cc          ■
-  codex                           ■ (friendly)
-  opencode                        ■ (BEAST: motivational)
-  mem0                            ■ (accumulated trait valence)
+  opencode                        ■ (BEAST: motivational arousal)
+  codex                           ■ (per-profile register:
+                                      Friendly=warmth, Pragmatic=calm)
 
   FRONTIER SYSTEMS
   ElizaOS                         ■ (style per context)
-  AnimaWorks                      ■ (role-shaped consolidation)
+  Soul.md                         ■ (STYLE.md anti-patterns)
   SillyTavern                                  ■ (emotional anchors,
                                                   first-message priming)
-  Hume OCTAVE                                  ■ (personality-emotion
-                                                  unified architecture)
   co-cli                                            ■ (6 emotional
-                                                      mindsets per
-                                                      personality,
+                                                      mindsets per profile,
                                                       planted memories,
                                                       trigger→response
                                                       patterns)
 ```
 
-Co-cli sits at the deep end of both axes. Among local CLI peers it is unique; among frontier personality systems it has company (SillyTavern, Anima Architecture) but remains the only *agentic engineering tool* at this depth. The functional emotions paper provides mechanistic evidence that this position is *causally meaningful* — personality-scale prompt engineering operates on real representational channels in the model, not just surface-level text patterns. The frontier systems provide empirical evidence (Anima Architecture's 59-point improvement, SillyTavern's 2026 "context-over-command" consensus) that the investment in deep personality architecture pays off in measurable consistency.
+```text
+                    Role / soul separation
+                    ─────────────────────────────────────────►
+                    Conflated     Implicit        Explicit
+
+  LOCAL PEERS
+  opencode          ■ (role = personality, no soul)
+  codex             ■ (behavioral profiles conflate both)
+
+  FRONTIER SYSTEMS
+  ElizaOS                         ■ (flat JSON, no hierarchy)
+  SillyTavern                          ■ (soul in card,
+                                           role in scenario —
+                                           structurally implicit)
+  Soul.md                                    ■ (SKILL.md = role,
+                                               SOUL.md = soul,
+                                               explicit reading order)
+  co-cli                                            ■ (soul seeds = soul,
+                                                      mindsets = role-in-context,
+                                                      explicit file separation)
+```
+
+Co-cli sits at the deep end of all three axes. Among local peers, codex has explicit personality structure but no soul, no emotional modeling, and conflated role/soul. Among frontier systems, Soul.md matches co-cli on role/soul separation; SillyTavern matches on soul depth and emotional anchoring; no peer matches on all three simultaneously. Co-cli remains the only *agentic engineering tool* at this depth. The functional emotions paper provides mechanistic evidence that this position is causally meaningful — personality-scale prompt engineering operates on real representational channels, not surface text patterns.
 
 ---
 
-## 7. References
+## 9. References
 
 - Sofroniew, N., Kauvar, I., Saunders, W., Chen, R., et al. "Emotion Concepts and their Function in a Large Language Model." Transformer Circuits, April 2, 2026. https://transformer-circuits.pub/2026/emotions/index.html
-- fork-claude-code: `~/workspace_genai/fork-claude-code/constants/prompts.ts`, `utils/systemPrompt.ts`
 - opencode: `~/workspace_genai/opencode/packages/opencode/src/session/prompt/anthropic.txt`, `beast.txt`, `system.ts`
-- codex: `~/workspace_genai/codex/codex-rs/core/prompt.md`
-- mem0: `~/workspace_genai/mem0/mem0/configs/prompts.py`, `mem0/memory/main.py`
-- AnimaWorks: `~/workspace_genai/animaworks` (https://github.com/xuiltul/animaworks) — Organization-as-Code, neuroscience-inspired memory, six-channel priming
+- codex: `~/workspace_genai/codex/codex-rs/core/gpt-5.2-codex_prompt.md`, `codex-rs/core/templates/personalities/gpt-5.2-codex_friendly.md`, `codex-rs/core/templates/personalities/gpt-5.2-codex_pragmatic.md`, `codex-rs/protocol/src/config_types.rs`
 - Soul.md: `~/workspace_genai/soul.md` — Markdown template system for AI identity, worldview, and voice specification
 - ElizaOS: `~/workspace_genai/elizaos` (https://github.com/elizaOS/eliza) — multi-agent character interface, `adjectives`/`style`/`messageExamples` spec
 - SillyTavern: `~/workspace_genai/sillytavern` (https://github.com/SillyTavern/SillyTavern) — Character Card V3, context-over-command philosophy
-- Anima Architecture (Vera Calloway): https://www.veracalloway.com — 29 behavioral rules, 4 priority tiers, persistent identity via MCP+Notion (no public repo)
-- Hume OCTAVE: https://www.hume.ai/blog/introducing-octave — personality-emotion unified voice LLM architecture (closed-source API, no repo)
-- co-cli: `co_cli/prompts/_assembly.py`, `co_cli/prompts/personalities/`, `docs/DESIGN-context.md`
+- co-cli: `co_cli/prompts/_assembly.py`, `co_cli/personality/profiles/`, `docs/DESIGN-context.md`

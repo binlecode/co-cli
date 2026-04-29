@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from co_cli.config.core import SEARCH_DB
 from co_cli.memory.frontmatter import parse_frontmatter
-from co_cli.memory.search_util import sanitize_fts5_query
+from co_cli.memory.search_util import normalize_bm25, run_fts, sanitize_fts5_query
 
 if TYPE_CHECKING:
     from co_cli.config.core import Settings
@@ -63,32 +63,6 @@ CREATE TABLE IF NOT EXISTS docs (
     artifact_id TEXT,
     UNIQUE(source, path, chunk_id)
 );
-
-CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
-    title,
-    content,
-    tags,
-    tokenize='porter unicode61',
-    content='docs',
-    content_rowid='rowid'
-);
-
-CREATE TRIGGER IF NOT EXISTS docs_ai AFTER INSERT ON docs BEGIN
-    INSERT INTO docs_fts(rowid, title, content, tags)
-    VALUES (new.rowid, new.title, new.content, new.tags);
-END;
-
-CREATE TRIGGER IF NOT EXISTS docs_ad AFTER DELETE ON docs BEGIN
-    INSERT INTO docs_fts(docs_fts, rowid, title, content, tags)
-    VALUES ('delete', old.rowid, old.title, old.content, old.tags);
-END;
-
-CREATE TRIGGER IF NOT EXISTS docs_au AFTER UPDATE ON docs BEGIN
-    INSERT INTO docs_fts(docs_fts, rowid, title, content, tags)
-    VALUES ('delete', old.rowid, old.title, old.content, old.tags);
-    INSERT INTO docs_fts(rowid, title, content, tags)
-    VALUES (new.rowid, new.title, new.content, new.tags);
-END;
 
 CREATE TABLE IF NOT EXISTS embedding_cache (
     provider     TEXT NOT NULL,
@@ -227,7 +201,6 @@ class KnowledgeStore:
         )
         self._embedding_model = config.knowledge.embedding_model
         self._embedding_dims = config.knowledge.embedding_dims
-        self._docs_vec_table = f"docs_vec_{self._embedding_dims}"
         self._chunks_vec_table = f"chunks_vec_{self._embedding_dims}"
         self._llm_host = config.llm.host
         self._llm_api_key = config.llm.api_key
@@ -293,6 +266,14 @@ class KnowledgeStore:
                 if _col not in _existing_cols:
                     self._conn.execute(f"ALTER TABLE docs ADD COLUMN {_col} TEXT")
                     logger.info("KnowledgeStore: migrated docs table — added column %s", _col)
+            # Drop dead doc-level FTS/vec tables and triggers (superseded by chunks_fts/chunks_vec).
+            for _trigger in ("docs_ai", "docs_ad", "docs_au"):
+                self._conn.execute(f"DROP TRIGGER IF EXISTS {_trigger}")
+            self._conn.execute("DROP TABLE IF EXISTS docs_fts")
+            for _row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'docs_vec_%'"
+            ).fetchall():
+                self._conn.execute(f"DROP TABLE IF EXISTS {_row[0]}")
             self._conn.commit()
         except Exception as _e:
             self._conn.close()
@@ -301,12 +282,6 @@ class KnowledgeStore:
         if self._backend == "hybrid":
             try:
                 self._load_sqlite_vec()
-                # Table names are dim-suffixed (e.g. docs_vec_1024) so a dim
-                # change just creates a new table — old tables are left in place.
-                self._conn.execute(
-                    f"CREATE VIRTUAL TABLE IF NOT EXISTS {self._docs_vec_table}"
-                    f" USING vec0(embedding float[{self._embedding_dims}])"
-                )
                 self._conn.execute(
                     f"CREATE VIRTUAL TABLE IF NOT EXISTS {self._chunks_vec_table}"
                     f" USING vec0(embedding float[{self._embedding_dims}])"
@@ -399,25 +374,6 @@ class KnowledgeStore:
             ),
         )
         self._conn.commit()
-
-        if self._backend == "hybrid":
-            text = f"{title or ''}\n{content or ''}"
-            emb = self._embed_cached(text)
-            if emb is not None:
-                row = self._conn.execute(
-                    "SELECT rowid FROM docs WHERE source=? AND path=? AND chunk_id=0",
-                    (source, path),
-                ).fetchone()
-                if row:
-                    self._conn.execute(
-                        f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],)
-                    )
-                    blob = struct.pack(f"{len(emb)}f", *emb)
-                    self._conn.execute(
-                        f"INSERT INTO {self._docs_vec_table}(rowid, embedding) VALUES (?, ?)",
-                        (row["rowid"], blob),
-                    )
-                    self._conn.commit()
 
     def index_chunks(
         self,
@@ -654,7 +610,7 @@ class KnowledgeStore:
         results: list[SearchResult] = []
         for row, _leg in all_rows:
             rank = row["rank"]
-            score = 1.0 / (1.0 + abs(rank))
+            score = normalize_bm25(rank)
             results.append(
                 SearchResult(
                     source=row["source"],
@@ -721,11 +677,7 @@ class KnowledgeStore:
             params.append(created_before)
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)
-        try:
-            rows = self._conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError as e:  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
-            logger.warning(f"Chunks FTS search error: {e}")
-            return []
+        rows = run_fts(self._conn, sql, params, label="Chunks FTS")
         return [(row, "chunks") for row in rows]
 
     def _fts_chunks_raw(
@@ -769,7 +721,7 @@ class KnowledgeStore:
 
         def _build(row: Any) -> SearchResult:
             rank = row["rank"]
-            score = 1.0 / (1.0 + abs(rank))
+            score = normalize_bm25(rank)
             return SearchResult(
                 source=row["source"],
                 kind=row["kind"],
@@ -1229,22 +1181,10 @@ class KnowledgeStore:
         return indexed
 
     def remove(self, source: str, path: str) -> None:
-        """Remove a single document from the index by path.
-
-        The docs_ad trigger fires on DELETE, handling docs_fts cleanup automatically.
-        In hybrid mode, also cleans the docs_vec and chunks_vec entries.
-        """
+        """Remove a single document from the index by path."""
         # Remove chunk rows first (rowid references must be cleaned before parent rows)
         self.remove_chunks(source, path)
 
-        if self._backend == "hybrid":
-            row = self._conn.execute(
-                "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
-            ).fetchone()
-            if row:
-                self._conn.execute(
-                    f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],)
-                )
         self._conn.execute(
             "DELETE FROM docs WHERE source = ? AND path = ?",
             (source, path),
@@ -1290,14 +1230,6 @@ class KnowledgeStore:
         for path in to_delete:
             # Remove chunk rows before docs rows
             self.remove_chunks(source, path)
-            if self._backend == "hybrid":
-                row = self._conn.execute(
-                    "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
-                ).fetchone()
-                if row:
-                    self._conn.execute(
-                        f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],)
-                    )
             self._conn.execute(
                 "DELETE FROM docs WHERE source = ? AND path = ?",
                 (source, path),
@@ -1346,16 +1278,13 @@ class KnowledgeStore:
         Used by bootstrap to surface FTS/vector configuration problems early.
         Unlike search(), this method does NOT suppress errors.
         """
-        # Probe FTS: run a raw FTS match against docs_fts to verify the table is intact.
         self._conn.execute(
-            "SELECT rowid FROM docs_fts WHERE docs_fts MATCH ? LIMIT 1",
+            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1",
             ("probe",),
         ).fetchone()
 
-        # Probe vec tables: verify the dim-suffixed tables exist and are accessible.
         if self._backend == "hybrid":
-            for table in (self._docs_vec_table, self._chunks_vec_table):
-                self._conn.execute(f"SELECT rowid FROM {table} LIMIT 1").fetchone()
+            self._conn.execute(f"SELECT rowid FROM {self._chunks_vec_table} LIMIT 1").fetchone()
 
     def close(self) -> None:
         """Close the database connection."""

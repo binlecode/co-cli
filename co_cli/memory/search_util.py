@@ -1,6 +1,33 @@
 """Shared search utilities for knowledge retrieval tools."""
 
+from __future__ import annotations
+
+import logging
 import re
+import sqlite3
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+def normalize_bm25(rank: float) -> float:
+    """Map a raw BM25 rank (negative, lower = better) to a [0, 1) score."""
+    return abs(rank) / (1.0 + abs(rank))
+
+
+def run_fts(
+    conn: Any,
+    sql: str,
+    params: tuple | list,
+    *,
+    label: str = "FTS",
+) -> list[Any]:
+    """Execute an FTS5 MATCH query, returning rows or [] on OperationalError."""
+    try:
+        return conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as exc:  # type: ignore[attr-defined]
+        logger.warning("%s search error: %s", label, exc)
+        return []
 
 
 def sanitize_fts5_query(query: str) -> str:

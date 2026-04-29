@@ -259,6 +259,41 @@ Dream-cycle semantics live in [dream.md](dream.md). This spec only owns the hand
 
 The dream cycle is not part of turn-time recall or in-turn knowledge writes. It is a separate lifecycle pass over the same Memory and Knowledge stores.
 
+### 2.7 Design Lineage
+
+The T1 and T2 retrieval pipelines are not original — they trace to specific peer systems. Recording the lineage here so future work knows which peer to consult before changing retrieval mechanics. Full peer survey: [docs/reference/RESEARCH-memory-peer-for-co-second-brain.md](../reference/RESEARCH-memory-peer-for-co-second-brain.md).
+
+**T1 (session transcripts) — direct port from `hermes-agent`.**
+
+`co_cli/memory/summary.py:4` docstring states this explicitly: *"Ported from hermes-agent session_search_tool.py with adaptations for pydantic-ai message types."* `recall.py:33` reinforces it: the 60s `_SUMMARIZATION_TIMEOUT_SECS` is sized for *"hermes-style LLM summarization"*. Mechanism, magic numbers, and pipeline shape are preserved line-for-line:
+
+| Mechanism | hermes-agent (`tools/session_search_tool.py`) | co_cli |
+| --- | --- | --- |
+| Pipeline | FTS5 → top-K → 100K-char window → parallel LLM summarization | identical |
+| `MAX_SESSION_CHARS` | `100_000` | `100_000` (`summary.py:32`) |
+| Session cap | default 3 | hard cap 3 (`recall.py:_T1_SESSION_CAP`) |
+| Summarizer timeout | 60s | 60s (`recall.py:_SUMMARIZATION_TIMEOUT_SECS`) |
+| `_truncate_around_matches` | three-tier match strategy, 25%/75% bias | identical (`summary.py:85`) |
+| Summarizer model | Gemini Flash | local noreason model (only adaptation) |
+
+Implication: changes to T1 retrieval should consult the hermes implementation first; deviations from it are intentional adaptations, not opportunistic cleanup.
+
+**T2 (knowledge artifacts) — retrieval mechanics from `openclaw`, product shape from `ReMe`.**
+
+Two distinct peers contributed two distinct layers:
+
+| Component | Peer source | co_cli location |
+| --- | --- | --- |
+| BM25 + vector hybrid via RRF | `openclaw` `extensions/memory-core/src/memory/hybrid.ts:57-155` | `_hybrid_search()` (`knowledge_store.py`) |
+| Optional cross-encoder / LLM rerank | `openclaw` MMR-style rerank | `_rerank_results()` (`knowledge_store.py`) |
+| Temporal decay | `openclaw` decay/recency policy | `co_cli/memory/decay.py` |
+| File-based local memory + memory classes (kind taxonomy) | `ReMe` (`reme/memory/file_based/`) | `knowledge_dir/*.md` + `artifact_kind` field |
+| Pre-reasoning, on-demand recall (no always-inject) | `ReMe` retrieval discipline | `memory_search()` tool surface |
+
+Standard RAG primitives are not peer-specific and should not be attributed: `chunk_size=600 + chunk_overlap=80` is the LangChain/LlamaIndex default, and `tokenize='porter unicode61'` is the idiomatic SQLite FTS5 recipe shared by both T1 and T2.
+
+Implication: changes to T2 ranking should consult `openclaw`; changes to T2 storage shape or artifact taxonomy should consult `ReMe`.
+
 ## 3. Config
 
 ### Memory Settings
