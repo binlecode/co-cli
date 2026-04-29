@@ -120,15 +120,23 @@ def build_agent(
         if tool_registry is None:
             tool_registry = build_tool_registry(config)
 
-        from co_cli.agent._instructions import (
-            add_category_awareness_prompt,
-            add_shell_guidance,
-            date_prompt,
-            safety_prompt,
-        )
+        from co_cli.agent._instructions import current_time_prompt, safety_prompt
         from co_cli.context.assembly import build_static_instructions
+        from co_cli.context.guidance import build_toolset_guidance
+        from co_cli.tools.deferred_prompt import build_category_awareness_prompt
 
-        static_instructions = build_static_instructions(config)
+        # Block 0: session-stable; cached across all turns and sessions
+        static_parts = [build_static_instructions(config)]
+
+        tool_guidance = build_toolset_guidance(tool_registry.tool_index)
+        if tool_guidance:
+            static_parts.append(tool_guidance)
+
+        category_hint = build_category_awareness_prompt(tool_registry.tool_index)
+        if category_hint:
+            static_parts.append(category_hint)
+
+        static_instructions = "\n\n".join(static_parts)
 
         # Static layer — set once at agent construction; does not change between turns.
         # Single filtered toolset (native + MCP combined); SDK adds ToolSearchToolset automatically.
@@ -149,12 +157,9 @@ def build_agent(
             capabilities=[CoToolLifecycle()],
         )
 
-        # Conditional prompt layers — runtime-gated (fresh per turn, never accumulated)
-        agent.instructions(add_shell_guidance)
-        agent.instructions(add_category_awareness_prompt)
-        # Dynamic per-turn context — date only (personality memories in static prompt)
-        agent.instructions(date_prompt)
-        # Dynamic per-turn safety warnings — doom loop, shell reflection cap
+        # Block 1: per-turn callbacks — real-time, not cached, tiny
+        # current_time_prompt: fresh date/time each turn; keeps Block 0 cache-stable
+        agent.instructions(current_time_prompt)
         agent.instructions(safety_prompt)
 
         return agent

@@ -1,15 +1,15 @@
 """Per-turn instruction builder functions for the orchestrator agent."""
 
+from datetime import datetime
+
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
 
 
-async def date_prompt(ctx: RunContext[CoDeps]) -> str:
-    """Per-turn: inject today's date."""
-    from co_cli.context.prompt_text import recall_prompt_text
-
-    return await recall_prompt_text(ctx)
+def current_time_prompt(ctx: RunContext[CoDeps]) -> str:
+    """Per-turn: inject current date and time for accuracy without freezing it in cached Block 0."""
+    return datetime.now().strftime("Current time: %A, %B %d, %Y %I:%M %p")
 
 
 def safety_prompt(ctx: RunContext[CoDeps]) -> str:
@@ -17,27 +17,3 @@ def safety_prompt(ctx: RunContext[CoDeps]) -> str:
     from co_cli.context.prompt_text import safety_prompt_text
 
     return safety_prompt_text(ctx)
-
-
-def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
-    """Inject shell tool guidance when shell is available."""
-    return (
-        "Prefer dedicated workspace file tools over shell primitives: "
-        "file_read for known files, file_find for path/name discovery, and "
-        "file_search for content search. Use file_search(glob=...) when you "
-        "need to search inside only a subset of files. "
-        "Shell runs as subprocess. DENY-pattern commands are blocked before deferral. "
-        "Safe-prefix commands execute directly. All others require user approval. "
-        "On non-zero exit, the tool returns the exit code and combined output as a "
-        "tool result — read the output to diagnose the failure (wrong flag, missing "
-        "binary, permission issue, syntax error) and retry with a corrected command. "
-        "Account for platform differences: macOS uses BSD utilities "
-        "(stat -f not -c; sed -i '' not -i; no GNU long-opts like --count)."
-    )
-
-
-def add_category_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
-    """Inject category-level awareness so the model discovers deferred tools via search_tools."""
-    from co_cli.tools.deferred_prompt import build_category_awareness_prompt
-
-    return build_category_awareness_prompt(ctx.deps.tool_index)

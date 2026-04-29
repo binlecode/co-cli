@@ -51,7 +51,6 @@ from co_cli.context.compaction import (
     summary_marker,
 )
 from co_cli.context.orchestrate import _history_with_pending_user_input
-from co_cli.context.prompt_text import recall_prompt_text
 from co_cli.deps import CoDeps, CoSessionState, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
@@ -1255,31 +1254,6 @@ async def test_compact_command_preserves_search_tools_breadcrumb():
     last = result.history[-1]
     assert isinstance(last, ModelResponse)
     assert "Understood" in last.parts[0].content
-
-
-# ---------------------------------------------------------------------------
-# recall_prompt_text — per-turn dynamic instruction (date only)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dynamic_instruction_is_date_only():
-    """recall_prompt_text returns exactly the date string and nothing else."""
-    from datetime import date as _date
-
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=make_settings().model_copy(update={"personality": None}),
-        model=_LLM_MODEL,
-        session=CoSessionState(),
-        knowledge_dir=Path("/nonexistent-test-dir"),
-    )
-    msgs = [_user("ping"), _assistant("pong"), _user("ping again")]
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage(), messages=msgs)
-    result = await recall_prompt_text(ctx)
-
-    expected = f"Today is {_date.today().isoformat()}."
-    assert result == expected, f"dynamic instruction should be date-only; got: {result!r}"
 
 
 # ---------------------------------------------------------------------------

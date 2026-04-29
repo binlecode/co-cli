@@ -5,7 +5,6 @@ appended to ``message_history`` — they drive the ``instructions`` field that
 pydantic-ai re-emits each turn.
 
 Functions:
-    recall_prompt_text   — async, returns today's date (volatile suffix only)
     safety_prompt_text   — sync, returns doom-loop / shell-reflection warnings
 """
 
@@ -14,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import date
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
@@ -28,16 +26,6 @@ from pydantic_ai.messages import (
 from co_cli.deps import CoDeps
 
 log = logging.getLogger(__name__)
-
-
-async def recall_prompt_text(ctx: RunContext[CoDeps]) -> str:
-    """Per-turn dynamic instruction: today's date.
-
-    Personality memories are injected in the static system prompt via
-    ``build_static_instructions()`` for prefix-cache stability. Knowledge
-    recall is on-demand via the ``memory_search`` tool.
-    """
-    return f"Today is {date.today().isoformat()}."
 
 
 def _count_consecutive_same_calls(messages: list[ModelMessage]) -> int:

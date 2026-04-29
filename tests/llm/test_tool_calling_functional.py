@@ -188,6 +188,7 @@ async def test_clarify_handled_by_run_turn():
     max_attempts = 3
     for _attempt in range(max_attempts):
         frontend.last_question = None
+        frontend.question_call_count = 0
         try:
             async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
                 turn = await run_turn(
@@ -211,6 +212,9 @@ async def test_clarify_handled_by_run_turn():
         if "Alice" not in str(turn.messages):
             last_details = "answer 'Alice' not found in turn messages"
             continue
+
+        # ideal is == 1; > 1 signals G4 retry spiral (Ollama re-invokes after result)
+        assert frontend.question_call_count >= 1, "prompt_question was never called"
 
         return
 

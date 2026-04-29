@@ -59,6 +59,28 @@ build_static_instructions(config)
 
 ## 2. Core Logic
 
+### Asset Taxonomy: Canon vs Distillation
+
+Soul assets fall on a spectrum from canon (source-material truth) to author distillation
+(interpretive guidance derived from canon). All five asset types are system-owned, read-only,
+and package-shipped, but they differ in *what they are* and *how they should be injected*.
+
+| Asset | Relation to canon | Nature |
+|---|---|---|
+| Memories (`memories/*.md`) | **Canon** — directly source-grounded scenes, observations, dialogue | Observational ("character did X in scene Y") |
+| Mindsets (`mindsets/{task_type}.md`) | **Distillation of canon** — interpretation abstracted into task-typed prescriptions | Prescriptive ("when coding, be terse and load-bearing") |
+| Seed (`seed.md`) | **Synthesis of canon** — distilled identity declaration | Declarative ("you are X, you do Y, never Z") |
+| Examples (`examples.md`) | **Pattern extraction from canon** — how the character speaks/responds | Few-shot |
+| Critique (`critique.md`) | **Interpretive lens** — evaluative frame, often more authorial than source | Reflective |
+
+**Why the distinction matters for retrieval:** distilled assets (mindsets, seed, examples,
+critique) prime behavior on every turn — they belong in static priming. Canon (memories) is
+discrete by nature: a scene either matches the moment or doesn't. Static injection of canon
+pays full token cost whether it lands or not, while leaving the model to extrapolate from
+unmatched scenes. Canon is therefore better served by on-demand recall — searched when the
+moment invokes it — while distilled assets stay always-on. See `memory.md` for the canon
+recall channel design.
+
 ### Soul File Layout
 
 Each personality in `souls/{role}/` contains:

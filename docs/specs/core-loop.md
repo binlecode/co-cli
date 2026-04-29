@@ -273,10 +273,9 @@ The main agent is built with three registered history processors (pure transform
 2. `enforce_batch_budget`
 3. `proactive_window_processor`
 
-Two additional functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
+One function is registered via `agent.instructions()` and runs before every model request as a dynamic instruction:
 
 - `safety_prompt` — doom-loop detection + shell reflection cap; active warnings returned as plain text
-- `date_prompt` — injects today's date as the volatile dynamic suffix (personality memories are in the static prompt; knowledge recall is on-demand via tools)
 
 Processor roles:
 
@@ -291,7 +290,7 @@ Preflight is called before every model-bound segment but not on approval-resume 
 Ordering rationale:
 
 - **#1–2 before #3**: truncation runs before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate.
-- **Dynamic instructions before model request**: `safety_prompt` and `date_prompt` run via the SDK's `agent.instructions()` mechanism before every model-bound request. Their output is ephemeral context — not stored back to `turn_state.current_history`.
+- **Dynamic instructions before model request**: `safety_prompt` runs via the SDK's `agent.instructions()` mechanism before every model-bound request. Its output is ephemeral context — not stored back to `turn_state.current_history`.
 
 Compaction behavior:
 
@@ -306,9 +305,9 @@ Compaction behavior:
 
 Knowledge recall is on-demand, not injected per-turn:
 
-- `date_prompt` (dynamic instruction) returns today's date only; it does not access the knowledge store
+- the session-start date is frozen into the static instructions in `build_agent()` — stable for the entire session
 - personality memories live in the static system prompt (injected once at agent construction)
-- the agent calls `knowledge_search()` or `memory_search()` proactively when past context is relevant
+- the agent calls `memory_search()` proactively when past context is relevant
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 
@@ -397,7 +396,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
 | `co_cli/context/compaction.py` | public entry points (three registered history processors, `proactive_window_processor` for M3; overflow-recovery entry points `recover_overflow_history` and `emergency_recover_overflow_history`); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `_history_processors.py` (dedup / truncate / batch-budget transformers) |
-| `co_cli/context/prompt_text.py` | `recall_prompt_text` (date-only dynamic instruction) and `safety_prompt_text` — called via `agent.instructions()` wrappers in `_instructions.py` |
+| `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/agent/core.py` | main agent factory |
 | `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |

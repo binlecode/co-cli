@@ -26,6 +26,7 @@ class SilentFrontend:
         self._question_answer = question_answer
         self.last_approval_subject: ApprovalSubject | None = None
         self.last_question: QuestionPrompt | None = None
+        self.question_call_count: int = 0
 
     def on_text_delta(self, accumulated: str) -> None:
         pass
@@ -63,6 +64,7 @@ class SilentFrontend:
 
     def prompt_question(self, prompt: QuestionPrompt) -> str:
         self.last_question = prompt
+        self.question_call_count += 1
         return self._question_answer
 
     def prompt_confirm(self, message: str) -> bool:

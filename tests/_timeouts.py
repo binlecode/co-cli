@@ -92,6 +92,4 @@ SUBPROCESS_START_TIMEOUT_SECS: int = 5
 """Subprocess spawn or first-tick check (process just launched)."""
 
 FILE_DB_TIMEOUT_SECS: int = 30
-"""Filesystem + SQLite operations: knowledge index sync, date_prompt_text,
-session restore, task status reads.
-"""
+"""Filesystem + SQLite operations: knowledge index sync, session restore, task status reads."""

@@ -303,26 +303,26 @@ choice:
 Full model/provider/session-ID metadata stays deferred, but the date callback
 must not remain an unexamined cache-smell after this plan.
 
-### Tasks
+### ✓ DONE Tasks
 
-- [ ] Repartition wording without adding `06_execution.md` unless the five-file structure becomes hard to read
-- [ ] Reword `01_identity.md` continuity line to avoid hallucinated memory; reference loaded context and `memory_search`
-- [ ] Edit `05_workflow.md § Execution` to state "don't stop at a plan" without duplicating `04_tool_protocol.md`
-- [ ] Edit `05_workflow.md § Completeness` with a short validation-before-finish checklist: correctness, grounding, requested formatting/schema, side-effect scope/safety, blocker status
-- [ ] Clarify in `05_workflow.md` that proactive durable memory saves are exempt from the Deep Inquiry "do not persist state" rule
-- [ ] Add deterministic-state examples to `03_reasoning.md § Verification` (time/date/timezone, system state, file contents, git state, current facts)
-- [ ] Keep simple mental arithmetic allowed; require tools for non-trivial/exact/high-stakes calculations, hashes, encodings, and checksums
-- [ ] Add obvious-default guidance to `03_reasoning.md § Two kinds of unknowns`
-- [ ] Add dependency-file prerequisite guidance to `03_reasoning.md § Verification`
-- [ ] Append the bounded empty-result retry rule to `04_tool_protocol.md § Memory`
-- [ ] Add new `## Shell` section to `04_tool_protocol.md` with the shell-guidance text plus non-interactive flag guidance
-- [ ] Delete `add_shell_guidance` from `co_cli/agent/_instructions.py`
-- [ ] Remove `add_shell_guidance` import and `agent.instructions(add_shell_guidance)` line from `co_cli/agent/core.py`
-- [ ] Resolve date/cache behavior: freeze date/time into static instructions or move date to a tail injection; remove or justify `date_prompt`
-- [ ] Add or update a static prompt assembly test that asserts the edited rule text is present in `build_static_instructions()`
-- [ ] If a new `06_execution.md` is introduced, update `docs/specs/personality.md`, `co_cli/personality/prompts/loader.py`, and tests/doc references from `01`-`05` to `01`-`06`
-- [ ] Update `docs/specs/prompt-assembly.md` and `docs/specs/core-loop.md` if `date_prompt` or static instruction assembly changes
-- [ ] Run `scripts/quality-gate.sh full`
+- [x] Repartition wording without adding `06_execution.md` unless the five-file structure becomes hard to read
+- [x] Reword `01_identity.md` continuity line to avoid hallucinated memory; reference loaded context and `memory_search`
+- [x] Edit `05_workflow.md § Execution` to state "don't stop at a plan" without duplicating `04_tool_protocol.md`
+- [x] Edit `05_workflow.md § Completeness` with a short validation-before-finish checklist: correctness, grounding, requested formatting/schema, side-effect scope/safety, blocker status
+- [x] Clarify in `05_workflow.md` that proactive durable memory saves are exempt from the Deep Inquiry "do not persist state" rule
+- [x] Add deterministic-state examples to `03_reasoning.md § Verification` (time/date/timezone, system state, file contents, git state, current facts)
+- [x] Keep simple mental arithmetic allowed; require tools for non-trivial/exact/high-stakes calculations, hashes, encodings, and checksums
+- [x] Add obvious-default guidance to `03_reasoning.md § Two kinds of unknowns`
+- [x] Add dependency-file prerequisite guidance to `03_reasoning.md § Verification`
+- [x] Append the bounded empty-result retry rule to `04_tool_protocol.md § Memory`
+- [x] Add new `## Shell` section to `04_tool_protocol.md` with the shell-guidance text plus non-interactive flag guidance
+- [x] Delete `add_shell_guidance` from `co_cli/agent/_instructions.py`
+- [x] Remove `add_shell_guidance` import and `agent.instructions(add_shell_guidance)` line from `co_cli/agent/core.py`
+- [x] Resolve date/cache behavior: freeze date/time into static instructions or move date to a tail injection; remove or justify `date_prompt`
+- [x] Add or update a static prompt assembly test that asserts the edited rule text is present in `build_static_instructions()`
+- [x] `06_execution.md` not introduced; five-file structure kept
+- [x] Update `docs/specs/prompt-assembly.md` and `docs/specs/core-loop.md` if `date_prompt` or static instruction assembly changes
+- [x] Run `scripts/quality-gate.sh full`
 
 ### Done When
 
@@ -343,7 +343,7 @@ must not remain an unexamined cache-smell after this plan.
 
 ---
 
-## Phase 2 — Toolset-availability gated static assembly
+## ✓ DONE — Phase 2 — Toolset-availability gated static assembly
 
 ### Design
 
@@ -432,39 +432,69 @@ to a separate tool-surface plan.
 
 **P2.4 — Wire in `core.py` as static instructions.**
 
+Post-Phase-1 state: `date_prompt` was removed; the session-start date is now frozen
+directly into `static_instructions` via `f"{static_instructions}\n\nToday is {_date.today().isoformat()}."`.
+Phase 2 must fix this: the timestamp belongs outside Block 0 (`static_instructions`) so
+the large rules block stays cache-stable across sessions. A real-time per-turn callback is
+the right home — it lands in Block 1 (non-cached, tiny overhead), and is always accurate
+without the staleness risk of a frozen string. "Frozen for cache" is no longer the
+justification once the timestamp is out of Block 0.
+
+`add_category_awareness_prompt` still runs as a per-turn callback but reads session-static
+`tool_index` — same smell as the removed `add_shell_guidance`. Phase 2 must move it to
+static assembly (see task below).
+
 ```python
-# core.py:131 area, after build_static_instructions(config)
+# core.py — build_agent() orchestrator path
+
+# Block 0: session-stable; cached across all turns and sessions
 static_parts = [build_static_instructions(config)]
+
 tool_guidance = build_toolset_guidance(tool_registry.tool_index)
 if tool_guidance:
     static_parts.append(tool_guidance)
-static_instructions = "\n\n".join(static_parts)
 
-# Per-request callbacks remain only for genuinely dynamic content:
-agent.instructions(date_prompt)
-agent.instructions(safety_prompt)
+category_hint = build_category_awareness_prompt(tool_registry.tool_index)
+if category_hint:
+    static_parts.append(category_hint)
+
+static_instructions = "\n\n".join(static_parts)
+agent = Agent(..., instructions=static_instructions, ...)
+
+# Block 1: per-turn callbacks — real-time, not cached, tiny
+agent.instructions(current_time_prompt)  # "Current time: Monday, April 28, 2026 08:13 AM"
+agent.instructions(safety_prompt)        # doom loop / shell reflection warnings
 ```
 
-If Phase 1 removes or replaces `date_prompt`, update this snippet accordingly.
+`current_time_prompt` is a new function in `_instructions.py`:
+
+```python
+def current_time_prompt(ctx: RunContext[CoDeps]) -> str:
+    from datetime import datetime
+    return datetime.now().strftime("Current time: %A, %B %d, %Y %I:%M %p")
+```
 
 ### Tasks
 
-- [ ] Define `MEMORY_GUIDANCE` and `CAPABILITIES_GUIDANCE` constants in `co_cli/context/guidance.py` or an equivalent static prompt module
-- [ ] Implement `build_toolset_guidance(tool_index)` reading the session `tool_registry.tool_index`
-- [ ] Do not reference `knowledge_search`; it is intentionally absent from the current tool surface
-- [ ] Remove `## Memory` and `## Capability self-check` sections from `04_tool_protocol.md`
+- [x] Define `MEMORY_GUIDANCE` and `CAPABILITIES_GUIDANCE` constants in `co_cli/context/guidance.py` or an equivalent static prompt module
+- [x] Implement `build_toolset_guidance(tool_index)` reading the session `tool_registry.tool_index`
+- [x] Do not reference `knowledge_search`; it is intentionally absent from the current tool surface
+- [x] Remove `## Memory` and `## Capability self-check` sections from `04_tool_protocol.md`
       (their content moves into the constants above)
-- [ ] Preserve the bounded empty-result retry rule from Phase 1 inside `MEMORY_GUIDANCE`; do not delete it when removing `## Memory`
-- [ ] Keep deferred-discovery guidance valid: either leave `## Deferred discovery` static or gate it by checking for any `ToolInfo.visibility == DEFERRED`
-- [ ] If deferred-discovery guidance is gated, do not check for `"search_tools"` in `tool_index`; derive it from deferred `ToolInfo` entries
-- [ ] Record skills prompt parity as deferred unless model-callable skill discovery/loading tools are available in current source
-- [ ] Wire `build_toolset_guidance` into `core.py` static instruction assembly; do not add a per-request callback for session-static guidance
-- [ ] Add a unit test: helper with `tool_index` containing only `memory_search`,
+- [x] Preserve the bounded empty-result retry rule from Phase 1 inside `MEMORY_GUIDANCE`; do not delete it when removing `## Memory`
+- [x] Keep deferred-discovery guidance valid: `## Deferred discovery` left static in `04_tool_protocol.md` (generic); `build_category_awareness_prompt` handles runtime gating for specific categories
+- [x] If deferred-discovery guidance is gated, do not check for `"search_tools"` in `tool_index`; derive it from deferred `ToolInfo` entries
+- [x] Record skills prompt parity as deferred — no model-callable skill discovery/loading tools found in current source
+- [x] Wire `build_toolset_guidance` into `core.py` static instruction assembly; do not add a per-request callback for session-static guidance
+- [x] Remove Phase 1's `f"Today is {_date.today().isoformat()}."` from `static_instructions`; replace with a `current_time_prompt` per-turn callback registered before `safety_prompt` in `build_agent()`; update `docs/specs/prompt-assembly.md` accordingly
+- [x] Move `add_category_awareness_prompt` from per-turn `agent.instructions` callback to static assembly: call `build_category_awareness_prompt(tool_registry.tool_index)` at `build_agent()` time, append result to `static_instructions`, and remove `agent.instructions(add_category_awareness_prompt)` from `core.py`
+- [x] Add a unit test: helper with `tool_index` containing only `memory_search`,
       assert it returns memory text and not capabilities text
-- [ ] Add a unit test: `tool_index` containing only `capabilities_check` returns capabilities text and not memory text
-- [ ] Add a unit test: empty `tool_index` returns empty string (no guidance noise)
-- [ ] Add a static assembly/build-agent test proving tool guidance appears in static instructions and is not registered as an `agent.instructions` callback
-- [ ] Run `scripts/quality-gate.sh full`
+- [x] Add a unit test: `tool_index` containing only `capabilities_check` returns capabilities text and not memory text
+- [x] Add a unit test: empty `tool_index` returns empty string (no guidance noise)
+- [x] Migrate `test_static_instructions_contains_phase1_rules`'s `"at most one broader retry"` assertion: after `## Memory` moves out of `04_tool_protocol.md`, that text no longer appears in `build_static_instructions()` output — move the assertion to the new `build_toolset_guidance` unit tests (assert it appears in memory-guidance output when `memory_search` is present)
+- [x] Add a static assembly/build-agent test proving tool guidance and category-awareness hint appear in static instructions and neither is registered as an `agent.instructions` callback
+- [x] Run `scripts/quality-gate.sh full`
 
 ### Done When
 
@@ -474,7 +504,9 @@ If Phase 1 removes or replaces `date_prompt`, update this snippet accordingly.
 - The Phase 1 bounded memory retry rule survives the Phase 2 migration
 - Toolset guidance is static for the session, not a new per-request callback
 - Skills prompt/tool parity is either implemented with real available tools or explicitly deferred
-- Existing assembly tests still pass (no changes to `build_static_instructions`)
+- `build_static_instructions()` signature is unchanged; its existing tests pass
+- `test_static_instructions_contains_phase1_rules`'s `"at most one broader retry"` assertion is moved to `build_toolset_guidance` unit tests; no assertion against `build_static_instructions()` output checks for text that now lives in conditional guidance
+- `add_category_awareness_prompt` is no longer an `agent.instructions` callback; it runs at `build_agent()` time alongside `build_toolset_guidance`
 - New unit tests pass for conditional emission
 - Manual smoke or test: build with a controlled `tool_index`, verify memory and
   capabilities guidance appear only when their matching tools are present
@@ -645,3 +677,62 @@ agent.instructions(safety_prompt)
   reliably reach future-session prompts. Replaces the killed user-notes plan
   on first-principles grounds (a user-authored static file is anti-agentic
   when chat-driven curation already covers the surface).
+
+---
+
+## Delivery Summary — 2026-04-28
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| Repartition without adding 06_execution.md | five-file structure kept | ✓ pass |
+| Reword 01_identity.md continuity | `memory_search` referenced, not just "remember past interactions" | ✓ pass |
+| 05_workflow.md § Execution don't-stop-at-plan | "Only stop at a plan when the user explicitly" in assembled prompt | ✓ pass |
+| 05_workflow.md § Completeness validation checklist | five-point checklist present | ✓ pass |
+| 05_workflow.md durable memory exempt from Deep Inquiry | exception clause added | ✓ pass |
+| 03_reasoning.md deterministic-state examples | "git state" in assembled prompt | ✓ pass |
+| 03_reasoning.md arithmetic rule | non-trivial/exact/high-stakes require tools; simple OK | ✓ pass |
+| 03_reasoning.md obvious-default guidance | "obvious default interpretation" in assembled prompt | ✓ pass |
+| 03_reasoning.md dependency-file prerequisite | `pyproject.toml`, `package.json` check listed | ✓ pass |
+| 04_tool_protocol.md bounded memory retry | "at most one broader retry" in assembled prompt | ✓ pass |
+| 04_tool_protocol.md § Shell section | "--non-interactive" in assembled prompt | ✓ pass |
+| Delete add_shell_guidance | function absent from _instructions.py | ✓ pass |
+| Remove add_shell_guidance from core.py | import and registration removed | ✓ pass |
+| Date/cache: freeze session-start date in static instructions | `_date.today()` appended in `build_agent()`; `date_prompt` and `recall_prompt_text` removed | ✓ pass (Phase 2 moves to real-time per-turn callback outside Block 0) |
+| Static prompt assembly test | `test_static_instructions_contains_phase1_rules` added and passing | ✓ pass |
+| Update prompt-assembly.md and core-loop.md | `add_shell_guidance`, `date_prompt`, `recall_prompt_text` references removed | ✓ pass |
+| scripts/quality-gate.sh full | all checks pass | ✓ pass |
+
+**Tests:** scoped (prompts + history) — 63 passed, 0 failed; full suite via quality-gate.sh — PASS
+**Doc Sync:** fixed — prompt-assembly.md and core-loop.md updated to remove stale dynamic instruction references
+
+**Overall: DELIVERED**
+All Phase 1 tasks shipped. Rule ownership sharpened across five files; per-turn callback overhead reduced (removed `add_shell_guidance` + `date_prompt`); session-start date frozen in static instructions for cache stability.
+
+---
+
+## Delivery Summary — Phase 2 — 2026-04-28
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| `MEMORY_GUIDANCE` + `CAPABILITIES_GUIDANCE` in `guidance.py` | constants defined, `build_toolset_guidance` emits each when tool present | ✓ pass |
+| `build_toolset_guidance` implemented | returns non-empty only when matching tools present | ✓ pass |
+| No `knowledge_search` reference | absent from guidance.py and all new tests | ✓ pass |
+| Remove `## Memory` + `## Capability self-check` from `04_tool_protocol.md` | sections absent; `## Deferred discovery` remains static | ✓ pass |
+| Bounded retry rule preserved in `MEMORY_GUIDANCE` | "at most one broader retry" in `build_toolset_guidance` output for `memory_search` | ✓ pass |
+| Deferred discovery guidance left static | `## Deferred discovery` in `04_tool_protocol.md`; `build_category_awareness_prompt` handles runtime gating | ✓ pass |
+| Skills parity recorded as deferred | no model-callable skill tools in current source; no fake SKILLS_GUIDANCE added | ✓ pass |
+| `build_toolset_guidance` wired into `core.py` static assembly | appended to `static_parts` at build time; no per-turn callback added | ✓ pass |
+| Phase 1 frozen date removed; `current_time_prompt` added as per-turn callback | `f"Today is..."` gone; `current_time_prompt` registered before `safety_prompt`; `prompt-assembly.md` updated | ✓ pass |
+| `add_category_awareness_prompt` moved to static assembly | `build_category_awareness_prompt()` called at build time; `agent.instructions(add_category_awareness_prompt)` removed | ✓ pass |
+| Unit test: `memory_search` only → memory text, not capabilities | `test_memory_search_present_returns_memory_guidance` passes | ✓ pass |
+| Unit test: `capabilities_check` only → capabilities text, not memory | `test_capabilities_check_present_returns_capabilities_guidance` passes | ✓ pass |
+| Unit test: empty `tool_index` → empty string | `test_empty_tool_index_returns_empty_string` passes | ✓ pass |
+| `"at most one broader retry"` assertion migrated to `test_toolset_guidance.py` | assertion removed from `test_static_instructions_contains_phase1_rules`; present in new tests | ✓ pass |
+| Static assembly integration test | `test_static_assembly_includes_toolset_and_category_guidance` passes | ✓ pass |
+| `scripts/quality-gate.sh full` | all checks pass | ✓ pass |
+
+**Tests:** scoped (prompts — `test_static_instructions.py` + `test_toolset_guidance.py`) — 8 passed, 0 failed
+**Doc Sync:** fixed — `prompt-assembly.md` updated: §2.1 describes three-part static assembly, §2.2 dynamic layers table updated (`current_time_prompt` added, `add_category_awareness_prompt` removed), §2.3 cache invariant updated, §2.4 callbacks table updated, §4 files table updated with `guidance.py`
+
+**Overall: DELIVERED**
+All Phase 2 tasks shipped. Tool-specific guidance (`memory_search`, `capabilities_check`) gated on tool presence and assembled statically at build time. Date/time moved from frozen static string to per-turn `current_time_prompt`, keeping Block 0 cache-stable. `add_category_awareness_prompt` per-turn callback eliminated; `build_category_awareness_prompt` now called once at agent construction. Skills parity explicitly deferred. `04_tool_protocol.md` is now tool-agnostic.

@@ -61,16 +61,15 @@ flowchart TD
 
 ### 2.1 Static Instruction Assembly
 
-`build_static_instructions()` (in `co_cli/context/assembly.py`) assembles one literal string in fixed order:
+`build_agent()` assembles `static_instructions` from three ordered parts, all evaluated once at agent construction:
 
-1. Soul seed from `souls/{role}/seed.md`
-2. Character memories from `co_cli/personality/prompts/souls/{role}/memories/*.md` (read-only system assets)
-3. Mindsets from `co_cli/personality/prompts/souls/{role}/mindsets/{task_type}.md`
-4. Numbered rules from `co_cli/context/rules/NN_rule_id.md` (contiguous from 01, unique prefixes, fail-fast validation)
-5. Examples from `souls/{role}/examples.md` (optional)
-6. Critique appended as `## Review lens` (optional)
+1. **`build_static_instructions(config)`** — soul seed, character memories, mindsets, personality-context memories, numbered rules (`co_cli/context/rules/NN_rule_id.md`), examples, critique.
+2. **`build_toolset_guidance(tool_registry.tool_index)`** — tool-specific guidance blocks, each gated on the tool being present. Currently gated: `memory_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
+3. **`build_category_awareness_prompt(tool_registry.tool_index)`** — single-sentence category-level hint listing deferred tool categories reachable via `search_tools`. Derived from `VisibilityPolicyEnum.DEFERRED` entries. Empty when no deferred tools exist.
 
-Each personality role is fully self-contained under `souls/{role}/`. Adding a role requires only a new directory — no Python changes.
+The three parts are joined with `"\n\n"` and passed as the `instructions=` string to `Agent(...)`. The string is stable for the entire session — it never changes between turns.
+
+Each personality role is fully self-contained under `souls/{role}/`. Adding a role requires only a new directory — no Python changes. Adding a tool-specific guidance block requires adding a constant to `co_cli/context/guidance.py` and a gate in `build_toolset_guidance`.
 
 ### 2.2 Dynamic Instruction Layers
 
@@ -78,8 +77,8 @@ Registered in `build_agent()` (`co_cli/agent/core.py`), evaluated fresh per requ
 
 | Layer | Condition | Content |
 | --- | --- | --- |
-| `add_shell_guidance` | always | shell approval/reminder text |
-| `add_category_awareness_prompt` | deferred tools registered in tool_index | category-level prompt listing available capabilities via `search_tools` (~100 tokens) |
+| `current_time_prompt` | always | current date and time string (`"Current time: Monday, April 28, 2026 08:13 AM"`) |
+| `safety_prompt` | doom loop or shell-error streak active | warning text injected into instructions context |
 
 These layers are **not** persisted into `message_history`.
 
@@ -89,7 +88,7 @@ Any content that can vary within a single session MUST be appended to the tail o
 
 **Rationale:** `@agent.instructions` output is concatenated into the static system-prompt block pydantic-ai sends to the provider. Providers cache the system-prompt block as the prefix of every request. Any per-request variance in that block invalidates the cache for the entire prefix, including fixed tool schemas and soul assets.
 
-New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date is injected via `date_prompt`, registered with `agent.instructions()` — the date can change at midnight. Personality-context memories are in the static prompt (loaded once at agent construction) and do not require per-turn injection.
+New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date/time is injected via `current_time_prompt` — a per-turn callback that lands in Block 1 (non-cached, tiny), keeping Block 0 cache-stable. Personality-context memories are in the static prompt (Block 0, loaded once at agent construction) and do not require per-turn injection.
 
 ### 2.4 History Processors And Dynamic Instructions
 
@@ -105,12 +104,12 @@ Two dynamic instruction functions are registered via `agent.instructions()` and 
 
 | Dynamic instruction | Behavior |
 | --- | --- |
+| `current_time_prompt` | returns current date/time string; keeps Block 0 cache-stable by moving time out of the static prefix |
 | `safety_prompt` | detects identical-tool-call streaks and shell-error streaks; returns warning text injected into the instructions context |
-| `date_prompt` | appends today's date as the volatile dynamic suffix (personality memories are in the static prompt; knowledge recall is on-demand via tools) |
 
 **Ordering rationale:**
 - **#1–2 before #3**: truncation runs before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set, todos) to compensate.
-- **Dynamic instructions before model request**: `safety_prompt` and `date_prompt` run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
+- **Dynamic instructions before model request**: `safety_prompt` runs via the SDK's `agent.instructions()` mechanism; its output is ephemeral — not stored back to `turn_state.current_history`.
 
 ### 2.5 Approval Resume
 
@@ -131,9 +130,10 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | File | Purpose |
 | --- | --- |
 | `co_cli/agent/core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
-| `co_cli/agent/_instructions.py` | dynamic instruction callbacks: `date_prompt`, `safety_prompt`, `add_shell_guidance`, `add_category_awareness_prompt` |
+| `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `current_time_prompt`, `safety_prompt` |
 | `co_cli/context/assembly.py` | `build_static_instructions()` — soul + personality-context memories + rules; rule-file validation |
+| `co_cli/context/guidance.py` | `MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE` constants; `build_toolset_guidance()` — gated on tool presence |
 | `co_cli/personality/prompts/loader.py` | soul seed, mindset, character memory, examples, critique, and `load_personality_memories()` |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |
-| `co_cli/context/prompt_text.py` | `recall_prompt_text` (date-only dynamic instruction) and `safety_prompt_text` — called via `agent.instructions()` wrappers in `agent/_instructions.py` |
-| `co_cli/tools/deferred_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
+| `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `agent/_instructions.py` |
+| `co_cli/tools/deferred_prompt.py` | `build_category_awareness_prompt()` — category-level hint for deferred tool categories; called at build time |
