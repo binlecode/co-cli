@@ -11,7 +11,7 @@ from pydantic_ai.usage import RunUsage
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS as _CONFIG
 from tests._settings import TEST_LLM
-from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+from tests._timeouts import LLM_SESSION_SUMMARY_TIMEOUT_SECS
 
 from co_cli.agent.core import build_agent
 from co_cli.deps import CoDeps
@@ -99,7 +99,7 @@ async def test_memory_search_summarizes_matching_session(tmp_path: Path) -> None
         ctx = _make_ctx(deps)
 
         await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-        async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS * len(["docker01"])):
+        async with asyncio.timeout(LLM_SESSION_SUMMARY_TIMEOUT_SECS * len(["docker01"])):
             result = await memory_search(ctx, "docker networking", limit=1)
 
         assert result.metadata is not None
@@ -153,7 +153,7 @@ async def test_memory_search_returns_session_id_and_when(tmp_path: Path) -> None
         )
         ctx = _make_ctx(deps)
 
-        async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS * 2):
+        async with asyncio.timeout(LLM_SESSION_SUMMARY_TIMEOUT_SECS * 2):
             result = await memory_search(ctx, "docker compose", limit=1)
 
         assert result.metadata is not None

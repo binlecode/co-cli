@@ -41,6 +41,14 @@ no registered tools in the agent. For compaction summaries (400–900 tokens
 output) use LLM_COMPACTION_SUMMARY_TIMEOUT_SECS instead.
 """
 
+LLM_SESSION_SUMMARY_TIMEOUT_SECS: int = 30
+"""Session summarization calls (noreason, 5-point structured summary, ~200–400 tokens output).
+
+At ~30 tok/s on local 35B hardware, a 400-token summary takes ~13s.
+30s gives ~2–4x headroom. Distinct from LLM_NON_REASONING_TIMEOUT_SECS (10–30 tokens)
+and LLM_COMPACTION_SUMMARY_TIMEOUT_SECS (400–900 tokens).
+"""
+
 LLM_COMPACTION_SUMMARY_TIMEOUT_SECS: int = 60
 """Compaction LLM summarizer calls (reasoning disabled, no tool schemas).
 
