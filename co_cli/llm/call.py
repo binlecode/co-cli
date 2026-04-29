@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
-from pydantic_ai import Agent
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.direct import model_request
+from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart, TextPart
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.deps import CoDeps
+if TYPE_CHECKING:
+    from co_cli.deps import CoDeps
 
 
 async def llm_call(
@@ -17,22 +18,23 @@ async def llm_call(
     *,
     instructions: str | None = None,
     message_history: list[ModelMessage] | None = None,
-    output_type: type[Any] = str,
     model_settings: ModelSettings | None = None,
-) -> Any:
+) -> str:
     """Single prompt→response LLM call. No tools, no agent loop.
 
     Defaults to deps.model.settings_noreason (per-provider noreason config).
-    Callers that need reasoning should build an agent via build_agent() instead.
+    Callers that need structured output or reasoning should use build_agent() instead.
     """
-    agent: Agent[None, Any] = Agent(
+    messages: list[ModelMessage] = []
+    if instructions:
+        messages.append(ModelRequest(parts=[SystemPromptPart(content=instructions)]))
+    if message_history:
+        messages.extend(message_history)
+    messages.append(ModelRequest.user_text_prompt(prompt))
+
+    response = await model_request(
         deps.model.model,
-        output_type=output_type,
-        instructions=instructions,
-    )
-    result = await agent.run(
-        prompt,
-        message_history=message_history,
+        messages,
         model_settings=model_settings or deps.model.settings_noreason,
     )
-    return result.output
+    return "".join(p.content for p in response.parts if isinstance(p, TextPart))

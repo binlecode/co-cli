@@ -13,17 +13,17 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic_ai.direct import model_request
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    SystemPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
+
+from co_cli.llm.call import llm_call
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
@@ -201,15 +201,7 @@ async def summarize_session_around_query(
     max_retries = _SESSION_SUMMARIZER_MAX_RETRIES
     for attempt in range(max_retries):
         try:
-            response = await model_request(
-                deps.model.model,
-                [
-                    ModelRequest(parts=[SystemPromptPart(content=system_prompt)]),
-                    ModelRequest.user_text_prompt(user_prompt),
-                ],
-                model_settings=deps.model.settings_noreason,
-            )
-            content = "".join(p.content for p in response.parts if isinstance(p, TextPart))
+            content = await llm_call(deps, user_prompt, instructions=system_prompt)
             if content and content.strip():
                 return content.strip()
             logger.warning(

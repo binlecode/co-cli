@@ -883,7 +883,7 @@ class KnowledgeStore:
         """RRF on chunk-level lists; collapse to doc-level after fusion.
 
         Non-memory results (chunk_index=int) keyed by (path, chunk_index).
-        After RRF, doc score = sum of its chunks' RRF scores; winning chunk
+        After RRF, doc score = max of its chunks' RRF scores; winning chunk
         (highest per-key score) carries its snippet/chunk_index/start_line/end_line.
         k=60: Cormack 2009 standard.
         """
@@ -911,7 +911,7 @@ class KnowledgeStore:
 
         for key, score in chunk_rrf.items():
             path = key[0]
-            doc_rrf[path] = doc_rrf.get(path, 0.0) + score
+            doc_rrf[path] = max(doc_rrf.get(path, 0.0), score)
             if path not in doc_winner_score or score > doc_winner_score[path]:
                 doc_winner_key[path] = key
                 doc_winner_score[path] = score

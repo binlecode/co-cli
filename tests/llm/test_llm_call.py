@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from pydantic import BaseModel
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS as _CONFIG
 from tests._settings import TEST_LLM
@@ -47,17 +46,10 @@ async def test_llm_call_with_message_history_forwards_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_call_output_type_returns_structured_output() -> None:
-    class Color(BaseModel):
-        value: str
-
+async def test_llm_call_returns_str() -> None:
     deps = _make_deps()
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        result = await llm_call(
-            deps,
-            "Name a single primary color.",
-            output_type=Color,
-        )
-    assert isinstance(result, Color)
-    assert result.value.strip()
+        result = await llm_call(deps, "Name a single primary color. Reply with one word only.")
+    assert isinstance(result, str)
+    assert result.strip()
