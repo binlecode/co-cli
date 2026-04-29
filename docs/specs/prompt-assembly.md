@@ -77,8 +77,8 @@ Registered in `build_agent()` (`co_cli/agent/core.py`), evaluated fresh per requ
 
 | Layer | Condition | Content |
 | --- | --- | --- |
-| `current_time_prompt` | always | current date and time string (`"Current time: Monday, April 28, 2026 08:13 AM"`) |
 | `safety_prompt` | doom loop or shell-error streak active | warning text injected into instructions context |
+| `current_time_prompt` | always | current date and time string (`"Current time: Monday, April 28, 2026 08:13 AM"`) |
 
 These layers are **not** persisted into `message_history`.
 
@@ -104,12 +104,13 @@ Two dynamic instruction functions are registered via `agent.instructions()` and 
 
 | Dynamic instruction | Behavior |
 | --- | --- |
-| `current_time_prompt` | returns current date/time string; keeps Block 0 cache-stable by moving time out of the static prefix |
 | `safety_prompt` | detects identical-tool-call streaks and shell-error streaks; returns warning text injected into the instructions context |
+| `current_time_prompt` | returns current date/time string at tail position — ephemeral grounding just before the model sees the user turn; keeps Block 0 cache-stable |
 
 **Ordering rationale:**
 - **#1–2 before #3**: truncation runs before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set, todos) to compensate.
-- **Dynamic instructions before model request**: `safety_prompt` runs via the SDK's `agent.instructions()` mechanism; its output is ephemeral — not stored back to `turn_state.current_history`.
+- **`safety_prompt` before `current_time_prompt`**: structural behavioral guidance sits above ephemeral grounding. `current_time_prompt` is at the tail — the last thing the model sees before the user turn — because ephemeral grounding is most effective close to the user message.
+- **Dynamic instructions before model request**: these functions run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
 
 ### 2.5 Approval Resume
 

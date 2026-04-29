@@ -158,9 +158,10 @@ def build_agent(
         )
 
         # Block 1: per-turn callbacks — real-time, not cached, tiny
-        # current_time_prompt: fresh date/time each turn; keeps Block 0 cache-stable
-        agent.instructions(current_time_prompt)
+        # safety_prompt: structural behavioral guidance; sits above ephemeral grounding
+        # current_time_prompt: tail position — ephemeral grounding just before model sees user turn
         agent.instructions(safety_prompt)
+        agent.instructions(current_time_prompt)
 
         return agent
 

@@ -3,7 +3,7 @@
 Static instruction scaffold assembly lives here: soul scaffold, character memories,
 mindsets, personality-context knowledge artifacts, behavioral rules, and examples.
 Runtime-only layers such as date and conditional safety warnings are added later
-via ``@agent.instructions`` in ``agent/_core.py``.
+via ``@agent.instructions`` in ``agent/core.py``.
 """
 
 from __future__ import annotations

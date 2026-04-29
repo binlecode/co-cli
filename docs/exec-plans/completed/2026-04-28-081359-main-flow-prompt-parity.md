@@ -515,134 +515,7 @@ def current_time_prompt(ctx: RunContext[CoDeps]) -> str:
 
 ## Phase 3 — Model-family overlay evidence, then targeted overlay
 
-### Design
-
-**P3.1 — First establish model-family-specific evidence.**
-
-The prior plan treated `test_clarify_handled_by_run_turn` as Gemini evidence,
-but current test and report evidence show that failure came from the Ollama
-tool-calling path. Before adding a Gemini overlay, run or add a model-specific
-main-agent/tool-calling eval that exercises the same failure mode against Gemini.
-
-Evidence targets:
-
-- For Gemini/Gemma: malformed tool schema retries, repeated identical tool calls,
-  or premature plan-only stops in a Gemini main-agent/tool-calling run.
-- For Ollama/Qwen: repeated clarify/tool calls or over-searching empty memory,
-  if current audits keep showing that family-specific pressure helps.
-- For GPT/Codex: no overlay until an actual co-cli failure mode is observed.
-
-Hermes reference: tool-use enforcement is configurable and auto-applies only
-for model-name substrings in `TOOL_USE_ENFORCEMENT_MODELS`
-(`prompt_builder.py:188-190`; `run_agent.py:3439-3461`). The model-specific
-overlays then branch to Google or OpenAI text (`run_agent.py:3462-3470`). co-cli
-should preserve that discipline: family overlays are corrective pressure for
-observed model behavior, not a new always-on rule layer.
-
-**P3.2 — Introduce `build_model_family_guidance(config)` only for a proven family.**
-
-Mirrors hermes `_build_system_prompt()` lines 3461–3470. Inspects
-`config.llm.provider` and/or model name to select a family overlay. It should
-run at agent construction and append to static instructions, not as a
-per-request callback.
-
-```python
-def build_model_family_guidance(config: Settings) -> str:
-    """Emit model-family-specific corrective pressure."""
-    model_name = (config.llm.model or "").lower()
-    provider = (config.llm.provider or "").lower()
-
-    if _gemini_overlay_is_supported_by_evidence and (
-        provider == "gemini" or "gemini" in model_name or "gemma" in model_name
-    ):
-        return GEMINI_OVERLAY
-    if _ollama_overlay_is_supported_by_evidence and provider == "ollama":
-        return OLLAMA_OVERLAY
-
-    return ""
-```
-
-**P3.3 — Phased rollout of overlays — start with only audit-confirmed content.**
-
-Initial Phase 3 PR ships no overlay unless the Phase 3 evidence task confirms
-a family-specific issue. GPT branches should not be stubbed unless they return
-empty with no dead constants. Avoid speculative prompt bloat.
-
-If Gemini evidence is confirmed, use a short `GEMINI_OVERLAY` adapted from
-hermes `GOOGLE_MODEL_OPERATIONAL_GUIDANCE`, trimmed to the confirmed failure:
-
-```text
-# Gemini-family operational rules
-- Keep going: work autonomously until the task is fully resolved.
-  Do not stop at a plan — execute it.
-- Non-interactive flags: when running shell commands, prefer
-  -y / --yes / --non-interactive to avoid hanging on prompts.
-- Parallel tool calls: when multiple operations are independent
-  (reading several files, etc.), make all calls in a single response
-  rather than sequentially.
-- Tool-call schema: each tool call must include all required arguments
-  with valid types. If a call is rejected, do not retry with the same
-  args — fix the schema or pick a different tool.
-```
-
-The last bullet is valid only if the Gemini evidence task reproduces schema
-retry behavior. If the evidence points to Ollama/Qwen instead, write an
-Ollama/Qwen overlay with only the observed corrective pressure.
-
-Prompt-reference menu for possible overlays:
-
-- General tool-use enforcement: Hermes `TOOL_USE_ENFORCEMENT_GUIDANCE`
-  (`prompt_builder.py:173-186`) maps to co-cli's existing
-  `04_tool_protocol.md § Execute, don't promise`; use only deltas not already
-  covered by Phase 1.
-- OpenAI/GPT/Codex overlay: Hermes `OPENAI_MODEL_EXECUTION_GUIDANCE`
-  (`prompt_builder.py:196-254`) contains tool persistence, mandatory tool-use
-  examples, act-don't-ask, prerequisites, verification, and missing-context
-  handling. Most of this belongs in static co-cli rules unless a GPT/Codex eval
-  proves model-specific reinforcement is needed.
-- Gemini/Gemma overlay: Hermes `GOOGLE_MODEL_OPERATIONAL_GUIDANCE`
-  (`prompt_builder.py:256-276`) contains absolute paths, verify-first,
-  dependency checks, conciseness, parallel tool calls, non-interactive commands,
-  and keep-going. Most universal parts should be static rule text; only
-  confirmed Gemini-specific pressure should remain in a Gemini overlay.
-
-**P3.4 — Wire in `core.py`.**
-
-```python
-# core.py, after build_toolset_guidance(...)
-model_guidance = build_model_family_guidance(config)
-if model_guidance:
-    static_parts.append(model_guidance)
-
-# Per-request callbacks remain only for genuinely dynamic content:
-agent.instructions(date_prompt)
-agent.instructions(safety_prompt)
-```
-
-### Tasks
-
-- [ ] Add or run a model-specific main-agent/tool-calling eval for Gemini before adding any Gemini overlay
-- [ ] Record the evidence: model/provider, prompt, tool-call sequence, failure mode, and whether it is family-specific
-- [ ] If evidence confirms Gemini/Gemma needs an overlay, define `GEMINI_OVERLAY` in `_instructions.py` (or `context/guidance.py`) with only confirmed corrective pressure
-- [ ] If evidence instead confirms Ollama/Qwen needs an overlay, define `OLLAMA_OVERLAY` with only confirmed corrective pressure
-- [ ] Implement `build_model_family_guidance(config)` only for families with evidence; return empty for all others
-- [ ] Wire `build_model_family_guidance` into `core.py` static instruction assembly only if at least one overlay ships
-- [ ] Add unit tests for each shipped overlay and a non-matching model returning empty string
-- [ ] Add a build-agent/static assembly test proving model guidance is static, not registered as an `agent.instructions` callback
-- [ ] Re-run the relevant audit eval and record before/after call-count or retry-pattern delta
-- [ ] Run `scripts/quality-gate.sh full`
-
-### Done When
-
-- A model-family overlay is shipped only when backed by model-specific evidence
-- `build_model_family_guidance` returns overlay text only for the proven family; empty otherwise
-- Model-family guidance is static for the session, not a per-request callback
-- Relevant audit eval no longer shows the targeted retry/stop failure, or shows
-  a recorded reduction with a clear explanation of residual risk
-- Existing prompt-assembly tests still pass
-- The `clarify` docstring CRITICAL block in `co_cli/tools/user_input.py` is left
-  in place — model-family overlay and tool-description patch are complementary,
-  not redundant
+_Split to its own plan: `docs/exec-plans/active/2026-04-28-222521-model-family-overlay.md`_
 
 ---
 
@@ -722,7 +595,7 @@ All Phase 1 tasks shipped. Rule ownership sharpened across five files; per-turn 
 | Deferred discovery guidance left static | `## Deferred discovery` in `04_tool_protocol.md`; `build_category_awareness_prompt` handles runtime gating | ✓ pass |
 | Skills parity recorded as deferred | no model-callable skill tools in current source; no fake SKILLS_GUIDANCE added | ✓ pass |
 | `build_toolset_guidance` wired into `core.py` static assembly | appended to `static_parts` at build time; no per-turn callback added | ✓ pass |
-| Phase 1 frozen date removed; `current_time_prompt` added as per-turn callback | `f"Today is..."` gone; `current_time_prompt` registered before `safety_prompt`; `prompt-assembly.md` updated | ✓ pass |
+| Phase 1 frozen date removed; `current_time_prompt` added as per-turn callback | `f"Today is..."` gone; `current_time_prompt` registered at tail (after `safety_prompt`); `prompt-assembly.md` updated | ✓ pass (corrected: original delivery had wrong order — `safety_prompt` must precede `current_time_prompt`) |
 | `add_category_awareness_prompt` moved to static assembly | `build_category_awareness_prompt()` called at build time; `agent.instructions(add_category_awareness_prompt)` removed | ✓ pass |
 | Unit test: `memory_search` only → memory text, not capabilities | `test_memory_search_present_returns_memory_guidance` passes | ✓ pass |
 | Unit test: `capabilities_check` only → capabilities text, not memory | `test_capabilities_check_present_returns_capabilities_guidance` passes | ✓ pass |
@@ -736,3 +609,58 @@ All Phase 1 tasks shipped. Rule ownership sharpened across five files; per-turn 
 
 **Overall: DELIVERED**
 All Phase 2 tasks shipped. Tool-specific guidance (`memory_search`, `capabilities_check`) gated on tool presence and assembled statically at build time. Date/time moved from frozen static string to per-turn `current_time_prompt`, keeping Block 0 cache-stable. `add_category_awareness_prompt` per-turn callback eliminated; `build_category_awareness_prompt` now called once at agent construction. Skills parity explicitly deferred. `04_tool_protocol.md` is now tool-agnostic.
+
+---
+
+## Implementation Review — 2026-04-28
+
+### Evidence
+| Task | done_when criterion | Spec Fidelity | Key Evidence |
+|------|---------------------|---------------|-------------|
+| Reword `01_identity.md` continuity | `memory_search` referenced, not just "remember" | ✓ pass | `01_identity.md:3` — "call memory_search when past-session facts are needed" |
+| `05_workflow.md` don't-stop-at-plan | "Only stop at a plan when the user explicitly" in prompt | ✓ pass | `05_workflow.md:22-24` — exact phrase confirmed |
+| `05_workflow.md` completeness checklist | five-point checklist present | ✓ pass | `05_workflow.md:39-44` — Correctness/Grounding/Format/Side-effect/Blockers |
+| `05_workflow.md` durable memory exempt | exception clause added | ✓ pass | `05_workflow.md:17-18` — "Exception: proactively saving durable user preferences…" |
+| `03_reasoning.md` deterministic-state examples | "git state" in assembled prompt | ✓ pass | `03_reasoning.md:8-11` — full list including git state |
+| `03_reasoning.md` arithmetic rule | tools required for non-trivial/exact; simple OK | ✓ pass | `03_reasoning.md:18-21` |
+| `03_reasoning.md` obvious-default guidance | "obvious default interpretation" present | ✓ pass | `03_reasoning.md:47-49` |
+| `03_reasoning.md` dependency prereqs | `pyproject.toml`, `package.json` listed | ✓ pass | `03_reasoning.md:15-17` |
+| `04_tool_protocol.md § Shell` | `--non-interactive` present | ✓ pass | `04_tool_protocol.md:70` |
+| `add_shell_guidance` deleted | absent from `_instructions.py` | ✓ pass | `_instructions.py` — only `current_time_prompt` and `safety_prompt` |
+| `add_shell_guidance` removed from `core.py` | import and registration absent | ✓ pass | `core.py:123` — only imports `current_time_prompt`, `safety_prompt` |
+| `MEMORY_GUIDANCE` + `CAPABILITIES_GUIDANCE` in `guidance.py` | constants defined; gated on tool presence | ✓ pass | `guidance.py:12-44` |
+| `build_toolset_guidance` implemented | non-empty only when matching tools present | ✓ pass | `guidance.py:34-44`; `test_toolset_guidance.py` — 5 tests |
+| No `knowledge_search` reference | absent from `guidance.py` and tests | ✓ pass | grep confirms absence |
+| `## Memory` + `## Capability self-check` removed from `04_tool_protocol.md` | sections absent | ✓ pass | `04_tool_protocol.md` — no such sections |
+| Bounded retry rule preserved in `MEMORY_GUIDANCE` | "at most one broader retry" in `build_toolset_guidance` output | ✓ pass | `guidance.py:22-23`; `test_toolset_guidance.py:21` |
+| `build_toolset_guidance` wired into `core.py` | appended to `static_parts` at build time | ✓ pass | `core.py:131-133` |
+| Phase 1 frozen date removed; `current_time_prompt` at tail | `safety_prompt` registered first; `current_time_prompt` at tail | ✓ pass (post-delivery correction applied) | `core.py:163-164` — `safety_prompt` then `current_time_prompt` |
+| `add_category_awareness_prompt` moved to static assembly | called at build time; no `agent.instructions` callback | ✓ pass | `core.py:135-137` |
+| Unit tests (3 required) | all three assertions pass | ✓ pass | `test_toolset_guidance.py` — 5 tests (3 required + 2 additional) |
+| Migrated `"at most one broader retry"` assertion | not in `test_static_instructions.py`; present in `test_toolset_guidance.py` | ✓ pass | `test_static_instructions.py:27` comment confirms migration |
+| Static assembly integration test | `test_static_assembly_includes_toolset_and_category_guidance` passes | ✓ pass | `test_static_instructions.py:29-64` |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| `prompt-assembly.md` §2.2 and §2.4 tables listed `current_time_prompt` before `safety_prompt`, contradicting corrected `core.py:163-164` order | `docs/specs/prompt-assembly.md:80-81, 107-108` | blocking | Swapped rows to match actual code; added ordering rationale |
+| `assembly.py` module docstring referenced nonexistent `agent/_core.py` | `co_cli/context/assembly.py:6` | minor | Corrected to `agent/core.py` |
+
+### Tests
+- Scoped: `uv run pytest tests/prompts/ -v` — 8 passed, 0 failed
+- Full suite run 1: 439 passed, 1 failed (`test_llm_call_output_type_returns_structured_output`) — `TimeoutError` from `asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS=10)`
+- Isolated rerun: PASSED (2.27s once Ollama recovered)
+- Full suite run 2: 732 passed, 0 failed
+- **RCA for run 1 failure**: `ensure_ollama_warm` took 17.5s (Ollama was processing a preceding compaction-summarization test with a large context). After warm-up completed, the 10s timeout for the actual `llm_call` was insufficient — Ollama was still resource-constrained. **Not caused by this plan**: `llm_call` builds `Agent(deps.model.model, output_type=output_type)` directly (`co_cli/llm/call.py:29`), never calling `build_agent()`. Phase 1/2 static instruction additions are not in the call path. Failure is test-suite scheduling: sequential LLM tests with no isolation between large-context compaction calls and subsequent tight-timeout calls.
+- Log: `.pytest-logs/` (timestamped)
+
+### Doc Sync
+- Scope: narrow — only `docs/specs/prompt-assembly.md` (no public API changes)
+- Result: fixed — §2.2 and §2.4 dynamic layer tables corrected for callback ordering; §2.4 ordering rationale extended to explain `safety_prompt → current_time_prompt` sequencing
+
+### Behavioral Verification
+- `uv run co --help`: ✓ starts cleanly (no `status` command exists in this project)
+- No user-facing surface changed — callback ordering is internal to agent construction
+
+### Overall: PASS
+All Phase 1 and Phase 2 tasks confirmed present at file:line. Two doc-code mismatches found and fixed (callback ordering in `prompt-assembly.md`, stale filename in `assembly.py`). Full test suite green on second run; single failure confirmed as pre-existing Ollama warmth flake unrelated to this plan.
