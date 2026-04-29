@@ -8,7 +8,6 @@ Personality is assembled from five sources in this order:
 - ``souls/{role}/memories/*.md``              — character base memories (read-only system assets)
 - ``souls/{role}/mindsets/{task_type}.md``     — task-specific behavioral guidance (static)
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by build_static_instructions)
-- ``souls/{role}/examples.md``               — concrete response patterns (optional, trailing rules)
 
 Personality-context knowledge artifacts (tagged ``personality-context`` in
 ``~/.co-cli/knowledge/``) are loaded once at agent construction via
@@ -19,7 +18,7 @@ Each role is fully self-contained under ``souls/{role}/``. Adding a role require
 only a new directory with the required files — no Python changes.
 
 Callers:
-  co_cli.context.assembly — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
+  co_cli.context.assembly — uses load_soul_seed, load_soul_mindsets,
                             load_character_memories, load_soul_critique, load_personality_memories
                             inside build_static_instructions(), invoked by build_agent()
 """
@@ -98,26 +97,6 @@ def load_soul_seed(role: str) -> str:
     return seed_file.read_text(encoding="utf-8").strip()
 
 
-def load_soul_examples(role: str) -> str:
-    """Load concrete response pattern examples for a role (optional).
-
-    Examples trail the behavioral rules in the static system prompt — they are
-    the last identity-level content the model reads before the critique lens.
-    This placement follows common few-shot practice: show the pattern closest to
-    the task so the model pattern-matches from the most recently seen examples.
-
-    Args:
-        role: Personality role name (e.g., "finch", "jeff").
-
-    Returns:
-        Examples text from ``souls/{role}/examples.md``, or empty string if absent.
-    """
-    examples_file = _SOULS_DIR / role / "examples.md"
-    if not examples_file.exists():
-        return ""
-    return examples_file.read_text(encoding="utf-8").strip()
-
-
 def load_soul_critique(role: str) -> str:
     """Load the always-on interpretive critique frame for a role (optional).
 
@@ -176,7 +155,7 @@ def load_soul_mindsets(role: str) -> str:
     how the conversation evolves.
 
     Skips missing files silently — consistent with existing degraded-but-functional
-    policy in ``load_character_memories`` and ``load_soul_examples``.
+    policy in ``load_character_memories``.
 
     Args:
         role: Personality role name (e.g., "finch", "jeff").

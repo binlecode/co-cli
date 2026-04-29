@@ -11,12 +11,10 @@ from co_cli.deps import ToolInfo
 
 MEMORY_GUIDANCE = """\
 ## Memory
-Character base memories and user experience memories are both loaded in the
-system prompt before the first turn — do not call memory_search at turn start.
-Use memory_search mid-conversation to look up specific facts relevant to the current task.
-When the user references something from a past conversation or session, call
-memory_search before asking them to repeat themselves — it covers both persistent
-knowledge artifacts and past session transcripts in one call.
+Use memory_search when the user references past work, preferences, or context
+from a prior session, or when you suspect relevant context exists for the current task.
+It covers persistent knowledge artifacts and past session transcripts in one call —
+call it before asking the user to repeat themselves.
 
 If memory_search returns no results, make at most one broader retry when a
 clear broader query exists. After that, surface the miss explicitly instead of

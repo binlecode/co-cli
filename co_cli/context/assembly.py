@@ -93,8 +93,7 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
     4. Behavioral rules (numbered, strict order)
     4b. Recency-clearing advisory (explains the ``[tool result cleared…]``
         placeholders that appear after ``evict_old_tool_results`` runs)
-    5. Soul examples
-    6. Critique (self-assessment lens)
+    5. Critique (self-assessment lens)
 
     Returns the fully assembled static instructions string.
     """
@@ -103,7 +102,6 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
     seed: str | None = None
     character_memories: str | None = None
     mindsets: str | None = None
-    examples: str | None = None
     critique: str | None = None
 
     if config.personality:
@@ -111,7 +109,6 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
             load_character_memories,
             load_personality_memories,
             load_soul_critique,
-            load_soul_examples,
             load_soul_mindsets,
             load_soul_seed,
         )
@@ -119,7 +116,6 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
         seed = load_soul_seed(config.personality)
         character_memories = load_character_memories(config.personality) or None
         mindsets = load_soul_mindsets(config.personality) or None
-        examples = load_soul_examples(config.personality) or None
         critique = load_soul_critique(config.personality) or None
 
     # 1. Soul seed — identity declaration, always first
@@ -151,11 +147,7 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
     # ``[tool result cleared…]`` placeholders the model will encounter.
     parts.append(RECENCY_CLEARING_ADVISORY)
 
-    # 5. Soul examples — concrete trigger→response patterns, trailing rules
-    if examples:
-        parts.append(examples)
-
-    # 6. Critique — self-assessment lens, always last
+    # 5. Critique — self-assessment lens, always last
     if critique:
         parts.append(f"## Review lens\n\n{critique}")
 
