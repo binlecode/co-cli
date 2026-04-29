@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from co_cli.memory.indexer import extract_messages
+from co_cli.memory.search_util import sanitize_fts5_query
 from co_cli.memory.session import parse_session_filename
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,9 @@ class SessionStore:
         Returns up to limit results, deduplicated to one per session (the
         highest-scoring matching message). Results are sorted by score desc.
         """
+        query = sanitize_fts5_query(query)
+        if not query:
+            return []
         sql = """
             SELECT
                 s.session_id,

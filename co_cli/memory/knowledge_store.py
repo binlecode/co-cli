@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from co_cli.config.core import SEARCH_DB
-from co_cli.memory._stopwords import STOPWORDS
 from co_cli.memory.frontmatter import parse_frontmatter
+from co_cli.memory.search_util import sanitize_fts5_query
 
 if TYPE_CHECKING:
     from co_cli.config.core import Settings
@@ -1139,23 +1139,9 @@ class KnowledgeStore:
         return reranked[:limit]
 
     def _build_fts_query(self, query: str) -> str | None:
-        """Tokenize query, filter stopwords, quote terms, AND-join.
-
-        Returns None if no non-stopword tokens survive (e.g. "the a an").
-        Quoted terms prevent FTS5 syntax injection from user input.
-        Non-word characters (backticks, quotes, punctuation) are stripped from
-        each token before quoting to prevent FTS5 phrase-string syntax errors.
-        """
-        tokens = []
-        for raw in query.lower().split():
-            # Strip characters that break FTS5 double-quoted phrase strings.
-            # Keep word chars and hyphens; drop everything else (backticks, quotes, etc.)
-            t = re.sub(r"[^\w-]", "", raw)
-            if t and t not in STOPWORDS and len(t) > 1:
-                tokens.append(t)
-        if not tokens:
-            return None
-        return " AND ".join(f'"{t}"' for t in tokens)
+        """Sanitize query for FTS5 MATCH. Returns None if nothing survives."""
+        result = sanitize_fts5_query(query)
+        return result if result else None
 
     def needs_reindex(self, source: str, path: str, current_hash: str) -> bool:
         """Return True if the file at path needs re-indexing (hash changed or absent)."""
