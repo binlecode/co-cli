@@ -27,7 +27,6 @@ from evals._timeouts import (
     EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS,
     EVAL_PROBE_TIMEOUT_SECS,
 )
-from evals.eval_bootstrap_flow_quality import TrackingFrontend
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -41,6 +40,7 @@ from co_cli.bootstrap.core import create_deps
 from co_cli.config.core import settings
 from co_cli.context.compaction import SUMMARY_MARKER_PREFIX
 from co_cli.context.orchestrate import run_turn
+from co_cli.display.headless import HeadlessFrontend
 
 # ---------------------------------------------------------------------------
 # Config — real settings with eval-local overrides
@@ -111,7 +111,7 @@ async def step_multi_cycle_compaction() -> bool:
         return False
     print("  Preflight: en.wikipedia.org reachable")
 
-    frontend = TrackingFrontend()
+    frontend = HeadlessFrontend(verbose=True)
     message_history: list[ModelMessage] = []
     passed = True
     summary_texts: list[str] = []

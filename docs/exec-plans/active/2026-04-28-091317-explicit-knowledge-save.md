@@ -35,11 +35,6 @@ The dream cycle (implicit pattern extraction) is a separate mechanism; out of sc
    `preference` and `feedback` (and conditionally `rule`); never tag `reference`, `decision`,
    `article`, `note`.
 
-### Background — dream miner tagging (resolved externally, context only)
-
-Fixed in memory-surface-unification TASK-3 (2026-04-28). The miner now tags `preference` and
-`feedback` artifacts with `tags=["personality-context"]`. Not part of this plan's delivery.
-
 ### Note on shared write path
 
 The sync save calls `memory_create` directly — the same `KnowledgeStore` write path the dream
@@ -51,13 +46,13 @@ The only difference is timing: same-turn (sync) vs. post-session (dream).
 - Dream cycle and `dream_miner.md` changes — already done.
 - A dedicated "save preference" tool — `memory_create` with correct kind + tag already covers it.
 - Cross-session recall — `memory_search` already covers all tiers.
-- `load_personality_memories` (`loader.py:56`) — must not change; only the protocol rule changes.
+- `load_personality_memories` (`loader.py:38–71`) — must not change; only the protocol rule changes.
 
 ## Phases
 
-### ✓ DONE — Phase 1: Dream miner tagging (resolved externally, context only)
+### ✓ DONE — Phase 1: Dream miner tagging
 
-Absorbed into memory-surface-unification TASK-3 (2026-04-28).
+`co_cli/memory/prompts/dream_miner.md` already contains the full tagging rule:
 
 | Artifact kind | Tag personality-context? |
 |---|---|
@@ -70,12 +65,17 @@ Absorbed into memory-surface-unification TASK-3 (2026-04-28).
 
 ### Phase 2: Add explicit-save guidance to `04_tool_protocol.md`
 
+**Current state (2026-04-29):** `04_tool_protocol.md` has no `## Memory` section at all.
+`memory_create`, `search_tools` (for deferred discovery), and `personality-context` are all absent.
+
 #### Design
 
-Append to `## Memory` in `co_cli/context/rules/04_tool_protocol.md`. The block must cover
+Append a `## Memory` section to `co_cli/context/rules/04_tool_protocol.md`. The block must cover
 all four gaps in order: trigger, DEFERRED discovery, kind selection, tagging rule.
 
 ```markdown
+## Memory
+
 ### Explicit saves
 
 When the user explicitly asks to remember or save something — "remember I prefer X",
@@ -129,8 +129,11 @@ success_signal:
 
 ### Phase 3 — Pinning / cap increase (deferred — measurement-gated)
 
-`load_personality_memories` (`loader.py:64`) takes `[:5]` by recency. Real risk once users
+`load_personality_memories` (`loader.py:63`) takes `[:5]` by recency. Real risk once users
 accumulate > 5 `personality-context` artifacts — an early standing rule falls off the prompt.
+
+**Current state (2026-04-29):** 0 `personality-context` artifacts in `~/.co-cli/knowledge/`.
+Phase 3 preconditions are not met.
 
 **Preconditions before any implementation:**
 1. Count `personality-context` artifacts in `~/.co-cli/knowledge/`. If ≤ 5, skip.
@@ -150,5 +153,5 @@ frontmatter (requires schema + loader + tool changes). Try A first.
 | Tool protocol rules | `co_cli/context/rules/04_tool_protocol.md` |
 | `memory_create` / `memory_modify` | `co_cli/tools/memory/write.py` |
 | `KnowledgeStore` write path | `co_cli/memory/store.py` |
-| Personality-context loader | `co_cli/personality/prompts/loader.py:39–72` |
-| Dream miner prompt (context only) | `co_cli/memory/prompts/dream_miner.md` |
+| Personality-context loader | `co_cli/personality/prompts/loader.py:38–71` |
+| Dream miner prompt (Phase 1 — done) | `co_cli/memory/prompts/dream_miner.md` |

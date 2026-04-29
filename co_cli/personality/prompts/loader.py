@@ -1,13 +1,16 @@
 """Soul loading for the file-driven personality system.
 
-Loads soul seeds, examples, critiques, mindsets, character memories, and
-personality-context knowledge artifacts at agent construction time.
+Loads soul seeds, critiques, mindsets, and personality-context knowledge artifacts
+at agent construction time.
 
-Personality is assembled from five sources in this order:
+Personality is assembled from these sources in this order:
 - ``souls/{role}/seed.md``                    — identity declaration, trait essence, constraints
-- ``souls/{role}/memories/*.md``              — character base memories (read-only system assets)
 - ``souls/{role}/mindsets/{task_type}.md``     — task-specific behavioral guidance (static)
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by build_static_instructions)
+
+Character memories (``souls/{role}/memories/*.md``) are NOT loaded here. They are
+surfaced on demand via the canon channel in ``memory_search`` (see
+``co_cli/tools/memory/_canon_recall.py``).
 
 Personality-context knowledge artifacts (tagged ``personality-context`` in
 ``~/.co-cli/knowledge/``) are loaded once at agent construction via
@@ -19,7 +22,7 @@ only a new directory with the required files — no Python changes.
 
 Callers:
   co_cli.context.assembly — uses load_soul_seed, load_soul_mindsets,
-                            load_character_memories, load_soul_critique, load_personality_memories
+                            load_soul_critique, load_personality_memories
                             inside build_static_instructions(), invoked by build_agent()
 """
 
@@ -27,7 +30,6 @@ from pathlib import Path
 
 from co_cli.config.core import KNOWLEDGE_DIR
 from co_cli.memory.artifact import load_knowledge_artifacts
-from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.personality.prompts.validator import REQUIRED_MINDSET_TASK_TYPES
 
 _SOULS_DIR = Path(__file__).parent / "souls"
@@ -112,41 +114,6 @@ def load_soul_critique(role: str) -> str:
     return critique_file.read_text(encoding="utf-8").strip()
 
 
-def load_character_memories(role: str) -> str:
-    """Load character base memories for the given role from the system path.
-
-    Scans ``souls/{role}/memories/*.md`` for read-only character memory files.
-    These are pre-planted entries carrying the felt layer of the character —
-    scenes, speech patterns, behavioral observations from source material.
-
-    Args:
-        role: Personality role name (e.g., "finch", "jeff").
-
-    Returns:
-        Formatted memory block (``## Character`` header + prose entries), or empty
-        string if the directory is absent or no matching entries are found.
-    """
-    memories_dir = _SOULS_DIR / role / "memories"
-    if not memories_dir.exists():
-        return ""
-
-    entries: list[str] = []
-    for path in sorted(memories_dir.glob("*.md")):
-        try:
-            raw = path.read_text(encoding="utf-8")
-            _fm, body = parse_frontmatter(raw)
-            text = body.strip()
-            if text:
-                entries.append(text)
-        except Exception:
-            continue
-
-    if not entries:
-        return ""
-
-    return "## Character\n\n" + "\n\n".join(entries)
-
-
 def load_soul_mindsets(role: str) -> str:
     """Load all 6 task-type mindset files for a role into a static block.
 
@@ -154,8 +121,7 @@ def load_soul_mindsets(role: str) -> str:
     so the model sees complete task-type guidance from Turn 1, regardless of
     how the conversation evolves.
 
-    Skips missing files silently — consistent with existing degraded-but-functional
-    policy in ``load_character_memories``.
+    Skips missing files silently to degrade gracefully when a mindset file is absent.
 
     Args:
         role: Personality role name (e.g., "finch", "jeff").

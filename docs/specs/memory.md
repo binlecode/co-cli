@@ -29,10 +29,11 @@ This spec defines how `co-cli` stores raw memory, derives episodic recall from i
 
 ## 1. What & How
 
-`co-cli` has two persistent layers with one directional bridge:
+`co-cli` has three recall channels plus one directional bridge:
 
-- **Memory** is the raw session timeline. It lives in append-only JSONL transcripts under `sessions/`, with oversized tool outputs spilled to `tool-results/`. A separate FTS5 DB indexes past transcripts for episodic search.
-- **Knowledge** is every reusable artifact the agent should recall across sessions. It lives as markdown files under `knowledge/`, with a derived retrieval DB for search/ranking.
+- **T0 (context)** is the static personality-context channel — curated knowledge artifacts tagged `personality-context` are loaded once at agent construction and injected into the prefix-cached system prompt. No query path; no FTS; no LLM in the recall route.
+- **T1 (session)** is the raw episodic timeline — append-only JSONL transcripts under `sessions/`, indexed by FTS5. Recall synthesizes a truncated transcript window into prose via a noreason LLM summarizer.
+- **T2 (knowledge)** is every reusable artifact the agent should recall on demand — markdown files under `knowledge/`, indexed by FTS5 and optional vector hybrid. Recall returns ranked structured rows; no LLM in the default path.
 - **Bridge** is agent-explicit `memory_create` calls during a turn, and the optional dream cycle which retrospectively mines past transcripts. Dream-cycle details live in [dream.md](dream.md).
 
 ```mermaid
@@ -64,6 +65,14 @@ flowchart TD
     SessionIdx --> MemorySearch
     SearchDB --> MemorySearch
 ```
+
+Three-channel overview:
+
+| Channel | Storage | Post-FTS recall synthesis |
+| --- | --- | --- |
+| T0 (context) | `knowledge/*.md` tagged `personality-context` | None — full artifacts injected into the static system prompt at construction; prefix-cache stable; no query |
+| T1 (session) | `sessions/*.jsonl` → `session-index.db` FTS5 | FTS5 BM25 → best-per-session dedup → 100K-char window → **parallel noreason LLM summarization** → prose summaries |
+| T2 (knowledge) | `knowledge/*.md` → `co-cli-search.db` FTS5 + optional vectors | FTS5 BM25 (± RRF vector merge) → ranked chunks → optional reranker → **structured rows; no LLM by default** |
 
 ## 2. Core Logic
 
@@ -149,7 +158,22 @@ Telemetry note:
 - The session short ID (`session_path.stem[-8:]`) is attached to spans and run metadata.
 - Forked sub-agent deps inherit shared services but start with a fresh empty `session_path`, so their traces are attributable but not persisted into the parent transcript file.
 
-### 2.3 Episodic Recall: Derived Transcript Index
+### 2.3 T0 Channel: Personality Context
+
+T0 is the static context channel. It is not a query-time recall path — it is a one-time unconditional load at agent construction.
+
+`load_personality_memories()` in `co_cli/personality/prompts/loader.py` scans the knowledge artifact index for files tagged `personality-context`. Those artifacts are injected verbatim into the static system prompt by `build_static_instructions()` in `co_cli/context/assembly.py`.
+
+Properties:
+
+- **No query**: T0 loads unconditionally; no FTS search runs and no `memory_search()` call is issued.
+- **Prefix-cache stable**: the T0 block is placed in the static prompt prefix, before all dynamic content, keeping the prefix-cache hit rate high across turns.
+- **Session-restart required**: edits to T0 artifacts take effect only after a new `co chat` session.
+- **Storage shared with T2**: T0 artifacts live in `knowledge/*.md` alongside all other knowledge artifacts; the `personality-context` tag routes them to the static prompt instead of the T2 query path at runtime.
+
+The dynamic-instructions block (`date_prompt()` in `co_cli/agent/_instructions.py`) is intentionally kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable T0 static prefix remains cache-stable across turns.
+
+### 2.4 T1 Channel: Episodic Session Recall
 
 Raw transcripts are Memory; `session-index.db` is a derived search structure over them.
 
@@ -166,15 +190,15 @@ Indexing rules:
 - Change detection is file-size-based because transcripts are append-only.
 - Reindexing deletes and reinserts message rows for that session ID.
 
-`memory_search()` is the only Memory read tool. It operates in two modes based on the query argument:
+`memory_search()` is the unified recall tool. It dispatches T1 and T2 queries in parallel for keyword searches. It operates in two modes:
 
 **Browse mode** (empty query): returns recent-session metadata — session ID, date, title, file size — with zero LLM cost. Excludes the current session from results. Use when the user asks what was worked on recently or wants to browse session history.
 
-**Search mode** (keyword query): runs T2 artifact search (BM25 FTS5/grep) and T1 session search in parallel. T1: FTS5 BM25 search over `messages_fts` → dedup to one entry per session → load transcript → truncate-around-query window (max 100,000 chars, biased 25% before / 75% after match anchor) → parallel noreason LLM summarization → return per-session prose summaries. T1 is capped at 3 sessions regardless of `limit`. T2: BM25 FTS5 search over the knowledge artifact index; falls back to grep when `KnowledgeStore` is unavailable. `limit` (default 10) applies to T2 results. Summarization runs under a 60-second global `asyncio.timeout`; each individual summarizer call retries up to 3 times with linear backoff on transient errors or empty responses. On summarizer failure, the pre-computed truncated window is used as a raw-preview fallback.
+**Search mode** (keyword query): dispatches T1, T2, and canon in parallel. **T1 post-FTS synthesis — LLM summarization:** FTS5 BM25 search over `messages_fts` → dedup to best-ranked message per session → top 3 sessions (hard cap: `_T1_SESSION_CAP=3`) → load each full JSONL → truncate to a 100,000-char window around the match anchor → parallel noreason LLM summarization → per-session prose summaries. Summarization runs under a 60-second global `asyncio.timeout`; each individual call retries up to 3 times with linear backoff on transient errors or empty responses; the pre-computed truncated window is the raw-preview fallback on failure. T2 dispatch and its synthesis are described in §2.5. **Canon channel:** globs `souls/{active_role}/memories/*.md`, scores by token overlap (title stem 2× weight), returns up to `config.knowledge.character_recall_limit` (default 3) hits — no FTS DB, no LLM. Only runs when a personality is active; role is read from config, not from the caller.
 
 Truncation uses a three-tier match strategy to find the best window anchor: (1) full-phrase match, (2) proximity co-occurrence of all query terms within 200 characters, (3) individual term positions as last resort. The window is placed to cover the most match positions, biased 25% before / 75% after the chosen anchor.
 
-Result shape: flat list where each entry carries a `tier` field (`"artifacts"` for T2, `"sessions"` for T1). T1 result fields: `{tier, session_id, when, source, summary}`. T2 result fields: `{tier, kind, title, snippet, score, path, slug}`. Scores are NOT cross-comparable across tiers.
+Result shape: flat list with a `tier` discriminator. T1 entries: `{tier: "sessions", session_id, when, source, summary}` — prose summaries. T2 entries: `{tier: "artifacts", kind, title, snippet, score, path, slug}` — ranked structured rows. Canon entries: `{tier: "canon", role, title, snippet, score, path, slug}` — on-demand character memory hits. Scores are NOT cross-comparable across tiers.
 
 Tracer span attributes set on every call: `memory.summarizer.runs`, `memory.summarizer.failures`, `memory.summarizer.timed_out`.
 
@@ -184,7 +208,7 @@ Important current behavior:
 - There is no shutdown reindex pass.
 - In practice, episodic search covers transcripts that have already been indexed during a prior bootstrap, not the live in-progress session.
 
-### 2.4 Knowledge Layer
+### 2.5 T2 Channel: Knowledge Artifacts
 
 Knowledge is every reusable artifact the agent should recall across sessions: preferences, decisions, rules, feedback, articles, references, and notes.
 
@@ -217,15 +241,11 @@ Knowledge artifact schema:
 | `last_recalled` | Most recent recall timestamp |
 | `recall_count` | Recall hit counter |
 
-Recall is on-demand. One tool surfaces persistent context: `memory_search()` covers both curated knowledge artifacts (T2) and past session transcripts (T1) in a single call. The agent decides when to call it; the tool description coaches proactive use for all recall tasks — saved preferences, past conversations, project conventions, and saved articles.
+T2 recall is on-demand. `memory_search()` covers both T2 knowledge artifacts and T1 session transcripts in a single call. The agent decides when to call it; the tool description coaches proactive use for all recall tasks — saved preferences, past conversations, project conventions, and saved articles. The `kind` parameter narrows T2 results by `artifact_kind`.
 
-Personality memories (knowledge artifacts tagged `personality-context`) live in the **static system prompt** to preserve prefix-cache stability across turns. They are loaded once at agent construction by `load_personality_memories()` in `co_cli/personality/prompts/loader.py` and injected by `build_static_instructions()` in `co_cli/context/assembly.py`. Runtime edits to personality-context artifacts require a session restart to take effect.
+**T2 post-FTS synthesis — ranked structured rows.** Unlike T1, T2 recall returns structured chunk rows directly — no LLM in the default path. BM25 and optional vector scores are merged via RRF; an optional cross-encoder or LLM reranker (`cross_encoder_reranker_url`) can re-score the top-N results when configured. T2 result shape: `{tier: "artifacts", kind, title, snippet, score, path, slug}`.
 
-The dynamic-instructions block (`date_prompt()` in `co_cli/agent/_instructions.py`) is intentionally kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable static prefix remains cache-stable across turns.
-
-**Explicit search**: `memory_search()` queries both the knowledge store (T2) and the session transcript index (T1) on demand. The `kind` parameter narrows T2 results by artifact_kind.
-
-Search backends degrade in this order:
+T2 search backends degrade in this order:
 
 | Backend | Mechanism | When used |
 | --- | --- | --- |
@@ -245,7 +265,7 @@ Dream lifecycle commands (`/knowledge dream`, `/knowledge restore`, `/knowledge 
 
 `/memory` is still present as a deprecated alias for `list`, `count`, and `forget`.
 
-### 2.5 Memory -> Knowledge Bridge: Agent-Explicit Writes and Dream
+### 2.6 Memory -> Knowledge Bridge: Agent-Explicit Writes and Dream
 
 There is no online per-turn extraction. Knowledge accumulates through two paths:
 
@@ -253,15 +273,15 @@ There is no online per-turn extraction. Knowledge accumulates through two paths:
 
 2. **Dream cycle** — at session end (when `knowledge.consolidation_enabled=true`), the dream cycle retrospectively mines past transcripts and writes new artifacts. See [dream.md](dream.md) for the full lifecycle.
 
-### 2.6 Dream Lifecycle Handoff
+### 2.7 Dream Lifecycle Handoff
 
 Dream-cycle semantics live in [dream.md](dream.md). This spec only owns the handoff: transcripts remain append-only read inputs, active knowledge remains markdown plus a derived search index, and any dream-cycle artifact writes or archives must preserve those source-of-truth boundaries.
 
 The dream cycle is not part of turn-time recall or in-turn knowledge writes. It is a separate lifecycle pass over the same Memory and Knowledge stores.
 
-### 2.7 Design Lineage
+### 2.8 Design Lineage
 
-The T1 and T2 retrieval pipelines are not original — they trace to specific peer systems. Recording the lineage here so future work knows which peer to consult before changing retrieval mechanics. Full peer survey: [docs/reference/RESEARCH-memory-peer-for-co-second-brain.md](../reference/RESEARCH-memory-peer-for-co-second-brain.md).
+The T1 and T2 retrieval pipelines are not original — they trace to specific peer systems. Recording the lineage here so future work knows which peer to consult before changing retrieval mechanics. Peer product survey: [docs/reference/RESEARCH-memory-peer-for-co-second-brain.md](../reference/RESEARCH-memory-peer-for-co-second-brain.md). Open porting gaps and cheap-borrow candidates: [docs/exec-plans/active/2026-04-29-143000-memory-recall-gap-backlog.md](../exec-plans/active/2026-04-29-143000-memory-recall-gap-backlog.md).
 
 **T1 (session transcripts) — direct port from `hermes-agent`.**
 
@@ -314,6 +334,7 @@ Implication: changes to T2 ranking should consult `openclaw`; changes to T2 stor
 | `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI reranker URL |
 | `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | chunk size used during indexing |
 | `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | chunk overlap used during indexing |
+| `knowledge.character_recall_limit` | `CO_CHARACTER_RECALL_LIMIT` | `3` | max canon hits returned per `memory_search` call |
 
 Dream-cycle and lifecycle maintenance settings, including consolidation trigger, lookback, merge threshold, artifact soft cap, and decay age, live in [dream.md](dream.md).
 
@@ -339,7 +360,8 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/memory/indexer.py` | `extract_messages()` — JSONL line parser that feeds `SessionStore.index_session()` |
 | `co_cli/memory/summary.py` | `_format_conversation()`, `_truncate_around_matches()`, and `summarize_session_around_query()` — transcript formatting, window extraction, and noreason LLM summarization pipeline |
 | `co_cli/memory/prompts/session_summarizer.md` | Summarizer prompt template for the noreason summarization agent |
-| `co_cli/tools/memory/recall.py` | `memory_search()` episodic recall tool |
+| `co_cli/tools/memory/recall.py` | `memory_search()` unified recall tool — T1, T2, and canon channels |
+| `co_cli/tools/memory/_canon_recall.py` | `search_canon()` — canon channel: globs `souls/{role}/memories/*.md`, token-overlap scoring, title 2× weight |
 | `co_cli/memory/artifact.py` | `KnowledgeArtifact` schema and artifact loaders |
 | `co_cli/memory/knowledge_store.py` | `KnowledgeStore` indexing/search backend and `sync_dir()` |
 | `co_cli/memory/frontmatter.py` | frontmatter parse/validate/render helpers |
@@ -353,7 +375,7 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/bootstrap/core.py` | `restore_session()` and `init_session_store()` during startup |
 | `co_cli/agent/_instructions.py` | `date_prompt()` — thin wrapper that delegates to `recall_prompt_text()` in `prompt_text.py`; returns today's date string |
 | `co_cli/context/prompt_text.py` | `recall_prompt_text()` — per-turn dynamic instruction; returns today's date only (personality memories are in static prompt; knowledge recall is on-demand) |
-| `co_cli/context/assembly.py` | `build_static_instructions()` — assembles soul, character memories, mindsets, personality-context artifacts, rules, and examples into the cacheable static system prompt |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — assembles soul, mindsets, personality-context artifacts, and rules into the cacheable static system prompt; character memories excluded (served via `memory_search` canon channel) |
 | `co_cli/personality/prompts/loader.py` | `load_personality_memories()` — loads `personality-context` tagged knowledge artifacts into the static prompt once at agent construction |
 | `co_cli/main.py` | `_finalize_turn()` persistence bridge and session-end dream trigger |
 | `co_cli/commands/core.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions`, `/knowledge`, and `/memory` command handlers |

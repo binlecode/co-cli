@@ -1,9 +1,10 @@
 """Prompt assembly for the Co CLI agent.
 
-Static instruction scaffold assembly lives here: soul scaffold, character memories,
-mindsets, personality-context knowledge artifacts, behavioral rules, and examples.
-Runtime-only layers such as date and conditional safety warnings are added later
-via ``@agent.instructions`` in ``agent/core.py``.
+Static instruction scaffold assembly lives here: soul scaffold, mindsets,
+personality-context knowledge artifacts, and behavioral rules. Character memories
+are NOT assembled here — they are surfaced on demand via the canon channel in
+``memory_search``. Runtime-only layers such as date and conditional safety warnings
+are added later via ``@agent.instructions`` in ``agent/core.py``.
 """
 
 from __future__ import annotations
@@ -88,25 +89,26 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
 
     Assembles sections in explicit order:
     1. Soul seed (identity anchor)
-    2. Character memories
-    3. Mindsets
+    2. Mindsets
+    3. Personality memories (curated knowledge artifacts tagged personality-context)
     4. Behavioral rules (numbered, strict order)
-    4b. Recency-clearing advisory (explains the ``[tool result cleared…]``
-        placeholders that appear after ``evict_old_tool_results`` runs)
-    5. Critique (self-assessment lens)
+    5. Recency-clearing advisory (explains the ``[tool result cleared…]``
+       placeholders that appear after ``evict_old_tool_results`` runs)
+    6. Critique (self-assessment lens)
+
+    Character memories are NOT injected here — they are surfaced on demand via
+    the canon channel in ``memory_search``.
 
     Returns the fully assembled static instructions string.
     """
     parts: list[str] = []
 
     seed: str | None = None
-    character_memories: str | None = None
     mindsets: str | None = None
     critique: str | None = None
 
     if config.personality:
         from co_cli.personality.prompts.loader import (
-            load_character_memories,
             load_personality_memories,
             load_soul_critique,
             load_soul_mindsets,
@@ -114,7 +116,6 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
         )
 
         seed = load_soul_seed(config.personality)
-        character_memories = load_character_memories(config.personality) or None
         mindsets = load_soul_mindsets(config.personality) or None
         critique = load_soul_critique(config.personality) or None
 
@@ -122,15 +123,11 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
     if seed:
         parts.append(seed)
 
-    # 2. Character memories
-    if character_memories:
-        parts.append(character_memories)
-
-    # 3. Mindsets
+    # 2. Mindsets
     if mindsets:
         parts.append(mindsets)
 
-    # 3b. Personality memories — curated knowledge artifacts tagged personality-context;
+    # 3. Personality memories — curated knowledge artifacts tagged personality-context;
     # session-stable, loaded once at agent construction for prefix-cache stability.
     if config.personality:
         personality_memories_content = load_personality_memories(knowledge_dir=knowledge_dir)
@@ -143,11 +140,11 @@ def build_static_instructions(config: Settings, *, knowledge_dir: Path | None = 
         if content:
             parts.append(content)
 
-    # 4b. Recency-clearing advisory — static, cacheable; explains the
+    # 5. Recency-clearing advisory — static, cacheable; explains the
     # ``[tool result cleared…]`` placeholders the model will encounter.
     parts.append(RECENCY_CLEARING_ADVISORY)
 
-    # 5. Critique — self-assessment lens, always last
+    # 6. Critique — self-assessment lens, always last
     if critique:
         parts.append(f"## Review lens\n\n{critique}")
 

@@ -28,7 +28,6 @@ from evals._timeouts import (
     EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS,
     EVAL_PROBE_TIMEOUT_SECS,
 )
-from evals.eval_bootstrap_flow_quality import TrackingFrontend
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
 from co_cli.agent.core import build_agent
@@ -36,6 +35,7 @@ from co_cli.bootstrap.core import create_deps
 from co_cli.config.core import KNOWLEDGE_DIR, TOOL_RESULTS_DIR, settings
 from co_cli.context.compaction import SUMMARY_MARKER_PREFIX
 from co_cli.context.orchestrate import run_turn
+from co_cli.display.headless import HeadlessFrontend
 
 # ---------------------------------------------------------------------------
 # Config — real settings with eval-local overrides
@@ -139,7 +139,7 @@ async def step_proactive_compaction() -> bool:
     before_tool_results = set(TOOL_RESULTS_DIR.glob("*")) if TOOL_RESULTS_DIR.exists() else set()
     before_knowledge = set(KNOWLEDGE_DIR.glob("*")) if KNOWLEDGE_DIR.exists() else set()
 
-    frontend = TrackingFrontend()
+    frontend = HeadlessFrontend(verbose=True)
     message_history: list[ModelMessage] = []
     passed = True
     compaction_fired = False

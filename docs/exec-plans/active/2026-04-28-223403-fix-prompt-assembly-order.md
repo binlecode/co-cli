@@ -13,29 +13,32 @@ No prior plan found for this slug. No related DESIGN or TODO docs.
 
 **Current-state validation:** Source verified against code (assembly.py:86-167, core.py:118-164). No phantom features or stale names found. No workflow hygiene issues.
 
+**Design update (post-plan):** `personality-context` tag and the associated `load_personality_memories` / `_personality_cache` mechanism are removed. The static prompt carries only the soul scaffold (seed, mindsets, examples, critique). All personality memory is reached via the canon channel (`memory_search`). This collapses Bug 1 from "move personality memories to tail" to "remove entirely". Terminology: T0/T1/T2 tiers are retired — the architecture uses static prompt + three memory channels (canon, session, knowledge).
+
 ---
 
 ## Problem & Outcome
 
 **Problem:** Block 0 of co's system prompt assembles two sections in the wrong positions:
 
-1. **Personality memories injected before behavioral rules** (`assembly.py:137-142`). Personality memories (T2 knowledge artifacts tagged `personality-context`) are the most cache-volatile element in Block 0 — they change between sessions when the user adds or modifies artifacts. Placing them at position 3b (between mindsets and behavioral rules) means every session where artifacts change must re-cache rules, recency advisory, examples, critique, toolset guidance, and category awareness — all stable sections that should stay warm.
+1. **Personality memories injected before behavioral rules** (`assembly.py:137-142`). The `personality-context` tag mechanism is now removed entirely — personality memory is served by the canon channel via `memory_search`, not injected into the static prompt. The 3b block and all related imports are dead.
 
 2. **Critique is not last in Block 0** (`assembly.py:158-160` vs `core.py:131-137`). `build_static_instructions` guarantees critique is "always last" within its output. But `core.py` appends `toolset_guidance` and `category_hint` after it. Critique ends up in the middle of Block 0, with operational guidance following it. The review/self-assessment lens must wrap the complete prompt, not precede operational sections.
 
-**Failure cost:** The model reads toolset guidance and category awareness after its self-assessment lens — any behavioral calibration from the critique has no visibility into those sections. Personality memories bloat the cache invalidation footprint with every artifact write.
+**Failure cost:** The model reads toolset guidance and category awareness after its self-assessment lens — any behavioral calibration from the critique has no visibility into those sections.
 
 **Outcome:** Block 0 assembles in this order (from top to tail):
 
 ```
-soul seed → char memories → mindsets → rules → recency advisory → examples
+soul seed → mindsets → rules → recency advisory
 → toolset guidance (conditional)
 → category awareness (conditional)
-→ personality memories (conditional, volatile suffix)
-→ critique (always last behavioral lens)
+→ critique (always last behavioral lens, conditional on personality)
 ```
 
-Personality memories are the narrowest volatile slice at the tail — only they re-cache on artifact changes. Critique wraps everything including operational guidance.
+Note: character memories are absent because the character-memory-to-search-channel plan runs first and removes the static `## Character` block. Examples were already removed in commit `95fd0c1`.
+
+Static prompt carries only the stable soul scaffold. Critique wraps everything including operational guidance.
 
 ---
 
@@ -43,36 +46,37 @@ Personality memories are the narrowest volatile slice at the tail — only they 
 
 - Refactor `co_cli/context/assembly.py` and `co_cli/agent/core.py` to fix the assembly order.
 - Update `tests/prompts/test_static_instructions.py` to cover the new ordering contract.
-- No behavior change for sessions without personality configured (personality memories and critique are conditional).
-- No public API change: `build_agent()` signature unchanged. `build_static_instructions` loses its `knowledge_dir` parameter (was only used to test personality memory injection, which moves out of this function).
+- Remove `personality-context` injection entirely: `load_personality_memories`, `_personality_cache`, and the `knowledge_dir` parameter are dead code after this change.
+- No public API change: `build_agent()` signature unchanged.
 
 **Out of scope:**
 - Block 1 ordering (already correct: safety_prompt → current_time_prompt).
 - Adding new prompt sections.
 - Changes to any personality asset files.
+- Pruning dead loader functions from `loader.py`: `load_personality_memories` / `_personality_cache` (dead after this plan) and `load_character_memories` (dead after character-memory plan). Both should be pruned together in a single `/sync-doc` pass after this plan ships. Also update the `loader.py` module docstring and Callers section, which will be stale after both plans run.
 
 ---
 
 ## Behavioral Constraints
 
 - `build_static_instructions` must never include personality memories or critique after this change.
-- `core.py` Block 0 must produce the section order: stable_core → toolset_guidance → category_hint → personality_memories → critique. Deviation from this order is a test failure.
+- `core.py` Block 0 must produce the section order: stable_core → toolset_guidance → category_hint → critique. Deviation from this order is a test failure.
 - Critique must appear after toolset_guidance in all assembled Block 0 output when a personality is configured. If no personality is configured, critique is absent and this constraint is vacuous.
-- Personality memories must appear after category_hint and before critique when both are present.
-- Sessions with no personality configured must produce identical output to the current behavior (only stable_core + toolset_guidance + category_hint, no personality memories, no critique).
-- The `_personality_cache` module-level cache in `loader.py` must remain intact — no changes to cache invalidation semantics.
+- Sessions with no personality configured must produce identical output to the current behavior (only stable_core + toolset_guidance + category_hint, no critique).
 
 ---
 
 ## High-Level Design
 
-`build_static_instructions` currently owns too much: it assembles both stable-forever sections (seed, rules, examples) and volatile/conditional sections (personality memories, critique). The fix is to narrow its responsibility to stable sections only, and promote personality memories and critique to the `core.py` call site where they can be appended in the correct relative position.
+`build_static_instructions` currently owns too much: it assembles both stable-forever sections (seed, rules) and the conditional critique. The fix is to narrow its responsibility to stable sections only, and promote critique to the `core.py` call site where it can be appended after operational guidance.
+
+Personality memories (the `personality-context` tag injection) are removed entirely — not moved, deleted.
 
 **Two structural changes:**
 
-1. **`assembly.py`**: Remove personality_memories and critique from `build_static_instructions`. Remove the `knowledge_dir` parameter (it was only needed for personality_memories injection and is now dead). Update the docstring section list.
+1. **`assembly.py`**: Remove personality_memories (3b block) and critique (section 5 — currently labelled `# 5. Critique` in code; was section 6 in the original plan numbering which counted examples as section 5, but examples were removed in `95fd0c1`) from `build_static_instructions`. Remove `load_personality_memories`, `load_soul_critique`, and the `knowledge_dir` parameter — all dead. Update the function docstring to remove section 5 (critique); section 2 (character memories) is already absent after character-memory plan runs first. Update the module-level docstring (`assembly.py:3–4`) to remove stale references to 'character memories', 'personality-context knowledge artifacts', and 'examples'.
 
-2. **`core.py`**: After assembling `[stable_instructions, toolset_guidance, category_hint]`, load and append personality_memories (via `load_personality_memories`) and critique (via `load_soul_critique`) when a personality is configured. These are already public functions in `loader.py` — no new functions needed.
+2. **`core.py`**: After assembling `[stable_instructions, toolset_guidance, category_hint]`, append critique (via `load_soul_critique`) when a personality is configured. One import, four lines.
 
 No new abstractions. No new modules. Callers of `build_static_instructions` outside tests only exist in `core.py` — one call site update.
 
@@ -85,9 +89,9 @@ No new abstractions. No new modules. Callers of `build_static_instructions` outs
 **files:**
 - `co_cli/context/assembly.py`
 
-Remove the `# 3b. Personality memories` block (lines 137-142) and the `# 6. Critique` block (lines 154-160) from `build_static_instructions`. Remove `load_personality_memories` and `load_soul_critique` from the conditional import. Remove the `knowledge_dir` parameter from the function signature and its use. Update the docstring section list to match (remove 3b and 6).
+Remove the `# 3b. Personality memories` inline block and the `# 5. Critique` block from `build_static_instructions`. Remove `load_personality_memories`, `load_soul_critique`, and the `knowledge_dir` parameter from the function signature and its use. (By the time this plan runs, the character-memory plan has already removed `load_character_memories` from the imports.) Update the function docstring: remove section 5 (critique); section 2 (character memories) is already absent. Update the module-level docstring (`assembly.py:3–4`) to remove stale references to 'character memories', 'personality-context knowledge artifacts', and 'examples'.
 
-**done_when:** `grep -n "load_personality_memories\|load_soul_critique\|knowledge_dir" co_cli/context/assembly.py` returns no matches. `uv run pytest tests/prompts/ -x` passes (tests updated in TASK-3 but the function's own assertions should still hold without personality_memories and critique).
+**done_when:** `grep -n "load_personality_memories\|load_soul_critique\|knowledge_dir" co_cli/context/assembly.py` returns no matches. `uv run pytest tests/prompts/ -x` passes.
 
 **success_signal:** N/A (internal refactor, no user-visible change)
 
@@ -97,24 +101,20 @@ Remove the `# 3b. Personality memories` block (lines 137-142) and the `# 6. Crit
 
 **files:**
 - `co_cli/agent/core.py`
-- `co_cli/personality/prompts/loader.py` (docstring update: `load_personality_memories` caller is now `build_agent` / `core.py`, not `build_static_instructions`)
 
 **prerequisites:** [TASK-1]
 
-After the existing three-part assembly (`stable_instructions`, `toolset_guidance`, `category_hint`), add:
+After the existing three-part assembly (`stable_instructions`, `toolset_guidance`, `category_hint`), add only critique — no personality memories:
 
 ```python
 if config.personality:
-    from co_cli.personality.prompts.loader import load_personality_memories, load_soul_critique
-    pm = load_personality_memories()
-    if pm:
-        static_parts.append(pm)
+    from co_cli.personality.prompts.loader import load_soul_critique
     crit = load_soul_critique(config.personality)
     if crit:
         static_parts.append(f"## Review lens\n\n{crit}")
 ```
 
-This replaces the critique formatting that was previously inline in `assembly.py:159-160` (`f"## Review lens\n\n{critique}"`).
+This replaces the critique formatting that was previously inline in `assembly.py:158-160` (`f"## Review lens\n\n{critique}"`). No `load_personality_memories` call — that mechanism is removed.
 
 **done_when:** `uv run pytest tests/prompts/ -x` passes with the new ordering tests from TASK-3.
 
@@ -129,22 +129,13 @@ This replaces the critique formatting that was previously inline in `assembly.py
 
 **prerequisites:** [TASK-2]
 
-Three test changes:
+Two test changes:
 
-1. **Update `test_static_instructions_includes_personality_memories`**: The function `build_static_instructions` no longer injects personality memories. Change the test to assert the sentinel is **absent** from `build_static_instructions` output (confirming extraction). Keep it as a negative guard.
+1. **Delete `test_static_instructions_includes_personality_memories`**: Personality memory injection is removed entirely; this test has no valid post-change assertion. Delete it rather than convert to a negative guard — a negative guard for a removed feature is noise.
 
-2. **Add `test_block0_personality_memories_position`**: Build Block 0 by replicating the `core.py` static_parts assembly inline (keep in sync with `core.py` — update this test if Block 0 wiring changes). Pass `knowledge_dir=tmp_path` explicitly to `load_personality_memories` to bypass the process-scoped `_personality_cache` global (the kwarg bypasses the cache per `loader.py:52`). Include a sentinel artifact in `tmp_path` and `memory_search` in tool_index. Assert:
-   ```python
-   assert combined.index(MEMORY_GUIDANCE_SENTINEL) < combined.index("personality-static-sentinel-XYZ789")
-   assert combined.index("personality-static-sentinel-XYZ789") < combined.index("## Review lens")
-   ```
-   where `MEMORY_GUIDANCE_SENTINEL = "at most one broader retry"` (unique string from `MEMORY_GUIDANCE`).
+2. **Add `test_block0_critique_is_last`**: Build Block 0 by replicating the `core.py` static_parts assembly inline (with `memory_search` in tool_index for MEMORY_GUIDANCE, and a personality that has a critique). Assert `combined.endswith("## Review lens\n\n" + critique_text)` — no content follows the `## Review lens` section.
 
-3. **Add `test_block0_critique_is_last`**: Build Block 0 with a personality that has a critique. Assert `combined.endswith("## Review lens\n\n" + critique_text)` or that no content follows the `## Review lens` section.
-
-The temp-knowledge-dir setup can be shared with a fixture. Use `CO_HOME` monkeypatching pattern consistent with existing tests, or pass `knowledge_dir` directly to `load_personality_memories` — check which pattern existing tests use and follow it.
-
-**done_when:** `uv run pytest tests/prompts/test_static_instructions.py -x -v` passes with all three new/updated tests green. Output includes `PASSED test_block0_personality_memories_position` and `PASSED test_block0_critique_is_last`.
+**done_when:** `uv run pytest tests/prompts/test_static_instructions.py -x -v` passes. Output includes `PASSED test_block0_critique_is_last`.
 
 **success_signal:** N/A (refactor test coverage, no user-visible change)
 
@@ -161,9 +152,10 @@ No evals needed (no model-output or behavioral change; this is prompt structure 
 ## Open Questions
 
 None. All questions answerable by inspection:
-- Where is `load_soul_critique` called? Only inside `build_static_instructions` (confirmed by grep).
-- Is `knowledge_dir` used by any caller other than tests? No — `core.py` always calls `build_static_instructions(config)` without it.
-- Does `load_personality_memories()` with no `knowledge_dir` arg use `KNOWLEDGE_DIR` from config? Yes (`loader.py:55`).
+- Where is `load_soul_critique` called? Only inside `build_static_instructions` — moves to `core.py`.
+- Is `knowledge_dir` used by any caller other than tests? No — `core.py` always calls `build_static_instructions(config)` without it; safe to remove.
+
+---
 
 ## Final — Team Lead
 

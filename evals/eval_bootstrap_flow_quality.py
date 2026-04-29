@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from evals._frontend import CapturingFrontend
 from evals._timeouts import EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS
 
 from co_cli.agent.core import build_agent
@@ -35,6 +34,7 @@ from co_cli.commands.skills import get_skill_registry
 from co_cli.config.core import get_settings
 from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.display.core import console
+from co_cli.display.headless import HeadlessFrontend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-bootstrap-flow-quality.md"
 _REPORT_HEADER = "# Eval Report: Bootstrap Flow Quality"
@@ -55,19 +55,6 @@ class EvalCaseResult:
     duration_ms: float
     steps: list[EvalStep]
     failure: str | None = None
-
-
-class TrackingFrontend(CapturingFrontend):
-    """Verbose eval frontend that records startup statuses with relative timestamps."""
-
-    def __init__(self) -> None:
-        super().__init__(verbose=True)
-        self._t0 = time.monotonic()
-        self.status_timeline: list[tuple[float, str]] = []
-
-    def on_status(self, message: str) -> None:
-        super().on_status(message)
-        self.status_timeline.append(((time.monotonic() - self._t0) * 1000, message))
 
 
 def _load_compatible_report_sections() -> list[str]:
@@ -192,7 +179,7 @@ def _write_report(
 
 
 async def _run_create_deps_case(
-    frontend: TrackingFrontend,
+    frontend: HeadlessFrontend,
     stack: AsyncExitStack,
 ) -> tuple[EvalCaseResult, CoDeps | None]:
     """Run create_deps() and validate the assembled runtime contract."""
@@ -332,7 +319,7 @@ def _run_agent_case(deps: CoDeps | None) -> tuple[EvalCaseResult, object | None]
 
 def _run_session_case(
     deps: CoDeps | None,
-    frontend: TrackingFrontend,
+    frontend: HeadlessFrontend,
 ) -> EvalCaseResult:
     """Run restore_session() and init_session_store() and validate ordering/state."""
     if deps is None:
@@ -470,7 +457,7 @@ async def main() -> None:
         _write_report(cases=cases, status_timeline=[], log_messages=[], total_ms=0.0)
         return
 
-    frontend = TrackingFrontend()
+    frontend = HeadlessFrontend(verbose=True)
     log_messages: list[str] = []
     total_t0 = time.monotonic()
     deps: CoDeps | None = None

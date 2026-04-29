@@ -26,6 +26,7 @@ KNOWLEDGE_ENV_MAP: dict[str, str] = {
     "chunk_overlap": "CO_KNOWLEDGE_CHUNK_OVERLAP",
     "consolidation_enabled": "CO_KNOWLEDGE_CONSOLIDATION_ENABLED",
     "decay_after_days": "CO_KNOWLEDGE_DECAY_AFTER_DAYS",
+    "character_recall_limit": "CO_CHARACTER_RECALL_LIMIT",
 }
 
 
@@ -79,3 +80,4 @@ class KnowledgeSettings(BaseModel):
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     max_artifact_count: int = Field(default=300, ge=1)
     decay_after_days: int = Field(default=90, ge=1)
+    character_recall_limit: int = Field(default=3, ge=1)

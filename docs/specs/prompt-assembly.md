@@ -6,7 +6,7 @@
 **Functional areas:**
 - Static instruction assembly (soul + rules + examples + critique)
 - Dynamic instruction callbacks (`@agent.instructions`)
-- Registered history-processor pipeline and ordering, plus two preflight callables (safety injection, recall injection)
+- Registered history-processor pipeline and ordering, plus two preflight callables (safety injection, canon recall injection)
 - Append-only invariant for dynamic content (cache hygiene)
 - Approval resume reusing the main agent
 
@@ -63,7 +63,7 @@ flowchart TD
 
 `build_agent()` assembles `static_instructions` from three ordered parts, all evaluated once at agent construction:
 
-1. **`build_static_instructions(config)`** — soul seed, character memories, mindsets, personality-context memories, numbered rules (`co_cli/context/rules/NN_rule_id.md`), examples, critique.
+1. **`build_static_instructions(config)`** — soul seed, mindsets, personality-context memories, numbered rules (`co_cli/context/rules/NN_rule_id.md`), critique. Character memories are NOT injected here — they are surfaced on demand via the canon channel in `memory_search`.
 2. **`build_toolset_guidance(tool_registry.tool_index)`** — tool-specific guidance blocks, each gated on the tool being present. Currently gated: `memory_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
 3. **`build_category_awareness_prompt(tool_registry.tool_index)`** — single-sentence category-level hint listing deferred tool categories reachable via `search_tools`. Derived from `VisibilityPolicyEnum.DEFERRED` entries. Empty when no deferred tools exist.
 
@@ -134,7 +134,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `current_time_prompt`, `safety_prompt` |
 | `co_cli/context/assembly.py` | `build_static_instructions()` — soul + personality-context memories + rules; rule-file validation |
 | `co_cli/context/guidance.py` | `MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE` constants; `build_toolset_guidance()` — gated on tool presence |
-| `co_cli/personality/prompts/loader.py` | soul seed, mindset, character memory, examples, critique, and `load_personality_memories()` |
+| `co_cli/personality/prompts/loader.py` | soul seed, mindset, critique, and `load_personality_memories()`; `load_character_memories()` is dead code (not called by assembly after TASK-4) |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `agent/_instructions.py` |
 | `co_cli/tools/deferred_prompt.py` | `build_category_awareness_prompt()` — category-level hint for deferred tool categories; called at build time |

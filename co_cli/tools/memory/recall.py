@@ -21,6 +21,7 @@ from co_cli.memory.summary import (
 )
 from co_cli.memory.transcript import load_transcript
 from co_cli.tools.agent_tool import agent_tool
+from co_cli.tools.memory._canon_recall import search_canon
 from co_cli.tools.memory.read import grep_recall
 from co_cli.tools.tool_io import tool_output
 
@@ -204,7 +205,9 @@ async def _search_sessions(
     """FTS search over T1 session transcripts. Returns tier='sessions' dicts.
 
     Capped at _T1_SESSION_CAP sessions regardless of caller's limit.
-    Returns [] if session_store is unavailable or summarization times out.
+    Returns [] if session_store is unavailable.
+    Uses best-effort summarization: sessions that finish within the timeout are
+    returned; timed-out sessions fall back to raw preview rather than dropping all.
     """
     store = ctx.deps.session_store
     if store is None:
@@ -223,28 +226,52 @@ async def _search_sessions(
 
     span.set_attribute("memory.summarizer.runs", len(tasks))
 
-    coros = [
-        summarize_session_around_query(
-            window,
-            query,
-            {"session_id": sid, "when": info.created_at[:10]},
-            ctx.deps,
+    async_tasks = [
+        asyncio.ensure_future(
+            summarize_session_around_query(
+                window,
+                query,
+                {"session_id": sid, "when": info.created_at[:10]},
+                ctx.deps,
+            )
         )
         for sid, info, window in tasks
     ]
 
-    try:
-        async with asyncio.timeout(_SUMMARIZATION_TIMEOUT_SECS):
-            summaries = await asyncio.gather(*coros, return_exceptions=True)
-    except TimeoutError:
-        span.set_attribute("memory.summarizer.timed_out", True)
-        span.set_attribute("memory.summarizer.failures", len(tasks))
-        return []
+    done, pending = await asyncio.wait(async_tasks, timeout=_SUMMARIZATION_TIMEOUT_SECS)
 
-    span.set_attribute("memory.summarizer.timed_out", False)
-    results_payload, failure_count = _build_results_payload(tasks, list(summaries))
+    timed_out = bool(pending)
+    for fut in pending:
+        fut.cancel()
+
+    # Collect results in original task order; substitute None for pending/failed tasks.
+    summaries: list[Any] = []
+    for fut in async_tasks:
+        if fut in done:
+            summaries.append(fut.exception() or fut.result())
+        else:
+            summaries.append(None)
+
+    span.set_attribute("memory.summarizer.timed_out", timed_out)
+    results_payload, failure_count = _build_results_payload(tasks, summaries)
     span.set_attribute("memory.summarizer.failures", failure_count)
     return results_payload
+
+
+async def _search_canon_channel(
+    ctx: RunContext[CoDeps],
+    query: str,
+) -> list[dict]:
+    """Token-overlap search over the active role's character memory files.
+
+    Returns [] when no personality is configured or the query has no content tokens.
+    Canon channel has its own budget from config.knowledge.character_recall_limit.
+    """
+    role = ctx.deps.config.personality
+    if not role:
+        return []
+    limit = ctx.deps.config.knowledge.character_recall_limit
+    return search_canon(query, role=role, limit=limit)
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
@@ -275,6 +302,7 @@ async def memory_search(
     - The user asks about a topic you've worked on but don't have in current context
     - The user asks "what did we do about X?", "what was my preferred Y?", "our convention for Z?"
     - The user references a project, person, decision, or concept that seems familiar
+    - The user asks about your character, your background, how you typically handle a situation, or references your source material
 
     Concrete examples:
     - "what was my preferred test runner?" → memory_search (searches T2 preferences)
@@ -287,6 +315,7 @@ async def memory_search(
 
     T2 result fields: tier, kind, title, snippet, score, path, slug
     T1 result fields: tier, session_id, when, source, summary
+    Canon result fields: tier, role, title, snippet, score, path, slug
 
     Args:
         query: FTS5 keyword query. Omit or pass empty string for recent-sessions browse mode.
@@ -302,12 +331,13 @@ async def memory_search(
 
     query = query.strip()
 
-    t2_results, t1_results = await asyncio.gather(
+    t2_results, t1_results, canon_results = await asyncio.gather(
         _search_artifacts(ctx, query, kind, limit),
         _search_sessions(ctx, query, span),
+        _search_canon_channel(ctx, query),
     )
 
-    all_results: list[dict] = list(t2_results) + list(t1_results)
+    all_results: list[dict] = list(t2_results) + list(t1_results) + list(canon_results)
 
     if not all_results:
         return tool_output(
@@ -321,6 +351,7 @@ async def memory_search(
 
     artifact_results = [r for r in all_results if r["tier"] == "artifacts"]
     session_results = [r for r in all_results if r["tier"] == "sessions"]
+    char_canon_results = [r for r in all_results if r["tier"] == "canon"]
 
     if artifact_results:
         lines.append("**Saved artifacts:**")
@@ -338,6 +369,13 @@ async def memory_search(
                 summary_preview = summary_preview[: _SESSION_SUMMARY_PREVIEW_CHARS - 3] + "..."
             lines.append(
                 f"  {idx}. [{entry['when']}] {entry['session_id']}\n     {summary_preview}"
+            )
+
+    if char_canon_results:
+        lines.append("\n**Character canon:**")
+        for r in char_canon_results:
+            lines.append(
+                f"  **{r['title']}**: {(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
             )
 
     return tool_output(

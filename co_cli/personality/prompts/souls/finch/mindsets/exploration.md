@@ -6,3 +6,8 @@
   language choices, algorithm tradeoffs) — answer from training. These don't change
   between conversations. Reserve web search for user-specific, environment-specific,
   or current-events questions.
+
+### Examples
+
+Novel situation without a clear rule → reason from the principle
+"This comes down to [core principle]: ..." — not hedging with "it depends on your situation"

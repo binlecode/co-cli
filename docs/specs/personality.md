@@ -46,13 +46,14 @@ Session start
 build_static_instructions(config)
     ↓
     [1] soul seed               — identity anchor, constraints, never-list
-    [2] character memories      — planted narrative backstory
-    [3] mindsets                — 6 task-type behavioral guides
-    [3b] personality memories   — top-5 "personality-context" artifacts from ~/.co-cli/knowledge/
+    [2] mindsets                — 6 task-type behavioral guides
+    [3] personality memories    — top-5 "personality-context" artifacts from ~/.co-cli/knowledge/
     [4] behavioral rules        — 5 universal rule files (01–05)
-    [5] soul examples           — concrete trigger→response patterns
-    [6] review lens             — self-assessment frame
+    [5] review lens             — self-assessment frame
     → set as Agent.instructions (static, once per session)
+
+Character memories (souls/{role}/memories/*.md) are NOT injected here.
+They are surfaced on demand via the canon channel in `memory_search`.
 ```
 
 ---
@@ -110,14 +111,17 @@ for human reference — they are not loaded into the agent.
 
 ```
 section_1 = load_soul_seed(role)               # Required — placed first; identity anchor
-section_2 = load_character_memories(role)       # Optional — ## Character block, memories/*.md
-section_3 = load_soul_mindsets(role)            # Optional — ## Mindsets block, all 6 files
+section_2 = load_soul_mindsets(role)            # Optional — ## Mindsets block, all 6 files
+section_3 = load_personality_memories()         # top-5 personality-context artifacts
 section_4 = _collect_rule_files()               # Rules from context/rules/NN_rule_id.md (01–05)
-section_5 = load_soul_examples(role)            # Optional — trigger→response patterns
-section_6 = load_soul_critique(role)            # Optional — ## Review lens, placed last
+section_5 = load_soul_critique(role)            # Optional — ## Review lens, placed last
 
 return "\n\n".join(non_empty_sections)
 ```
+
+Character memories (`memories/*.md`) are NOT included here — they are served on demand via
+the canon channel in `memory_search` when the user or model queries about the character's
+background, scenes, or source material.
 
 **Placement rationale:** Soul seed is first because early context has the strongest influence
 on the model's operating space. Review lens is last so it frames all prior content as
@@ -173,7 +177,7 @@ for missing mindset files.
 | File | Purpose |
 |---|---|
 | `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (soul + personality memories + rules) |
-| `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_examples`, `load_soul_critique`, `load_character_memories`, `load_soul_mindsets`, `load_personality_memories` |
+| `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_character_memories` (dead — not called by assembly), `load_soul_mindsets`, `load_personality_memories` |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
 | `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
