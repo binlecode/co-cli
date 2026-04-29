@@ -223,8 +223,31 @@ class SessionStore:
             ORDER BY rank
             LIMIT ?
         """
+        overfetch = limit * _SESSION_SEARCH_OVERFETCH_FACTOR
+
+        def _like_fallback(conn: object, tokens: list[str]) -> list[object]:
+            like_conds = " OR ".join("m.content LIKE ?" for _ in tokens)
+            lp: list[object] = [f"%{t}%" for t in tokens]
+            lsql = (
+                "SELECT s.session_id, s.session_path, s.created_at, m.role,"
+                " substr(m.content, 1, 300) AS snippet, -1.0 AS rank"
+                " FROM messages m"
+                " JOIN sessions s ON m.session_id = s.session_id"
+                f" WHERE ({like_conds})"
+                " LIMIT ?"
+            )
+            lp.append(overfetch)
+            try:
+                return conn.execute(lsql, lp).fetchall()  # type: ignore[union-attr]
+            except Exception:
+                return []
+
         rows = run_fts(
-            self._conn, sql, (query, limit * _SESSION_SEARCH_OVERFETCH_FACTOR), label="Session"
+            self._conn,
+            sql,
+            (query, overfetch),
+            label="Session",
+            like_fallback=_like_fallback,
         )
         if not rows:
             return []

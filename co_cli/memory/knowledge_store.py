@@ -25,7 +25,7 @@ import struct
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from co_cli.config.core import SEARCH_DB
 from co_cli.memory.frontmatter import parse_frontmatter
@@ -119,6 +119,53 @@ SELECT c.source, c.doc_path AS path,
   JOIN docs d ON d.source = c.source AND d.path = c.doc_path AND d.chunk_id = 0
  WHERE chunks_fts MATCH ?
 """
+
+
+def _chunks_like_search(
+    conn: Any,
+    tokens: list[str],
+    *,
+    sources: list[str] | None,
+    kind: str | None,
+    created_after: str | None,
+    created_before: str | None,
+    limit: int,
+) -> list[Any]:
+    """LIKE fallback for chunks FTS — returns rows with the same columns as _CHUNKS_FTS_SQL."""
+    like_conds = " OR ".join("c.content LIKE ?" for _ in tokens)
+    lp: list[Any] = [f"%{t}%" for t in tokens]
+    lsql = (
+        "SELECT c.source, c.doc_path AS path,"
+        " substr(c.content, 1, 300) AS snippet, -1.0 AS rank,"
+        " c.chunk_index, c.start_line, c.end_line,"
+        " d.kind, d.title, d.tags, d.category, d.created, d.updated,"
+        " d.provenance, d.certainty, d.source_ref, d.artifact_id"
+        " FROM chunks c"
+        " JOIN docs d ON d.source = c.source AND d.path = c.doc_path AND d.chunk_id = 0"
+        f" WHERE ({like_conds})"
+    )
+    if sources is not None and len(sources) == 1:
+        lsql += " AND c.source = ?"
+        lp.append(sources[0])
+    elif sources is not None and len(sources) > 1:
+        ph = ",".join("?" * len(sources))
+        lsql += f" AND c.source IN ({ph})"
+        lp.extend(sources)
+    if kind is not None:
+        lsql += " AND d.kind = ?"
+        lp.append(kind)
+    if created_after is not None:
+        lsql += " AND d.created >= ?"
+        lp.append(created_after)
+    if created_before is not None:
+        lsql += " AND d.created <= ?"
+        lp.append(created_before)
+    lsql += " LIMIT ?"
+    lp.append(limit)
+    try:
+        return conn.execute(lsql, lp).fetchall()
+    except Exception:
+        return []
 
 
 def _coerce_sources(source: str | list[str] | None) -> list[str] | None:
@@ -462,8 +509,6 @@ class KnowledgeStore:
         *,
         source: str | list[str] | None = None,
         kind: str | None = None,
-        tags: list[str] | None = None,
-        tag_match_mode: Literal["any", "all"] = "any",
         created_after: str | None = None,
         created_before: str | None = None,
         limit: int = 5,
@@ -489,8 +534,6 @@ class KnowledgeStore:
                 query,
                 source=source,
                 kind=kind,
-                tags=tags,
-                tag_match_mode=tag_match_mode,
                 created_after=created_after,
                 created_before=created_before,
                 limit=limit,
@@ -502,8 +545,6 @@ class KnowledgeStore:
             query,
             source=source,
             kind=kind,
-            tags=tags,
-            tag_match_mode=tag_match_mode,
             created_after=created_after,
             created_before=created_before,
             limit=fetch_limit,
@@ -516,8 +557,6 @@ class KnowledgeStore:
         *,
         source: str | list[str] | None,
         kind: str | None,
-        tags: list[str] | None,
-        tag_match_mode: Literal["any", "all"],
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -527,8 +566,6 @@ class KnowledgeStore:
             query,
             source=source,
             kind=kind,
-            tags=tags,
-            tag_match_mode=tag_match_mode,
             created_after=created_after,
             created_before=created_before,
             limit=limit * 4,
@@ -540,8 +577,6 @@ class KnowledgeStore:
                     emb,
                     source=source,
                     kind=kind,
-                    tags=tags,
-                    tag_match_mode=tag_match_mode,
                     created_after=created_after,
                     created_before=created_before,
                     limit=limit * 4,
@@ -565,8 +600,6 @@ class KnowledgeStore:
         *,
         source: str | list[str] | None,
         kind: str | None,
-        tags: list[str] | None,
-        tag_match_mode: Literal["any", "all"],
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -576,7 +609,6 @@ class KnowledgeStore:
         if fts_query is None:
             return []
 
-        tags = list(dict.fromkeys(tags)) if tags else tags
         # Chunks leg always uses a larger pool: one document produces N chunk rows,
         # so limiting at chunk granularity causes a single long article to crowd out
         # other matching documents before Python-side doc-level dedup can run.
@@ -591,21 +623,6 @@ class KnowledgeStore:
             created_before=created_before,
             limit=chunks_fetch_limit,
         )
-
-        if tags:
-            tag_set = set(tags)
-            if tag_match_mode == "all":
-                all_rows = [
-                    (row, leg)
-                    for row, leg in all_rows
-                    if tag_set <= {t for t in (row["tags"] or "").split() if t}
-                ]
-            else:
-                all_rows = [
-                    (row, leg)
-                    for row, leg in all_rows
-                    if tag_set & {t for t in (row["tags"] or "").split() if t}
-                ]
 
         results: list[SearchResult] = []
         for row, _leg in all_rows:
@@ -677,7 +694,19 @@ class KnowledgeStore:
             params.append(created_before)
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)
-        rows = run_fts(self._conn, sql, params, label="Chunks FTS")
+
+        def _like_fallback(conn: Any, tokens: list[str]) -> list[Any]:
+            return _chunks_like_search(
+                conn,
+                tokens,
+                sources=sources,
+                kind=kind,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit,
+            )
+
+        rows = run_fts(self._conn, sql, params, label="Chunks FTS", like_fallback=_like_fallback)
         return [(row, "chunks") for row in rows]
 
     def _fts_chunks_raw(
@@ -686,8 +715,6 @@ class KnowledgeStore:
         *,
         source: str | list[str] | None,
         kind: str | None,
-        tags: list[str] | None,
-        tag_match_mode: Literal["any", "all"],
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -697,7 +724,6 @@ class KnowledgeStore:
         if fts_query is None:
             return []
 
-        tags = list(dict.fromkeys(tags)) if tags else tags
         chunks_fetch_limit = limit * 20
 
         nonmem = _coerce_sources(source)
@@ -709,15 +735,6 @@ class KnowledgeStore:
             created_before=created_before,
             limit=chunks_fetch_limit,
         )
-
-        if tags:
-            tag_set = set(tags)
-            predicate = (
-                (lambda rl: tag_set <= {t for t in (rl[0]["tags"] or "").split() if t})
-                if tag_match_mode == "all"
-                else (lambda rl: tag_set & {t for t in (rl[0]["tags"] or "").split() if t})
-            )
-            chunk_rows = [rl for rl in chunk_rows if predicate(rl)]
 
         def _build(row: Any) -> SearchResult:
             rank = row["rank"]
@@ -752,8 +769,6 @@ class KnowledgeStore:
         *,
         source: str | list[str] | None,
         kind: str | None,
-        tags: list[str] | None,
-        tag_match_mode: Literal["any", "all"],
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -765,8 +780,6 @@ class KnowledgeStore:
             blob,
             sources=nonmem,
             kind=kind,
-            tags=tags,
-            tag_match_mode=tag_match_mode,
             created_after=created_after,
             created_before=created_before,
             limit=limit * 4,
@@ -778,8 +791,6 @@ class KnowledgeStore:
         *,
         sources: list[str] | None,
         kind: str | None,
-        tags: list[str] | None,
-        tag_match_mode: Literal["any", "all"],
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -832,16 +843,6 @@ class KnowledgeStore:
             doc_params.append(created_before)
 
         doc_rows = self._conn.execute(doc_sql, doc_params).fetchall()
-        if tags:
-            tag_set = set(tags)
-            if tag_match_mode == "all":
-                doc_rows = [
-                    r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}
-                ]
-            else:
-                doc_rows = [
-                    r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}
-                ]
         doc_meta = {row["path"]: row for row in doc_rows}
 
         results: list[SearchResult] = []
@@ -922,6 +923,20 @@ class KnowledgeStore:
             base = chunk_fts_by_key.get(winner_key) or chunk_vec_by_key[winner_key]
             snippet = (
                 chunk_fts_by_key[winner_key].snippet if winner_key in chunk_fts_by_key else None
+            )
+            fts_score = (
+                chunk_fts_by_key[winner_key].score if winner_key in chunk_fts_by_key else None
+            )
+            vec_score = (
+                chunk_vec_by_key[winner_key].score if winner_key in chunk_vec_by_key else None
+            )
+            logger.debug(
+                "hybrid merge: path=%s chunk=%s rrf=%.4f bm25=%s cosine=%s",
+                path,
+                winner_key[1],
+                total_score,
+                f"{fts_score:.4f}" if fts_score is not None else "—",
+                f"{vec_score:.4f}" if vec_score is not None else "—",
             )
             chunk_merged.append(dataclasses.replace(base, score=total_score, snippet=snippet))
 

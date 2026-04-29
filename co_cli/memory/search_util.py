@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -15,17 +16,36 @@ def normalize_bm25(rank: float) -> float:
     return abs(rank) / (1.0 + abs(rank))
 
 
+def _like_tokens(query: str) -> list[str]:
+    """Extract plain search tokens from a (possibly sanitized) FTS5 query string."""
+    unwrapped = re.sub(r'"([^"]*)"', lambda m: m.group(1), query)
+    unwrapped = re.sub(r'[+*^(){}\[\]"<>]', " ", unwrapped)
+    unwrapped = re.sub(r"\b(?:AND|OR|NOT)\b", " ", unwrapped, flags=re.IGNORECASE)
+    return [t for t in unwrapped.split() if len(t) >= 2]
+
+
 def run_fts(
     conn: Any,
     sql: str,
     params: tuple | list,
     *,
     label: str = "FTS",
+    like_fallback: Callable[[Any, list[str]], list[Any]] | None = None,
 ) -> list[Any]:
-    """Execute an FTS5 MATCH query, returning rows or [] on OperationalError."""
+    """Execute an FTS5 MATCH query, returning rows or [] on OperationalError.
+
+    If like_fallback is provided and FTS5 raises OperationalError, calls
+    like_fallback(conn, tokens) where tokens are plain words from params[0].
+    """
     try:
         return conn.execute(sql, params).fetchall()
     except sqlite3.OperationalError as exc:  # type: ignore[attr-defined]
+        if like_fallback is not None:
+            tokens = _like_tokens(str(params[0]))
+            logger.warning(
+                "%s FTS error, falling back to LIKE (%d tokens): %s", label, len(tokens), exc
+            )
+            return like_fallback(conn, tokens) if tokens else []
         logger.warning("%s search error: %s", label, exc)
         return []
 
