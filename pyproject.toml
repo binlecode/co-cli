@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.8.66"
+version = "0.8.68"
 description = "Co — personal AI assistant CLI with approval-gated shell, Google Drive/Gmail/Calendar, Obsidian, and OTel tracing"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -92,3 +92,4 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["tests"]
 timeout = 120
+session_timeout = 300

@@ -175,6 +175,7 @@ class QuestionPrompt:
 
     question: str
     options: list[str] | None = None
+    multiple: bool = False
 
 
 @runtime_checkable
@@ -497,7 +498,8 @@ class TerminalFrontend:
         """Prompt user for a constrained or free-text answer with SIGINT handler swap."""
         self._clear_status_live()
         if prompt.options:
-            body = f"[accent]{prompt.question}[/accent]\n[hint]Options: {' | '.join(prompt.options)}[/hint]"
+            suffix = " (select multiple, comma-separated)" if prompt.multiple else ""
+            body = f"[accent]{prompt.question}[/accent]\n[hint]Options: {' | '.join(prompt.options)}{suffix}[/hint]"
         else:
             body = f"[accent]{prompt.question}[/accent]"
         console.print(Panel(body, title="Question", border_style="info", title_align="left"))
@@ -505,12 +507,10 @@ class TerminalFrontend:
         prev_handler = signal.getsignal(signal.SIGINT)
         signal.signal(signal.SIGINT, signal.default_int_handler)
         try:
-            if prompt.options:
-                return Prompt.ask(
-                    "",
-                    choices=prompt.options,
-                    console=console,
-                )
+            if prompt.options and not prompt.multiple:
+                return Prompt.ask("", choices=prompt.options, console=console)
+            if prompt.options and prompt.multiple:
+                return Prompt.ask("Select (comma-separated)", console=console)
             return Prompt.ask("Answer", console=console)
         finally:
             signal.signal(signal.SIGINT, prev_handler)

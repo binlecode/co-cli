@@ -15,7 +15,9 @@ class ShellBackend:
     def __init__(self, workspace_dir: str | None = None):
         self.workspace_dir = workspace_dir or os.getcwd()
 
-    async def run_command(self, cmd: str, timeout: int = 120) -> tuple[int, str]:
+    async def run_command(
+        self, cmd: str, timeout: int = 120, cwd: str | None = None
+    ) -> tuple[int, str]:
         """Execute a command as a subprocess with sanitized environment.
 
         Uses start_new_session=True for process group killing on timeout.
@@ -25,7 +27,7 @@ class ShellBackend:
             "sh",
             "-c",
             cmd,
-            cwd=self.workspace_dir,
+            cwd=cwd or self.workspace_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=restricted_env(),

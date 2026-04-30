@@ -19,17 +19,16 @@ from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 
 
 class QuestionRequired(ApprovalRequired):
-    """Raised by clarify to pause execution for a user-input question.
+    """Raised by clarify to pause execution for user-input questions.
 
     Subclasses ApprovalRequired so pydantic-ai's deferred tool mechanism handles it.
-    The orchestrator discriminates this variant by checking for "question" in metadata
+    The orchestrator discriminates this variant by checking for "questions" in metadata
     (present only on QuestionRequired, not on plain ApprovalRequired).
     """
 
-    def __init__(self, *, question: str, options: list[str] | None = None) -> None:
-        super().__init__(metadata={"question": question, "options": options})
-        self.question = question
-        self.options = options
+    def __init__(self, *, questions: list[dict]) -> None:
+        super().__init__(metadata={"questions": questions})
+        self.questions = questions
 
 
 @dataclass(frozen=True)

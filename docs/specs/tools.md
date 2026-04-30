@@ -69,10 +69,11 @@ run_turn()
            -> _collect_deferred_tool_approvals(latest_result, deps, frontend)
               -> for call in output.approvals
                  -> meta = output.metadata[tool_call_id]
-                 -> if "question" in meta
-                    -> frontend.prompt_question(...)
+                 -> if "questions" in meta
+                    -> for q in meta["questions"]
+                       -> frontend.prompt_question(...)
                     -> approvals[id] =
-                       ToolApproved(override_args={"user_answer": answer})
+                       ToolApproved(override_args={"user_answers": answers})
                  -> else
                     -> decode_tool_args(call.args)
                     -> resolve_approval_subject(...)
@@ -104,7 +105,7 @@ Resume segments execute on the main agent with `deferred_tool_results=...`; on t
 **Approval & Errors:**
 - **Auto-Approve:** `_collect_deferred_tool_approvals()` writes `True` into `DeferredToolResults`; the actual tool call runs only after the resumed segment starts.
 - **Requires-Approval:** Deferred calls are collected first, then resumed with `deferred_tool_results=...`. If denied, the resume payload carries `ToolDenied(...)` rather than crashing the turn.
-- **Clarify:** `clarify` uses the same deferred-resume mechanism, but stores `ToolApproved(override_args={"user_answer": ...})` instead of a plain boolean approval.
+- **Clarify:** `clarify` uses the same deferred-resume mechanism, but iterates `meta["questions"]`, prompts each one, and stores `ToolApproved(override_args={"user_answers": [...]})` — a list aligned to the input questions.
 - **Failures:** Hard failures trigger `tool_error(msg)` (no retry), while bad parameters return `ModelRetry(msg)` to let the model self-correct.
 
 ### Concurrency Safety
@@ -126,7 +127,7 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `clarify(question, options=None, user_answer=None)` | A | — | — | — | Pause mid-execution to ask the user a clarifying question; resume with injected answer |
+| `clarify(questions, user_answers=None)` | A | — | — | — | Pause mid-execution to ask a batch of questions; each question dict has `{question, options?, multiple?}`; returns JSON list[str] positionally aligned to questions |
 | `capabilities_check()` | A | — | — | — | Canonical self-check surface: grouped tool visibility, approval-gating, unavailable or limited integrations, bootstrap-recorded fallbacks |
 | `todo_write(todos)` | A | — | — | — | Replace in-session multi-turn checklist |
 | `todo_read()` | A | — | — | — | Fetch current checklist |
@@ -158,13 +159,13 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
 | `web_search(query, max_results=5, domains=None)` | A | — | — | — | Brave API search with optional domain filter |
-| `web_fetch(url)` | A | — | — | — | Fetch URL and convert to markdown |
+| `web_fetch(url, format="markdown", timeout=15)` | A | — | — | — | Fetch URL; `format` controls output (`markdown`, `html`, `text`); `timeout` overrides the default 15 s limit |
 
 ### Execution, Jobs & Delegation
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `shell(cmd, timeout=120)` | A | hybrid | — | — | Run blocking shell command; safe-prefix auto-approves, mutations prompt, destructive denied |
+| `shell(cmd, timeout=120, workdir=None)` | A | hybrid | — | — | Run blocking shell command; `workdir` executes in a workspace-relative subdirectory (traversal blocked); safe-prefix auto-approves, mutations prompt, destructive denied |
 | `task_start(command, description, working_directory=None)` | D | ✓ | — | — | Spawn unblocked process group; returns `task_id` |
 | `task_status(task_id, tail_lines=20)` | D | — | — | — | Poll stdout/stderr and completion state of a task |
 | `task_cancel(task_id)` | D | — | — | — | SIGTERM → SIGKILL a background task |

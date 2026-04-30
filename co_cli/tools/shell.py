@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
@@ -6,6 +7,7 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools._shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.agent_tool import agent_tool
+from co_cli.tools.files.helpers import _enforce_workspace_boundary
 from co_cli.tools.tool_io import tool_error, tool_output
 
 logger = logging.getLogger(__name__)
@@ -14,7 +16,9 @@ logger = logging.getLogger(__name__)
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True, max_result_size=30_000
 )
-async def shell(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolReturn:
+async def shell(
+    ctx: RunContext[CoDeps], cmd: str, timeout: int = 120, workdir: str | None = None
+) -> ToolReturn:
     """Execute a shell command and return combined stdout + stderr as text.
 
     Use for git commands, package managers, builds, scripts, and system info.
@@ -47,6 +51,8 @@ async def shell(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolRe
              "python scripts/run.py", "uv run pytest").
         timeout: Max seconds to wait (default 120). Increase for builds or
                  long scripts (e.g. 300). Capped by shell_max_timeout.
+        workdir: Optional subdirectory (relative to workspace root) to run the
+                 command in. Prevents directory traversal.
     """
     # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → defer for user approval
     policy = evaluate_shell_command(cmd, ctx.deps.config.shell.safe_commands)
@@ -62,9 +68,21 @@ async def shell(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolRe
         raise ApprovalRequired(metadata={"cmd": cmd})
     # ALLOW or tool_call_approved: fall through to execution
 
+    if workdir is not None:
+        try:
+            resolved_cwd = str(
+                _enforce_workspace_boundary(Path(workdir), Path(ctx.deps.shell.workspace_dir))
+            )
+        except ValueError as e:
+            return tool_error(str(e), ctx=ctx)
+    else:
+        resolved_cwd = None
+
     effective = min(timeout, ctx.deps.config.shell.max_timeout)
     try:
-        exit_code, output = await ctx.deps.shell.run_command(cmd, timeout=effective)
+        exit_code, output = await ctx.deps.shell.run_command(
+            cmd, timeout=effective, cwd=resolved_cwd
+        )
         if exit_code == 0:
             return tool_output(output, ctx=ctx)
         return tool_error(f"exit {exit_code}:\n{output}", ctx=ctx)

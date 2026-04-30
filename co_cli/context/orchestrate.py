@@ -203,15 +203,21 @@ async def _collect_deferred_tool_approvals(
     for call in output.approvals:
         meta = output.metadata.get(call.tool_call_id, {})
 
-        # Clarify path — "question" key is present only on QuestionRequired metadata
-        if "question" in meta:
-            q_prompt = QuestionPrompt(
-                question=meta.get("question", ""),
-                options=meta.get("options"),
-            )
-            answer = frontend.prompt_question(q_prompt) if frontend is not None else ""
+        # Clarify path — "questions" key is present only on QuestionRequired metadata
+        if "questions" in meta:
+            answers: list[str] = []
+            for q in meta["questions"]:
+                raw_opts = q.get("options")
+                labels = [o["label"] for o in raw_opts] if raw_opts else None
+                q_prompt = QuestionPrompt(
+                    question=q.get("question", ""),
+                    options=labels,
+                    multiple=q.get("multiple", False),
+                )
+                answer = frontend.prompt_question(q_prompt) if frontend is not None else ""
+                answers.append(answer)
             approvals.approvals[call.tool_call_id] = ToolApproved(
-                override_args={"user_answer": answer}
+                override_args={"user_answers": answers}
             )
             continue
 

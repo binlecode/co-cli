@@ -293,3 +293,27 @@ async def test_web_fetch_plain_text():
         result = await web_fetch(ctx, "https://httpbin.org/robots.txt")
     assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
     assert "User-agent" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_format_html_returns_raw_html():
+    """web_fetch with format='html' returns raw HTML without markdown conversion."""
+    ctx = _make_ctx()
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
+        result = await web_fetch(
+            ctx,
+            "https://en.wikipedia.org/wiki/Python_(programming_language)",
+            format="html",
+        )
+    assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
+    # Raw HTML: angle brackets must survive (markdown conversion skipped)
+    assert "<" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_short_timeout_returns_error():
+    """web_fetch with timeout=1 fails fast on a slow endpoint."""
+    ctx = _make_ctx()
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
+        result = await web_fetch(ctx, "https://httpbin.org/delay/5", timeout=1)
+    assert (result.metadata or {}).get("error") is True

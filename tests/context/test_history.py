@@ -242,8 +242,8 @@ async def test_circuit_breaker_probes_at_cadence():
     deps.runtime.compaction_skip_count = 13
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    # proactive_window_processor makes one LLM call (summarizer); pytest-timeout=120s is the safety net.
-    await proactive_window_processor(ctx, msgs)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        await proactive_window_processor(ctx, msgs)
     # After a probe: success resets to 0, failure increments to 14.
     # Count must be 0 or 14 — 13 would mean the skip branch ran (bug).
     assert deps.runtime.compaction_skip_count in (0, 14)
@@ -255,14 +255,15 @@ async def test_circuit_breaker_probes_at_cadence():
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(150)
 async def test_compact_produces_two_message_history():
     """/compact returns the shared compaction marker so auto-compaction can detect prior summaries."""
     msgs = _make_messages(6)
     ctx = _make_compact_ctx(message_history=msgs)
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    # dispatch("/compact") chains two sequential LLM calls (summarize + memory
-    # extraction); pytest-timeout=120s is the safety net.
-    result = await dispatch("/compact", ctx)
+    # dispatch("/compact") chains two sequential LLM calls; budget = 2 x LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS * 2):
+        result = await dispatch("/compact", ctx)
     assert isinstance(result, ReplaceTranscript)
     assert len(result.history) == 2
     assert result.compaction_applied is True

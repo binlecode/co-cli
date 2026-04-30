@@ -211,10 +211,9 @@ Approval deferral uses the native Pydantic-AI objects directly:
 
 Approval collection sequence (per pending call):
 
-0. read `output.metadata[tool_call_id]`; if `"question" in metadata`, take the clarify path:
-   - construct `QuestionPrompt(question, options)` from metadata
-   - call `frontend.prompt_question(prompt)` to get the user's answer
-   - encode `ToolApproved(override_args={"user_answer": answer})` — tool resumes with the injected answer
+0. read `output.metadata[tool_call_id]`; if `"questions" in metadata`, take the clarify path:
+   - for each question dict in `metadata["questions"]`, construct `QuestionPrompt(question, options, multiple)` and call `frontend.prompt_question(prompt)`; collect answers into a list
+   - encode `ToolApproved(override_args={"user_answers": answers})` — tool resumes with the injected answer list
    - skip steps 1–7
 1. decode tool arguments with `decode_tool_args()`
 2. resolve one `ApprovalSubject`

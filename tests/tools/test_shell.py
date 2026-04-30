@@ -261,3 +261,23 @@ def test_shell_legitimate_curl_not_denied():
     """A plain curl fetch without a pipe is not denied."""
     policy = evaluate_shell_command("curl https://api.example.com", [])
     assert policy.decision != ShellDecisionEnum.DENY
+
+
+@pytest.mark.asyncio
+async def test_shell_workdir_runs_in_nested_directory(tmp_path):
+    """shell workdir parameter executes commands in the specified subdirectory."""
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    ctx = _make_ctx(shell=ShellBackend(workspace_dir=str(tmp_path)))
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await shell(ctx, "pwd", workdir="subdir")
+    assert str(subdir) in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_shell_workdir_traversal_blocked(tmp_path):
+    """workdir attempting directory traversal outside workspace is rejected."""
+    ctx = _make_ctx(shell=ShellBackend(workspace_dir=str(tmp_path)))
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await shell(ctx, "pwd", workdir="../../etc")
+    assert result.metadata.get("error") is True

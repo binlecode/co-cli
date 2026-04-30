@@ -108,6 +108,8 @@ def _build_fetch_headers(hostname: str | None) -> dict[str, str]:
 async def web_fetch(
     ctx: RunContext[CoDeps],
     url: str,
+    format: str = "markdown",
+    timeout: int = _FETCH_TIMEOUT,
 ) -> ToolReturn:
     """Fetch a web page and return its content as readable markdown text.
 
@@ -136,6 +138,9 @@ async def web_fetch(
 
     Args:
         url: Full URL to fetch (must start with http:// or https://).
+        format: Output format — "markdown" (default, converts HTML to markdown), "html" (raw HTML),
+            or "text" (raw decoded text, no conversion).
+        timeout: Max seconds to wait for the HTTP response (default 15). Increase for slow sites.
     """
     if not url or not re.match(r"https?://", url.strip()):
         raise ModelRetry("web_fetch requires an http:// or https:// URL.")
@@ -155,7 +160,7 @@ async def web_fetch(
 
     try:
         async with httpx.AsyncClient(
-            timeout=_FETCH_TIMEOUT,
+            timeout=timeout,
             follow_redirects=True,
             max_redirects=5,
             event_hooks={"response": [ssrf_redirect_guard]},
@@ -197,7 +202,7 @@ async def web_fetch(
     raw_bytes = resp.content[:_MAX_FETCH_BYTES]
     text = raw_bytes.decode(resp.encoding or "utf-8", errors="replace")
 
-    if "html" in content_type:
+    if "html" in content_type and format == "markdown":
         text = _html_to_markdown(text)
 
     truncated = len(text) > _MAX_FETCH_CHARS
