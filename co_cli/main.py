@@ -14,7 +14,7 @@ from pydantic_ai.messages import ModelMessage
 
 from co_cli.agent.core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import create_deps, init_session_store, restore_session
+from co_cli.bootstrap.core import create_deps, init_session_index, restore_session
 from co_cli.bootstrap.project_info import project_info
 from co_cli.commands.core import dispatch as dispatch_command
 from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
@@ -249,7 +249,7 @@ async def _chat_loop(
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
         current_session_path = restore_session(deps, frontend)
-        init_session_store(deps, current_session_path, frontend)
+        init_session_index(deps, current_session_path, frontend)
         _sweep_tool_results(deps)
         from co_cli.commands.skills import get_skill_registry
 

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @agent_tool(
-    visibility=VisibilityPolicyEnum.DEFERRED,
+    visibility=VisibilityPolicyEnum.ALWAYS,
     approval=True,
     is_concurrent_safe=True,
     retries=1,
@@ -111,7 +111,7 @@ async def memory_create(
 
 
 @agent_tool(
-    visibility=VisibilityPolicyEnum.DEFERRED,
+    visibility=VisibilityPolicyEnum.ALWAYS,
     approval=True,
     is_concurrent_safe=True,
     retries=1,

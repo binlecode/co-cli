@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from co_cli.agent.core import ToolRegistry
     from co_cli.llm.factory import LlmModel
     from co_cli.memory.knowledge_store import KnowledgeStore
-    from co_cli.memory.session_store import SessionStore
     from co_cli.skills.skill_types import SkillConfig
     from co_cli.tools.background import BackgroundTaskState
     from co_cli.tools.resource_lock import ResourceLockStore
@@ -197,7 +196,6 @@ class CoDeps:
     file_partial_reads: set[str] = field(default_factory=set, repr=False)
     # Service handles (optional, set during bootstrap)
     knowledge_store: KnowledgeStore | None = field(default=None, repr=False)
-    session_store: SessionStore | None = field(default=None, repr=False)
     model: LlmModel | None = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, ToolInfo] = field(default_factory=dict)
@@ -269,7 +267,6 @@ def fork_deps(base: CoDeps) -> CoDeps:
         file_read_mtimes=base.file_read_mtimes,
         file_partial_reads=base.file_partial_reads,
         knowledge_store=base.knowledge_store,
-        session_store=base.session_store,
         model=base.model,
         tool_index=base.tool_index,
         skill_commands=base.skill_commands,

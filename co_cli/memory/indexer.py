@@ -1,8 +1,9 @@
 """Extract indexable messages from session JSONL transcripts.
 
 Parses each JSONL line, skipping control markers (compact_boundary, session_meta)
-and non-indexable parts (tool-call, tool-return, system-prompt, thinking, retry-prompt).
-Returns only user-prompt and text (assistant) parts as ExtractedMessage records.
+and noise parts (thinking, system-prompt, retry-prompt).
+Returns user-prompt, text (assistant), tool-call, and tool-return parts as
+ExtractedMessage records.
 """
 
 from __future__ import annotations
@@ -21,17 +22,18 @@ class ExtractedMessage:
 
     line_index: int
     part_index: int
-    # 'user' | 'assistant'
+    # 'user' | 'assistant' | 'tool-call' | 'tool-return'
     role: str
     content: str
     timestamp: str | None
+    tool_name: str | None = None
 
 
 def extract_messages(path: Path) -> list[ExtractedMessage]:
-    """Extract user-prompt and assistant-text parts from a session JSONL file.
+    """Extract indexable parts from a session JSONL file.
 
-    Skips tool-call, tool-return, system-prompt, thinking, retry-prompt parts
-    and compact-boundary / session-meta control lines.
+    Returns user-prompt, text (assistant), tool-call, and tool-return parts.
+    Skips thinking, system-prompt, retry-prompt and compact-boundary / session-meta lines.
     """
     results: list[ExtractedMessage] = []
     try:
@@ -81,7 +83,11 @@ def _extract_part(
     line_idx: int,
     msg_timestamp: object,
 ) -> ExtractedMessage | None:
-    """Return an ExtractedMessage for a user-prompt or text part, or None to skip."""
+    """Return an ExtractedMessage for a retained part kind, or None to skip.
+
+    Retained: user-prompt, text (assistant), tool-call, tool-return.
+    Dropped: thinking, system-prompt, retry-prompt.
+    """
     part_kind = part.get("part_kind")
     ts = _to_str(part.get("timestamp") or msg_timestamp)
 
@@ -115,6 +121,33 @@ def _extract_part(
             role="assistant",
             content=content.strip(),
             timestamp=ts,
+        )
+
+    if part_kind == "tool-call":
+        tool_name = _to_str(part.get("tool_name"))
+        if not tool_name:
+            return None
+        return ExtractedMessage(
+            line_index=line_idx,
+            part_index=part_idx,
+            role="tool-call",
+            content=tool_name,
+            timestamp=ts,
+            tool_name=tool_name,
+        )
+
+    if part_kind == "tool-return":
+        tool_name = _to_str(part.get("tool_name"))
+        content = part.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            return None
+        return ExtractedMessage(
+            line_index=line_idx,
+            part_index=part_idx,
+            role="tool-return",
+            content=content.strip(),
+            timestamp=ts,
+            tool_name=tool_name,
         )
 
     return None

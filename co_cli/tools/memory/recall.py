@@ -13,13 +13,6 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.memory.artifact import load_knowledge_artifacts
 from co_cli.memory.session_browser import list_sessions
-from co_cli.memory.session_store import SessionSearchResult
-from co_cli.memory.summary import (
-    _format_conversation,
-    _truncate_around_matches,
-    summarize_session_around_query,
-)
-from co_cli.memory.transcript import load_transcript
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.memory._canon_recall import search_canon
 from co_cli.tools.memory.read import grep_recall
@@ -27,25 +20,11 @@ from co_cli.tools.tool_io import tool_output
 
 logger = logging.getLogger(__name__)
 
-_SUMMARIZATION_TIMEOUT_SECS: int = 60
-"""Gather budget for concurrent session summarization in memory_search.
-
-Sized for the worst-case batch: multiple sessions, each requiring one
-hermes-style LLM summarization call. 60s covers parallel invocations
-on a local 35B model while still failing fast on hangs.
-"""
-
 _SESSIONS_CHANNEL_CAP = 3
-"""Maximum number of sessions-channel hits to summarize regardless of limit."""
-
-_SESSION_FALLBACK_PREVIEW_CHARS = 500
-"""Raw preview length used when LLM summarization fails for a session."""
+"""Maximum number of unique sessions returned by the sessions channel."""
 
 _SNIPPET_DISPLAY_CHARS = 100
-"""Maximum chars shown from an artifact snippet in formatted output."""
-
-_SESSION_SUMMARY_PREVIEW_CHARS = 300
-"""Maximum chars of a session summary shown in formatted output."""
+"""Maximum chars shown from an artifact or session chunk snippet in formatted output."""
 
 
 def _browse_recent(
@@ -86,70 +65,6 @@ def _browse_recent(
             for s in sessions
         ],
     )
-
-
-def _dedup_sessions(
-    raw_results: list[SessionSearchResult],
-    current_resolved: Any,
-    limit: int,
-) -> dict[str, SessionSearchResult]:
-    """Deduplicate FTS5 results to one entry per session, skipping current session."""
-    seen: dict[str, SessionSearchResult] = {}
-    for result in raw_results:
-        if current_resolved and Path(result.session_path).resolve() == current_resolved:
-            continue
-        seen[result.session_id] = result
-        if len(seen) >= limit:
-            break
-    return seen
-
-
-def _prepare_tasks(
-    seen: dict[str, SessionSearchResult],
-    query: str,
-) -> list[tuple[str, SessionSearchResult, str]]:
-    """Load transcripts and build pre-formatted windows for summarization."""
-    tasks: list[tuple[str, SessionSearchResult, str]] = []
-    for session_id, match_info in seen.items():
-        try:
-            messages = load_transcript(Path(match_info.session_path))
-            if not messages:
-                continue
-            window = _truncate_around_matches(_format_conversation(messages), query)
-            tasks.append((session_id, match_info, window))
-        except Exception as e:
-            logger.warning("Failed to prepare session %s: %s", session_id, e, exc_info=True)
-    return tasks
-
-
-def _build_results_payload(
-    tasks: list[tuple[str, SessionSearchResult, str]],
-    summaries: list[Any],
-) -> tuple[list[dict], int]:
-    """Merge summarizer results with fallback previews for failures."""
-    results_payload: list[dict] = []
-    failure_count = 0
-    for (session_id, match_info, window), summary_result in zip(tasks, summaries, strict=True):
-        if isinstance(summary_result, Exception) or not summary_result:
-            failure_count += 1
-            preview = (
-                window[:_SESSION_FALLBACK_PREVIEW_CHARS] + "\n…[truncated]"
-                if window
-                else "No preview available."
-            )
-            summary = f"[Raw preview — summarization unavailable]\n{preview}"
-        else:
-            summary = summary_result
-        results_payload.append(
-            {
-                "channel": "sessions",
-                "session_id": session_id,
-                "when": match_info.created_at[:10],
-                "source": match_info.session_path,
-                "summary": summary,
-            }
-        )
-    return results_payload, failure_count
 
 
 async def _search_artifacts(
@@ -202,60 +117,61 @@ async def _search_sessions(
     query: str,
     span: Span,
 ) -> list[dict]:
-    """FTS search over session transcripts. Returns channel='sessions' dicts.
+    """Chunked recall over session transcripts via KnowledgeStore.search(source='session').
 
-    Capped at _SESSIONS_CHANNEL_CAP sessions regardless of caller's limit.
-    Returns [] if session_store is unavailable.
-    Uses best-effort summarization: sessions that finish within the timeout are
-    returned; timed-out sessions fall back to raw preview rather than dropping all.
+    Returns channel='sessions' dicts with chunk citation fields (chunk_text, start_line,
+    end_line, score). Capped at _SESSIONS_CHANNEL_CAP unique sessions; no LLM calls.
+    Returns [] when knowledge_store is unavailable.
     """
-    store = ctx.deps.session_store
+    from co_cli.memory.session import parse_session_filename
+
+    store = ctx.deps.knowledge_store
     if store is None:
+        span.set_attribute("memory.sessions.count", 0)
         return []
 
-    raw_results = store.search(query, limit=_SESSIONS_CHANNEL_CAP * 5)
-    if not raw_results:
+    try:
+        raw = store.search(query, source="session", limit=_SESSIONS_CHANNEL_CAP * 5)
+    except Exception as e:
+        logger.warning("Session chunk search failed: %s", e)
+        span.set_attribute("memory.sessions.count", 0)
         return []
 
     current_path = ctx.deps.session.session_path
-    current_resolved = current_path.resolve() if current_path else None
-    seen = _dedup_sessions(raw_results, current_resolved, _SESSIONS_CHANNEL_CAP)
-    tasks = _prepare_tasks(seen, query)
-    if not tasks:
-        return []
+    current_uuid8: str | None = None
+    if current_path and current_path.name:
+        parsed = parse_session_filename(current_path.name)
+        if parsed is not None:
+            current_uuid8 = parsed[0]
 
-    span.set_attribute("memory.summarizer.runs", len(tasks))
+    seen: dict[str, Any] = {}
+    for r in raw:
+        uuid8 = r.path
+        if uuid8 == current_uuid8:
+            continue
+        if uuid8 not in seen:
+            seen[uuid8] = r
+        if len(seen) >= _SESSIONS_CHANNEL_CAP:
+            break
 
-    async_tasks = [
-        asyncio.ensure_future(
-            summarize_session_around_query(
-                window,
-                query,
-                {"session_id": sid, "when": info.created_at[:10]},
-                ctx.deps,
-            )
+    span.set_attribute("memory.sessions.count", len(seen))
+
+    results: list[dict] = []
+    for uuid8, r in seen.items():
+        when = r.created[:10] if r.created else ""
+        results.append(
+            {
+                "channel": "sessions",
+                "session_id": uuid8,
+                "when": when,
+                "source": r.source,
+                "chunk_text": r.snippet or "",
+                "start_line": r.start_line,
+                "end_line": r.end_line,
+                "score": r.score,
+            }
         )
-        for sid, info, window in tasks
-    ]
-
-    done, pending = await asyncio.wait(async_tasks, timeout=_SUMMARIZATION_TIMEOUT_SECS)
-
-    timed_out = bool(pending)
-    for fut in pending:
-        fut.cancel()
-
-    # Collect results in original task order; substitute None for pending/failed tasks.
-    summaries: list[Any] = []
-    for fut in async_tasks:
-        if fut in done:
-            summaries.append(fut.exception() or fut.result())
-        else:
-            summaries.append(None)
-
-    span.set_attribute("memory.summarizer.timed_out", timed_out)
-    results_payload, failure_count = _build_results_payload(tasks, summaries)
-    span.set_attribute("memory.summarizer.failures", failure_count)
-    return results_payload
+    return results
 
 
 async def _search_canon_channel(
@@ -288,9 +204,9 @@ async def memory_search(
         was worked on recently, what we did last time, or to browse session history.
         Artifacts are not returned for empty queries (BM25 requires search terms).
     (b) Keyword query → searches the artifacts channel (BM25 FTS5/grep), the sessions
-        channel (LLM-summarized), and the canon channel in parallel. Returns a flat
-        list with a "channel" field per result ("artifacts", "sessions", or "canon").
-        The sessions channel is capped at 3 hits regardless of limit.
+        channel (chunk-level index, no LLM), and the canon channel in parallel. Returns
+        a flat list with a "channel" field per result ("artifacts", "sessions", or "canon").
+        The sessions channel is capped at 3 unique sessions regardless of limit.
 
     IMPORTANT: scores in results are NOT cross-comparable across channels — use the
     "channel" field to interpret each result's provenance.
@@ -316,10 +232,11 @@ async def memory_search(
 
     Artifact hits render as `**<title>** [<kind>] @ <path>: <snippet>` — call file_read
     on the `@ <path>` value when you need the full body. Canon hits render the full body
-    inline; no follow-up needed. Session hits render an LLM-generated summary inline.
+    inline; no follow-up needed. Session hits render a chunk citation and snippet inline;
+    call memory_read_session_turn(session_id, start_line, end_line) for the verbatim turns.
 
     Artifacts result fields: channel, kind, title, snippet, score, path, slug
-    Sessions result fields:  channel, session_id, when, source, summary
+    Sessions result fields:  channel, session_id, when, source, chunk_text, start_line, end_line, score
     Canon result fields:     channel, role, title, body, score
 
     Args:
@@ -373,12 +290,13 @@ async def memory_search(
     if session_results:
         lines.append("\n**Past sessions:**")
         for idx, entry in enumerate(session_results, 1):
-            summary_preview = entry.get("summary", "")
-            if len(summary_preview) > _SESSION_SUMMARY_PREVIEW_CHARS:
-                summary_preview = summary_preview[: _SESSION_SUMMARY_PREVIEW_CHARS - 3] + "..."
-            lines.append(
-                f"  {idx}. [{entry['when']}] {entry['session_id']}\n     {summary_preview}"
-            )
+            start = entry.get("start_line")
+            end = entry.get("end_line")
+            loc = f" @ L{start}-{end}" if start is not None and end is not None else ""
+            lines.append(f"  {idx}. [{entry['when']}] {entry['session_id']}{loc}")
+            preview = (entry.get("chunk_text") or "")[:_SNIPPET_DISPLAY_CHARS]
+            if preview:
+                lines.append(f"     {preview}")
 
     if char_canon_results:
         lines.append("\n**Character canon:**")

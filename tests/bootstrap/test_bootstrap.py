@@ -10,7 +10,7 @@ from pydantic_ai.toolsets import DeferredLoadingToolset
 from tests._settings import make_settings
 
 from co_cli.agent.mcp import MCPToolsetEntry, discover_mcp_tools
-from co_cli.bootstrap.core import init_session_store, restore_session
+from co_cli.bootstrap.core import restore_session
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display.core import TerminalFrontend
 from co_cli.memory.knowledge_store import KnowledgeStore
@@ -361,60 +361,3 @@ def test_restore_session_readonly_dir_does_not_raise(tmp_path: Path) -> None:
         assert deps.session.session_path == result
     finally:
         os.chmod(readonly_dir, 0o755)
-
-
-def test_init_session_store_indexes_past_sessions(tmp_path: Path) -> None:
-    """init_session_store opens the DB and syncs past sessions; deps.session_store is set."""
-    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
-
-    from co_cli.memory.session_store import SessionStore
-    from co_cli.memory.transcript import append_messages
-
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir(parents=True)
-
-    # Write a past session with searchable content
-    from datetime import UTC, datetime
-
-    from co_cli.memory.session import session_filename
-
-    past_name = session_filename(
-        datetime(2026, 4, 14, 10, 0, 0, tzinfo=UTC),
-        "past0001-0000-0000-0000-000000000000",
-    )
-    past_path = sessions_dir / past_name
-    append_messages(
-        past_path,
-        [
-            ModelRequest(
-                parts=[UserPromptPart(content="Explain the Fibonacci sequence in Python")]
-            ),
-            ModelResponse(
-                parts=[
-                    TextPart(
-                        content="Fibonacci is a sequence where each number is the sum of the two preceding ones."
-                    )
-                ]
-            ),
-        ],
-    )
-
-    # Current session path (excluded from sync)
-    current_name = session_filename(
-        datetime(2026, 4, 14, 12, 0, 0, tzinfo=UTC),
-        "curr0001-0000-0000-0000-000000000000",
-    )
-    current_path = sessions_dir / current_name
-
-    deps = _make_deps(tmp_path)
-
-    init_session_store(deps, current_path, TerminalFrontend())
-
-    assert isinstance(deps.session_store, SessionStore), (
-        "deps.session_store must be a SessionStore after init_session_store"
-    )
-    results = deps.session_store.search("Fibonacci sequence")
-    assert len(results) >= 1, "Indexed past session must be searchable by keyword"
-    assert results[0].session_id == "past0001", (
-        f"Result must reference the past session, got {results[0].session_id!r}"
-    )

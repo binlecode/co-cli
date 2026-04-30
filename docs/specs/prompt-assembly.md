@@ -61,13 +61,14 @@ flowchart TD
 
 ### 2.1 Static Instruction Assembly
 
-`build_agent()` assembles `static_instructions` from three ordered parts, all evaluated once at agent construction:
+`build_agent()` assembles `static_instructions` from up to four ordered parts, all evaluated once at agent construction:
 
-1. **`build_static_instructions(config)`** — soul seed, mindsets, personality-context memories, numbered rules (`co_cli/context/rules/NN_rule_id.md`), critique. Character memories are NOT injected here — they are surfaced on demand via the canon channel in `memory_search`.
+1. **`build_static_instructions(config)`** — soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. Character memories and critique are NOT included here.
 2. **`build_toolset_guidance(tool_registry.tool_index)`** — tool-specific guidance blocks, each gated on the tool being present. Currently gated: `memory_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
 3. **`build_category_awareness_prompt(tool_registry.tool_index)`** — single-sentence category-level hint listing deferred tool categories reachable via `search_tools`. Derived from `VisibilityPolicyEnum.DEFERRED` entries. Empty when no deferred tools exist.
+4. **`load_soul_critique(config.personality)`** — self-assessment lens (`## Review lens`), appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
 
-The three parts are joined with `"\n\n"` and passed as the `instructions=` string to `Agent(...)`. The string is stable for the entire session — it never changes between turns.
+The parts are joined with `"\n\n"` and passed as the `instructions=` string to `Agent(...)`. The string is stable for the entire session — it never changes between turns.
 
 Each personality role is fully self-contained under `souls/{role}/`. Adding a role requires only a new directory — no Python changes. Adding a tool-specific guidance block requires adding a constant to `co_cli/context/guidance.py` and a gate in `build_toolset_guidance`.
 
@@ -88,7 +89,7 @@ Any content that can vary within a single session MUST be appended to the tail o
 
 **Rationale:** `@agent.instructions` output is concatenated into the static system-prompt block pydantic-ai sends to the provider. Providers cache the system-prompt block as the prefix of every request. Any per-request variance in that block invalidates the cache for the entire prefix, including fixed tool schemas and soul assets.
 
-New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date/time is injected via `current_time_prompt` — a per-turn callback that lands in Block 1 (non-cached, tiny), keeping Block 0 cache-stable. Personality-context memories are in the static prompt (Block 0, loaded once at agent construction) and do not require per-turn injection.
+New dynamic surfaces go in the tail. Audit every new `@agent.instructions` registration against this rule. The current date/time is injected via `current_time_prompt` — a per-turn callback that lands in Block 1 (non-cached, tiny), keeping Block 0 cache-stable.
 
 ### 2.4 History Processors And Dynamic Instructions
 
@@ -132,7 +133,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | --- | --- |
 | `co_cli/agent/core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
 | `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `current_time_prompt`, `safety_prompt` |
-| `co_cli/context/assembly.py` | `build_static_instructions()` — soul + personality-context memories + rules; rule-file validation |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — soul + mindsets + rules + recency advisory; rule-file validation |
 | `co_cli/context/guidance.py` | `MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE` constants; `build_toolset_guidance()` — gated on tool presence |
 | `co_cli/personality/prompts/loader.py` | soul seed, mindset, critique, and `load_personality_memories()` |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |

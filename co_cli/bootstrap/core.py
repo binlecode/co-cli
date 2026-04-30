@@ -303,29 +303,32 @@ async def create_deps(
     )
 
 
-def init_session_store(
+def init_session_index(
     deps: CoDeps,
     current_session_path: Path,
     frontend: TerminalFrontend,
 ) -> None:
-    """Open the session store DB and sync past sessions into it.
+    """Sync past sessions into the unified chunks pipeline.
 
-    Initialises deps.session_store in-place.  On any error, logs a warning,
-    sets deps.session_store = None, and continues (graceful degradation).
-    The current_session_path is excluded from the sync so the in-progress
-    session is never indexed mid-session.
+    The current session is excluded so the in-progress transcript is never
+    indexed mid-session. On first run after migration, removes the obsolete
+    session-index.db.
     """
-    from co_cli.memory.session_store import SessionStore
-
-    db_path = deps.sessions_dir.parent / "session-index.db"
+    if deps.knowledge_store is None:
+        frontend.on_status("  Session index unavailable — knowledge store missing")
+        return
     try:
-        store = SessionStore(db_path)
-        store.sync_sessions(deps.sessions_dir, exclude=current_session_path)
-        deps.session_store = store
+        legacy_db = deps.sessions_dir.parent / "session-index.db"
+        if legacy_db.exists():
+            try:
+                legacy_db.unlink()
+                logger.info("Removed legacy session-index.db (superseded by chunks pipeline)")
+            except OSError as exc:
+                logger.warning("Could not remove legacy session-index.db: %s", exc)
+        deps.knowledge_store.sync_sessions(deps.sessions_dir, exclude=current_session_path)
     except Exception as exc:
-        logger.warning("Session index unavailable: %s", exc)
-        deps.session_store = None
-        frontend.on_status(f"  Session index unavailable — {exc}")
+        logger.warning("Session sync failed: %s", exc)
+        frontend.on_status(f"  Session index sync failed — {exc}")
 
 
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> Path:

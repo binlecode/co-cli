@@ -31,26 +31,18 @@ Three personalities ship: `finch` (preparation-first mentor), `jeff` (warm colla
 
 Personality enters the agent via one path:
 
-1. **Static** — `build_static_instructions()` assembles the full static prompt at agent
-   construction, including personality-context knowledge artifacts. This is set once as
-   `Agent(instructions=...)` and does not change within a session.
-
-Personality-context memories (knowledge artifacts tagged `personality-context`) are loaded
-once at agent construction by `load_personality_memories()` in `personality/prompts/loader.py`
-and injected into the static system prompt. This keeps the cache-stable prefix intact across
-all turns. Runtime edits to personality-context artifacts require a session restart to take effect.
+1. **Static** — `build_agent()` assembles Block 0 at agent construction: `build_static_instructions()` (soul seed, mindsets, rules), toolset guidance, category hint, and critique (last, conditional on personality). This is set once as `Agent(instructions=...)` and does not change within a session.
 
 ```
 Session start
     ↓
-build_static_instructions(config)
+build_agent(config)
     ↓
-    [1] soul seed               — identity anchor, constraints, never-list
-    [2] mindsets                — 6 task-type behavioral guides
-    [3] personality memories    — top-5 "personality-context" artifacts from ~/.co-cli/knowledge/
-    [4] behavioral rules        — 5 universal rule files (01–05)
-    [5] review lens             — self-assessment frame
-    → set as Agent.instructions (static, once per session)
+    [1] build_static_instructions → soul seed, mindsets, behavioral rules, recency advisory
+    [2] build_toolset_guidance    — tool-specific guidance (conditional on tool presence)
+    [3] build_category_awareness_prompt — deferred tool category hint (conditional)
+    [4] load_soul_critique        — ## Review lens, last (conditional on personality + critique file)
+    → joined and set as Agent.instructions (static, once per session)
 
 Character memories (souls/{role}/memories/*.md) are NOT injected here.
 They are surfaced on demand via the canon channel in `memory_search`.
@@ -107,48 +99,38 @@ for human reference — they are not loaded into the agent.
 
 ### Static Prompt Assembly
 
-`build_static_instructions(config)` in `_assembly.py`:
+`build_static_instructions(config)` in `assembly.py` owns the stable-forever sections only:
 
 ```
 section_1 = load_soul_seed(role)               # Required — placed first; identity anchor
 section_2 = load_soul_mindsets(role)            # Optional — ## Mindsets block, all 6 files
-section_3 = load_personality_memories()         # top-5 personality-context artifacts
-section_4 = _collect_rule_files()               # Rules from context/rules/NN_rule_id.md (01–05)
-section_5 = load_soul_critique(role)            # Optional — ## Review lens, placed last
+section_3 = _collect_rule_files()               # Rules from context/rules/NN_rule_id.md (01–05)
+section_4 = RECENCY_CLEARING_ADVISORY           # Static advisory for tool-result eviction
 
 return "\n\n".join(non_empty_sections)
 ```
 
-Character memories (`memories/*.md`) are NOT included here — they are served on demand via
-the canon channel in `memory_search` when the user or model queries about the character's
-background, scenes, or source material.
+`build_agent()` then appends operational guidance and critique after `build_static_instructions`:
+
+```
+static_parts = [build_static_instructions(config)]
+static_parts += [build_toolset_guidance(...)]        # conditional on tool presence
+static_parts += [build_category_awareness_prompt(...)] # conditional on deferred tools
+if config.personality:
+    crit = load_soul_critique(role)                  # ## Review lens, always last
+    if crit: static_parts.append(...)
+```
+
+Character memories (`memories/*.md`) are NOT included — they are served on demand via
+the canon channel in `memory_search`.
 
 **Placement rationale:** Soul seed is first because early context has the strongest influence
-on the model's operating space. Review lens is last so it frames all prior content as
-subject to self-review.
+on the model's operating space. Review lens is last so it frames all operational guidance
+as subject to self-review.
 
 **Rule files** (`context/rules/`) are personality-independent universal policies. Files must
 be numbered `01`–`05`, contiguous, and unique. Current rules: `01_identity.md`,
 `02_safety.md`, `03_reasoning.md`, `04_tool_protocol.md`, `05_workflow.md`.
-
-### Static Personality-Context Injection
-
-`load_personality_memories()` in `personality/prompts/loader.py`:
-
-```
-if _personality_cache is not None:
-    return _personality_cache                      # cached — no disk scan
-memories = load_knowledge_artifacts(KNOWLEDGE_DIR, tags=["personality-context"])
-sorted by recency (updated_at or created_at)
-take top 5
-_personality_cache = "## Learned Context\n\n" + bullet list of bodies
-return _personality_cache
-```
-
-The cache is process-scoped (module-level `_personality_cache`). The function is called
-once at agent construction inside `build_static_instructions()`; result is injected into
-the static system prompt. The memory extraction pipeline (in [memory.md](memory.md))
-is responsible for tagging relevant observations as `personality-context`.
 
 ### Personality Discovery and Validation
 
@@ -176,12 +158,12 @@ for missing mindset files.
 
 | File | Purpose |
 |---|---|
-| `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (soul + personality memories + rules) |
-| `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets`, `load_personality_memories` |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (soul + mindsets + rules + recency advisory) |
+| `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
 | `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
 | `co_cli/personality/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agent/core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
-| `co_cli/agent/_instructions.py` | `date_prompt()` — dynamic instruction returning today's date |
+| `co_cli/agent/_instructions.py` | `current_time_prompt()` — dynamic instruction returning current date/time; `safety_prompt()` — doom-loop and shell-error warnings |

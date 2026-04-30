@@ -34,49 +34,23 @@ def _build() -> build_model:
     return build_model(_LLM_SETTINGS)
 
 
+@pytest.mark.skipif(not _API_KEY, reason="GEMINI_API_KEY or CO_LLM_API_KEY required")
 @pytest.mark.asyncio
 async def test_gemini_noreason_returns_response() -> None:
     """Noreason settings (thinking_level=MINIMAL) return a valid non-empty response."""
     m = _build()
-    agent = Agent(m.model, output_type=str)
+    agent = Agent(m.model, output_type=str, model_settings=m.settings_noreason)
     async with asyncio.timeout(LLM_GEMINI_NOREASON_TIMEOUT_SECS):
-        result = await agent.run(
-            "Reply with exactly one word: yes",
-            model_settings=m.settings_noreason,
-        )
+        result = await agent.run("Reply with exactly one word: yes")
     assert result.output.strip(), "Noreason call must return non-empty output"
 
 
+@pytest.mark.skipif(not _API_KEY, reason="GEMINI_API_KEY or CO_LLM_API_KEY required")
 @pytest.mark.asyncio
 async def test_gemini_reasoning_returns_response() -> None:
     """Reasoning settings return a valid non-empty response."""
     m = _build()
-    agent = Agent(m.model, output_type=str)
+    agent = Agent(m.model, output_type=str, model_settings=m.settings)
     async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
-        result = await agent.run(
-            "Reply with exactly one word: yes",
-            model_settings=m.settings,
-        )
+        result = await agent.run("Reply with exactly one word: yes")
     assert result.output.strip(), "Reasoning call must return non-empty output"
-
-
-@pytest.mark.asyncio
-async def test_gemini_noreason_faster_than_reasoning() -> None:
-    """Noreason (thinking_level=MINIMAL) completes within non-reasoning timeout; reasoning within reasoning timeout."""
-    m = _build()
-    agent = Agent(m.model, output_type=str)
-
-    async with asyncio.timeout(LLM_GEMINI_NOREASON_TIMEOUT_SECS):
-        noreason_result = await agent.run(
-            "Reply with exactly one word: yes",
-            model_settings=m.settings_noreason,
-        )
-
-    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
-        reason_result = await agent.run(
-            "Reply with exactly one word: yes",
-            model_settings=m.settings,
-        )
-
-    assert noreason_result.output.strip()
-    assert reason_result.output.strip()

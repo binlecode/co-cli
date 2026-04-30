@@ -163,16 +163,9 @@ Telemetry note:
 
 Static personality content is not a recall channel — it is a one-time unconditional load at agent construction.
 
-`load_personality_memories()` in `co_cli/personality/prompts/loader.py` scans the knowledge artifact index for files tagged `personality-context`. Those artifacts are injected verbatim into the static system prompt by `build_static_instructions()` in `co_cli/context/assembly.py`.
+`build_static_instructions()` in `co_cli/context/assembly.py` assembles soul seed, mindsets, and behavioral rules into the cacheable static prompt. Personality-context knowledge artifacts (tagged `personality-context`) are no longer injected into the static prompt; they are reachable via the canon channel in `memory_search`.
 
-Properties:
-
-- **No query**: loaded unconditionally; no FTS search runs and no `memory_search()` call is issued.
-- **Prefix-cache stable**: placed in the static prompt prefix, before all dynamic content, keeping the prefix-cache hit rate high across turns.
-- **Session-restart required**: edits to personality-context artifacts take effect only after a new `co chat` session.
-- **Storage shared with the artifacts channel**: these entries live in `knowledge/*.md` alongside all other knowledge artifacts; the `personality-context` tag routes them to the static prompt instead of the artifacts query path at runtime.
-
-The dynamic-instructions block (`date_prompt()` in `co_cli/agent/_instructions.py`) is intentionally kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable static prefix remains cache-stable across turns.
+The dynamic-instructions block (`current_time_prompt()` in `co_cli/agent/_instructions.py`) is intentionally kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable static prefix remains cache-stable across turns.
 
 ### 2.4 Sessions Channel: Episodic Recall
 
@@ -374,9 +367,9 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/tools/memory/read.py` | `memory_list()` — paginated inventory of knowledge artifacts; `grep_recall()` utility used by `memory_search()`. Full-body artifact reads route through the generic `file_read` tool on the path surfaced by `memory_search`. |
 | `co_cli/tools/memory/write.py` | artifact write/update/append helpers and article persistence |
 | `co_cli/bootstrap/core.py` | `restore_session()` and `init_session_store()` during startup |
-| `co_cli/agent/_instructions.py` | `date_prompt()` — thin wrapper that delegates to `recall_prompt_text()` in `prompt_text.py`; returns today's date string |
-| `co_cli/context/prompt_text.py` | `recall_prompt_text()` — per-turn dynamic instruction; returns today's date only (personality memories are in static prompt; knowledge recall is on-demand) |
-| `co_cli/context/assembly.py` | `build_static_instructions()` — assembles soul, mindsets, personality-context artifacts, and rules into the cacheable static system prompt; character memories excluded (served via `memory_search` canon channel) |
-| `co_cli/personality/prompts/loader.py` | `load_personality_memories()` — loads `personality-context` tagged knowledge artifacts into the static prompt once at agent construction |
+| `co_cli/agent/_instructions.py` | `current_time_prompt()` — per-turn current date/time injection; `safety_prompt()` — doom-loop and shell-error streak warnings |
+| `co_cli/context/prompt_text.py` | `safety_prompt_text()` — per-turn dynamic instruction; returns doom-loop / shell-reflection warning text or empty string |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — assembles soul, mindsets, and rules into the cacheable static system prompt; character memories and critique excluded |
+| `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |
 | `co_cli/main.py` | `_finalize_turn()` persistence bridge and session-end dream trigger |
 | `co_cli/commands/core.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions`, `/knowledge`, and `/memory` command handlers |

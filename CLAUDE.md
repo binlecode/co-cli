@@ -121,6 +121,7 @@ TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full
 - `/sync-doc [doc...]`: fix spec inaccuracies in `docs/specs/` in-place. No args means all specs. Auto-invoked by `orchestrate-dev`.
 - `/deliver [slug]`: lightweight solo delivery — implement directly, test-gate, self-review, ship. No subagent orchestration. Use instead of `/orchestrate-dev` when the task is simple enough for a single-dev pass, or without a slug for ad-hoc work described inline.
 - `/ship [slug]`: post-Gate-2 ship — full test safety net, version bump, plan archive (`git mv` to `completed/`), commit.
+- `/test-hygiene [path]`: standalone test quality gate — enforce `agent_docs/testing.md` rules, purge structural/redundant tests, verify behavioral depth, run full suite. Default path: `tests/`. Call any time, not just pre-ship.
 - **Staged-file hygiene**: before shipping, verify only related files are staged — never include unrelated changes. Ask the user before staging any file that seems tangential to the task.
 
 ## Docs

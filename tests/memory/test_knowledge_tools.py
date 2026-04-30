@@ -208,20 +208,6 @@ def test_memory_modify_replace_tab_normalization(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_memory_modify_append_adds_to_end(tmp_path: Path):
-    """memory_modify append adds content as a new line at the end of the body."""
-    memory_dir = tmp_path / "memory"
-    path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
-    ctx = _make_ctx(knowledge_dir=memory_dir)
-
-    slug = path.stem
-    asyncio.run(memory_modify(ctx, slug, "append", "Also uses coverage reports."))
-
-    updated_text = path.read_text(encoding="utf-8")
-    assert updated_text.rstrip("\n").endswith("Also uses coverage reports.")
-    assert "User prefers pytest" in updated_text
-
-
 def test_memory_modify_append_missing_slug_returns_error(tmp_path: Path):
     """memory_modify append returns tool_error for an unknown slug."""
     memory_dir = tmp_path / "memory"

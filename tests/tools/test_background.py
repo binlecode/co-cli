@@ -392,21 +392,22 @@ async def test_slash_background_command():
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
 
-    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        deps = CoDeps(shell=ShellBackend(), config=make_settings())
-        ctx = CommandContext(message_history=[], deps=deps, agent=None)
+    deps = CoDeps(shell=ShellBackend(), config=make_settings())
+    ctx = CommandContext(message_history=[], deps=deps, agent=None)
 
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
         await BUILTIN_COMMANDS["background"].handler(ctx, "echo slash_test")
 
-        assert len(deps.session.background_tasks) == 1
-        state = next(iter(deps.session.background_tasks.values()))
-        assert state.command == "echo slash_test"
+    assert len(deps.session.background_tasks) == 1
+    state = next(iter(deps.session.background_tasks.values()))
+    assert state.command == "echo slash_test"
 
-        # Cleanup
-        from co_cli.tools.background import kill_task
+    # Cleanup
+    from co_cli.tools.background import kill_task
 
-        for s in deps.session.background_tasks.values():
-            if s.status == "running":
+    for s in deps.session.background_tasks.values():
+        if s.status == "running":
+            async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
                 await kill_task(s)
 
 
@@ -450,27 +451,29 @@ async def test_slash_cancel_command():
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
 
-    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        deps = CoDeps(shell=ShellBackend(), config=make_settings())
-        ctx = CommandContext(message_history=[], deps=deps, agent=None)
+    deps = CoDeps(shell=ShellBackend(), config=make_settings())
+    ctx = CommandContext(message_history=[], deps=deps, agent=None)
 
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
         await BUILTIN_COMMANDS["background"].handler(ctx, "sleep 60")
-        assert len(deps.session.background_tasks) == 1
+    assert len(deps.session.background_tasks) == 1
 
-        state = next(iter(deps.session.background_tasks.values()))
-        task_id = state.task_id
+    state = next(iter(deps.session.background_tasks.values()))
+    task_id = state.task_id
 
-        # Wait for process to start
+    # Wait for process to start
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
         for _ in range(20):
             await asyncio.sleep(0.1)
             if state.process is not None and state.process.returncode is None:
                 break
 
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
         await BUILTIN_COMMANDS["cancel"].handler(ctx, task_id)
-        assert state.status == "cancelled"
-        assert state.cleanup_incomplete is False
-        assert state.cleanup_error is None
-        assert state.process is None
+    assert state.status == "cancelled"
+    assert state.cleanup_incomplete is False
+    assert state.cleanup_error is None
+    assert state.process is None
 
 
 # ---------------------------------------------------------------------------

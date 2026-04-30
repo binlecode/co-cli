@@ -46,7 +46,7 @@ def _teardown_logger(spans_logger: logging.Logger, handler: logging.Handler) -> 
     spans_logger.propagate = True
 
 
-def test_json_span_exporter_emits_kind_span(tmp_path):
+def test_json_span_exporter_emits_kind_span():
     """Each exported span produces a JSON line with kind='span'."""
     provider, emitted, handler, spans_logger = _make_span_provider()
     try:
@@ -63,7 +63,7 @@ def test_json_span_exporter_emits_kind_span(tmp_path):
         _teardown_logger(spans_logger, handler)
 
 
-def test_json_span_exporter_all_fields_present(tmp_path):
+def test_json_span_exporter_all_fields_present():
     """Exported span JSON contains all required fields."""
     provider, emitted, handler, spans_logger = _make_span_provider()
     try:
@@ -93,7 +93,7 @@ def test_json_span_exporter_all_fields_present(tmp_path):
         _teardown_logger(spans_logger, handler)
 
 
-def test_json_span_exporter_redacts_attribute_value(tmp_path):
+def test_json_span_exporter_redacts_attribute_value():
     """String attribute matching a redact pattern is stored as [REDACTED]."""
     provider, emitted, handler, spans_logger = _make_span_provider(
         patterns=[r"sk-[A-Za-z0-9]{20,}"]
@@ -111,7 +111,7 @@ def test_json_span_exporter_redacts_attribute_value(tmp_path):
         _teardown_logger(spans_logger, handler)
 
 
-def test_json_span_exporter_captures_events(tmp_path):
+def test_json_span_exporter_captures_events():
     """Span events (name + attributes) are included in the JSON output."""
     provider, emitted, handler, spans_logger = _make_span_provider()
     try:
@@ -129,7 +129,7 @@ def test_json_span_exporter_captures_events(tmp_path):
         _teardown_logger(spans_logger, handler)
 
 
-def test_json_span_exporter_parent_id_set_for_child(tmp_path):
+def test_json_span_exporter_parent_id_set_for_child():
     """Child span has parent_id set to the parent span's span_id."""
     provider, emitted, handler, spans_logger = _make_span_provider()
     try:

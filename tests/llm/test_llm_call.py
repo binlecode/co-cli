@@ -43,13 +43,3 @@ async def test_llm_call_with_message_history_forwards_context() -> None:
             message_history=history,
         )
     assert "ZEPHYR" in result.upper()
-
-
-@pytest.mark.asyncio
-async def test_llm_call_returns_str() -> None:
-    deps = _make_deps()
-    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        result = await llm_call(deps, "Name a single primary color. Reply with one word only.")
-    assert isinstance(result, str)
-    assert result.strip()

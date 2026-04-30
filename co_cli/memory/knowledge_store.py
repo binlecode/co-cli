@@ -261,6 +261,8 @@ class KnowledgeStore:
             if config.knowledge.chunk_size > 0
             else 0
         )
+        self._session_chunk_tokens = config.knowledge.session_chunk_tokens
+        self._session_chunk_overlap = config.knowledge.session_chunk_overlap
 
         # Determine effective reranker provider from new config fields:
         # cross-encoder (TEI) takes priority; LLM listwise as fallback; none if neither configured.
@@ -1194,6 +1196,105 @@ class KnowledgeStore:
 
         self.remove_stale(source, current_paths, directory=directory)
         return indexed
+
+    def index_session(self, session_path: Path) -> None:
+        """Index a session JSONL into chunks/chunks_fts/chunks_vec.
+
+        Idempotent — content hash skip avoids re-embedding unchanged sessions.
+        Partial-write recovery: falls through hash-skip when chunks are absent.
+        doc_path = uuid8 (8-char ID from the session filename).
+        """
+        from co_cli.memory.chunker import Chunk
+        from co_cli.memory.session import parse_session_filename
+        from co_cli.memory.session_chunker import chunk_session
+
+        parsed = parse_session_filename(session_path.name)
+        if parsed is None:
+            logger.warning("Unrecognised session filename: %s", session_path.name)
+            return
+        uuid8, created_at = parsed
+
+        sess_chunks = chunk_session(
+            session_path,
+            chunk_tokens=self._session_chunk_tokens,
+            overlap_tokens=self._session_chunk_overlap,
+        )
+        if not sess_chunks:
+            return
+
+        full_text = "\n\n".join(c.text for c in sess_chunks)
+        content_hash = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+
+        if not self.needs_reindex("session", uuid8, content_hash):
+            chunk_count = self._conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE source='session' AND doc_path=?",
+                (uuid8,),
+            ).fetchone()[0]
+            if chunk_count > 0:
+                return  # hash-skip — content unchanged AND chunks present
+            # else: partial-write recovery — fall through and re-index
+
+        self.index(
+            source="session",
+            kind="session",
+            path=uuid8,
+            title=uuid8,
+            content=full_text,
+            mtime=session_path.stat().st_mtime,
+            hash=content_hash,
+            created=created_at.isoformat(),
+            updated=created_at.isoformat(),
+        )
+
+        chunk_records = [
+            Chunk(
+                index=i,
+                content=c.text,
+                start_line=c.start_jsonl_line,
+                end_line=c.end_jsonl_line,
+            )
+            for i, c in enumerate(sess_chunks)
+        ]
+        self.index_chunks(source="session", doc_path=uuid8, chunks=chunk_records)
+
+    def sync_sessions(self, sessions_dir: Path, exclude: Path | None = None) -> int:
+        """Incrementally index past sessions into the unified chunks pipeline.
+
+        Iterates sessions_dir/*.jsonl, skips `exclude` (the active session),
+        calls index_session per file, and removes stale entries for deleted sessions.
+
+        Note: doc_path for sessions is uuid8, not a filesystem path, so
+        remove_stale is called without a directory filter to avoid prefix mismatch.
+
+        Returns:
+            Number of sessions successfully processed.
+        """
+        from co_cli.memory.session import parse_session_filename
+
+        if not sessions_dir.exists():
+            return 0
+
+        current_uuid8s: set[str] = set()
+        processed = 0
+
+        for file_path in sessions_dir.glob("*.jsonl"):
+            if exclude is not None and file_path == exclude:
+                continue
+            parsed = parse_session_filename(file_path.name)
+            if parsed is None:
+                continue
+            uuid8, _ = parsed
+            current_uuid8s.add(uuid8)
+            try:
+                self.index_session(file_path)
+                processed += 1
+            except Exception as e:
+                logger.warning("Failed to index session %s: %s", file_path.name, e)
+
+        # Remove stale session entries — no directory filter since doc_path=uuid8,
+        # not a filesystem path. source='session' already scopes the deletion.
+        self.remove_stale("session", current_uuid8s)
+        return processed
 
     def remove(self, source: str, path: str) -> None:
         """Remove a single document from the index by path."""
