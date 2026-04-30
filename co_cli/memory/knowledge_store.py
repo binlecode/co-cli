@@ -133,10 +133,18 @@ def _chunks_like_search(
 ) -> list[Any]:
     """LIKE fallback for chunks FTS — returns rows with the same columns as _CHUNKS_FTS_SQL."""
     like_conds = " OR ".join("c.content LIKE ?" for _ in tokens)
-    lp: list[Any] = [f"%{t}%" for t in tokens]
+    like_params = [f"%{t}%" for t in tokens]
+
+    # Per-row match-count: negate so normalize_bm25 maps more matches → higher score.
+    case_exprs = " + ".join("CASE WHEN c.content LIKE ? THEN 1 ELSE 0 END" for _ in tokens)
+    rank_expr = f"-({case_exprs})" if tokens else "-1.0"
+
+    # rank CASE params appear in SELECT (before WHERE), so they come first in lp.
+    lp: list[Any] = list(like_params) + list(like_params)
+
     lsql = (
         "SELECT c.source, c.doc_path AS path,"
-        " substr(c.content, 1, 300) AS snippet, -1.0 AS rank,"
+        f" substr(c.content, 1, 300) AS snippet, {rank_expr} AS rank,"
         " c.chunk_index, c.start_line, c.end_line,"
         " d.kind, d.title, d.category, d.created, d.updated,"
         " d.provenance, d.certainty, d.source_ref, d.artifact_id"
