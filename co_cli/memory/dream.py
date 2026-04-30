@@ -310,10 +310,6 @@ def _write_consolidated_artifact(
 ) -> KnowledgeArtifact:
     """Write a new consolidated artifact and index it. Source URL-less."""
     artifact_id = str(uuid4())
-    union_tags: set[str] = set()
-    for artifact in cluster:
-        union_tags.update(artifact.tags)
-
     kind = cluster[0].artifact_kind
     title = cluster[0].title or f"consolidated {kind}"
     slug = _slugify(title)
@@ -327,7 +323,6 @@ def _write_consolidated_artifact(
         title=title,
         content=merged_body.strip(),
         created=datetime.now(UTC).isoformat(),
-        tags=sorted(union_tags),
         source_type=SourceTypeEnum.CONSOLIDATED.value,
         source_ref=None,
     )
@@ -346,7 +341,6 @@ def _write_consolidated_artifact(
             content=merged_body.strip(),
             mtime=file_path.stat().st_mtime,
             hash=content_hash,
-            tags=" ".join(sorted(union_tags)) if union_tags else None,
             created=merged_artifact.created,
             type=kind,
             description=None,

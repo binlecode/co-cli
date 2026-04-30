@@ -48,7 +48,6 @@ def _reindex_knowledge_file(
         content=body.strip(),
         mtime=path.stat().st_mtime,
         hash=content_hash,
-        tags=" ".join(fm.get("tags", [])) or None,
         created=fm.get("created"),
         type=artifact_kind,
         description=fm.get("description"),

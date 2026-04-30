@@ -31,7 +31,7 @@ This spec defines how `co-cli` stores raw memory, derives episodic recall from i
 
 `co-cli` has two persistence layers — a static layer baked into the system prompt at agent construction and a dynamic layer of three recall channels queried on demand — plus one directional bridge:
 
-- **Static personality content** (not a recall channel) — curated knowledge artifacts tagged `personality-context` are loaded once at agent construction and injected into the prefix-cached system prompt. No query path; no FTS; no LLM. Distinct from the three recall channels below.
+- **Static personality content** (not a recall channel) — soul seed, mindsets, and behavioral rules are assembled once at agent construction and injected into the prefix-cached system prompt. No query path; no FTS; no LLM. Distinct from the three recall channels below.
 - **Sessions channel** is the raw episodic timeline — append-only JSONL transcripts under `sessions/`, chunked and indexed in the unified `co-cli-search.db` chunks pipeline as `source='session'`. Recall returns verbatim chunk citations with JSONL line bounds; no LLM in the recall path.
 - **Artifacts channel** is every reusable artifact the agent should recall on demand — markdown files under `knowledge/`, indexed by FTS5 and optional vector hybrid. Recall returns ranked structured rows; no LLM in the default path.
 - **Canon channel** is the role-scoped read-only character memory under `souls/{role}/memories/*.md`. Recall returns ranked snippets; no LLM. Tuned for a small curated corpus and surfaced only when a personality is active.
@@ -161,7 +161,7 @@ Telemetry note:
 
 Static personality content is not a recall channel — it is a one-time unconditional load at agent construction.
 
-`build_static_instructions()` in `co_cli/context/assembly.py` assembles soul seed, mindsets, and behavioral rules into the cacheable static prompt. Personality-context knowledge artifacts (tagged `personality-context`) are no longer injected into the static prompt; they are reachable via the canon channel in `memory_search`.
+`build_static_instructions()` in `co_cli/context/assembly.py` assembles soul seed, mindsets, and behavioral rules into the cacheable static prompt. Knowledge artifacts are not injected into the static prompt; they are reachable on demand via `memory_search`.
 
 The dynamic-instructions block (`current_time_prompt()` in `co_cli/agent/_instructions.py`) is intentionally kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable static prefix remains cache-stable across turns.
 
@@ -221,7 +221,6 @@ Knowledge artifact schema:
 | `description` | Short retrieval summary |
 | `created` | ISO8601 creation timestamp |
 | `updated` | ISO8601 last-modified timestamp |
-| `tags` | Retrieval/organization labels |
 | `related` | Soft links to related artifacts |
 | `source_type` | `detected`, `web_fetch`, `manual`, `obsidian`, `drive`, or `consolidated` |
 | `source_ref` | Pointer to source session, URL, file path, or artifact ID |

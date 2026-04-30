@@ -54,7 +54,6 @@ def _write_knowledge_file(
         "kind": "knowledge",
         "artifact_kind": artifact_kind,
         "created": "2026-01-01T00:00:00+00:00",
-        "tags": ["test"],
     }
     if extra:
         fm.update(extra)

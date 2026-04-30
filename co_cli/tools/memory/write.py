@@ -30,7 +30,6 @@ async def memory_create(
     artifact_kind: str,
     title: str | None = None,
     description: str | None = None,
-    tags: list[str] | None = None,
     source_url: str | None = None,
     decay_protected: bool = False,
 ) -> ToolReturn:
@@ -54,7 +53,6 @@ async def memory_create(
         artifact_kind: One of preference | decision | rule | feedback | article | reference | note.
         title: Optional human-readable label.
         description: Optional ≤200-char hook used for retrieval ranking.
-        tags: Optional retrieval labels (lowercased before writing).
         source_url: Source URL for web-fetched articles. Triggers URL-keyed dedup.
         decay_protected: Protect from automatic decay. Always True when source_url is set.
     """
@@ -77,7 +75,6 @@ async def memory_create(
             artifact_kind=artifact_kind,
             title=title,
             description=description,
-            tags=tags,
             source_url=source_url,
             decay_protected=decay_protected,
             consolidation_enabled=ctx.deps.config.knowledge.consolidation_enabled,

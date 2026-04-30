@@ -126,7 +126,6 @@ def save_artifact(
     artifact_kind: str,
     title: str | None = None,
     description: str | None = None,
-    tags: list[str] | None = None,
     source_url: str | None = None,
     source_type: str = SourceTypeEnum.DETECTED.value,
     source_ref: str | None = None,
@@ -153,8 +152,6 @@ def save_artifact(
         if existing_path is not None:
             raw = existing_path.read_text(encoding="utf-8")
             fm, _ = parse_frontmatter(raw)
-            existing_tags = fm.get("tags") or []
-            merged_tags = sorted(set(existing_tags) | set(tags or []))
             artifact_id = str(fm.get("id") or "")
             created = fm.get("created") or datetime.now(UTC).isoformat()
             artifact = KnowledgeArtifact(
@@ -165,7 +162,6 @@ def save_artifact(
                 content=content,
                 created=created,
                 updated=datetime.now(UTC).isoformat(),
-                tags=merged_tags,
                 related=list(fm.get("related") or []),
                 source_type=SourceTypeEnum.WEB_FETCH.value,
                 source_ref=source_url,
@@ -176,7 +172,6 @@ def save_artifact(
             fm_dict = {
                 "artifact_kind": ArtifactKindEnum.ARTICLE.value,
                 "title": artifact.title,
-                "tags": merged_tags,
                 "created": created,
                 "source_ref": source_url,
                 "id": fm.get("id"),
@@ -211,7 +206,6 @@ def save_artifact(
             title=title,
             content=content,
             created=datetime.now(UTC).isoformat(),
-            tags=list(tags or []),
             related=list(related or []),
             source_type=SourceTypeEnum.WEB_FETCH.value,
             source_ref=source_url,
@@ -222,7 +216,6 @@ def save_artifact(
         fm_dict = {
             "artifact_kind": ArtifactKindEnum.ARTICLE.value,
             "title": title,
-            "tags": list(tags or []),
             "created": artifact.created,
             "source_ref": source_url,
             "id": artifact_id,
@@ -298,7 +291,6 @@ def save_artifact(
         content=content,
         created=datetime.now(UTC).isoformat(),
         description=description,
-        tags=[t.lower() for t in (tags or [])],
         source_type=source_type,
         source_ref=source_ref,
         decay_protected=decay_protected,
@@ -307,7 +299,6 @@ def save_artifact(
     fm_dict = {
         "artifact_kind": artifact_kind,
         "title": artifact.title,
-        "tags": artifact.tags,
         "created": artifact.created,
         "description": artifact.description,
         "id": artifact_id,

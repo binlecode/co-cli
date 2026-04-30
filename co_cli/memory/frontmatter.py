@@ -151,7 +151,6 @@ def _artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
         ("title", artifact.title),
         ("description", artifact.description),
         ("updated", artifact.updated),
-        ("tags", list(artifact.tags)),
         ("related", list(artifact.related)),
         ("source_type", artifact.source_type),
         ("source_ref", artifact.source_ref),

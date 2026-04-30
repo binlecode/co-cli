@@ -45,7 +45,6 @@ def test_load_canonical_knowledge_artifact(tmp_path: Path) -> None:
     assert artifact.title == "Prefers pytest"
     assert artifact.source_type == SourceTypeEnum.DETECTED.value
     assert artifact.source_ref == "session-abc"
-    assert artifact.tags == ["testing"]
     assert artifact.content == "User prefers pytest over unittest."
 
 
@@ -113,7 +112,6 @@ def test_render_knowledge_file_emits_canonical_kind(tmp_path: Path) -> None:
         title="Prefers pytest",
         content="User prefers pytest.",
         created="2026-04-16T10:00:00Z",
-        tags=["testing"],
         source_type=SourceTypeEnum.DETECTED.value,
         source_ref="session-abc",
     )
@@ -137,7 +135,6 @@ def test_render_knowledge_file_round_trip_via_loader(tmp_path: Path) -> None:
         title="Asyncio",
         content="Body text.",
         created="2026-04-16T10:00:00Z",
-        tags=["python"],
         source_type=SourceTypeEnum.WEB_FETCH.value,
         source_ref="https://docs.python.org/asyncio",
         decay_protected=True,

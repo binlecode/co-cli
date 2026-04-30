@@ -70,7 +70,6 @@ def _write_artifact(knowledge_dir: Path, idx: int, content: str, kind: str = "pr
         "kind": "knowledge",
         "artifact_kind": kind,
         "created": created,
-        "tags": [],
     }
     path = knowledge_dir / filename
     path.write_text(f"---\n{yaml.dump(fm)}---\n\n{content}\n", encoding="utf-8")

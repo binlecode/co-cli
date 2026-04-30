@@ -54,7 +54,6 @@ def _write_memory(
     memory_dir: Path,
     memory_id: int,
     content: str,
-    tags: list[str] | None = None,
     created: str | None = None,
     updated: str | None = None,
     artifact_kind: str = "preference",
@@ -70,7 +69,6 @@ def _write_memory(
         "kind": "knowledge",
         "artifact_kind": artifact_kind,
         "created": created,
-        "tags": tags or [],
     }
     if updated:
         fm["updated"] = updated
@@ -89,7 +87,7 @@ def test_list_knowledge_pagination(tmp_path: Path):
     """list_knowledge returns correct pages with offset/limit."""
     memory_dir = tmp_path / "memory"
     for i in range(1, 6):
-        _write_memory(memory_dir, i, f"Memory content number {i}", tags=["test"])
+        _write_memory(memory_dir, i, f"Memory content number {i}")
 
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
@@ -124,7 +122,7 @@ def test_list_knowledge_pagination(tmp_path: Path):
 def test_memory_modify_replace_exact_match(tmp_path: Path):
     """memory_modify replace substitutes old passage with new in the body."""
     memory_dir = tmp_path / "memory"
-    path = _write_memory(memory_dir, 1, "User prefers pytest over unittest", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User prefers pytest over unittest")
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
@@ -152,7 +150,7 @@ def test_memory_modify_replace_not_found(tmp_path: Path):
 def test_memory_modify_replace_zero_occurrences(tmp_path: Path):
     """memory_modify replace returns tool_error when target is not in the body."""
     memory_dir = tmp_path / "memory"
-    path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User prefers pytest")
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
@@ -163,7 +161,7 @@ def test_memory_modify_replace_zero_occurrences(tmp_path: Path):
 def test_memory_modify_replace_ambiguous(tmp_path: Path):
     """memory_modify replace returns tool_error when target appears more than once."""
     memory_dir = tmp_path / "memory"
-    path = _write_memory(memory_dir, 1, "User uses pytest. Also uses pytest.", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User uses pytest. Also uses pytest.")
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
@@ -174,7 +172,7 @@ def test_memory_modify_replace_ambiguous(tmp_path: Path):
 def test_memory_modify_replace_rejects_line_prefix(tmp_path: Path):
     """memory_modify replace returns tool_error when target contains Read-tool line prefixes."""
     memory_dir = tmp_path / "memory"
-    path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User prefers pytest")
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
@@ -194,7 +192,7 @@ def test_memory_modify_replace_tab_normalization(tmp_path: Path):
     """
     memory_dir = tmp_path / "memory"
     # 5 spaces at column 3: what expandtabs() produces for "foo\tbar"
-    path = _write_memory(memory_dir, 1, "foo     bar", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "foo     bar")
     ctx = _make_ctx(knowledge_dir=memory_dir)
 
     slug = path.stem
@@ -302,7 +300,7 @@ class TestMemoryCreateDedup:
     def test_distinct_content_creates_new_file(self, tmp_path: Path) -> None:
         """Unrelated content always writes a new artifact regardless of dedup setting."""
         knowledge_dir = tmp_path / "knowledge"
-        _write_memory(knowledge_dir, 1, "completely unrelated existing entry", tags=[])
+        _write_memory(knowledge_dir, 1, "completely unrelated existing entry")
         ctx = _make_dedup_ctx(knowledge_dir)
         result = asyncio.run(memory_create(ctx, "user prefers pytest for testing", "preference"))
         files = list(knowledge_dir.glob("*.md"))
@@ -312,7 +310,7 @@ class TestMemoryCreateDedup:
     def test_near_identical_content_skips_write(self, tmp_path: Path) -> None:
         """Score > 0.9 must skip writing and return action='skipped'."""
         knowledge_dir = tmp_path / "knowledge"
-        _write_memory(knowledge_dir, 1, "user prefers pytest over unittest", tags=[])
+        _write_memory(knowledge_dir, 1, "user prefers pytest over unittest")
         ctx = _make_dedup_ctx(knowledge_dir, threshold=0.5)
         result = asyncio.run(memory_create(ctx, "user prefers pytest over unittest", "preference"))
         files = list(knowledge_dir.glob("*.md"))
@@ -322,7 +320,7 @@ class TestMemoryCreateDedup:
     def test_superset_content_replaces_existing_body(self, tmp_path: Path) -> None:
         """New content whose tokens are a strict superset of existing content triggers merge."""
         knowledge_dir = tmp_path / "knowledge"
-        existing = _write_memory(knowledge_dir, 1, "user prefers pytest", tags=[])
+        existing = _write_memory(knowledge_dir, 1, "user prefers pytest")
         ctx = _make_dedup_ctx(knowledge_dir, threshold=0.3)
         result = asyncio.run(
             memory_create(
@@ -338,7 +336,7 @@ class TestMemoryCreateDedup:
     def test_overlapping_content_appends_to_existing(self, tmp_path: Path) -> None:
         """Partially-overlapping content that is not a superset appends to the existing artifact."""
         knowledge_dir = tmp_path / "knowledge"
-        existing = _write_memory(knowledge_dir, 1, "user prefers pytest ruff", tags=[])
+        existing = _write_memory(knowledge_dir, 1, "user prefers pytest ruff")
         ctx = _make_dedup_ctx(knowledge_dir, threshold=0.2)
         result = asyncio.run(memory_create(ctx, "user prefers pytest mypy checks", "preference"))
         files = list(knowledge_dir.glob("*.md"))
@@ -351,7 +349,7 @@ class TestMemoryCreateDedup:
     def test_dedup_bypassed_when_consolidation_disabled(self, tmp_path: Path) -> None:
         """When consolidation_enabled=False, identical content always writes a new file."""
         knowledge_dir = tmp_path / "knowledge"
-        _write_memory(knowledge_dir, 1, "user prefers pytest over unittest", tags=[])
+        _write_memory(knowledge_dir, 1, "user prefers pytest over unittest")
         ctx = _make_ctx(knowledge_dir=knowledge_dir)  # consolidation_enabled defaults to False
         result = asyncio.run(memory_create(ctx, "user prefers pytest over unittest", "preference"))
         files = list(knowledge_dir.glob("*.md"))
@@ -393,7 +391,7 @@ def _make_ctx_sized_knowledge(
 async def test_memory_modify_append_busy_error_uses_ctx_path(tmp_path: Path) -> None:
     """Oversized memory_modify append busy error is persisted through the ctx-aware path."""
     knowledge_dir = tmp_path / "knowledge"
-    path = _write_memory(knowledge_dir, 1, "test content for lock", tags=["test"])
+    path = _write_memory(knowledge_dir, 1, "test content for lock")
     slug = path.stem
     ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "memory_modify")
 
@@ -419,7 +417,7 @@ async def test_memory_modify_append_busy_error_uses_ctx_path(tmp_path: Path) -> 
 async def test_memory_modify_replace_busy_error_uses_ctx_path(tmp_path: Path) -> None:
     """Oversized memory_modify replace busy error is persisted through the ctx-aware path."""
     knowledge_dir = tmp_path / "knowledge"
-    path = _write_memory(knowledge_dir, 1, "test content for update lock", tags=["test"])
+    path = _write_memory(knowledge_dir, 1, "test content for update lock")
     slug = path.stem
     ctx = _make_ctx_sized_knowledge(knowledge_dir, tmp_path / "tool-results", "memory_modify")
 
@@ -478,7 +476,6 @@ async def test_store_search_populates_source_ref_and_artifact_id(tmp_path: Path)
             artifact_kind="article",
             title="Identity Test Article",
             source_url="https://example.com/identity-test",
-            tags=["identity"],
         )
         results = idx.search("xyloquartz-identity-field-unique", source="knowledge")
         assert len(results) >= 1
@@ -498,7 +495,6 @@ def test_search_result_to_tool_output_excludes_identity_fields() -> None:
         title="Test",
         snippet="snippet",
         score=0.9,
-        tags=None,
         category=None,
         created=None,
         updated=None,
@@ -608,7 +604,7 @@ async def test_memory_create_with_source_url_sets_decay_protected(tmp_path: Path
 async def test_memory_modify_append_round_trips_content(tmp_path: Path) -> None:
     """memory_modify action='append' adds content to artifact body."""
     knowledge_dir = tmp_path / "knowledge"
-    path = _write_memory(knowledge_dir, 1, "User prefers pytest", tags=["preference"])
+    path = _write_memory(knowledge_dir, 1, "User prefers pytest")
     ctx = _make_ctx(knowledge_dir=knowledge_dir)
 
     slug = path.stem
@@ -624,7 +620,7 @@ async def test_memory_modify_append_round_trips_content(tmp_path: Path) -> None:
 async def test_memory_modify_replace_empty_target_returns_tool_error(tmp_path: Path) -> None:
     """memory_modify action='replace' with empty target returns tool_error (not raises)."""
     knowledge_dir = tmp_path / "knowledge"
-    path = _write_memory(knowledge_dir, 1, "User prefers pytest", tags=["preference"])
+    path = _write_memory(knowledge_dir, 1, "User prefers pytest")
     ctx = _make_ctx(knowledge_dir=knowledge_dir)
 
     slug = path.stem
@@ -637,7 +633,7 @@ async def test_memory_modify_replace_empty_target_returns_tool_error(tmp_path: P
 async def test_memory_modify_line_prefix_in_content_returns_tool_error(tmp_path: Path) -> None:
     """memory_modify rejects content with Read-tool line-number prefixes."""
     knowledge_dir = tmp_path / "knowledge"
-    path = _write_memory(knowledge_dir, 1, "User prefers pytest", tags=["preference"])
+    path = _write_memory(knowledge_dir, 1, "User prefers pytest")
     ctx = _make_ctx(knowledge_dir=knowledge_dir)
 
     slug = path.stem

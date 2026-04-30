@@ -63,7 +63,6 @@ class KnowledgeArtifact:
     created: str
     updated: str | None = None
     description: str | None = None
-    tags: list[str] = field(default_factory=list)
     related: list[str] = field(default_factory=list)
     source_type: str | None = None
     source_ref: str | None = None
@@ -84,7 +83,6 @@ def _coerce_fields(fm: dict[str, Any], body: str, path: Path) -> KnowledgeArtifa
         created=fm["created"],
         updated=fm.get("updated"),
         description=fm.get("description"),
-        tags=list(fm.get("tags") or []),
         related=list(fm.get("related") or []),
         source_type=fm.get("source_type"),
         source_ref=fm.get("source_ref"),
@@ -116,7 +114,6 @@ def load_knowledge_artifacts(
     knowledge_dir: Path,
     *,
     artifact_kind: str | None = None,
-    tags: list[str] | None = None,
 ) -> list[KnowledgeArtifact]:
     """Load all .md files under knowledge_dir as KnowledgeArtifacts.
 
@@ -134,8 +131,6 @@ def load_knowledge_artifacts(
             logger.warning("Failed to load %s: %s", path, exc)
             continue
         if artifact_kind is not None and artifact.artifact_kind != artifact_kind:
-            continue
-        if tags is not None and not any(tag in artifact.tags for tag in tags):
             continue
         artifacts.append(artifact)
     return artifacts

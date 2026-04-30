@@ -91,7 +91,6 @@ def test_save_artifact_url_match_consolidates(tmp_path: Path) -> None:
         artifact_kind="article",
         title="Asyncio Guide Updated",
         source_url="https://example.com/asyncio",
-        tags=["python", "async"],
     )
 
     assert result.action == "merged"

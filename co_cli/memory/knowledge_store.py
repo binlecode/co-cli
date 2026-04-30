@@ -112,7 +112,7 @@ SELECT c.source, c.doc_path AS path,
        snippet(chunks_fts, 0, '>', '<', '...', 40) AS snippet,
        bm25(chunks_fts) AS rank,
        c.chunk_index, c.start_line, c.end_line,
-       d.kind, d.title, d.tags, d.category, d.created, d.updated, d.provenance, d.certainty,
+       d.kind, d.title, d.category, d.created, d.updated, d.provenance, d.certainty,
        d.source_ref, d.artifact_id
   FROM chunks_fts
   JOIN chunks c ON c.rowid = chunks_fts.rowid
@@ -138,7 +138,7 @@ def _chunks_like_search(
         "SELECT c.source, c.doc_path AS path,"
         " substr(c.content, 1, 300) AS snippet, -1.0 AS rank,"
         " c.chunk_index, c.start_line, c.end_line,"
-        " d.kind, d.title, d.tags, d.category, d.created, d.updated,"
+        " d.kind, d.title, d.category, d.created, d.updated,"
         " d.provenance, d.certainty, d.source_ref, d.artifact_id"
         " FROM chunks c"
         " JOIN docs d ON d.source = c.source AND d.path = c.doc_path AND d.chunk_id = 0"
@@ -187,7 +187,6 @@ class SearchResult:
     title: str | None
     snippet: str | None
     score: float
-    tags: str | None
     category: str | None
     created: str | None
     updated: str | None
@@ -372,7 +371,6 @@ class KnowledgeStore:
         content: str | None = None,
         mtime: float | None = None,
         hash: str | None = None,
-        tags: str | None = None,
         category: str | None = None,
         created: str | None = None,
         updated: str | None = None,
@@ -401,9 +399,9 @@ class KnowledgeStore:
         content_str = content or ""
         self._conn.execute(
             """INSERT INTO docs
-                   (source, kind, path, title, content, mtime, hash, tags, category,
+                   (source, kind, path, title, content, mtime, hash, category,
                     created, updated, type, description, source_ref, artifact_id, chunk_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
             (
                 source,
                 kind,
@@ -412,7 +410,6 @@ class KnowledgeStore:
                 content_str,
                 mtime,
                 hash,
-                tags,
                 category,
                 created,
                 updated,
@@ -638,7 +635,6 @@ class KnowledgeStore:
                     title=row["title"],
                     snippet=row["snippet"],
                     score=score,
-                    tags=row["tags"],
                     category=row["category"],
                     created=row["created"],
                     updated=row["updated"],
@@ -748,7 +744,6 @@ class KnowledgeStore:
                 title=row["title"],
                 snippet=row["snippet"],
                 score=score,
-                tags=row["tags"],
                 category=row["category"],
                 created=row["created"],
                 updated=row["updated"],
@@ -829,7 +824,7 @@ class KnowledgeStore:
         doc_paths = list({row["doc_path"] for row in chunk_rows})
         doc_ph = ",".join("?" * len(doc_paths))
         doc_sql = (
-            f"SELECT source, kind, path, title, tags, category, created, updated, "
+            f"SELECT source, kind, path, title, category, created, updated, "
             f"provenance, certainty, type, description, source_ref, artifact_id"
             f" FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
         )
@@ -861,7 +856,6 @@ class KnowledgeStore:
                     title=meta["title"],
                     snippet=None,
                     score=max(0.0, 1.0 - dist),
-                    tags=meta["tags"],
                     category=meta["category"],
                     created=meta["created"],
                     updated=meta["updated"],
@@ -1163,8 +1157,6 @@ class KnowledgeStore:
                 fm, body = parse_frontmatter(raw)
                 artifact_kind = fm.get("artifact_kind") or fm.get("kind")
                 title = fm.get("title") or file_path.stem
-                tags_list = fm.get("tags") or []
-                tags_str = " ".join(tags_list) if tags_list else None
                 mtime = file_path.stat().st_mtime
 
                 self.index(
@@ -1175,7 +1167,6 @@ class KnowledgeStore:
                     content=body.strip(),
                     mtime=mtime,
                     hash=file_hash,
-                    tags=tags_str,
                     category=fm.get("auto_category"),
                     created=fm.get("created"),
                     updated=fm.get("updated"),

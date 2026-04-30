@@ -51,7 +51,6 @@ async def test_save_article_creates_file(tmp_path: Path):
         artifact_kind="article",
         title="Python Asyncio Guide",
         source_url="https://docs.python.org/3/library/asyncio.html",
-        tags=["python", "async"],
     )
 
     assert result.metadata["action"] == "saved"
@@ -68,7 +67,6 @@ async def test_save_article_creates_file(tmp_path: Path):
     assert fm["decay_protected"] is True
     assert fm["source_ref"] == "https://docs.python.org/3/library/asyncio.html"
     assert fm["source_type"] == "web_fetch"
-    assert "python" in fm["tags"]
     assert "Python asyncio" in raw
 
 
@@ -84,7 +82,6 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
         artifact_kind="article",
         title="Article",
         source_url=url,
-        tags=["v1"],
     )
     result = await memory_create(
         ctx,
@@ -92,7 +89,6 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
         artifact_kind="article",
         title="Article Updated",
         source_url=url,
-        tags=["v2"],
     )
 
     assert result.metadata["action"] == "merged"
@@ -102,9 +98,6 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
 
     raw = files[0].read_text(encoding="utf-8")
     assert "Version 2" in raw, "Merged file must have new content"
-    fm = yaml.safe_load(raw.split("---")[1])
-    assert "v1" in fm["tags"], "Tags must be merged"
-    assert "v2" in fm["tags"], "Tags must be merged"
 
 
 @pytest.mark.asyncio
@@ -119,7 +112,6 @@ async def test_save_article_indexes_into_fts(tmp_path: Path):
         artifact_kind="article",
         title="FTS Test Article",
         source_url="https://example.com/fts-test",
-        tags=["test"],
     )
 
     results = idx.search("xyloquartz-article-fts-unique", source="knowledge")
@@ -140,7 +132,6 @@ async def test_memory_search_article_grep_finds_article(tmp_path: Path):
         artifact_kind="article",
         title="Grep Test",
         source_url="https://example.com/grep",
-        tags=["reference"],
     )
 
     result = await memory_search(ctx, "xyloquartz-article-grep-unique", kind="article")
@@ -196,7 +187,6 @@ async def test_memory_search_article_fts_path(tmp_path: Path):
         artifact_kind="article",
         title="FTS Index Article",
         source_url="https://example.com/fts-index",
-        tags=["fts"],
     )
 
     result = await memory_search(ctx, "xyloquartz-article-fts-index-unique", kind="article")

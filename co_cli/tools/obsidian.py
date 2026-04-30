@@ -60,11 +60,9 @@ def _fts_search_notes(
     """FTS5 search path. Returns ToolReturn on success, None to fall through to regex."""
     try:
         ctx.deps.knowledge_store.sync_dir("obsidian", search_root)
-        tag_filter = tag.lstrip("#") if tag else None
         fts_results = ctx.deps.knowledge_store.search(
             query,
             source="obsidian",
-            tags=[tag_filter] if tag_filter else None,
             limit=limit + 1,
         )
         if search_root != vault:

@@ -72,7 +72,6 @@ def _seed_similar_cluster(knowledge_dir: Path) -> list[Path]:
             content=f"{common} {suffix}",
             created=datetime.now(UTC).isoformat(),
             source_type=SourceTypeEnum.DETECTED.value,
-            tags=["testing"],
         )
         path.write_text(render_knowledge_file(artifact), encoding="utf-8")
         paths.append(path)
@@ -158,22 +157,71 @@ async def test_full_cycle_executes_all_phases_with_live_llm(tmp_path: Path) -> N
     """End-to-end: mining extracts, merge consolidates, decay archives — all in one cycle."""
     deps, store = _make_deps(tmp_path, with_model=True)
     try:
+        # Multi-turn session with a cross-turn pattern: user rejects Pydantic twice
+        # in different contexts. Per-turn extractor sees only the last turn; the
+        # dream miner sees the repeated rejection and should extract the preference.
         session_path = deps.sessions_dir / "2026-04-16-T120000Z-aaaaaaaa.jsonl"
         append_messages(
             session_path,
             [
                 ModelRequest(
+                    parts=[UserPromptPart(content="How should I model my config in Python?")]
+                ),
+                ModelResponse(
+                    parts=[
+                        TextPart(
+                            content=(
+                                "I recommend Pydantic BaseModel — it gives you validation "
+                                "and type coercion out of the box."
+                            )
+                        )
+                    ],
+                    model_name="test-model",
+                ),
+                ModelRequest(
                     parts=[
                         UserPromptPart(
                             content=(
-                                "For future sessions: I always prefer ruff for linting, "
-                                "never flake8, never pylint."
+                                "Actually I'd prefer a plain dataclass. "
+                                "I'm keeping Pydantic out of this project."
                             )
                         )
                     ]
                 ),
                 ModelResponse(
-                    parts=[TextPart(content="Understood — ruff for linting.")],
+                    parts=[TextPart(content="Got it — here's the dataclass version.")],
+                    model_name="test-model",
+                ),
+                ModelRequest(
+                    parts=[
+                        UserPromptPart(
+                            content="What about modeling the API request and response types?"
+                        )
+                    ]
+                ),
+                ModelResponse(
+                    parts=[
+                        TextPart(
+                            content=(
+                                "For request/response types Pydantic is a natural fit "
+                                "since it serialises to and from JSON automatically."
+                            )
+                        )
+                    ],
+                    model_name="test-model",
+                ),
+                ModelRequest(
+                    parts=[
+                        UserPromptPart(
+                            content=(
+                                "Please use dataclasses again — I already said "
+                                "I'm avoiding Pydantic across the board."
+                            )
+                        )
+                    ]
+                ),
+                ModelResponse(
+                    parts=[TextPart(content="Understood, dataclass approach it is.")],
                     model_name="test-model",
                 ),
             ],

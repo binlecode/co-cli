@@ -16,7 +16,6 @@ def _chunk(path: str, chunk_index: int, score: float = 0.5) -> SearchResult:
         title=path,
         snippet=f"snippet from {path} chunk {chunk_index}",
         score=score,
-        tags=None,
         category=None,
         created=None,
         updated=None,

@@ -24,22 +24,6 @@ Use the same vocabulary as the per-turn extractor:
 
 Each call must include a `content` string; a short `title` is strongly encouraged.
 
-## Auto-injection tagging
-
-For artifacts that should be visible at the start of every future session,
-add `tags=["personality-context"]` to the `memory_create` call:
-
-- **Always tag personality-context:** `preference`, `feedback`
-- **Tag personality-context when stable:** `rule` (only if the rule reads as a
-  forward-acting standing instruction the agent should follow without being reminded)
-- **Never tag personality-context:** `reference`, `decision`, `article`, `note`
-
-Multiple tags are allowed — combine `personality-context` with any topic tags
-the artifact warrants.
-
-Example:
-`memory_create(content="user prefers pytest over unittest", artifact_kind="preference", tags=["personality-context", "testing"])`
-
 ## What NOT to extract
 
 - Anything already obvious from the per-turn slice (a single-turn preference already caught)

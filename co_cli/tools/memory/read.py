@@ -33,11 +33,7 @@ def grep_recall(
     Sorts by recency (updated or created, newest first).
     """
     query_lower = query.lower()
-    matches = [
-        m
-        for m in artifacts
-        if query_lower in m.content.lower() or any(query_lower in t.lower() for t in m.tags)
-    ]
+    matches = [m for m in artifacts if query_lower in m.content.lower()]
     matches.sort(key=lambda m: m.updated or m.created, reverse=True)
     return matches[:max_results]
 
@@ -104,7 +100,6 @@ async def memory_list(
                 "artifact_kind": a.artifact_kind,
                 "created": a.created,
                 "updated": a.updated,
-                "tags": a.tags,
                 "summary": summary,
             }
         )
