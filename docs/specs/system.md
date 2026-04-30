@@ -105,7 +105,6 @@ Startup sequencing detail is in [bootstrap.md](bootstrap.md); turn execution in 
   - `shell`: `ShellBackend` handle
   - `model`: `LlmModel` handle
   - `knowledge_store`: Optional `KnowledgeStore` integration
-  - `session_store`: Optional `SessionStore`
   - `resource_locks`: Shared `ResourceLockStore`
   - `file_read_mtimes`: Staleness detection registry
 - **Registries** (bootstrap-built tool definitions)
