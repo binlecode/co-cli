@@ -90,11 +90,12 @@ Bootstrap is one ordered path. The sections below follow the same order as the d
 
 The first access to `co_cli.config.settings` creates `~/.co-cli/` if needed, loads user settings, applies env overrides, validates the result, and caches the singleton `Settings` instance. In practice this happens during module import because the display layer and logging setup both read settings before `chat()` starts.
 
-Config precedence is:
+Config precedence is (lowest → highest):
 
 ```text
 1. ~/.co-cli/settings.json
-2. env vars
+2. ~/.co-cli/.env            (secrets file; does not overwrite shell-set vars)
+3. env vars (shell)
 ```
 
 ### Step 2. Enter `chat_loop()` and construct shell-local UI objects

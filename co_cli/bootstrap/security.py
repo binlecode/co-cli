@@ -28,12 +28,13 @@ def check_security(
     Checks:
       1. User settings.json file permissions (warn if not 0o600)
       2. shell.safe_commands wildcard entries (pattern == "*" auto-approves all shell commands)
+      3. .env file permissions (warn if not 0o600)
     """
     findings: list[SecurityCheckResult] = []
 
-    user_cfg = _user_config_path or (USER_DIR / "settings.json")
-    if Path(user_cfg).exists():
-        mode = Path(user_cfg).stat().st_mode & 0o777
+    user_cfg = Path(_user_config_path or (USER_DIR / "settings.json"))
+    if user_cfg.exists():
+        mode = user_cfg.stat().st_mode & 0o777
         if mode != 0o600:
             findings.append(
                 SecurityCheckResult(
@@ -45,7 +46,7 @@ def check_security(
             )
 
         try:
-            data = json.loads(Path(user_cfg).read_text(encoding="utf-8"))
+            data = json.loads(user_cfg.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             data = {}
         shell_data = data.get("shell", {})
@@ -60,6 +61,19 @@ def check_security(
                         "all shell commands are auto-approved without prompting"
                     ),
                     remediation=f"Remove '*' from shell.safe_commands in {user_cfg}",
+                )
+            )
+
+    dot_env = user_cfg.parent / ".env"
+    if dot_env.exists():
+        mode = dot_env.stat().st_mode & 0o777
+        if mode != 0o600:
+            findings.append(
+                SecurityCheckResult(
+                    severity="warn",
+                    check_id="dot-env-permissions",
+                    detail=f"{dot_env} permissions are {oct(mode)} (expected 0o600)",
+                    remediation=f"chmod 600 {dot_env}",
                 )
             )
 

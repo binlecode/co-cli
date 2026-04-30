@@ -72,6 +72,17 @@ def _fts_search_notes(
                 for r in fts_results
                 if r.path == search_root_str or r.path.startswith(search_root_str + "/")
             ]
+        if tag:
+            tag_filtered = []
+            for r in fts_results:
+                try:
+                    content = Path(r.path).read_text(encoding="utf-8")
+                    fm_tags = _extract_frontmatter_tags(content)
+                    if tag in fm_tags or tag in content:
+                        tag_filtered.append(r)
+                except Exception:
+                    continue
+            fts_results = tag_filtered
         has_more = len(fts_results) > limit
         fts_results = fts_results[:limit]
         if not fts_results:

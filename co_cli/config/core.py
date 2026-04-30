@@ -187,6 +187,17 @@ def load_config(
     data: dict[str, Any] = {}
 
     user_config = _user_config_path if _user_config_path is not None else SETTINGS_FILE
+
+    # Load .env from the same directory as settings.json using dotenv_values so os.environ
+    # is not mutated (safe for test isolation and repeated calls).
+    dot_env_file = user_config.parent / ".env"
+    dot_env_vars: dict[str, str] = {}
+    if dot_env_file.exists():
+        from dotenv import dotenv_values
+
+        raw = dotenv_values(dot_env_file)
+        dot_env_vars = {k: v for k, v in raw.items() if v is not None}
+
     if user_config.exists():
         with open(user_config) as f:
             try:
@@ -202,7 +213,16 @@ def load_config(
         except ValidationError as exc:
             raise ValueError(f"Invalid configuration — check: {user_config}:\n{exc}") from exc
 
-    context = {"env": _env} if _env is not None else None
+    # Precedence: _env (explicit/test) > os.environ (shell) > dot_env_vars (.env file).
+    # override=False semantics: shell wins over .env; _env wins over everything.
+    if _env is not None:
+        env_context: dict[str, str] | None = {**dot_env_vars, **_env}
+    elif dot_env_vars:
+        env_context = {**dot_env_vars, **os.environ}
+    else:
+        env_context = None
+
+    context = {"env": env_context} if env_context is not None else None
     try:
         resolved = Settings.model_validate(data, context=context)
     except ValidationError as exc:

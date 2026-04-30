@@ -389,7 +389,7 @@ wheels = [
 
 [[package]]
 name = "co-cli"
-version = "0.8.64"
+version = "0.8.71"
 source = { editable = "." }
 dependencies = [
     { name = "google-api-python-client" },
@@ -403,6 +403,7 @@ dependencies = [
     { name = "prompt-toolkit" },
     { name = "pydantic-ai" },
     { name = "pysqlite3" },
+    { name = "python-dotenv" },
     { name = "rich" },
     { name = "sqlite-vec" },
     { name = "typer" },
@@ -430,6 +431,7 @@ requires-dist = [
     { name = "prompt-toolkit", specifier = ">=3.0.52" },
     { name = "pydantic-ai", specifier = "==1.81.0" },
     { name = "pysqlite3", specifier = ">=0.6.0" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "rich", specifier = ">=14.3.2" },
     { name = "sqlite-vec", specifier = ">=0.1.6" },
     { name = "typer", specifier = ">=0.21.1" },
