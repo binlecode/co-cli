@@ -136,6 +136,13 @@ def build_agent(
         if category_hint:
             static_parts.append(category_hint)
 
+        if config.personality:
+            from co_cli.personality.prompts.loader import load_soul_critique
+
+            crit = load_soul_critique(config.personality)
+            if crit:
+                static_parts.append(f"## Review lens\n\n{crit}")
+
         static_instructions = "\n\n".join(static_parts)
 
         # Static layer — set once at agent construction; does not change between turns.

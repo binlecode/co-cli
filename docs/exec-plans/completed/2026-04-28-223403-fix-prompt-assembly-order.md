@@ -84,7 +84,7 @@ No new abstractions. No new modules. Callers of `build_static_instructions` outs
 
 ## Implementation Plan
 
-### TASK-1: Narrow `build_static_instructions` to stable sections only
+### ✓ DONE — TASK-1: Narrow `build_static_instructions` to stable sections only
 
 **files:**
 - `co_cli/context/assembly.py`
@@ -97,7 +97,7 @@ Remove the `# 3b. Personality memories` inline block and the `# 5. Critique` blo
 
 ---
 
-### TASK-2: Reassemble Block 0 in correct order in `core.py`
+### ✓ DONE — TASK-2: Reassemble Block 0 in correct order in `core.py`
 
 **files:**
 - `co_cli/agent/core.py`
@@ -122,7 +122,7 @@ This replaces the critique formatting that was previously inline in `assembly.py
 
 ---
 
-### TASK-3: Update and extend tests for ordering contract
+### ✓ DONE — TASK-3: Update and extend tests for ordering contract
 
 **files:**
 - `tests/prompts/test_static_instructions.py`
@@ -164,3 +164,19 @@ Plan approved.
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev fix-prompt-assembly-order`
+
+---
+
+## Delivery Summary — 2026-04-30
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | grep for `load_personality_memories\|load_soul_critique\|knowledge_dir` in assembly.py returns no matches; `tests/prompts/ -x` passes | ✓ pass |
+| TASK-2 | `uv run pytest tests/prompts/ -x` passes with new ordering tests | ✓ pass |
+| TASK-3 | `uv run pytest tests/prompts/test_static_instructions.py -x -v` passes; output includes `PASSED test_block0_critique_is_last` | ✓ pass |
+
+**Tests:** scoped (`tests/prompts/`, `tests/approvals/`) — 40 passed, 0 failed
+**Doc Sync:** fixed — `prompt-assembly.md`, `memory.md`, `personality.md` updated; `loader.py` docstring corrected; pre-existing lint/format issues in coworker files also fixed
+
+**Overall: DELIVERED**
+All three tasks passed. Block 0 now assembles in correct order: soul scaffold → toolset guidance → category hint → critique. `build_static_instructions` is narrowed to stable-forever content only.

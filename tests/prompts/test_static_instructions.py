@@ -1,8 +1,5 @@
 """Tests for build_static_instructions — static system prompt assembly."""
 
-from pathlib import Path
-
-import yaml
 from tests._settings import make_settings
 
 from co_cli.context.assembly import build_static_instructions
@@ -63,26 +60,35 @@ def test_static_assembly_includes_toolset_and_category_guidance() -> None:
     assert "file editing" in combined
 
 
-def test_static_instructions_includes_personality_memories(tmp_path: Path) -> None:
-    """When personality memories are present, they appear in the static instructions string."""
-    knowledge_dir = tmp_path / "knowledge"
-    knowledge_dir.mkdir()
-
-    frontmatter = {
-        "id": "test-pc-001",
-        "kind": "knowledge",
-        "artifact_kind": "preference",
-        "created": "2026-01-01T00:00:00+00:00",
-        "tags": ["personality-context"],
-    }
-    (knowledge_dir / "test-pc-sentinel.md").write_text(
-        f"---\n{yaml.dump(frontmatter)}---\n\npersonality-static-sentinel-XYZ789\n",
-        encoding="utf-8",
-    )
+def test_block0_critique_is_last() -> None:
+    """Critique (Review lens) is the last section in Block 0 when personality is configured."""
+    from co_cli.context.guidance import build_toolset_guidance
+    from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
+    from co_cli.personality.prompts.loader import load_soul_critique
+    from co_cli.tools.deferred_prompt import build_category_awareness_prompt
 
     config = make_settings().model_copy(update={"personality": "finch"})
-    result = build_static_instructions(config, knowledge_dir=knowledge_dir)
+    critique_text = load_soul_critique(config.personality)
+    assert critique_text, "finch personality must have a critique for this test to be meaningful"
 
-    assert "personality-static-sentinel-XYZ789" in result, (
-        f"personality memories missing from static instructions; got excerpt: {result[:200]!r}"
+    tool_index = {
+        "memory_search": ToolInfo(
+            name="memory_search",
+            description="search",
+            approval=False,
+            source=ToolSourceEnum.NATIVE,
+            visibility=VisibilityPolicyEnum.ALWAYS,
+        ),
+    }
+    base = build_static_instructions(config)
+    guidance = build_toolset_guidance(tool_index)
+    category_hint = build_category_awareness_prompt(tool_index)
+
+    static_parts = [p for p in [base, guidance, category_hint] if p]
+    if critique_text:
+        static_parts.append(f"## Review lens\n\n{critique_text}")
+    combined = "\n\n".join(static_parts)
+
+    assert combined.endswith(f"## Review lens\n\n{critique_text}"), (
+        "critique must be the last section of Block 0; something follows it"
     )

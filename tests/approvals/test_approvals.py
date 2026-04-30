@@ -1,5 +1,6 @@
 """Tests for approval subject resolution and session approval persistence."""
 
+import pytest
 from pydantic_ai import DeferredToolResults
 
 from co_cli.config.core import settings
@@ -77,45 +78,56 @@ def test_patch_display_includes_replace_all():
     assert "True" in subject.display
 
 
-def test_patch_display_includes_scope_hint():
-    """patch approval includes user-legible scope hint."""
-    subject = resolve_approval_subject(
-        "file_patch",
-        {"path": "src/bar.py", "old_string": "x", "new_string": "y"},
-    )
-    assert "allow all writes" in subject.display
-    assert "this session" in subject.display
+# --- scope wording: all tool types use noun phrase, not bracket notation ---
 
 
-# --- scope wording — no bracket notation ---
-
-
-def test_shell_hint_uses_noun_phrase():
-    """Shell approval hint is a noun phrase, not bracket notation."""
-    subject = resolve_approval_subject("shell", {"cmd": "git status"})
-    assert "[always → session:" not in subject.display
-    assert "this session" in subject.display
-
-
-def test_path_hint_uses_noun_phrase():
-    """Path approval hint is a noun phrase, not bracket notation."""
-    subject = resolve_approval_subject("file_write", {"path": "src/foo.py", "content": ""})
-    assert "[always → session:" not in subject.display
-    assert "this session" in subject.display
-
-
-def test_domain_hint_uses_noun_phrase():
-    """Domain approval hint is a noun phrase, not bracket notation."""
-    subject = resolve_approval_subject("web_fetch", {"url": "https://example.com/page"})
-    assert "[always → session:" not in subject.display
-    assert "this session" in subject.display
-
-
-def test_tool_hint_uses_noun_phrase():
-    """Generic tool approval hint is a noun phrase, not bracket notation."""
-    subject = resolve_approval_subject("some_mcp_tool", {"arg": "val"})
-    assert "[always → session:" not in subject.display
-    assert "this session" in subject.display
+@pytest.mark.parametrize(
+    ("tool_name", "kwargs", "must_contain", "must_not_contain"),
+    [
+        (
+            "shell",
+            {"cmd": "git status"},
+            ["this session"],
+            ["[always → session:"],
+        ),
+        (
+            "file_write",
+            {"path": "src/foo.py", "content": "x"},
+            ["this session", "allow all writes"],
+            ["[always → session:"],
+        ),
+        (
+            "file_patch",
+            {"path": "src/bar.py", "old_string": "x", "new_string": "y"},
+            ["this session", "allow all writes"],
+            ["[always → session:"],
+        ),
+        (
+            "web_fetch",
+            {"url": "https://example.com/page"},
+            ["this session"],
+            ["[always → session:"],
+        ),
+        (
+            "some_mcp_tool",
+            {"arg": "val"},
+            ["this session"],
+            ["[always → session:"],
+        ),
+    ],
+)
+def test_scope_hint_noun_phrase_and_session_wording(
+    tool_name: str,
+    kwargs: dict,
+    must_contain: list[str],
+    must_not_contain: list[str],
+) -> None:
+    """All approval hints use natural-language noun phrases, never bracket notation."""
+    subject = resolve_approval_subject(tool_name, kwargs)
+    for text in must_contain:
+        assert text in subject.display
+    for text in must_not_contain:
+        assert text not in subject.display
 
 
 # --- is_auto_approved exact-match semantics unchanged ---

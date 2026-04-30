@@ -4,8 +4,6 @@ Regression guard for the canon-channel refactor: character memories are surfaced
 on demand via memory_search rather than statically injected into the system prompt.
 """
 
-from pathlib import Path
-
 import pytest
 from tests._settings import make_settings
 
@@ -14,9 +12,9 @@ from co_cli.tools.memory._canon_recall import _SOULS_DIR
 
 
 @pytest.mark.parametrize("role", ["tars", "finch", "jeff"])
-def test_no_character_block_in_static_instructions(role: str, tmp_path: Path) -> None:
+def test_no_character_block_in_static_instructions(role: str) -> None:
     cfg = make_settings(personality=role)
-    prompt = build_static_instructions(cfg, knowledge_dir=tmp_path / "knowledge")
+    prompt = build_static_instructions(cfg)
 
     assert "## Character\n" not in prompt, (
         f"## Character block must not appear in static instructions for role={role}"
