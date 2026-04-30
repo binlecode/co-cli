@@ -77,3 +77,24 @@ When the needed capability is not visible in the current tool set, call
 description. Prefer a dedicated tool discovered this way over
 `shell` when it clearly fits the task. If `search_tools` returns no
 match, do not retry it — pivot or explain the limitation.
+
+## Memory
+
+### Explicit saves
+
+When the user explicitly asks to remember or save something — "remember I prefer X",
+"always do Y", "we decided Z", "save this URL", "remember this note" — call `memory_create`
+synchronously in the same turn. Do not defer to the dream cycle; dream handles implicit
+patterns only.
+
+**Kind selection:**
+
+| User intent | artifact_kind |
+|---|---|
+| Stable personal preference | `preference` |
+| Behavioral correction / "always / never / stop" | `feedback` |
+| Forward-acting standing rule or constraint | `rule` |
+| Recorded decision (project or design) | `decision` |
+| URL or external resource to save | `reference` |
+| Web article to index | `article` |
+| Free-form note | `note` |
