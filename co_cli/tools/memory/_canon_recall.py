@@ -18,14 +18,6 @@ def _tokenize(text: str) -> set[str]:
     return {t for t in _TOKEN_RE.findall(text.lower()) if t not in STOPWORDS and len(t) > 1}
 
 
-def _snippet(body: str, q: set[str], width: int = 200) -> str:
-    """Return up to `width` chars around the first paragraph that contains a query token."""
-    for para in body.split("\n\n"):
-        if _tokenize(para) & q:
-            return para.strip()[:width]
-    return body.strip()[:width]
-
-
 def search_canon(
     query: str,
     *,
@@ -35,9 +27,11 @@ def search_canon(
 ) -> list[dict]:
     """Glob the active role's memories and return up to `limit` hits ranked by token overlap.
 
-    Title (filename stem) matches count 2x — filenames are curated descriptors.
-    Returns [] if: role is empty/None, query has no non-stopword tokens, the role has no
-    memories directory, or the resolved path escapes the souls dir (defense-in-depth).
+    Title (filename stem) matches count 2x — filenames are curated descriptors. Each hit
+    carries the full post-frontmatter body; the corpus is small (per-role <1KB on average)
+    so the model receives whole scenes rather than a snippet that would force a follow-up
+    read. Returns [] if: role is empty/None, query has no non-stopword tokens, the role has
+    no memories directory, or the resolved path escapes the souls dir (defense-in-depth).
     """
     if not role:
         return []
@@ -64,7 +58,7 @@ def search_canon(
             raw = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        body = strip_frontmatter(raw)
+        body = strip_frontmatter(raw).strip()
         title_tokens = _tokenize(path.stem)
         body_tokens = _tokenize(body)
         score = 2 * len(q & title_tokens) + len(q & body_tokens)
@@ -75,10 +69,8 @@ def search_canon(
                 "channel": "canon",
                 "role": role,
                 "title": path.stem,
-                "snippet": _snippet(body, q),
+                "body": body,
                 "score": score,
-                "path": str(path),
-                "slug": path.stem,
             }
         )
 

@@ -26,12 +26,12 @@ def test_search_canon_top_m_cap() -> None:
 
 
 def test_search_canon_role_isolation() -> None:
-    """Searching finch returns finch memories; tars results never contain finch paths."""
+    """Searching finch returns finch hits; tars results never carry the finch role."""
     finch_hits = search_canon("preparation", role="finch", limit=3)
     tars_hits = search_canon("preparation", role="tars", limit=3)
     assert finch_hits, "Finch has 'preparation' canon — must return hits"
-    assert all("/finch/memories/" in h["path"] for h in finch_hits)
-    assert all("/finch/memories/" not in h["path"] for h in tars_hits)
+    assert all(h["role"] == "finch" for h in finch_hits)
+    assert all(h["role"] == "tars" for h in tars_hits)
 
 
 def test_search_canon_path_traversal_rejected() -> None:
@@ -83,23 +83,23 @@ def test_search_canon_stale_file_race(tmp_path: Path) -> None:
     assert all(r["title"] != "stale-deleted" for r in results)
 
 
-def test_search_canon_snippet_contains_query_token(tmp_path: Path) -> None:
-    """Snippet contains at least one query token when body has one."""
+def test_search_canon_body_contains_query_token(tmp_path: Path) -> None:
+    """Returned body contains at least one query token when the file body has one."""
     memories_dir = tmp_path / "test-role" / "memories"
     memories_dir.mkdir(parents=True)
     (memories_dir / "entry.md").write_text("This is about loyalty and dedication.")
 
     hits = search_canon("loyalty", role="test-role", limit=3, _souls_dir=tmp_path)
     assert hits, "Expected a hit for 'loyalty'"
-    assert "loyalty" in hits[0]["snippet"]
+    assert "loyalty" in hits[0]["body"]
 
 
 def test_search_canon_excludes_frontmatter(tmp_path: Path) -> None:
-    """YAML frontmatter must not contribute to scoring or appear in snippets.
+    """YAML frontmatter must not contribute to scoring or appear in returned body.
 
     Memory files carry frontmatter like `tags: [character, source-material]` and
     `auto_category: character`. Tokenizing the raw file would inflate scores and
-    leak YAML into snippets shown to the LLM.
+    leak YAML into the body the LLM sees.
     """
     memories_dir = tmp_path / "test-role" / "memories"
     memories_dir.mkdir(parents=True)
@@ -121,14 +121,14 @@ def test_search_canon_excludes_frontmatter(tmp_path: Path) -> None:
     assert search_canon("planted", role="test-role", limit=5, _souls_dir=tmp_path) == []
     assert search_canon("provenance", role="test-role", limit=5, _souls_dir=tmp_path) == []
 
-    # Tokens that appear in prose must still match — and snippet must exclude YAML.
+    # Tokens that appear in prose must still match — and body must exclude YAML.
     hits = search_canon("courage", role="test-role", limit=5, _souls_dir=tmp_path)
     assert hits, "Expected hit for 'courage' from prose"
-    snippet = hits[0]["snippet"]
-    assert "courage" in snippet
-    assert "---" not in snippet
-    assert "tags:" not in snippet
-    assert "auto_category" not in snippet
+    body = hits[0]["body"]
+    assert "courage" in body
+    assert "---" not in body
+    assert "tags:" not in body
+    assert "auto_category" not in body
 
 
 def test_search_canon_score_ordering(tmp_path: Path) -> None:

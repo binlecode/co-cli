@@ -316,7 +316,7 @@ async def memory_search(
 
     Artifacts result fields: channel, kind, title, snippet, score, path, slug
     Sessions result fields:  channel, session_id, when, source, summary
-    Canon result fields:     channel, role, title, snippet, score, path, slug
+    Canon result fields:     channel, role, title, body, score
 
     Args:
         query: FTS5 keyword query. Omit or pass empty string for recent-sessions browse mode.
@@ -332,13 +332,15 @@ async def memory_search(
 
     query = query.strip()
 
-    t2_results, t1_results, canon_results = await asyncio.gather(
+    knowledge_results, session_results_raw, canon_results = await asyncio.gather(
         _search_artifacts(ctx, query, kind, limit),
         _search_sessions(ctx, query, span),
         _search_canon_channel(ctx, query),
     )
 
-    all_results: list[dict] = list(t2_results) + list(t1_results) + list(canon_results)
+    all_results: list[dict] = (
+        list(knowledge_results) + list(session_results_raw) + list(canon_results)
+    )
 
     if not all_results:
         return tool_output(
@@ -375,9 +377,7 @@ async def memory_search(
     if char_canon_results:
         lines.append("\n**Character canon:**")
         for r in char_canon_results:
-            lines.append(
-                f"  **{r['title']}**: {(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
-            )
+            lines.append(f"\n### {r['title']}\n{r['body']}")
 
     return tool_output(
         "\n".join(lines),
