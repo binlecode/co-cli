@@ -13,7 +13,7 @@ No prior plan found for this slug. No related DESIGN or TODO docs.
 
 **Current-state validation:** Source verified against code (assembly.py:86-167, core.py:118-164). No phantom features or stale names found. No workflow hygiene issues.
 
-**Design update (post-plan):** `personality-context` tag and the associated `load_personality_memories` / `_personality_cache` mechanism are removed. The static prompt carries only the soul scaffold (seed, mindsets, examples, critique). All personality memory is reached via the canon channel (`memory_search`). This collapses Bug 1 from "move personality memories to tail" to "remove entirely". Terminology: T0/T1/T2 tiers are retired — the architecture uses static prompt + three memory channels (canon, session, knowledge).
+**Design update (post-plan):** `personality-context` tag and the associated `load_personality_memories` / `_personality_cache` mechanism are removed. The static prompt carries only the soul scaffold (seed, mindsets, examples, critique). All personality memory is reached via the canon channel (`memory_search`). This collapses Bug 1 from "move personality memories to tail" to "remove entirely". Terminology: tier framing is retired — the architecture uses static personality content + three recall channels (artifacts, sessions, canon).
 
 ---
 

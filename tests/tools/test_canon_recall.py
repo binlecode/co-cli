@@ -12,11 +12,11 @@ def test_search_canon_title_weight() -> None:
     assert hits[0]["title"].startswith("tars-humor-is-tactical")
 
 
-def test_search_canon_returns_tier_canon() -> None:
-    """Every hit must carry tier='canon'."""
+def test_search_canon_returns_channel_canon() -> None:
+    """Every hit must carry channel='canon'."""
     hits = search_canon("humor", role="tars", limit=5)
     assert hits
-    assert all(h["tier"] == "canon" for h in hits)
+    assert all(h["channel"] == "canon" for h in hits)
 
 
 def test_search_canon_top_m_cap() -> None:

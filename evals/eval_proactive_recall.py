@@ -134,7 +134,7 @@ async def run_all_cases() -> list[dict[str, Any]]:
         )
     )
 
-    # Case 2: saved-preference phrasing → memory_search (searches T2 artifacts)
+    # Case 2: saved-preference phrasing → memory_search (searches artifacts)
     results.append(
         await _run_case(
             "saved_preference",
@@ -143,7 +143,7 @@ async def run_all_cases() -> list[dict[str, Any]]:
         )
     )
 
-    # Case 3: convention phrasing → memory_search (searches T2 rules/decisions)
+    # Case 3: convention phrasing → memory_search (searches artifacts rules/decisions)
     results.append(
         await _run_case(
             "saved_convention",

@@ -12,7 +12,7 @@ The change is in how that content is consumed, not where it lives: scanned on de
 
 Per `docs/specs/personality.md` §2 "Asset Taxonomy: Canon vs Distillation": canon (memories) is observational and discrete by nature — a scene either matches the moment or doesn't. Distilled assets (mindsets, seed, examples, critique) prime behavior on every turn and stay static; canon moves to a searchable channel.
 
-Peer survey results (`docs/reference/RESEARCH-prompt-gaps-co-vs-hermes.md` and follow-up research): no peer co-indexes canon with user knowledge under a "gentle BM25 boost" — they either pin (Letta), use binary always-fire flags (SillyTavern `constant`), reserve token budget tiers, or use ≥10× multipliers for tier dominance. The peer-aligned solution within our unified `memory_search` surface is a **separate channel with its own budget**, not score boosting.
+Peer survey results (`docs/reference/RESEARCH-prompt-gaps-co-vs-hermes.md` and follow-up research): no peer co-indexes canon with user knowledge under a "gentle BM25 boost" — they either pin (Letta), use binary always-fire flags (SillyTavern `constant`), reserve token budget bands, or use ≥10× multipliers for source dominance. The peer-aligned solution within our unified `memory_search` surface is a **separate channel with its own budget**, not score boosting.
 
 **Doc accuracy:** `docs/specs/personality.md` §1 step `[2] character memories` and `docs/specs/prompt-assembly.md` §2.1 step `2. Character memories` describe the static-injection model and will need a post-delivery `sync-doc` pass to reframe `souls/{role}/memories/*.md` as a search-channel source rather than a static prompt input. The Asset Taxonomy table in §2 of `personality.md` already aligns with the new model.
 
@@ -24,14 +24,14 @@ Peer survey results (`docs/reference/RESEARCH-prompt-gaps-co-vs-hermes.md` and f
 
 **Failure cost:** Token tax on every turn for content the model usually doesn't need, no path to scale character lore beyond the per-prompt token ceiling, and the model has no way to *search* canon when it would actually help (e.g. user references a specific scene).
 
-**Outcome:** `memory_search` gains a third channel — `_search_canon` — that scans `co_cli/personality/prompts/souls/{role}/memories/*.md` for the active role on each non-empty query, scores by token overlap (title 2× weight), and returns up to M=3 hits merged with T2/T1 results. The static prompt drops the `## Character` block; the static layer carries voice via seed + mindsets + personality-context. The LLM sees one merged result list — no `kind=character-memory` exposed in tool surfaces.
+**Outcome:** `memory_search` gains a third channel — `_search_canon` — that scans `co_cli/personality/prompts/souls/{role}/memories/*.md` for the active role on each non-empty query, scores by token overlap (title 2× weight), and returns up to M=3 hits merged with the artifacts and sessions channels. The static prompt drops the `## Character` block; the static layer carries voice via seed + mindsets + personality-context. The LLM sees one merged result list — no `kind=character-memory` exposed in tool surfaces.
 
 **Success signal (user-observable):** With `personality=tars`, asking "what's TARS's deal with humor?" surfaces canon hits from `tars-humor-is-tactical-front-loaded-delivered-flat.md` via `memory_search`; the system prompt no longer contains a `## Character` block; voice cadence on coding/exploration/debugging tasks remains consistent vs. baseline.
 
 ## Scope
 
 **In scope:**
-- New `search_canon(query, role, limit)` function in `co_cli/tools/memory/_canon_recall.py` — globs `souls/{role}/memories/*.md`, tokenizes with shared `STOPWORDS`, scores by token overlap (title 2× weight), returns top-M dicts with `tier="canon"`
+- New `search_canon(query, role, limit)` function in `co_cli/tools/memory/_canon_recall.py` — globs `souls/{role}/memories/*.md`, tokenizes with shared `STOPWORDS`, scores by token overlap (title 2× weight), returns top-M dicts with `channel="canon"`
 - Third channel in `memory_search` (`co_cli/tools/memory/recall.py`) — parallel to `_search_artifacts` / `_search_sessions`, role pulled from `config.personality`, cap M from `config.knowledge.character_recall_limit`
 - New config field `character_recall_limit: int = 3` on `KnowledgeSettings` (env `CO_CHARACTER_RECALL_LIMIT`)
 - Removal of `## Character` block from `build_static_instructions` (`co_cli/context/assembly.py`)
@@ -43,9 +43,9 @@ Peer survey results (`docs/reference/RESEARCH-prompt-gaps-co-vs-hermes.md` and f
 
 ## Behavioral Constraints
 
-- **No LLM-visible distinction between canon and other memory results.** The `memory_search` tool description, return schema, and result formatting must keep canon results merged into the same list as T2/T1. Adding a `kind=character-memory` or a separate tool would re-introduce the surface complexity we're avoiding.
+- **No LLM-visible distinction between canon and other memory results.** The `memory_search` tool description, return schema, and result formatting must keep canon results merged into the same list as the artifacts and sessions channels. Adding a `kind=character-memory` or a separate tool would re-introduce the surface complexity we're avoiding.
 - **Static prompt cache stability preserved.** The canon scan runs only when `memory_search` is invoked, never in `@agent.instructions`. The static prompt becomes shorter and stable across sessions for a given personality — prefix cache improves, never degrades.
-- **Read-only at runtime.** Canon is package data; no agent tool writes to `souls/{role}/memories/`. Agent-learned character context (e.g. "Finch's terse tone confirmed by user") flows through T2 with a `role` tag, not into canon.
+- **Read-only at runtime.** Canon is package data; no agent tool writes to `souls/{role}/memories/`. Agent-learned character context (e.g. "Finch's terse tone confirmed by user") flows through the artifacts channel with a `role` tag, not into canon.
 - **Active-role filter is strict — role comes from config, not from caller.** `_search_canon` reads `role = ctx.deps.config.personality` and only opens `_SOULS_DIR / role / "memories"`. Roles are validated upstream by `co_cli.personality.prompts.validator.VALID_PERSONALITIES` at config-parse time, so untrusted role names cannot reach the path. Defense-in-depth: the resolved memories path must be `is_relative_to(_SOULS_DIR)` before any `glob`. A user running TARS cannot see Finch canon, and the LLM has no parameter to override the active role.
 - **Cap M on canon channel, default 3, configurable.** `_search_canon` reads `config.knowledge.character_recall_limit` (env var `CO_CHARACTER_RECALL_LIMIT`, default 3). Caller's `limit` argument does not override this — canon channel has its own budget independent of the caller's general-search budget.
 - **Stateless.** `_search_canon` is a pure function over package data — no persistent state, no init step, no deps field. Files added or edited in `souls/{role}/memories/` are picked up on the next call.
@@ -61,7 +61,7 @@ Code-grounded reasoning (cannot run live model in plan phase; eval gate validate
 1. **Voice cadence regression after static block removal.** Risk: low. Static layer retains seed (18 lines, identity declaration + 11 Never rules — voice-dense) + 6 mindsets (~57 lines, task-prescriptive) + personality-context + examples + critique. Mindsets are pre-extrapolated for task type; canon is diffuse texture. Mitigation: voice eval test (`eval_character_memory_recall.py` voice subcase) compares cadence on representative tasks.
 
 2. **Canon recall doesn't trigger.** Risk: medium. The model must call `memory_search` to surface canon. For pure character-voice queries the model may not search. Mitigation:
-   - Tool description already coaches proactive recall ("the user references a project, person, decision, or concept that seems familiar"). Canon will be reached via the same proactive-recall path that already serves T2 user notes.
+   - Tool description already coaches proactive recall ("the user references a project, person, decision, or concept that seems familiar"). Canon will be reached via the same proactive-recall path that already serves user-knowledge artifacts.
    - Eval validates canon-invoking queries surface canon hits.
    - Long-tail mitigation (out of scope): add a per-turn hint when user message contains role-canonical entities. Deferred unless eval shows persistent miss.
 
@@ -115,7 +115,7 @@ Each `memory_search` call with a non-empty query reads the active role's `memori
 | `co_cli/context/assembly.py` | Remove `character_memories` import, variable, and the `if character_memories: parts.append(...)` block. Drop the `# 2. Character memories` section from the comment header. |
 | `co_cli/personality/prompts/loader.py` | No change. (`load_character_memories` becomes dead code — Out of scope.) |
 | `co_cli/personality/prompts/validator.py` | No change. |
-| `co_cli/tools/memory/recall.py` | Add `_search_canon(ctx, query)` async wrapper that calls `search_canon(query, role=ctx.deps.config.personality, limit=ctx.deps.config.knowledge.character_recall_limit)` from `_canon_recall.py`. Two guards: (a) `config.personality is None` → `[]`; (b) tokenized query empty (handled inside `search_canon`) → `[]`. Add to `asyncio.gather` in `memory_search`. Concat results into `all_results` with `tier="canon"`. Update result formatting (rendering header `**Character canon:**` + items, parallel to `**Saved artifacts:**` / `**Past sessions:**`). Add one bullet to the tool description's `USE THIS PROACTIVELY when:` list — verbatim text: `"the user asks about your character, your background, how you typically handle a situation, or references your source material."` Empty-query path (`_browse_recent` at `:287-288`) must continue to bypass `_search_canon`. |
+| `co_cli/tools/memory/recall.py` | Add `_search_canon_channel(ctx, query)` async wrapper that calls `search_canon(query, role=ctx.deps.config.personality, limit=ctx.deps.config.knowledge.character_recall_limit)` from `_canon_recall.py`. Two guards: (a) `config.personality is None` → `[]`; (b) tokenized query empty (handled inside `search_canon`) → `[]`. Add to `asyncio.gather` in `memory_search`. Concat results into `all_results` with `channel="canon"`. Update result formatting (rendering header `**Character canon:**` + items, parallel to `**Saved artifacts:**` / `**Past sessions:**`). Add one bullet to the tool description's `USE THIS PROACTIVELY when:` list — verbatim text: `"the user asks about your character, your background, how you typically handle a situation, or references your source material."` Empty-query path (`_browse_recent` at `:287-288`) must continue to bypass the canon channel. |
 | `co_cli/config/knowledge.py` | Add `character_recall_limit: int = Field(default=3, ge=1)` to `KnowledgeSettings` (`knowledge.py:55`, has `extra="forbid"` so the field must be declared explicitly), and add `"character_recall_limit": "CO_CHARACTER_RECALL_LIMIT"` to `KNOWLEDGE_ENV_MAP` (`knowledge.py:18`). The settings are mounted on `Settings.knowledge` in `co_cli/config/core.py:85` — no edit to `core.py` needed. |
 
 No edits to `co_cli/deps.py`, `co_cli/bootstrap/core.py`, or `co_cli/main.py` — `_search_canon` is invoked from `recall.py` and reads package data directly, so it needs no bootstrap step and no deps field.
@@ -173,7 +173,7 @@ def search_canon(query: str, *, role: str, limit: int) -> list[dict]:
         if score == 0:
             continue
         hits.append({
-            "tier": "canon",
+            "channel": "canon",
             "role": role,
             "title": path.stem,
             "snippet": _snippet(body, q),
@@ -199,10 +199,10 @@ The whole module is ~50 lines including the snippet helper.
 
 ### memory_search wiring
 
-In `_search_canon`, the role comes from `ctx.deps.config.personality`. Result dicts use `tier="canon"`. The `memory_search` rendering loop adds a `**Character canon:**` section when canon hits are present, parallel to `**Saved artifacts:**` and `**Past sessions:**`. The dict shape:
+In `_search_canon_channel`, the role comes from `ctx.deps.config.personality`. Result dicts use `channel="canon"`. The `memory_search` rendering loop adds a `**Character canon:**` section when canon hits are present, parallel to `**Saved artifacts:**` and `**Past sessions:**`. The dict shape:
 
 ```python
-{"tier": "canon", "role": role, "title": title, "snippet": snippet, "score": score, "path": path, "slug": Path(path).stem}
+{"channel": "canon", "role": role, "title": title, "snippet": snippet, "score": score, "path": path, "slug": Path(path).stem}
 ```
 
 ### Decisions and rationale
@@ -273,7 +273,7 @@ def test_search_canon_title_weight():
 `prerequisites: [TASK-1]`
 
 `done_when:` `uv run pytest tests/tools/test_memory_search_canon.py -x` passes — exercises:
-- (a) Canon-invoking query returns up to `config.knowledge.character_recall_limit` canon hits with `tier="canon"` merged into `all_results` alongside T2/T1.
+- (a) Canon-invoking query returns up to `config.knowledge.character_recall_limit` canon hits with `channel="canon"` merged into `all_results` alongside the artifacts and sessions channels.
 - (b) **Role from config, not from caller:** `memory_search(ctx, query="humor", role="finch")` is rejected by signature — the tool exposes no `role` argument; role is read inside `_search_canon` from `ctx.deps.config.personality`.
 - (c) Result rendering includes a `**Character canon:**` section header when canon hits are present, parallel to `**Saved artifacts:**` and `**Past sessions:**`.
 - (d) Empty query (`""`) bypasses `_search_canon` entirely via the existing `_browse_recent` early-return at `recall.py:287-288`.
@@ -288,7 +288,7 @@ def test_search_canon_title_weight():
 async def test_memory_search_includes_canon_channel(deps_with_personality_tars):
     ctx = make_run_context(deps_with_personality_tars)
     out = await memory_search(ctx, query="humor tactical")
-    canon = [r for r in out.metadata["results"] if r["tier"] == "canon"]
+    canon = [r for r in out.metadata["results"] if r["channel"] == "canon"]
     assert 1 <= len(canon) <= 3
     assert all(r["role"] == "tars" for r in canon)
     assert "Character canon:" in out.text
@@ -297,13 +297,13 @@ async def test_memory_search_canon_capped_at_recall_limit(deps_with_personality_
     deps_with_personality_tars.config.knowledge.character_recall_limit = 2
     ctx = make_run_context(deps_with_personality_tars)
     out = await memory_search(ctx, query="tars humor mission directive loyalty")
-    canon = [r for r in out.metadata["results"] if r["tier"] == "canon"]
+    canon = [r for r in out.metadata["results"] if r["channel"] == "canon"]
     assert len(canon) <= 2
 
 async def test_memory_search_no_personality_skips_canon(deps_no_personality):
     ctx = make_run_context(deps_no_personality)
     out = await memory_search(ctx, query="humor tactical")
-    assert not any(r["tier"] == "canon" for r in out.metadata["results"])
+    assert not any(r["channel"] == "canon" for r in out.metadata["results"])
 ```
 
 ### ✓ DONE — TASK-7 — Capture pre-change voice baseline (must complete before TASK-4)
@@ -395,7 +395,7 @@ Pytest commands must pipe to `.pytest-logs/$(date +%Y%m%d-%H%M%S)-<scope>.log` p
 
 ## Open Questions
 
-1. **`canon` tier rendering header label.** Plan uses `**Character canon:**`. Alternative phrasings: `**Persona context:**`, `**Source-material recall:**`. The header is shown to the model in the merged result list. Recommendation: `**Character canon:**` — short, clear, matches the term used in the spec's Asset Taxonomy table.
+1. **`canon` channel rendering header label.** Plan uses `**Character canon:**`. Alternative phrasings: `**Persona context:**`, `**Source-material recall:**`. The header is shown to the model in the merged result list. Recommendation: `**Character canon:**` — short, clear, matches the term used in the spec's Asset Taxonomy table.
 
 ## Final — Team Lead
 

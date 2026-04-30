@@ -45,7 +45,7 @@ The only difference is timing: same-turn (sync) vs. post-session (dream).
 
 - Dream cycle and `dream_miner.md` changes — already done.
 - A dedicated "save preference" tool — `memory_create` with correct kind + tag already covers it.
-- Cross-session recall — `memory_search` already covers all tiers.
+- Cross-session recall — `memory_search` already covers all channels.
 - `load_personality_memories` (`loader.py:38–71`) — must not change; only the protocol rule changes.
 
 ## Phases

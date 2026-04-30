@@ -1,1 +1,1 @@
-"""Memory layer — session transcripts (T1) and reusable knowledge artifacts (T2)."""
+"""Memory layer — session transcripts and reusable knowledge artifacts."""

@@ -1,4 +1,4 @@
-"""Memory write tools — `memory_create` and `memory_modify` over T2 knowledge artifacts."""
+"""Memory write tools — `memory_create` and `memory_modify` over knowledge artifacts."""
 
 import logging
 

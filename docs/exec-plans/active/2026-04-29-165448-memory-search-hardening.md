@@ -1,13 +1,13 @@
-# Plan: T1 Search Hardening
+# Plan: Sessions Channel Search Hardening
 
 Task type: code-feature
 
 ## Context
 
-A gap analysis of T1 (session transcript) search against the hermes-agent reference design
-surfaced seven issues. Issue 1 (all-or-nothing timeout) was fixed inline in this session:
-`recall.py:_search_sessions()` now uses `asyncio.wait()` + per-task result collection so
-sessions that finish before the deadline are returned even if others time out.
+A gap analysis of the sessions channel (session transcript search) against the hermes-agent
+reference design surfaced seven issues. Issue 1 (all-or-nothing timeout) was fixed inline in
+this session: `recall.py:_search_sessions()` now uses `asyncio.wait()` + per-task result
+collection so sessions that finish before the deadline are returned even if others time out.
 
 This plan addresses the remaining six issues in priority order. Issue 7 (FTS5 phrase-quoting
 false negatives) is deferred — it has no clean fix without changing the overall FTS5 tokenizer
@@ -16,7 +16,7 @@ practice.
 
 **Current-state validation:**
 - `co_cli/memory/indexer.py`: confirmed — only `user-prompt` and `text` parts indexed; no tool-return content.
-- `co_cli/memory/summary.py:_find_match_positions()`: confirmed — tier-3 term list includes raw boolean operators.
+- `co_cli/memory/summary.py:_find_match_positions()`: confirmed — strategy-3 term list includes raw boolean operators.
 - `co_cli/memory/session_store.py:search()`: confirmed — no recency component; pure BM25 score.
 - `co_cli/memory/session_store.py:_like_fallback()`: confirmed — all rows get `rank = -1.0`.
 - `co_cli/memory/session_store.py:sync_sessions()`: confirmed — no cleanup of stale entries.
@@ -32,7 +32,7 @@ practice.
 
 ## Problem & Outcome
 
-**Problem:** T1 session search has five structural deficiencies that degrade recall quality
+**Problem:** The sessions channel has five structural deficiencies that degrade recall quality
 and create unpredictable behavior.
 
 **Failure cost:**
@@ -47,9 +47,9 @@ and create unpredictable behavior.
 - Stale index entries → deleted sessions waste overfetch budget and produce silent misses in
   `_prepare_tasks()`.
 
-**Outcome:** After this plan, T1 search correctly indexes tool-produced content, anchors
-transcript windows on true query terms, blends recency into ranking, ranks LIKE fallback by
-match density, and evicts deleted sessions from the index.
+**Outcome:** After this plan, the sessions channel correctly indexes tool-produced content,
+anchors transcript windows on true query terms, blends recency into ranking, ranks LIKE
+fallback by match density, and evicts deleted sessions from the index.
 
 ---
 
@@ -57,15 +57,15 @@ match density, and evicts deleted sessions from the index.
 
 **In scope:**
 - `co_cli/memory/indexer.py`: add tool-return indexing with length cap
-- `co_cli/memory/summary.py`: strip FTS5 boolean operators from tier-3 term list
+- `co_cli/memory/summary.py`: strip FTS5 boolean operators from strategy-3 term list
 - `co_cli/memory/session_store.py`: recency blending, LIKE fallback ranking, stale-entry eviction
 
 **Out of scope:**
 - Issue 7 (FTS5 phrase-quoting false negatives) — deferred; no clean fix without rethinking
   tokenizer strategy
 - Issue 8 (double dedup) — informational; behavior is correct
-- Changing the `_T1_SESSION_CAP` or overfetch constants
-- Vector/semantic search for T1
+- Changing the `_SESSIONS_CHANNEL_CAP` or overfetch constants
+- Vector/semantic search for the sessions channel
 
 ---
 
@@ -88,13 +88,13 @@ match density, and evicts deleted sessions from the index.
 
 ### TASK-1: Strip FTS5 boolean operators from window truncation terms
 
-In `_find_match_positions()`, tier-3 individual-term fallback currently includes "AND", "OR",
+In `_find_match_positions()`, strategy-3 individual-term fallback currently includes "AND", "OR",
 "NOT" as search terms when the user query uses FTS5 boolean syntax. These tokens appear
 throughout any transcript ("or", "not") and flood the match-position list with false anchors,
 causing `_best_window_start()` to pick a misaligned window.
 
 Fix: define `_FTS5_BOOL_OPS = frozenset({"and", "or", "not"})` and filter term candidates
-in tier-3. Also filter single-char tokens (already filtered in `_like_tokens` but not here).
+in strategy-3. Also filter single-char tokens (already filtered in `_like_tokens` but not here).
 
 ### TASK-2: Index tool-return content
 

@@ -98,7 +98,7 @@ async def test_browse_mode_returns_recent_sessions(tmp_path: Path) -> None:
         assert "when" in first, "Browse results must include when"
         assert "title" in first, "Browse results must include title"
         assert "file_size" in first, "Browse results must include file_size"
-        assert first["tier"] == "sessions", "Browse results must carry tier='sessions'"
+        assert first["channel"] == "sessions", "Browse results must carry channel='sessions'"
 
         # Browse mode does NOT produce LLM summaries
         assert "summary" not in first, (

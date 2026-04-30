@@ -1,4 +1,4 @@
-"""Memory tools — unified recall over T2 knowledge artifacts and T1 session transcripts."""
+"""Memory tools — unified recall over knowledge artifacts, session transcripts, and canon."""
 
 import asyncio
 import logging
@@ -35,17 +35,17 @@ hermes-style LLM summarization call. 60s covers parallel invocations
 on a local 35B model while still failing fast on hangs.
 """
 
-_T1_SESSION_CAP = 3
-"""Maximum number of T1 sessions to summarize regardless of limit."""
+_SESSIONS_CHANNEL_CAP = 3
+"""Maximum number of sessions-channel hits to summarize regardless of limit."""
 
 _SESSION_FALLBACK_PREVIEW_CHARS = 500
 """Raw preview length used when LLM summarization fails for a session."""
 
 _SNIPPET_DISPLAY_CHARS = 100
-"""Maximum chars shown from a T2 artifact snippet in formatted output."""
+"""Maximum chars shown from an artifact snippet in formatted output."""
 
 _SESSION_SUMMARY_PREVIEW_CHARS = 300
-"""Maximum chars of a T1 session summary shown in formatted output."""
+"""Maximum chars of a session summary shown in formatted output."""
 
 
 def _browse_recent(
@@ -77,7 +77,7 @@ def _browse_recent(
         count=len(sessions),
         results=[
             {
-                "tier": "sessions",
+                "channel": "sessions",
                 "session_id": s.session_id,
                 "when": s.created_at.isoformat()[:10],
                 "title": s.title,
@@ -142,7 +142,7 @@ def _build_results_payload(
             summary = summary_result
         results_payload.append(
             {
-                "tier": "sessions",
+                "channel": "sessions",
                 "session_id": session_id,
                 "when": match_info.created_at[:10],
                 "source": match_info.session_path,
@@ -158,7 +158,7 @@ async def _search_artifacts(
     kind: str | None,
     limit: int,
 ) -> list[dict]:
-    """BM25 FTS / grep fallback over T2 knowledge artifacts. Returns tier='artifacts' dicts."""
+    """BM25 FTS / grep fallback over knowledge artifacts. Returns channel='artifacts' dicts."""
     if ctx.deps.knowledge_store is not None:
         try:
             fts_results = ctx.deps.knowledge_store.search(
@@ -169,7 +169,7 @@ async def _search_artifacts(
             )
             return [
                 {
-                    "tier": "artifacts",
+                    "channel": "artifacts",
                     "kind": r.kind,
                     "title": r.title or (Path(r.path).stem if r.path else ""),
                     "snippet": r.snippet,
@@ -180,12 +180,12 @@ async def _search_artifacts(
                 for r in fts_results
             ]
         except Exception as e:
-            logger.warning("T2 FTS search failed, falling back to grep: %s", e)
+            logger.warning("Artifacts FTS search failed, falling back to grep: %s", e)
     artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind)
     matches = grep_recall(artifacts, query, limit)
     return [
         {
-            "tier": "artifacts",
+            "channel": "artifacts",
             "kind": m.artifact_kind,
             "title": m.title or m.path.stem,
             "snippet": m.content[:_SNIPPET_DISPLAY_CHARS],
@@ -202,9 +202,9 @@ async def _search_sessions(
     query: str,
     span: Span,
 ) -> list[dict]:
-    """FTS search over T1 session transcripts. Returns tier='sessions' dicts.
+    """FTS search over session transcripts. Returns channel='sessions' dicts.
 
-    Capped at _T1_SESSION_CAP sessions regardless of caller's limit.
+    Capped at _SESSIONS_CHANNEL_CAP sessions regardless of caller's limit.
     Returns [] if session_store is unavailable.
     Uses best-effort summarization: sessions that finish within the timeout are
     returned; timed-out sessions fall back to raw preview rather than dropping all.
@@ -213,13 +213,13 @@ async def _search_sessions(
     if store is None:
         return []
 
-    raw_results = store.search(query, limit=_T1_SESSION_CAP * 5)
+    raw_results = store.search(query, limit=_SESSIONS_CHANNEL_CAP * 5)
     if not raw_results:
         return []
 
     current_path = ctx.deps.session.session_path
     current_resolved = current_path.resolve() if current_path else None
-    seen = _dedup_sessions(raw_results, current_resolved, _T1_SESSION_CAP)
+    seen = _dedup_sessions(raw_results, current_resolved, _SESSIONS_CHANNEL_CAP)
     tasks = _prepare_tasks(seen, query)
     if not tasks:
         return []
@@ -281,18 +281,19 @@ async def memory_search(
     kind: str | None = None,
     limit: int = 10,
 ) -> ToolReturn:
-    """Search memory across both saved artifacts (T2) and past sessions (T1) in one call.
+    """Search memory across saved artifacts, past sessions, and canon in one call.
 
     TWO MODES:
     (a) Empty query → recent-sessions browse, zero LLM cost. Use when the user asks what
         was worked on recently, what we did last time, or to browse session history.
-        T2 artifacts are not returned for empty queries (BM25 requires search terms).
-    (b) Keyword query → searches both T2 artifacts (BM25 FTS5/grep) and T1 sessions
-        (LLM-summarized) in parallel. Returns a flat list with a "tier" field per result
-        ("artifacts" or "sessions"). T1 is capped at 3 sessions regardless of limit.
+        Artifacts are not returned for empty queries (BM25 requires search terms).
+    (b) Keyword query → searches the artifacts channel (BM25 FTS5/grep), the sessions
+        channel (LLM-summarized), and the canon channel in parallel. Returns a flat
+        list with a "channel" field per result ("artifacts", "sessions", or "canon").
+        The sessions channel is capped at 3 hits regardless of limit.
 
-    IMPORTANT: scores in results are NOT cross-comparable across tiers — use the "tier"
-    field to interpret each result's provenance.
+    IMPORTANT: scores in results are NOT cross-comparable across channels — use the
+    "channel" field to interpret each result's provenance.
 
     USE THIS for ALL recall tasks — saved preferences, past conversations, project
     conventions, saved articles.
@@ -305,22 +306,22 @@ async def memory_search(
     - The user asks about your character, your background, how you typically handle a situation, or references your source material
 
     Concrete examples:
-    - "what was my preferred test runner?" → memory_search (searches T2 preferences)
-    - "what did we figure out about docker last time?" → memory_search (searches T1 sessions)
+    - "what was my preferred test runner?" → memory_search (searches artifacts preferences)
+    - "what did we figure out about docker last time?" → memory_search (searches sessions)
     - "what was that auth bug we hit?" → memory_search (searches both)
-    - "what's our convention for logging?" → memory_search (searches T2 rules/decisions)
+    - "what's our convention for logging?" → memory_search (searches artifacts rules/decisions)
 
     Search syntax (FTS5): keywords joined with OR for broad recall (auth OR login OR session),
     phrases for exact match ("connection pool"), boolean (python NOT java), prefix (deploy*).
 
-    T2 result fields: tier, kind, title, snippet, score, path, slug
-    T1 result fields: tier, session_id, when, source, summary
-    Canon result fields: tier, role, title, snippet, score, path, slug
+    Artifacts result fields: channel, kind, title, snippet, score, path, slug
+    Sessions result fields:  channel, session_id, when, source, summary
+    Canon result fields:     channel, role, title, snippet, score, path, slug
 
     Args:
         query: FTS5 keyword query. Omit or pass empty string for recent-sessions browse mode.
-        kind: Filter T2 results by artifact_kind (e.g. "preference", "article"). None = all.
-        limit: Max T2 results (default 10). T1 is always capped at 3 sessions.
+        kind: Filter artifacts results by artifact_kind (e.g. "preference", "article"). None = all.
+        limit: Max artifacts results (default 10). Sessions channel is always capped at 3.
     """
     span = otel_trace.get_current_span()
 
@@ -349,9 +350,9 @@ async def memory_search(
 
     lines = [f"Found {len(all_results)} result(s) for '{query}':\n"]
 
-    artifact_results = [r for r in all_results if r["tier"] == "artifacts"]
-    session_results = [r for r in all_results if r["tier"] == "sessions"]
-    char_canon_results = [r for r in all_results if r["tier"] == "canon"]
+    artifact_results = [r for r in all_results if r["channel"] == "artifacts"]
+    session_results = [r for r in all_results if r["channel"] == "sessions"]
+    char_canon_results = [r for r in all_results if r["channel"] == "canon"]
 
     if artifact_results:
         lines.append("**Saved artifacts:**")

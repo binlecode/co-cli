@@ -1,4 +1,4 @@
-"""Memory read tools — `memory_list` and `memory_read` over T2 knowledge artifacts."""
+"""Memory read tools — `memory_list` and `memory_read` over knowledge artifacts."""
 
 import logging
 from typing import Any

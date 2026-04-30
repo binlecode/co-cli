@@ -35,12 +35,12 @@ def _make_deps(tmp_path: Path, *, personality: str = "tars") -> CoDeps:
 
 @pytest.mark.asyncio
 async def test_memory_search_canon_returns_hits(tmp_path: Path) -> None:
-    """Canon-invoking query returns hits with tier='canon' merged into all_results."""
+    """Canon-invoking query returns hits with channel='canon' merged into all_results."""
     deps = _make_deps(tmp_path, personality="tars")
     ctx = _make_ctx(deps)
     result = await memory_search(ctx, query="humor tactical")
     assert result.metadata is not None
-    canon = [r for r in result.metadata["results"] if r["tier"] == "canon"]
+    canon = [r for r in result.metadata["results"] if r["channel"] == "canon"]
     assert len(canon) >= 1, "Expected canon hits for 'humor tactical' with tars personality"
     assert all(r["role"] == "tars" for r in canon)
 
@@ -73,7 +73,7 @@ async def test_memory_search_canon_capped_at_recall_limit(tmp_path: Path) -> Non
     )
     ctx = _make_ctx(deps)
     result = await memory_search(ctx, query="tars humor mission directive loyalty warmth")
-    canon = [r for r in result.metadata["results"] if r["tier"] == "canon"]
+    canon = [r for r in result.metadata["results"] if r["channel"] == "canon"]
     assert len(canon) <= 1
 
 
@@ -84,8 +84,8 @@ async def test_memory_search_empty_query_bypasses_canon(tmp_path: Path) -> None:
     ctx = _make_ctx(deps)
     result = await memory_search(ctx, query="")
     assert result.metadata is not None
-    # Browse mode returns session-tier results only (or empty) — no canon tier
-    assert not any(r["tier"] == "canon" for r in result.metadata["results"])
+    # Browse mode returns session-channel results only (or empty) — no canon channel
+    assert not any(r["channel"] == "canon" for r in result.metadata["results"])
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_memory_search_no_personality_skips_canon(tmp_path: Path) -> None:
     )
     ctx = _make_ctx(deps)
     result = await memory_search(ctx, query="humor tactical")
-    assert not any(r["tier"] == "canon" for r in result.metadata["results"])
+    assert not any(r["channel"] == "canon" for r in result.metadata["results"])
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,7 @@ async def test_memory_search_stopword_only_query_no_canon(tmp_path: Path) -> Non
     deps = _make_deps(tmp_path, personality="tars")
     ctx = _make_ctx(deps)
     result = await memory_search(ctx, query="the and a is of")
-    assert not any(r["tier"] == "canon" for r in result.metadata["results"])
+    assert not any(r["channel"] == "canon" for r in result.metadata["results"])
 
 
 def test_memory_search_tool_description_has_canon_bullet() -> None:

@@ -1,4 +1,4 @@
-"""Tests for unified memory_search — T2 artifact and T1 session result tiers."""
+"""Tests for unified memory_search — artifact and session result channels."""
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,15 +90,15 @@ def _write_indexed_session(
 
 
 @pytest.mark.asyncio
-async def test_browse_mode_results_carry_tier_sessions(tmp_path: Path) -> None:
-    """Browse mode (empty query) results each carry tier='sessions'."""
+async def test_browse_mode_results_carry_channel_sessions(tmp_path: Path) -> None:
+    """Browse mode (empty query) results each carry channel='sessions'."""
     db_path = tmp_path / "session-index.db"
     store = SessionStore(db_path)
     try:
         _write_indexed_session(
             tmp_path / "sessions",
             store,
-            name_suffix="tierbrowse1",
+            name_suffix="channelbrowse1",
             content="python async context manager patterns",
             response="Here is how to use async context managers",
         )
@@ -108,41 +108,41 @@ async def test_browse_mode_results_carry_tier_sessions(tmp_path: Path) -> None:
         assert result.metadata is not None
         assert result.metadata["count"] >= 1
         first = result.metadata["results"][0]
-        assert first["tier"] == "sessions"
+        assert first["channel"] == "sessions"
         assert "summary" not in first
     finally:
         store.close()
 
 
 @pytest.mark.asyncio
-async def test_artifact_query_returns_tier_artifacts_via_grep(tmp_path: Path) -> None:
-    """Non-empty query returns T2 artifact results with tier='artifacts' via grep fallback."""
+async def test_artifact_query_returns_channel_artifacts_via_grep(tmp_path: Path) -> None:
+    """Non-empty query returns artifact results with channel='artifacts' via grep fallback."""
     knowledge_dir = tmp_path / "knowledge"
-    _write_artifact(knowledge_dir, 1, "xyloquartz-t2-grep-unique preferred test runner pytest")
+    _write_artifact(knowledge_dir, 1, "xyloquartz-grep-unique preferred test runner pytest")
     ctx = _make_ctx(tmp_path, knowledge_dir=knowledge_dir)
 
-    result = await memory_search(ctx, query="xyloquartz-t2-grep-unique")
+    result = await memory_search(ctx, query="xyloquartz-grep-unique")
 
     assert result.metadata is not None
     assert result.metadata["count"] >= 1
-    artifact_results = [r for r in result.metadata["results"] if r["tier"] == "artifacts"]
+    artifact_results = [r for r in result.metadata["results"] if r["channel"] == "artifacts"]
     assert len(artifact_results) >= 1
     first = artifact_results[0]
-    assert first["tier"] == "artifacts"
+    assert first["channel"] == "artifacts"
     assert "slug" in first
     assert "path" in first
 
 
 @pytest.mark.asyncio
-async def test_artifact_query_returns_tier_artifacts_via_fts(tmp_path: Path) -> None:
-    """Non-empty query returns T2 artifact results with tier='artifacts' via FTS5."""
+async def test_artifact_query_returns_channel_artifacts_via_fts(tmp_path: Path) -> None:
+    """Non-empty query returns artifact results with channel='artifacts' via FTS5."""
     fts_cfg = make_settings(
         knowledge=make_settings().knowledge.model_copy(update={"search_backend": "fts5"})
     )
     idx = KnowledgeStore(config=fts_cfg, knowledge_db_path=tmp_path / "search.db")
     try:
         knowledge_dir = tmp_path / "knowledge"
-        _write_artifact(knowledge_dir, 1, "xyloquartz-t2-fts-unique preferred runner pytest")
+        _write_artifact(knowledge_dir, 1, "xyloquartz-fts-unique preferred runner pytest")
         idx.sync_dir("knowledge", knowledge_dir)
 
         ctx = RunContext(
@@ -159,13 +159,13 @@ async def test_artifact_query_returns_tier_artifacts_via_fts(tmp_path: Path) -> 
             tool_name="memory_search",
         )
 
-        result = await memory_search(ctx, query="xyloquartz-t2-fts-unique")
+        result = await memory_search(ctx, query="xyloquartz-fts-unique")
 
         assert result.metadata is not None
-        artifact_results = [r for r in result.metadata["results"] if r["tier"] == "artifacts"]
+        artifact_results = [r for r in result.metadata["results"] if r["channel"] == "artifacts"]
         assert len(artifact_results) >= 1
         first = artifact_results[0]
-        assert first["tier"] == "artifacts"
+        assert first["channel"] == "artifacts"
         assert "slug" in first
         assert first["score"] > 0.0, "FTS results must have non-zero score"
     finally:
@@ -174,20 +174,22 @@ async def test_artifact_query_returns_tier_artifacts_via_fts(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_kind_filter_narrows_artifact_results(tmp_path: Path) -> None:
-    """kind parameter filters T2 artifact results — wrong kind returns empty."""
+    """kind parameter filters artifact results — wrong kind returns empty."""
     knowledge_dir = tmp_path / "knowledge"
     _write_artifact(knowledge_dir, 1, "xyloquartz-kind-filter-unique value", kind="preference")
     ctx = _make_ctx(tmp_path, knowledge_dir=knowledge_dir)
 
     result = await memory_search(ctx, query="xyloquartz-kind-filter-unique", kind="rule")
 
-    artifact_results = [r for r in (result.metadata["results"] or []) if r["tier"] == "artifacts"]
+    artifact_results = [
+        r for r in (result.metadata["results"] or []) if r["channel"] == "artifacts"
+    ]
     assert len(artifact_results) == 0, "kind='rule' must filter out preference artifacts"
 
 
 @pytest.mark.asyncio
 async def test_no_matching_results_returns_count_zero(tmp_path: Path) -> None:
-    """No matching T1 or T2 results returns count=0 and empty results list."""
+    """No matching session or artifact results returns count=0 and empty results list."""
     ctx = _make_ctx(tmp_path)
     result = await memory_search(ctx, query="zzz-no-match-ever-xyloquartz-unique-9999")
 

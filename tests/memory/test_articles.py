@@ -133,7 +133,7 @@ async def test_save_article_indexes_into_fts(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_memory_search_article_grep_finds_article(tmp_path: Path):
-    """memory_search grep path returns T2 artifact result for article."""
+    """memory_search grep path returns artifact result for article."""
     ctx = _make_ctx(tmp_path)
     await memory_create(
         ctx,
@@ -147,7 +147,7 @@ async def test_memory_search_article_grep_finds_article(tmp_path: Path):
     result = await memory_search(ctx, "xyloquartz-article-grep-unique", kind="article")
     assert result.metadata["count"] >= 1
     hit = result.metadata["results"][0]
-    assert hit["tier"] == "artifacts"
+    assert hit["channel"] == "artifacts"
     assert hit["kind"] == "article"
     assert "slug" in hit
     assert "title" in hit
@@ -165,7 +165,7 @@ async def test_memory_search_article_no_match(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_memory_search_article_fts_path(tmp_path: Path):
-    """memory_search FTS path returns T2 artifact result for article."""
+    """memory_search FTS path returns artifact result for article."""
     idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     ctx = _make_ctx(tmp_path, knowledge_store=idx, knowledge_search_backend="fts5")
 
@@ -181,7 +181,7 @@ async def test_memory_search_article_fts_path(tmp_path: Path):
     result = await memory_search(ctx, "xyloquartz-article-fts-index-unique", kind="article")
     assert result.metadata["count"] >= 1
     hit = result.metadata["results"][0]
-    assert hit["tier"] == "artifacts"
+    assert hit["channel"] == "artifacts"
     assert hit["kind"] == "article"
     assert "slug" in hit
     idx.close()
@@ -239,4 +239,4 @@ async def test_memory_search_grep_finds_articles(tmp_path: Path):
 
     result = await memory_search(ctx, "xyloquartz-crosssource-unique")
     assert result.metadata["count"] >= 1
-    assert all(r["tier"] == "artifacts" for r in result.metadata["results"])
+    assert all(r["channel"] == "artifacts" for r in result.metadata["results"])

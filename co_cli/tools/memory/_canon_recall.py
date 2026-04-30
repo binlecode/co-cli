@@ -72,7 +72,7 @@ def search_canon(
             continue
         hits.append(
             {
-                "tier": "canon",
+                "channel": "canon",
                 "role": role,
                 "title": path.stem,
                 "snippet": _snippet(body, q),
