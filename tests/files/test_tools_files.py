@@ -111,7 +111,7 @@ async def test_glob_recursive_truncation(tmp_path):
 
 @pytest.mark.asyncio
 async def test_glob_broken_symlink(tmp_path):
-    """Broken symlinks do not crash recursive glob — they appear in results."""
+    """Broken symlinks do not crash recursive glob; real files are returned normally."""
     (tmp_path / "real.txt").write_text("exists")
     (tmp_path / "broken_link").symlink_to(tmp_path / "nonexistent_target")
 
@@ -119,7 +119,6 @@ async def test_glob_broken_symlink(tmp_path):
 
     assert not result.metadata.get("error")
     names = [e["name"] for e in result.metadata["entries"]]
-    assert any("broken_link" in n for n in names)
     assert any("real.txt" in n for n in names)
 
 
@@ -138,7 +137,7 @@ async def test_glob_shallow_truncation(tmp_path):
 
 @pytest.mark.asyncio
 async def test_glob_recursive_includes_directories(tmp_path):
-    """Recursive glob preserves directory entries for patterns that match them."""
+    """Recursive glob returns only files (not directories) when rg is used."""
     nested_dir = tmp_path / "src" / "pkg"
     nested_dir.mkdir(parents=True)
     (nested_dir / "module.py").write_text("x = 1\n")
@@ -147,8 +146,7 @@ async def test_glob_recursive_includes_directories(tmp_path):
 
     assert not result.metadata.get("error")
     entries = result.metadata["entries"]
-    assert any(entry["name"] == "src" and entry["type"] == "dir" for entry in entries)
-    assert any(entry["name"] == "src/pkg" and entry["type"] == "dir" for entry in entries)
+    assert all(entry["type"] == "file" for entry in entries)
     assert any(
         entry["name"] == "src/pkg/module.py" and entry["type"] == "file" for entry in entries
     )
@@ -185,6 +183,50 @@ async def test_glob_not_a_dir(tmp_path):
     result = await file_find(_make_ctx(tmp_path), path="afile.txt")
 
     assert result.metadata.get("error") is True
+
+
+@pytest.mark.asyncio
+async def test_file_find_ripgrep_recursive(tmp_path):
+    """file_find with **/*.py uses ripgrep when available, returning files sorted by mtime."""
+    import time
+
+    sub = tmp_path / "src"
+    sub.mkdir()
+    (tmp_path / "old.py").write_text("old")
+    time.sleep(0.05)
+    (sub / "new.py").write_text("new")
+
+    result = await file_find(_make_ctx(tmp_path), path=".", pattern="**/*.py")
+
+    assert not result.metadata.get("error")
+    names = [e["name"] for e in result.metadata["entries"]]
+    assert any("old.py" in n for n in names)
+    assert any("new.py" in n for n in names)
+    assert all(e["type"] == "file" for e in result.metadata["entries"])
+    # Newest first: new.py was written after old.py
+    assert "new.py" in names[0]
+
+
+@pytest.mark.asyncio
+async def test_file_find_fallback(tmp_path):
+    """file_find falls back to Python glob when ripgrep is unavailable."""
+    (tmp_path / "alpha.py").write_text("")
+    (tmp_path / "beta.py").write_text("")
+
+    original_path = os.environ.get("PATH")
+    os.environ["PATH"] = ""
+    try:
+        result = await file_find(_make_ctx(tmp_path), path=".", pattern="**/*.py")
+    finally:
+        if original_path is None:
+            del os.environ["PATH"]
+        else:
+            os.environ["PATH"] = original_path
+
+    assert not result.metadata.get("error")
+    names = [e["name"] for e in result.metadata["entries"]]
+    assert any("alpha.py" in n for n in names)
+    assert any("beta.py" in n for n in names)
 
 
 # --- read_file ---

@@ -99,6 +99,50 @@ async def _glob_python(
     return entries, truncated
 
 
+async def _glob_ripgrep(
+    resolved: Path, workspace_root: Path, pattern: str, max_entries: int
+) -> tuple[list[dict[str, str]], bool] | None:
+    # Run rg from `resolved` with no dir arg: path-prefix globs like src/**/*.py only work
+    # correctly when rg resolves paths relative to its cwd, not against an absolute dir arg.
+    # --no-config: ignore user's ~/.config/ripgrep/ripgrep.toml to prevent config interference.
+    # --sortr=modified: rg-native mtime sort (rg 13+); avoids per-file stat calls.
+    #   If the flag is unknown (rg <13) rg exits non-zero → retry without sort.
+    base_args = ["rg", "--files", "--null", "--hidden", "--no-config", "-g", pattern]
+
+    async def _run(args: list[str]) -> bytes | None:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=resolved,
+            )
+            stdout, _ = await proc.communicate()
+        except Exception:
+            return None
+        return stdout if proc.returncode in (0, 1) else None
+
+    stdout = await _run([*base_args, "--sortr=modified"])
+    if stdout is None:
+        # --sortr unknown (rg <13) or fatal error — retry without sort
+        stdout = await _run(base_args)
+        if stdout is None:
+            return None
+    if not stdout:
+        return [], False
+    # Paths are relative to `resolved`; reconstruct absolute before relativizing to workspace.
+    raw_paths = [resolved / p.decode("utf-8", errors="replace") for p in stdout.split(b"\0") if p]
+    truncated = len(raw_paths) > max_entries
+    entries = []
+    for path in raw_paths[:max_entries]:
+        try:
+            rel = str(path.relative_to(workspace_root))
+        except ValueError:
+            rel = str(path)
+        entries.append({"name": rel, "type": "file"})
+    return entries, truncated
+
+
 def _relativize_output_path(path_str: str, workspace_root: Path) -> str:
     """Return a workspace-relative path when possible."""
     try:
@@ -336,21 +380,27 @@ async def file_find(
     pattern: str = "*",
     max_entries: int = 200,
 ) -> ToolReturn:
-    """Find workspace files by path/name pattern or list a directory.
+    """Find workspace files by name pattern, or list a directory.
 
-    Use this instead of shell `ls` or `find` for workspace path discovery.
-    Use it when you need to know what files exist or find files by
-    extension/name pattern. Use "**/*.ext" for recursive search by name
-    (results sorted by modification time, newest first).
+    Prefer this over shell `ls` or `find`. Results are sorted by
+    modification time, newest first.
 
-    When NOT to use: for content search inside files — use file_search
-    instead.
+    Pattern examples:
+      "*"            — list everything in `path` (files + dirs)
+      "*.py"         — flat: .py files in `path` only
+      "**/*.py"      — recursive: all .py files under `path`
+      "src/**/*.py"  — recursive: .py files under src/ only
+      "*config*"     — flat: entries with "config" in the name
+
+    Recursive patterns (containing ** or /) return files only, not
+    directories. Flat patterns return both files and directories.
+
+    When NOT to use: to search file contents — use file_search instead.
 
     Args:
-        path: Directory path relative to the workspace root (default: current directory).
-        pattern: Glob pattern to filter entries (default: "*" matches all).
-                 Use "**/*.ext" for recursive file search by name.
-        max_entries: Maximum number of entries to return (default: 200).
+        path: Search root relative to workspace root (default: ".").
+        pattern: Glob pattern (default: "*" lists all entries).
+        max_entries: Maximum entries returned (default: 200).
     """
     try:
         resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
@@ -364,9 +414,18 @@ async def file_find(
         return tool_error(f"Not a directory: {path}", ctx=ctx)
 
     workspace_root = ctx.deps.workspace_root
+
+    entries: list[dict[str, str]] = []
     truncated = False
 
-    entries, truncated = await _glob_python(resolved, workspace_root, pattern, max_entries)
+    if _is_recursive_pattern(pattern) and _has_command("rg"):
+        rg_result = await _glob_ripgrep(resolved, workspace_root, pattern, max_entries)
+        if rg_result is not None:
+            entries, truncated = rg_result
+        else:
+            entries, truncated = await _glob_python(resolved, workspace_root, pattern, max_entries)
+    else:
+        entries, truncated = await _glob_python(resolved, workspace_root, pattern, max_entries)
 
     lines = [f"[{e['type']}] {e['name']}" for e in entries]
     if truncated:
