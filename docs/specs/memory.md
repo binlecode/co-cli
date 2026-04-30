@@ -371,7 +371,7 @@ Dream-cycle and lifecycle maintenance settings, including consolidation trigger,
 | `co_cli/memory/similarity.py` | similarity and dedup helpers |
 | `co_cli/memory/_window.py` | transcript-window builder used by dream mining |
 | `co_cli/memory/service.py` | pure-function service layer for knowledge artifact writes; `save_artifact()` and `mutate_artifact()` — no RunContext |
-| `co_cli/tools/memory/read.py` | `memory_list()` and `memory_read()` — list/retrieve knowledge artifacts; `grep_recall()` utility used by `memory_search()` |
+| `co_cli/tools/memory/read.py` | `memory_list()` — paginated inventory of knowledge artifacts; `grep_recall()` utility used by `memory_search()`. Full-body artifact reads route through the generic `file_read` tool on the path surfaced by `memory_search`. |
 | `co_cli/tools/memory/write.py` | artifact write/update/append helpers and article persistence |
 | `co_cli/bootstrap/core.py` | `restore_session()` and `init_session_store()` during startup |
 | `co_cli/agent/_instructions.py` | `date_prompt()` — thin wrapper that delegates to `recall_prompt_text()` in `prompt_text.py`; returns today's date string |

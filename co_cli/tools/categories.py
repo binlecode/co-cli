@@ -37,7 +37,6 @@ COMPACTABLE_TOOLS: frozenset[str] = frozenset(
         "file_find",
         "web_search",
         "web_fetch",
-        "memory_read",
         "obsidian_read",
     }
 )

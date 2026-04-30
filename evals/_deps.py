@@ -6,6 +6,7 @@ from pydantic_ai.settings import ModelSettings
 
 from co_cli.config.core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 
@@ -27,17 +28,29 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     ``make_eval_deps(brave_search_api_key=None)``.
     Service fields (shell, knowledge_store, model) can
     also be passed as overrides and are extracted before building CoDeps.
+
+    The ``model`` default is an ``LlmModel`` built via ``build_model(settings.llm)`` —
+    real sessions get this via bootstrap, and CoDeps.model is typed as ``LlmModel | None``
+    (with ``.context_window``, ``.settings``, ``.model``). Defaulting to None here would let
+    downstream paths like compaction.py (which reads ``deps.model.context_window``) trip
+    AttributeErrors only inside the eval. Callers can still pass ``model=None`` explicitly
+    when truly model-free behavior is desired.
     """
     s = get_settings()
 
-    # Extract non-config fields before building CoDeps
+    # Extract non-config fields before building CoDeps. Sentinel for `model` so we
+    # can distinguish "unset → build the default" from "explicitly None".
+    _UNSET = object()
     shell = overrides.pop("shell", ShellBackend())
     knowledge_store = overrides.pop("knowledge_store", None)
-    model = overrides.pop("model", None)
+    model = overrides.pop("model", _UNSET)
     knowledge_dir = overrides.pop("knowledge_dir", None)
     # Discard legacy overrides that no longer map to current fields
     overrides.pop("session_id", None)
     overrides.pop("mcp_servers", None)
+
+    if model is _UNSET:
+        model = build_model(s.llm)
 
     deps = CoDeps(
         shell=shell,

@@ -12,7 +12,6 @@ from co_cli.agent.core import build_agent
 from co_cli.config.core import settings
 from co_cli.deps import CoDeps
 from co_cli.memory.knowledge_store import KnowledgeStore
-from co_cli.tools.memory.read import memory_read
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.memory.write import memory_create
 from co_cli.tools.shell_backend import ShellBackend
@@ -164,6 +163,28 @@ async def test_memory_search_article_no_match(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_memory_search_renders_artifact_path_for_file_read(tmp_path: Path):
+    """Rendered output exposes the saved file path so the LLM can dereference via file_read."""
+    ctx = _make_ctx(tmp_path)
+    await memory_create(
+        ctx,
+        content="xyloquartz-rendered-path-marker article body for path render test",
+        artifact_kind="article",
+        title="Path Render",
+        source_url="https://example.com/path-render",
+    )
+
+    saved_path = next(iter((tmp_path / "library").glob("*.md")))
+
+    result = await memory_search(ctx, "xyloquartz-rendered-path-marker", kind="article")
+    rendered = result.return_value
+    assert "**Saved artifacts:**" in rendered
+    assert f"@ {saved_path}" in rendered, (
+        "Artifact render must expose the absolute file path so the model can pass it to file_read"
+    )
+
+
+@pytest.mark.asyncio
 async def test_memory_search_article_fts_path(tmp_path: Path):
     """memory_search FTS path returns artifact result for article."""
     idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
@@ -185,41 +206,6 @@ async def test_memory_search_article_fts_path(tmp_path: Path):
     assert hit["kind"] == "article"
     assert "slug" in hit
     idx.close()
-
-
-# --- memory_read ---
-
-
-@pytest.mark.asyncio
-async def test_read_article_returns_full_body(tmp_path: Path):
-    """memory_read returns the full markdown body and metadata."""
-    ctx = _make_ctx(tmp_path)
-    await memory_create(
-        ctx,
-        content="Full body content for read test.\n\nSecond paragraph.",
-        artifact_kind="article",
-        title="Read Test Article",
-        source_url="https://example.com/read",
-    )
-
-    knowledge_dir = tmp_path / "library"
-    slug = next(iter(knowledge_dir.glob("*.md"))).stem
-
-    result = await memory_read(ctx, slug)
-    assert result.metadata["title"] == "Read Test Article"
-    assert result.metadata["source_ref"] == "https://example.com/read"
-    assert "Full body content" in result.metadata["content"]
-    assert "Second paragraph" in result.metadata["content"]
-
-
-@pytest.mark.asyncio
-async def test_read_article_not_found(tmp_path: Path):
-    """memory_read returns error-like result for missing slug."""
-    ctx = _make_ctx(tmp_path)
-    (tmp_path / "library").mkdir(parents=True, exist_ok=True)
-    result = await memory_read(ctx, "999-nonexistent-article")
-    assert result.metadata["artifact_id"] is None
-    assert "not found" in result.return_value.lower()
 
 
 # --- memory_search cross-source ---

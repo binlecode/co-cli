@@ -22,7 +22,7 @@ from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search
 from co_cli.tools.google.drive import google_drive_read, google_drive_search
 from co_cli.tools.google.gmail import google_gmail_draft, google_gmail_list, google_gmail_search
-from co_cli.tools.memory.read import memory_list, memory_read
+from co_cli.tools.memory.read import memory_list
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.memory.write import (
     memory_create,
@@ -51,7 +51,6 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     todo_read,
     # Knowledge reads
     memory_list,
-    memory_read,
     memory_search,
     # Workspace reads
     file_find,

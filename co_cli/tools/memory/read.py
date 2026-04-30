@@ -1,4 +1,8 @@
-"""Memory read tools — `memory_list` and `memory_read` over knowledge artifacts."""
+"""Memory inventory tool — `memory_list` over knowledge artifacts.
+
+Full-body reads route through the generic `file_read` tool using the path that
+`memory_search` surfaces in its rendered output.
+"""
 
 import logging
 from typing import Any
@@ -8,7 +12,6 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.memory.artifact import KnowledgeArtifact, load_knowledge_artifacts
-from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
@@ -125,66 +128,4 @@ async def memory_list(
         limit=limit,
         has_more=has_more,
         memories=memory_dicts,
-    )
-
-
-@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def memory_read(
-    ctx: RunContext[CoDeps],
-    slug: str,
-) -> ToolReturn:
-    """Load the full markdown body of a saved memory artifact on demand.
-
-    Always call memory_search(query=...) first to find the slug, then call memory_read
-    to get the full body. This two-step approach keeps recall responses compact.
-
-    Does NOT summarize — returns full content as stored.
-    The slug comes from the memory_search result's "slug" field
-    (e.g. "042-python-asyncio-guide").
-
-    Returns a dict with:
-    - display: full article content — show directly to the user
-    - artifact_id: artifact ID
-    - title: article title
-    - source_ref: source URL
-    - content: full markdown body
-
-    Args:
-        slug: File stem from memory_search result (e.g. "042-python-asyncio-guide").
-    """
-    knowledge_dir = ctx.deps.knowledge_dir
-
-    # Single glob — exact stem match takes priority over prefix match
-    all_candidates = list(knowledge_dir.glob(f"{slug}*.md"))
-    candidates = [p for p in all_candidates if p.stem == slug] or all_candidates
-    if not candidates:
-        return tool_output(
-            f"Article '{slug}' not found.",
-            ctx=ctx,
-            artifact_id=None,
-            title=None,
-            source_ref=None,
-            content=None,
-        )
-
-    path = candidates[0]
-    raw = path.read_text(encoding="utf-8")
-    fm, body = parse_frontmatter(raw)
-
-    title = fm.get("title", path.stem)
-    source_ref = fm.get("source_ref") or ""
-    artifact_id = fm.get("id")
-
-    header_parts = [f"# {title}"]
-    if source_ref:
-        header_parts.append(f"Source: {source_ref}")
-    header = "\n".join(header_parts)
-
-    return tool_output(
-        f"{header}\n\n{body.strip()}",
-        ctx=ctx,
-        artifact_id=artifact_id,
-        title=title,
-        source_ref=source_ref,
-        content=body.strip(),
     )

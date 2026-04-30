@@ -1,4 +1,8 @@
-"""Unit tests: static instructions must not contain the ## Character block."""
+"""Static instructions must not contain the ## Character block.
+
+Regression guard for the canon-channel refactor: character memories are surfaced
+on demand via memory_search rather than statically injected into the system prompt.
+"""
 
 from pathlib import Path
 
@@ -11,10 +15,7 @@ from co_cli.tools.memory._canon_recall import _SOULS_DIR
 
 @pytest.mark.parametrize("role", ["tars", "finch", "jeff"])
 def test_no_character_block_in_static_instructions(role: str, tmp_path: Path) -> None:
-    """After canon refactor, the static prompt must not contain the ## Character section."""
     cfg = make_settings(personality=role)
-    # Pass tmp_path as knowledge_dir to bypass the personality-memories cache
-    # and avoid loading real knowledge artifacts from ~/.co-cli/.
     prompt = build_static_instructions(cfg, knowledge_dir=tmp_path / "knowledge")
 
     assert "## Character\n" not in prompt, (

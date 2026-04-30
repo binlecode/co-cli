@@ -109,14 +109,6 @@ def _web_fetch_marker(args: dict[str, Any], content: str, chars: int, lines: int
     return f"[web_fetch] {url} ({chars:,} chars)"
 
 
-def _knowledge_article_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
-    del lines
-    slug = args.get("slug", "?")
-    if "not found" in content[:80]:
-        return f"[memory_read] '{slug}' → not found"
-    return f"[memory_read] '{slug}' ({chars:,} chars)"
-
-
 def _obsidian_read_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
     del content, lines
     filename = args.get("filename", "?")
@@ -132,7 +124,6 @@ _TOOL_MARKERS: dict[str, _MarkerFn] = {
     "file_find": _file_find_marker,
     "web_search": _web_search_marker,
     "web_fetch": _web_fetch_marker,
-    "memory_read": _knowledge_article_marker,
     "obsidian_read": _obsidian_read_marker,
 }
 

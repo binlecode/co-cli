@@ -314,6 +314,10 @@ async def memory_search(
     Search syntax (FTS5): keywords joined with OR for broad recall (auth OR login OR session),
     phrases for exact match ("connection pool"), boolean (python NOT java), prefix (deploy*).
 
+    Artifact hits render as `**<title>** [<kind>] @ <path>: <snippet>` — call file_read
+    on the `@ <path>` value when you need the full body. Canon hits render the full body
+    inline; no follow-up needed. Session hits render an LLM-generated summary inline.
+
     Artifacts result fields: channel, kind, title, snippet, score, path, slug
     Sessions result fields:  channel, session_id, when, source, summary
     Canon result fields:     channel, role, title, body, score
@@ -360,8 +364,10 @@ async def memory_search(
         lines.append("**Saved artifacts:**")
         for r in artifact_results:
             kind_str = f" [{r['kind']}]" if r.get("kind") else ""
+            path_str = f" @ {r['path']}" if r.get("path") else ""
             lines.append(
-                f"  **{r['title']}**{kind_str}: {(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
+                f"  **{r['title']}**{kind_str}{path_str}: "
+                f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
             )
 
     if session_results:

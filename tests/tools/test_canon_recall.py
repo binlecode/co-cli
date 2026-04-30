@@ -1,4 +1,9 @@
-"""Unit tests for search_canon — token-overlap scoring over souls memory files."""
+"""Unit tests for search_canon — token-overlap scoring over souls memory files.
+
+Direct unit coverage of the canon-recall algorithm. Integration via the canon
+channel of memory_search lives in test_memory_search_canon.py; the canon eval
+in evals/eval_canon_recall.py covers end-to-end correctness.
+"""
 
 from pathlib import Path
 
@@ -6,17 +11,28 @@ from co_cli.tools.memory._canon_recall import search_canon
 
 
 def test_search_canon_title_weight() -> None:
-    """Title tokens (filename stem) outrank body-only mentions."""
+    """Title tokens (filename stem) outrank body-only mentions in real soul data."""
     hits = search_canon("humor tactical", role="tars", limit=5)
     assert hits, "Expected at least one hit for 'humor tactical' in tars memories"
     assert hits[0]["title"].startswith("tars-humor-is-tactical")
 
 
 def test_search_canon_returns_channel_canon() -> None:
-    """Every hit must carry channel='canon'."""
+    """Every hit must carry channel='canon' — recall.py merges by channel field."""
     hits = search_canon("humor", role="tars", limit=5)
     assert hits
     assert all(h["channel"] == "canon" for h in hits)
+
+
+def test_search_canon_returns_full_body() -> None:
+    """Hits ship the full post-frontmatter body inline — not a snippet, no path indirection."""
+    hits = search_canon("humor", role="tars", limit=5)
+    assert hits
+    assert "body" in hits[0]
+    body = hits[0]["body"]
+    assert body, "Body must be non-empty"
+    assert "---" not in body[:5], "Frontmatter must be stripped from body"
+    assert "humor" in body.lower(), "Body must contain a query token"
 
 
 def test_search_canon_top_m_cap() -> None:
@@ -26,12 +42,12 @@ def test_search_canon_top_m_cap() -> None:
 
 
 def test_search_canon_role_isolation() -> None:
-    """Searching finch returns finch hits; tars results never carry the finch role."""
+    """Searching finch returns finch memories; tars results must not contain finch hits."""
     finch_hits = search_canon("preparation", role="finch", limit=3)
     tars_hits = search_canon("preparation", role="tars", limit=3)
     assert finch_hits, "Finch has 'preparation' canon — must return hits"
     assert all(h["role"] == "finch" for h in finch_hits)
-    assert all(h["role"] == "tars" for h in tars_hits)
+    assert all(h["role"] != "finch" for h in tars_hits)
 
 
 def test_search_canon_path_traversal_rejected() -> None:
@@ -45,7 +61,6 @@ def test_search_canon_missing_memories_dir(tmp_path: Path) -> None:
     """A role whose souls dir exists but has no 'memories/' subdir returns []."""
     role_dir = tmp_path / "norole"
     role_dir.mkdir()
-    # No memories/ subdir created.
     assert search_canon("anything", role="norole", limit=3, _souls_dir=tmp_path) == []
 
 
@@ -62,7 +77,7 @@ def test_search_canon_stopword_only_returns_empty() -> None:
 def test_search_canon_empty_role_returns_empty() -> None:
     """Empty or None role returns [] without raising."""
     assert search_canon("humor", role="", limit=3) == []
-    assert search_canon("humor", role=None, limit=3) == []  # type: ignore[arg-type]
+    assert search_canon("humor", role=None, limit=3) == []
 
 
 def test_search_canon_stale_file_race(tmp_path: Path) -> None:
@@ -73,8 +88,6 @@ def test_search_canon_stale_file_race(tmp_path: Path) -> None:
         "humor tactical approach used here"
     )
     (memories_dir / "another-memory-humor.md").write_text("humor is tactical front-loaded")
-    # A directory named *.md causes IsADirectoryError (OSError subclass) on read_text — simulates
-    # a file deleted between glob and read.
     stale = memories_dir / "stale-deleted.md"
     stale.mkdir()
 
@@ -83,24 +96,8 @@ def test_search_canon_stale_file_race(tmp_path: Path) -> None:
     assert all(r["title"] != "stale-deleted" for r in results)
 
 
-def test_search_canon_body_contains_query_token(tmp_path: Path) -> None:
-    """Returned body contains at least one query token when the file body has one."""
-    memories_dir = tmp_path / "test-role" / "memories"
-    memories_dir.mkdir(parents=True)
-    (memories_dir / "entry.md").write_text("This is about loyalty and dedication.")
-
-    hits = search_canon("loyalty", role="test-role", limit=3, _souls_dir=tmp_path)
-    assert hits, "Expected a hit for 'loyalty'"
-    assert "loyalty" in hits[0]["body"]
-
-
 def test_search_canon_excludes_frontmatter(tmp_path: Path) -> None:
-    """YAML frontmatter must not contribute to scoring or appear in returned body.
-
-    Memory files carry frontmatter like `tags: [character, source-material]` and
-    `auto_category: character`. Tokenizing the raw file would inflate scores and
-    leak YAML into the body the LLM sees.
-    """
+    """YAML frontmatter must not contribute to scoring or appear in returned bodies."""
     memories_dir = tmp_path / "test-role" / "memories"
     memories_dir.mkdir(parents=True)
     (memories_dir / "entry.md").write_text(
@@ -116,17 +113,19 @@ def test_search_canon_excludes_frontmatter(tmp_path: Path) -> None:
         "Real prose talks about courage and resolve."
     )
 
-    # Tokens that appear ONLY in frontmatter must not match.
-    assert search_canon("character", role="test-role", limit=5, _souls_dir=tmp_path) == []
-    assert search_canon("planted", role="test-role", limit=5, _souls_dir=tmp_path) == []
-    assert search_canon("provenance", role="test-role", limit=5, _souls_dir=tmp_path) == []
+    # Frontmatter-only tokens, even paired, must not match — confirms tokenizer skips frontmatter.
+    assert search_canon("character planted", role="test-role", limit=5, _souls_dir=tmp_path) == []
+    assert (
+        search_canon("provenance auto_category", role="test-role", limit=5, _souls_dir=tmp_path)
+        == []
+    )
 
-    # Tokens that appear in prose must still match — and body must exclude YAML.
-    hits = search_canon("courage", role="test-role", limit=5, _souls_dir=tmp_path)
-    assert hits, "Expected hit for 'courage' from prose"
+    # Two prose tokens clear the score floor (2 body matches = score 2).
+    hits = search_canon("courage resolve", role="test-role", limit=5, _souls_dir=tmp_path)
+    assert hits, "Expected hit for 'courage resolve' from prose"
     body = hits[0]["body"]
     assert "courage" in body
-    assert "---" not in body
+    assert "---" not in body[:5]
     assert "tags:" not in body
     assert "auto_category" not in body
 
@@ -135,9 +134,20 @@ def test_search_canon_score_ordering(tmp_path: Path) -> None:
     """Higher-scoring hits appear first — title 2x body weight."""
     memories_dir = tmp_path / "test-role" / "memories"
     memories_dir.mkdir(parents=True)
-    # Title-match entry scores higher than body-only entry.
-    (memories_dir / "humor-test.md").write_text("some content here")
+    (memories_dir / "humor-tactical.md").write_text("some content here")
     (memories_dir / "other.md").write_text("humor is a topic in this body text here")
 
+    hits = search_canon("humor tactical", role="test-role", limit=5, _souls_dir=tmp_path)
+    assert hits[0]["title"] == "humor-tactical", "Title-match entry must rank first"
+
+
+def test_search_canon_score_floor(tmp_path: Path) -> None:
+    """Score 1 (single body-token coincidence) is rejected — admits only score >= 2."""
+    memories_dir = tmp_path / "test-role" / "memories"
+    memories_dir.mkdir(parents=True)
+    (memories_dir / "unrelated.md").write_text("body mentions humor exactly once and nothing else")
+
     hits = search_canon("humor", role="test-role", limit=5, _souls_dir=tmp_path)
-    assert hits[0]["title"] == "humor-test", "Title-match entry must rank first"
+    assert hits == [], (
+        "Single body-token coincidence (score=1) must be rejected by the score floor"
+    )

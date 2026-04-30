@@ -13,6 +13,13 @@ _SOULS_DIR: Path = (Path(co_cli.personality.__file__).parent / "prompts" / "soul
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+# Minimum score for canon admission. Score = 2*|q & title| + |q & body|, so the floor
+# admits "≥1 title-token match" OR "≥2 body-token matches" while rejecting score-1 hits
+# (single incidental body-token overlap in unrelated prose). Without this floor any
+# query-token coincidence pads the result list with noise — the algorithm has no
+# MATCH-level filter like FTS5, so the floor is what compensates.
+_MIN_SCORE = 2
+
 
 def _tokenize(text: str) -> set[str]:
     return {t for t in _TOKEN_RE.findall(text.lower()) if t not in STOPWORDS and len(t) > 1}
@@ -62,7 +69,7 @@ def search_canon(
         title_tokens = _tokenize(path.stem)
         body_tokens = _tokenize(body)
         score = 2 * len(q & title_tokens) + len(q & body_tokens)
-        if score == 0:
+        if score < _MIN_SCORE:
             continue
         hits.append(
             {

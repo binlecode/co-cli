@@ -177,7 +177,7 @@ for missing mindset files.
 | File | Purpose |
 |---|---|
 | `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (soul + personality memories + rules) |
-| `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_character_memories` (dead — not called by assembly), `load_soul_mindsets`, `load_personality_memories` |
+| `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets`, `load_personality_memories` |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
 | `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |

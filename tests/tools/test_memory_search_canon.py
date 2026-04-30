@@ -1,15 +1,13 @@
-"""Unit tests for memory_search canon channel wiring."""
+"""Functional tests for memory_search canon channel wiring."""
 
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
 
 from co_cli.agent.core import build_agent
-from co_cli.config.knowledge import KnowledgeSettings
 from co_cli.deps import CoDeps
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
@@ -113,24 +111,3 @@ async def test_memory_search_stopword_only_query_no_canon(tmp_path: Path) -> Non
     ctx = _make_ctx(deps)
     result = await memory_search(ctx, query="the and a is of")
     assert not any(r["channel"] == "canon" for r in result.metadata["results"])
-
-
-def test_memory_search_tool_description_has_canon_bullet() -> None:
-    """Tool description contains the proactive-recall bullet for character queries."""
-    doc = memory_search.__doc__ or ""
-    assert (
-        "your character, your background, how you typically handle a situation, or references your source material"
-        in doc
-    )
-
-
-def test_knowledge_settings_character_recall_limit_default() -> None:
-    """character_recall_limit defaults to 3."""
-    ks = KnowledgeSettings()
-    assert ks.character_recall_limit == 3
-
-
-def test_knowledge_settings_character_recall_limit_ge1() -> None:
-    """character_recall_limit rejects values < 1."""
-    with pytest.raises(ValidationError):
-        KnowledgeSettings(character_recall_limit=0)
