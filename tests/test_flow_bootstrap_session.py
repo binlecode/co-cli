@@ -2,32 +2,24 @@
 
 from pathlib import Path
 
-from tests._settings import make_settings
+from tests._settings import SETTINGS, SETTINGS_NO_MCP
 
 from co_cli.bootstrap.core import restore_session
 from co_cli.bootstrap.security import check_security
-from co_cli.config.core import load_config, settings
+from co_cli.config.core import load_config
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display.core import TerminalFrontend
 from co_cli.memory.session import session_filename
 from co_cli.tools.shell_backend import ShellBackend
 
 
-def _make_deps(
-    tmp_path: Path,
-    *,
-    mcp_servers: dict | None = None,
-) -> CoDeps:
-    config = make_settings(
-        mcp_servers=mcp_servers if mcp_servers is not None else {},
-    )
-    runtime = CoRuntimeState()
+def _make_deps(tmp_path: Path) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         knowledge_store=None,
-        config=config,
+        config=SETTINGS_NO_MCP,
         session=CoSessionState(),
-        runtime=runtime,
+        runtime=CoRuntimeState(),
         sessions_dir=tmp_path / "sessions",
         knowledge_dir=tmp_path / "knowledge",
     )
@@ -53,10 +45,11 @@ def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
 
 
 def test_load_config_dotenv_applied(tmp_path: Path) -> None:
-    """Vars in .env are applied to config when no explicit _env override is given."""
+    """Vars in .env are applied to config when no shell env vars are present."""
     (tmp_path / ".env").write_text("CO_THEME=dark\n", encoding="utf-8")
 
-    result = load_config(_user_config_path=tmp_path / "settings.json")
+    # _env={} isolates from real shell so only the .env values are in scope
+    result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
 
     assert result.theme == "dark"
 
@@ -74,9 +67,19 @@ def test_load_config_env_wins_over_dotenv(tmp_path: Path) -> None:
 
 
 def test_load_config_no_dot_env_uses_defaults(tmp_path: Path) -> None:
-    """When no .env is present, load_config() falls back to defaults unchanged."""
-    settings_default = load_config(_user_config_path=tmp_path / "settings.json")
-    assert settings_default.theme == "light"
+    """When no .env is present, load_config() returns defaults unchanged."""
+    # _env={} isolates from real shell so the assertion is not contaminated by CO_THEME in env
+    result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
+    assert result.theme == "light"
+
+
+def test_load_config_dotenv_empty_value_uses_default(tmp_path: Path) -> None:
+    """Empty-value .env entries must not override Settings defaults."""
+    (tmp_path / ".env").write_text("CO_THEME=\n", encoding="utf-8")
+
+    result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
+
+    assert result.theme == "light"
 
 
 def test_check_security_dot_env_wrong_mode(tmp_path: Path) -> None:
@@ -122,7 +125,7 @@ def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     )
     (skills_dir / "test-bootstrap-skill.md").write_text(skill_content, encoding="utf-8")
 
-    skill_commands = load_skills(skills_dir, settings=settings)
+    skill_commands = load_skills(skills_dir, settings=SETTINGS)
 
     assert "test-bootstrap-skill" in skill_commands, (
         "Project skill must appear in skill_commands after load_skills"
