@@ -1,10 +1,11 @@
-"""Behavioral tests for proactive_window_processor trigger and anti-thrash gate.
+"""Behavioral tests for proactive_window_processor and the circuit breaker gate.
 
 Production path: co_cli/context/compaction.py:proactive_window_processor
 
 Test 1: no LLM — below threshold, returns early.
 Test 2: LLM call — above threshold, compaction applied.
 Test 3: no LLM — anti-thrash gate fires, returns early.
+Tests 4-8: _summarization_gate_open circuit breaker cadence (counts 0-2, 3-12, 13, 14-22, 23).
 """
 
 import asyncio
@@ -18,7 +19,12 @@ from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
 from co_cli.context._compaction_markers import is_compaction_marker
-from co_cli.context.compaction import proactive_window_processor
+from co_cli.context.compaction import (
+    _COMPACTION_BREAKER_PROBE_EVERY,
+    _COMPACTION_BREAKER_TRIP,
+    _summarization_gate_open,
+    proactive_window_processor,
+)
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
@@ -146,3 +152,118 @@ async def test_anti_thrash_gate_skips_compaction_after_consecutive_low_yield() -
 
     assert result is messages, "Gate must return original messages unchanged"
     assert deps.runtime.compaction_applied_this_turn is False
+
+
+# --- Circuit breaker gate tests ---
+
+
+def _gate_ctx(skip_count: int) -> tuple[RunContext[CoDeps], CoDeps]:
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+    )
+    deps.runtime.compaction_skip_count = skip_count
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    return ctx, deps
+
+
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_gate_open_before_trip(count: int) -> None:
+    """Gate is open for skip_count 0-2 -- breaker has not tripped yet.
+
+    Deletion regression: would not detect the breaker firing before 3 consecutive
+    failures, blocking the LLM prematurely.
+    """
+    ctx, _ = _gate_ctx(count)
+    assert _summarization_gate_open(ctx) is True
+
+
+@pytest.mark.parametrize(
+    "count",
+    list(
+        range(_COMPACTION_BREAKER_TRIP, _COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY)
+    ),
+)
+def test_gate_closed_after_trip(count: int) -> None:
+    """Gate is closed for skip_count 3-12 -- tripped, first probe not yet due.
+
+    Deletion regression: would not detect the breaker staying open after trip,
+    making every subsequent call a live LLM probe (circuit breaker never engages).
+    """
+    ctx, _ = _gate_ctx(count)
+    assert _summarization_gate_open(ctx) is False
+
+
+def test_gate_open_at_first_probe() -> None:
+    """Gate opens at skip_count 13 (TRIP + PROBE_EVERY) — first LLM probe fires.
+
+    Deletion regression: would not detect permanent blocking (probe window
+    silently skipped), leaving the LLM permanently bypassed after any 3 failures.
+    """
+    ctx, _ = _gate_ctx(_COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY)
+    assert _summarization_gate_open(ctx) is True
+
+
+@pytest.mark.parametrize(
+    "count",
+    list(
+        range(
+            _COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY + 1,
+            _COMPACTION_BREAKER_TRIP + 2 * _COMPACTION_BREAKER_PROBE_EVERY,
+        )
+    ),
+)
+def test_gate_closed_between_probes(count: int) -> None:
+    """Gate is closed for skip_count 14-22 -- between first and second probe.
+
+    Deletion regression: would not detect the gate staying open after a probe,
+    making every call post-probe a live LLM attempt (probe cadence lost).
+    """
+    ctx, _ = _gate_ctx(count)
+    assert _summarization_gate_open(ctx) is False
+
+
+def test_gate_open_at_second_probe() -> None:
+    """Gate opens at skip_count 23 (TRIP + 2*PROBE_EVERY) -- second probe fires.
+
+    Deletion regression: would not detect the probe cadence stopping after one
+    cycle, leaving the LLM permanently blocked after the first probe fails.
+    """
+    ctx, _ = _gate_ctx(_COMPACTION_BREAKER_TRIP + 2 * _COMPACTION_BREAKER_PROBE_EVERY)
+    assert _summarization_gate_open(ctx) is True
+
+
+@pytest.mark.asyncio
+async def test_successful_compaction_resets_skip_count() -> None:
+    """compaction_skip_count resets to 0 after a successful (non-empty) LLM summary.
+
+    Sets skip_count=2 (below trip, gate open) before compaction so the counter is
+    non-zero going in. A valid summary must reset it to 0.
+
+    Deletion regression: would not detect a future change that leaves the counter
+    non-zero after a successful compaction, silently degrading circuit breaker
+    accuracy.
+    """
+    settings = _tight_settings()
+    model = build_model(settings.llm)
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=model,
+        config=settings,
+        session=CoSessionState(),
+    )
+    # Below trip threshold (< 3) so the gate remains open for the LLM call.
+    deps.runtime.compaction_skip_count = 2
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    messages = _above_threshold_messages()
+
+    await ensure_ollama_warm(TEST_LLM.model)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        result = await proactive_window_processor(ctx, messages)
+
+    assert result is not messages
+    assert deps.runtime.compaction_skip_count == 0, (
+        "skip_count must reset to 0 after a successful summarization"
+    )

@@ -88,26 +88,14 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-_CIRCUIT_BREAKER_PROBE_EVERY: int = 10
-"""When the circuit breaker is tripped (skip_count >= 3), attempt the LLM anyway
-every Nth subsequent trigger. A success resets the counter to 0. Prevents
-permanent bypass from a transient provider hiccup that happened to hit 3 in a
-row early in the session. First probe fires at skip_count == 3 + N (i.e. after
-N skips), then every N skips thereafter.
+_COMPACTION_BREAKER_TRIP: int = 3
+"""Consecutive summarization failures that trip the circuit breaker."""
+
+_COMPACTION_BREAKER_PROBE_EVERY: int = 10
+"""Once tripped, allow one LLM probe attempt every N blocked calls.
+First probe fires at skip_count == TRIP + PROBE_EVERY (i.e. 13), then every
+PROBE_EVERY counts thereafter (23, 33, …). A successful probe resets the counter.
 """
-
-
-def _circuit_breaker_should_skip(skip_count: int) -> bool:
-    """Return True when the circuit breaker requires a skip at this miss count.
-
-    Trips at skip_count >= 3. Once tripped, allows a probe every
-    _CIRCUIT_BREAKER_PROBE_EVERY skips: first probe at skip_count == 13,
-    then 23, 33, and so on. At any other tripped count, callers must skip.
-    """
-    if skip_count < 3:
-        return False
-    skips_since_trip = skip_count - 3
-    return skips_since_trip == 0 or skips_since_trip % _CIRCUIT_BREAKER_PROBE_EVERY != 0
 
 
 def _summarization_gate_open(ctx: RunContext[CoDeps]) -> bool:
@@ -123,11 +111,15 @@ def _summarization_gate_open(ctx: RunContext[CoDeps]) -> bool:
         return False
 
     count = ctx.deps.runtime.compaction_skip_count
-    if _circuit_breaker_should_skip(count):
+    # skips_since_trip == 0 blocks the initial trip; probes fire every PROBE_EVERY skips after that
+    skips_since_trip = count - _COMPACTION_BREAKER_TRIP
+    if count >= _COMPACTION_BREAKER_TRIP and (
+        skips_since_trip == 0 or skips_since_trip % _COMPACTION_BREAKER_PROBE_EVERY != 0
+    ):
         log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
         ctx.deps.runtime.compaction_skip_count += 1
         return False
-    if count >= 3:
+    if count >= _COMPACTION_BREAKER_TRIP:
         log.info("Compaction: circuit breaker probe (count=%d)", count)
     return True
 
@@ -172,8 +164,9 @@ async def _gated_summarize_or_none(
     """Run the summarizer if the gate is open, else return None.
 
     Owns the user-visible "Compacting conversation..." announce print, the success
-    reset of ``compaction_skip_count``, and the fall-through-to-static-marker path
-    when the summarizer raises. Lets ``asyncio.CancelledError`` propagate.
+    reset of ``compaction_skip_count`` on a valid (non-empty) summary, and the
+    fall-through-to-static-marker path when the summarizer raises or returns empty.
+    Lets ``asyncio.CancelledError`` propagate.
     """
     if not _summarization_gate_open(ctx):
         return None
@@ -190,6 +183,13 @@ async def _gated_summarize_or_none(
     except Exception:
         log.warning(
             "Compaction summarization failed — falling back to static marker", exc_info=True
+        )
+        ctx.deps.runtime.compaction_skip_count += 1
+        return None
+    if not _is_valid_summary(summary_text):
+        log.warning(
+            "Compaction summarizer returned empty output — counting as failure (count=%d)",
+            ctx.deps.runtime.compaction_skip_count + 1,
         )
         ctx.deps.runtime.compaction_skip_count += 1
         return None
@@ -249,9 +249,6 @@ async def apply_compaction(
     summary_text = await _gated_summarize_or_none(
         ctx, dropped, announce=announce, focus=focus, previous_summary=previous_summary
     )
-    if summary_text is not None and not _is_valid_summary(summary_text):
-        log.warning("Compaction summarizer returned empty output; downgrading to static marker.")
-        summary_text = None
     if summary_text is not None:
         ctx.deps.runtime.previous_compaction_summary = summary_text
     marker = build_compaction_marker(dropped_count, summary_text)

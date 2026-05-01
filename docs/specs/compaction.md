@@ -369,7 +369,7 @@ Raw `summary_text` is stored in `ctx.deps.runtime.previous_compaction_summary` b
 Summarizer surface:
 - `_summarization_gate_open(ctx)` — `False` when `ctx.deps.model is None` or circuit breaker tripped (and not at probe cadence).
 - `summarize_dropped_messages(ctx, dropped, *, focus, previous_summary=None)` — pure LLM call; raises on failure.
-- `_gated_summarize_or_none(...)` — gate + announce + summarizer + fallback; returns `None` on any failure path.
+- `_gated_summarize_or_none(...)` — gate + announce + summarizer + validity check + fallback; returns `None` on any failure path (exception, empty/whitespace-only return, or gate closed).
 
 **Marker** — `ModelRequest` / `UserPromptPart` with a `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix, N-message count, `summary_text`, and a verbatim-tail trailer instructing the model to treat the summary as reference, not active instructions. Detection via `startswith(SUMMARY_MARKER_PREFIX)` — shared constant used by both builder and detector.
 
@@ -381,10 +381,10 @@ Summarizer surface:
 
 | State | Behavior |
 |---|---|
-| `compaction_skip_count == 0` (healthy) | Attempt summarizer; on success keep at 0; on failure fall back to static marker, increment to 1. |
-| `compaction_skip_count == 1 or 2` | Attempt summarizer; on success reset to 0; on failure fall back to static, increment. |
-| `compaction_skip_count >= 3` (tripped) | Skip summarizer; static marker; increment. Every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips, attempt once — probe success resets to 0. |
-| Any success at any state | Reset counter to 0. |
+| `compaction_skip_count == 0` (healthy) | Attempt summarizer; on valid (non-empty) summary keep at 0; on failure or empty return fall back to static marker, increment to 1. |
+| `compaction_skip_count == 1 or 2` | Attempt summarizer; on valid summary reset to 0; on failure or empty return fall back to static, increment. |
+| `compaction_skip_count >= 3` (tripped) | Skip summarizer; static marker; increment. Every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips, attempt once — probe success (valid summary) resets to 0. |
+| Any valid (non-empty) summary | Reset counter to 0. |
 
 `ctx.deps.model is None` (sub-agent without a configured model) is also a bypass condition.
 
@@ -457,7 +457,8 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | Failure mode | Fallback |
 |---|---|
 | Summarizer raises (transient) | Static marker; warning logged; `compaction_skip_count += 1` |
-| Summarizer raises 3+ consecutive times | Circuit breaker trips; static markers used; LLM probed once every 10 skips |
+| Summarizer returns empty/whitespace string | Static marker; warning logged; `compaction_skip_count += 1` (same path as exception) |
+| Summarizer raises 3+ consecutive times (or returns empty 3+ times) | Circuit breaker trips; static markers used; LLM probed once every 10 skips |
 | `ctx.deps.model is None` (sub-agent context) | Static marker without LLM attempt |
 | `plan_compaction_boundaries` returns `None` (proactive) | Return messages unchanged; next request re-checks |
 | `plan_compaction_boundaries` returns `None` (overflow) | Fall through to `emergency_recover_overflow_history` |
@@ -519,8 +520,8 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `co_cli/context/compaction.py` | Public entry surface: M3 processor, overflow recovery, `apply_compaction`, summarizer gate, re-exports. |
 | `co_cli/context/_compaction_boundaries.py` | Boundary planner: `TurnGroup`, `group_by_turn`, `plan_compaction_boundaries`, active-user anchoring. |
 | `co_cli/context/_compaction_markers.py` | Marker builders, `gather_compaction_context` enrichment helper, `SUMMARY_MARKER_PREFIX`. |
-| `co_cli/context/_dedup_tool_results.py` | M2-pre: `dedup_tool_results` — dedup key, back-reference marker, eligibility predicate. |
-| `co_cli/context/_history_processors.py` | M2 processors: `dedup_tool_results`, `truncate_tool_results`, `enforce_batch_budget`. |
+| `co_cli/context/_dedup_tool_results.py` | M2-pre dedup helpers: content hash, eligibility predicate (`is_dedup_candidate`), back-reference builder (`build_dedup_part`). |
+| `co_cli/context/_history_processors.py` | M2 processors: `dedup_tool_results`, `evict_old_tool_results`, `evict_batch_tool_outputs`. |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker` per-tool format and `is_cleared_marker` predicate. |
 | `co_cli/context/summarization.py` | `summarize_messages`, token estimator, budget resolver, and prompt templates. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — provider overflow detection for 400/413. |
@@ -531,28 +532,34 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `co_cli/tools/shell/execute.py` | `shell` M1 override: `max_result_size=30_000`. |
 | `co_cli/config/tools.py` | `ToolsSettings` — `result_persist_chars`, `batch_spill_chars`. |
 | `co_cli/config/llm.py` | `num_ctx` (Ollama override), `ctx_token_budget` (fallback budget). |
-| `co_cli/context/rules/…` | Base system prompt; static recency-clearing advisory. |
-| `evals/eval_compaction_quality.py` | Compaction fidelity regression eval. |
+| `co_cli/context/assembly.py` | Prompt assembly: `assemble_system_prompt`; static `_TOOL_RESULT_ADVISORY` recency-clearing paragraph. |
+| `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |
+| `evals/eval_compaction_proactive.py` | Proactive compaction end-to-end eval. |
+| `evals/eval_compaction_multi_cycle.py` | Multi-cycle compaction fidelity eval. |
 
 ## 5. Test Gates
 
 | Property | Test file |
 |---|---|
-| M1 persist threshold and preview placeholder format | `tests/files/test_tool_output_sizing.py` |
-| M2a `semantic_marker` format for all 8 compactable tools + generic fallback + shell exit detection | `tests/context/test_tool_result_markers.py` |
-| M2a `truncate_tool_results` clearing and replacement behavior per tool | `tests/context/test_tool_result_markers.py` |
-| M2a non-string (multimodal) content falls back to static placeholder | `tests/context/test_tool_result_markers.py` |
-| `is_cleared_marker` predicate recognizes static fallback and per-tool markers | `tests/context/test_tool_result_markers.py` |
-| M3 token estimation (ToolCallPart.args + dict/list content) | `tests/context/test_context_compaction.py` |
-| M3 trigger floor via `max()` of estimate and reported; budget resolution | `tests/context/test_context_compaction.py` |
-| M3 anti-thrashing gate activation; low-yield savings-clear unblocks gate | `tests/context/test_context_compaction.py` |
-| M3 small-context floor blocks compaction | `tests/context/test_context_compaction.py` |
-| Iterative summarizer branch content preservation | `tests/context/test_context_compaction.py` (`@pytest.mark.local`) |
-| `previous_compaction_summary` write-back; failure isolation on gate-closed path | `tests/context/test_context_compaction.py` (`@pytest.mark.local`) |
-| Enrichment suppression when runtime field set; session-boundary reset | `tests/context/test_context_compaction.py` |
-| Planner: token scaling, turn-boundary snap, overlap, min-groups clamp | `tests/context/test_history.py` |
-| Planner: active-user anchoring; oversized-last-group unconditional retain | `tests/context/test_history.py` |
-| Marker construction and prior-summary prefix detection | `tests/context/test_history.py` |
-| Manual `/compact` static-marker fallback (no model, circuit-breaker, todos, breadcrumbs) | `tests/context/test_history.py` |
-| `search_tools` orphan structural preservation (breadcrumb dedup) | `tests/context/test_history.py` |
-| Dedup of identical tool results | `tests/context/test_dedup_tool_results.py` |
+| M1 persist path exercised: oversized batch result spilled to disk, placeholder format confirmed | `tests/test_flow_history_processors.py` |
+| M2-pre dedup: identical return collapses to back-reference; short content and distinct content pass through | `tests/test_flow_history_processors.py` |
+| M2a `evict_old_tool_results`: clears oldest when over keep limit; keeps all at limit; protects last-turn returns | `tests/test_flow_history_processors.py` |
+| M2a `is_cleared_marker` recognizes cleared markers; recent returns left untouched | `tests/test_flow_history_processors.py` |
+| M2b `evict_batch_tool_outputs`: spills largest return when aggregate exceeds threshold; passes through when under | `tests/test_flow_history_processors.py` |
+| `group_by_turn` correctly partitions multi-turn message list into turn groups | `tests/test_flow_history_processors.py` |
+| M3 below-threshold fast path: messages object returned unchanged, no compaction | `tests/test_flow_compaction_proactive.py` |
+| M3 above-threshold compaction: result shorter than input, compaction marker present | `tests/test_flow_compaction_proactive.py` |
+| M3 anti-thrashing gate: skips compaction after consecutive low-yield passes | `tests/test_flow_compaction_proactive.py` |
+| Circuit breaker cadence: counts 0–2 open, 3–12 closed, 13 probe, 14–22 closed, 23 probe | `tests/test_flow_compaction_proactive.py` |
+| Circuit breaker counter resets to 0 after a successful (non-empty) LLM compaction | `tests/test_flow_compaction_proactive.py` |
+| Boundary planner: valid `(head_end, tail_start, dropped_count)` for 3-turn history | `tests/test_flow_compaction_boundaries.py` |
+| Boundary planner: returns `None` when only 1 turn group (nothing to drop) | `tests/test_flow_compaction_boundaries.py` |
+| Boundary planner: oversized last-group retained unconditionally even over tail budget | `tests/test_flow_compaction_boundaries.py` |
+| `find_first_run_end` anchors at first `TextPart` response, skips tool-only responses | `tests/test_flow_compaction_boundaries.py` |
+| `estimate_message_tokens` scales with content length; returns 0 for empty list | `tests/test_flow_compaction_summarization.py` |
+| `resolve_compaction_budget` prefers explicit `context_window`; falls back to plausible default | `tests/test_flow_compaction_summarization.py` |
+| Summarizer from-scratch branch: returns non-empty structured text | `tests/test_flow_compaction_summarization.py` |
+| Summarizer iterative branch: output incorporates prior summary and new turns | `tests/test_flow_compaction_summarization.py` |
+| Emergency overflow recovery: pending user turn preserved after structural fallback | `tests/test_flow_compaction_recovery.py` |
+| `is_context_overflow`: 413 is unconditional; 400 requires overflow evidence in body | `tests/test_flow_http_error_classifier.py` |
+| `/clear` resets all compaction runtime fields to initial state | `tests/test_flow_slash_commands.py` |
