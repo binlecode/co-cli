@@ -1,13 +1,13 @@
 """Tests for prompt assembly — static instructions and toolset guidance emission."""
 
-from tests._settings import make_settings
+from tests._settings import SETTINGS
 
 from co_cli.context.assembly import build_static_instructions
 
 
 def test_static_instructions_contains_phase1_rules() -> None:
     """Assembled static instructions must include the don't-stop-at-plan workflow rule."""
-    result = build_static_instructions(make_settings())
+    result = build_static_instructions(SETTINGS)
     assert "Only stop at a plan when the user explicitly" in result
 
 

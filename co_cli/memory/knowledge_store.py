@@ -1,6 +1,6 @@
 """SQLite FTS5 knowledge index for ranked search across all text sources.
 
-KnowledgeStore is a single SQLite-backed search index (``search.db``) that any
+KnowledgeStore is a single SQLite-backed search index (``co-cli-search.db``) that any
 source writes to. The ``source`` column distinguishes origin; the ``kind`` /
 ``type`` columns hold the ``artifact_kind`` subtype for local artifacts.
 

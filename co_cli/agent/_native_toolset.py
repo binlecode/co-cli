@@ -10,13 +10,12 @@ from pydantic_ai.toolsets import FunctionToolset
 from co_cli.config.core import Settings
 from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
-from co_cli.tools.agents import (
+from co_cli.tools.agents.delegation import (
     knowledge_analyze,
     reason,
     web_research,
 )
-from co_cli.tools.capabilities import capabilities_check
-from co_cli.tools.execute_code import code_execute
+from co_cli.tools.code.execute import code_execute
 from co_cli.tools.files.read import file_find, file_read, file_search
 from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search
@@ -28,16 +27,17 @@ from co_cli.tools.memory.write import (
     memory_create,
     memory_modify,
 )
-from co_cli.tools.obsidian import obsidian_list, obsidian_read, obsidian_search
-from co_cli.tools.shell import shell
-from co_cli.tools.task_control import (
+from co_cli.tools.obsidian.tools import obsidian_list, obsidian_read, obsidian_search
+from co_cli.tools.shell.execute import shell
+from co_cli.tools.system.capabilities import capabilities_check
+from co_cli.tools.system.user_input import clarify
+from co_cli.tools.tasks.control import (
     task_cancel,
     task_list,
     task_start,
     task_status,
 )
-from co_cli.tools.todo import todo_read, todo_write
-from co_cli.tools.user_input import clarify
+from co_cli.tools.todo.rw import todo_read, todo_write
 from co_cli.tools.web.fetch import web_fetch
 from co_cli.tools.web.search import web_search
 

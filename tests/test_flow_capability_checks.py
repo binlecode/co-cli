@@ -5,20 +5,20 @@ import asyncio
 import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import make_settings
+from tests._settings import SETTINGS, make_settings
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
 from co_cli.agent.core import build_agent, build_tool_registry
-from co_cli.config.core import settings
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.tools.capabilities import capabilities_check
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.system.capabilities import capabilities_check
 
-_AGENT = build_agent(config=settings)
+_TOOL_REG = build_tool_registry(SETTINGS)
+_AGENT = build_agent(config=SETTINGS, tool_registry=_TOOL_REG)
 
 
 def _make_deps(**settings_overrides) -> CoDeps:
-    config = make_settings(**settings_overrides)
+    config = make_settings(**settings_overrides) if settings_overrides else SETTINGS
     tool_registry = build_tool_registry(config)
     return CoDeps(
         shell=ShellBackend(),
@@ -29,7 +29,7 @@ def _make_deps(**settings_overrides) -> CoDeps:
 
 
 def _make_ctx(deps: CoDeps) -> RunContext[CoDeps]:
-    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    return RunContext(deps=deps, model=None, usage=RunUsage())
 
 
 @pytest.mark.asyncio

@@ -171,6 +171,11 @@ def plan_compaction_boundaries(
     acc_groups: list[TurnGroup] = []
     acc_tokens = 0
     for group in reversed(groups):
+        # Stop before absorbing groups that belong to the head region — including
+        # a group with start_index <= head_end would make tail_start <= head_end,
+        # leaving nothing to drop.
+        if group.start_index <= head_end:
+            break
         group_tokens = estimate_message_tokens(group.messages)
         if (
             len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS

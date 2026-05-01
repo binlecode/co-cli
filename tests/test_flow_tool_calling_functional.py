@@ -3,31 +3,29 @@
 import asyncio
 
 import pytest
-from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, ToolCallPart
-from pydantic_ai.result import DeferredToolRequests
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agent.core import build_tool_registry
+from co_cli.agent.core import build_agent, build_tool_registry
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.llm.factory import build_model
+from co_cli.llm.factory import LlmModel, build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
-_AGENT_NOREASON = Agent(
-    _LLM_MODEL.model,
-    deps_type=CoDeps,
-    model_settings=_LLM_MODEL.settings_noreason,
-    retries=_CONFIG_NO_MCP.tool_retries,
-    output_type=[str, DeferredToolRequests],
-    toolsets=[_TOOL_REG.toolset],
+# Production agent via build_agent() with noreason settings per test policy for tool-calling tests.
+_LLM_NOREASON = LlmModel(
+    model=_LLM_MODEL.model,
+    settings=_LLM_MODEL.settings_noreason,
+    settings_noreason=_LLM_MODEL.settings_noreason,
+    context_window=_LLM_MODEL.context_window,
 )
+_AGENT = build_agent(config=_CONFIG_NO_MCP, model=_LLM_NOREASON, tool_registry=_TOOL_REG)
 
 
 def _make_deps() -> CoDeps:
@@ -47,7 +45,7 @@ async def test_refusal_no_tool_for_simple_math():
     await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
         turn = await run_turn(
-            agent=_AGENT_NOREASON,
+            agent=_AGENT,
             user_input="What is 17 times 23?",
             deps=deps,
             message_history=[],
@@ -64,7 +62,7 @@ async def test_refusal_no_tool_for_simple_math():
 @pytest.mark.asyncio
 async def test_tool_selection_shell_git_status():
     """Agent must correctly route a request to execute a bash command to the shell tool."""
-    agent = _AGENT_NOREASON
+    agent = _AGENT
     deps = _make_deps()
     frontend = SilentFrontend(approval_response="y")
 

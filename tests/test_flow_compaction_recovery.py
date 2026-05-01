@@ -4,7 +4,7 @@ import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.usage import RunUsage
-from tests._settings import make_settings
+from tests._settings import SETTINGS
 
 from co_cli.context.compaction import emergency_recover_overflow_history
 from co_cli.deps import CoDeps, CoSessionState
@@ -21,7 +21,7 @@ async def test_emergency_recover_overflow_preserves_pending_user_turn():
         ModelResponse(parts=[TextPart(content="r2")]),
         ModelRequest(parts=[UserPromptPart(content="pending request")]),
     ]
-    deps = CoDeps(shell=ShellBackend(), config=make_settings(), session=CoSessionState())
+    deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=CoSessionState())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
     result = await emergency_recover_overflow_history(ctx, messages)
     recovered = result[0] if isinstance(result, tuple) else result

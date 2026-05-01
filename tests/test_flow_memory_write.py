@@ -1,0 +1,208 @@
+"""Behavioral tests for save_artifact and mutate_artifact write paths.
+
+Exercises: dedup (URL-keyed, Jaccard), straight save, indexing, append, and
+replace-uniqueness guard. No LLM — real filesystem + real FTS5 only.
+"""
+
+import pytest
+from tests._settings import SETTINGS
+
+from co_cli.memory.knowledge_store import KnowledgeStore
+from co_cli.memory.service import mutate_artifact, save_artifact
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_store(tmp_path, name="test-search.db") -> KnowledgeStore:
+    return KnowledgeStore(config=SETTINGS, knowledge_db_path=tmp_path / name)
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
+    """save_artifact (straight path) must write a file AND index it in FTS5.
+
+    Failure mode: file written but not indexed → memory_search misses newly
+    created artifacts on the next turn.
+    """
+    knowledge_dir = tmp_path / "knowledge"
+    store = _make_store(tmp_path)
+    try:
+        result = save_artifact(
+            knowledge_dir,
+            content="pytest is a testing framework",
+            artifact_kind="note",
+            title="pytest note",
+            knowledge_store=store,
+        )
+
+        assert result.action == "saved"
+        assert result.path.exists(), "artifact file was not written to disk"
+        assert isinstance(result.artifact_id, str)
+        assert len(result.artifact_id) >= 8, (
+            f"artifact_id must be a non-empty slug string, got {result.artifact_id!r}"
+        )
+
+        hits = store.search("pytest testing")
+        paths = [h.path for h in hits]
+        assert any(str(result.path) in p for p in paths), (
+            f"artifact not found in FTS5 index after save; indexed paths: {paths}"
+        )
+    finally:
+        store.close()
+
+
+def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
+    """save_artifact with the same source_url must update, not create a duplicate.
+
+    Failure mode: duplicate articles accumulate silently → user gets stale
+    content in search results.
+    """
+    knowledge_dir = tmp_path / "knowledge"
+    store = _make_store(tmp_path)
+    try:
+        url = "https://example.com/test-page"
+
+        save_artifact(
+            knowledge_dir,
+            content="original content",
+            artifact_kind="article",
+            title="test article",
+            source_url=url,
+            knowledge_store=store,
+        )
+
+        second = save_artifact(
+            knowledge_dir,
+            content="updated content",
+            artifact_kind="article",
+            title="test article",
+            source_url=url,
+            knowledge_store=store,
+        )
+
+        assert second.action in ("appended", "merged"), (
+            f"expected dedup action, got {second.action!r}"
+        )
+        md_files = list(knowledge_dir.glob("*.md"))
+        assert len(md_files) == 1, (
+            f"expected exactly 1 .md file after URL dedup, found {len(md_files)}: {md_files}"
+        )
+    finally:
+        store.close()
+
+
+def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
+    """save_artifact with consolidation_enabled must skip near-identical content.
+
+    Failure mode: near-duplicate artifacts pile up → search returns noisy,
+    redundant results.
+
+    Uses a 20-word vocabulary repeated to form the base; adding one word
+    gives Jaccard = 20/21 ≈ 0.95, which exceeds the > 0.9 skip threshold.
+    The code checks best_score > 0.9 before the superset path, so 'skipped'
+    fires regardless of superset status.
+    """
+    knowledge_dir = tmp_path / "knowledge"
+    store = _make_store(tmp_path)
+    try:
+        # 20 distinct meaningful tokens (no stopwords, all len > 1).
+        base = (
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+            "kilo lima mike november oscar papa quebec romeo sierra tango "
+        ) * 3
+
+        save_artifact(
+            knowledge_dir,
+            content=base,
+            artifact_kind="note",
+            title="nato note",
+            knowledge_store=store,
+            consolidation_enabled=True,
+        )
+
+        # Adding one word: Jaccard = 20/21 ≈ 0.95 > 0.9 → triggers 'skipped'.
+        second = save_artifact(
+            knowledge_dir,
+            content=base + " ultraviolet",
+            artifact_kind="note",
+            title="nato note",
+            knowledge_store=store,
+            consolidation_enabled=True,
+        )
+
+        assert second.action == "skipped", (
+            f"expected 'skipped' for near-identical content (Jaccard > 0.9), got {second.action!r}"
+        )
+    finally:
+        store.close()
+
+
+def test_mutate_artifact_append_adds_content_at_end(tmp_path):
+    """mutate_artifact append must add new content to the end of the artifact body.
+
+    Failure mode: append silently no-ops or overwrites → memory modification
+    is lost on the next read.
+    """
+    knowledge_dir = tmp_path / "knowledge"
+    store = _make_store(tmp_path)
+    try:
+        saved = save_artifact(
+            knowledge_dir,
+            content="initial body",
+            artifact_kind="note",
+            title="my note",
+            knowledge_store=store,
+        )
+
+        mutate_result = mutate_artifact(
+            knowledge_dir,
+            slug=saved.slug,
+            action="append",
+            content="new line",
+            knowledge_store=store,
+        )
+
+        assert mutate_result.action == "appended"
+        file_text = mutate_result.path.read_text(encoding="utf-8")
+        # The file may have a trailing newline after the appended content; strip before checking.
+        assert file_text.rstrip("\n").endswith("new line"), (
+            f"'new line' not found at end of file. File ends with: {file_text[-100:]!r}"
+        )
+    finally:
+        store.close()
+
+
+def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
+    """mutate_artifact replace must raise ValueError when the target appears more than once.
+
+    Failure mode: replace picks wrong occurrence → artifact body silently
+    corrupted with no error surfaced to the caller.
+    """
+    knowledge_dir = tmp_path / "knowledge"
+    store = _make_store(tmp_path)
+    try:
+        saved = save_artifact(
+            knowledge_dir,
+            content="same line\nsame line\nother content",
+            artifact_kind="note",
+            title="dupe note",
+            knowledge_store=store,
+        )
+
+        with pytest.raises(ValueError, match="appears"):
+            mutate_artifact(
+                knowledge_dir,
+                slug=saved.slug,
+                action="replace",
+                target="same line",
+                content="replacement",
+                knowledge_store=store,
+            )
+    finally:
+        store.close()

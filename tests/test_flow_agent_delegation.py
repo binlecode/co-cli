@@ -7,7 +7,7 @@ from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.deps import CoDeps, CoSessionState, fork_deps
 from co_cli.llm.factory import build_model
-from co_cli.tools.agent_delegate import MAX_AGENT_DEPTH, knowledge_analyze, reason, web_research
+from co_cli.tools.agents.delegation import MAX_AGENT_DEPTH, knowledge_analyze, reason, web_research
 from co_cli.tools.shell_backend import ShellBackend
 
 _LLM_MODEL = build_model(SETTINGS_NO_MCP.llm)
