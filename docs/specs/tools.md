@@ -1,23 +1,5 @@
 # Co CLI — Tools
 
-## Product Intent
-
-**Goal:** Define tool registration, visibility policy, approval model, and the built-in tool surface plus MCP discovery model.
-**Functional areas:**
-- Config-gated tool registration
-- Visibility tiers (always-registered vs deferred/discoverable)
-- Approval handling (session auto-approve rules, explicit prompts, shell policy-driven prompts)
-- Shell policy and resource locks
-- MCP integration and native tool catalog (37 built-in tools)
-
-**Non-goals:**
-- Parallel MCP execution across servers
-- Tool-level retry (handled at turn level)
-
-**Success criteria:** All tools registered at agent construction; deferred tools discoverable via `search_tools`; approval resume narrows toolset uniformly.
-**Status:** Stable
-
----
 
 > For system overview and approval boundary: [system.md](system.md). For the agent loop, orchestration, and approval flow: [core-loop.md](core-loop.md). For skill loading and slash-command dispatch: [skills.md](skills.md).
 

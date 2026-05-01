@@ -1,26 +1,5 @@
 # TUI Layer — REPL, Completer, and Slash Commands
 
-## Product Intent
-
-**Goal:** Own the user-facing shell — REPL loop, input completion, slash command dispatch, and reasoning display.
-**Functional areas:**
-- REPL loop (`_chat_loop`) and session lifecycle
-- `prompt_toolkit` completion (`WordCompleter`, skill name injection)
-- Slash command registry (`BUILTIN_COMMANDS`) and dispatch
-- `CommandContext` input bag
-- `CoSessionState` / `CoRuntimeState` integration
-
-**Non-goals:**
-- Complex argument parsing (positional tokens only)
-- Multi-line input editing
-
-**Success criteria:** Tab completion includes loaded skill commands; Ctrl+C twice exits cleanly; reasoning display modes (`off`/`summary`/`full`) toggle via `/reasoning`.
-**Status:** In Progress
-**Active plans:**
-- `docs/exec-plans/active/2026-04-13-110355-tui-status-surface.md`
-- `docs/exec-plans/active/2026-04-13-110355-tui-deferred-interactions.md`
-
----
 
 ## 1. What & How
 

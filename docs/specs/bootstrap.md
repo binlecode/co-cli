@@ -1,23 +1,5 @@
 # Co CLI — System Bootstrap Design
 
-## Product Intent
-
-**Goal:** Document the canonical startup sequence from settings load to REPL entry, including degradation.
-**Functional areas:**
-- Settings loading and config precedence
-- CoDeps assembly (`create_deps()`)
-- MCP connection and skill loading
-- Knowledge backend resolution and sync
-- Session restore and welcome banner
-
-**Non-goals:**
-- Runtime health checks (owned by `capabilities_check` agent tool)
-- Per-component initialization internals
-
-**Success criteria:** Bootstrap completes with degradations recorded; optional failures don't abort startup; welcome banner printed.
-**Status:** Stable
-
----
 
 ## 1. What & How
 

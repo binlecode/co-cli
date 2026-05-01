@@ -1,23 +1,5 @@
 # Personality System
 
-## Product Intent
-
-**Goal:** Define how co-cli constructs and maintains a consistent, configurable character across sessions.
-**Functional areas:**
-- Soul file format and directory layout (`souls/{role}/`)
-- Static prompt assembly — six-section ordered construction
-- Per-turn personality-context memory injection
-- Personality discovery, validation, and configuration
-
-**Non-goals:**
-- Model fine-tuning or weight modification (all personality is external, prompt-space only)
-- Automatic personality selection based on context
-- Cross-personality memory sharing
-
-**Success criteria:** Personality is fully reconstructed from files each session; soul seed is placed first in static instructions; per-turn personality-context memories inject top-5 recent entries.
-**Status:** Stable
-
----
 
 ## 1. What & How
 

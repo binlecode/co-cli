@@ -1,42 +1,5 @@
 # Co CLI — Compaction System
 
-## Product Intent
-
-**Goal:** Keep the tokens sent to the model on every request bounded, the active working context current, and task intent preserved across compaction boundaries — without user intervention.
-
-**Functional areas:**
-- Emit-time tool-output persistence (size-based disk spill)
-- Prepass recency clearing (per-tool top-N retention)
-- Window compaction (token-budget head/middle/tail with inline summarization)
-- Summarizer enrichment (file working set, pending todos, prior summaries) — helper, not a layer
-- Overflow recovery — single-retry emergency path that shares the planner and summarizer with proactive compaction
-- Per-request trigger cadence with self-stabilizing feedback
-
-**Non-goals:**
-- Multi-variant microcompact / snip / collapse stacks (fork-cc pattern rejected — complexity not justified).
-- Queued or async compaction tasks (opencode pattern rejected).
-- Two-layer hygiene with separate thresholds (hermes pattern rejected).
-- Per-request or per-session tuning of compaction parameters beyond what `settings.json` / env vars expose.
-- Modifying already-sent transcripts (transcripts are append-only).
-- Splitting compaction across turn-group boundaries (turn group is the atomic preserved unit).
-
-**Success criteria:**
-- Tool-calling turns with large returns compact before hitting provider overflow.
-- Overflow recovery never fails where a structural compaction is possible (≥2 turn groups).
-- Repeated compaction does not cause breadcrumb or summary drift.
-- Summarizer failure falls back to a static marker; turn continues.
-- Prompt cache hit rate preserved (no per-turn churn in static sections).
-
-**Status:** Stable. Design landed via the compaction-refactor-from-peer-survey plan; see [docs/exec-plans/completed/2026-04-17-163453-compaction-refactor-from-peer-survey.md](../exec-plans/completed/2026-04-17-163453-compaction-refactor-from-peer-survey.md) and its followup [2026-04-18-002621-compaction-followup-fixes.md](../exec-plans/completed/2026-04-18-002621-compaction-followup-fixes.md).
-
-### Deferred
-
-- Summarizer LLM calls are not merged into `turn_usage` — the user's turn token display omits summarizer cost.
-- First-turn overflow is terminal when `len(groups) ≤ 1` (no middle to drop). Structural limit.
-- `COMPACTABLE_KEEP_RECENT = 5` is borrowed verbatim from fork-cc; not tuned for co-cli's tool surface — revisit via `evals/eval_compaction_quality.py` if retention/fidelity tradeoff becomes measurable.
-- A future eval-gated prompt upgrade is possible (fork-cc's verbatim-quote anchoring, explicit `All User Messages` section, etc.) — out of scope until `evals/eval_compaction_quality.py` shows a measurable fidelity gap.
-
----
 
 Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (including child-session branching after compaction) lives in [memory.md](memory.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
 
@@ -564,7 +527,7 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `co_cli/tools/categories.py` | `COMPACTABLE_TOOLS`, `FILE_TOOLS`, `PATH_NORMALIZATION_TOOLS`. |
 | `co_cli/tools/tool_io.py` | M1: `persist_if_oversized`, `tool_output`, `check_tool_results_size`. |
 | `co_cli/tools/files/read.py` | `file_read` M1 override: `max_result_size=math.inf` (never persists). |
-| `co_cli/tools/shell.py` | `shell` M1 override: `max_result_size=30_000`. |
+| `co_cli/tools/shell/execute.py` | `shell` M1 override: `max_result_size=30_000`. |
 | `co_cli/config/tools.py` | `ToolsSettings` — `result_persist_chars`, `batch_spill_chars`. |
 | `co_cli/config/llm.py` | `num_ctx` (Ollama override), `ctx_token_budget` (fallback budget). |
 | `co_cli/context/rules/…` | Base system prompt; static recency-clearing advisory. |

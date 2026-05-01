@@ -1,23 +1,5 @@
 # LLM Models
 
-## Product Intent
-
-**Goal:** Define the single-model architecture, provider abstraction, and per-call settings resolution.
-**Functional areas:**
-- Model factory (`build_model`) and provider selection
-- Explicit reasoning settings resolution plus provider-aware noreason settings resolved at build time
-- Provider-specific runtime settings (Ollama `num_ctx`, Gemini defaults)
-- Model dependency checks at startup
-
-**Non-goals:**
-- Multi-model routing
-- Model-level caching
-- Streaming token budgets
-
-**Success criteria:** Single model used for all tasks; reasoning suppressed on non-reasoning calls; Ollama `num_ctx` baked at Modelfile level.
-**Status:** Stable
-
----
 
 ## 1. What & How
 

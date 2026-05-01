@@ -1,23 +1,5 @@
 # Co CLI System Design
 
-## Product Intent
-
-**Goal:** Define the top-level runtime shape — subsystems, wiring, and boundaries.
-**Functional areas:**
-- CoDeps assembly and dependency direction
-- Session lifecycle and system boundaries
-- Degradation policy (startup failures, optional service unavailability)
-- Cross-subsystem communication contracts
-
-**Non-goals:**
-- Component internals (owned by component specs)
-- Startup sequencing (bootstrap.md)
-- Turn execution (core-loop.md)
-
-**Success criteria:** All cross-subsystem communication goes through CoDeps; no hidden global state; degradation recorded and surfaced at startup.
-**Status:** Stable
-
----
 
 This doc defines the runtime architecture of `co-cli`: subsystems, boundaries, and cross-subsystem contracts. Component internals are owned by their component specs; see section 2.4 for the full cross-reference map.
 

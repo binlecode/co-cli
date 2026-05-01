@@ -1,26 +1,5 @@
 # Co CLI — Prompt Assembly
 
-## Product Intent
-
-**Goal:** Own how instruction layers, dynamic instruction callbacks, and history processors combine to produce the outbound model request on every turn.
-**Functional areas:**
-- Static instruction assembly (soul + rules + examples + critique)
-- Dynamic instruction callbacks (`@agent.instructions`)
-- Registered history-processor pipeline and ordering, plus two preflight callables (safety injection, canon recall injection)
-- Append-only invariant for dynamic content (cache hygiene)
-- Approval resume reusing the main agent
-
-**Non-goals:**
-- Compaction internals (owned by [compaction.md](compaction.md))
-- Memory/session persistence and transcript recall (owned by [memory.md](memory.md))
-- Reusable knowledge schema and retrieval (owned by [memory.md](memory.md))
-- Provider wire format past the pydantic-ai SDK boundary
-
-**Success criteria:** Prompt-prefix cache hit rate preserved across turns; dynamic content appended to the tail, never woven into `@agent.instructions`; approval resumes add zero new tokens.
-**Status:** Stable
-**Known gaps:** None.
-
----
 
 Covers how `co-cli` shapes the prompt for each model request. Startup sequencing lives in [bootstrap.md](bootstrap.md); turn orchestration in [core-loop.md](core-loop.md); compaction mechanics in [compaction.md](compaction.md); memory/session and knowledge internals in [memory.md](memory.md); tool registration in [tools.md](tools.md).
 

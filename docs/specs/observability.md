@@ -1,24 +1,5 @@
 # Observability — Tracing and Viewers
 
-## Product Intent
-
-**Goal:** Trace every agent operation to local SQLite; provide two first-party viewer modes.
-**Functional areas:**
-- OTel instrumentation and `SQLiteSpanExporter`
-- WAL mode for concurrent read access
-- HTML tree viewer (nested span hierarchy)
-- Live tail viewer (real-time terminal)
-
-**Non-goals:**
-- External telemetry endpoints
-- Distributed tracing
-- Retention/pruning automation
-
-**Success criteria:** Every turn produces spans in `co-cli-logs.db` and `co-cli.jsonl`; WAL mode enables concurrent read; both viewers work on the same DB.
-**Status:** Stable
-**Known gaps:** No retention/pruning policy — DB grows unbounded.
-
----
 
 ## 1. What & How
 

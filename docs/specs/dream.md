@@ -1,30 +1,5 @@
 # Co CLI — Dream
 
-## Product Intent
-
-**Goal:** Keep Co's reusable knowledge healthy over time by retrospectively mining sessions, consolidating duplicate artifacts, and archiving stale knowledge without hiding state from the user.
-
-**Functional areas:**
-- Session-end and manual dream-cycle entrypoints
-- Retrospective transcript mining into reusable knowledge artifacts
-- Similarity-based artifact consolidation
-- Age and recall-based decay into a recoverable archive
-- Dream state, stats, dry-run previews, and observability spans
-
-**Non-goals:**
-- Rewriting raw session transcripts
-- Opaque provider-side memory
-- Autonomous deletion of knowledge without recoverable archive
-- Replacing turn-time recall or explicit knowledge search
-- A long-running scheduler or daemon-owned dreaming loop
-
-**Success criteria:** Dreaming strengthens Co's mission as a trusted local personal operator: raw memory stays intact, reusable knowledge becomes more coherent, stale low-use artifacts leave active recall, every mutation remains local and inspectable, and automatic work is bounded by config, timeouts, caps, and recoverability.
-
-**Status:** Stable. The dream cycle is implemented in `co_cli/memory/dream.py`, available via `/knowledge dream`, and optionally run on session end when `knowledge.consolidation_enabled=true` and `knowledge.consolidation_trigger="session_end"`. It is off by default.
-
-**Known gaps:** There is no wall-clock scheduler; the only automatic trigger is session shutdown. Mining only considers the configured recent transcript lookback and does not revisit already processed sessions after prompt or model changes. Similarity clustering is lexical token-Jaccard, so semantically similar but differently worded artifacts may not merge. `knowledge.max_artifact_count` is a soft setting and is not directly enforced by the dream cycle. A timeout can interrupt the cycle after earlier phase side effects have already happened; state persistence happens only on a completed non-dry run.
-
----
 
 This spec owns the dream-cycle lifecycle. The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [system.md](system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for dream miner and merge calls lives in [llm-models.md](llm-models.md).
 

@@ -1,41 +1,9 @@
 # Co CLI — Memory & Knowledge
 
-## Product Intent
 
-**Goal:** Own the full persistent cognition surface: session transcripts as raw memory, the derived transcript index for episodic recall, the reusable knowledge store, and the dream-cycle bridge between them.
+> Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md). Compaction mechanics: [compaction.md](compaction.md). Dream-cycle mining, merge, decay, archive: [dream.md](dream.md). Tool registration and approval: [tools.md](tools.md).
 
-**Functional areas:**
-- Session transcripts, transcript branching, and session lifecycle commands
-- Oversized tool-result spill files and transcript placeholders
-- Derived transcript index (`session-index.db`) and episodic `memory_search()`
-- Reusable knowledge artifacts on disk plus the derived retrieval DB
-- Turn-time recall, explicit search, and lifecycle handoff to dreaming
-
-**Non-goals:**
-- Multi-user or concurrent-write safety
-- Media ingestion pipelines
-- Provider-side memory or server-managed context
-- Automatic TTL/pruning for session transcripts or spilled tool results
-
-**Success criteria:** Raw chronology is preserved in append-only transcripts; episodic recall routes through the transcript index; reusable recall routes through the knowledge layer; history replacement branches to child transcripts instead of rewriting parents; agent-explicit `memory_create` and the dream lifecycle keep reusable knowledge current.
-
-**Status:** Stable. Memory is the session transcript layer plus a derived FTS5 session index. Knowledge is the reusable artifact layer in `knowledge_dir/*.md` plus the derived search DB. Dream-cycle details live in [dream.md](dream.md).
-
-**Known gaps:** No concurrent-instance safety around transcript writes. A second `co chat` in the same user home can race session persistence. Deferred.
-
----
-
-This spec defines how `co-cli` stores raw memory, derives episodic recall from it, promotes durable facts into knowledge, and maintains that knowledge over time. Startup sequencing lives in [bootstrap.md](bootstrap.md). Turn orchestration lives in [core-loop.md](core-loop.md). Prompt assembly and per-turn recall injection live in [prompt-assembly.md](prompt-assembly.md). Compaction mechanics live in [compaction.md](compaction.md). Dream-cycle mining, merge, decay, archive, and state live in [dream.md](dream.md). Tool registration and approval live in [tools.md](tools.md).
-
-## 1. What & How
-
-`co-cli` has two persistence layers — a static layer baked into the system prompt at agent construction and a dynamic layer of three recall channels queried on demand — plus one directional bridge:
-
-- **Static personality content** (not a recall channel) — soul seed, mindsets, and behavioral rules are assembled once at agent construction and injected into the prefix-cached system prompt. No query path; no FTS; no LLM. Distinct from the three recall channels below.
-- **Sessions channel** is the raw episodic timeline — append-only JSONL transcripts under `sessions/`, chunked and indexed in the unified `co-cli-search.db` chunks pipeline as `source='session'`. Recall returns verbatim chunk citations with JSONL line bounds; no LLM in the recall path.
-- **Artifacts channel** is every reusable artifact the agent should recall on demand — markdown files under `knowledge/`, indexed by FTS5 and optional vector hybrid. Recall returns ranked structured rows; no LLM in the default path.
-- **Canon channel** is the role-scoped read-only character memory under `souls/{role}/memories/*.md`. Recall returns ranked snippets; no LLM. Tuned for a small curated corpus and surfaced only when a personality is active.
-- **Bridge** is agent-explicit `memory_create` calls during a turn, and the optional dream cycle which retrospectively mines past transcripts. Dream-cycle details live in [dream.md](dream.md).
+## 1. Functional Architecture
 
 ```mermaid
 flowchart TD
@@ -50,28 +18,28 @@ flowchart TD
 
     subgraph Knowledge["Knowledge Layer"]
         KDir["knowledge/*.md"]
-        SearchDB["co-cli-search.db"]
+        SearchDB["co-cli-search.db\n(chunks + FTS5 + optional vec)"]
     end
 
     subgraph Recall["Retrieval"]
         MemorySearch["memory_search()"]
     end
 
-    Sessions --> SearchDB
+    Sessions -->|"index_session() → source='session'"| SearchDB
     Sessions --> Dream
     Sessions --> Spill
     Dream --> KDir
-    KDir --> SearchDB
+    KDir -->|"sync_dir() → source='knowledge'"| SearchDB
     SearchDB --> MemorySearch
 ```
 
-Three-channel overview:
-
-| Channel | Storage | Post-search recall synthesis |
+| Channel | Storage | Recall mechanism |
 | --- | --- | --- |
-| Sessions | `sessions/*.jsonl` → `co-cli-search.db` chunks pipeline (`source='session'`) | BM25 chunk search → best chunk per unique session (dedup) → **verbatim chunk citations with JSONL line bounds; no LLM** |
-| Artifacts | `knowledge/*.md` → `co-cli-search.db` FTS5 + optional vectors | FTS5 BM25 (± RRF vector merge) → ranked chunks → optional reranker → **structured rows; no LLM by default** |
+| Sessions | `sessions/*.jsonl` → `co-cli-search.db` (`source='session'`) | BM25 chunk search → best chunk per unique session (dedup) → verbatim citations with JSONL line bounds; no LLM |
+| Artifacts | `knowledge/*.md` → `co-cli-search.db` (`source='knowledge'`) | FTS5 BM25 ± RRF vector merge → optional reranker → ranked structured rows; no LLM by default |
 | Canon | `souls/{role}/memories/*.md` (in-process scan) | Token-overlap scoring (title 2× weight) → ranked snippets; no FTS DB, no LLM |
+
+`KnowledgeStore` is the shared search backend for both sessions and artifacts. `memory_search()` dispatches all three channels in parallel. Static personality content (soul seed, mindsets, behavioral rules) is injected once at agent construction via `build_static_instructions()` — it is not a recall channel.
 
 ## 2. Core Logic
 
@@ -83,13 +51,11 @@ Session transcripts are append-only JSONL files under `sessions_dir` with lexico
 YYYY-MM-DD-THHMMSSZ-{uuid8}.jsonl
 ```
 
-The timestamp prefix makes lexicographic order match chronological order; the 8-char UUID suffix is the display/session ID reused in telemetry.
-
 Each JSONL line is one of:
 
 - a message row serialized through `ModelMessagesTypeAdapter`
 - a `session_meta` control row written at the start of a branched child transcript
-- a legacy `compact_boundary` control row, still honored on load for older transcripts
+- a `compact_boundary` control row, honored on load for files above the precompact threshold
 
 `persist_session_history()` is the only transcript persistence primitive:
 
@@ -108,114 +74,96 @@ Behavioral rules:
 
 - Individual transcript files are never rewritten or truncated.
 - History replacement never mutates the parent transcript; it branches to a child transcript.
-- `CoSessionState.persisted_message_count` is the only durability cursor. Nothing is inferred from file size or mtime.
+- `CoSessionState.persisted_message_count` is the only durability cursor.
 - `load_transcript()` skips malformed lines and `session_meta` rows, honors `compact_boundary` skips for files above 5 MB, and refuses to load transcripts above 50 MB.
 
-### 2.2 Session Lifecycle, Commands, And Spill Files
+### 2.2 Session Lifecycle, Commands, and Spill Files
 
-Startup restore is path-only. `restore_session()` picks the latest `*.jsonl` by filename and sets `deps.session.session_path`, but `_chat_loop()` still begins with empty in-memory `message_history`. Resuming history is explicit.
+Startup restore is path-only. `restore_session()` picks the latest `*.jsonl` by filename and sets `deps.session.session_path`; `_chat_loop()` begins with empty in-memory `message_history`. Resuming history is explicit.
 
 Session command behavior:
 
 | Command | Behavior |
 | --- | --- |
-| `/resume` | Uses `list_sessions()` + interactive picker, then `load_transcript(selected.path)`. On success, adopts that history and sets `deps.session.session_path` to the selected file. |
-| `/new` | If history is empty, prints “Nothing to rotate”. Otherwise assigns a fresh `session_path` and replaces in-memory history with `[]`. |
-| `/clear` | Replaces in-memory history with `[]`. Existing transcript files are untouched. |
-| `/compact` | Replaces in-memory history with a compacted transcript; persistence then branches to a child session on the next write path. |
-| `/sessions [keyword]` | Lists session summaries from `sessions_dir`, optionally filtered by title substring. |
+| `/resume` | `list_sessions()` + interactive picker → `load_transcript(selected.path)`; adopts history and updates `session_path` |
+| `/new` | If history is empty, prints "Nothing to rotate"; else assigns a fresh `session_path` and clears in-memory history |
+| `/clear` | Clears in-memory history; transcript files untouched |
+| `/compact` | Replaces in-memory history with compacted transcript; next write branches to a child session |
+| `/sessions [keyword]` | Lists session summaries, optionally filtered by title substring |
 
-Oversized tool results never need to stay inline in the transcript. `tool_output()` checks the effective threshold:
-
-- `ToolInfo.max_result_size` when the tool defines one
-- otherwise `config.tools.result_persist_chars`
-
-If the display string exceeds that threshold, `persist_if_oversized()` writes the full text to:
+Oversized tool results spill to disk. `tool_output()` checks the effective threshold (`ToolInfo.max_result_size` or `config.tools.result_persist_chars`). When exceeded, `persist_if_oversized()` writes to:
 
 ```text
 tool-results/{sha256[:16]}.txt
 ```
 
-The model sees a `<persisted-output>` placeholder containing:
-
-- tool name
-- file path
-- total size
-- a 2,000-char preview
-- guidance to page the full file by line range
-
-Spill files are content-addressed and idempotent: identical content reuses the same filename. There is no TTL or automatic cleanup; `check_tool_results_size()` only warns when the directory exceeds a size threshold.
-
-Security constraints:
-
-- Session paths are internally generated from timestamps and UUIDs.
-- `/resume` uses a picker; there is no free-form transcript-path argument.
-- Session files and spilled tool-result files are `chmod 0o600`.
-
-Telemetry note:
-
-- The session short ID (`session_path.stem[-8:]`) is attached to spans and run metadata.
-- Forked sub-agent deps inherit shared services but start with a fresh empty `session_path`, so their traces are attributable but not persisted into the parent transcript file.
+The model sees a `<persisted-output>` placeholder with tool name, file path, total size, a 2,000-char preview, and guidance to page the full file. Spill files are content-addressed and idempotent. Session files and spill files are `chmod 0o600`.
 
 ### 2.3 Static Personality Content
 
 Static personality content is not a recall channel — it is a one-time unconditional load at agent construction.
 
-`build_static_instructions()` in `co_cli/context/assembly.py` assembles soul seed, mindsets, and behavioral rules into the cacheable static prompt. Knowledge artifacts are not injected into the static prompt; they are reachable on demand via `memory_search`.
+`build_static_instructions()` assembles soul seed, mindsets, and behavioral rules into the cacheable static prompt. Knowledge artifacts are not injected into the static prompt; they are reachable on demand via `memory_search`.
 
-The dynamic-instructions block (`current_time_prompt()` in `co_cli/agent/_instructions.py`) is intentionally kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable static prefix remains cache-stable across turns.
+The dynamic-instructions block (`current_time_prompt()`) is kept to a small volatile suffix — today's date plus conditional safety warnings — so the stable static prefix remains cache-stable across turns.
 
-### 2.4 Sessions Channel: Episodic Recall
-
-Raw transcripts are Memory; `co-cli-search.db` (unified chunks pipeline) is the derived search structure over them.
+### 2.4 Sessions Channel: Chunked Episodic Recall
 
 Sessions are indexed as `source='session'` chunks by `KnowledgeStore`:
 
-- `index_session(path)` — chunks a single JSONL file, hash-skips unchanged files, and writes the resulting `SessionChunk` rows into the unified `chunks` table. Partial-write recovery: if chunk count in DB < expected, re-indexes from scratch.
-- `sync_sessions(sessions_dir, exclude=None)` — scans `sessions_dir`, calls `index_session` for each file except the excluded path (current session), and removes stale rows for deleted files via `remove_stale("session", current_uuid8s)`.
-- `init_session_index()` runs during bootstrap. On first run after migration, removes the obsolete `session-index.db` file if present.
+```text
+index_session(path):
+    parse uuid8 and created_at from filename
+    chunk_session(path) → list[SessionChunk]
+    content_hash = sha256(joined chunk texts)
+    if hash unchanged AND chunk_count > 0: return  # hash-skip
+    index doc row (source='session', path=uuid8, kind='session')
+    index_chunks(source='session', doc_path=uuid8, chunks)
 
-Chunking is done by `session_chunker.py`:
+sync_sessions(sessions_dir, exclude=current_session):
+    for each *.jsonl except excluded:
+        index_session(path)
+    remove_stale('session', current_uuid8s)
+```
 
-- `flatten_session(messages)` converts `ExtractedMessage` list to flat text lines with role prefixes: `User:`, `Assistant:`, `Tool[name](call):`, `Tool[name](return):`.
-- `chunk_flattened(flat_lines, line_map, *, chunk_tokens, overlap_tokens)` splits flat text into overlapping `SessionChunk` objects, each tracking `start_jsonl_line` and `end_jsonl_line`.
-- Configurable via `knowledge.session_chunk_tokens` (default 400) and `knowledge.session_chunk_overlap` (default 80).
+`session_chunker.py` pipeline:
 
-`memory_search()` is the unified recall tool. It dispatches the sessions, artifacts, and canon channels in parallel for keyword searches. It operates in two modes:
+- `extract_messages(path)` → `list[ExtractedMessage]` — parses JSONL, skips control lines and noise parts
+- `flatten_session(messages)` → `(flat_lines, line_map)` — role-prefixed lines: `User:`, `Assistant:`, `Tool[name](call)`, `Tool[name](return):`
+- `chunk_flattened(flat_lines, line_map)` → `list[SessionChunk]` — sliding-window token chunks, each tracking `start_jsonl_line` / `end_jsonl_line`
 
-**Browse mode** (empty query): returns recent-session metadata — session ID, date, title, file size — with zero LLM cost. Excludes the current session from results. Use when the user asks what was worked on recently or wants to browse session history.
+`init_session_index()` runs at bootstrap. On first run after migration it removes the obsolete `session-index.db` if present.
 
-**Search mode** (keyword query): dispatches all three channels in parallel. **Sessions channel — chunk citations:** `KnowledgeStore.search(source='session', limit=15)` → dedup to one best chunk per unique session → cap at 3 unique sessions (hard cap: `_SESSIONS_CHANNEL_CAP=3`). No LLM in the sessions recall path. Artifacts dispatch and its synthesis are described in §2.5. **Canon channel:** globs `souls/{active_role}/memories/*.md`, scores by token overlap (title stem 2× weight), returns up to `config.knowledge.character_recall_limit` (default 3) hits — no FTS DB, no LLM. Only runs when a personality is active; role is read from config, not from the caller.
+`memory_search()` operates in two modes:
 
-To drill into a specific session turn, call `memory_read_session_turn(session_id, start_line, end_line)` — returns verbatim JSONL lines in the requested range (capped at 200 lines / 16 KB). Use the `start_line`/`end_line` from a sessions channel hit as the drill-down coordinates.
+**Browse mode** (empty query): returns recent-session metadata — session ID, date, title, file size — with zero LLM cost. Excludes the current session.
 
-Result shape: flat list with a `channel` discriminator. Sessions entries: `{channel: "sessions", session_id, when, source, chunk_text, start_line, end_line, score}` — verbatim chunk text with JSONL line bounds. Artifacts entries: `{channel: "artifacts", kind, title, snippet, score, path, slug}` — ranked structured rows. Canon entries: `{channel: "canon", role, title, snippet, score, path, slug}` — on-demand character memory hits. Scores are NOT cross-comparable across channels.
+**Search mode** (keyword query): dispatches sessions, artifacts, and canon channels in parallel.
+- Sessions: `KnowledgeStore.search(source='session', limit=15)` → dedup to one best chunk per unique session → cap at 3 (`_SESSIONS_CHANNEL_CAP`)
+- To drill into a specific turn: `memory_read_session_turn(session_id, start_line, end_line)` — verbatim JSONL lines, capped at 200 lines / 16 KB
 
-Important current behavior:
+Result shape (sessions): `{channel: "sessions", session_id, when, source, chunk_text, start_line, end_line, score}`
 
-- The active session is excluded from the bootstrap sync.
-- There is no shutdown reindex pass.
-- In practice, episodic search covers transcripts that have already been indexed during a prior bootstrap, not the live in-progress session.
+The active session is excluded from the bootstrap sync. Episodic search covers already-indexed transcripts, not the live in-progress session.
 
 ### 2.5 Artifacts Channel: Knowledge Artifacts
 
-Knowledge is every reusable artifact the agent should recall across sessions: preferences, decisions, rules, feedback, articles, references, and notes.
+Knowledge artifacts are reusable facts the agent recalls across sessions: preferences, decisions, rules, feedback, articles, references, and notes.
 
 Storage is dual-layer:
 
 | Layer | What lives there | Purpose |
 | --- | --- | --- |
-| `knowledge_dir/*.md` | YAML frontmatter + body text | Source of truth; human-editable and agent-readable |
-| `co-cli-search.db` | chunk/index tables, FTS5, optional vectors, metadata | Derived retrieval layer; all search hits query the DB, not raw files |
+| `knowledge_dir/*.md` | YAML frontmatter + body text | Source of truth; human-editable |
+| `co-cli-search.db` | `chunks`, `chunks_fts`, optional `chunks_vec`, `docs` | Derived retrieval layer |
 
-`sync_dir()` keeps the derived DB current from disk. On bootstrap and after writes, artifacts are chunked and indexed under `source="knowledge"` (plus optional Obsidian/Drive sources when those connectors are present).
+`sync_dir()` keeps the DB current: parses frontmatter, SHA256 hash-skips unchanged files, chunks body text, and writes to `chunks`/`chunks_fts`. Obsidian and Drive connectors index under `source='obsidian'`/`source='drive'`.
 
 Knowledge artifact schema:
 
 | Field | Purpose |
 | --- | --- |
 | `id` | Stable UUID |
-| `kind` | Always `knowledge` |
 | `artifact_kind` | `preference`, `decision`, `rule`, `feedback`, `article`, `reference`, or `note` |
 | `title` | Human-readable label |
 | `description` | Short retrieval summary |
@@ -225,23 +173,38 @@ Knowledge artifact schema:
 | `source_type` | `detected`, `web_fetch`, `manual`, `obsidian`, `drive`, or `consolidated` |
 | `source_ref` | Pointer to source session, URL, file path, or artifact ID |
 | `certainty` | `high`, `medium`, or `low` |
-| `decay_protected` | Lifecycle protection flag; dream merge/decay semantics live in [dream.md](dream.md) |
+| `decay_protected` | Lifecycle protection flag; decay semantics live in [dream.md](dream.md) |
 | `last_recalled` | Most recent recall timestamp |
 | `recall_count` | Recall hit counter |
 
-Artifacts recall is on-demand. `memory_search()` covers all three recall channels in a single call. The agent decides when to call it; the tool description coaches proactive use for all recall tasks — saved preferences, past conversations, project conventions, and saved articles. The `kind` parameter narrows artifact results by `artifact_kind`.
+RAG pipeline for artifacts recall:
 
-**Artifacts post-FTS synthesis — ranked structured rows.** Unlike the sessions channel, artifacts recall returns structured chunk rows directly — no LLM in the default path. BM25 and optional vector scores are merged via RRF; an optional cross-encoder or LLM reranker (`cross_encoder_reranker_url`) can re-score the top-N results when configured. Artifacts result shape: `{channel: "artifacts", kind, title, snippet, score, path, slug}`.
+```text
+KnowledgeStore.search(query, source='knowledge'):
+    fts_chunks = FTS5 BM25 over chunks_fts
+    if hybrid:
+        vec_chunks = cosine search over chunks_vec
+        merged = RRF(fts_chunks, vec_chunks)   # k=60
+    else:
+        merged = fts_chunks
+    return _rerank_results(query, merged, limit)
+```
 
-Artifacts search backends degrade in this order:
+Backends degrade in this order:
 
 | Backend | Mechanism | When used |
 | --- | --- | --- |
-| `hybrid` | FTS5 + vector search + merged ranking | Embeddings are available |
-| `fts5` | BM25 over chunked text | Embeddings unavailable |
+| `hybrid` | FTS5 BM25 + sqlite-vec cosine, RRF merge | Embedding provider available |
+| `fts5` | BM25 over chunked text only | Embeddings unavailable |
 | `grep` | In-memory substring match over loaded markdown | KnowledgeStore unavailable |
 
-The main reusable-artifact commands owned by this spec are:
+Optional rerankers (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`) takes priority; LLM listwise (`llm_reranker`) as fallback; neither = pass-through.
+
+Result shape (artifacts): `{channel: "artifacts", kind, title, snippet, score, path, slug}`
+
+Canon channel result shape: `{channel: "canon", role, title, body, score}`
+
+Knowledge commands:
 
 | Command | Purpose |
 | --- | --- |
@@ -249,56 +212,39 @@ The main reusable-artifact commands owned by this spec are:
 | `/knowledge count [query] [flags]` | Count matching artifacts |
 | `/knowledge forget <query> [flags]` | Delete matching active artifacts after confirmation |
 
-Dream lifecycle commands (`/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, `/knowledge stats`) live in [dream.md](dream.md).
+Dream lifecycle commands (`/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, `/knowledge stats`) live in [dream.md](dream.md). `/memory` is a deprecated alias for `list`, `count`, and `forget`.
 
-`/memory` is still present as a deprecated alias for `list`, `count`, and `forget`.
+### 2.6 Memory → Knowledge Bridge: Agent-Explicit Writes and Dream
 
-### 2.6 Memory -> Knowledge Bridge: Agent-Explicit Writes and Dream
+Knowledge accumulates through two paths:
 
-There is no online per-turn extraction. Knowledge accumulates through two paths:
+1. **`memory_create`** — agent calls during a turn when it recognizes a durable signal. Three dispatch paths in `save_artifact()`:
+   - `source_url` set → URL-keyed dedup (web articles); `decay_protected` forced True
+   - `consolidation_enabled` → Jaccard dedup; near-identical (>0.9) skipped, overlapping merged
+   - else → straight create
 
-1. **Agent-explicit `memory_create`** — the agent calls `memory_create(...)` at any point during a turn when it recognizes a durable signal worth preserving. This is the primary in-session write path and is always available.
+2. **`memory_modify`** — append content or surgically replace a passage in an existing artifact. Guards: rejects Read-tool line-number prefixes; for `replace`, target must appear exactly once.
 
-2. **Dream cycle** — at session end (when `knowledge.consolidation_enabled=true`), the dream cycle retrospectively mines past transcripts and writes new artifacts. See [dream.md](dream.md) for the full lifecycle.
+3. **Dream cycle** — at session end when `consolidation_enabled=true`, retrospectively mines past transcripts. See [dream.md](dream.md).
 
-### 2.7 Dream Lifecycle Handoff
+Artifact writes use `_atomic_write()` (temp-file + `os.replace`) and trigger inline reindex via `KnowledgeStore.index()` + `index_chunks()`.
 
-Dream-cycle semantics live in [dream.md](dream.md). This spec only owns the handoff: transcripts remain append-only read inputs, active knowledge remains markdown plus a derived search index, and any dream-cycle artifact writes or archives must preserve those source-of-truth boundaries.
+Archive/restore: `archive_artifacts()` moves files to `knowledge_dir/_archive/` and removes them from the FTS index; `restore_artifact()` moves them back and re-indexes. The `_archive/` subdir is never traversed by the default loaders.
 
-The dream cycle is not part of turn-time recall or in-turn knowledge writes. It is a separate lifecycle pass over the same Memory and Knowledge stores.
+### 2.7 Design Lineage
 
-### 2.8 Design Lineage
-
-The sessions and artifacts retrieval pipelines are not original — they trace to specific peer systems. Recording the lineage here so future work knows which peer to consult before changing retrieval mechanics. Peer product survey: [docs/reference/RESEARCH-memory-peer-for-co-second-brain.md](../reference/RESEARCH-memory-peer-for-co-second-brain.md). Open porting gaps and cheap-borrow candidates: [docs/exec-plans/active/2026-04-29-143000-memory-recall-gap-backlog.md](../exec-plans/active/2026-04-29-143000-memory-recall-gap-backlog.md).
-
-**Sessions channel — ported from `openclaw` chunked recall pipeline.**
-
-The sessions channel was originally a direct port from `hermes-agent` (FTS5 + LLM summarization). It was subsequently replaced by a chunked recall pipeline ported from `openclaw`: sessions are chunked by `session_chunker.py`, indexed into the unified `co-cli-search.db` chunks pipeline as `source='session'`, and recalled via `KnowledgeStore.search(source='session')`. No LLM in the recall path. The hermes-era `summary.py`, `session-index.db`, and `_SUMMARIZATION_TIMEOUT_SECS` constants have been deleted.
-
-| Mechanism | openclaw (chunked recall) | co_cli |
-| --- | --- | --- |
-| Pipeline | chunk JSONL → index chunks → BM25 search → verbatim citations | identical |
-| Session cap | configurable | hard cap 3 (`recall.py:_SESSIONS_CHANNEL_CAP`) |
-| Chunk size | configurable | `session_chunk_tokens=400`, `session_chunk_overlap=80` |
-| LLM in recall path | none | none |
-
-Implication: changes to sessions chunking or retrieval should consult the openclaw implementation first.
-
-**Artifacts channel — retrieval mechanics from `openclaw`, product shape from `ReMe`.**
-
-Two distinct peers contributed two distinct layers:
+Peer product survey: [docs/reference/RESEARCH-memory-peer-for-co-second-brain.md](../reference/RESEARCH-memory-peer-for-co-second-brain.md).
 
 | Component | Peer source | co_cli location |
 | --- | --- | --- |
-| BM25 + vector hybrid via RRF | `openclaw` `extensions/memory-core/src/memory/hybrid.ts:57-155` | `_hybrid_search()` (`knowledge_store.py`) |
-| Optional cross-encoder / LLM rerank | `openclaw` MMR-style rerank | `_rerank_results()` (`knowledge_store.py`) |
-| Temporal decay | `openclaw` decay/recency policy | `co_cli/memory/decay.py` |
-| File-based local memory + memory classes (kind taxonomy) | `ReMe` (`reme/memory/file_based/`) | `knowledge_dir/*.md` + `artifact_kind` field |
-| Pre-reasoning, on-demand recall (no always-inject) | `ReMe` retrieval discipline | `memory_search()` tool surface |
+| Chunked session recall pipeline | `openclaw` | `session_chunker.py`, `KnowledgeStore.index_session()` |
+| BM25 + vector hybrid via RRF | `openclaw` | `KnowledgeStore._hybrid_search()` |
+| Optional cross-encoder / LLM rerank | `openclaw` | `KnowledgeStore._rerank_results()` |
+| Temporal decay | `openclaw` | `co_cli/memory/decay.py` |
+| File-based local memory + kind taxonomy | `ReMe` | `knowledge_dir/*.md` + `artifact_kind` field |
+| Pre-reasoning on-demand recall | `ReMe` | `memory_search()` tool surface |
 
-Standard RAG primitives are not peer-specific and should not be attributed: `chunk_size=600 + chunk_overlap=80` is the LangChain/LlamaIndex default, and `tokenize='porter unicode61'` is the idiomatic SQLite FTS5 recipe shared by both the sessions and artifacts channels.
-
-Implication: changes to artifacts ranking should consult `openclaw`; changes to artifacts storage shape or artifact taxonomy should consult `ReMe`.
+Standard RAG primitives (`chunk_size=600 + chunk_overlap=80`, `tokenize='porter unicode61'`) are not peer-specific.
 
 ## 3. Config
 
@@ -313,54 +259,80 @@ Implication: changes to artifacts ranking should consult `openclaw`; changes to 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | preferred retrieval backend before runtime degradation |
-| `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | embedding backend for hybrid search |
+| `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | embedding backend (`ollama`, `gemini`, `tei`, `none`) |
 | `knowledge.embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `embeddinggemma` | embedding model name |
 | `knowledge.embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | embedding vector dimensions |
 | `knowledge.embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
-| `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI reranker URL |
-| `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | chunk size used during indexing |
-| `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | chunk overlap used during indexing |
-| `knowledge.character_recall_limit` | `CO_CHARACTER_RECALL_LIMIT` | `3` | max canon hits returned per `memory_search` call |
-| `knowledge.session_chunk_tokens` | `CO_KNOWLEDGE_SESSION_CHUNK_TOKENS` | `400` | target chunk size (in tokens) for session transcript indexing |
-| `knowledge.session_chunk_overlap` | `CO_KNOWLEDGE_SESSION_CHUNK_OVERLAP` | `80` | overlap (in tokens) between adjacent session chunks |
+| `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI cross-encoder reranker URL |
+| `knowledge.tei_rerank_batch_size` | *(no env var)* | `50` | batch size for TEI cross-encoder rerank HTTP requests |
+| `knowledge.llm_reranker` | *(no env var)* | `null` | LLM reranker config `{provider, model}` (`ollama` or `gemini`) |
+| `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | artifact chunk size in chars during indexing |
+| `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | artifact chunk overlap in chars |
+| `knowledge.session_chunk_tokens` | `CO_KNOWLEDGE_SESSION_CHUNK_TOKENS` | `400` | session chunk size in tokens |
+| `knowledge.session_chunk_overlap` | `CO_KNOWLEDGE_SESSION_CHUNK_OVERLAP` | `80` | session chunk overlap in tokens |
+| `knowledge.character_recall_limit` | `CO_CHARACTER_RECALL_LIMIT` | `3` | max canon hits per `memory_search` call |
+| `knowledge.consolidation_enabled` | `CO_KNOWLEDGE_CONSOLIDATION_ENABLED` | `false` | enable Jaccard dedup on artifact writes |
+| `knowledge.consolidation_trigger` | *(no env var)* | `session_end` | when consolidation runs: `session_end` or `manual` |
+| `knowledge.consolidation_lookback_sessions` | *(no env var)* | `5` | past sessions to mine during consolidation |
+| `knowledge.consolidation_similarity_threshold` | *(no env var)* | `0.75` | Jaccard score threshold for artifact dedup/merge |
+| `knowledge.max_artifact_count` | *(no env var)* | `300` | soft cap on total artifact count |
+| `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | days before an artifact becomes eligible for decay |
 
-Dream-cycle and lifecycle maintenance settings, including consolidation trigger, lookback, merge threshold, artifact soft cap, and decay age, live in [dream.md](dream.md).
+Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 
 ### Paths
 
 | Path | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | source-of-truth knowledge artifact directory |
-| `sessions_dir` | — | `~/.co-cli/sessions/` | user-global transcript directory, resolved onto `CoDeps` |
-| `tool_results_dir` | — | `~/.co-cli/tool-results/` | user-global spill directory for oversized tool results |
-| `knowledge_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB for both knowledge artifacts and session chunks |
+| `sessions_dir` | — | `~/.co-cli/sessions/` | user-global transcript directory |
+| `tool_results_dir` | — | `~/.co-cli/tool-results/` | spill directory for oversized tool results |
+| `knowledge_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB for knowledge artifacts and session chunks |
 
 ## 4. Files
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/memory/session.py` | session filename parsing/generation and latest-session discovery |
-| `co_cli/memory/transcript.py` | transcript append/load logic, child-session branching, and control records |
-| `co_cli/memory/session_browser.py` | lightweight session listing and picker metadata for `/resume` and `/sessions` |
-| `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, and size warnings |
-| `co_cli/memory/session_chunker.py` | `SessionChunk`, `flatten_session()`, `chunk_flattened()`, `chunk_session()` — session transcript chunking pipeline feeding the unified `KnowledgeStore` |
-| `co_cli/memory/indexer.py` | `ExtractedMessage`, `extract_messages()` — JSONL line parser that feeds `KnowledgeStore.index_session()`; emits user/assistant/tool-call/tool-return message types |
-| `co_cli/tools/memory/recall.py` | `memory_search()` unified recall tool — sessions, artifacts, and canon channels |
-| `co_cli/tools/memory/_canon_recall.py` | `search_canon()` — canon channel: globs `souls/{role}/memories/*.md`, token-overlap scoring, title 2× weight |
-| `co_cli/memory/artifact.py` | `KnowledgeArtifact` schema and artifact loaders |
-| `co_cli/memory/knowledge_store.py` | `KnowledgeStore` indexing/search backend and `sync_dir()` |
-| `co_cli/memory/frontmatter.py` | frontmatter parse/validate/render helpers |
-| `co_cli/memory/chunker.py` | chunking for indexed artifact text |
+| `co_cli/memory/session.py` | session filename parsing, generation, and latest-session discovery |
+| `co_cli/memory/transcript.py` | transcript append/load, child-session branching, and control records |
+| `co_cli/memory/session_browser.py` | session listing and picker metadata for `/resume` and `/sessions` |
+| `co_cli/memory/session_chunker.py` | session transcript chunking pipeline: `flatten_session()`, `chunk_flattened()`, `chunk_session()` |
+| `co_cli/memory/indexer.py` | JSONL line parser: `ExtractedMessage`, `extract_messages()` |
+| `co_cli/memory/knowledge_store.py` | `KnowledgeStore` — unified FTS5/hybrid search backend, `sync_dir()`, `index_session()`, `sync_sessions()` |
+| `co_cli/memory/artifact.py` | `KnowledgeArtifact` schema, kind enums, and artifact loaders |
+| `co_cli/memory/service.py` | pure-function write layer: `save_artifact()`, `mutate_artifact()` — no RunContext |
+| `co_cli/memory/mutator.py` | `_atomic_write()`, `_reindex_knowledge_file()`, `_update_artifact_body()` — atomic write and RunContext-aware re-index helpers |
+| `co_cli/memory/archive.py` | `archive_artifacts()`, `restore_artifact()` — move to/from `_archive/`, de-index and re-index |
+| `co_cli/memory/chunker.py` | knowledge artifact text chunking |
+| `co_cli/memory/frontmatter.py` | frontmatter parse, validate, and render helpers |
+| `co_cli/memory/similarity.py` | Jaccard similarity and content-superset helpers for artifact dedup |
 | `co_cli/memory/ranking.py` | confidence scoring and contradiction helpers |
-| `co_cli/memory/similarity.py` | similarity and dedup helpers |
+| `co_cli/memory/query.py` | artifact list filtering (`older_than_days`) and display formatting |
+| `co_cli/memory/search_util.py` | `normalize_bm25()`, `run_fts()`, `sanitize_fts5_query()`, `snippet_around()` — FTS5 utilities shared by `KnowledgeStore` |
+| `co_cli/memory/_embedder.py` | `build_embedder()` — embedding provider dispatch (ollama/gemini/tei/none) |
+| `co_cli/memory/_reranker.py` | `build_llm_reranker()` — LLM listwise reranker dispatch (ollama/gemini) |
+| `co_cli/memory/_stopwords.py` | `STOPWORDS` frozenset — shared by `similarity.py` and `_canon_recall.py` |
 | `co_cli/memory/_window.py` | transcript-window builder used by dream mining |
-| `co_cli/memory/service.py` | pure-function service layer for knowledge artifact writes; `save_artifact()` and `mutate_artifact()` — no RunContext |
-| `co_cli/tools/memory/read.py` | `memory_list()` — paginated inventory of knowledge artifacts; `memory_read_session_turn()` — verbatim JSONL turn drill-down (capped at 200 lines / 16 KB); `grep_recall()` utility used by `memory_search()`. Full-body artifact reads route through the generic `file_read` tool on the path surfaced by `memory_search`. |
-| `co_cli/tools/memory/write.py` | artifact write/update/append helpers and article persistence |
-| `co_cli/bootstrap/core.py` | `restore_session()` and `init_session_index()` during startup |
-| `co_cli/agent/_instructions.py` | `current_time_prompt()` — per-turn current date/time injection; `safety_prompt()` — doom-loop and shell-error streak warnings |
-| `co_cli/context/prompt_text.py` | `safety_prompt_text()` — per-turn dynamic instruction; returns doom-loop / shell-reflection warning text or empty string |
-| `co_cli/context/assembly.py` | `build_static_instructions()` — assembles soul, mindsets, and rules into the cacheable static system prompt; character memories and critique excluded |
+| `co_cli/memory/decay.py` | artifact decay scoring and eligibility logic |
+| `co_cli/memory/dream.py` | dream-cycle orchestration (see [dream.md](dream.md)) |
+| `co_cli/tools/memory/recall.py` | `memory_search()` — unified recall tool dispatching sessions, artifacts, and canon |
+| `co_cli/tools/memory/read.py` | `memory_list()`, `memory_read_session_turn()`, `grep_recall()` |
+| `co_cli/tools/memory/write.py` | `memory_create()`, `memory_modify()` |
+| `co_cli/tools/memory/_canon_recall.py` | `search_canon()` — token-overlap scoring over `souls/{role}/memories/*.md` |
+| `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, and size warnings |
+| `co_cli/bootstrap/core.py` | `restore_session()`, `init_session_index()` — startup session and index bootstrap |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — static system prompt assembly (soul, mindsets, rules) |
+| `co_cli/agent/_instructions.py` | `current_time_prompt()` — per-turn date/time and safety warning injection |
+| `co_cli/context/prompt_text.py` | `safety_prompt_text()` — doom-loop and shell-reflection warning text |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |
-| `co_cli/main.py` | `_finalize_turn()` persistence bridge and session-end dream trigger |
-| `co_cli/commands/core.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions`, `/knowledge`, and `/memory` command handlers |
+| `co_cli/main.py` | `_finalize_turn()` — persistence bridge and session-end dream trigger |
+| `co_cli/commands/core.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions`, `/knowledge`, `/memory` command handlers |
+
+## 5. Test Gates
+
+| Property | Test file |
+| --- | --- |
+| FTS5 search finds an indexed artifact entry | `tests/test_flow_memory_search.py` |
+| `mutate_artifact` replace preserves frontmatter | `tests/test_flow_memory_lifecycle.py` |
+| `mutate_artifact` append adds to body | `tests/test_flow_memory_lifecycle.py` |
+| Session restore picks the most recent transcript | `tests/test_flow_bootstrap_session.py` |

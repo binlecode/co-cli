@@ -1,24 +1,5 @@
 # Co CLI Core Loop Design
 
-## Product Intent
-
-**Goal:** Own foreground-turn execution from prompt input to post-turn finalization.
-**Functional areas:**
-- Turn orchestration and stream segment execution
-- Approval flow and approval-resume narrowing
-- History-processor orchestration and trigger points
-- Inline recovery and degradation routing for compaction-related failures
-- Retries and interrupt handling
-
-**Non-goals:**
-- Multi-turn planning graphs
-- Persistent approval memory across sessions
-- Multi-agent coordination
-
-**Success criteria:** Turn contract is stateless (state on CoDeps only); approval resume narrows toolset; compaction circuit breaker prevents cascade.
-**Status:** Stable
-
----
 
 For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); memory/session persistence and recall live in [memory.md](memory.md); compaction mechanics in [compaction.md](compaction.md).
 
@@ -400,7 +381,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/agent/core.py` | main agent factory |
 | `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
-| `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
+| `co_cli/tools/shell/execute.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
 | `co_cli/display/core.py` | terminal frontend surfaces, tool panels, status rendering, approval prompts, and question prompting (`QuestionPrompt`, `prompt_question`) |
 | `co_cli/memory/session.py` | session filename generation and latest-session discovery |
