@@ -18,7 +18,6 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 
 from co_cli.memory.session import new_session_path
 from co_cli.memory.transcript import (
-    COMPACT_BOUNDARY_MARKER,
     SKIP_PRECOMPACT_THRESHOLD,
     append_messages,
     load_transcript,
@@ -79,12 +78,8 @@ def test_normal_turn_appends_delta_to_existing_session(tmp_path: Path) -> None:
     assert isinstance(loaded[1], ModelResponse)
     assert isinstance(loaded[2], ModelRequest)
     assert isinstance(loaded[3], ModelResponse)
-    first_req_content = next(
-        p.content for p in loaded[0].parts if isinstance(p, UserPromptPart)
-    )
-    second_req_content = next(
-        p.content for p in loaded[2].parts if isinstance(p, UserPromptPart)
-    )
+    first_req_content = next(p.content for p in loaded[0].parts if isinstance(p, UserPromptPart))
+    second_req_content = next(p.content for p in loaded[2].parts if isinstance(p, UserPromptPart))
     assert first_req_content == "first user message"
     assert second_req_content == "second user message"
 

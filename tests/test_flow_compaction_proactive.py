@@ -14,7 +14,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.usage import RunUsage
 from tests._ollama import ensure_ollama_warm
-from tests._settings import SETTINGS_NO_MCP, TEST_LLM, make_settings
+from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
 from co_cli.context._compaction_markers import is_compaction_marker
@@ -50,10 +50,14 @@ def _above_threshold_messages() -> list:
     """4-turn history well above the 130-token threshold under tight settings."""
     content = "A" * 160  # 160 chars = 40 tokens per part
     return [
-        _req(content), _resp(content),
-        _req(content), _resp(content),
-        _req(content), _resp(content),
-        _req(content), _resp(content),
+        _req(content),
+        _resp(content),
+        _req(content),
+        _resp(content),
+        _req(content),
+        _resp(content),
+        _req(content),
+        _resp(content),
     ]
 
 
