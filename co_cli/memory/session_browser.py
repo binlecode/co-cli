@@ -76,7 +76,7 @@ def format_file_size(size: int) -> str:
 def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
     """List past sessions sorted by filename descending (= most recent first).
 
-    Session files use the format YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl.
+    Session files use the format YYYY-MM-DD-THHMMSSZ-{uuid8}.jsonl.
     session_id is the 8-char UUID suffix; created_at is parsed from the filename prefix.
     Files that do not match this format are skipped.
 

@@ -1,6 +1,6 @@
 """Session filename helpers for co-cli chat sessions.
 
-Session files follow the naming format YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl —
+Session files follow the naming format YYYY-MM-DD-THHMMSSZ-{uuid8}.jsonl —
 lexicographically sortable, human-readable, and self-describing. The display
 short ID is the 8-char UUID suffix embedded in the filename stem.
 """
@@ -13,14 +13,14 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _TIMESTAMP_FORMAT = "%Y-%m-%d-T%H%M%SZ"
-# Length of the timestamp prefix: "YYYY-MM-DD-THHMMSSz" = 19 chars
+# Length of the timestamp prefix: "YYYY-MM-DD-THHMMSSZ" = 19 chars
 _TIMESTAMP_LEN = 19
 
 
 def session_filename(created_at: datetime, session_id: str) -> str:
     """Build the canonical session filename from creation time and UUID.
 
-    Format: YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl
+    Format: YYYY-MM-DD-THHMMSSZ-{uuid8}.jsonl
     Example: 2026-04-11-T142305Z-550e8400.jsonl
     """
     ts = created_at.strftime(_TIMESTAMP_FORMAT)

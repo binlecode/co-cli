@@ -1,7 +1,7 @@
 # Co CLI — Compaction System
 
 
-Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (including child-session branching after compaction) lives in [memory.md](memory.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
+Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (including child-session branching after compaction) lives in [memory-session.md](memory-session.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
 
 ## 1. Functional Architecture
 
@@ -17,8 +17,8 @@ flowchart TD
 
     subgraph PerReq["M2 + M3 — per ModelRequestNode"]
         R0[dedup_tool_results<br/>M2-pre]
-        R1[truncate_tool_results<br/>M2a]
-        R1b[enforce_batch_budget<br/>M2b]
+        R1[evict_old_tool_results<br/>M2a]
+        R1b[evict_batch_tool_outputs<br/>M2b]
         R5[proactive_window_processor<br/>M3]
         R0 --> R1 --> R1b --> R5
     end
@@ -255,19 +255,19 @@ flowchart TD
         d_h["head"]:::head --> d_fd1["→ see fd2\n(back-ref)"]:::marker --> d_fd2["TR(file_read)\nabc.py\n(latest — kept)"]:::prior --> d_s1["TR(shell)\nrun 1"]:::prior --> d_s2["TR(shell)\nrun 2"]:::prior --> d_s3["TR(shell)\nrun 3"]:::prior --> d_s4["TR(shell)\nrun 4"]:::prior --> d_s5["TR(shell)\nrun 5"]:::prior --> d_s6["TR(shell)\nrun 6"]:::prior --> d_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> d_s7["TR(shell)\nrun 7\n250K chars"]:::tail
     end
 
-    subgraph AfterTrunc["After M2a — truncate_tool_results: 6 shell runs in pre-tail; keep 5 most recent (runs 2–6); run 1 → semantic marker"]
+    subgraph AfterTrunc["After M2a — evict_old_tool_results: 6 shell runs in pre-tail; keep 5 most recent (runs 2–6); run 1 → semantic marker"]
         direction LR
         t_h["head"]:::head --> t_fd1["→ see fd2"]:::marker --> t_fd2["TR(file_read)\nabc.py\n(1 of 1 — kept)"]:::prior --> t_s1["[shell] run 1\n→ exit 0, N lines"]:::marker --> t_s2["TR(shell)\nrun 2"]:::prior --> t_s3["TR(shell)\nrun 3"]:::prior --> t_s4["TR(shell)\nrun 4"]:::prior --> t_s5["TR(shell)\nrun 5"]:::prior --> t_s6["TR(shell)\nrun 6"]:::prior --> t_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> t_s7["TR(shell)\nrun 7\n250K chars"]:::tail
     end
 
-    subgraph AfterBatch["After M2b — enforce_batch_budget: run 7 aggregate exceeds batch_spill_chars → M1 persist"]
+    subgraph AfterBatch["After M2b — evict_batch_tool_outputs: run 7 aggregate exceeds batch_spill_chars → M1 persist"]
         direction LR
         b_h["head"]:::head --> b_fd1["→ see fd2"]:::marker --> b_fd2["TR(file_read)\nabc.py"]:::prior --> b_s1["[shell] run 1\n→ exit 0, N lines"]:::marker --> b_s2["TR(shell)\nrun 2"]:::prior --> b_s3["TR(shell)\nrun 3"]:::prior --> b_s4["TR(shell)\nrun 4"]:::prior --> b_s5["TR(shell)\nrun 5"]:::prior --> b_s6["TR(shell)\nrun 6"]:::prior --> b_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> b_s7["TR(shell)\nrun 7\n→ &lt;persisted-output&gt;"]:::syspr
     end
 
     Raw -->|"M2-pre: dedup_tool_results"| AfterDedup
-    AfterDedup -->|"M2a: truncate_tool_results"| AfterTrunc
-    AfterTrunc -->|"M2b: enforce_batch_budget"| AfterBatch
+    AfterDedup -->|"M2a: evict_old_tool_results"| AfterTrunc
+    AfterTrunc -->|"M2b: evict_batch_tool_outputs"| AfterBatch
 
     classDef syspr fill:#fff3e0,stroke:#f57c00
     classDef head fill:#e8f4f8,stroke:#6baed6
@@ -308,9 +308,9 @@ Four sync processors in order; no LLM calls.
 
 **`dedup_tool_results` (M2-pre)** — collapses identical returns outside the protected tail before recency clearing. For each compactable return whose `(tool_name, sha256(content))` key matches a more recent return of the same tool, replaces content with a 1-line back-reference to the latest `tool_call_id`. Eligibility: string content ≥ 200 chars; non-string and non-compactable tools pass through. (`co_cli/context/_dedup_tool_results.py`)
 
-**`truncate_tool_results` (M2a)** — protects the last `UserPromptPart` onward; in the pre-tail region keeps the 5 most recent returns per tool in `COMPACTABLE_TOOLS` and replaces older returns with a per-tool semantic marker (`semantic_marker()` in `co_cli/context/_tool_result_markers.py`). Marker carries tool name, 1-3 key args from `ToolCallPart.args` (looked up via a `tool_call_id` index), and a size/outcome signal — e.g. `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`. Non-string content falls back to `_CLEARED_PLACEHOLDER`. `tool_name` and `tool_call_id` preserved; non-compactable tools (writes, approvals) never cleared.
+**`evict_old_tool_results` (M2a)** — protects the last `UserPromptPart` onward; in the pre-tail region keeps the 5 most recent returns per tool in `COMPACTABLE_TOOLS` and replaces older returns with a per-tool semantic marker (`semantic_marker()` in `co_cli/context/_tool_result_markers.py`). Marker carries tool name, 1-3 key args from `ToolCallPart.args` (looked up via a `tool_call_id` index), and a size/outcome signal — e.g. `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`. Non-string content falls back to `_CLEARED_PLACEHOLDER`. `tool_name` and `tool_call_id` preserved; non-compactable tools (writes, approvals) never cleared.
 
-**`enforce_batch_budget` (M2b).** Fires on the current batch — the `ToolReturnPart`s that follow the last `ModelResponse` with a `ToolCallPart`. If the aggregate size of that batch exceeds `config.tools.batch_spill_chars`, spills the largest non-persisted returns via `persist_if_oversized(max_size=0)`, largest-first, until the aggregate fits. Skips already-persisted parts (those containing `<persisted-output>`). Fails open: if persist raises `OSError`, the candidate is skipped. Operates only on the current batch — no cross-turn state mutation.
+**`evict_batch_tool_outputs` (M2b).** Fires on the current batch — the `ToolReturnPart`s that follow the last `ModelResponse` with a `ToolCallPart`. If the aggregate size of that batch exceeds `config.tools.batch_spill_chars`, spills the largest non-persisted returns via `persist_if_oversized(max_size=0)`, largest-first, until the aggregate fits. Skips already-persisted parts (those containing `<persisted-output>`). Fails open: if persist raises `OSError`, the candidate is skipped. Operates only on the current batch — no cross-turn state mutation.
 
 ### 2.3 M3 — Window compaction
 
@@ -383,7 +383,7 @@ Summarizer surface:
 |---|---|
 | `compaction_skip_count == 0` (healthy) | Attempt summarizer; on success keep at 0; on failure fall back to static marker, increment to 1. |
 | `compaction_skip_count == 1 or 2` | Attempt summarizer; on success reset to 0; on failure fall back to static, increment. |
-| `compaction_skip_count >= 3` (tripped) | Skip summarizer; static marker; increment. Every `_CIRCUIT_BREAKER_PROBE_EVERY` (10) skips, attempt once — probe success resets to 0. |
+| `compaction_skip_count >= 3` (tripped) | Skip summarizer; static marker; increment. Every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips, attempt once — probe success resets to 0. |
 | Any success at any state | Reset counter to 0. |
 
 `ctx.deps.model is None` (sub-agent without a configured model) is also a bypass condition.
@@ -493,7 +493,8 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 |---|---|---|
 | `_MIN_RETAINED_TURN_GROUPS` | `1` | Hardcoded correctness invariant — last turn group always retained |
 | `COMPACTABLE_KEEP_RECENT` | `5` | M2a: most-recent returns per tool to keep |
-| `_CIRCUIT_BREAKER_PROBE_EVERY` | `10` | Skips between probe attempts when circuit breaker is tripped |
+| `_COMPACTION_BREAKER_TRIP` | `3` | Consecutive failures that trip the circuit breaker |
+| `_COMPACTION_BREAKER_PROBE_EVERY` | `10` | Skips between probe attempts when circuit breaker is tripped |
 
 **M1 and M2b thresholds** (`co_cli/config/tools.py`):
 

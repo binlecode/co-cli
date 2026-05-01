@@ -1,7 +1,7 @@
 # Co CLI — Prompt Assembly
 
 
-Covers how `co-cli` shapes the prompt for each model request. Startup sequencing lives in [bootstrap.md](bootstrap.md); turn orchestration in [core-loop.md](core-loop.md); compaction mechanics in [compaction.md](compaction.md); memory/session and knowledge internals in [memory.md](memory.md); tool registration in [tools.md](tools.md).
+Covers how `co-cli` shapes the prompt for each model request. Startup sequencing lives in [bootstrap.md](bootstrap.md); turn orchestration in [core-loop.md](core-loop.md); compaction mechanics in [compaction.md](compaction.md); session memory in [memory-session.md](memory-session.md); knowledge artifacts in [memory-knowledge.md](memory-knowledge.md); canon recall in [memory-canon.md](memory-canon.md); tool registration in [tools.md](tools.md).
 
 ## 1. What & How
 
@@ -98,7 +98,7 @@ Approval resumes reuse the main agent with zero additional tokens. The pydantic-
 
 ## 3. Config
 
-Only the settings that directly shape prompt text are listed here. Compaction thresholds live in [compaction.md](compaction.md); recall parameters live in [memory.md](memory.md).
+Only the settings that directly shape prompt text are listed here. Compaction thresholds live in [compaction.md](compaction.md); recall parameters live in [memory-session.md](memory-session.md) and [memory-knowledge.md](memory-knowledge.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |

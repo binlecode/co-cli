@@ -1,7 +1,7 @@
 # Co CLI Core Loop Design
 
 
-For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); memory/session persistence and recall live in [memory.md](memory.md); compaction mechanics in [compaction.md](compaction.md).
+For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); session persistence lives in [memory-session.md](memory-session.md); knowledge artifacts and recall in [memory-knowledge.md](memory-knowledge.md); compaction mechanics in [compaction.md](compaction.md).
 
 ## 1. Foreground Turn Flow
 
@@ -37,8 +37,8 @@ flowchart TD
 | `run_turn` / approval loop / retries | [core-loop.md](core-loop.md) |
 | Instruction parts + history processors | [prompt-assembly.md](prompt-assembly.md) |
 | Compaction trigger (processor #5) | [compaction.md](compaction.md) |
-| Turn-time recall (processor #4) | [memory.md](memory.md) |
-| Transcript append / child-session branching | [memory.md](memory.md) |
+| Turn-time recall (processor #4) | [memory-knowledge.md](memory-knowledge.md) |
+| Transcript append / child-session branching | [memory-session.md](memory-session.md) |
 
 Detailed foreground turn flow:
 
@@ -279,7 +279,7 @@ Compaction behavior:
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
-- a circuit breaker (`deps.runtime.compaction_skip_count`) trips at 3 consecutive failures; tripped state uses static markers but probes the LLM once every `_CIRCUIT_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
+- a circuit breaker (`deps.runtime.compaction_skip_count`) trips at `_COMPACTION_BREAKER_TRIP` (3) consecutive failures; tripped state uses static markers but probes the LLM once every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
 - successful history replacement sets `deps.runtime.compaction_applied_this_turn`, which later tells `_finalize_turn()` to persist into a child transcript instead of appending into the parent transcript
 
@@ -358,7 +358,7 @@ The intentional simplification remains:
 
 ## 3. Config
 
-These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); memory/session and knowledge settings live in [memory.md](memory.md).
+These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); session settings live in [memory-session.md](memory-session.md); knowledge settings in [memory-knowledge.md](memory-knowledge.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
