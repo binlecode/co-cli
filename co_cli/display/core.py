@@ -13,7 +13,7 @@ from rich.rule import Rule
 from rich.text import Text
 from rich.theme import Theme
 
-from co_cli.tools.approvals import ApprovalSubject
+from co_cli.deps import ApprovalSubject
 
 if TYPE_CHECKING:
     from co_cli.tools.tool_io import ToolResultPayload

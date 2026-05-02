@@ -55,6 +55,27 @@ class SessionApprovalRule:
     value: str
 
 
+@dataclass(frozen=True)
+class ApprovalSubject:
+    """Resolved representation of what is being approved.
+
+    tool_name:    the registered tool name (e.g. "shell")
+    kind:         category matching SessionApprovalRule.kind
+    value:        the scoped key used for session rule matching
+    display:      human-readable description shown in the approval prompt
+    can_remember: whether 'a' should store a session rule
+    preview:      optional content preview (write_file: first N lines of content;
+                  None for all other tool kinds — display is sufficient)
+    """
+
+    tool_name: str
+    kind: ApprovalKindEnum
+    value: str
+    display: str
+    can_remember: bool
+    preview: str | None = None
+
+
 class VisibilityPolicyEnum(Enum):
     """Whether a tool is visible by default or hidden behind search_tools."""
 
@@ -117,7 +138,7 @@ class CoRuntimeState:
     should be explicitly justified.
 
     Per-turn (reset by reset_for_turn() at run_turn() entry):
-      turn_usage, tool_progress_callback, resume_tool_names,
+      turn_usage, tool_progress_callback, status_callback, resume_tool_names,
       compaction_applied_this_turn
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
@@ -130,6 +151,10 @@ class CoRuntimeState:
     compaction_skip_count: int = 0
     turn_usage: RunUsage | None = None
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
+    # Turn-scoped display callback: set by run_turn() before the agent starts,
+    # cleared by reset_for_turn(). Used by history processors (e.g. proactive
+    # compaction) that run inside the agent loop without direct Frontend access.
+    status_callback: Callable[[str], None] | None = field(default=None, repr=False)
     active_skill_name: str | None = None
     resume_tool_names: frozenset[str] | None = None
     # True when compaction ran this turn; drives both session-branching (main.py) and
@@ -141,9 +166,6 @@ class CoRuntimeState:
     # the configured minimum savings threshold.
     # Reset by compaction.py when overflow recovery or hygiene fires.
     consecutive_low_yield_proactive_compactions: int = 0
-    # One-shot guard for the user-visible "anti-thrashing gate active" console hint.
-    # Set the first time the gate trips per session so subsequent trips stay log-only.
-    compaction_thrash_hint_emitted: bool = False
     # Dedup key for evict_batch_tool_outputs's "still over budget" warning.
     # Same batch repeated request-to-request emits the warning once, not per cycle.
     last_overbudget_batch_signature: tuple[str, ...] | None = None
@@ -162,6 +184,7 @@ class CoRuntimeState:
         """Reset per-turn fields at the start of each run_turn() call."""
         self.turn_usage = None
         self.tool_progress_callback = None
+        self.status_callback = None
         self.resume_tool_names = None
         self.compaction_applied_this_turn = False
 

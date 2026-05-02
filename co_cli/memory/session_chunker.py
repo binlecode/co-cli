@@ -153,6 +153,12 @@ def chunk_flattened(
         while end < len(flat_lines):
             line_len = len(flat_lines[end])
             if acc + line_len > chunk_chars and end > start:
+                # Snap forward to the next message boundary so no message is
+                # split across chunks. Lines from the same message share a
+                # line_map value; keep consuming until that value changes.
+                while end < len(flat_lines) and line_map[end] == line_map[end - 1]:
+                    acc += len(flat_lines[end]) + 1
+                    end += 1
                 break
             acc += line_len + 1  # +1 for joining newline
             end += 1
@@ -183,6 +189,17 @@ def chunk_flattened(
         next_start = end - overlap_count
         if next_start <= start:
             next_start = start + 1
+
+        # Snap forward to a message boundary so the next chunk doesn't start
+        # mid-message. Prefer less overlap over starting inside a wrapped line.
+        # next_start == end after the snap means zero overlap — safe, no infinite
+        # loop because end > start is invariant at this point.
+        while (
+            next_start < end
+            and next_start > 0
+            and line_map[next_start] == line_map[next_start - 1]
+        ):
+            next_start += 1
 
         start = next_start
 

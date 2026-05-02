@@ -63,14 +63,15 @@ def _discover_memory_backend(
 ) -> MemoryStore | None:
     """Discover which knowledge backend is available and construct the store.
 
-    Three-tier fallback with graceful degradation:
+    Two-tier resolution with fail-fast on FTS unavailability:
       1. hybrid  — sqlite-vec + embedding provider (richest search)
-      2. fts5    — SQLite FTS5 index (keyword search, no vectors)
-      3. grep    — pure file search, no store required
+      2. fts5    — SQLite FTS5 index (minimum required for session recall)
+      3. grep    — explicit opt-in only (search_backend: grep in config)
 
-    Probes embedder/reranker availability, mutates config fields directly, constructs
-    the store, and reports degradation to frontend.
-    Config reflects the runtime backend; degradations dict records what changed and why.
+    FTS5 is the minimum required backend. If the configured backend is fts5 or
+    hybrid and FTS5 fails to initialise, bootstrap raises rather than silently
+    degrading — a grep fallback would lose the sessions recall channel entirely.
+    Raises RuntimeError on FTS5 init failure.
     """
     if config.knowledge.search_backend == "grep":
         return None
@@ -130,21 +131,23 @@ def _discover_memory_backend(
             try:
                 return _MS(config=config)
             except Exception as exc2:
-                logger.warning("FTS5 backend unavailable: %s", exc2)
-                frontend.on_status(
-                    f"  Knowledge degraded — fts5 unavailable "
-                    f"({_summarize_backend_error(exc2)}); using grep"
-                )
-                _degrade_to("grep", _summarize_backend_error(exc2))
-                return None
+                detail = _summarize_backend_error(exc2)
+                logger.error("FTS5 backend unavailable: %s", exc2)
+                frontend.on_status(f"  Knowledge error — fts5 unavailable ({detail})")
+                raise RuntimeError(
+                    f"FTS5 knowledge backend failed to initialise ({detail}). "
+                    "FTS5 is the minimum required backend for session recall. "
+                    "Set search_backend: grep in config to opt out of FTS entirely."
+                ) from exc2
         else:
-            logger.warning("FTS5 backend unavailable: %s", exc)
-            frontend.on_status(
-                f"  Knowledge degraded — fts5 unavailable "
-                f"({_summarize_backend_error(exc)}); using grep"
-            )
-            _degrade_to("grep", _summarize_backend_error(exc))
-            return None
+            detail = _summarize_backend_error(exc)
+            logger.error("FTS5 backend unavailable: %s", exc)
+            frontend.on_status(f"  Knowledge error — fts5 unavailable ({detail})")
+            raise RuntimeError(
+                f"FTS5 knowledge backend failed to initialise ({detail}). "
+                "FTS5 is the minimum required backend for session recall. "
+                "Set search_backend: grep in config to opt out of FTS entirely."
+            ) from exc
 
 
 def _sync_memory_store(
@@ -155,8 +158,9 @@ def _sync_memory_store(
 ) -> MemoryStore | None:
     """Reconcile the knowledge store with current knowledge files on disk.
 
-    Hash-based — skips unchanged files. On sync failure, closes the store and
-    returns None (grep fallback for the session).
+    Hash-based — skips unchanged files. On sync failure, raises RuntimeError
+    rather than silently dropping the store — a None store would lose session
+    recall for the session without any visible signal.
     """
     if store is None:
         frontend.on_status("  Knowledge store not available — skipped")
@@ -181,8 +185,7 @@ def _sync_memory_store(
                 store.close()
             except Exception:
                 pass
-            frontend.on_status(f"  Knowledge sync failed — {e}")
-            return None
+            raise RuntimeError(f"Knowledge store sync failed: {e}") from e
 
     return store
 

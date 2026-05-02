@@ -17,7 +17,7 @@ import os
 import sys
 from typing import Any
 
-from co_cli.config._core import get_settings
+from co_cli.config.core import get_settings
 
 
 def _extract_model_name(raw_name: str) -> str:

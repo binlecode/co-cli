@@ -271,7 +271,9 @@ def _handle_tool_call_event(
     # In summary mode annotations are suppressed — tool result panel is sufficient feedback
     if deps.session.reasoning_display != REASONING_DISPLAY_SUMMARY:
         frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
-    renderer.install_progress(deps, tool_id)
+    deps.runtime.tool_progress_callback = lambda msg, _tid=tool_id: frontend.on_tool_progress(
+        _tid, msg
+    )
 
 
 def _handle_stream_event(
@@ -306,7 +308,7 @@ def _handle_stream_event(
 
     if isinstance(event, FunctionToolResultEvent):
         renderer.flush_for_tool_output()
-        renderer.clear_progress(deps)
+        deps.runtime.tool_progress_callback = None
         tool_id = event.tool_call_id
         if not isinstance(event.result, ToolReturnPart):
             # RetryPromptPart: tool raised ModelRetry or validation failed.
@@ -577,6 +579,7 @@ async def run_turn(
       "error"    — unrecoverable error, display and prompt
     """
     deps.runtime.reset_for_turn()
+    deps.runtime.status_callback = frontend.on_status
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
     turn_state = _TurnState(

@@ -3,8 +3,8 @@
 import time
 from typing import Any
 
+from co_cli.deps import ApprovalSubject
 from co_cli.display.core import QuestionPrompt
-from co_cli.tools.approvals import ApprovalSubject
 
 
 class HeadlessFrontend:

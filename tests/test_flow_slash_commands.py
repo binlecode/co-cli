@@ -2,10 +2,10 @@
 
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.commands.clear import _cmd_clear
 from co_cli.commands.types import CommandContext
-from co_cli.config.core import settings
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display.core import TerminalFrontend
 from co_cli.tools.shell_backend import ShellBackend
@@ -19,7 +19,9 @@ async def test_cmd_clear_wipes_history_and_resets_compaction_state() -> None:
     runtime.post_compaction_token_estimate = 42_000
     runtime.message_count_at_last_compaction = 10
 
-    deps = CoDeps(shell=ShellBackend(), config=settings, session=CoSessionState(), runtime=runtime)
+    deps = CoDeps(
+        shell=ShellBackend(), config=SETTINGS_NO_MCP, session=CoSessionState(), runtime=runtime
+    )
     history = [
         ModelRequest(parts=[UserPromptPart(content="hello")]),
         ModelResponse(parts=[TextPart(content="hi")]),

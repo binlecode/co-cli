@@ -170,10 +170,11 @@ async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
         return
 
     from co_cli.memory.dream import run_dream_cycle
+    from co_cli.tools.memory.write import memory_create
 
     logger = logging.getLogger(__name__)
     try:
-        result = await run_dream_cycle(deps)
+        result = await run_dream_cycle(deps, miner_tool=memory_create)
         if result.any_changes:
             logger.info(
                 "Dream cycle: %d extracted, %d merged, %d archived",

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
+from co_cli.memory._mutator import atomic_write
 from co_cli.memory.artifact import (
     ArtifactKindEnum,
     IndexSourceEnum,
@@ -27,7 +28,6 @@ from co_cli.memory.frontmatter import (
     render_frontmatter,
     render_knowledge_file,
 )
-from co_cli.memory.mutator import atomic_write
 from co_cli.memory.similarity import find_similar_artifacts, is_content_superset
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ def _find_article_by_url(knowledge_dir: Path, origin_url: str) -> Path | None:
 
 
 def reindex(
-    store: "MemoryStore",
+    store: "MemoryStore | None",
     path: Path,
     body: str,
     markdown_content: str,
@@ -98,6 +98,8 @@ def reindex(
     chunk_overlap: int,
 ) -> None:
     """Re-index a single knowledge file in the FTS store without RunContext."""
+    if store is None:
+        return
     content_hash = hashlib.sha256(markdown_content.encode()).hexdigest()
     artifact_kind = frontmatter.get("artifact_kind", ArtifactKindEnum.NOTE.value)
     store.index(

@@ -1,6 +1,5 @@
 """Memory tools — unified recall over knowledge artifacts, session transcripts, and canon."""
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -14,7 +13,7 @@ from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.memory.artifact import load_knowledge_artifacts
 from co_cli.memory.session_browser import list_sessions
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.memory._canon_recall import search_canon
+from co_cli.tools.memory.canon_recall import search_canon
 from co_cli.tools.memory.read import grep_recall
 from co_cli.tools.tool_io import tool_output
 
@@ -23,6 +22,7 @@ logger = logging.getLogger(__name__)
 _SESSIONS_CHANNEL_CAP = 3
 """Maximum number of unique sessions returned by the sessions channel."""
 
+# user-facing snippet truncation in tool output
 _SNIPPET_DISPLAY_CHARS = 100
 """Maximum chars shown from an artifact or session chunk snippet in formatted output."""
 
@@ -31,40 +31,27 @@ def _browse_recent(
     ctx: RunContext[CoDeps],
     limit: int,
     span: Span,
-) -> ToolReturn:
-    """Return recent-session metadata — no LLM calls."""
+) -> list[dict]:
+    """Return recent-session metadata as a list of dicts — no LLM calls."""
     sessions = list_sessions(ctx.deps.sessions_dir)
     current_path = ctx.deps.session.session_path
     if current_path:
         current_resolved = current_path.resolve()
         sessions = [s for s in sessions if s.path.resolve() != current_resolved]
     sessions = sessions[:limit]
-
     span.set_attribute("memory.summarizer.runs", 0)
     span.set_attribute("memory.summarizer.failures", 0)
     span.set_attribute("memory.summarizer.timed_out", False)
-
-    if not sessions:
-        return tool_output("No past sessions found.", ctx=ctx, count=0, results=[])
-
-    lines = [f"Recent {len(sessions)} session(s):\n"]
-    for idx, s in enumerate(sessions, 1):
-        lines.append(f"{idx}. [{s.created_at.isoformat()[:10]}] {s.session_id} — {s.title}")
-    return tool_output(
-        "\n".join(lines),
-        ctx=ctx,
-        count=len(sessions),
-        results=[
-            {
-                "channel": "sessions",
-                "session_id": s.session_id,
-                "when": s.created_at.isoformat()[:10],
-                "title": s.title,
-                "file_size": s.file_size,
-            }
-            for s in sessions
-        ],
-    )
+    return [
+        {
+            "channel": "sessions",
+            "session_id": s.session_id,
+            "when": s.created_at.isoformat()[:10],
+            "title": s.title,
+            "file_size": s.file_size,
+        }
+        for s in sessions
+    ]
 
 
 def _list_artifacts(
@@ -72,12 +59,11 @@ def _list_artifacts(
     kinds: list[str] | None,
     limit: int,
     span: Span,
-    offset: int = 0,
 ) -> list[dict]:
     """Paginated inventory of knowledge artifacts, sorted by created descending."""
     artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
     artifacts.sort(key=lambda a: a.created, reverse=True)
-    page = artifacts[offset : offset + limit]
+    page = artifacts[:limit]
     span.set_attribute("memory.artifacts.count", len(page))
     return [
         {
@@ -93,7 +79,7 @@ def _list_artifacts(
     ]
 
 
-async def _search_artifacts(
+def _search_artifacts(
     ctx: RunContext[CoDeps],
     query: str,
     kinds: list[str] | None,
@@ -138,7 +124,7 @@ async def _search_artifacts(
     ]
 
 
-async def _search_sessions(
+def _search_sessions(
     ctx: RunContext[CoDeps],
     query: str,
     span: Span,
@@ -172,23 +158,23 @@ async def _search_sessions(
 
     seen: dict[str, Any] = {}
     for r in raw:
-        uuid8 = r.path
-        if uuid8 == current_uuid8:
+        session_uuid8 = r.path
+        if session_uuid8 == current_uuid8:
             continue
-        if uuid8 not in seen:
-            seen[uuid8] = r
+        if session_uuid8 not in seen:
+            seen[session_uuid8] = r
         if len(seen) >= _SESSIONS_CHANNEL_CAP:
             break
 
     span.set_attribute("memory.sessions.count", len(seen))
 
     results: list[dict] = []
-    for uuid8, r in seen.items():
+    for session_uuid8, r in seen.items():
         when = r.created[:10] if r.created else ""
         results.append(
             {
                 "channel": "sessions",
-                "session_id": uuid8,
+                "session_id": session_uuid8,
                 "when": when,
                 "source": r.source,
                 "chunk_text": r.snippet or "",
@@ -200,7 +186,7 @@ async def _search_sessions(
     return results
 
 
-async def _search_canon_channel(
+def _search_canon_channel(
     ctx: RunContext[CoDeps],
     query: str,
 ) -> list[dict]:
@@ -216,6 +202,43 @@ async def _search_canon_channel(
     return search_canon(query, role=role, limit=limit)
 
 
+def _format_search_display(query: str, all_results: list[dict]) -> str:
+    """Build the display string for a non-empty search result set."""
+    lines: list[str] = [f"Found {len(all_results)} result(s) for '{query}':\n"]
+
+    artifact_results = [r for r in all_results if r["channel"] == "artifacts"]
+    session_results = [r for r in all_results if r["channel"] == "sessions"]
+    char_canon_results = [r for r in all_results if r["channel"] == "canon"]
+
+    if artifact_results:
+        lines.append("**Saved artifacts:**")
+        for r in artifact_results:
+            kind_str = f" [{r['kind']}]" if r.get("kind") else ""
+            path_str = f" @ {r['path']}" if r.get("path") else ""
+            lines.append(
+                f"  **{r['title']}**{kind_str}{path_str}: "
+                f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
+            )
+
+    if session_results:
+        lines.append("\n**Past sessions:**")
+        for idx, entry in enumerate(session_results, 1):
+            start = entry.get("start_line")
+            end = entry.get("end_line")
+            loc = f" @ L{start}-{end}" if start is not None and end is not None else ""
+            lines.append(f"  {idx}. [{entry['when']}] {entry['session_id']}{loc}")
+            preview = (entry.get("chunk_text") or "")[:_SNIPPET_DISPLAY_CHARS]
+            if preview:
+                lines.append(f"     {preview}")
+
+    if char_canon_results:
+        lines.append("\n**Character canon:**")
+        for r in char_canon_results:
+            lines.append(f"\n### {r['title']}\n{r['body']}")
+
+    return "\n".join(lines)
+
+
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def memory_search(
     ctx: RunContext[CoDeps],
@@ -226,7 +249,7 @@ async def memory_search(
     """Search memory across saved artifacts, past sessions, and canon in one call.
 
     Searches the artifacts channel (BM25 FTS5/grep), the sessions channel
-    (chunk-level index, no LLM), and the canon channel in parallel. Returns
+    (chunk-level index, no LLM), and the canon channel in sequence. Returns
     a flat list with a "channel" field per result ("artifacts", "sessions", or "canon").
     The sessions channel is capped at 3 unique sessions regardless of limit.
 
@@ -286,24 +309,27 @@ async def memory_search(
     limit = max(1, int(limit))
 
     if not query or not query.strip():
-        sessions_result = _browse_recent(ctx, limit, span)
+        session_results = _browse_recent(ctx, limit, span)
         artifact_results = _list_artifacts(ctx, kinds, limit, span)
-        if not artifact_results:
-            return sessions_result
-        session_data = (sessions_result.metadata or {}).get("results", [])
-        sessions_display = sessions_result.return_value
-        artifact_lines = ["\n**Knowledge artifacts:**"]
-        for r in artifact_results:
-            kind_str = f" [{r['kind']}]" if r.get("kind") else ""
-            path_str = f" @ {r['path']}" if r.get("path") else ""
-            artifact_lines.append(
-                f"  **{r['title']}**{kind_str}{path_str}: "
-                f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
-            )
-        combined_display = sessions_display + "\n".join(artifact_lines)
-        all_results = list(session_data) + artifact_results
+        all_results = session_results + artifact_results
+        if not all_results:
+            return tool_output("No past sessions found.", ctx=ctx, count=0, results=[])
+        lines: list[str] = []
+        if session_results:
+            lines.append(f"Recent {len(session_results)} session(s):\n")
+            for idx, s in enumerate(session_results, 1):
+                lines.append(f"{idx}. [{s['when']}] {s['session_id']} — {s['title']}")
+        if artifact_results:
+            lines.append("\n**Knowledge artifacts:**")
+            for r in artifact_results:
+                kind_str = f" [{r['kind']}]" if r.get("kind") else ""
+                path_str = f" @ {r['path']}" if r.get("path") else ""
+                lines.append(
+                    f"  **{r['title']}**{kind_str}{path_str}: "
+                    f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
+                )
         return tool_output(
-            combined_display,
+            "\n".join(lines),
             ctx=ctx,
             count=len(all_results),
             results=all_results,
@@ -311,11 +337,9 @@ async def memory_search(
 
     query = query.strip()
 
-    knowledge_results, session_results_raw, canon_results = await asyncio.gather(
-        _search_artifacts(ctx, query, kinds, limit),
-        _search_sessions(ctx, query, span),
-        _search_canon_channel(ctx, query),
-    )
+    knowledge_results = _search_artifacts(ctx, query, kinds, limit)
+    session_results_raw = _search_sessions(ctx, query, span)
+    canon_results = _search_canon_channel(ctx, query)
 
     all_results: list[dict] = (
         list(knowledge_results) + list(session_results_raw) + list(canon_results)
@@ -329,40 +353,8 @@ async def memory_search(
             results=[],
         )
 
-    lines = [f"Found {len(all_results)} result(s) for '{query}':\n"]
-
-    artifact_results = [r for r in all_results if r["channel"] == "artifacts"]
-    session_results = [r for r in all_results if r["channel"] == "sessions"]
-    char_canon_results = [r for r in all_results if r["channel"] == "canon"]
-
-    if artifact_results:
-        lines.append("**Saved artifacts:**")
-        for r in artifact_results:
-            kind_str = f" [{r['kind']}]" if r.get("kind") else ""
-            path_str = f" @ {r['path']}" if r.get("path") else ""
-            lines.append(
-                f"  **{r['title']}**{kind_str}{path_str}: "
-                f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
-            )
-
-    if session_results:
-        lines.append("\n**Past sessions:**")
-        for idx, entry in enumerate(session_results, 1):
-            start = entry.get("start_line")
-            end = entry.get("end_line")
-            loc = f" @ L{start}-{end}" if start is not None and end is not None else ""
-            lines.append(f"  {idx}. [{entry['when']}] {entry['session_id']}{loc}")
-            preview = (entry.get("chunk_text") or "")[:_SNIPPET_DISPLAY_CHARS]
-            if preview:
-                lines.append(f"     {preview}")
-
-    if char_canon_results:
-        lines.append("\n**Character canon:**")
-        for r in char_canon_results:
-            lines.append(f"\n### {r['title']}\n{r['body']}")
-
     return tool_output(
-        "\n".join(lines),
+        _format_search_display(query, all_results),
         ctx=ctx,
         count=len(all_results),
         results=all_results,

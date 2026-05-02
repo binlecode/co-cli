@@ -14,7 +14,6 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.memory.artifact import KnowledgeArtifact
 from co_cli.memory.indexer import extract_messages
-from co_cli.memory.session import parse_session_filename
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
@@ -69,14 +68,10 @@ async def memory_read_session_turn(
             ctx=ctx,
         )
 
-    # Locate the JSONL file by matching uuid8 prefix against session filenames
+    # Locate the JSONL file using a targeted glob on the session ID suffix
     sessions_dir = ctx.deps.sessions_dir
-    jsonl_path: Any = None
-    for candidate in sessions_dir.glob("*.jsonl"):
-        parsed = parse_session_filename(candidate.name)
-        if parsed is not None and parsed[0] == session_id:
-            jsonl_path = candidate
-            break
+    candidates = list(sessions_dir.glob(f"*-{session_id}.jsonl"))
+    jsonl_path = candidates[0] if candidates else None
 
     if jsonl_path is None:
         return tool_output(

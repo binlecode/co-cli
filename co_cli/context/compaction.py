@@ -104,7 +104,6 @@ def _reset_thrash_state(ctx: RunContext[CoDeps]) -> None:
     the banner-text contract.
     """
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-    ctx.deps.runtime.compaction_thrash_hint_emitted = False
 
 
 _COMPACTION_BREAKER_TRIP: int = 3
@@ -190,10 +189,8 @@ async def _gated_summarize_or_none(
     if not _summarization_gate_open(ctx):
         return None
 
-    if announce:
-        from co_cli.display.core import console
-
-        console.print("[dim]Compacting conversation...[/dim]")
+    if announce and (cb := ctx.deps.runtime.status_callback) is not None:
+        cb("Compacting conversation...")
 
     try:
         summary_text = await summarize_dropped_messages(
@@ -450,14 +447,6 @@ async def proactive_window_processor(
             >= cfg.proactive_thrash_window
         ):
             log.info("Compaction: anti-thrashing gate active, skipping")
-            if not ctx.deps.runtime.compaction_thrash_hint_emitted:
-                from co_cli.display.core import console
-
-                console.print(
-                    "[dim]Compaction paused: recent passes freed too little context. "
-                    "/compact to force one more pass, or /new for a fresh session.[/dim]"
-                )
-                ctx.deps.runtime.compaction_thrash_hint_emitted = True
             return messages
 
         result = await _run_window_compaction(ctx, messages, budget)
@@ -473,9 +462,7 @@ async def proactive_window_processor(
         if savings < cfg.min_proactive_savings:
             ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
         else:
-            # hint re-arms with counter — banner-text contract
             ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-            ctx.deps.runtime.compaction_thrash_hint_emitted = False
         return result
     except Exception:
         log.warning("Mid-turn compaction failed — skipping", exc_info=True)

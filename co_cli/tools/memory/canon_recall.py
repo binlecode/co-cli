@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 
 import co_cli.personality
-from co_cli.memory._stopwords import STOPWORDS
 from co_cli.memory.frontmatter import strip_frontmatter
+from co_cli.memory.stopwords import STOPWORDS
 
 _SOULS_DIR: Path = (Path(co_cli.personality.__file__).parent / "prompts" / "souls").resolve()
 
@@ -41,9 +41,6 @@ def search_canon(
     no memories directory, or the resolved path escapes the souls dir (defense-in-depth).
     """
     if not role:
-        return []
-    # Defense-in-depth: reject role strings with path traversal components before resolution.
-    if ".." in role or "/" in role or "\\" in role:
         return []
 
     q = _tokenize(query)

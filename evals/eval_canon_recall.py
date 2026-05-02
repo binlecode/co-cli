@@ -37,7 +37,7 @@ from co_cli.agent.core import build_agent
 from co_cli.config.core import settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
-from co_cli.tools.memory._canon_recall import search_canon
+from co_cli.tools.memory.canon_recall import search_canon
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 

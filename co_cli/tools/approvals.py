@@ -8,14 +8,13 @@ No cross-session persistence — approval rules are cleared when the session end
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from pydantic_ai import ApprovalRequired, DeferredToolResults, ToolDenied
 
-from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
+from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, SessionApprovalRule
 
 
 class QuestionRequired(ApprovalRequired):
@@ -29,27 +28,6 @@ class QuestionRequired(ApprovalRequired):
     def __init__(self, *, questions: list[dict]) -> None:
         super().__init__(metadata={"questions": questions})
         self.questions = questions
-
-
-@dataclass(frozen=True)
-class ApprovalSubject:
-    """Resolved representation of what is being approved.
-
-    tool_name:    the registered tool name (e.g. "shell")
-    kind:         category matching SessionApprovalRule.kind
-    value:        the scoped key used for session rule matching
-    display:      human-readable description shown in the approval prompt
-    can_remember: whether 'a' should store a session rule
-    preview:      optional content preview (write_file: first N lines of content;
-                  None for all other tool kinds — display is sufficient)
-    """
-
-    tool_name: str
-    kind: ApprovalKindEnum
-    value: str
-    display: str
-    can_remember: bool
-    preview: str | None = None
 
 
 def _build_file_write_preview(content: str | None) -> str | None:

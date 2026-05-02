@@ -102,9 +102,18 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
 END;
 """
 
-_CHUNKS_FTS_SQL = """
+_FTS_SNIPPET_TOKENS = 40
+"""Passed to FTS5 snippet() — context window for match highlighting."""
+
+_CHUNK_DEDUP_FETCH_MULTIPLIER = 20
+"""Chunks fetched per requested doc — dedup by path collapses many chunks per doc."""
+
+_RERANKER_CANDIDATE_MULTIPLIER = 4
+"""Reranker pool size — gives the reranker meaningful signal to reorder."""
+
+_CHUNKS_FTS_SQL = f"""
 SELECT c.source, c.doc_path AS path,
-       snippet(chunks_fts, 0, '>', '<', '...', 40) AS snippet,
+       snippet(chunks_fts, 0, '>', '<', '...', {_FTS_SNIPPET_TOKENS}) AS snippet,
        bm25(chunks_fts) AS rank,
        c.chunk_index, c.start_line, c.end_line,
        d.kind, d.title, d.category, d.created, d.updated,
@@ -196,23 +205,9 @@ class SearchResult:
     chunk_index: int | None = None
     start_line: int | None = None
     end_line: int | None = None
-    type: str | None = None
     description: str | None = None
     source_ref: str | None = None
     artifact_id: str | None = None
-
-    def to_tool_output(self, *, conflict: bool = False) -> dict:
-        """Return the standard tool output dict for this search result."""
-        return {
-            "source": self.source,
-            "kind": self.kind,
-            "title": self.title,
-            "snippet": self.snippet,
-            "score": self.score,
-            "path": self.path,
-            "confidence": self.confidence,
-            "conflict": conflict,
-        }
 
 
 # Type alias for the (path, chunk_index) key used in RRF merging.
@@ -313,6 +308,51 @@ class MemoryStore:
         m = re.search(r"float\[(\d+)\]", row[0] or "")
         return int(m.group(1)) if m else None
 
+    def _index_no_commit(
+        self,
+        *,
+        source: str,
+        kind: str | None = None,
+        path: str,
+        title: str | None = None,
+        mtime: float | None = None,
+        hash: str | None = None,
+        category: str | None = None,
+        created: str | None = None,
+        updated: str | None = None,
+        description: str | None = None,
+        source_ref: str | None = None,
+        artifact_id: str | None = None,
+    ) -> None:
+        """UPSERT a document row without committing. hash-skip: no-op when hash unchanged."""
+        self._conn.execute(
+            """INSERT INTO docs
+                   (source, kind, path, title, mtime, hash, category,
+                    created, updated, description, source_ref, artifact_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source, path) DO UPDATE SET
+                   kind=excluded.kind, title=excluded.title,
+                   mtime=excluded.mtime, hash=excluded.hash,
+                   category=excluded.category, created=excluded.created,
+                   updated=excluded.updated, description=excluded.description,
+                   source_ref=excluded.source_ref, artifact_id=excluded.artifact_id
+               WHERE excluded.hash IS NOT docs.hash""",
+            (
+                source,
+                kind,
+                path,
+                title,
+                mtime,
+                hash,
+                category,
+                created,
+                updated,
+                description,
+                source_ref,
+                artifact_id,
+            ),
+        )
+
     def index(
         self,
         *,
@@ -325,65 +365,38 @@ class MemoryStore:
         category: str | None = None,
         created: str | None = None,
         updated: str | None = None,
-        type: str | None = None,
         description: str | None = None,
         source_ref: str | None = None,
         artifact_id: str | None = None,
-        **_kwargs: object,
     ) -> None:
         """Insert or update a document in the index.
 
         Skips the write if `hash` matches the stored value (no change).
-        Uses INSERT OR REPLACE for upsert semantics.
+        Uses INSERT ON CONFLICT DO UPDATE for atomic upsert semantics.
         """
-        existing = self._conn.execute(
-            "SELECT hash FROM docs WHERE source = ? AND path = ?",
-            (source, path),
-        ).fetchone()
-
-        if hash is not None and existing is not None and existing["hash"] == hash:
-            return  # unchanged
-
-        self._conn.execute("DELETE FROM docs WHERE source = ? AND path = ?", (source, path))
-
-        self._conn.execute(
-            """INSERT INTO docs
-                   (source, kind, path, title, mtime, hash, category,
-                    created, updated, type, description, source_ref, artifact_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                source,
-                kind,
-                path,
-                title,
-                mtime,
-                hash,
-                category,
-                created,
-                updated,
-                type,
-                description,
-                source_ref,
-                artifact_id,
-            ),
+        self._index_no_commit(
+            source=source,
+            kind=kind,
+            path=path,
+            title=title,
+            mtime=mtime,
+            hash=hash,
+            category=category,
+            created=created,
+            updated=updated,
+            description=description,
+            source_ref=source_ref,
+            artifact_id=artifact_id,
         )
         self._conn.commit()
 
-    def index_chunks(
+    def _index_chunks_no_commit(
         self,
         source: str,
         doc_path: str,
         chunks: list[Any],
     ) -> None:
-        """Write paragraph chunks to chunks/chunks_fts (and chunks_vec in hybrid mode).
-
-        Replaces all existing chunks for (source, doc_path) atomically.
-
-        Args:
-            source: Source label ('knowledge', 'obsidian', 'drive').
-            doc_path: Path key matching the docs.path for this document.
-            chunks: List of Chunk objects from _chunker.chunk_text().
-        """
+        """Write paragraph chunks without committing."""
         if self._backend == "hybrid":
             existing_rowids = [
                 row[0]
@@ -419,6 +432,22 @@ class MemoryStore:
                         (cur.lastrowid, blob),
                     )
 
+    def index_chunks(
+        self,
+        source: str,
+        doc_path: str,
+        chunks: list[Any],
+    ) -> None:
+        """Write paragraph chunks to chunks/chunks_fts (and chunks_vec in hybrid mode).
+
+        Replaces all existing chunks for (source, doc_path) atomically.
+
+        Args:
+            source: Source label ('knowledge', 'obsidian', 'drive').
+            doc_path: Path key matching the docs.path for this document.
+            chunks: List of Chunk objects from _chunker.chunk_text().
+        """
+        self._index_chunks_no_commit(source, doc_path, chunks)
         self._conn.commit()
 
     def remove_chunks(self, source: str, path: str) -> None:
@@ -466,12 +495,13 @@ class MemoryStore:
           sources=["drive"]     → Google Drive documents only
           sources=["knowledge", "obsidian", "drive"] → multiple sources via IN-clause
         """
-        if self._build_fts_query(query) is None:
+        fts_query = self._build_fts_query(query)
+        if fts_query is None:
             return []
 
         if self._backend == "hybrid":
             return self._hybrid_search(
-                query,
+                fts_query,
                 sources=sources,
                 kinds=kinds,
                 created_after=created_after,
@@ -480,9 +510,11 @@ class MemoryStore:
             )
         # Fetch a larger candidate pool when reranker is active so it has
         # meaningful signal to reorder; otherwise fetch exactly what caller needs.
-        fetch_limit = limit * 4 if self._reranker_provider != "none" else limit
+        fetch_limit = (
+            limit * _RERANKER_CANDIDATE_MULTIPLIER if self._reranker_provider != "none" else limit
+        )
         results = self._fts_search(
-            query,
+            fts_query,
             sources=sources,
             kinds=kinds,
             created_after=created_after,
@@ -493,7 +525,7 @@ class MemoryStore:
 
     def _hybrid_search(
         self,
-        query: str,
+        fts_query: str,
         *,
         sources: list[str] | None,
         kinds: list[str] | None,
@@ -503,15 +535,15 @@ class MemoryStore:
     ) -> list[SearchResult]:
         """Hybrid BM25 + vector search with chunk-level RRF. Falls back to FTS5."""
         fts_chunks = self._fts_chunks_raw(
-            query,
+            fts_query,
             sources=sources,
             kinds=kinds,
             created_after=created_after,
             created_before=created_before,
-            limit=limit * 4,
+            fetch_limit=limit * _RERANKER_CANDIDATE_MULTIPLIER,
         )
         try:
-            emb = self._embed_cached(query)
+            emb = self._embed_cached(fts_query)
             if emb is not None:
                 vec_chunks = self._vec_chunks_search(
                     struct.pack(f"{len(emb)}f", *emb),
@@ -522,7 +554,7 @@ class MemoryStore:
                     limit=limit * 16,
                 )
                 merged = self._hybrid_merge(fts_chunks, vec_chunks)
-                return self._rerank_results(query, merged, limit)
+                return self._rerank_results(fts_query, merged, limit)
         except Exception as e:
             logger.warning(f"Vector search failed, falling back to FTS: {e}")
 
@@ -532,7 +564,7 @@ class MemoryStore:
             if r.path not in fallback_seen or r.score > fallback_seen[r.path].score:
                 fallback_seen[r.path] = r
         fts_results = sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)
-        return self._rerank_results(query, fts_results, limit)
+        return self._rerank_results(fts_query, fts_results, limit)
 
     @staticmethod
     def _chunk_row_to_result(row: Any) -> "SearchResult":
@@ -555,7 +587,7 @@ class MemoryStore:
 
     def _fts_search(
         self,
-        query: str,
+        fts_query: str,
         *,
         sources: list[str] | None,
         kinds: list[str] | None,
@@ -564,14 +596,10 @@ class MemoryStore:
         limit: int,
     ) -> list[SearchResult]:
         """BM25 FTS5 search over chunks_fts — single leg for all sources."""
-        fts_query = self._build_fts_query(query)
-        if fts_query is None:
-            return []
-
         # Chunks leg always uses a larger pool: one document produces N chunk rows,
         # so limiting at chunk granularity causes a single long article to crowd out
         # other matching documents before Python-side doc-level dedup can run.
-        chunks_fetch_limit = limit * 20
+        chunks_fetch_limit = limit * _CHUNK_DEDUP_FETCH_MULTIPLIER
 
         all_rows: list[tuple[Any, str]] = self._run_chunks_fts(
             fts_query,
@@ -643,28 +671,22 @@ class MemoryStore:
 
     def _fts_chunks_raw(
         self,
-        query: str,
+        fts_query: str,
         *,
         sources: list[str] | None,
         kinds: list[str] | None,
         created_after: str | None,
         created_before: str | None,
-        limit: int,
+        fetch_limit: int,
     ) -> list[SearchResult]:
         """Return chunk-level FTS results for hybrid RRF (non-memory sources only)."""
-        fts_query = self._build_fts_query(query)
-        if fts_query is None:
-            return []
-
-        chunks_fetch_limit = limit * 20
-
         chunk_rows = self._run_chunks_fts(
             fts_query,
             sources=sources,
             kinds=kinds,
             created_after=created_after,
             created_before=created_before,
-            limit=chunks_fetch_limit,
+            limit=fetch_limit,
         )
 
         return [self._chunk_row_to_result(row) for row, _leg in chunk_rows]
@@ -749,7 +771,6 @@ class MemoryStore:
                     chunk_index=c["chunk_index"],
                     start_line=c["start_line"],
                     end_line=c["end_line"],
-                    type=None,
                     description=None,
                     source_ref=meta["source_ref"],
                     artifact_id=meta["artifact_id"],
@@ -985,7 +1006,6 @@ class MemoryStore:
                     kind=artifact_kind,
                     path=path_str,
                     title=title,
-                    content=body.strip(),
                     mtime=mtime,
                     hash=file_hash,
                     category=frontmatter.get("auto_category"),
@@ -1014,7 +1034,6 @@ class MemoryStore:
         """Index a session JSONL into chunks/chunks_fts/chunks_vec.
 
         Idempotent — content hash skip avoids re-embedding unchanged sessions.
-        Partial-write recovery: falls through hash-skip when chunks are absent.
         doc_path = uuid8 (8-char ID from the session filename).
         """
         from co_cli.memory.chunker import Chunk
@@ -1039,25 +1058,7 @@ class MemoryStore:
         content_hash = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
 
         if not self.needs_reindex("session", uuid8, content_hash):
-            chunk_count = self._conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE source='session' AND doc_path=?",
-                (uuid8,),
-            ).fetchone()[0]
-            if chunk_count > 0:
-                return  # hash-skip — content unchanged AND chunks present
-            # else: partial-write recovery — fall through and re-index
-
-        self.index(
-            source="session",
-            kind="session",
-            path=uuid8,
-            title=uuid8,
-            content=full_text,
-            mtime=session_path.stat().st_mtime,
-            hash=content_hash,
-            created=created_at.isoformat(),
-            updated=created_at.isoformat(),
-        )
+            return  # hash-skip — content unchanged
 
         chunk_records = [
             Chunk(
@@ -1068,7 +1069,18 @@ class MemoryStore:
             )
             for i, c in enumerate(sess_chunks)
         ]
-        self.index_chunks(source="session", doc_path=uuid8, chunks=chunk_records)
+        with self._conn:
+            self._index_no_commit(
+                source="session",
+                kind="session",
+                path=uuid8,
+                title=uuid8,
+                mtime=session_path.stat().st_mtime,
+                hash=content_hash,
+                created=created_at.isoformat(),
+                updated=created_at.isoformat(),
+            )
+            self._index_chunks_no_commit(source="session", doc_path=uuid8, chunks=chunk_records)
 
     def sync_sessions(self, sessions_dir: Path, exclude: Path | None = None) -> int:
         """Incrementally index past sessions into the unified chunks pipeline.

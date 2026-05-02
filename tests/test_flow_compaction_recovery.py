@@ -23,7 +23,7 @@ async def test_emergency_recover_overflow_preserves_pending_user_turn():
     ]
     deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=CoSessionState())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
-    result = await emergency_recover_overflow_history(ctx, messages)
-    recovered = result[0] if isinstance(result, tuple) else result
+    recovered = await emergency_recover_overflow_history(ctx, messages)
+    assert recovered is not None
     assert len(recovered) > 0
     assert recovered[-1].parts[0].content == "pending request"

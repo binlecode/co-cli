@@ -38,11 +38,12 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
     raw_model = ctx.deps.model.model if ctx.deps.model else None
     run_ctx: RunContext[CoDeps] = RunContext(deps=ctx.deps, model=raw_model, usage=RunUsage())
+    console.print("[dim]Compacting conversation...[/dim]")
     new_history, summary = await apply_compaction(
         run_ctx,
         ctx.message_history,
         (0, old_len, old_len),
-        announce=True,
+        announce=False,
         focus=args.strip() or None,
     )
     new_history.append(
@@ -51,7 +52,6 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         )
     )
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-    ctx.deps.runtime.compaction_thrash_hint_emitted = False
 
     post_tokens = estimate_message_tokens(new_history)
     budget = resolve_compaction_budget(

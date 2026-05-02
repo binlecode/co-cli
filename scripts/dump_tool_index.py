@@ -10,7 +10,7 @@ Output (one line per tool, sorted by name):
 import argparse
 
 from co_cli.agent._native_toolset import _build_native_toolset
-from co_cli.config._core import load_config
+from co_cli.config.core import load_config
 
 
 def main() -> None:

@@ -8,7 +8,6 @@ Ownership contract:
 - append_text / append_thinking: accumulate content, throttle live renders at 20 FPS
 - flush_for_tool_output: commit all buffers before a tool surface renders
 - finish: commit remaining buffers at normal segment completion
-- install_progress / clear_progress: manage the turn-scoped progress callback
 
 Reasoning display modes:
 - off: thinking stream is silently dropped
@@ -28,7 +27,6 @@ from co_cli.config.core import (
 )
 
 if TYPE_CHECKING:
-    from co_cli.deps import CoDeps
     from co_cli.display.core import Frontend
 
 _RENDER_INTERVAL = 0.05  # 20 FPS
@@ -105,23 +103,6 @@ class StreamRenderer:
             self._flush_thinking()
         self._commit_text()
         return self._streamed_text
-
-    def install_progress(self, deps: "CoDeps", tool_id: str) -> None:
-        """Install the turn-scoped progress callback for the active tool surface.
-
-        Called when a FunctionToolCallEvent arrives. The callback routes progress
-        messages to the frontend for the specific tool_id.
-        """
-        deps.runtime.tool_progress_callback = lambda msg, _tid=tool_id: (
-            self._frontend.on_tool_progress(_tid, msg)
-        )
-
-    def clear_progress(self, deps: "CoDeps") -> None:
-        """Clear the turn-scoped progress callback.
-
-        Called on tool completion (normal, retry/validation failure, or interrupt).
-        """
-        deps.runtime.tool_progress_callback = None
 
     def _flush_thinking(self) -> None:
         if self._reasoning_display == REASONING_DISPLAY_FULL and self._thinking_buffer:

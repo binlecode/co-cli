@@ -4,7 +4,7 @@
 
 ## 1. Architecture
 
-Three-channel recall model. `memory_search()` dispatches all channels in parallel. Static personality content (soul seed, mindsets, rules) is injected once at agent construction — it is not a recall channel.
+Three-channel recall model. `memory_search()` dispatches all channels in sequence. Static personality content (soul seed, mindsets, rules) is injected once at agent construction — it is not a recall channel.
 
 | Channel | Storage | Recall mechanism |
 | --- | --- | --- |
@@ -93,9 +93,10 @@ Startup restore is path-only. `restore_session()` picks the latest `*.jsonl` by 
 parse uuid8 and created_at from filename
 chunk_session(path) → list[SessionChunk]
 content_hash = sha256(joined chunk texts)
-if hash unchanged AND chunk_count > 0: return  # hash-skip
-index doc row (source='session', path=uuid8, kind='session')
-index_chunks(source='session', doc_path=uuid8, chunks)
+if hash unchanged: return  # hash-skip
+with transaction:
+    index doc row (source='session', path=uuid8, kind='session')
+    index_chunks(source='session', doc_path=uuid8, chunks)
 ```
 
 `session_chunker.py` pipeline:
@@ -169,7 +170,7 @@ Backend degradation order:
 | `fts5` | BM25 over chunked text only | Embeddings unavailable |
 | `grep` | In-memory substring match over loaded markdown | MemoryStore unavailable |
 
-Optional rerankers (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`) takes priority; LLM listwise as fallback; neither = pass-through.
+Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
 
 Result shape: `{channel: "artifacts", kind, title, snippet, score, path, filename_stem}`
 
@@ -216,30 +217,28 @@ Result shape: `{channel: "canon", role, title, body, score}` — full body inlin
 
 ```
 memory_search(ctx, query, kinds, limit)             # tools/memory/recall.py
-  └─ asyncio.gather(
-       ├─ _search_artifacts(ctx, query, kinds, limit)
-       │    ├─ [store available]
-       │    │    MemoryStore.search(query, sources=['knowledge'], kinds, limit)
-       │    │      ├─ FTS5 BM25 over chunks_fts
-       │    │      ├─ [hybrid] embed(query) → cosine over chunks_vec → RRF merge (k=60)
-       │    │      └─ _rerank_results(query, merged, limit)
-       │    │           ├─ [tei] cross-encoder HTTP rerank
-       │    │           └─ [llm] listwise rerank
-       │    └─ [store unavailable]
-       │         load_knowledge_artifacts() → grep_recall()     # in-memory substring fallback
-       │
-       ├─ _search_sessions(ctx, query, span)
-       │    └─ MemoryStore.search(query, sources=['session'], limit=15)
-       │         └─ dedup to 3 unique sessions (_SESSIONS_CHANNEL_CAP); excludes current session
-       │
-       └─ _search_canon_channel(ctx, query)
-            └─ search_canon(query, role, limit)     # tools/memory/_canon_recall.py
-                 └─ token-overlap scoring over souls/{role}/memories/*.md
-     )
+  ├─ _search_artifacts(ctx, query, kinds, limit)
+  │    ├─ [store available]
+  │    │    MemoryStore.search(query, sources=['knowledge'], kinds, limit)
+  │    │      ├─ FTS5 BM25 over chunks_fts
+  │    │      ├─ [hybrid] embed(query) → cosine over chunks_vec → RRF merge (k=60)
+  │    │      └─ _rerank_results(query, merged, limit)
+  │    │           └─ [tei] cross-encoder HTTP rerank
+  │    └─ [store unavailable]
+  │         load_knowledge_artifacts() → grep_recall()     # in-memory substring fallback
+  │
+  ├─ _search_sessions(ctx, query, span)
+  │    └─ MemoryStore.search(query, sources=['session'], limit=15)
+  │         └─ dedup to 3 unique sessions (_SESSIONS_CHANNEL_CAP); excludes current session
+  │
+  └─ _search_canon_channel(ctx, query)
+       └─ search_canon(query, role, limit)     # tools/memory/canon_recall.py
+            └─ token-overlap scoring over souls/{role}/memories/*.md
+
   └─ merge channels → format and return flat result list
 ```
 
-All three channels run concurrently. Results carry a `channel` field (`artifacts`, `sessions`, `canon`); scores are not cross-comparable across channels.
+All three channels run in sequence. Results carry a `channel` field (`artifacts`, `sessions`, `canon`); scores are not cross-comparable across channels.
 
 ## 6. Config
 
@@ -252,7 +251,6 @@ All three channels run concurrently. Results carry a `channel` field (`artifacts
 | `knowledge.embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
 | `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI cross-encoder reranker URL |
 | `knowledge.tei_rerank_batch_size` | *(no env var)* | `50` | batch size for TEI rerank HTTP requests |
-| `knowledge.llm_reranker` | *(no env var)* | `null` | LLM reranker config `{provider, model}` |
 | `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | artifact chunk size in chars during indexing |
 | `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | artifact chunk overlap in chars |
 | `knowledge.session_chunk_tokens` | `CO_KNOWLEDGE_SESSION_CHUNK_TOKENS` | `400` | session chunk size in tokens |
@@ -301,17 +299,15 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/memory/memory_store.py` | `MemoryStore` — FTS5/hybrid search, `sync_dir()`, `index_session()`, `sync_sessions()` |
 | `co_cli/memory/artifact.py` | `KnowledgeArtifact` schema, kind enums, artifact loaders |
 | `co_cli/memory/service.py` | pure-function write layer: `save_artifact()`, `mutate_artifact()` |
-| `co_cli/memory/mutator.py` | `atomic_write()` — temp-file + `os.replace` write helper |
+| `co_cli/memory/_mutator.py` | `atomic_write()` — temp-file + `os.replace` write helper |
 | `co_cli/memory/archive.py` | `archive_artifacts()`, `restore_artifact()` |
 | `co_cli/memory/chunker.py` | knowledge artifact text chunking |
 | `co_cli/memory/frontmatter.py` | frontmatter parse, validate, render |
 | `co_cli/memory/similarity.py` | Jaccard similarity and content-superset helpers |
-| `co_cli/memory/ranking.py` | confidence scoring and contradiction helpers |
 | `co_cli/memory/query.py` | artifact list filtering and display formatting |
 | `co_cli/memory/search_util.py` | `normalize_bm25()`, `run_fts()`, `sanitize_fts5_query()`, `snippet_around()` |
 | `co_cli/memory/_embedder.py` | `build_embedder()` — embedding provider dispatch |
-| `co_cli/memory/_reranker.py` | `build_llm_reranker()` — LLM listwise reranker dispatch |
-| `co_cli/memory/_stopwords.py` | `STOPWORDS` frozenset |
+| `co_cli/memory/stopwords.py` | `STOPWORDS` frozenset |
 | `co_cli/memory/decay.py` | artifact decay scoring and eligibility |
 | `co_cli/memory/dream.py` | dream-cycle orchestration (see [dream.md](dream.md)) |
 | `co_cli/tools/memory/recall.py` | `memory_search()` — unified recall tool |
@@ -322,8 +318,8 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/tools/memory/_canon_recall.py` | `search_canon()` — token-overlap scoring over `souls/{role}/memories/*.md` |
-| `co_cli/memory/_stopwords.py` | `STOPWORDS` frozenset — shared with `similarity.py` |
+| `co_cli/tools/memory/canon_recall.py` | `search_canon()` — token-overlap scoring over `souls/{role}/memories/*.md` |
+| `co_cli/memory/stopwords.py` | `STOPWORDS` frozenset — shared with `similarity.py` |
 | `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly |
 | `co_cli/agent/_instructions.py` | `current_time_prompt()` — per-turn date/time injection |
 
