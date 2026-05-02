@@ -330,7 +330,7 @@ def _write_consolidated_artifact(
     file_content = render_knowledge_file(merged_artifact)
     _atomic_write(file_path, file_content)
 
-    store = deps.knowledge_store
+    store = deps.memory_store
     if store is not None:
         content_hash = hashlib.sha256(file_content.encode()).hexdigest()
         store.index(
@@ -422,7 +422,7 @@ async def _merge_similar_artifacts(deps: CoDeps) -> int:
         if merged is None:
             continue
         try:
-            archive_artifacts(cluster, knowledge_dir, deps.knowledge_store)
+            archive_artifacts(cluster, knowledge_dir, deps.memory_store)
         except Exception:
             logger.warning(
                 "dream.merge: archive failed after merge; merged artifact kept",
@@ -450,7 +450,7 @@ def _decay_sweep(deps: CoDeps) -> int:
     if not candidates:
         return 0
     batch = candidates[:_MAX_DECAY_PER_CYCLE]
-    return archive_artifacts(batch, deps.knowledge_dir, deps.knowledge_store)
+    return archive_artifacts(batch, deps.knowledge_dir, deps.memory_store)
 
 
 # ---------------------------------------------------------------------------

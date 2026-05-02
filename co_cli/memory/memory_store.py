@@ -1,6 +1,6 @@
-"""SQLite FTS5 knowledge index for ranked search across all text sources.
+"""SQLite FTS5 memory index for ranked search across all text sources.
 
-KnowledgeStore is a single SQLite-backed search index (``co-cli-search.db``) that any
+MemoryStore is a single SQLite-backed search index (``co-cli-search.db``) that any
 source writes to. The ``source`` column distinguishes origin; the ``kind`` /
 ``type`` columns hold the ``artifact_kind`` subtype for local artifacts.
 
@@ -187,7 +187,7 @@ def _coerce_sources(source: str | list[str] | None) -> list[str] | None:
 
 @dataclass
 class SearchResult:
-    """A single result from KnowledgeStore.search()."""
+    """A single result from MemoryStore.search()."""
 
     source: str
     kind: str | None
@@ -227,22 +227,22 @@ class SearchResult:
 type _ChunkKey = tuple[str, int | None]
 
 
-class KnowledgeStore:
-    """SQLite FTS5 index for ranked search across knowledge sources.
+class MemoryStore:
+    """SQLite FTS5 index for ranked search across all memory sources.
 
     Supports two backends:
       - 'fts5' (default): BM25 ranked full-text search only.
       - 'hybrid': FTS5 + sqlite-vec cosine vector search, RRF merge.
 
     Usage:
-        idx = KnowledgeStore(config=Settings())
+        idx = MemoryStore(config=Settings())
         idx.sync_dir("knowledge", knowledge_dir)
         results = idx.search("pytest testing")
         idx.close()
     """
 
-    def __init__(self, *, config: "Settings", knowledge_db_path: Path | None = None) -> None:
-        db_path = knowledge_db_path if knowledge_db_path is not None else SEARCH_DB
+    def __init__(self, *, config: "Settings", memory_db_path: Path | None = None) -> None:
+        db_path = memory_db_path if memory_db_path is not None else SEARCH_DB
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
         self._embedding_provider = config.knowledge.embedding_provider
@@ -321,7 +321,7 @@ class KnowledgeStore:
             for _col in ("source_ref", "artifact_id"):
                 if _col not in _existing_cols:
                     self._conn.execute(f"ALTER TABLE docs ADD COLUMN {_col} TEXT")
-                    logger.info("KnowledgeStore: migrated docs table — added column %s", _col)
+                    logger.info("MemoryStore: migrated docs table — added column %s", _col)
             # Drop dead doc-level FTS/vec tables and triggers (superseded by chunks_fts/chunks_vec).
             for _trigger in ("docs_ai", "docs_ad", "docs_au"):
                 self._conn.execute(f"DROP TRIGGER IF EXISTS {_trigger}")
@@ -333,7 +333,7 @@ class KnowledgeStore:
             self._conn.commit()
         except Exception as _e:
             self._conn.close()
-            raise RuntimeError("KnowledgeStore: schema migration failed") from _e
+            raise RuntimeError("MemoryStore: schema migration failed") from _e
 
         if self._backend == "hybrid":
             try:

@@ -34,7 +34,7 @@ def test_mutate_artifact_replace_preserves_frontmatter(tmp_path: Path) -> None:
         action="replace",
         content="updated body content",
         target="original body content",
-        knowledge_store=None,
+        memory_store=None,
     )
 
     art = load_knowledge_artifact(artifact_path)
@@ -55,7 +55,7 @@ def test_mutate_artifact_append_adds_to_body(tmp_path: Path) -> None:
         slug="test-art",
         action="append",
         content="second line",
-        knowledge_store=None,
+        memory_store=None,
     )
 
     art = load_knowledge_artifact(artifact_path)

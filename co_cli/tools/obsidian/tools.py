@@ -59,8 +59,8 @@ def _fts_search_notes(
 ) -> ToolReturn | None:
     """FTS5 search path. Returns ToolReturn on success, None to fall through to regex."""
     try:
-        ctx.deps.knowledge_store.sync_dir("obsidian", search_root)
-        fts_results = ctx.deps.knowledge_store.search(
+        ctx.deps.memory_store.sync_dir("obsidian", search_root)
+        fts_results = ctx.deps.memory_store.search(
             query,
             source="obsidian",
             limit=limit + 1,
@@ -219,7 +219,7 @@ def obsidian_search(
         tag = f"#{tag}"
     search_root = vault / folder if folder else vault
 
-    if ctx.deps.knowledge_store is not None:
+    if ctx.deps.memory_store is not None:
         result = _fts_search_notes(ctx, vault, search_root, query, keywords, tag, limit)
         if result is not None:
             return result

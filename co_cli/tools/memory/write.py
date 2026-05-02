@@ -79,7 +79,7 @@ async def memory_create(
             decay_protected=decay_protected,
             consolidation_enabled=ctx.deps.config.knowledge.consolidation_enabled,
             consolidation_similarity_threshold=ctx.deps.config.knowledge.consolidation_similarity_threshold,
-            knowledge_store=ctx.deps.knowledge_store,
+            memory_store=ctx.deps.memory_store,
         )
         span.set_attribute("knowledge.action", result.action)
 
@@ -163,7 +163,7 @@ async def memory_modify(
                     action=action,  # type: ignore[arg-type]
                     content=content,
                     target=target,
-                    knowledge_store=ctx.deps.knowledge_store,
+                    memory_store=ctx.deps.memory_store,
                 )
 
             return tool_output(

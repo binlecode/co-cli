@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 
 from co_cli.memory.artifact import KnowledgeArtifact
-from co_cli.memory.knowledge_store import KnowledgeStore
+from co_cli.memory.memory_store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _non_colliding_path(dest_dir: Path, filename: str) -> Path:
 def archive_artifacts(
     entries: list[KnowledgeArtifact],
     knowledge_dir: Path,
-    knowledge_store: KnowledgeStore | None = None,
+    memory_store: MemoryStore | None = None,
 ) -> int:
     """Move artifact files to ``knowledge_dir/_archive/`` and remove them from the FTS index.
 
@@ -80,8 +80,8 @@ def archive_artifacts(
             )
         source_path.rename(dest_path)
 
-        if knowledge_store is not None:
-            knowledge_store.remove(_KNOWLEDGE_SOURCE, original_path_str)
+        if memory_store is not None:
+            memory_store.remove(_KNOWLEDGE_SOURCE, original_path_str)
 
         archived += 1
 
@@ -91,7 +91,7 @@ def archive_artifacts(
 def restore_artifact(
     slug: str,
     knowledge_dir: Path,
-    knowledge_store: KnowledgeStore | None = None,
+    memory_store: MemoryStore | None = None,
 ) -> bool:
     """Move an archived file whose filename starts with ``slug`` back to the active dir.
 
@@ -127,7 +127,7 @@ def restore_artifact(
         )
     source_path.rename(dest_path)
 
-    if knowledge_store is not None:
-        knowledge_store.sync_dir(_KNOWLEDGE_SOURCE, knowledge_dir, glob="*.md")
+    if memory_store is not None:
+        memory_store.sync_dir(_KNOWLEDGE_SOURCE, knowledge_dir, glob="*.md")
 
     return True

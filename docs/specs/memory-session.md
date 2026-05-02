@@ -60,7 +60,7 @@ The model sees a `<persisted-output>` placeholder with tool name, file path, tot
 
 ## 3. Sessions Recall Channel
 
-Sessions are indexed as `source='session'` chunks by `KnowledgeStore`:
+Sessions are indexed as `source='session'` chunks by `MemoryStore`:
 
 ```text
 index_session(path):
@@ -90,7 +90,7 @@ sync_sessions(sessions_dir, exclude=current_session):
 **Browse mode** (empty query): returns recent-session metadata — session ID, date, title, file size — with zero LLM cost. Excludes the current session.
 
 **Search mode** (keyword query): dispatches sessions, artifacts, and canon channels in parallel.
-- Sessions: `KnowledgeStore.search(source='session', limit=15)` → dedup to one best chunk per unique session → cap at 3 (`_SESSIONS_CHANNEL_CAP`)
+- Sessions: `MemoryStore.search(source='session', limit=15)` → dedup to one best chunk per unique session → cap at 3 (`_SESSIONS_CHANNEL_CAP`)
 - To drill into a specific turn: `memory_read_session_turn(session_id, start_line, end_line)` — verbatim JSONL lines, capped at 200 lines / 16 KB
 
 Result shape: `{channel: "sessions", session_id, when, source, chunk_text, start_line, end_line, score}`
@@ -111,7 +111,7 @@ The active session is excluded from the bootstrap sync. Episodic search covers a
 | --- | --- | --- | --- |
 | `sessions_dir` | — | `~/.co-cli/sessions/` | user-global transcript directory |
 | `tool_results_dir` | — | `~/.co-cli/tool-results/` | spill directory for oversized tool results |
-| `knowledge_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (shared with knowledge artifacts) |
+| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (shared with knowledge artifacts) |
 
 ## 5. Files
 

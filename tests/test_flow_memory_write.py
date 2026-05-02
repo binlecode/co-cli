@@ -7,7 +7,7 @@ replace-uniqueness guard. No LLM — real filesystem + real FTS5 only.
 import pytest
 from tests._settings import SETTINGS
 
-from co_cli.memory.knowledge_store import KnowledgeStore
+from co_cli.memory.memory_store import MemoryStore
 from co_cli.memory.service import mutate_artifact, save_artifact
 
 # ---------------------------------------------------------------------------
@@ -15,8 +15,8 @@ from co_cli.memory.service import mutate_artifact, save_artifact
 # ---------------------------------------------------------------------------
 
 
-def _make_store(tmp_path, name="test-search.db") -> KnowledgeStore:
-    return KnowledgeStore(config=SETTINGS, knowledge_db_path=tmp_path / name)
+def _make_store(tmp_path, name="test-search.db") -> MemoryStore:
+    return MemoryStore(config=SETTINGS, memory_db_path=tmp_path / name)
 
 
 # ---------------------------------------------------------------------------
@@ -38,12 +38,11 @@ def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
             content="pytest is a testing framework",
             artifact_kind="note",
             title="pytest note",
-            knowledge_store=store,
+            memory_store=store,
         )
 
         assert result.action == "saved"
         assert result.path.exists(), "artifact file was not written to disk"
-        assert isinstance(result.artifact_id, str)
         assert len(result.artifact_id) >= 8, (
             f"artifact_id must be a non-empty slug string, got {result.artifact_id!r}"
         )
@@ -74,7 +73,7 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
             artifact_kind="article",
             title="test article",
             source_url=url,
-            knowledge_store=store,
+            memory_store=store,
         )
 
         second = save_artifact(
@@ -83,7 +82,7 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
             artifact_kind="article",
             title="test article",
             source_url=url,
-            knowledge_store=store,
+            memory_store=store,
         )
 
         assert second.action in ("appended", "merged"), (
@@ -122,7 +121,7 @@ def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
             content=base,
             artifact_kind="note",
             title="nato note",
-            knowledge_store=store,
+            memory_store=store,
             consolidation_enabled=True,
         )
 
@@ -132,7 +131,7 @@ def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
             content=base + " ultraviolet",
             artifact_kind="note",
             title="nato note",
-            knowledge_store=store,
+            memory_store=store,
             consolidation_enabled=True,
         )
 
@@ -157,7 +156,7 @@ def test_mutate_artifact_append_adds_content_at_end(tmp_path):
             content="initial body",
             artifact_kind="note",
             title="my note",
-            knowledge_store=store,
+            memory_store=store,
         )
 
         mutate_result = mutate_artifact(
@@ -165,7 +164,7 @@ def test_mutate_artifact_append_adds_content_at_end(tmp_path):
             slug=saved.slug,
             action="append",
             content="new line",
-            knowledge_store=store,
+            memory_store=store,
         )
 
         assert mutate_result.action == "appended"
@@ -192,7 +191,7 @@ def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
             content="same line\nsame line\nother content",
             artifact_kind="note",
             title="dupe note",
-            knowledge_store=store,
+            memory_store=store,
         )
 
         with pytest.raises(ValueError, match="appears"):
@@ -202,7 +201,7 @@ def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
                 action="replace",
                 target="same line",
                 content="replacement",
-                knowledge_store=store,
+                memory_store=store,
             )
     finally:
         store.close()

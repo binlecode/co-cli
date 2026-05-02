@@ -3,8 +3,8 @@
 KnowledgeArtifact is the single reusable-artifact model — preferences,
 decisions, rules, feedback, articles, references, and notes share this schema.
 Memory (raw transcripts) lives in ``sessions/``; knowledge (everything reusable)
-lives in ``knowledge_dir/``. See ``docs/specs/memory.md`` for the
-combined memory/knowledge model.
+lives in ``knowledge_dir/``. See ``docs/specs/memory-knowledge.md`` for the
+knowledge model and ``docs/specs/memory-session.md`` for session recall.
 """
 
 from __future__ import annotations

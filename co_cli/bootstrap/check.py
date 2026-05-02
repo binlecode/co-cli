@@ -10,9 +10,9 @@ Public entry point:
   check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
 
 Bootstrap callers (direct, not via entry points):
-  check_reranker_llm      — bootstrap/core.py (_resolve_reranker, inside _discover_knowledge_backend)
-  check_cross_encoder     — bootstrap/core.py (_resolve_reranker, inside _discover_knowledge_backend)
-  check_embedder          — bootstrap/core.py (_discover_knowledge_backend)
+  check_reranker_llm      — bootstrap/core.py (_resolve_reranker, inside _discover_memory_backend)
+  check_cross_encoder     — bootstrap/core.py (_resolve_reranker, inside _discover_memory_backend)
+  check_embedder          — bootstrap/core.py (_discover_memory_backend)
 
 Config-shape validation lives on LlmSettings.validate_config() (config/_llm.py), not here.
 """
@@ -333,12 +333,12 @@ def _check_brave(api_key: str | None) -> CheckResult:
     return CheckResult(ok=True, status="skipped", detail="not configured")
 
 
-def _check_knowledge(knowledge_store: Any, backend: str) -> CheckResult:
-    if knowledge_store is None:
+def _check_memory_store(memory_store: Any, backend: str) -> CheckResult:
+    if memory_store is None:
         return CheckResult(ok=True, status="warn", detail="grep mode")
     # Probe: run a minimal health check that raises on FTS/vector schema errors.
     try:
-        knowledge_store.probe()
+        memory_store.probe()
     except Exception as e:
         return CheckResult(ok=False, status="error", detail=str(e))
     return CheckResult(ok=True, status="ok", detail=f"{backend} active")
@@ -387,7 +387,7 @@ def check_runtime(
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
     _emit_progress(progress, "Doctor: checking knowledge backend...")
-    knowledge_result = _check_knowledge(deps.knowledge_store, deps.config.knowledge.search_backend)
+    knowledge_result = _check_memory_store(deps.memory_store, deps.config.knowledge.search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
     from co_cli.commands.skills import get_skill_registry

@@ -26,7 +26,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
 
     Pass keyword overrides to customise any CoDeps field, e.g.
     ``make_eval_deps(brave_search_api_key=None)``.
-    Service fields (shell, knowledge_store, model) can
+    Service fields (shell, memory_store, model) can
     also be passed as overrides and are extracted before building CoDeps.
 
     The ``model`` default is an ``LlmModel`` built via ``build_model(settings.llm)`` —
@@ -42,7 +42,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     # can distinguish "unset → build the default" from "explicitly None".
     _UNSET = object()
     shell = overrides.pop("shell", ShellBackend())
-    knowledge_store = overrides.pop("knowledge_store", None)
+    memory_store = overrides.pop("memory_store", None)
     model = overrides.pop("model", _UNSET)
     knowledge_dir = overrides.pop("knowledge_dir", None)
     # Discard legacy overrides that no longer map to current fields
@@ -54,7 +54,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
 
     deps = CoDeps(
         shell=shell,
-        knowledge_store=knowledge_store,
+        memory_store=memory_store,
         model=model,
         config=s,
         session=CoSessionState(),

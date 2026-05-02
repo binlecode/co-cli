@@ -74,9 +74,9 @@ async def _search_artifacts(
     limit: int,
 ) -> list[dict]:
     """BM25 FTS / grep fallback over knowledge artifacts. Returns channel='artifacts' dicts."""
-    if ctx.deps.knowledge_store is not None:
+    if ctx.deps.memory_store is not None:
         try:
-            fts_results = ctx.deps.knowledge_store.search(
+            fts_results = ctx.deps.memory_store.search(
                 query,
                 source="knowledge",
                 kind=kind,
@@ -117,15 +117,15 @@ async def _search_sessions(
     query: str,
     span: Span,
 ) -> list[dict]:
-    """Chunked recall over session transcripts via KnowledgeStore.search(source='session').
+    """Chunked recall over session transcripts via MemoryStore.search(source='session').
 
     Returns channel='sessions' dicts with chunk citation fields (chunk_text, start_line,
     end_line, score). Capped at _SESSIONS_CHANNEL_CAP unique sessions; no LLM calls.
-    Returns [] when knowledge_store is unavailable.
+    Returns [] when memory_store is unavailable.
     """
     from co_cli.memory.session import parse_session_filename
 
-    store = ctx.deps.knowledge_store
+    store = ctx.deps.memory_store
     if store is None:
         span.set_attribute("memory.sessions.count", 0)
         return []

@@ -16,7 +16,7 @@ from co_cli.tools.shell_backend import ShellBackend
 def _make_deps(tmp_path: Path) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
-        knowledge_store=None,
+        memory_store=None,
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
         runtime=CoRuntimeState(),

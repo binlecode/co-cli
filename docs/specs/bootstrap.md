@@ -44,7 +44,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ enter MCP toolsets on stack; discover_mcp_tools(); merge MCP tool_index
 │  ├─ load_skills(skills_dir, settings=config, user_skills_dir=...) → filter_namespace_conflicts()
 │  ├─ _discover_knowledge_backend(config, frontend, degradations)
-│  ├─ _sync_knowledge_store(store, config, frontend, knowledge_dir)
+│  ├─ _sync_memory_store(store, config, frontend, knowledge_dir)
 │  │      indexes every .md in knowledge_dir under source="knowledge"; on failure closes store and falls back to grep
 │  └─ return CoDeps(...)
 │
@@ -130,7 +130,7 @@ else:
     resolve reranker availability
     probe embedder
     choose hybrid or fts5
-    build KnowledgeStore
+    build MemoryStore
     on failure: degrade to fts5, then grep
 ```
 
@@ -138,7 +138,7 @@ When degradation happens, bootstrap records the reason in `deps.degradations`. D
 
 ### Step 9. Sync the knowledge store
 
-If a `KnowledgeStore` exists, bootstrap syncs every `.md` file under `knowledge_dir` into the index under a single `source="knowledge"` label — extracted facts and articles alike are indexed into `docs` + `chunks_fts` (and `chunks_vec` in hybrid mode). Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and disables indexed retrieval for the session; the CLI continues without aborting startup.
+If a `MemoryStore` exists, bootstrap syncs every `.md` file under `knowledge_dir` into the index under a single `source="knowledge"` label — extracted facts and articles alike are indexed into `docs` + `chunks_fts` (and `chunks_vec` in hybrid mode). Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and disables indexed retrieval for the session; the CLI continues without aborting startup.
 
 ### Step 10. Assemble `CoDeps`
 
@@ -147,7 +147,7 @@ After model setup, MCP discovery, skill loading, backend resolution, and sync, b
 `CoDeps` is the runtime object shared by tools and sub-agents. It holds:
 
 - `config`: the session `Settings` instance
-- `model`, `knowledge_store`, and `shell`: service handles
+- `model`, `memory_store`, and `shell`: service handles
 - `tool_registry`, `tool_index`, and `skill_commands`: bootstrap-built registries
 - resolved workspace paths
 - `degradations`: runtime downgrade reasons
@@ -241,6 +241,6 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/commands/skills.py` | `/skills` REPL command family and `get_skill_registry` |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
 | `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
-| `co_cli/memory/knowledge_store.py` | Implements the indexed knowledge store used when bootstrap enables it |
+| `co_cli/memory/memory_store.py` | Implements the `MemoryStore` used when bootstrap enables indexed retrieval |
 | `co_cli/memory/session_store.py` | `SessionStore` — FTS5 session index opened and synced during bootstrap |
 | `co_cli/memory/indexer.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |

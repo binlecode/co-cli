@@ -121,8 +121,8 @@ async def _subcmd_memory_forget(
 
     for m in entries:
         m.path.unlink()
-        if ctx.deps.knowledge_store is not None:
-            ctx.deps.knowledge_store.remove("knowledge", str(m.path))
+        if ctx.deps.memory_store is not None:
+            ctx.deps.memory_store.remove("knowledge", str(m.path))
 
     console.print(f"[success]✓ Deleted {len(entries)} memories.[/success]")
     return None
@@ -176,7 +176,7 @@ async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
         console.print(f"[dim]{len(entries)} archived artifact(s)[/dim]")
         return None
 
-    restored = restore_artifact(slug, ctx.deps.knowledge_dir, ctx.deps.knowledge_store)
+    restored = restore_artifact(slug, ctx.deps.knowledge_dir, ctx.deps.memory_store)
     if restored:
         console.print(f"[success]✓ Restored {slug}[/success]")
     else:
@@ -218,7 +218,7 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
         console.print("[dim]Aborted.[/dim]")
         return None
 
-    archived = archive_artifacts(candidates, ctx.deps.knowledge_dir, ctx.deps.knowledge_store)
+    archived = archive_artifacts(candidates, ctx.deps.knowledge_dir, ctx.deps.memory_store)
     console.print(f"[success]✓ Archived {archived}.[/success]")
 
 

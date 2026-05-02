@@ -129,7 +129,7 @@ def _researcher_instructions(deps: CoDeps) -> str:
 
 def _analyst_instructions(deps: CoDeps) -> str:
     active_sources = []
-    if deps.knowledge_store is not None:
+    if deps.memory_store is not None:
         active_sources.append("knowledge base")
     if deps.config.google_credentials_path:
         active_sources.append("Google Drive")

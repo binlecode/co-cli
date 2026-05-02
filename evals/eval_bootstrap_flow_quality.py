@@ -249,8 +249,8 @@ async def _run_create_deps_case(
             failures.append("merged tool_index is empty")
         if len(completer_words) < len(BUILTIN_COMMANDS):
             failures.append("completer words dropped built-in slash commands")
-        if deps.config.knowledge.search_backend == "grep" and deps.knowledge_store is not None:
-            failures.append("grep backend should not keep a KnowledgeStore handle")
+        if deps.config.knowledge.search_backend == "grep" and deps.memory_store is not None:
+            failures.append("grep backend should not keep a MemoryStore handle")
 
         if failures:
             verdict = "FAIL"

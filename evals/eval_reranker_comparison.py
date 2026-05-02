@@ -29,7 +29,7 @@ from pathlib import Path
 
 from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
 
-from co_cli.memory.knowledge_store import KnowledgeStore, SearchResult
+from co_cli.memory.memory_store import MemoryStore, SearchResult
 
 # ---------------------------------------------------------------------------
 # Harder synthetic corpus -- 5 topics x 6 docs
@@ -481,8 +481,8 @@ def build_index(
     backend: str = "fts5",
     reranker_model: str | None = None,
     ollama_host: str = "http://localhost:11434",
-) -> KnowledgeStore:
-    """Create a fresh KnowledgeStore with the full synthetic corpus loaded."""
+) -> MemoryStore:
+    """Create a fresh MemoryStore with the full synthetic corpus loaded."""
     from co_cli.config.core import Settings
     from co_cli.config.knowledge import KnowledgeSettings, LlmModelSettings
     from co_cli.config.llm import LlmSettings
@@ -506,7 +506,7 @@ def build_index(
             llm_reranker=llm_reranker,
         ),
     )
-    idx = KnowledgeStore(config=config, knowledge_db_path=db_path)
+    idx = MemoryStore(config=config, memory_db_path=db_path)
     for doc in CORPUS:
         idx.index(
             source="memory",
@@ -520,7 +520,7 @@ def build_index(
     return idx
 
 
-def run_benchmark(idx: KnowledgeStore, label: str, notes: str = "", runs: int = 3) -> dict:
+def run_benchmark(idx: MemoryStore, label: str, notes: str = "", runs: int = 3) -> dict:
     """Run all 5 queries across multiple runs; return metrics and stable median latency.
 
     cold_ms = first query of first run (model init + first inference).

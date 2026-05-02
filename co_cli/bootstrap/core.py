@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal
 from opentelemetry import trace
 
 if TYPE_CHECKING:
-    from co_cli.memory.knowledge_store import KnowledgeStore
+    from co_cli.memory.memory_store import MemoryStore
 
 from co_cli.config.core import Settings, get_settings
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
@@ -60,11 +60,11 @@ def _resolve_reranker(
         config.knowledge.llm_reranker = None
 
 
-def _discover_knowledge_backend(
+def _discover_memory_backend(
     config: Settings,
     frontend: TerminalFrontend,
     degradations: dict[str, str],
-) -> KnowledgeStore | None:
+) -> MemoryStore | None:
     """Discover which knowledge backend is available and construct the store.
 
     Three-tier fallback with graceful degradation:
@@ -112,14 +112,14 @@ def _discover_knowledge_backend(
     config.knowledge.search_backend = resolved_backend
 
     # --- Construct store with resolved config ---
-    from co_cli.memory.knowledge_store import KnowledgeStore as _KS
+    from co_cli.memory.memory_store import MemoryStore as _MS
 
     def _degrade_to(backend: KnowledgeBackendLiteral, reason: str) -> None:
         config.knowledge.search_backend = backend
         degradations["knowledge"] = f"{configured} → {backend} ({reason})"
 
     try:
-        return _KS(config=config)
+        return _MS(config=config)
     except Exception as exc:
         if resolved_backend == "hybrid":
             logger.warning("Hybrid backend unavailable: %s", exc)
@@ -129,7 +129,7 @@ def _discover_knowledge_backend(
             )
             _degrade_to("fts5", _summarize_backend_error(exc))
             try:
-                return _KS(config=config)
+                return _MS(config=config)
             except Exception as exc2:
                 logger.warning("FTS5 backend unavailable: %s", exc2)
                 frontend.on_status(
@@ -148,12 +148,12 @@ def _discover_knowledge_backend(
             return None
 
 
-def _sync_knowledge_store(
-    store: KnowledgeStore | None,
+def _sync_memory_store(
+    store: MemoryStore | None,
     config: Settings,
     frontend: TerminalFrontend,
     knowledge_dir: Path,
-) -> KnowledgeStore | None:
+) -> MemoryStore | None:
     """Reconcile the knowledge store with current knowledge files on disk.
 
     Hash-based — skips unchanged files. On sync failure, closes the store and
@@ -276,12 +276,12 @@ async def create_deps(
     for msg in skill_errors:
         frontend.on_status(msg)
 
-    # Step 6: discover knowledge backend + construct store (IO probes — three-tier fallback)
-    knowledge_store = _discover_knowledge_backend(config, frontend, degradations)
+    # Step 6: discover memory backend + construct store (IO probes — three-tier fallback)
+    memory_store = _discover_memory_backend(config, frontend, degradations)
 
-    # Step 7: sync knowledge store with current files on disk
-    knowledge_store = _sync_knowledge_store(
-        knowledge_store,
+    # Step 7: sync memory store with current files on disk
+    memory_store = _sync_memory_store(
+        memory_store,
         config,
         frontend,
         knowledge_dir=paths["knowledge_dir"],
@@ -293,7 +293,7 @@ async def create_deps(
         shell=ShellBackend(),
         config=config,
         model=llm_model,
-        knowledge_store=knowledge_store,
+        memory_store=memory_store,
         tool_index=tool_registry.tool_index,
         tool_registry=tool_registry,
         skill_commands=skill_commands,
@@ -314,8 +314,8 @@ def init_session_index(
     indexed mid-session. On first run after migration, removes the obsolete
     session-index.db.
     """
-    if deps.knowledge_store is None:
-        frontend.on_status("  Session index unavailable — knowledge store missing")
+    if deps.memory_store is None:
+        frontend.on_status("  Session index unavailable — memory store missing")
         return
     try:
         legacy_db = deps.sessions_dir.parent / "session-index.db"
@@ -325,7 +325,7 @@ def init_session_index(
                 logger.info("Removed legacy session-index.db (superseded by chunks pipeline)")
             except OSError as exc:
                 logger.warning("Could not remove legacy session-index.db: %s", exc)
-        deps.knowledge_store.sync_sessions(deps.sessions_dir, exclude=current_session_path)
+        deps.memory_store.sync_sessions(deps.sessions_dir, exclude=current_session_path)
     except Exception as exc:
         logger.warning("Session sync failed: %s", exc)
         frontend.on_status(f"  Session index sync failed — {exc}")

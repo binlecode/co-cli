@@ -193,7 +193,7 @@ sort oldest created first
 
 The cutoff is `now - knowledge.decay_after_days`. A candidate is archived only if it is old enough and either has never been recalled or was last recalled outside the same age window.
 
-Decay archives at most 20 artifacts per cycle. Archive moves files into `knowledge/_archive/`, removes active index rows when a `KnowledgeStore` is available, and resolves filename collisions by suffixing rather than clobbering existing files.
+Decay archives at most 20 artifacts per cycle. Archive moves files into `knowledge/_archive/`, removes active index rows when a `MemoryStore` is available, and resolves filename collisions by suffixing rather than clobbering existing files.
 
 ### 2.6 Dry Run
 
@@ -301,7 +301,7 @@ Internal caps:
 | `co_cli/memory/archive.py` | Archive and restore mechanics |
 | `co_cli/memory/artifact.py` | Knowledge artifact schema and active top-level artifact loading |
 | `co_cli/memory/frontmatter.py` | Knowledge markdown rendering and frontmatter validation |
-| `co_cli/memory/knowledge_store.py` | Derived index updates for consolidated and archived artifacts |
+| `co_cli/memory/memory_store.py` | Derived index updates for consolidated and archived artifacts |
 | `co_cli/tools/memory/write.py` | `memory_create` tool used by dream mining |
 | `co_cli/main.py` | Session-end dream trigger (`_maybe_run_dream_cycle`) |
 | `co_cli/commands/knowledge.py` | `/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, and `/knowledge stats` |

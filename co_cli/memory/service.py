@@ -2,7 +2,7 @@
 
 Provides save_artifact and mutate_artifact as the canonical write path for all
 knowledge mutations. Tool wrappers acquire resource locks before calling these
-functions; reindexing is triggered here when knowledge_store is provided.
+functions; reindexing is triggered here when memory_store is provided.
 """
 
 import hashlib
@@ -30,12 +30,12 @@ from co_cli.memory.mutator import _atomic_write
 from co_cli.memory.similarity import find_similar_artifacts, is_content_superset
 
 if TYPE_CHECKING:
-    from co_cli.memory.knowledge_store import KnowledgeStore
+    from co_cli.memory.memory_store import MemoryStore
 
 _LINE_PREFIX_RE = re.compile(r"(^|\n)\d+→ ", re.MULTILINE)
 _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
 
-# Match config defaults — used when knowledge_store reindexing is triggered without config access.
+# Match config defaults — used when memory_store reindexing is triggered without config access.
 _DEFAULT_CHUNK_SIZE = 600
 _DEFAULT_CHUNK_OVERLAP = 80
 
@@ -88,7 +88,7 @@ def _find_article_by_url(knowledge_dir: Path, origin_url: str) -> Path | None:
 
 
 def _reindex(
-    store: "KnowledgeStore",
+    store: "MemoryStore",
     path: Path,
     body: str,
     md_content: str,
@@ -133,7 +133,7 @@ def save_artifact(
     related: list[str] | None = None,
     consolidation_enabled: bool = False,
     consolidation_similarity_threshold: float = 0.75,
-    knowledge_store: "KnowledgeStore | None" = None,
+    memory_store: "MemoryStore | None" = None,
 ) -> SaveResult:
     """Save or consolidate a knowledge artifact. Pure — no RunContext.
 
@@ -176,9 +176,9 @@ def save_artifact(
                 "source_ref": source_url,
                 "id": fm.get("id"),
             }
-            if knowledge_store is not None:
+            if memory_store is not None:
                 _reindex(
-                    knowledge_store,
+                    memory_store,
                     existing_path,
                     content,
                     md_content,
@@ -220,8 +220,8 @@ def save_artifact(
             "source_ref": source_url,
             "id": artifact_id,
         }
-        if knowledge_store is not None:
-            _reindex(knowledge_store, file_path, content, md_content, fm_dict, file_path.stem)
+        if memory_store is not None:
+            _reindex(memory_store, file_path, content, md_content, fm_dict, file_path.stem)
         return SaveResult(
             path=file_path,
             artifact_id=artifact_id,
@@ -259,9 +259,9 @@ def save_artifact(
             fm["updated"] = datetime.now(UTC).isoformat()
             md_content = render_frontmatter(fm, merged_body)
             _atomic_write(best_artifact.path, md_content)
-            if knowledge_store is not None:
+            if memory_store is not None:
                 _reindex(
-                    knowledge_store,
+                    memory_store,
                     best_artifact.path,
                     merged_body,
                     md_content,
@@ -304,8 +304,8 @@ def save_artifact(
         "id": artifact_id,
     }
     _atomic_write(file_path, md_content)
-    if knowledge_store is not None:
-        _reindex(knowledge_store, file_path, content, md_content, fm_dict, file_path.stem)
+    if memory_store is not None:
+        _reindex(memory_store, file_path, content, md_content, fm_dict, file_path.stem)
     return SaveResult(
         path=file_path,
         artifact_id=artifact_id,
@@ -323,7 +323,7 @@ def mutate_artifact(
     action: Literal["append", "replace"],
     content: str,
     target: str = "",
-    knowledge_store: "KnowledgeStore | None" = None,
+    memory_store: "MemoryStore | None" = None,
 ) -> MutateResult:
     """Append or surgically replace a passage in an existing knowledge artifact.
 
@@ -332,7 +332,7 @@ def mutate_artifact(
     - For replace: target must appear exactly once in the body.
     - For replace: empty target is rejected (ambiguous).
 
-    Reindexes via knowledge_store if provided.
+    Reindexes via memory_store if provided.
     """
     for s, name in ((content, "content"), (target, "target")):
         if _LINE_PREFIX_RE.search(s) or _LINE_NUM_RE.search(s):
@@ -377,8 +377,8 @@ def mutate_artifact(
     md_content = render_frontmatter(fm, updated_body)
     _atomic_write(match_path, md_content)
 
-    if knowledge_store is not None:
-        _reindex(knowledge_store, match_path, updated_body, md_content, fm, slug)
+    if memory_store is not None:
+        _reindex(memory_store, match_path, updated_body, md_content, fm, slug)
 
     return MutateResult(
         path=match_path,

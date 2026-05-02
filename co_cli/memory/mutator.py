@@ -35,7 +35,7 @@ def _reindex_knowledge_file(
 
     sync_dir handles both at once; callers that mutate a single file call this to refresh inline.
     """
-    store = ctx.deps.knowledge_store
+    store = ctx.deps.memory_store
     if store is None:
         return
     content_hash = hashlib.sha256(md_content.encode()).hexdigest()
@@ -73,5 +73,5 @@ def _update_artifact_body(
     fm["updated"] = datetime.now(UTC).isoformat()
     md_content = render_frontmatter(fm, new_body)
     _atomic_write(artifact.path, md_content)
-    if ctx.deps.knowledge_store is not None:
+    if ctx.deps.memory_store is not None:
         _reindex_knowledge_file(ctx, artifact.path, new_body, md_content, fm, artifact.path.stem)

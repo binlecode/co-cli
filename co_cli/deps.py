@@ -21,7 +21,7 @@ from co_cli.config.core import (
 if TYPE_CHECKING:
     from co_cli.agent.core import ToolRegistry
     from co_cli.llm.factory import LlmModel
-    from co_cli.memory.knowledge_store import KnowledgeStore
+    from co_cli.memory.memory_store import MemoryStore
     from co_cli.skills.skill_types import SkillConfig
     from co_cli.tools.background import BackgroundTaskState
     from co_cli.tools.resource_lock import ResourceLockStore
@@ -181,7 +181,7 @@ class CoDeps:
 
     config: Settings instance (read-only after bootstrap).
     Workspace paths and runtime degradation state live here, not on config.
-    Tools access via ctx.deps.config.llm.provider, ctx.deps.knowledge_dir, etc.
+    Tools access via ctx.deps.config.llm.provider, ctx.deps.memory_store, etc.
     """
 
     # Service handles
@@ -195,7 +195,7 @@ class CoDeps:
     # Paths for which only a partial read (start_line/end_line) was performed — cleared on full read
     file_partial_reads: set[str] = field(default_factory=set, repr=False)
     # Service handles (optional, set during bootstrap)
-    knowledge_store: KnowledgeStore | None = field(default=None, repr=False)
+    memory_store: MemoryStore | None = field(default=None, repr=False)
     model: LlmModel | None = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, ToolInfo] = field(default_factory=dict)
@@ -211,7 +211,7 @@ class CoDeps:
     knowledge_dir: Path = field(default_factory=lambda: _DEFAULT_KNOWLEDGE_DIR)
     skills_dir: Path = field(default_factory=lambda: _DEFAULT_SKILLS_DIR)
     user_skills_dir: Path = field(default_factory=lambda: _DEFAULT_USER_SKILLS_DIR)
-    knowledge_db_path: Path = field(default_factory=lambda: SEARCH_DB)
+    memory_db_path: Path = field(default_factory=lambda: SEARCH_DB)
     sessions_dir: Path = field(default_factory=lambda: _DEFAULT_SESSIONS_DIR)
     tool_results_dir: Path = field(default_factory=lambda: _DEFAULT_TOOL_RESULTS_DIR)
 
@@ -266,7 +266,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         resource_locks=base.resource_locks,
         file_read_mtimes=base.file_read_mtimes,
         file_partial_reads=base.file_partial_reads,
-        knowledge_store=base.knowledge_store,
+        memory_store=base.memory_store,
         model=base.model,
         tool_index=base.tool_index,
         skill_commands=base.skill_commands,
@@ -277,7 +277,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         knowledge_dir=base.knowledge_dir,
         skills_dir=base.skills_dir,
         user_skills_dir=base.user_skills_dir,
-        knowledge_db_path=base.knowledge_db_path,
+        memory_db_path=base.memory_db_path,
         sessions_dir=base.sessions_dir,
         tool_results_dir=base.tool_results_dir,
         degradations=base.degradations,

@@ -121,7 +121,7 @@ Create a small helper inside `co_cli/bootstrap/banner.py` or a nearby private bo
 - external status
 
 The helper should use:
-- `deps.knowledge_store`
+- `deps.memory_store`
 - `deps.config`
 - `deps.degradations`
 - existing config presence gates for Obsidian, Google Drive, and web search

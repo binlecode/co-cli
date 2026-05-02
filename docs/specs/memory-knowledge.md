@@ -12,13 +12,12 @@ Three-channel recall model. `memory_search()` dispatches all channels in paralle
 | Knowledge | `knowledge/*.md` → `co-cli-search.db` (`source='knowledge'`) | FTS5 BM25 ± RRF vector merge → optional reranker → ranked structured rows; no LLM by default |
 | Canon | `souls/{role}/memories/*.md` (in-process scan) | Token-overlap scoring (title 2× weight) → ranked snippets; no FTS DB, no LLM |
 
-`KnowledgeStore` is the shared search backend for sessions and knowledge artifacts. `memory_search()` in `co_cli/tools/memory/recall.py` dispatches all three channels.
+`MemoryStore` is the shared search backend for sessions and knowledge artifacts. `memory_search()` in `co_cli/tools/memory/recall.py` dispatches all three channels.
 
 ```mermaid
 flowchart TD
     subgraph Memory["Memory Layer"]
         Sessions["sessions/*.jsonl"]
-        Spill["tool-results/{sha256[:16]}.txt"]
     end
 
     subgraph Bridge["Bridge"]
@@ -36,7 +35,6 @@ flowchart TD
 
     Sessions -->|"index_session() → source='session'"| SearchDB
     Sessions --> Dream
-    Sessions --> Spill
     Dream --> KDir
     KDir -->|"sync_dir() → source='knowledge'"| SearchDB
     SearchDB --> MemorySearch
@@ -76,7 +74,7 @@ Knowledge artifact schema:
 RAG pipeline for artifact recall:
 
 ```text
-KnowledgeStore.search(query, source='knowledge'):
+MemoryStore.search(query, source='knowledge'):
     fts_chunks = FTS5 BM25 over chunks_fts
     if hybrid:
         vec_chunks = cosine search over chunks_vec
@@ -92,7 +90,7 @@ Backends degrade in this order:
 | --- | --- | --- |
 | `hybrid` | FTS5 BM25 + sqlite-vec cosine, RRF merge | Embedding provider available |
 | `fts5` | BM25 over chunked text only | Embeddings unavailable |
-| `grep` | In-memory substring match over loaded markdown | KnowledgeStore unavailable |
+| `grep` | In-memory substring match over loaded markdown | MemoryStore unavailable |
 
 Optional rerankers (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`) takes priority; LLM listwise (`llm_reranker`) as fallback; neither = pass-through.
 
@@ -108,7 +106,44 @@ Knowledge commands:
 
 Dream lifecycle commands (`/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, `/knowledge stats`) live in [dream.md](dream.md). `/memory` is a deprecated alias for `list`, `count`, and `forget`.
 
-## 3. Knowledge Write Paths
+## 3. Knowledge Recall Path
+
+`memory_search()` is the single entry point for all recall. Two modes:
+
+**Empty query → recent-sessions browse** — returns session metadata with no search, no FTS, no LLM.
+
+**Keyword query → three-channel parallel dispatch:**
+
+```
+memory_search(ctx, query, kind, limit)              # tools/memory/recall.py
+  └─ asyncio.gather(
+       ├─ _search_artifacts(ctx, query, kind, limit)
+       │    ├─ [store available]
+       │    │    MemoryStore.search(query, source='knowledge', kind, limit)
+       │    │      ├─ FTS5 BM25 over chunks_fts
+       │    │      ├─ [hybrid] embed(query) → cosine over chunks_vec → RRF merge (k=60)
+       │    │      └─ _rerank_results(query, merged, limit)
+       │    │           ├─ [tei] cross-encoder HTTP rerank
+       │    │           └─ [llm] listwise rerank
+       │    └─ [store unavailable]
+       │         load_knowledge_artifacts() → grep_recall()     # in-memory substring fallback
+       │
+       ├─ _search_sessions(ctx, query, span)
+       │    └─ MemoryStore.search(query, source='session', limit=15)
+       │         └─ dedup to 3 unique sessions (_SESSIONS_CHANNEL_CAP); excludes current session
+       │
+       └─ _search_canon_channel(ctx, query)
+            └─ search_canon(query, role, limit)     # tools/memory/_canon_recall.py
+                 └─ token-overlap scoring over souls/{role}/memories/*.md
+     )
+  └─ merge channels → format and return flat result list
+```
+
+All three channels run concurrently. Results carry a `channel` field (`artifacts`, `sessions`, `canon`); scores are not cross-comparable across channels.
+
+Artifact hits return `{channel, kind, title, snippet, score, path, slug}`. Full body requires a follow-up `file_read` on `path`. Session hits return chunk citations `{channel, session_id, when, chunk_text, start_line, end_line, score}`; verbatim turns require `memory_read_session_turn(session_id, start_line, end_line)`. Canon hits return full body inline — no follow-up needed.
+
+## 4. Knowledge Write Paths
 
 Knowledge accumulates through two paths:
 
@@ -121,26 +156,26 @@ Knowledge accumulates through two paths:
 
 3. **Dream cycle** — at session end when `consolidation_enabled=true`, retrospectively mines past transcripts. See [dream.md](dream.md).
 
-Artifact writes use `_atomic_write()` (temp-file + `os.replace`) and trigger inline reindex via `KnowledgeStore.index()` + `index_chunks()`.
+Artifact writes use `_atomic_write()` (temp-file + `os.replace`) and trigger inline reindex via `MemoryStore.index()` + `index_chunks()`.
 
 Archive/restore: `archive_artifacts()` moves files to `knowledge_dir/_archive/` and removes them from the FTS index; `restore_artifact()` moves them back and re-indexes. The `_archive/` subdir is never traversed by the default loaders.
 
-## 4. Design Lineage
+## 5. Design Lineage
 
 Peer product survey: [docs/reference/RESEARCH-memory-peer-for-co-second-brain.md](../reference/RESEARCH-memory-peer-for-co-second-brain.md).
 
 | Component | Peer source | co_cli location |
 | --- | --- | --- |
-| Chunked session recall pipeline | `openclaw` | `session_chunker.py`, `KnowledgeStore.index_session()` |
-| BM25 + vector hybrid via RRF | `openclaw` | `KnowledgeStore._hybrid_search()` |
-| Optional cross-encoder / LLM rerank | `openclaw` | `KnowledgeStore._rerank_results()` |
+| Chunked session recall pipeline | `openclaw` | `session_chunker.py`, `MemoryStore.index_session()` |
+| BM25 + vector hybrid via RRF | `openclaw` | `MemoryStore._hybrid_search()` |
+| Optional cross-encoder / LLM rerank | `openclaw` | `MemoryStore._rerank_results()` |
 | Temporal decay | `openclaw` | `co_cli/memory/decay.py` |
 | File-based local memory + kind taxonomy | `ReMe` | `knowledge_dir/*.md` + `artifact_kind` field |
 | Pre-reasoning on-demand recall | `ReMe` | `memory_search()` tool surface |
 
 Standard RAG primitives (`chunk_size=600 + chunk_overlap=80`, `tokenize='porter unicode61'`) are not peer-specific.
 
-## 5. Config
+## 6. Config
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
@@ -160,6 +195,9 @@ Standard RAG primitives (`chunk_size=600 + chunk_overlap=80`, `tokenize='porter 
 | `knowledge.consolidation_similarity_threshold` | *(no env var)* | `0.75` | Jaccard score threshold for artifact dedup/merge |
 | `knowledge.max_artifact_count` | *(no env var)* | `300` | soft cap on total artifact count |
 | `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | days before an artifact becomes eligible for decay |
+| `knowledge.character_recall_limit` | `CO_CHARACTER_RECALL_LIMIT` | `3` | max canon snippets returned by the canon recall channel |
+| `knowledge.session_chunk_tokens` | `CO_KNOWLEDGE_SESSION_CHUNK_TOKENS` | `400` | token budget per session chunk during session indexing |
+| `knowledge.session_chunk_overlap` | `CO_KNOWLEDGE_SESSION_CHUNK_OVERLAP` | `80` | token overlap between adjacent session chunks |
 
 Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 
@@ -168,13 +206,13 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | Path | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | source-of-truth knowledge artifact directory |
-| `knowledge_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (shared with session chunks) |
+| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (shared with session chunks) |
 
-## 6. Files
+## 7. Files
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/memory/knowledge_store.py` | `KnowledgeStore` — unified FTS5/hybrid search backend, `sync_dir()`, `index_session()`, `sync_sessions()` |
+| `co_cli/memory/memory_store.py` | `MemoryStore` — unified FTS5/hybrid search backend, `sync_dir()`, `index_session()`, `sync_sessions()` |
 | `co_cli/memory/artifact.py` | `KnowledgeArtifact` schema, kind enums, and artifact loaders |
 | `co_cli/memory/service.py` | pure-function write layer: `save_artifact()`, `mutate_artifact()` — no RunContext |
 | `co_cli/memory/mutator.py` | `_atomic_write()`, `_reindex_knowledge_file()`, `_update_artifact_body()` — atomic write and RunContext-aware re-index helpers |
@@ -184,18 +222,19 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/memory/similarity.py` | Jaccard similarity and content-superset helpers for artifact dedup |
 | `co_cli/memory/ranking.py` | confidence scoring and contradiction helpers |
 | `co_cli/memory/query.py` | artifact list filtering (`older_than_days`) and display formatting |
-| `co_cli/memory/search_util.py` | `normalize_bm25()`, `run_fts()`, `sanitize_fts5_query()`, `snippet_around()` — FTS5 utilities shared by `KnowledgeStore` |
+| `co_cli/memory/search_util.py` | `normalize_bm25()`, `run_fts()`, `sanitize_fts5_query()`, `snippet_around()` — FTS5 utilities shared by `MemoryStore` |
 | `co_cli/memory/_embedder.py` | `build_embedder()` — embedding provider dispatch (ollama/gemini/tei/none) |
 | `co_cli/memory/_reranker.py` | `build_llm_reranker()` — LLM listwise reranker dispatch (ollama/gemini) |
 | `co_cli/memory/_stopwords.py` | `STOPWORDS` frozenset — shared by `similarity.py` and `_canon_recall.py` |
 | `co_cli/memory/decay.py` | artifact decay scoring and eligibility logic |
 | `co_cli/memory/dream.py` | dream-cycle orchestration (see [dream.md](dream.md)) |
 | `co_cli/tools/memory/recall.py` | `memory_search()` — unified recall tool dispatching sessions, artifacts, and canon |
-| `co_cli/tools/memory/read.py` | `memory_list()`, `grep_recall()` |
+| `co_cli/tools/memory/read.py` | `memory_list()`, `grep_recall()`, `memory_read_session_turn()` |
 | `co_cli/tools/memory/write.py` | `memory_create()`, `memory_modify()` |
-| `co_cli/commands/core.py` | `/knowledge`, `/memory` command handlers |
+| `co_cli/commands/knowledge.py` | `_cmd_knowledge`, `_cmd_memory` — `/knowledge` and `/memory` (deprecated) command handlers |
+| `co_cli/commands/core.py` | slash-command registry and dispatcher (`BUILTIN_COMMANDS`, `dispatch()`) |
 
-## 7. Test Gates
+## 8. Test Gates
 
 | Property | Test file |
 | --- | --- |

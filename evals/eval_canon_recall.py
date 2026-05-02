@@ -55,7 +55,7 @@ def _make_ctx(tmp: Path, *, personality: str | None) -> RunContext:
     cfg = settings.model_copy(update={"personality": personality})
     deps = CoDeps(
         shell=ShellBackend(),
-        knowledge_store=None,
+        memory_store=None,
         session_store=None,
         model=_LLM_MODEL,
         config=cfg,

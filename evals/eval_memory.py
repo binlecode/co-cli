@@ -34,7 +34,7 @@ from co_cli.agent.core import build_agent
 from co_cli.config.core import get_settings, settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.memory.knowledge_store import KnowledgeStore
+from co_cli.memory.memory_store import MemoryStore
 from co_cli.memory.session import new_session_path
 from co_cli.memory.transcript import load_transcript, persist_session_history
 from co_cli.tools.memory.recall import memory_search
@@ -57,7 +57,7 @@ _AGENT = build_agent(config=settings)
 def _make_ctx(
     memory_dir: Path,
     *,
-    knowledge_store: KnowledgeStore | None = None,
+    memory_store: MemoryStore | None = None,
 ) -> RunContext:
     cfg = get_settings()
     if cfg.knowledge.search_backend != "fts5":
@@ -66,7 +66,7 @@ def _make_ctx(
         )
     deps = CoDeps(
         shell=ShellBackend(),
-        knowledge_store=knowledge_store,
+        memory_store=memory_store,
         config=cfg,
         session=CoSessionState(),
     )
@@ -335,8 +335,8 @@ async def run_save_recall(tmp_dir: Path) -> dict[str, Any]:
     db_path = tmp_dir / "save-recall" / "search.db"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
-    ks = KnowledgeStore(config=settings, knowledge_db_path=db_path)
-    ctx = _make_ctx(memory_dir, knowledge_store=ks)
+    ks = MemoryStore(config=settings, memory_db_path=db_path)
+    ctx = _make_ctx(memory_dir, memory_store=ks)
     sentinel = f"{_SENTINEL_BASE}-save"
 
     try:
@@ -393,8 +393,8 @@ async def run_update_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
     db_path = tmp_dir / "update-recall" / "search.db"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
-    ks = KnowledgeStore(config=settings, knowledge_db_path=db_path)
-    ctx = _make_ctx(memory_dir, knowledge_store=ks)
+    ks = MemoryStore(config=settings, memory_db_path=db_path)
+    ctx = _make_ctx(memory_dir, memory_store=ks)
     original = f"{_SENTINEL_BASE}-update-original"
     updated = f"{_SENTINEL_BASE}-update-new"
 
@@ -490,8 +490,8 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
     db_path = tmp_dir / "append-recall" / "search.db"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
-    ks = KnowledgeStore(config=settings, knowledge_db_path=db_path)
-    ctx = _make_ctx(memory_dir, knowledge_store=ks)
+    ks = MemoryStore(config=settings, memory_db_path=db_path)
+    ctx = _make_ctx(memory_dir, memory_store=ks)
     base_keyword = f"{_SENTINEL_BASE}-append-base"
     appended_keyword = f"{_SENTINEL_BASE}-append-addendum"
 
@@ -565,15 +565,15 @@ async def run_append_reindex_recall(tmp_dir: Path) -> dict[str, Any]:
 
 
 async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
-    """memory_modify completes cleanly when knowledge_store=None; no crash, file updated."""
+    """memory_modify completes cleanly when memory_store=None; no crash, file updated."""
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
     memory_dir = tmp_dir / "edit-no-db" / "memory"
     db_path = tmp_dir / "edit-no-db" / "search.db"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
-    ks = KnowledgeStore(config=settings, knowledge_db_path=db_path)
-    ctx_with_db = _make_ctx(memory_dir, knowledge_store=ks)
+    ks = MemoryStore(config=settings, memory_db_path=db_path)
+    ctx_with_db = _make_ctx(memory_dir, memory_store=ks)
     original = f"{_SENTINEL_BASE}-no-db-original"
     updated = f"{_SENTINEL_BASE}-no-db-updated"
 
@@ -596,7 +596,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
         }
     )
 
-    ctx_no_db = _make_ctx(memory_dir, knowledge_store=None)
+    ctx_no_db = _make_ctx(memory_dir, memory_store=None)
 
     t = time.monotonic()
     exception_raised = False
@@ -615,7 +615,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
 
     steps.append(
         {
-            "name": "memory_modify (knowledge_store=None)",
+            "name": "memory_modify (memory_store=None)",
             "ms": (time.monotonic() - t) * 1000,
             "detail": f"exception={exception_raised}",
         }
@@ -635,7 +635,7 @@ async def run_edit_no_db(tmp_dir: Path) -> dict[str, Any]:
     if exception_raised:
         verdict, failure = "FAIL", f"memory_modify raised exception without DB: {exception_msg}"
     elif not file_updated:
-        verdict, failure = "FAIL", "file not updated on disk when knowledge_store=None"
+        verdict, failure = "FAIL", "file not updated on disk when memory_store=None"
     else:
         verdict, failure = "PASS", None
 
