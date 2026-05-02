@@ -17,7 +17,7 @@ from pydantic import (
 )
 
 from co_cli.config.compaction import COMPACTION_ENV_MAP, CompactionSettings
-from co_cli.config.knowledge import KNOWLEDGE_ENV_MAP, KnowledgeSettings
+from co_cli.config.knowledge import KnowledgeSettings
 from co_cli.config.llm import LLM_ENV_MAP, LlmSettings, resolve_api_key_from_env
 from co_cli.config.mcp import DEFAULT_MCP_SERVERS, MCPServerSettings, parse_mcp_servers_from_env
 from co_cli.config.memory import MEMORY_ENV_MAP, MemorySettings
@@ -152,7 +152,6 @@ class Settings(BaseModel):
         # Nested fields — each group owns its env-var map in its own module
         nested_env_map: dict[str, dict[str, str]] = {
             "llm": LLM_ENV_MAP,
-            "knowledge": KNOWLEDGE_ENV_MAP,
             "memory": MEMORY_ENV_MAP,
             "shell": SHELL_ENV_MAP,
             "web": WEB_ENV_MAP,

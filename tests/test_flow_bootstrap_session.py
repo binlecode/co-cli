@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from tests._settings import SETTINGS, SETTINGS_NO_MCP
 
 from co_cli.bootstrap.core import restore_session
@@ -109,6 +110,49 @@ def test_check_security_no_dot_env_no_finding(tmp_path: Path) -> None:
     """No .env present → no dot-env-permissions finding."""
     findings = check_security(_user_config_path=tmp_path / "settings.json")
     assert not any(f.check_id == "dot-env-permissions" for f in findings)
+
+
+def test_knowledge_settings_env_prefix_overrides_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CO_KNOWLEDGE_<FIELD> env var overrides the KnowledgeSettings default."""
+    monkeypatch.setenv("CO_KNOWLEDGE_CHUNK_SIZE", "42")
+
+    result = load_config(_user_config_path=tmp_path / "settings.json")
+
+    assert result.knowledge.chunk_size == 42
+
+
+def test_knowledge_settings_env_overrides_json_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Env var takes priority over the JSON config value for knowledge fields."""
+    (tmp_path / "settings.json").write_text('{"knowledge": {"chunk_size": 200}}', encoding="utf-8")
+    monkeypatch.setenv("CO_KNOWLEDGE_CHUNK_SIZE", "99")
+
+    result = load_config(_user_config_path=tmp_path / "settings.json")
+
+    assert result.knowledge.chunk_size == 99
+
+
+def test_knowledge_settings_legacy_alias_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CO_CHARACTER_RECALL_LIMIT (legacy alias) still overrides character_recall_limit."""
+    monkeypatch.setenv("CO_CHARACTER_RECALL_LIMIT", "7")
+
+    result = load_config(_user_config_path=tmp_path / "settings.json")
+
+    assert result.knowledge.character_recall_limit == 7
+
+
+def test_knowledge_settings_json_config_applies_without_env(tmp_path: Path) -> None:
+    """JSON config value is used for knowledge fields when no env var is set."""
+    (tmp_path / "settings.json").write_text('{"knowledge": {"chunk_size": 300}}', encoding="utf-8")
+
+    result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
+
+    assert result.knowledge.chunk_size == 300
 
 
 def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:

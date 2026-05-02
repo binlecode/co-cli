@@ -2,7 +2,8 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "hybrid"
 DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "tei"
@@ -13,23 +14,6 @@ DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
-
-
-KNOWLEDGE_ENV_MAP: dict[str, str] = {
-    "search_backend": "CO_KNOWLEDGE_SEARCH_BACKEND",
-    "embedding_provider": "CO_KNOWLEDGE_EMBEDDING_PROVIDER",
-    "embedding_model": "CO_KNOWLEDGE_EMBEDDING_MODEL",
-    "embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
-    "cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
-    "embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
-    "chunk_size": "CO_KNOWLEDGE_CHUNK_SIZE",
-    "chunk_overlap": "CO_KNOWLEDGE_CHUNK_OVERLAP",
-    "consolidation_enabled": "CO_KNOWLEDGE_CONSOLIDATION_ENABLED",
-    "decay_after_days": "CO_KNOWLEDGE_DECAY_AFTER_DAYS",
-    "character_recall_limit": "CO_CHARACTER_RECALL_LIMIT",
-    "session_chunk_tokens": "CO_KNOWLEDGE_SESSION_CHUNK_TOKENS",
-    "session_chunk_overlap": "CO_KNOWLEDGE_SESSION_CHUNK_OVERLAP",
-}
 
 
 # Default reranker model per provider — single source of truth, overridable via settings.json.
@@ -55,10 +39,14 @@ class LlmModelSettings(BaseModel):
         return self
 
 
-class KnowledgeSettings(BaseModel):
+class KnowledgeSettings(BaseSettings):
     """Knowledge search, embedding, and chunking settings."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = SettingsConfigDict(
+        extra="forbid",
+        env_prefix="CO_KNOWLEDGE_",
+        env_nested_delimiter="__",
+    )
 
     search_backend: Literal["grep", "fts5", "hybrid"] = Field(
         default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND
@@ -82,6 +70,20 @@ class KnowledgeSettings(BaseModel):
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     max_artifact_count: int = Field(default=300, ge=1)
     decay_after_days: int = Field(default=90, ge=1)
-    character_recall_limit: int = Field(default=3, ge=1)
+    # Legacy env var CO_CHARACTER_RECALL_LIMIT predates the CO_KNOWLEDGE_ prefix; both accepted.
+    character_recall_limit: int = Field(
+        default=3,
+        ge=1,
+        validation_alias=AliasChoices(
+            "CO_KNOWLEDGE_CHARACTER_RECALL_LIMIT",
+            "CO_CHARACTER_RECALL_LIMIT",
+            "character_recall_limit",
+        ),
+    )
     session_chunk_tokens: int = Field(default=400, ge=64)
     session_chunk_overlap: int = Field(default=80, ge=0)
+
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, **kwargs) -> tuple:
+        # env vars take priority over init kwargs (JSON config) — preserves existing contract.
+        return (kwargs["env_settings"], kwargs["init_settings"])
