@@ -281,24 +281,3 @@ def test_evict_batch_passes_through_when_under_threshold(tmp_path):
     )
     assert unchanged.content == small_content
     assert PERSISTED_OUTPUT_TAG not in unchanged.content
-
-
-# ---------------------------------------------------------------------------
-# group_by_turn
-# ---------------------------------------------------------------------------
-
-
-def test_group_by_turn_multi_turn():
-    """group_by_turn must split a two-turn history into exactly two turn groups."""
-    from co_cli.context._compaction_boundaries import group_by_turn
-
-    messages = [
-        ModelRequest(parts=[UserPromptPart(content="turn 1")]),
-        ModelResponse(parts=[TextPart(content="turn 1 resp")]),
-        ModelRequest(parts=[UserPromptPart(content="turn 2")]),
-        ModelResponse(parts=[TextPart(content="turn 2 resp")]),
-    ]
-    groups = group_by_turn(messages)
-    assert len(groups) == 2
-    assert groups[0].messages[0].parts[0].content == "turn 1"
-    assert groups[1].messages[0].parts[0].content == "turn 2"

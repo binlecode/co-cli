@@ -12,7 +12,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.context._compaction_boundaries import find_first_run_end, plan_compaction_boundaries
+from co_cli.context._compaction_boundaries import (
+    find_first_run_end,
+    group_by_turn,
+    plan_compaction_boundaries,
+)
 
 
 def _req(content: str) -> ModelRequest:
@@ -95,6 +99,20 @@ def test_last_turn_group_always_retained_even_over_tail_budget() -> None:
     assert large_content in tail_contents, (
         f"Last turn's UserPromptPart not in tail (tail_start={tail_start})"
     )
+
+
+def test_group_by_turn_multi_turn() -> None:
+    """group_by_turn must split a two-turn history into exactly two turn groups."""
+    messages = [
+        _req("turn 1"),
+        _resp("turn 1 resp"),
+        _req("turn 2"),
+        _resp("turn 2 resp"),
+    ]
+    groups = group_by_turn(messages)
+    assert len(groups) == 2
+    assert groups[0].messages[0].parts[0].content == "turn 1"
+    assert groups[1].messages[0].parts[0].content == "turn 2"
 
 
 def test_find_first_run_end_anchors_at_first_text_response() -> None:

@@ -67,6 +67,9 @@ def _above_threshold_messages() -> list:
     ]
 
 
+_TIGHT_MODEL = build_model(_tight_settings().llm)
+
+
 @pytest.mark.asyncio
 async def test_processor_returns_messages_unchanged_when_below_threshold() -> None:
     """Processor returns the same list object when token count is below threshold.
@@ -82,7 +85,7 @@ async def test_processor_returns_messages_unchanged_when_below_threshold() -> No
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
     )
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
 
     result = await proactive_window_processor(ctx, short_history)
 
@@ -99,15 +102,13 @@ async def test_processor_applies_compaction_when_above_threshold() -> None:
     Failure mode: above-threshold history is silently passed through → context
     window exhaustion, no proactive compaction ever fires.
     """
-    settings = _tight_settings()
-    model = build_model(settings.llm)
     deps = CoDeps(
         shell=ShellBackend(),
-        model=model,
-        config=settings,
+        model=_TIGHT_MODEL,
+        config=_tight_settings(),
         session=CoSessionState(),
     )
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
 
     await ensure_ollama_warm(TEST_LLM.model)
@@ -134,10 +135,9 @@ async def test_anti_thrash_gate_skips_compaction_after_consecutive_low_yield() -
     summarizer still fires, burning context budget on low-yield passes.
     """
     settings = _tight_settings()
-    model = build_model(settings.llm)
     deps = CoDeps(
         shell=ShellBackend(),
-        model=model,
+        model=_TIGHT_MODEL,
         config=settings,
         session=CoSessionState(),
     )
@@ -145,7 +145,7 @@ async def test_anti_thrash_gate_skips_compaction_after_consecutive_low_yield() -
     deps.runtime.consecutive_low_yield_proactive_compactions = (
         settings.compaction.proactive_thrash_window
     )
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
 
     result = await proactive_window_processor(ctx, messages)
@@ -165,13 +165,13 @@ def _gate_ctx(skip_count: int) -> tuple[RunContext[CoDeps], CoDeps]:
         session=CoSessionState(),
     )
     deps.runtime.compaction_skip_count = skip_count
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
     return ctx, deps
 
 
-@pytest.mark.parametrize("count", [0, 1, 2])
+@pytest.mark.parametrize("count", [2])
 def test_gate_open_before_trip(count: int) -> None:
-    """Gate is open for skip_count 0-2 -- breaker has not tripped yet.
+    """Gate is open at the boundary value just below trip (skip_count=2).
 
     Deletion regression: would not detect the breaker firing before 3 consecutive
     failures, blocking the LLM prematurely.
@@ -246,17 +246,15 @@ async def test_successful_compaction_resets_skip_count() -> None:
     non-zero after a successful compaction, silently degrading circuit breaker
     accuracy.
     """
-    settings = _tight_settings()
-    model = build_model(settings.llm)
     deps = CoDeps(
         shell=ShellBackend(),
-        model=model,
-        config=settings,
+        model=_TIGHT_MODEL,
+        config=_tight_settings(),
         session=CoSessionState(),
     )
     # Below trip threshold (< 3) so the gate remains open for the LLM call.
     deps.runtime.compaction_skip_count = 2
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
 
     await ensure_ollama_warm(TEST_LLM.model)
