@@ -73,34 +73,29 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
     content in search results.
     """
     knowledge_dir = tmp_path / "knowledge"
-    try:
-        url = "https://example.com/test-page"
+    url = "https://example.com/test-page"
 
-        save_artifact(
-            knowledge_dir,
-            content="original content",
-            artifact_kind="article",
-            title="test article",
-            source_url=url,
-        )
+    save_artifact(
+        knowledge_dir,
+        content="original content",
+        artifact_kind="article",
+        title="test article",
+        source_url=url,
+    )
 
-        second = save_artifact(
-            knowledge_dir,
-            content="updated content",
-            artifact_kind="article",
-            title="test article",
-            source_url=url,
-        )
+    second = save_artifact(
+        knowledge_dir,
+        content="updated content",
+        artifact_kind="article",
+        title="test article",
+        source_url=url,
+    )
 
-        assert second.action in ("appended", "merged"), (
-            f"expected dedup action, got {second.action!r}"
-        )
-        md_files = list(knowledge_dir.glob("*.md"))
-        assert len(md_files) == 1, (
-            f"expected exactly 1 .md file after URL dedup, found {len(md_files)}: {md_files}"
-        )
-    finally:
-        pass
+    assert second.action in ("appended", "merged"), f"expected dedup action, got {second.action!r}"
+    md_files = list(knowledge_dir.glob("*.md"))
+    assert len(md_files) == 1, (
+        f"expected exactly 1 .md file after URL dedup, found {len(md_files)}: {md_files}"
+    )
 
 
 def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):

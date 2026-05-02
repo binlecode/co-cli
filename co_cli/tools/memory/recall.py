@@ -225,14 +225,10 @@ async def memory_search(
 ) -> ToolReturn:
     """Search memory across saved artifacts, past sessions, and canon in one call.
 
-    TWO MODES:
-    (a) Empty query → recent-sessions browse, zero LLM cost. Use when the user asks what
-        was worked on recently, what we did last time, or to browse session history.
-        Artifacts are not returned for empty queries (BM25 requires search terms).
-    (b) Keyword query → searches the artifacts channel (BM25 FTS5/grep), the sessions
-        channel (chunk-level index, no LLM), and the canon channel in parallel. Returns
-        a flat list with a "channel" field per result ("artifacts", "sessions", or "canon").
-        The sessions channel is capped at 3 unique sessions regardless of limit.
+    Searches the artifacts channel (BM25 FTS5/grep), the sessions channel
+    (chunk-level index, no LLM), and the canon channel in parallel. Returns
+    a flat list with a "channel" field per result ("artifacts", "sessions", or "canon").
+    The sessions channel is capped at 3 unique sessions regardless of limit.
 
     IMPORTANT: scores in results are NOT cross-comparable across channels — use the
     "channel" field to interpret each result's provenance.
@@ -281,7 +277,7 @@ async def memory_search(
     Canon result fields:     channel, role, title, body, score
 
     Args:
-        query: FTS5 keyword query. Omit or pass empty string for recent-sessions browse mode.
+        query: FTS5 keyword query.
         kinds: Up to 3 artifact kinds to filter results. None searches all kinds.
         limit: Max artifacts results (default 10). Sessions channel is always capped at 3.
     """
