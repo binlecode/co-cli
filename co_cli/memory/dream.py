@@ -12,7 +12,6 @@ for the dream lifecycle model.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 from collections import defaultdict
@@ -30,16 +29,14 @@ from co_cli.llm.call import llm_call
 from co_cli.memory._window import build_transcript_window
 from co_cli.memory.archive import archive_artifacts
 from co_cli.memory.artifact import (
-    IndexSourceEnum,
     KnowledgeArtifact,
     SourceTypeEnum,
     load_knowledge_artifacts,
 )
-from co_cli.memory.chunker import chunk_text
 from co_cli.memory.decay import find_decay_candidates
-from co_cli.memory.frontmatter import render_knowledge_file
-from co_cli.memory.mutator import _atomic_write
-from co_cli.memory.service import _slugify
+from co_cli.memory.frontmatter import artifact_to_frontmatter, render_knowledge_file
+from co_cli.memory.mutator import atomic_write
+from co_cli.memory.service import reindex, slugify
 from co_cli.memory.similarity import token_jaccard
 from co_cli.tools.memory.write import memory_create
 
@@ -312,7 +309,7 @@ def _write_consolidated_artifact(
     artifact_id = str(uuid4())
     kind = cluster[0].artifact_kind
     title = cluster[0].title or f"consolidated {kind}"
-    slug = _slugify(title)
+    slug = slugify(title)
     filename = f"{slug}-{artifact_id[:8]}.md"
     file_path = deps.knowledge_dir / filename
 
@@ -328,31 +325,19 @@ def _write_consolidated_artifact(
     )
 
     file_content = render_knowledge_file(merged_artifact)
-    _atomic_write(file_path, file_content)
+    atomic_write(file_path, file_content)
 
-    store = deps.memory_store
-    if store is not None:
-        content_hash = hashlib.sha256(file_content.encode()).hexdigest()
-        store.index(
-            source=IndexSourceEnum.KNOWLEDGE,
-            kind=kind,
-            path=str(file_path),
-            title=title,
-            content=merged_body.strip(),
-            mtime=file_path.stat().st_mtime,
-            hash=content_hash,
-            created=merged_artifact.created,
-            type=kind,
-            description=None,
-            artifact_id=str(merged_artifact.id),
-            source_ref=None,
-        )
-        chunks = chunk_text(
+    if deps.memory_store is not None:
+        reindex(
+            deps.memory_store,
+            file_path,
             merged_body.strip(),
+            file_content,
+            artifact_to_frontmatter(merged_artifact),
+            file_path.stem,
             chunk_size=deps.config.knowledge.chunk_size,
-            overlap=deps.config.knowledge.chunk_overlap,
+            chunk_overlap=deps.config.knowledge.chunk_overlap,
         )
-        store.index_chunks(IndexSourceEnum.KNOWLEDGE, str(file_path), chunks)
 
     return merged_artifact
 

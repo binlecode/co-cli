@@ -57,8 +57,8 @@ def strip_frontmatter(content: str) -> str:
     return body
 
 
-def _require_iso8601(fm: dict[str, Any], key: str, required: bool) -> None:
-    value = fm.get(key)
+def _require_iso8601(frontmatter: dict[str, Any], key: str, required: bool) -> None:
+    value = frontmatter.get(key)
     if value is None:
         if required:
             raise ValueError(f"knowledge frontmatter missing required field: {key}")
@@ -69,35 +69,39 @@ def _require_iso8601(fm: dict[str, Any], key: str, required: bool) -> None:
         )
 
 
-def _require_str_list(fm: dict[str, Any], key: str) -> None:
-    value = fm.get(key)
+def _require_str_list(frontmatter: dict[str, Any], key: str) -> None:
+    value = frontmatter.get(key)
     if value is None:
         return
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"knowledge frontmatter field '{key}' must be a list of strings")
 
 
-def _validate_identity(fm: dict[str, Any]) -> None:
-    if "id" not in fm:
+def _validate_identity(frontmatter: dict[str, Any]) -> None:
+    if "id" not in frontmatter:
         raise ValueError("knowledge frontmatter missing required field: id")
-    if isinstance(fm["id"], bool) or not isinstance(fm["id"], (int, str)):
+    if isinstance(frontmatter["id"], bool) or not isinstance(frontmatter["id"], (int, str)):
         raise ValueError("knowledge frontmatter field 'id' must be an integer or string")
-    if isinstance(fm["id"], str) and not fm["id"].strip():
+    if isinstance(frontmatter["id"], str) and not frontmatter["id"].strip():
         raise ValueError("knowledge frontmatter field 'id' must not be empty")
-    if fm.get("kind") != KIND_KNOWLEDGE:
+    if frontmatter.get("kind") != KIND_KNOWLEDGE:
         raise ValueError(
             f"knowledge frontmatter field 'kind' must be {KIND_KNOWLEDGE!r} "
-            f"(got {fm.get('kind')!r})"
+            f"(got {frontmatter.get('kind')!r})"
         )
-    if "artifact_kind" not in fm or not isinstance(fm["artifact_kind"], str):
+    if "artifact_kind" not in frontmatter or not isinstance(frontmatter["artifact_kind"], str):
         raise ValueError("knowledge frontmatter missing required field: artifact_kind")
 
 
-def _validate_string_fields(fm: dict[str, Any]) -> None:
+def _validate_string_fields(frontmatter: dict[str, Any]) -> None:
     for key in ("title", "description", "source_type", "source_ref", "certainty"):
-        if key in fm and fm[key] is not None and not isinstance(fm[key], str):
+        if (
+            key in frontmatter
+            and frontmatter[key] is not None
+            and not isinstance(frontmatter[key], str)
+        ):
             raise ValueError(f"knowledge frontmatter field {key!r} must be a string or null")
-    description = fm.get("description")
+    description = frontmatter.get("description")
     if description is None:
         return
     if not description.strip():
@@ -110,14 +114,14 @@ def _validate_string_fields(fm: dict[str, Any]) -> None:
         )
 
 
-def _validate_typed_scalars(fm: dict[str, Any]) -> None:
-    if "decay_protected" in fm and not isinstance(fm["decay_protected"], bool):
+def _validate_typed_scalars(frontmatter: dict[str, Any]) -> None:
+    if "decay_protected" in frontmatter and not isinstance(frontmatter["decay_protected"], bool):
         raise ValueError("knowledge frontmatter field 'decay_protected' must be a boolean")
-    if "recall_count" in fm and not isinstance(fm["recall_count"], int):
+    if "recall_count" in frontmatter and not isinstance(frontmatter["recall_count"], int):
         raise ValueError("knowledge frontmatter field 'recall_count' must be an integer")
 
 
-def validate_knowledge_frontmatter(fm: dict[str, Any]) -> None:
+def validate_knowledge_frontmatter(frontmatter: dict[str, Any]) -> None:
     """Validate canonical kind=knowledge frontmatter.
 
     Required: id, kind=knowledge, artifact_kind, created.
@@ -125,23 +129,23 @@ def validate_knowledge_frontmatter(fm: dict[str, Any]) -> None:
               source_ref, certainty, decay_protected, last_recalled,
               recall_count.
     """
-    _validate_identity(fm)
-    _require_iso8601(fm, "created", required=True)
-    _require_iso8601(fm, "updated", required=False)
-    _require_iso8601(fm, "last_recalled", required=False)
-    _require_str_list(fm, "tags")
-    _require_str_list(fm, "related")
-    _validate_string_fields(fm)
-    _validate_typed_scalars(fm)
+    _validate_identity(frontmatter)
+    _require_iso8601(frontmatter, "created", required=True)
+    _require_iso8601(frontmatter, "updated", required=False)
+    _require_iso8601(frontmatter, "last_recalled", required=False)
+    _require_str_list(frontmatter, "tags")
+    _require_str_list(frontmatter, "related")
+    _validate_string_fields(frontmatter)
+    _validate_typed_scalars(frontmatter)
 
 
-def _artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
+def artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
     """Serialize a KnowledgeArtifact to its frontmatter dict.
 
     Drops None, empty-list, and default-valued fields so files stay readable.
     Always keeps id, kind, artifact_kind, created (required identity).
     """
-    fm: dict[str, Any] = {
+    frontmatter: dict[str, Any] = {
         "id": artifact.id,
         "kind": KIND_KNOWLEDGE,
         "artifact_kind": artifact.artifact_kind,
@@ -160,23 +164,23 @@ def _artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
     ]
     for key, value in optional:
         if value:
-            fm[key] = value
+            frontmatter[key] = value
     if artifact.decay_protected:
-        fm["decay_protected"] = True
-    return fm
+        frontmatter["decay_protected"] = True
+    return frontmatter
 
 
 def render_knowledge_file(artifact: KnowledgeArtifact) -> str:
     """Render a KnowledgeArtifact to a .md file (YAML frontmatter + body)."""
-    fm = _artifact_to_frontmatter(artifact)
-    return render_frontmatter(fm, artifact.content)
+    frontmatter = artifact_to_frontmatter(artifact)
+    return render_frontmatter(frontmatter, artifact.content)
 
 
-def render_frontmatter(fm: dict[str, Any], body: str) -> str:
+def render_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
     """Serialize a frontmatter dict + body to .md text.
 
     Used by in-place updates that already hold a parsed frontmatter dict.
     For new writes, prefer ``render_knowledge_file(artifact)``.
     """
-    yaml_text = yaml.dump(fm, default_flow_style=False, sort_keys=True)
+    yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
     return f"---\n{yaml_text}---\n\n{body.strip()}\n"

@@ -67,6 +67,32 @@ def _browse_recent(
     )
 
 
+def _list_artifacts(
+    ctx: RunContext[CoDeps],
+    kinds: list[str] | None,
+    limit: int,
+    span: Span,
+    offset: int = 0,
+) -> list[dict]:
+    """Paginated inventory of knowledge artifacts, sorted by created descending."""
+    artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
+    artifacts.sort(key=lambda a: a.created, reverse=True)
+    page = artifacts[offset : offset + limit]
+    span.set_attribute("memory.artifacts.count", len(page))
+    return [
+        {
+            "channel": "artifacts",
+            "kind": a.artifact_kind,
+            "title": a.title or a.path.stem,
+            "snippet": a.content[:_SNIPPET_DISPLAY_CHARS],
+            "score": 0.0,
+            "path": str(a.path),
+            "filename_stem": a.path.stem,
+        }
+        for a in page
+    ]
+
+
 async def _search_artifacts(
     ctx: RunContext[CoDeps],
     query: str,
@@ -90,7 +116,7 @@ async def _search_artifacts(
                     "snippet": r.snippet,
                     "score": r.score,
                     "path": r.path,
-                    "slug": Path(r.path).stem if r.path else "",
+                    "filename_stem": Path(r.path).stem if r.path else "",
                 }
                 for r in fts_results
             ]
@@ -106,7 +132,7 @@ async def _search_artifacts(
             "snippet": m.content[:_SNIPPET_DISPLAY_CHARS],
             "score": 0.0,
             "path": str(m.path),
-            "slug": m.path.stem,
+            "filename_stem": m.path.stem,
         }
         for m in matches
     ]
@@ -250,7 +276,7 @@ async def memory_search(
     inline; no follow-up needed. Session hits render a chunk citation and snippet inline;
     call memory_read_session_turn(session_id, start_line, end_line) for the verbatim turns.
 
-    Artifacts result fields: channel, kind, title, snippet, score, path, slug
+    Artifacts result fields: channel, kind, title, snippet, score, path, filename_stem
     Sessions result fields:  channel, session_id, when, source, chunk_text, start_line, end_line, score
     Canon result fields:     channel, role, title, body, score
 
@@ -264,7 +290,28 @@ async def memory_search(
     limit = max(1, int(limit))
 
     if not query or not query.strip():
-        return _browse_recent(ctx, limit, span)
+        sessions_result = _browse_recent(ctx, limit, span)
+        artifact_results = _list_artifacts(ctx, kinds, limit, span)
+        if not artifact_results:
+            return sessions_result
+        session_data = (sessions_result.metadata or {}).get("results", [])
+        sessions_display = sessions_result.return_value
+        artifact_lines = ["\n**Knowledge artifacts:**"]
+        for r in artifact_results:
+            kind_str = f" [{r['kind']}]" if r.get("kind") else ""
+            path_str = f" @ {r['path']}" if r.get("path") else ""
+            artifact_lines.append(
+                f"  **{r['title']}**{kind_str}{path_str}: "
+                f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
+            )
+        combined_display = sessions_display + "\n".join(artifact_lines)
+        all_results = list(session_data) + artifact_results
+        return tool_output(
+            combined_display,
+            ctx=ctx,
+            count=len(all_results),
+            results=all_results,
+        )
 
     query = query.strip()
 

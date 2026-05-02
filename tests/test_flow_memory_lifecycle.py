@@ -9,14 +9,14 @@ from co_cli.memory.service import mutate_artifact
 
 
 def _write_artifact(path: Path, body: str) -> None:
-    fm = {
+    frontmatter = {
         "kind": "knowledge",
         "artifact_kind": "note",
         "id": "test-123",
         "created": "2026-01-01T00:00:00+00:00",
     }
     path.write_text(
-        f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body}\n",
+        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{body}\n",
         encoding="utf-8",
     )
 
@@ -30,11 +30,10 @@ def test_mutate_artifact_replace_preserves_frontmatter(tmp_path: Path) -> None:
 
     mutate_artifact(
         knowledge_dir,
-        slug="test-art",
+        filename_stem="test-art",
         action="replace",
         content="updated body content",
         target="original body content",
-        memory_store=None,
     )
 
     art = load_knowledge_artifact(artifact_path)
@@ -52,10 +51,9 @@ def test_mutate_artifact_append_adds_to_body(tmp_path: Path) -> None:
 
     mutate_artifact(
         knowledge_dir,
-        slug="test-art",
+        filename_stem="test-art",
         action="append",
         content="second line",
-        memory_store=None,
     )
 
     art = load_knowledge_artifact(artifact_path)

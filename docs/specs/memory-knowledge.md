@@ -94,7 +94,7 @@ Backends degrade in this order:
 
 Optional rerankers (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`) takes priority; LLM listwise (`llm_reranker`) as fallback; neither = pass-through.
 
-Result shape: `{channel: "artifacts", kind, title, snippet, score, path, slug}`
+Result shape: `{channel: "artifacts", kind, title, snippet, score, path, filename_stem}`
 
 Knowledge commands:
 
@@ -141,7 +141,7 @@ memory_search(ctx, query, kinds, limit)             # tools/memory/recall.py
 
 All three channels run concurrently. Results carry a `channel` field (`artifacts`, `sessions`, `canon`); scores are not cross-comparable across channels.
 
-Artifact hits return `{channel, kind, title, snippet, score, path, slug}`. Full body requires a follow-up `file_read` on `path`. Session hits return chunk citations `{channel, session_id, when, chunk_text, start_line, end_line, score}`; verbatim turns require `memory_read_session_turn(session_id, start_line, end_line)`. Canon hits return full body inline — no follow-up needed.
+Artifact hits return `{channel, kind, title, snippet, score, path, filename_stem}`. Full body requires a follow-up `file_read` on `path`. Session hits return chunk citations `{channel, session_id, when, chunk_text, start_line, end_line, score}`; verbatim turns require `memory_read_session_turn(session_id, start_line, end_line)`. Canon hits return full body inline — no follow-up needed.
 
 ## 4. Knowledge Write Paths
 
@@ -156,7 +156,7 @@ Knowledge accumulates through two paths:
 
 3. **Dream cycle** — at session end when `consolidation_enabled=true`, retrospectively mines past transcripts. See [dream.md](dream.md).
 
-Artifact writes use `_atomic_write()` (temp-file + `os.replace`) and trigger inline reindex via `MemoryStore.index()` + `index_chunks()`.
+Artifact writes use `atomic_write()` (temp-file + `os.replace`). Reindexing is explicit: `reindex()` is called at the tool layer (`memory_create`, `memory_modify`) with config-sourced `chunk_size`/`chunk_overlap` values — not inline in the write functions.
 
 Archive/restore: `archive_artifacts()` moves files to `knowledge_dir/_archive/` and removes them from the FTS index; `restore_artifact()` moves them back and re-indexes. The `_archive/` subdir is never traversed by the default loaders.
 
@@ -215,7 +215,7 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/memory/memory_store.py` | `MemoryStore` — unified FTS5/hybrid search backend, `sync_dir()`, `index_session()`, `sync_sessions()` |
 | `co_cli/memory/artifact.py` | `KnowledgeArtifact` schema, kind enums, and artifact loaders |
 | `co_cli/memory/service.py` | pure-function write layer: `save_artifact()`, `mutate_artifact()` — no RunContext |
-| `co_cli/memory/mutator.py` | `_atomic_write()`, `_reindex_knowledge_file()`, `_update_artifact_body()` — atomic write and RunContext-aware re-index helpers |
+| `co_cli/memory/mutator.py` | `atomic_write()` — atomic temp-file + `os.replace` write helper |
 | `co_cli/memory/archive.py` | `archive_artifacts()`, `restore_artifact()` — move to/from `_archive/`, de-index and re-index |
 | `co_cli/memory/chunker.py` | knowledge artifact text chunking |
 | `co_cli/memory/frontmatter.py` | frontmatter parse, validate, and render helpers |
@@ -229,7 +229,7 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/memory/decay.py` | artifact decay scoring and eligibility logic |
 | `co_cli/memory/dream.py` | dream-cycle orchestration (see [dream.md](dream.md)) |
 | `co_cli/tools/memory/recall.py` | `memory_search()` — unified recall tool dispatching sessions, artifacts, and canon |
-| `co_cli/tools/memory/read.py` | `memory_list()`, `grep_recall()`, `memory_read_session_turn()` |
+| `co_cli/tools/memory/read.py` | `grep_recall()`, `memory_read_session_turn()` |
 | `co_cli/tools/memory/write.py` | `memory_create()`, `memory_modify()` |
 | `co_cli/commands/knowledge.py` | `_cmd_knowledge`, `_cmd_memory` — `/knowledge` and `/memory` (deprecated) command handlers |
 | `co_cli/commands/core.py` | slash-command registry and dispatcher (`BUILTIN_COMMANDS`, `dispatch()`) |

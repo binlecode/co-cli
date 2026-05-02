@@ -1158,9 +1158,9 @@ class MemoryStore:
                 if not self.needs_reindex(source, path_str, file_hash):
                     continue
 
-                fm, body = parse_frontmatter(raw)
-                artifact_kind = fm.get("artifact_kind") or fm.get("kind")
-                title = fm.get("title") or file_path.stem
+                frontmatter, body = parse_frontmatter(raw)
+                artifact_kind = frontmatter.get("artifact_kind") or frontmatter.get("kind")
+                title = frontmatter.get("title") or file_path.stem
                 mtime = file_path.stat().st_mtime
 
                 self.index(
@@ -1171,13 +1171,15 @@ class MemoryStore:
                     content=body.strip(),
                     mtime=mtime,
                     hash=file_hash,
-                    category=fm.get("auto_category"),
-                    created=fm.get("created"),
-                    updated=fm.get("updated"),
+                    category=frontmatter.get("auto_category"),
+                    created=frontmatter.get("created"),
+                    updated=frontmatter.get("updated"),
                     type=artifact_kind,
-                    description=fm.get("description"),
-                    source_ref=fm.get("source_ref"),
-                    artifact_id=str(fm["id"]) if fm.get("id") is not None else None,
+                    description=frontmatter.get("description"),
+                    source_ref=frontmatter.get("source_ref"),
+                    artifact_id=str(frontmatter["id"])
+                    if frontmatter.get("id") is not None
+                    else None,
                 )
                 text_chunks = _chunk_text(
                     body.strip(),

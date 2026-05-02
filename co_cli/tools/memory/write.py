@@ -1,6 +1,7 @@
 """Memory write tools — `memory_create` and `memory_modify` over knowledge artifacts."""
 
 import logging
+from typing import Literal
 
 from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
@@ -8,7 +9,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.memory.artifact import ArtifactKindEnum
-from co_cli.memory.service import mutate_artifact, save_artifact
+from co_cli.memory.service import mutate_artifact, reindex, save_artifact
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.resource_lock import ResourceBusyError
 from co_cli.tools.tool_io import tool_error, tool_output
@@ -78,9 +79,19 @@ async def memory_create(
             decay_protected=decay_protected,
             consolidation_enabled=ctx.deps.config.knowledge.consolidation_enabled,
             consolidation_similarity_threshold=ctx.deps.config.knowledge.consolidation_similarity_threshold,
-            memory_store=ctx.deps.memory_store,
         )
         span.set_attribute("knowledge.action", result.action)
+        if result.action != "skipped" and ctx.deps.memory_store is not None:
+            reindex(
+                ctx.deps.memory_store,
+                result.path,
+                result.content,
+                result.markdown_content,
+                result.frontmatter_dict,
+                result.filename_stem,
+                chunk_size=ctx.deps.config.knowledge.chunk_size,
+                chunk_overlap=ctx.deps.config.knowledge.chunk_overlap,
+            )
 
     if result.action == "skipped":
         return tool_output(
@@ -114,14 +125,14 @@ async def memory_create(
 )
 async def memory_modify(
     ctx: RunContext[CoDeps],
-    slug: str,
-    action: str,
+    filename_stem: str,
+    action: Literal["append", "replace"],
     content: str,
     target: str = "",
 ) -> ToolReturn:
     """Append content to or surgically replace a passage in a saved artifact.
 
-    Use memory_list to find the slug, then call this tool.
+    Use memory_search to find the filename_stem, then call this tool.
 
     action="append" — adds content as a new line at the end of the body.
     action="replace" — replaces an exact passage (target) with content.
@@ -134,46 +145,50 @@ async def memory_modify(
 
     Returns a dict with:
     - display: confirmation message — show directly to the user
-    - slug: artifact slug that was modified
+    - filename_stem: artifact filename stem that was modified
 
     Args:
-        slug: Full file stem from memory_list (e.g. "003-user-prefers-pytest").
+        filename_stem: Full file stem from memory_search (e.g. "003-user-prefers-pytest").
         action: "append" to add at the end, or "replace" to substitute an exact passage.
         content: Text to append, or replacement text for replace.
         target: For action="replace" — exact passage to replace (must appear exactly once).
     """
-    if action not in ("append", "replace"):
-        return tool_error(
-            f"Invalid action {action!r}. Must be 'append' or 'replace'.",
-            ctx=ctx,
-        )
-
     knowledge_dir = ctx.deps.knowledge_dir
 
     try:
-        async with ctx.deps.resource_locks.try_acquire(slug):
+        async with ctx.deps.resource_locks.try_acquire(filename_stem):
             with _TRACER.start_as_current_span("co.knowledge.memory_modify") as span:
-                span.set_attribute("knowledge.slug", slug)
+                span.set_attribute("knowledge.filename_stem", filename_stem)
                 span.set_attribute("knowledge.action", action)
 
                 result = mutate_artifact(
                     knowledge_dir,
-                    slug=slug,
-                    action=action,  # type: ignore[arg-type]
+                    filename_stem=filename_stem,
+                    action=action,
                     content=content,
                     target=target,
-                    memory_store=ctx.deps.memory_store,
                 )
+                if ctx.deps.memory_store is not None:
+                    reindex(
+                        ctx.deps.memory_store,
+                        result.path,
+                        result.updated_body,
+                        result.markdown_content,
+                        result.frontmatter,
+                        result.filename_stem,
+                        chunk_size=ctx.deps.config.knowledge.chunk_size,
+                        chunk_overlap=ctx.deps.config.knowledge.chunk_overlap,
+                    )
 
             return tool_output(
-                f"✓ {result.action.capitalize()} artifact '{slug}'.",
+                f"✓ {result.action.capitalize()} artifact '{filename_stem}'.",
                 ctx=ctx,
-                slug=slug,
+                filename_stem=filename_stem,
                 action=result.action,
             )
     except ResourceBusyError:
         return tool_error(
-            f"Artifact '{slug}' is being modified by another tool call — retry next turn",
+            f"Artifact '{filename_stem}' is being modified by another tool call — retry next turn",
             ctx=ctx,
         )
     except FileNotFoundError as exc:

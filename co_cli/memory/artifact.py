@@ -69,24 +69,24 @@ class KnowledgeArtifact:
     recall_count: int = 0
 
 
-def _coerce_fields(fm: dict[str, Any], body: str, path: Path) -> KnowledgeArtifact:
+def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> KnowledgeArtifact:
     """Build a KnowledgeArtifact from canonical kind=knowledge frontmatter."""
     return KnowledgeArtifact(
-        id=str(fm["id"]),
+        id=str(frontmatter["id"]),
         path=path,
-        artifact_kind=fm.get("artifact_kind", ArtifactKindEnum.NOTE.value),
-        title=fm.get("title"),
+        artifact_kind=frontmatter.get("artifact_kind", ArtifactKindEnum.NOTE.value),
+        title=frontmatter.get("title"),
         content=body.strip(),
-        created=fm["created"],
-        updated=fm.get("updated"),
-        description=fm.get("description"),
-        related=list(fm.get("related") or []),
-        source_type=fm.get("source_type"),
-        source_ref=fm.get("source_ref"),
-        certainty=fm.get("certainty"),
-        decay_protected=bool(fm.get("decay_protected", False)),
-        last_recalled=fm.get("last_recalled"),
-        recall_count=int(fm.get("recall_count", 0) or 0),
+        created=frontmatter["created"],
+        updated=frontmatter.get("updated"),
+        description=frontmatter.get("description"),
+        related=list(frontmatter.get("related") or []),
+        source_type=frontmatter.get("source_type"),
+        source_ref=frontmatter.get("source_ref"),
+        certainty=frontmatter.get("certainty"),
+        decay_protected=bool(frontmatter.get("decay_protected", False)),
+        last_recalled=frontmatter.get("last_recalled"),
+        recall_count=int(frontmatter.get("recall_count", 0) or 0),
     )
 
 
@@ -97,14 +97,14 @@ def load_knowledge_artifact(path: Path) -> KnowledgeArtifact:
     Raises ValueError on any missing required field or unexpected ``kind``.
     """
     raw = path.read_text(encoding="utf-8")
-    fm, body = parse_frontmatter(raw)
-    if "id" not in fm:
+    frontmatter, body = parse_frontmatter(raw)
+    if "id" not in frontmatter:
         raise ValueError(f"{path}: missing required field 'id'")
-    if "created" not in fm:
+    if "created" not in frontmatter:
         raise ValueError(f"{path}: missing required field 'created'")
-    if fm.get("kind") != "knowledge":
-        raise ValueError(f"{path}: expected kind='knowledge', got {fm.get('kind')!r}")
-    return _coerce_fields(fm, body, path)
+    if frontmatter.get("kind") != "knowledge":
+        raise ValueError(f"{path}: expected kind='knowledge', got {frontmatter.get('kind')!r}")
+    return _coerce_fields(frontmatter, body, path)
 
 
 def load_knowledge_artifacts(

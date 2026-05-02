@@ -8,7 +8,7 @@ import pytest
 from tests._settings import SETTINGS
 
 from co_cli.memory.memory_store import MemoryStore
-from co_cli.memory.service import mutate_artifact, save_artifact
+from co_cli.memory.service import mutate_artifact, reindex, save_artifact
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,13 +38,21 @@ def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
             content="pytest is a testing framework",
             artifact_kind="note",
             title="pytest note",
-            memory_store=store,
         )
 
         assert result.action == "saved"
         assert result.path.exists(), "artifact file was not written to disk"
         assert len(result.artifact_id) >= 8, (
             f"artifact_id must be a non-empty slug string, got {result.artifact_id!r}"
+        )
+
+        reindex(
+            store,
+            result.path,
+            result.content,
+            result.markdown_content,
+            result.frontmatter_dict,
+            result.filename_stem,
         )
 
         hits = store.search("pytest testing")
@@ -63,7 +71,6 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
     content in search results.
     """
     knowledge_dir = tmp_path / "knowledge"
-    store = _make_store(tmp_path)
     try:
         url = "https://example.com/test-page"
 
@@ -73,7 +80,6 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
             artifact_kind="article",
             title="test article",
             source_url=url,
-            memory_store=store,
         )
 
         second = save_artifact(
@@ -82,7 +88,6 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
             artifact_kind="article",
             title="test article",
             source_url=url,
-            memory_store=store,
         )
 
         assert second.action in ("appended", "merged"), (
@@ -93,7 +98,7 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
             f"expected exactly 1 .md file after URL dedup, found {len(md_files)}: {md_files}"
         )
     finally:
-        store.close()
+        pass
 
 
 def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
@@ -108,38 +113,32 @@ def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
     fires regardless of superset status.
     """
     knowledge_dir = tmp_path / "knowledge"
-    store = _make_store(tmp_path)
-    try:
-        # 20 distinct meaningful tokens (no stopwords, all len > 1).
-        base = (
-            "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
-            "kilo lima mike november oscar papa quebec romeo sierra tango "
-        ) * 3
+    # 20 distinct meaningful tokens (no stopwords, all len > 1).
+    base = (
+        "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+        "kilo lima mike november oscar papa quebec romeo sierra tango "
+    ) * 3
 
-        save_artifact(
-            knowledge_dir,
-            content=base,
-            artifact_kind="note",
-            title="nato note",
-            memory_store=store,
-            consolidation_enabled=True,
-        )
+    save_artifact(
+        knowledge_dir,
+        content=base,
+        artifact_kind="note",
+        title="nato note",
+        consolidation_enabled=True,
+    )
 
-        # Adding one word: Jaccard = 20/21 ≈ 0.95 > 0.9 → triggers 'skipped'.
-        second = save_artifact(
-            knowledge_dir,
-            content=base + " ultraviolet",
-            artifact_kind="note",
-            title="nato note",
-            memory_store=store,
-            consolidation_enabled=True,
-        )
+    # Adding one word: Jaccard = 20/21 ≈ 0.95 > 0.9 → triggers 'skipped'.
+    second = save_artifact(
+        knowledge_dir,
+        content=base + " ultraviolet",
+        artifact_kind="note",
+        title="nato note",
+        consolidation_enabled=True,
+    )
 
-        assert second.action == "skipped", (
-            f"expected 'skipped' for near-identical content (Jaccard > 0.9), got {second.action!r}"
-        )
-    finally:
-        store.close()
+    assert second.action == "skipped", (
+        f"expected 'skipped' for near-identical content (Jaccard > 0.9), got {second.action!r}"
+    )
 
 
 def test_mutate_artifact_append_adds_content_at_end(tmp_path):
@@ -149,32 +148,26 @@ def test_mutate_artifact_append_adds_content_at_end(tmp_path):
     is lost on the next read.
     """
     knowledge_dir = tmp_path / "knowledge"
-    store = _make_store(tmp_path)
-    try:
-        saved = save_artifact(
-            knowledge_dir,
-            content="initial body",
-            artifact_kind="note",
-            title="my note",
-            memory_store=store,
-        )
+    saved = save_artifact(
+        knowledge_dir,
+        content="initial body",
+        artifact_kind="note",
+        title="my note",
+    )
 
-        mutate_result = mutate_artifact(
-            knowledge_dir,
-            slug=saved.slug,
-            action="append",
-            content="new line",
-            memory_store=store,
-        )
+    mutate_result = mutate_artifact(
+        knowledge_dir,
+        filename_stem=saved.filename_stem,
+        action="append",
+        content="new line",
+    )
 
-        assert mutate_result.action == "appended"
-        file_text = mutate_result.path.read_text(encoding="utf-8")
-        # The file may have a trailing newline after the appended content; strip before checking.
-        assert file_text.rstrip("\n").endswith("new line"), (
-            f"'new line' not found at end of file. File ends with: {file_text[-100:]!r}"
-        )
-    finally:
-        store.close()
+    assert mutate_result.action == "appended"
+    file_text = mutate_result.path.read_text(encoding="utf-8")
+    # The file may have a trailing newline after the appended content; strip before checking.
+    assert file_text.rstrip("\n").endswith("new line"), (
+        f"'new line' not found at end of file. File ends with: {file_text[-100:]!r}"
+    )
 
 
 def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
@@ -184,24 +177,18 @@ def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
     corrupted with no error surfaced to the caller.
     """
     knowledge_dir = tmp_path / "knowledge"
-    store = _make_store(tmp_path)
-    try:
-        saved = save_artifact(
-            knowledge_dir,
-            content="same line\nsame line\nother content",
-            artifact_kind="note",
-            title="dupe note",
-            memory_store=store,
-        )
+    saved = save_artifact(
+        knowledge_dir,
+        content="same line\nsame line\nother content",
+        artifact_kind="note",
+        title="dupe note",
+    )
 
-        with pytest.raises(ValueError, match="appears"):
-            mutate_artifact(
-                knowledge_dir,
-                slug=saved.slug,
-                action="replace",
-                target="same line",
-                content="replacement",
-                memory_store=store,
-            )
-    finally:
-        store.close()
+    with pytest.raises(ValueError, match="appears"):
+        mutate_artifact(
+            knowledge_dir,
+            filename_stem=saved.filename_stem,
+            action="replace",
+            target="same line",
+            content="replacement",
+        )
