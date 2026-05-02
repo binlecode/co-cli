@@ -70,7 +70,14 @@ def _find_by_filename_stem(knowledge_dir: Path, filename_stem: str) -> Path | No
     return next((p for p in knowledge_dir.glob("*.md") if p.stem == filename_stem), None)
 
 
-def _find_article_by_url(knowledge_dir: Path, origin_url: str) -> Path | None:
+def _find_article_by_url(
+    knowledge_dir: Path,
+    origin_url: str,
+    memory_store: "MemoryStore | None" = None,
+) -> Path | None:
+    if memory_store is not None:
+        result = memory_store.find_by_source_ref(origin_url, IndexSourceEnum.KNOWLEDGE)
+        return Path(result) if result else None
     if not knowledge_dir.exists():
         return None
     for path in knowledge_dir.glob("*.md"):
@@ -130,6 +137,7 @@ def save_artifact(
     decay_protected: bool = False,
     consolidation_enabled: bool = False,
     consolidation_similarity_threshold: float = 0.75,
+    memory_store: "MemoryStore | None" = None,
 ) -> SaveResult:
     """Save or consolidate a knowledge artifact. Pure — no RunContext.
 
@@ -141,7 +149,7 @@ def save_artifact(
     knowledge_dir.mkdir(parents=True, exist_ok=True)
 
     if source_url is not None:
-        existing_path = _find_article_by_url(knowledge_dir, source_url)
+        existing_path = _find_article_by_url(knowledge_dir, source_url, memory_store)
 
         if existing_path is not None:
             raw = existing_path.read_text(encoding="utf-8")

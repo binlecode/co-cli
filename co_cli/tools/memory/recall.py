@@ -61,6 +61,10 @@ def _list_artifacts(
     span: Span,
 ) -> list[dict]:
     """Paginated inventory of knowledge artifacts, sorted by created descending."""
+    if ctx.deps.memory_store is not None:
+        results = ctx.deps.memory_store.list_artifacts(kinds, limit)
+        span.set_attribute("memory.artifacts.count", len(results))
+        return results
     artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
     artifacts.sort(key=lambda a: a.created, reverse=True)
     page = artifacts[:limit]

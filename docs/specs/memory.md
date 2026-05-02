@@ -168,7 +168,7 @@ Backend degradation order:
 | --- | --- | --- |
 | `hybrid` | FTS5 BM25 + sqlite-vec cosine, RRF merge | Embedding provider available |
 | `fts5` | BM25 over chunked text only | Embeddings unavailable |
-| `grep` | In-memory substring match over loaded markdown | MemoryStore unavailable |
+| `grep` | In-memory substring match over artifact title and content | MemoryStore unavailable |
 
 Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
 
@@ -286,7 +286,7 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/memory/session_browser.py` | session listing and picker metadata for `/resume` and `/sessions` |
 | `co_cli/memory/session_chunker.py` | chunking pipeline: `flatten_session()`, `chunk_flattened()`, `chunk_session()` |
 | `co_cli/memory/indexer.py` | JSONL line parser: `ExtractedMessage`, `extract_messages()` |
-| `co_cli/tools/memory/read.py` | `grep_recall()`, `memory_read_session_turn()` — verbatim JSONL turn reader |
+| `co_cli/tools/memory/read.py` | `grep_recall()` — artifact title/content substring fallback; `memory_read_session_turn()` — verbatim JSONL turn reader |
 | `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, size warnings |
 | `co_cli/bootstrap/core.py` | `restore_session()`, `init_session_index()` — startup bootstrap |
 | `co_cli/main.py` | `_finalize_turn()` — session persistence bridge and session-end dream trigger |
@@ -331,3 +331,6 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `mutate_artifact` replace preserves frontmatter | `tests/test_flow_memory_lifecycle.py` |
 | `mutate_artifact` append adds to body | `tests/test_flow_memory_lifecycle.py` |
 | Session restore picks the most recent transcript | `tests/test_flow_bootstrap_session.py` |
+| `grep_recall` returns artifact matched by title only | `tests/test_flow_memory_recall.py` |
+| `_list_artifacts` delegates to index when store is available | `tests/test_flow_memory_recall.py` |
+| `save_artifact` URL dedup uses O(1) index when `memory_store` set | `tests/test_flow_memory_write.py` |

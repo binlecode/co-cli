@@ -189,3 +189,77 @@ def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
             target="same line",
             content="replacement",
         )
+
+
+def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
+    """Second save_artifact with same source_url uses O(1) index path when memory_store is set.
+
+    Failure mode: without memory_store, dedup relies on O(n) file scan; with it, a single
+    SQL lookup replaces the scan — this test confirms the index path produces action='merged'.
+    """
+    knowledge_dir = tmp_path / "knowledge"
+    store = _make_store(tmp_path)
+    url = "https://example.com/index-dedup"
+
+    try:
+        first = save_artifact(
+            knowledge_dir,
+            content="first version",
+            artifact_kind="article",
+            title="index dedup test",
+            source_url=url,
+        )
+        reindex(
+            store,
+            first.path,
+            first.content,
+            first.markdown_content,
+            first.frontmatter_dict,
+            first.filename_stem,
+            chunk_size=600,
+            chunk_overlap=80,
+        )
+
+        second = save_artifact(
+            knowledge_dir,
+            content="updated version",
+            artifact_kind="article",
+            title="index dedup test",
+            source_url=url,
+            memory_store=store,
+        )
+
+        assert second.action == "merged", (
+            f"Expected 'merged' when index path is used for dedup, got {second.action!r}"
+        )
+        md_files = list(knowledge_dir.glob("*.md"))
+        assert len(md_files) == 1, (
+            f"Expected 1 .md file after index-path dedup, found {len(md_files)}"
+        )
+    finally:
+        store.close()
+
+
+def test_find_article_by_url_file_scan_fallback(tmp_path):
+    """_find_article_by_url with memory_store=None falls back to file scan.
+
+    Failure mode: if the file-scan fallback is removed, saves without a warm index
+    (e.g. first-run bootstrap) would create duplicate articles.
+    """
+    from co_cli.memory.service import _find_article_by_url
+
+    knowledge_dir = tmp_path / "knowledge"
+    url = "https://example.com/fallback-scan"
+
+    saved = save_artifact(
+        knowledge_dir,
+        content="content for fallback test",
+        artifact_kind="article",
+        title="fallback test",
+        source_url=url,
+    )
+
+    result = _find_article_by_url(knowledge_dir, url, memory_store=None)
+
+    assert result is not None, "file-scan fallback returned None for a known URL"
+    assert result == saved.path, f"Expected {saved.path}, got {result}"

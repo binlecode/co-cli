@@ -28,12 +28,16 @@ def grep_recall(
     query: str,
     max_results: int,
 ) -> list[KnowledgeArtifact]:
-    """Case-insensitive substring search across content and tags.
+    """Case-insensitive substring search across title and content.
 
     Sorts by recency (updated or created, newest first).
     """
     query_lower = query.lower()
-    matches = [m for m in artifacts if query_lower in m.content.lower()]
+    matches = [
+        m
+        for m in artifacts
+        if query_lower in m.content.lower() or query_lower in (m.title or "").lower()
+    ]
     matches.sort(key=lambda m: m.updated or m.created, reverse=True)
     return matches[:max_results]
 

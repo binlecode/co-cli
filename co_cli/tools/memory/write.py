@@ -85,6 +85,7 @@ async def memory_create(
             decay_protected=decay_protected,
             consolidation_enabled=ctx.deps.config.knowledge.consolidation_enabled,
             consolidation_similarity_threshold=ctx.deps.config.knowledge.consolidation_similarity_threshold,
+            memory_store=ctx.deps.memory_store,
         )
         span.set_attribute("knowledge.action", result.action)
         if result.action != "skipped" and ctx.deps.memory_store is not None:

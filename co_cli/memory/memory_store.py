@@ -472,6 +472,40 @@ class MemoryStore:
         )
         self._conn.commit()
 
+    def find_by_source_ref(self, source_ref: str, source: str) -> str | None:
+        """Return the path of the doc with the given source_ref, or None."""
+        row = self._conn.execute(
+            "SELECT path FROM docs WHERE source = ? AND source_ref = ?",
+            (source, source_ref),
+        ).fetchone()
+        return row["path"] if row else None
+
+    def list_artifacts(self, kinds: list[str] | None, limit: int) -> list[dict]:
+        """Return index-backed inventory of knowledge artifacts, sorted by created DESC."""
+        kind_sql, kind_params = _kind_clause(kinds, "d.kind")
+        rows = self._conn.execute(
+            f"""SELECT d.path, d.kind, d.title, d.created,
+                       c.content AS snippet
+                FROM docs d
+                LEFT JOIN chunks c
+                  ON c.doc_path = d.path AND c.source = d.source AND c.chunk_index = 0
+                WHERE d.source = 'knowledge'{kind_sql}
+                ORDER BY d.created DESC LIMIT ?""",
+            [*kind_params, limit],
+        ).fetchall()
+        return [
+            {
+                "channel": "artifacts",
+                "kind": row["kind"],
+                "title": row["title"] or Path(row["path"]).stem,
+                "snippet": (row["snippet"] or "")[:100],
+                "score": 0.0,
+                "path": row["path"],
+                "filename_stem": Path(row["path"]).stem,
+            }
+            for row in rows
+        ]
+
     def search(
         self,
         query: str,
@@ -814,6 +848,8 @@ class MemoryStore:
 
         for key, score in chunk_rrf.items():
             path = key[0]
+            # max over sum: eval 2026-05-02 showed 0% recall@2 delta; max preserves
+            # best-chunk-wins semantics and avoids inflating long documents.
             doc_rrf[path] = max(doc_rrf.get(path, 0.0), score)
             if path not in doc_winner_score or score > doc_winner_score[path]:
                 doc_winner_key[path] = key
