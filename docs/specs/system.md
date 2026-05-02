@@ -123,7 +123,7 @@ The specialized DESIGN docs own the detailed behavior inside each boundary:
 - turn execution, approvals, and retries: [core-loop.md](core-loop.md)
 - prompt assembly, instruction layers, and history processors: [prompt-assembly.md](prompt-assembly.md)
 - compaction mechanisms (emit-time, prepass, window, overflow): [compaction.md](compaction.md)
-- session transcripts and recall: [memory-session.md](memory-session.md); knowledge artifacts, retrieval, and bridge: [memory-knowledge.md](memory-knowledge.md); canon recall: [memory-canon.md](memory-canon.md)
+- session transcripts, knowledge artifacts, retrieval, canon recall: [memory.md](memory.md)
 - dream-cycle mining, merge, decay, archive, and state: [dream.md](dream.md)
 - REPL loop, completer, and slash commands: [tui.md](tui.md)
 - tool registration and approval behavior: [tools.md](tools.md)

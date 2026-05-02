@@ -1,6 +1,6 @@
 # RESEARCH: Hermes-Agent, OpenClaw, and ReMe for Co's Second-Brain Mission
 
-Scan date: 2026-04-23
+Scan date: 2026-04-23; co source updated: 2026-04-30
 
 ## 0. Why This Document Exists
 
@@ -32,27 +32,32 @@ Implication:
 
 ## 2. Co Baseline: What Problem Co Is Actually Solving
 
-`co` already has the correct top-level split for a second-brain product:
+`co` has a three-channel recall model over two storage layers:
 
-- **Memory layer**: append-only session transcripts plus a derived FTS session index for episodic recall
-- **Knowledge layer**: reusable markdown artifacts plus a derived retrieval DB
-- **Bridge**: per-turn extraction and optional dream cycles that distill reusable knowledge from raw history
+- **Session channel**: append-only `sessions/*.jsonl` transcripts indexed in `co-cli-search.db` (`source='session'`) for episodic recall
+- **Knowledge channel**: reusable `knowledge/*.md` markdown artifacts indexed in the same `co-cli-search.db` (`source='knowledge'`) for artifact recall
+- **Canon channel**: read-only `souls/{role}/memories/*.md` scenes scanned in-process with token-overlap scoring
+- **Dream cycle**: optional session-end mining, merge, and decay that distill durable knowledge from raw history
+
+Static personality content (soul seed, mindsets, rules) is injected once at agent construction — it is not a recall channel and does not depend on artifact search.
 
 Key evidence:
 
-- `docs/specs/memory-knowledge.md:5-23` defines the product intent as "session transcripts as raw memory" plus "reusable knowledge store" plus "extraction/consolidation bridge".
-- `docs/specs/memory-knowledge.md:32-37` defines the two-layer architecture directly.
-- `co_cli/tools/memory.py:12-38` makes `memory_search()` explicitly episodic and transcript-based.
-- `co_cli/tools/knowledge/read.py:68-145` implements turn-time artifact recall from the knowledge layer.
-- `co_cli/context/_history.py:1083-1097` injects top recalled knowledge artifacts once per new user turn.
-- `co_cli/knowledge/_dream.py:441-458` already has merge and decay phases for reusable knowledge.
+- `docs/specs/memory.md` §1 defines the three-channel recall model and confirms static personality is not a channel.
+- `co_cli/tools/memory/recall.py:194` implements `memory_search()` dispatching all three channels in parallel.
+- `co_cli/tools/memory/read.py:69-73` implements the `memory_list` artifact inventory tool.
+- `co_cli/memory/dream.py:379-453` has merge (`_identify_mergeable_clusters`, `_merge_similar_artifacts`) and decay (`_decay_sweep`) phases for reusable knowledge.
+
+**Architecture note (April 28, v0.8.52):** The `co_cli/knowledge/` module was collapsed into `co_cli/memory/`. All artifact, dream, decay, and archive logic now lives under `co_cli/memory/`; the tool surface under `co_cli/tools/memory/` was unchanged. The two storage layers remain separate on disk; only the Python module boundary changed.
+
+**Recall is pull-based, not push-based.** Knowledge artifacts are not injected into the context per-turn. The agent calls `memory_search()` when it suspects relevance — nothing is pre-loaded into the prompt from the knowledge corpus during normal turns.
 
 So the design target is not "add memory to a stateless assistant." It is:
 
-1. keep raw chronology
-2. distill durable knowledge
-3. recall the right durable knowledge at the right time
-4. keep the local corpus inspectable and healthy over time
+1. keep raw chronology (sessions)
+2. distill durable knowledge (artifacts via dream cycle)
+3. recall the right knowledge on demand (unified `memory_search`)
+4. keep the local corpus inspectable and healthy over time (dream merge/decay)
 
 That framing matters because some peers are strong on personalization but weak on local knowledge management, while others are strong on consolidation but weak on assistant identity.
 
@@ -601,24 +606,19 @@ This is the concrete target stack implied by the research.
 
 The primary runtime surface should be native tools and commands, not skill-only behavior.
 
-Recommended `co`-native tool stack:
+**Shipped tool surface** (as of April 30, `co_cli/tools/memory/`):
 
-- `memory_search`
-  episodic transcript recall over raw session history
-- `knowledge_search`
-  explicit search over durable reusable artifacts
-- `knowledge_save` / `knowledge_update` / `knowledge_append`
-  durable knowledge writes
-- `knowledge_article_save`
-  article ingestion into the reusable corpus
-- `arxiv_search`
-  read-only paper discovery
-- `knowledge_import_article` or equivalent narrow import helper
-  metadata-first / abstract-first research import
-- `citation_verify`
-  evidence-discipline helper for references
-- `research_journal_save`
-  structured note capture for what was learned, why it is trusted, and what remains open
+- `memory_search` (`recall.py:194`) — unified recall across knowledge artifacts, session transcripts, and canon in one call
+- `memory_list` (`read.py`) — paginated artifact inventory
+- `memory_create` (`write.py`) — save a new artifact (kinds: preference, feedback, rule, article, reference, note, decision); includes Jaccard dedup when `consolidation_enabled`
+- `memory_modify` (`write.py`) — append or surgically replace a passage in an existing artifact
+
+**Still aspirational** (not yet shipped — from original April 23 target list):
+
+- `arxiv_search` — read-only paper discovery
+- `knowledge_import_article` or equivalent narrow import helper — metadata-first / abstract-first research import
+- `citation_verify` — evidence-discipline helper for references
+- `research_journal_save` — structured note capture for what was learned, why it is trusted, and what remains open
 
 ### 13.2 Skills
 
@@ -637,14 +637,18 @@ Rejected role for skills:
 
 ### 13.3 Memory
 
-`co`'s memory layer should stay raw and chronological.
+`co`'s session layer stays raw and chronological.
 
-Recommended `co`-native memory design:
+Current state (`co_cli/memory/`):
 
-- append-only session transcripts as source of truth
-- derived episodic recall index for transcript search
-- no attempt to turn the memory layer itself into the reusable knowledge store
-- stronger personalization split at the knowledge layer rather than bolting profile semantics into raw transcripts
+- append-only `sessions/*.jsonl` as source of truth
+- chunked (token-based, 400-token window, 80-token overlap) session indexing into `co-cli-search.db` (`source='session'`)
+- recall via `memory_search` → BM25 chunk search → best chunk per unique session (no LLM)
+- sessions and knowledge artifacts are co-equal kinds under the unified `co_cli/memory/` module (April 28 collapse)
+
+Still aspirational:
+
+- stronger personalization split — explicitly separating user-profile artifacts from general/world/project artifacts within the existing `kind` taxonomy
 
 Borrowed ideas:
 
@@ -653,16 +657,20 @@ Borrowed ideas:
 
 ### 13.4 Knowledge
 
-The knowledge layer should remain the reusable second-brain layer.
+The knowledge layer is the reusable second-brain layer.
 
-Recommended `co`-native knowledge design:
+Current state (`co_cli/memory/` + `knowledge/*.md`):
 
-- markdown artifacts in `knowledge_dir` as source of truth
-- derived search/index DB for retrieval
-- `_meta/` governance overlay for schema, catalog, and append-only log
-- dream merge/decay as maintenance on reusable artifacts, not on raw transcripts
-- article/reference/note artifacts as first-class local research memory
-- evidence-bearing notes and references, not just content snippets
+- flat `knowledge/*.md` markdown artifacts with YAML frontmatter as source of truth
+- `KnowledgeStore` FTS5 BM25 ± RRF vector merge backend in `co-cli-search.db` (`source='knowledge'`)
+- dream merge (`_identify_mergeable_clusters`, `_merge_similar_artifacts`) and decay (`_decay_sweep`) in `co_cli/memory/dream.py`
+- artifact kinds shipped: preference, decision, rule, feedback, article, reference, note
+
+Still aspirational:
+
+- `knowledge/_meta/` governance overlay (schema, catalog, append-only log)
+- first-class research ingestion (arXiv metadata/abstract import)
+- evidence-discipline helpers (citation verification, structured research journals)
 
 Borrowed ideas:
 
@@ -682,3 +690,88 @@ If the question is:
 
 - **"Which peer is most aligned to co's mission as a personalized second brain with a local knowledgebase?"**
   `ReMe` is the best primary reference, `hermes-agent` is the best personalization overlay, and `openclaw` is the best maintenance/retrieval subsystem reference.
+
+## 15. Remaining Gaps Against Converged Best Practice
+
+Updated: 2026-05-01. Reflects current source state after the April 28 module collapse.
+
+### What is shipped
+
+| Capability | Source | Peer origin |
+| --- | --- | --- |
+| Three-channel recall (sessions, knowledge, canon) | `co_cli/tools/memory/recall.py` | `ReMe` |
+| Four unified `memory_*` tools | `co_cli/tools/memory/` | `ReMe` |
+| Hybrid FTS5 + vector retrieval (BM25 ± RRF) | `co_cli/memory/knowledge_store.py` | `openclaw` |
+| Dream cycle: mine, merge, decay | `co_cli/memory/dream.py` | `openclaw` + `ReMe` |
+| Pull-based recall (no per-turn injection) | architecture | `ReMe` |
+| Static personality injected once at construction | `co_cli/context/assembly.py` | `hermes-agent` |
+| Age + access-based artifact decay | `co_cli/memory/dream.py:441` | `openclaw` |
+| Artifact dedup (Jaccard on write) | `co_cli/memory/service.py` | `openclaw` |
+
+### Gap 1 — Personalization split (high ROI, fits current harness)
+
+**From:** `hermes-agent` (`USER.md` vs `MEMORY.md`)
+
+**What's missing:** There is no enforced distinction between user-profile artifacts (preferences, goals, habits) and general/world/project knowledge. Both land in the same flat `knowledge/*.md` corpus under the same kind taxonomy. The result is that user-identity memory and durable factual knowledge compete for the same retrieval slots with no structural priority.
+
+**Minimum viable adoption:** A `scope` frontmatter field (`user` | `world` | `project`) plus a retrieval policy that boosts `user`-scoped results when the query is personal in nature. No new storage layer required.
+
+### Gap 2 — Corpus governance (high ROI, fits current harness)
+
+**From:** Hermes adoption plan + `openclaw` index hygiene
+
+**What's missing:** The `knowledge/` corpus has no schema, no machine-maintained catalog, and no mutation log. There is no way to audit what the corpus contains, enforce artifact conventions, or trace when an artifact was created or merged. The `_meta/` overlay proposed in Section 10.1 was never shipped.
+
+**Minimum viable adoption:** Three files under `knowledge/_meta/`: `SCHEMA.md` (corpus conventions and kind taxonomy), `index.md` (auto-maintained catalog), `log.md` (append-only artifact mutation log written by `memory_create` and `memory_modify`).
+
+### Gap 3 — Pre-reasoning memory selection (medium ROI, requires agent loop change)
+
+**From:** `ReMe` pre-reasoning context management
+
+**What's missing:** `memory_search` is available but nothing governs when the agent should call it before reasoning. Recall is entirely ad-hoc — the agent decides per-turn with no structural prompt or policy nudge to check memory before answering. `ReMe` makes pre-reasoning memory lookup a mandatory step, not an optional tool call.
+
+**Minimum viable adoption:** A system-prompt instruction that explicitly primes the agent to call `memory_search` before answering questions that reference past sessions, user preferences, or established decisions. Requires no code change, only guidance policy.
+
+### Gap 4 — Research ingestion pipeline (medium ROI, new tooling required)
+
+**From:** Hermes adoption plan + `co`'s existing `article` and `reference` artifact kinds
+
+**What's missing:** `article` and `reference` kinds are defined and storable, but there is no first-class ingest path. No arXiv discovery tool, no metadata-first import flow, no abstract-first ingestion. Research must be captured manually via `memory_create`.
+
+**Minimum viable adoption:** An `arxiv_search` tool (read-only paper discovery) and a `memory_create` flow that auto-populates frontmatter from arXiv metadata. Full-text ingestion stays deferred.
+
+### Gap 5 — Evidence discipline (medium ROI, new tooling required)
+
+**From:** Hermes adoption plan
+
+**What's missing:** The corpus can hold references but cannot flag unverified ones or track what remains open. There is no `citation_verify` tool and no structured research journal artifact. The second-brain goal of preserving *what was learned*, *why it should be trusted*, and *what remains unresolved* is unsupported.
+
+**Minimum viable adoption:** A `research_journal` artifact kind with a schema that requires `source`, `confidence`, and `open_questions` fields. A `citation_verify` tool can come later.
+
+### Gap 6 — Retrieval diversity reranking (low ROI, retrieval quality improvement)
+
+**From:** `openclaw` MMR reranking
+
+**What's missing:** The hybrid BM25 + vector retrieval stack is shipped, but diversity-aware reranking (Maximal Marginal Relevance or equivalent) is not. Result sets can cluster around semantically similar chunks, especially in artifact-dense corpora.
+
+**Minimum viable adoption:** MMR pass after RRF merge in `knowledge_store.py`, gated by a config flag (`knowledge.rerank_diversity`). Low urgency until the corpus is large enough for clustering to be a visible problem.
+
+### Gap 7 — Retrieval-aware decay (low ROI, hygiene improvement)
+
+**From:** `openclaw` temporal scoring
+
+**What's missing:** Decay today is age + explicit-access based (`decay_after_days`, `decay_protected`). `openclaw`'s recency-weighted retrieval scoring — penalizing artifacts that haven't appeared in recent search results, not just ones that haven't been explicitly read — is not adopted. This matters for large corpora where stale artifacts can still match queries without ever being acted on.
+
+**Minimum viable adoption:** Track `last_recalled_at` in artifact frontmatter (written by `memory_search` on hit) and include it as a decay signal alongside `last_modified_at`.
+
+### Priority order
+
+| Priority | Gap | Effort | Peer source |
+| --- | --- | --- | --- |
+| 1 | Personalization split | Low — frontmatter + retrieval policy | `hermes-agent` |
+| 2 | Corpus governance (`_meta/`) | Low — three markdown files + write-path hooks | `openclaw` + Hermes plan |
+| 3 | Pre-reasoning memory selection | Low — guidance policy only | `ReMe` |
+| 4 | Research ingestion | Medium — new arXiv tool + import flow | Hermes plan |
+| 5 | Evidence discipline | Medium — new artifact kind + optional tool | Hermes plan |
+| 6 | Retrieval diversity reranking | Medium — MMR pass in knowledge_store | `openclaw` |
+| 7 | Retrieval-aware decay | Low — `last_recalled_at` tracking | `openclaw` |

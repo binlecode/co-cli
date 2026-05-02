@@ -7,7 +7,7 @@ Specs are **living implementation documents** — they track development milesto
 Every spec follows this structure:
 - `## 1. Functional Architecture` / `## 2. Core Logic` / `## 3. Config` / `## 4. Files` / `## 5. Test Gates`
 
-Use pseudocode, never source code. Sequence-owning specs (`bootstrap.md`, `core-loop.md`, flow diagrams in `compaction.md`, `prompt-assembly.md`, `memory-knowledge.md`) follow execution order strictly — no separate taxonomy sections that duplicate the flow.
+Use pseudocode, never source code. Sequence-owning specs (`bootstrap.md`, `core-loop.md`, flow diagrams in `compaction.md`, `prompt-assembly.md`, `memory.md`) follow execution order strictly — no separate taxonomy sections that duplicate the flow.
 
 ### Section Rules
 

@@ -1,5 +1,5 @@
 # RESEARCH: self-model and working-style quality
-_Date: 2026-03-08_
+_Date: 2026-03-08 | Revised: 2026-05-01_
 
 This document expands the brief `6.0 Self/personality model quality` note in `docs/reference/RESEARCH-peer-systems.md`.
 
@@ -25,7 +25,16 @@ The practical thesis is:
 # 1. What Was Reviewed
 
 - **Current co design/docs:** `docs/DESIGN-personalization.md`, `docs/DESIGN-context-engineering.md`, `docs/DESIGN-system.md`, `docs/reference/RESEARCH-peer-systems.md`, `docs/reference/ROADMAP-co-evolution.md`
-- **Current co implementation:** `co_cli/agent.py`, `co_cli/_commands.py`, `co_cli/_history.py`, `co_cli/tools/personality.py`
+- **Current co implementation (as of 2026-05-01):**
+  - `co_cli/personality/prompts/loader.py` — soul asset loading
+  - `co_cli/personality/prompts/validator.py` — role discovery and file validation
+  - `co_cli/personality/prompts/souls/` — 42 `.md` files across finch, jeff, tars
+  - `co_cli/context/assembly.py` — static instruction assembly
+  - `co_cli/context/rules/` — behavioral policy (01–05)
+  - `co_cli/agent/core.py` — agent construction and critique injection
+  - `co_cli/memory/artifact.py` — knowledge artifact schema including preference kind
+  - `co_cli/tools/memory/` — memory read/write/search toolset
+  - `co_cli/config/core.py` — personality config field
 - **Frontier/peer patterns already captured in repo research:** OpenAI memory/agent direction, Anthropic Claude Code memory + subagents, Letta typed memory blocks, Mem0 structured memory operations, Codex/Claude Code prompt-and-policy discipline
 
 ---
@@ -48,11 +57,68 @@ That is the right base abstraction. A future team setting should look like:
 
 Each with its own self model, memory state, and working-style defaults. Teamwork should happen between instances, not inside one blended prompt identity.
 
+## 2.1 Actual architecture (as of 2026-05-01)
+
+The personality system has been refactored into its own package. The key components are:
+
+**Role discovery and validation** — `co_cli/personality/prompts/validator.py`
+
+Three roles are supported: `finch`, `jeff`, `tars`. They are auto-discovered from the `souls/` directory. Six mindset task types are required for each role: `technical`, `exploration`, `debugging`, `teaching`, `emotional`, `memory`. Missing files surface as warnings at config load time.
+
+**Soul asset loading** — `co_cli/personality/prompts/loader.py`
+
+Three load functions: `load_soul_seed(role)`, `load_soul_mindsets(role)`, `load_soul_critique(role)`. These are called during agent construction, not per-turn.
+
+**Static instruction assembly** — `co_cli/context/assembly.py` → `build_static_instructions(config)`
+
+Assembled once per agent session in strict order:
+1. Soul seed (`souls/{role}/seed.md`) — identity anchor
+2. Soul mindsets (all 6 task-type guidance files joined) — behavioral stance per task shape
+3. Behavioral rules (numbered `01_identity.md` through `05_workflow.md`) — policy layer
+4. Recency-clearing advisory — explains `[tool result cleared…]` placeholders to the model
+
+**Critique injection** — `co_cli/agent/core.py` → `build_agent()`
+
+After toolset guidance is assembled, `load_soul_critique(role)` is appended as a `## Review lens` section in the static instructions block. This gives each role an always-on review posture without a separate per-turn call.
+
+**Per-turn instructions** — two `@agent.instructions` callbacks in `core.py`
+
+- `safety_prompt` — structural behavioral guardrails (conditional per session state)
+- `current_time_prompt` — ephemeral grounding (date/time)
+
+No per-turn style injection exists. All personality content is in the static (cached) block.
+
+**Character memory (canon)** — `souls/{role}/memories/*.md`
+
+YAML-frontmattered files with `decay_protected: true`, `tags: [role, character]`. Loaded on demand via `search_canon()` in `co_cli/tools/memory/_canon_recall.py` using token-overlap scoring (title weighted 2×, score ≥ 2 required). Canon hits return full body inline as part of `memory_search()`. This sublayer carries scenes, speech patterns, and behavioral observations from source material.
+
+**Config** — `co_cli/config/core.py` → `Settings.personality`
+
+Single string field. Validated against `VALID_PERSONALITIES` at load time. Default: `"tars"`. Override via `CO_PERSONALITY` env var.
+
+**Knowledge artifacts with preference kind** — `co_cli/memory/artifact.py`
+
+`ArtifactKindEnum.PREFERENCE` exists as a generic kind for user communication and feedback style. No typed subtypes, scoped strength, or supersedes fields are present yet.
+
+## 2.2 What has changed since the March 2026 draft
+
+The March draft correctly diagnosed the gap but described the codebase as it existed at that time. Since then:
+
+- Personality code moved from `co_cli/tools/personality.py` to `co_cli/personality/` package
+- `build_static_instructions()` was centralized in `co_cli/context/assembly.py` (previously scattered)
+- Critique injection moved into `build_agent()` in `co_cli/agent/core.py`
+- Rule files were renumbered and consolidated under `co_cli/context/rules/`
+- Canon recall was formalized in `co_cli/tools/memory/_canon_recall.py` with token-overlap scoring
+
+None of the P1/P2 proposals from the March draft have been built: no `style.yaml`, no `ResolvedStyle` resolver, no typed preference subtypes, no `/style` inspection command.
+
+## 2.3 Strengths of the current stack
+
 The current stack is strong in three ways:
 
-- **clear static identity anchor**: soul seed, examples, mindsets, and rule files are assembled into a stable base prompt
-- **runtime continuity**: per-turn injection adds project instructions, learned context, and critique overlays
-- **maintainer legibility**: behavior is defined in files, not hidden in deeply tangled Python branches
+- **Clear static identity anchor**: soul seed, mindsets, and rule files are assembled into a stable base prompt with a defined order contract
+- **Layered asset separation**: identity (seed + critique), policy (rules), task guidance (mindsets), and character memory (canon) are in distinct files with distinct load paths
+- **Maintainer legibility**: behavior is defined in plain markdown files, not hidden in Python branches
 
 That is better than many systems that just stuff "be helpful, concise, warm" into one prompt blob.
 
@@ -60,11 +126,11 @@ But the current architecture is still primarily a **prompt-composition system**,
 
 Today co's self/personality behavior is encoded mostly as:
 
-- prose in `souls/{role}/seed.md`
-- prose in `mindsets/{role}/*.md`
-- prose in `rules/*.md`
-- prose in `souls/{role}/critique.md`
-- runtime injection of `personality-context` memories
+- prose in `co_cli/personality/prompts/souls/{role}/seed.md`
+- prose in `co_cli/personality/prompts/souls/{role}/mindsets/*.md`
+- numbered rule files in `co_cli/context/rules/`
+- prose in `co_cli/personality/prompts/souls/{role}/critique.md`
+- on-demand recall of `souls/{role}/memories/*.md` via `memory_search()`
 
 This is coherent, but it has a limitation: the behavior contract is distributed across prompt text rather than represented as explicit dimensions with stable semantics.
 
@@ -110,17 +176,17 @@ Examples of dimensions that exist implicitly today:
 - confidence expression vs uncertainty surfacing
 - initiative vs waiting for instruction
 
-These dimensions are present in prose, but not represented as explicit fields or policies.
+These dimensions are present in prose (seed.md and mindsets), but not represented as explicit fields or policies.
 
 Consequence:
 
-- behavior tuning is indirect
-- changes are harder to review
+- behavior tuning is indirect — you rewrite prose, not a value
+- changes are harder to review — a diff on seed.md doesn't tell you which dimension moved
 - regressions appear as "prompt drift" rather than a visible contract change
 
 ## 4.2 Gap: context adaptation is file-driven, not state-driven
 
-Mindsets give co task-shape adaptation, which is good, but the adaptation is still largely static.
+Mindsets give co task-shape adaptation, which is good, but the adaptation is still largely static. The six mindset files are all loaded together and joined into one block — the model must infer which applies.
 
 The system does not yet have a formal runtime concept like:
 
@@ -132,13 +198,13 @@ The system does not yet have a formal runtime concept like:
 
 Consequence:
 
-- style selection is less precise than it could be
-- multiple competing prompt files may be active without a strong resolution model
+- style selection relies on the model's implicit pattern matching across all six mindsets in one block
 - the system has limited ability to deliberately shift style when stakes change
+- no mechanism exists to suppress less-relevant mindsets during a specific task shape
 
-## 4.3 Gap: personality memories are a weak control surface
+## 4.3 Gap: preference artifacts are a weak control surface
 
-`personality-context` memories help with continuity, but they are still a rough mechanism.
+`ArtifactKindEnum.PREFERENCE` entries help with continuity, but the schema is still a rough mechanism. A preference artifact is just markdown with a description — no structured fields for scope, strength, recency, or resolution precedence.
 
 They work well for reminders like:
 
@@ -176,12 +242,12 @@ Consequence:
 
 Today several things live close together in the prompt stack:
 
-- identity and voice
-- safety and approval policy
-- task workflow rules
-- learned user-facing style preferences
+- identity and voice (seed.md)
+- safety and approval policy (rules/02_safety.md, rules/04_tool_protocol.md)
+- task workflow rules (rules/05_workflow.md)
+- learned user-facing style preferences (preference artifacts — recalled dynamically, but no formal injection contract)
 
-The docs say these are conceptually distinct, but the runtime contract is still mostly "all of this becomes prompt text."
+The docs say these are conceptually distinct, but the runtime contract is still mostly "all of this becomes prompt text" with no explicit precedence definition.
 
 Consequence:
 
@@ -215,7 +281,7 @@ co has inspectable files for maintainers, but not a real first-class view of:
 
 - what co currently believes its working style is
 - which style modifiers are active in this session
-- which personality memories are in force
+- which preference artifacts are in force
 - which constraints outrank others
 
 Consequence:
@@ -230,7 +296,7 @@ Consequence:
 A high-quality self model for co should have these properties:
 
 - **explicit**: core behavior dimensions are represented directly, not only described in prose
-- **layered**: identity, policy, task-mode adaptation, and learned user-style preferences are separate layers
+- **layered**: identity, policy, task-mode adaptation, and learned user-style preferences are separate layers with defined precedence
 - **bounded**: no style layer can override safety, approval, truthfulness, or uncertainty discipline
 - **situational**: the system can adapt by task, risk, and user state without becoming erratic
 - **inspectable**: maintainers and eventually users can see the resolved working-style state
@@ -261,11 +327,11 @@ Recommended stack:
    Purpose: stable voice, posture, relationship feel
    Source: `souls/{role}/seed.md`, optional examples
 
-   Note: `load_character_memories()` already implements a **character base sublayer** within this layer. It loads `.co-cli/memory/*.md` entries tagged with both the role name and `"character"` — decay-protected, planted entries carrying scenes, speech patterns, and behavioral observations from source material. These are assembled into the static soul block at agent creation alongside `seed.md` and mindsets. P1 work does not need to build this from scratch — it builds on this existing mechanism.
+   Note: the **character base sublayer** already exists. `souls/{role}/memories/*.md` entries tagged with the role name and `"character"` are decay-protected, planted entries carrying scenes, speech patterns, and behavioral observations from source material. These are loaded on demand via `search_canon()` in `co_cli/tools/memory/_canon_recall.py`. P1 work builds on this existing mechanism.
 
 2. **Policy layer**
    Purpose: safety, approval, truthfulness, tool-use, workflow constraints
-   Source: existing `rules/*.md`
+   Source: existing `co_cli/context/rules/01–05_*.md`
 
 3. **Working-style schema**
    Purpose: explicit behavior dimensions with stable meaning
@@ -277,7 +343,7 @@ Recommended stack:
 
 5. **Learned style preference layer**
    Purpose: user-specific communication preferences
-   Source: typed memories/preferences, not free-form recall only
+   Source: typed preference artifacts with scope/strength fields, not free-form recall only
 
 6. **Resolved style contract**
    Purpose: the compact final behavior state injected per turn
@@ -287,9 +353,9 @@ This preserves the current prompt assets while giving them a clearer contract.
 
 Implementation direction:
 
-- keep `personality` in `CoConfig` as the active role selector for the instance
-- add a structured role asset beside `seed.md` and `critique.md`
-- compute resolved style per request in `agent.py` instruction injection or adjacent helper code
+- keep `personality` in `Settings` (`co_cli/config/core.py`) as the active role selector
+- add a structured role asset beside `seed.md` and `critique.md` under `souls/{role}/`
+- compute resolved style per request in `co_cli/agent/core.py` or a new adjacent module
 - do not let the runtime load multiple role style schemas for one agent session
 
 ## 6.2 Add an explicit working-style schema
@@ -323,10 +389,11 @@ Why this helps:
 
 Implementation detail:
 
-- add `load_soul_style(role)` in `co_cli/prompts/personalities/_composer.py`
-- validate the schema at load time
+- add `souls/{role}/style.yaml` under `co_cli/personality/prompts/souls/`
+- add `load_soul_style(role)` in `co_cli/personality/prompts/loader.py` (alongside existing `load_soul_seed`, `load_soul_mindsets`, `load_soul_critique`)
+- validate the schema at load time in `co_cli/personality/prompts/validator.py`
 - fail closed on malformed files rather than silently drifting
-- expose the parsed schema through `CoConfig` or a dedicated runtime cache
+- expose the parsed schema through `Settings` or a dedicated runtime cache in `co_cli/config/`
 
 ## 6.3 Add a runtime style resolver
 
@@ -361,31 +428,22 @@ This lets co adapt intentionally instead of relying on whichever prompt fragment
 Implementation direction:
 
 - add `ResolvedStyle` and `StyleRationale` dataclasses or Pydantic models
-- add `resolve_working_style(ctx, task_context)` in a new module such as `co_cli/_style_resolver.py`
-- call it from a new `@agent.instructions` function before `inject_personality_critique`
-- keep the rendered section short, for example `## Working Style`
+- add `resolve_working_style(ctx, task_context)` in a new module `co_cli/personality/_style_resolver.py`
+- call it from a new `@agent.instructions` function in `co_cli/agent/core.py`, before or alongside `inject_personality_critique`
+- keep the rendered section short, e.g. `## Working Style`
 - store the last resolved style in session/runtime state for inspection commands and trace output
 
-## 6.4 Replace `personality-context` as the main style mechanism with typed preference records
+## 6.4 Replace flat preference artifacts as the main style mechanism with typed preference records
 
-The current tag-based memory approach should be demoted from primary mechanism to compatibility layer.
+The current `ArtifactKindEnum.PREFERENCE` kind should be extended, not replaced.
 
-Add typed preference records such as:
+Add typed fields to preference artifacts:
 
-- `communication.preference`
-- `feedback.preference`
-- `planning.preference`
-- `challenge.preference`
-- `format.preference`
-
-Each record should carry:
-
-- scope: global, project, relationship, task-type
-- strength: hard, strong, soft
-- recency
-- source
-- supersedes / superseded_by
-- do_not_override: optional bounded flag
+- `type`: `communication.preference`, `feedback.preference`, `planning.preference`, `challenge.preference`, `format.preference`
+- `scope`: global, project, relationship, task-type
+- `strength`: hard, strong, soft
+- `supersedes` / `superseded_by`: artifact id references
+- `do_not_override`: optional bounded flag
 
 Example:
 
@@ -399,7 +457,7 @@ value:
   dislikes_praise_preamble: true
 source:
   kind: user_correction
-  timestamp: 2026-03-08
+  timestamp: 2026-05-01
 status: active
 ```
 
@@ -407,10 +465,10 @@ This turns user style learning into an explicit control surface rather than inci
 
 Implementation direction:
 
-- extend the existing memory schema rather than inventing a second storage system
-- either add a new `kind: preference` or add a typed subtype under `kind: memory`
+- extend `KnowledgeArtifact` in `co_cli/memory/artifact.py` with the new fields (optional, defaulting to unset)
+- update `memory_create()` in `co_cli/tools/memory/write.py` to accept and store typed preference fields
 - update memory save/consolidation flows to emit structured preference records when the signal is clearly a stable style preference
-- keep existing `personality-context` tag support as a backward-compatible fallback during migration
+- keep existing flat `PREFERENCE` artifacts as a backward-compatible fallback during migration
 
 ## 6.5 Separate "voice" from "behavior"
 
@@ -427,18 +485,18 @@ Why this matters:
 
 Operationally:
 
-- soul examples and seed remain the main voice surface
+- soul examples and seed remain the main voice surface (no change needed)
 - working-style schema and resolver become the main behavior surface
 
 Implementation detail:
 
-- keep `seed.md`, `examples.md`, and mindset files prose-first
+- keep `seed.md`, `memories/*.md`, and mindset files prose-first
 - keep style dimensions out of examples where possible
 - use the schema/resolver to control behavior that should be reviewable and testable
 
 ## 6.6 Turn critique into a structured evaluation lens
 
-Keep `critique.md`, but pair it with explicit behavior metrics or categories.
+Keep `critique.md` injection (currently appended in `build_agent()` as `## Review lens`), but pair it with explicit behavior metrics or categories.
 
 Suggested categories:
 
@@ -460,7 +518,7 @@ This creates a real improvement loop rather than just an always-on prose reminde
 
 Implementation direction:
 
-- add a small taxonomy file under the personality assets, or document the categories centrally
+- add a small taxonomy file under `co_cli/personality/prompts/souls/` or `co_cli/context/`
 - use it in eval prompts, delivery audits, and prompt-review workflows
 - avoid automatic self-rewriting of prompts; keep human-reviewed edits as the control point
 
@@ -512,10 +570,10 @@ That is enough to materially improve quality without creating a maintenance trap
 
 ## 7.1 New data/assets
 
-- `co_cli/prompts/personalities/souls/{role}/style.yaml`
+- `co_cli/personality/prompts/souls/{role}/style.yaml`
   Defines role default dimensions and hard bounds
-- typed preference records in the existing knowledge/memory system
-- optional resolver output object in runtime state
+- Extended `KnowledgeArtifact` schema in `co_cli/memory/artifact.py` with typed preference fields
+- Optional resolver output object in runtime state
 
 Instance rule:
 
@@ -526,14 +584,16 @@ Instance rule:
 
 - `resolve_working_style(ctx, task_context) -> ResolvedStyle`
 
+Location: `co_cli/personality/_style_resolver.py`
+
 Inputs:
 
-- role defaults
-- policy bounds
+- role defaults (from `style.yaml`)
+- policy bounds (from rules)
 - task type
 - risk hints
 - project instructions
-- user style preferences
+- user style preferences (typed preference artifacts)
 
 Outputs:
 
@@ -542,26 +602,29 @@ Outputs:
 
 Likely code touchpoints:
 
-- `co_cli/agent.py`
-- `co_cli/prompts/personalities/_composer.py`
-- `co_cli/config.py` or deps construction
-- `co_cli/tools/personality.py` (internal helper only — `_load_personality_memories()`; not a registered agent tool)
-- `co_cli/_history.py`
-- `co_cli/_commands.py`
-- memory lifecycle code for typed preference extraction and update
+- `co_cli/agent/core.py` — call resolver and add `@agent.instructions` callback
+- `co_cli/personality/prompts/loader.py` — add `load_soul_style(role)` alongside existing loaders
+- `co_cli/personality/prompts/validator.py` — schema validation for `style.yaml`
+- `co_cli/config/core.py` — expose parsed style schema or resolver cache
+- `co_cli/memory/artifact.py` — extend `KnowledgeArtifact` with preference type/scope/strength fields
+- `co_cli/tools/memory/write.py` — accept and store typed preference fields in `memory_create()`
+- `co_cli/_commands.py` — add `/style` inspection command
 
 ## 7.3 Prompt contract change
 
 Current:
 
-- seed + rules + mindsets + memories + critique all become prompt text
+- seed + mindsets (all 6 joined) + rules + toolset guidance + critique all become static prompt text
+- no per-turn style injection
+- user preferences recalled on demand via `memory_search()` with no formal injection contract
 
 Recommended:
 
-- seed/examples remain prompt text
-- rules remain prompt text
-- resolved style becomes a short explicit section
-- raw preference memories are not injected directly unless needed
+- seed/examples remain static prompt text
+- rules remain static prompt text
+- all six mindsets remain static; optionally suppress low-relevance ones via resolver
+- resolved style becomes a short explicit per-turn section (`## Working Style`)
+- raw preference artifacts are not injected directly unless needed
 
 This reduces prompt sprawl and makes the style state more legible.
 
@@ -579,11 +642,12 @@ Design goal:
 
 Scope:
 
-- add `style.yaml` per role
-- add `load_soul_style(role)`
-- add `ResolvedStyle` model and resolver
-- inject a compact `## Working Style` section per turn
-- add a read-only inspection command
+- add `style.yaml` per role under `co_cli/personality/prompts/souls/{role}/`
+- add `load_soul_style(role)` to `co_cli/personality/prompts/loader.py`
+- add schema validation in `co_cli/personality/prompts/validator.py`
+- add `ResolvedStyle` model and `resolve_working_style()` in `co_cli/personality/_style_resolver.py`
+- inject a compact `## Working Style` section per turn via `@agent.instructions` in `co_cli/agent/core.py`
+- add `/style` read-only inspection command in `co_cli/_commands.py`
 - define precedence between seed, rules, style schema, project instructions, and learned preferences
 
 Expected outcome:
@@ -602,7 +666,8 @@ Design goal:
 
 Scope:
 
-- add typed preference records and migration path from `personality-context`
+- extend `KnowledgeArtifact` in `co_cli/memory/artifact.py` with typed preference fields (type, scope, strength, supersedes)
+- update `memory_create()` and `memory_modify()` in `co_cli/tools/memory/write.py`
 - update memory extraction/consolidation to recognize durable style preferences
 - add conflict resolution and precedence logic across global/project/task scopes
 - add behavior-quality evals and critique categories
@@ -624,7 +689,7 @@ If the schema is too rigid, co may feel mechanical.
 
 Mitigation:
 
-- keep voice in prose
+- keep voice in prose (seed.md, memories/)
 - structure only the dimensions that materially affect trust and usefulness
 
 ## Risk: duplicate control surfaces
@@ -642,8 +707,9 @@ A naive implementation would add more prompt text instead of clarifying it.
 
 Mitigation:
 
-- inject only resolved style summary
+- inject only resolved style summary per turn
 - avoid dumping raw preference lists into every turn
+- optionally suppress irrelevant mindsets when task type is clear
 
 ## Risk: false precision
 
@@ -658,15 +724,15 @@ Mitigation:
 
 # 10. Bottom Line
 
-co's current personality system is already thoughtful and better than generic prompt styling.
+co's current personality system is already thoughtful and better than generic prompt styling. The refactoring since March 2026 has improved maintainability: personality lives in its own package (`co_cli/personality/`), assembly is centralized (`co_cli/context/assembly.py`), and rules, mindsets, critique, and canon are clearly separated.
 
-Its main limitation is that it is still a **well-authored prompt stack**, not yet a **first-class self model**.
+Its main remaining limitation is that it is still a **well-authored prompt stack**, not yet a **first-class self model**.
 
 The frontier gap is not lack of charm. It is lack of:
 
-- explicit behavior dimensions
-- structured style preferences
-- resolved per-turn working-style state
-- inspection and quality loops
+- explicit behavior dimensions (style.yaml per role)
+- structured style preferences (typed, scoped, with precedence)
+- resolved per-turn working-style state (resolver injecting `## Working Style`)
+- inspection and quality loops (`/style` command, critique categories)
 
 The right move is not to make co "more personality-driven." The right move is to make co's working style **more explicit, more bounded, more inspectable, and easier to improve without destabilizing trust**.

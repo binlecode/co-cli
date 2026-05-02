@@ -38,7 +38,7 @@ See `docs/specs/system.md` for architecture, `CoDeps`, capability surface, and s
 
 Three-channel recall model: **artifacts** (persistent knowledge artifacts), **sessions** (past session transcripts), and **canon** (read-only character scenes). Static personality content (seed, mindsets, personality-context artifacts) is auto-injected into the system prompt; everything else is dynamic, loaded on-demand via tools, and never baked into the system prompt.
 
-Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store artifact entries (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (artifacts + Obsidian); session transcripts have a separate index at `~/.co-cli/session-index.db`. Implementation lives in `co_cli/memory/` (sessions and artifacts as co-equal kinds) with the unified tool surface in `co_cli/tools/memory/`. See `docs/specs/memory-session.md`, `docs/specs/memory-knowledge.md`, and `docs/specs/memory-canon.md` for the Memory model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
+Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store artifact entries (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (artifacts + Obsidian + sessions). Implementation lives in `co_cli/memory/` (sessions and artifacts as co-equal kinds) with the unified tool surface in `co_cli/tools/memory/`. See `docs/specs/memory.md` for the Memory model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
 
 Four unified `memory_*` tools cover all channels:
 - `memory_search` — recall across artifacts (BM25) + sessions (LLM-summarized) + canon in one call

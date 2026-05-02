@@ -53,7 +53,7 @@ critique) prime behavior on every turn — they belong in static priming. Canon 
 discrete by nature: a scene either matches the moment or doesn't. Static injection of canon
 pays full token cost whether it lands or not, while leaving the model to extrapolate from
 unmatched scenes. Canon is therefore better served by on-demand recall — searched when the
-moment invokes it — while distilled assets stay always-on. See `memory-canon.md` for the canon
+moment invokes it — while distilled assets stay always-on. See `memory.md` for the canon
 recall channel design.
 
 ### Soul File Layout
