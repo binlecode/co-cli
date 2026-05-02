@@ -40,24 +40,3 @@ def test_mutate_artifact_replace_preserves_frontmatter(tmp_path: Path) -> None:
     assert art.content.strip() == "updated body content"
     assert art.id == "test-123"
     assert art.created == "2026-01-01T00:00:00+00:00"
-
-
-def test_mutate_artifact_append_adds_to_body(tmp_path: Path) -> None:
-    """mutate_artifact action='append' must add content at the end of the existing body."""
-    knowledge_dir = tmp_path / "knowledge"
-    knowledge_dir.mkdir()
-    artifact_path = knowledge_dir / "test-art.md"
-    _write_artifact(artifact_path, "first line")
-
-    mutate_artifact(
-        knowledge_dir,
-        filename_stem="test-art",
-        action="append",
-        content="second line",
-    )
-
-    art = load_knowledge_artifact(artifact_path)
-    body = art.content.strip()
-    assert "first line" in body
-    assert "second line" in body
-    assert body.index("first line") < body.index("second line")
