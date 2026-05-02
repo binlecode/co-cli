@@ -175,7 +175,6 @@ def google_drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
                     source="drive",
                     path=file_id,
                     title=file.get("name"),
-                    content=text,
                     hash=_hashlib.sha256(text.encode()).hexdigest(),
                 )
                 from co_cli.memory.chunker import chunk_text

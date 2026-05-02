@@ -105,7 +105,6 @@ def reindex(
         kind=artifact_kind,
         path=str(path),
         title=frontmatter.get("title") or filename_stem,
-        content=body.strip(),
         mtime=path.stat().st_mtime,
         hash=content_hash,
         created=frontmatter.get("created"),

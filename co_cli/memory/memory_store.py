@@ -47,21 +47,16 @@ CREATE TABLE IF NOT EXISTS docs (
     kind        TEXT,
     path        TEXT NOT NULL,
     title       TEXT,
-    content     TEXT,
     mtime       REAL,
     hash        TEXT,
-    tags        TEXT,
     category    TEXT,
     created     TEXT,
     updated     TEXT,
-    provenance  TEXT,
-    certainty   TEXT,
-    chunk_id    INTEGER DEFAULT 0,
     type        TEXT,
     description TEXT,
     source_ref  TEXT,
     artifact_id TEXT,
-    UNIQUE(source, path, chunk_id)
+    UNIQUE(source, path)
 );
 
 CREATE TABLE IF NOT EXISTS embedding_cache (
@@ -112,11 +107,11 @@ SELECT c.source, c.doc_path AS path,
        snippet(chunks_fts, 0, '>', '<', '...', 40) AS snippet,
        bm25(chunks_fts) AS rank,
        c.chunk_index, c.start_line, c.end_line,
-       d.kind, d.title, d.category, d.created, d.updated, d.provenance, d.certainty,
+       d.kind, d.title, d.category, d.created, d.updated,
        d.source_ref, d.artifact_id
   FROM chunks_fts
   JOIN chunks c ON c.rowid = chunks_fts.rowid
-  JOIN docs d ON d.source = c.source AND d.path = c.doc_path AND d.chunk_id = 0
+  JOIN docs d ON d.source = c.source AND d.path = c.doc_path
  WHERE chunks_fts MATCH ?
 """
 
@@ -147,9 +142,9 @@ def _chunks_like_search(
         f" substr(c.content, 1, 300) AS snippet, {rank_expr} AS rank,"
         " c.chunk_index, c.start_line, c.end_line,"
         " d.kind, d.title, d.category, d.created, d.updated,"
-        " d.provenance, d.certainty, d.source_ref, d.artifact_id"
+        " d.source_ref, d.artifact_id"
         " FROM chunks c"
-        " JOIN docs d ON d.source = c.source AND d.path = c.doc_path AND d.chunk_id = 0"
+        " JOIN docs d ON d.source = c.source AND d.path = c.doc_path"
         f" WHERE ({like_conds})"
     )
     if sources is not None and len(sources) == 1:
@@ -197,8 +192,6 @@ class SearchResult:
     category: str | None
     created: str | None
     updated: str | None
-    provenance: str | None = None
-    certainty: str | None = None
     confidence: float | None = None
     chunk_index: int | None = None
     start_line: int | None = None
@@ -260,7 +253,6 @@ class MemoryStore:
         self._embed_api_url = config.knowledge.embed_api_url
         self._cross_encoder_url = config.knowledge.cross_encoder_reranker_url
         self._tei_batch_size = config.knowledge.tei_rerank_batch_size
-        self._llm_reranker = config.knowledge.llm_reranker
         self._chunk_size = config.knowledge.chunk_size
         self._chunk_overlap = (
             max(0, min(config.knowledge.chunk_overlap, config.knowledge.chunk_size - 1))
@@ -270,20 +262,9 @@ class MemoryStore:
         self._session_chunk_tokens = config.knowledge.session_chunk_tokens
         self._session_chunk_overlap = config.knowledge.session_chunk_overlap
 
-        # Determine effective reranker provider from new config fields:
-        # cross-encoder (TEI) takes priority; LLM listwise as fallback; none if neither configured.
-        if self._cross_encoder_url is not None:
-            self._reranker_provider = "tei"
-        elif self._llm_reranker is not None:
-            _p = self._llm_reranker.provider
-            self._reranker_provider = (
-                "ollama" if _p == "ollama" else ("gemini" if _p == "gemini" else "none")
-            )
-        else:
-            self._reranker_provider = "none"
+        self._reranker_provider = "tei" if self._cross_encoder_url is not None else "none"
 
         from co_cli.memory._embedder import build_embedder
-        from co_cli.memory._reranker import build_llm_reranker
 
         self._embed_fn = build_embedder(
             self._embedding_provider,
@@ -292,47 +273,11 @@ class MemoryStore:
             self._embed_api_url,
             self._llm_api_key,
         )
-        if self._llm_reranker is not None:
-            _p = self._llm_reranker.provider
-            _llm_rerank_provider = (
-                "ollama" if _p == "ollama" else ("gemini" if _p == "gemini" else "none")
-            )
-            _llm_rerank_model = self._llm_reranker.model
-        else:
-            _llm_rerank_provider = "none"
-            _llm_rerank_model = ""
-        self._rerank_llm_fn = build_llm_reranker(
-            _llm_rerank_provider,
-            self._llm_host,
-            _llm_rerank_model,
-            self._llm_api_key,
-        )
 
         self._conn = sqlite3.connect(str(self._db_path), timeout=5)  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
         self._conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
-
-        try:
-            _existing_cols = {
-                row[1] for row in self._conn.execute("PRAGMA table_info(docs)").fetchall()
-            }
-            for _col in ("source_ref", "artifact_id"):
-                if _col not in _existing_cols:
-                    self._conn.execute(f"ALTER TABLE docs ADD COLUMN {_col} TEXT")
-                    logger.info("MemoryStore: migrated docs table — added column %s", _col)
-            # Drop dead doc-level FTS/vec tables and triggers (superseded by chunks_fts/chunks_vec).
-            for _trigger in ("docs_ai", "docs_ad", "docs_au"):
-                self._conn.execute(f"DROP TRIGGER IF EXISTS {_trigger}")
-            self._conn.execute("DROP TABLE IF EXISTS docs_fts")
-            for _row in self._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'docs_vec_%'"
-            ).fetchall():
-                self._conn.execute(f"DROP TABLE IF EXISTS {_row[0]}")
-            self._conn.commit()
-        except Exception as _e:
-            self._conn.close()
-            raise RuntimeError("MemoryStore: schema migration failed") from _e
 
         if self._backend == "hybrid":
             try:
@@ -375,7 +320,6 @@ class MemoryStore:
         kind: str | None = None,
         path: str,
         title: str | None = None,
-        content: str | None = None,
         mtime: float | None = None,
         hash: str | None = None,
         category: str | None = None,
@@ -393,28 +337,25 @@ class MemoryStore:
         Uses INSERT OR REPLACE for upsert semantics.
         """
         existing = self._conn.execute(
-            "SELECT hash FROM docs WHERE source = ? AND path = ? AND chunk_id = 0",
+            "SELECT hash FROM docs WHERE source = ? AND path = ?",
             (source, path),
         ).fetchone()
 
         if hash is not None and existing is not None and existing["hash"] == hash:
             return  # unchanged
 
-        # Delete existing rows for this path
         self._conn.execute("DELETE FROM docs WHERE source = ? AND path = ?", (source, path))
 
-        content_str = content or ""
         self._conn.execute(
             """INSERT INTO docs
-                   (source, kind, path, title, content, mtime, hash, category,
-                    created, updated, type, description, source_ref, artifact_id, chunk_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                   (source, kind, path, title, mtime, hash, category,
+                    created, updated, type, description, source_ref, artifact_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 source,
                 kind,
                 path,
                 title,
-                content_str,
                 mtime,
                 hash,
                 category,
@@ -464,26 +405,19 @@ class MemoryStore:
         )
 
         for chunk in chunks:
-            self._conn.execute(
+            cur = self._conn.execute(
                 """INSERT INTO chunks (source, doc_path, chunk_index, content, start_line, end_line)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (source, doc_path, chunk.index, chunk.content, chunk.start_line, chunk.end_line),
             )
-
-        if self._backend == "hybrid":
-            for chunk in chunks:
+            if self._backend == "hybrid":
                 emb = self._embed_cached(chunk.content or "")
                 if emb is not None:
-                    row = self._conn.execute(
-                        "SELECT rowid FROM chunks WHERE source=? AND doc_path=? AND chunk_index=?",
-                        (source, doc_path, chunk.index),
-                    ).fetchone()
-                    if row:
-                        blob = struct.pack(f"{len(emb)}f", *emb)
-                        self._conn.execute(
-                            f"INSERT INTO {self._chunks_vec_table}(rowid, embedding) VALUES (?, ?)",
-                            (row["rowid"], blob),
-                        )
+                    blob = struct.pack(f"{len(emb)}f", *emb)
+                    self._conn.execute(
+                        f"INSERT INTO {self._chunks_vec_table}(rowid, embedding) VALUES (?, ?)",
+                        (cur.lastrowid, blob),
+                    )
 
         self._conn.commit()
 
@@ -579,13 +513,13 @@ class MemoryStore:
         try:
             emb = self._embed_cached(query)
             if emb is not None:
-                vec_chunks = self._vec_search(
-                    emb,
+                vec_chunks = self._vec_chunks_search(
+                    struct.pack(f"{len(emb)}f", *emb),
                     sources=sources,
                     kinds=kinds,
                     created_after=created_after,
                     created_before=created_before,
-                    limit=limit * 4,
+                    limit=limit * 16,
                 )
                 merged = self._hybrid_merge(fts_chunks, vec_chunks)
                 return self._rerank_results(query, merged, limit)
@@ -599,6 +533,25 @@ class MemoryStore:
                 fallback_seen[r.path] = r
         fts_results = sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)
         return self._rerank_results(query, fts_results, limit)
+
+    @staticmethod
+    def _chunk_row_to_result(row: Any) -> "SearchResult":
+        return SearchResult(
+            source=row["source"],
+            kind=row["kind"],
+            path=row["path"],
+            title=row["title"],
+            snippet=row["snippet"],
+            score=normalize_bm25(row["rank"]),
+            category=row["category"],
+            created=row["created"],
+            updated=row["updated"],
+            chunk_index=row["chunk_index"],
+            start_line=row["start_line"],
+            end_line=row["end_line"],
+            source_ref=row["source_ref"],
+            artifact_id=row["artifact_id"],
+        )
 
     def _fts_search(
         self,
@@ -629,32 +582,7 @@ class MemoryStore:
             limit=chunks_fetch_limit,
         )
 
-        results: list[SearchResult] = []
-        for row, _leg in all_rows:
-            rank = row["rank"]
-            score = normalize_bm25(rank)
-            results.append(
-                SearchResult(
-                    source=row["source"],
-                    kind=row["kind"],
-                    path=row["path"],
-                    title=row["title"],
-                    snippet=row["snippet"],
-                    score=score,
-                    category=row["category"],
-                    created=row["created"],
-                    updated=row["updated"],
-                    provenance=row["provenance"],
-                    certainty=row["certainty"],
-                    chunk_index=row["chunk_index"],
-                    start_line=row["start_line"],
-                    end_line=row["end_line"],
-                    type=None,
-                    description=None,
-                    source_ref=row["source_ref"],
-                    artifact_id=row["artifact_id"],
-                )
-            )
+        results = [self._chunk_row_to_result(row) for row, _leg in all_rows]
 
         # Deduplicate by path, keep highest score per document
         seen: dict[str, SearchResult] = {}
@@ -739,52 +667,7 @@ class MemoryStore:
             limit=chunks_fetch_limit,
         )
 
-        def _build(row: Any) -> SearchResult:
-            rank = row["rank"]
-            score = normalize_bm25(rank)
-            return SearchResult(
-                source=row["source"],
-                kind=row["kind"],
-                path=row["path"],
-                title=row["title"],
-                snippet=row["snippet"],
-                score=score,
-                category=row["category"],
-                created=row["created"],
-                updated=row["updated"],
-                provenance=row["provenance"],
-                certainty=row["certainty"],
-                chunk_index=row["chunk_index"],
-                start_line=row["start_line"],
-                end_line=row["end_line"],
-                type=None,
-                description=None,
-                source_ref=row["source_ref"],
-                artifact_id=row["artifact_id"],
-            )
-
-        return [_build(row) for row, _leg in chunk_rows]
-
-    def _vec_search(
-        self,
-        embedding: list[float],
-        *,
-        sources: list[str] | None,
-        kinds: list[str] | None,
-        created_after: str | None,
-        created_before: str | None,
-        limit: int,
-    ) -> list[SearchResult]:
-        """Vector search against chunks_vec (non-memory sources only)."""
-        blob = struct.pack(f"{len(embedding)}f", *embedding)
-        return self._vec_chunks_search(
-            blob,
-            sources=sources,
-            kinds=kinds,
-            created_after=created_after,
-            created_before=created_before,
-            limit=limit * 4,
-        )
+        return [self._chunk_row_to_result(row) for row, _leg in chunk_rows]
 
     def _vec_chunks_search(
         self,
@@ -829,8 +712,8 @@ class MemoryStore:
         doc_ph = ",".join("?" * len(doc_paths))
         doc_sql = (
             f"SELECT source, kind, path, title, category, created, updated, "
-            f"provenance, certainty, type, description, source_ref, artifact_id"
-            f" FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
+            f"type, description, source_ref, artifact_id"
+            f" FROM docs WHERE path IN ({doc_ph})"
         )
         doc_params: list[Any] = doc_paths
         kind_sql, kind_params = _kind_clause(kinds)
@@ -863,8 +746,6 @@ class MemoryStore:
                     category=meta["category"],
                     created=meta["created"],
                     updated=meta["updated"],
-                    provenance=meta["provenance"],
-                    certainty=meta["certainty"],
                     chunk_index=c["chunk_index"],
                     start_line=c["start_line"],
                     end_line=c["end_line"],
@@ -986,47 +867,18 @@ class MemoryStore:
         candidates: list[SearchResult],
         limit: int,
     ) -> list[SearchResult]:
-        """Rerank candidates using the configured provider. Falls back on error."""
+        """Rerank via TEI cross-encoder, or pass-through if TEI is not configured."""
         if self._reranker_provider == "none" or not candidates:
             return candidates[:limit]
         try:
-            if self._reranker_provider == "tei":
-                return self._tei_rerank(query, candidates, limit)
-            texts = self._fetch_reranker_texts(candidates)
-            scores = self._generate_rerank_scores(query, texts)
-            reranked = [dataclasses.replace(r, score=scores[i]) for i, r in enumerate(candidates)]
-            reranked.sort(key=lambda r: r.score, reverse=True)
-            return reranked[:limit]
+            return self._tei_rerank(query, candidates, limit)
         except Exception as e:
-            logger.warning(f"Reranking failed ({self._reranker_provider}), using unranked: {e}")
+            logger.warning(f"Reranking failed (tei), using unranked: {e}")
             return candidates[:limit]
 
     def _fetch_reranker_texts(self, candidates: list[SearchResult]) -> list[str]:
-        """Fetch relevant text for reranking.
-
-        chunk_index is not None → fetch chunks.content (exact matching chunk text).
-        chunk_index is None → fetch docs.content[:200] preamble (memory results).
-        """
-        doc_level = [r for r in candidates if r.chunk_index is None]
-        chunk_level = [r for r in candidates if r.chunk_index is not None]
-
-        # Batch-fetch doc preambles (memory / doc-level results)
-        doc_texts: dict[str, str] = {}
-        if doc_level:
-            paths = [r.path for r in doc_level]
-            ph = ",".join("?" * len(paths))
-            rows = self._conn.execute(
-                f"SELECT path, title, content FROM docs WHERE path IN ({ph}) AND chunk_id = 0",
-                paths,
-            ).fetchall()
-            for row in rows:
-                title = row["title"] or ""
-                content = (row["content"] or "")[:200]
-                doc_texts[row["path"]] = f"{title}\n{content}".strip()
-
-        # Per-row chunk content fetch (candidate sets are <= limit*4, typically 20-40 rows)
         chunk_texts: dict[tuple, str] = {}
-        for r in chunk_level:
+        for r in candidates:
             row = self._conn.execute(
                 "SELECT content FROM chunks WHERE source=? AND doc_path=? AND chunk_index=?",
                 (r.source, r.path, r.chunk_index),
@@ -1034,47 +886,12 @@ class MemoryStore:
             if row and row["content"]:
                 chunk_texts[(r.source, r.path, r.chunk_index)] = row["content"]
 
-        texts: list[str] = []
-        for r in candidates:
-            if r.chunk_index is None:
-                texts.append(doc_texts.get(r.path) or r.title or "")
-            else:
-                content = chunk_texts.get((r.source, r.path, r.chunk_index), "")
-                texts.append(f"{r.title or ''}\n{content}".strip() if content else r.title or "")
-        return texts
-
-    def _generate_rerank_scores(self, query: str, texts: list[str]) -> list[float]:
-        """Generate relevance scores for texts. Returns [0.0]*n for unknown provider."""
-        if self._reranker_provider in ("ollama", "gemini"):
-            return self._llm_rerank(query, texts)
-        logger.warning(
-            f"Unknown reranker provider {self._reranker_provider!r}; returning zero scores"
-        )
-        return [0.0] * len(texts)
-
-    def _llm_rerank(self, query: str, texts: list[str]) -> list[float]:
-        """LLM listwise rerank. Returns scores aligned to input candidate order."""
-        n = len(texts)
-        if n == 0:
-            return []
-        numbered = "\n\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
-        prompt = (
-            f"Rank these documents by relevance to the query: '{query}'\n\n"
-            f"Documents:\n{numbered}\n\n"
-            f"Return a JSON array of document numbers in order from most to least relevant. "
-            f"Include all {n} numbers. Example: [{', '.join(str(i + 1) for i in range(n))}]"
-        )
-        ranked_indices = self._call_reranker_llm(prompt, n)
-        scores = [0.0] * n
-        for rank, one_idx in enumerate(ranked_indices):
-            idx = one_idx - 1
-            if 0 <= idx < n:
-                scores[idx] = 1.0 - rank / n
-        return scores
-
-    def _call_reranker_llm(self, prompt: str, n: int) -> list[int]:
-        """Dispatch to provider-specific LLM and return list of 1-based ranked indices."""
-        return self._rerank_llm_fn(prompt, n)
+        return [
+            f"{r.title or ''}\n{chunk_texts.get((r.source, r.path, r.chunk_index), '')}".strip()
+            or r.title
+            or ""
+            for r in candidates
+        ]
 
     def _tei_rerank(
         self,
@@ -1113,7 +930,7 @@ class MemoryStore:
     def needs_reindex(self, source: str, path: str, current_hash: str) -> bool:
         """Return True if the file at path needs re-indexing (hash changed or absent)."""
         row = self._conn.execute(
-            "SELECT hash FROM docs WHERE source = ? AND path = ? AND chunk_id = 0",
+            "SELECT hash FROM docs WHERE source = ? AND path = ?",
             (source, path),
         ).fetchone()
         if row is None:

@@ -42,12 +42,6 @@ class IndexSourceEnum(StrEnum):
     DRIVE = "drive"
 
 
-class CertaintyEnum(StrEnum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-
 @dataclass
 class KnowledgeArtifact:
     """A single reusable knowledge artifact (preferences, rules, articles, notes, …)."""
@@ -63,7 +57,6 @@ class KnowledgeArtifact:
     related: list[str] = field(default_factory=list)
     source_type: str | None = None
     source_ref: str | None = None
-    certainty: str | None = None
     decay_protected: bool = False
     last_recalled: str | None = None
     recall_count: int = 0
@@ -83,7 +76,6 @@ def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> Knowle
         related=list(frontmatter.get("related") or []),
         source_type=frontmatter.get("source_type"),
         source_ref=frontmatter.get("source_ref"),
-        certainty=frontmatter.get("certainty"),
         decay_protected=bool(frontmatter.get("decay_protected", False)),
         last_recalled=frontmatter.get("last_recalled"),
         recall_count=int(frontmatter.get("recall_count", 0) or 0),

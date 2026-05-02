@@ -73,7 +73,6 @@ def artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
         ("related", list(artifact.related)),
         ("source_type", artifact.source_type),
         ("source_ref", artifact.source_ref),
-        ("certainty", artifact.certainty),
         ("last_recalled", artifact.last_recalled),
         ("recall_count", artifact.recall_count),
     ]
