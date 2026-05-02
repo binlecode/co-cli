@@ -43,7 +43,7 @@ Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store artifact entri
 Four unified `memory_*` tools cover all channels:
 - `memory_search` — recall across artifacts (BM25) + sessions (LLM-summarized) + canon in one call
 - `memory_list` — paginated inventory of artifacts
-- `memory_create` — save a new artifact (all kinds: preference, feedback, rule, article, reference, note, decision)
+- `memory_create` — save a new artifact (all kinds: user | rule | article | note)
 - `memory_modify` — append or surgically replace a passage in an existing artifact
 
 Full-body artifact reads use the generic `file_read` tool against the path that

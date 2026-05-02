@@ -57,7 +57,10 @@ async def _subcmd_memory_list(
 ) -> None:
     """Display matching knowledge artifacts — one line each, with a count footer."""
     kind_filter = filters.get("kind")
-    entries = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind_filter)
+    entries = load_knowledge_artifacts(
+        ctx.deps.knowledge_dir,
+        artifact_kinds=[kind_filter] if kind_filter is not None else None,
+    )
     entries = _apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
@@ -74,7 +77,10 @@ async def _subcmd_memory_count(
 ) -> None:
     """Print the count of matching artifacts."""
     kind_filter = filters.get("kind")
-    entries = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind_filter)
+    entries = load_knowledge_artifacts(
+        ctx.deps.knowledge_dir,
+        artifact_kinds=[kind_filter] if kind_filter is not None else None,
+    )
     entries = _apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
@@ -97,7 +103,10 @@ async def _subcmd_memory_forget(
         return None
 
     kind_filter = filters.get("kind")
-    entries = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind_filter)
+    entries = load_knowledge_artifacts(
+        ctx.deps.knowledge_dir,
+        artifact_kinds=[kind_filter] if kind_filter is not None else None,
+    )
     entries = _apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)

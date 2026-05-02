@@ -12,7 +12,7 @@ def _write_knowledge_file(path: Path, *, body: str):
     fm = {
         "id": "test-1",
         "kind": "knowledge",
-        "artifact_kind": "preference",
+        "artifact_kind": "user",
         "created": "2026-01-01T00:00:00+00:00",
     }
     path.write_text(
@@ -40,7 +40,7 @@ def test_fts5_search_finds_indexed_entry(tmp_path: Path):
     store = MemoryStore(config=config, memory_db_path=tmp_path / "search.db")
     try:
         store.sync_dir("knowledge", knowledge_dir)
-        results = store.search("Finch robot", source="knowledge", limit=5)
+        results = store.search("Finch robot", sources=["knowledge"], limit=5)
         assert len(results) > 0, "FTS5 search returned no results for a synced artifact"
         assert results[0].path == expected_path, (
             f"expected result path {expected_path!r}, got {results[0].path!r}"

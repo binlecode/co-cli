@@ -234,7 +234,10 @@ def save_artifact(
     # Jaccard dedup path
     if consolidation_enabled:
         threshold = consolidation_similarity_threshold
-        existing = load_knowledge_artifacts(knowledge_dir, artifact_kind=artifact_kind)
+        existing = load_knowledge_artifacts(
+            knowledge_dir,
+            artifact_kinds=[artifact_kind] if artifact_kind is not None else None,
+        )
         matches = find_similar_artifacts(content, artifact_kind, existing, threshold)
         if matches:
             best_artifact, best_score = matches[0]

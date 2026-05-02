@@ -1,10 +1,10 @@
 """Unified knowledge artifact data model.
 
-KnowledgeArtifact is the single reusable-artifact model — preferences,
-decisions, rules, feedback, articles, references, and notes share this schema.
-Memory (raw transcripts) lives in ``sessions/``; knowledge (everything reusable)
-lives in ``knowledge_dir/``. See ``docs/specs/memory-knowledge.md`` for the
-knowledge model and ``docs/specs/memory-session.md`` for session recall.
+KnowledgeArtifact is the single reusable-artifact model — user, rule, article,
+and note artifacts share this schema. Memory (raw transcripts) lives in
+``sessions/``; knowledge (everything reusable) lives in ``knowledge_dir/``.
+See ``docs/specs/memory-knowledge.md`` for the knowledge model and
+``docs/specs/memory-session.md`` for session recall.
 """
 
 from __future__ import annotations
@@ -21,12 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 class ArtifactKindEnum(StrEnum):
-    PREFERENCE = "preference"
-    DECISION = "decision"
+    USER = "user"
     RULE = "rule"
-    FEEDBACK = "feedback"
     ARTICLE = "article"
-    REFERENCE = "reference"
     NOTE = "note"
 
 
@@ -113,7 +110,7 @@ def load_knowledge_artifact(path: Path) -> KnowledgeArtifact:
 def load_knowledge_artifacts(
     knowledge_dir: Path,
     *,
-    artifact_kind: str | None = None,
+    artifact_kinds: list[str] | None = None,
 ) -> list[KnowledgeArtifact]:
     """Load all .md files under knowledge_dir as KnowledgeArtifacts.
 
@@ -130,7 +127,7 @@ def load_knowledge_artifacts(
         except Exception as exc:
             logger.warning("Failed to load %s: %s", path, exc)
             continue
-        if artifact_kind is not None and artifact.artifact_kind != artifact_kind:
+        if artifact_kinds is not None and artifact.artifact_kind not in artifact_kinds:
             continue
         artifacts.append(artifact)
     return artifacts

@@ -6,7 +6,7 @@ source writes to. The ``source`` column distinguishes origin; the ``kind`` /
 
 Source namespace:
   source='knowledge' — reusable artifacts under ~/.co-cli/knowledge/
-                       (preferences, rules, feedback, articles, notes, references)
+                       (user, rule, article, note)
   source='obsidian'  — Obsidian vault notes
   source='drive'     — Google Drive docs (indexed on read)
 
@@ -126,7 +126,7 @@ def _chunks_like_search(
     tokens: list[str],
     *,
     sources: list[str] | None,
-    kind: str | None,
+    kinds: list[str] | None,
     created_after: str | None,
     created_before: str | None,
     limit: int,
@@ -159,9 +159,9 @@ def _chunks_like_search(
         ph = ",".join("?" * len(sources))
         lsql += f" AND c.source IN ({ph})"
         lp.extend(sources)
-    if kind is not None:
-        lsql += " AND d.kind = ?"
-        lp.append(kind)
+    kind_sql, kind_params = _kind_clause(kinds, "d.kind")
+    lsql += kind_sql
+    lp.extend(kind_params)
     if created_after is not None:
         lsql += " AND d.created >= ?"
         lp.append(created_after)
@@ -176,13 +176,12 @@ def _chunks_like_search(
         return []
 
 
-def _coerce_sources(source: str | list[str] | None) -> list[str] | None:
-    """Normalize source arg to list[str], or None meaning all sources."""
-    if source is None:
-        return None
-    if isinstance(source, str):
-        return [source]
-    return list(source)
+def _kind_clause(kinds: list[str] | None, col: str = "kind") -> tuple[str, list]:
+    """Return (sql_fragment, params) for a kind IN filter, or ('', []) if None."""
+    if kinds is None:
+        return "", []
+    placeholders = ",".join("?" * len(kinds))
+    return f" AND {col} IN ({placeholders})", list(kinds)
 
 
 @dataclass
@@ -237,7 +236,7 @@ class MemoryStore:
     Usage:
         idx = MemoryStore(config=Settings())
         idx.sync_dir("knowledge", knowledge_dir)
-        results = idx.search("pytest testing")
+        results = idx.search("pytest testing", sources=["knowledge"])
         idx.close()
     """
 
@@ -514,8 +513,8 @@ class MemoryStore:
         self,
         query: str,
         *,
-        source: str | list[str] | None = None,
-        kind: str | None = None,
+        sources: list[str] | None = None,
+        kinds: list[str] | None = None,
         created_after: str | None = None,
         created_before: str | None = None,
         limit: int = 5,
@@ -528,10 +527,10 @@ class MemoryStore:
         In hybrid mode, falls back to FTS5 if the embedding provider fails.
 
         Source filter shortcuts:
-          source="knowledge" → local knowledge artifacts
-          source="obsidian"  → Obsidian vault notes only
-          source="drive"     → Google Drive documents only
-          source=["knowledge", "obsidian", "drive"] → multiple sources via IN-clause
+          sources=["knowledge"] → local knowledge artifacts
+          sources=["obsidian"]  → Obsidian vault notes only
+          sources=["drive"]     → Google Drive documents only
+          sources=["knowledge", "obsidian", "drive"] → multiple sources via IN-clause
         """
         if self._build_fts_query(query) is None:
             return []
@@ -539,8 +538,8 @@ class MemoryStore:
         if self._backend == "hybrid":
             return self._hybrid_search(
                 query,
-                source=source,
-                kind=kind,
+                sources=sources,
+                kinds=kinds,
                 created_after=created_after,
                 created_before=created_before,
                 limit=limit,
@@ -550,8 +549,8 @@ class MemoryStore:
         fetch_limit = limit * 4 if self._reranker_provider != "none" else limit
         results = self._fts_search(
             query,
-            source=source,
-            kind=kind,
+            sources=sources,
+            kinds=kinds,
             created_after=created_after,
             created_before=created_before,
             limit=fetch_limit,
@@ -562,8 +561,8 @@ class MemoryStore:
         self,
         query: str,
         *,
-        source: str | list[str] | None,
-        kind: str | None,
+        sources: list[str] | None,
+        kinds: list[str] | None,
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -571,8 +570,8 @@ class MemoryStore:
         """Hybrid BM25 + vector search with chunk-level RRF. Falls back to FTS5."""
         fts_chunks = self._fts_chunks_raw(
             query,
-            source=source,
-            kind=kind,
+            sources=sources,
+            kinds=kinds,
             created_after=created_after,
             created_before=created_before,
             limit=limit * 4,
@@ -582,8 +581,8 @@ class MemoryStore:
             if emb is not None:
                 vec_chunks = self._vec_search(
                     emb,
-                    source=source,
-                    kind=kind,
+                    sources=sources,
+                    kinds=kinds,
                     created_after=created_after,
                     created_before=created_before,
                     limit=limit * 4,
@@ -605,8 +604,8 @@ class MemoryStore:
         self,
         query: str,
         *,
-        source: str | list[str] | None,
-        kind: str | None,
+        sources: list[str] | None,
+        kinds: list[str] | None,
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -621,11 +620,10 @@ class MemoryStore:
         # other matching documents before Python-side doc-level dedup can run.
         chunks_fetch_limit = limit * 20
 
-        nonmem = _coerce_sources(source)
         all_rows: list[tuple[Any, str]] = self._run_chunks_fts(
             fts_query,
-            sources=nonmem,
-            kind=kind,
+            sources=sources,
+            kinds=kinds,
             created_after=created_after,
             created_before=created_before,
             limit=chunks_fetch_limit,
@@ -671,7 +669,7 @@ class MemoryStore:
         fts_query: str,
         *,
         sources: list[str] | None,
-        kind: str | None,
+        kinds: list[str] | None,
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -689,9 +687,9 @@ class MemoryStore:
             placeholders = ",".join("?" * len(sources))
             sql += f" AND c.source IN ({placeholders})"
             params.extend(sources)
-        if kind is not None:
-            sql += " AND d.kind = ?"
-            params.append(kind)
+        kind_sql, kind_params = _kind_clause(kinds, "d.kind")
+        sql += kind_sql
+        params.extend(kind_params)
         if created_after is not None:
             sql += " AND d.created >= ?"
             params.append(created_after)
@@ -706,7 +704,7 @@ class MemoryStore:
                 conn,
                 tokens,
                 sources=sources,
-                kind=kind,
+                kinds=kinds,
                 created_after=created_after,
                 created_before=created_before,
                 limit=limit,
@@ -719,8 +717,8 @@ class MemoryStore:
         self,
         query: str,
         *,
-        source: str | list[str] | None,
-        kind: str | None,
+        sources: list[str] | None,
+        kinds: list[str] | None,
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -732,11 +730,10 @@ class MemoryStore:
 
         chunks_fetch_limit = limit * 20
 
-        nonmem = _coerce_sources(source)
         chunk_rows = self._run_chunks_fts(
             fts_query,
-            sources=nonmem,
-            kind=kind,
+            sources=sources,
+            kinds=kinds,
             created_after=created_after,
             created_before=created_before,
             limit=chunks_fetch_limit,
@@ -772,19 +769,18 @@ class MemoryStore:
         self,
         embedding: list[float],
         *,
-        source: str | list[str] | None,
-        kind: str | None,
+        sources: list[str] | None,
+        kinds: list[str] | None,
         created_after: str | None,
         created_before: str | None,
         limit: int,
     ) -> list[SearchResult]:
         """Vector search against chunks_vec (non-memory sources only)."""
         blob = struct.pack(f"{len(embedding)}f", *embedding)
-        nonmem = _coerce_sources(source)
         return self._vec_chunks_search(
             blob,
-            sources=nonmem,
-            kind=kind,
+            sources=sources,
+            kinds=kinds,
             created_after=created_after,
             created_before=created_before,
             limit=limit * 4,
@@ -795,7 +791,7 @@ class MemoryStore:
         blob: bytes,
         *,
         sources: list[str] | None,
-        kind: str | None,
+        kinds: list[str] | None,
         created_after: str | None,
         created_before: str | None,
         limit: int,
@@ -837,9 +833,9 @@ class MemoryStore:
             f" FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
         )
         doc_params: list[Any] = doc_paths
-        if kind is not None:
-            doc_sql += " AND kind = ?"
-            doc_params.append(kind)
+        kind_sql, kind_params = _kind_clause(kinds)
+        doc_sql += kind_sql
+        doc_params.extend(kind_params)
         if created_after is not None:
             doc_sql += " AND created >= ?"
             doc_params.append(created_after)

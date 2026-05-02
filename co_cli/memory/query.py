@@ -13,7 +13,7 @@ def _apply_memory_filters(
 ) -> list[KnowledgeArtifact]:
     """Apply older_than_days filter to a loaded artifact list.
 
-    ``kind`` is applied upstream via ``load_knowledge_artifacts(artifact_kind=...)``
+    ``kind`` is applied upstream via ``load_knowledge_artifacts(artifact_kinds=...)``
     and is not re-applied here.
     """
     result = entries

@@ -62,7 +62,7 @@ def _fts_search_notes(
         ctx.deps.memory_store.sync_dir("obsidian", search_root)
         fts_results = ctx.deps.memory_store.search(
             query,
-            source="obsidian",
+            sources=["obsidian"],
             limit=limit + 1,
         )
         if search_root != vault:

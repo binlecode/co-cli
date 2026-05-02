@@ -48,9 +48,9 @@ async def memory_list(
     """List saved memory artifacts with IDs, dates, tags, and one-line summaries.
     Returns one page at a time (default 20 per page).
 
-    Covers all artifact kinds: preferences, decisions, rules, feedback, articles,
-    references, and notes. For targeted lookup by keyword, use memory_search.
-    For personal notes, use obsidian_list. For cloud documents, use google_drive_search.
+    Covers all artifact kinds: user, rule, article, note. For targeted lookup by keyword,
+    use memory_search. For personal notes, use obsidian_list. For cloud documents, use
+    google_drive_search.
 
     Returns a dict with:
     - display: formatted inventory — show directly to the user
@@ -64,10 +64,12 @@ async def memory_list(
     Args:
         offset: Starting position (0-based). Example: offset=20 skips the first 20 entries.
         limit: Max entries per page (default 20).
-        kind: Filter by artifact_kind (e.g. "preference", "article", "rule"). None = all.
+        kind: Filter by artifact_kind: "user", "rule", "article", or "note". None = all.
     """
     knowledge_dir = ctx.deps.knowledge_dir
-    artifacts = load_knowledge_artifacts(knowledge_dir, artifact_kind=kind)
+    artifacts = load_knowledge_artifacts(
+        knowledge_dir, artifact_kinds=[kind] if kind is not None else None
+    )
 
     if not artifacts:
         no_dir = not knowledge_dir.exists()

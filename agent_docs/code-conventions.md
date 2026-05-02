@@ -23,6 +23,8 @@ Names must reveal the class's role. Prefer these suffixes where they fit. Self-e
 
 Use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
 
+No domain-specific abbreviations. Names must be explicit and reflect functionality: `frontmatter_dict` not `fm_dict`, `source_type` not `src_type`. Standard Python/ecosystem shorthands (`id`, `dir`, `url`, `db`, `ctx`) are fine. Magic labels — opaque short strings used as keys or identifiers without a named constant — are not allowed; use an enum or a descriptive named constant instead.
+
 ## Suffix Preservation
 
 Preserve existing suffix conventions (e.g. `*Registry`, `*Info`) unless explicitly told otherwise. Before proposing a rename, verify the new name against peer codebases and existing conventions in this repo.

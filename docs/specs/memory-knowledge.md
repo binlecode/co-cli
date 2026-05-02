@@ -42,7 +42,7 @@ flowchart TD
 
 ## 2. Knowledge Artifacts
 
-Knowledge artifacts are reusable facts the agent recalls across sessions: preferences, decisions, rules, feedback, articles, references, and notes.
+Knowledge artifacts are reusable facts the agent recalls across sessions: user, rule, article, and note kinds.
 
 Storage is dual-layer:
 
@@ -58,7 +58,7 @@ Knowledge artifact schema:
 | Field | Purpose |
 | --- | --- |
 | `id` | Stable UUID |
-| `artifact_kind` | `preference`, `decision`, `rule`, `feedback`, `article`, `reference`, or `note` |
+| `artifact_kind` | `user`, `rule`, `article`, or `note` |
 | `title` | Human-readable label |
 | `description` | Short retrieval summary |
 | `created` | ISO8601 creation timestamp |
@@ -74,7 +74,7 @@ Knowledge artifact schema:
 RAG pipeline for artifact recall:
 
 ```text
-MemoryStore.search(query, source='knowledge'):
+MemoryStore.search(query, sources=['knowledge']):
     fts_chunks = FTS5 BM25 over chunks_fts
     if hybrid:
         vec_chunks = cosine search over chunks_vec
@@ -115,11 +115,11 @@ Dream lifecycle commands (`/knowledge dream`, `/knowledge restore`, `/knowledge 
 **Keyword query → three-channel parallel dispatch:**
 
 ```
-memory_search(ctx, query, kind, limit)              # tools/memory/recall.py
+memory_search(ctx, query, kinds, limit)             # tools/memory/recall.py
   └─ asyncio.gather(
-       ├─ _search_artifacts(ctx, query, kind, limit)
+       ├─ _search_artifacts(ctx, query, kinds, limit)
        │    ├─ [store available]
-       │    │    MemoryStore.search(query, source='knowledge', kind, limit)
+       │    │    MemoryStore.search(query, sources=['knowledge'], kinds, limit)
        │    │      ├─ FTS5 BM25 over chunks_fts
        │    │      ├─ [hybrid] embed(query) → cosine over chunks_vec → RRF merge (k=60)
        │    │      └─ _rerank_results(query, merged, limit)
@@ -129,7 +129,7 @@ memory_search(ctx, query, kind, limit)              # tools/memory/recall.py
        │         load_knowledge_artifacts() → grep_recall()     # in-memory substring fallback
        │
        ├─ _search_sessions(ctx, query, span)
-       │    └─ MemoryStore.search(query, source='session', limit=15)
+       │    └─ MemoryStore.search(query, sources=['session'], limit=15)
        │         └─ dedup to 3 unique sessions (_SESSIONS_CHANNEL_CAP); excludes current session
        │
        └─ _search_canon_channel(ctx, query)

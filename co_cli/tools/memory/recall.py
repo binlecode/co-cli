@@ -70,7 +70,7 @@ def _browse_recent(
 async def _search_artifacts(
     ctx: RunContext[CoDeps],
     query: str,
-    kind: str | None,
+    kinds: list[str] | None,
     limit: int,
 ) -> list[dict]:
     """BM25 FTS / grep fallback over knowledge artifacts. Returns channel='artifacts' dicts."""
@@ -78,8 +78,8 @@ async def _search_artifacts(
         try:
             fts_results = ctx.deps.memory_store.search(
                 query,
-                source="knowledge",
-                kind=kind,
+                sources=["knowledge"],
+                kinds=kinds,
                 limit=limit,
             )
             return [
@@ -96,7 +96,7 @@ async def _search_artifacts(
             ]
         except Exception as e:
             logger.warning("Artifacts FTS search failed, falling back to grep: %s", e)
-    artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kind=kind)
+    artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
     matches = grep_recall(artifacts, query, limit)
     return [
         {
@@ -117,7 +117,7 @@ async def _search_sessions(
     query: str,
     span: Span,
 ) -> list[dict]:
-    """Chunked recall over session transcripts via MemoryStore.search(source='session').
+    """Chunked recall over session transcripts via MemoryStore.search(sources=["session"]).
 
     Returns channel='sessions' dicts with chunk citation fields (chunk_text, start_line,
     end_line, score). Capped at _SESSIONS_CHANNEL_CAP unique sessions; no LLM calls.
@@ -131,7 +131,7 @@ async def _search_sessions(
         return []
 
     try:
-        raw = store.search(query, source="session", limit=_SESSIONS_CHANNEL_CAP * 5)
+        raw = store.search(query, sources=["session"], limit=_SESSIONS_CHANNEL_CAP * 5)
     except Exception as e:
         logger.warning("Session chunk search failed: %s", e)
         span.set_attribute("memory.sessions.count", 0)
@@ -194,7 +194,7 @@ async def _search_canon_channel(
 async def memory_search(
     ctx: RunContext[CoDeps],
     query: str = "",
-    kind: str | None = None,
+    kinds: list[str] | None = None,
     limit: int = 10,
 ) -> ToolReturn:
     """Search memory across saved artifacts, past sessions, and canon in one call.
@@ -222,10 +222,25 @@ async def memory_search(
     - The user asks about your character, your background, how you typically handle a situation, or references your source material
 
     Concrete examples:
-    - "what was my preferred test runner?" → memory_search (searches artifacts preferences)
+    - "what do I prefer for testing?" → memory_search kinds=["user"]
     - "what did we figure out about docker last time?" → memory_search (searches sessions)
     - "what was that auth bug we hit?" → memory_search (searches both)
-    - "what's our convention for logging?" → memory_search (searches artifacts rules/decisions)
+    - "what's our convention for logging?" → memory_search kinds=["rule"]
+
+    KIND SELECTION — supply up to 3 kinds as a list for targeted recall:
+
+      TAXONOMY:
+        "user"    — everything about the user: identity, preferences, corrections, feedback
+        "rule"    — prescriptive guidance: mandates, decisions with rationale, conventions
+        "article" — synthesized content: analysis, summaries, research notes, saved URLs
+        "note"    — catch-all; rarely worth filtering to directly
+
+      INTENT → KINDS:
+        "what do I prefer / how do I like / who am I..."   → ["user"]
+        "how do I usually handle / my approach to..."      → ["user", "rule"]
+        "what do I know about / what have I saved..."      → ["article"]
+        "everything about X"                               → ["user", "rule", "article"]
+        broad or uncertain intent                          → omit kinds (searches all)
 
     Search syntax (FTS5): keywords joined with OR for broad recall (auth OR login OR session),
     phrases for exact match ("connection pool"), boolean (python NOT java), prefix (deploy*).
@@ -241,7 +256,7 @@ async def memory_search(
 
     Args:
         query: FTS5 keyword query. Omit or pass empty string for recent-sessions browse mode.
-        kind: Filter artifacts results by artifact_kind (e.g. "preference", "article"). None = all.
+        kinds: Up to 3 artifact kinds to filter results. None searches all kinds.
         limit: Max artifacts results (default 10). Sessions channel is always capped at 3.
     """
     span = otel_trace.get_current_span()
@@ -254,7 +269,7 @@ async def memory_search(
     query = query.strip()
 
     knowledge_results, session_results_raw, canon_results = await asyncio.gather(
-        _search_artifacts(ctx, query, kind, limit),
+        _search_artifacts(ctx, query, kinds, limit),
         _search_sessions(ctx, query, span),
         _search_canon_channel(ctx, query),
     )

@@ -90,7 +90,7 @@ sync_sessions(sessions_dir, exclude=current_session):
 **Browse mode** (empty query): returns recent-session metadata — session ID, date, title, file size — with zero LLM cost. Excludes the current session.
 
 **Search mode** (keyword query): dispatches sessions, artifacts, and canon channels in parallel.
-- Sessions: `MemoryStore.search(source='session', limit=15)` → dedup to one best chunk per unique session → cap at 3 (`_SESSIONS_CHANNEL_CAP`)
+- Sessions: `MemoryStore.search(sources=['session'], limit=15)` → dedup to one best chunk per unique session → cap at 3 (`_SESSIONS_CHANNEL_CAP`)
 - To drill into a specific turn: `memory_read_session_turn(session_id, start_line, end_line)` — verbatim JSONL lines, capped at 200 lines / 16 KB
 
 Result shape: `{channel: "sessions", session_id, when, source, chunk_text, start_line, end_line, score}`

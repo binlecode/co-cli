@@ -35,8 +35,7 @@ async def memory_create(
 ) -> ToolReturn:
     """Save a new knowledge artifact or update an existing web article by URL.
 
-    Covers all artifact kinds: preference, decision, rule, feedback, article,
-    reference, note. Dedup behavior:
+    Covers all artifact kinds: user | rule | article | note. Dedup behavior:
     - source_url provided → URL-keyed dedup: updates existing article if same URL
       exists, saves new article otherwise. Always sets decay_protected=True.
     - consolidation_enabled in config → Jaccard dedup: near-identical content
@@ -50,7 +49,7 @@ async def memory_create(
 
     Args:
         content: Primary text of the artifact.
-        artifact_kind: One of preference | decision | rule | feedback | article | reference | note.
+        artifact_kind: One of user | rule | article | note.
         title: Optional human-readable label.
         description: Optional ≤200-char hook used for retrieval ranking.
         source_url: Source URL for web-fetched articles. Triggers URL-keyed dedup.
