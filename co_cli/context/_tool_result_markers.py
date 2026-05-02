@@ -59,8 +59,7 @@ def _line_count(content: str) -> int:
     return content.count("\n") + 1
 
 
-def _shell_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
-    del chars
+def _shell_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -> str:
     cmd = _truncate(str(args.get("cmd", "")), _CMD_PREVIEW_MAX)
     match = _SHELL_EXIT_RE.match(content)
     if match:
@@ -68,8 +67,7 @@ def _shell_marker(args: dict[str, Any], content: str, chars: int, lines: int) ->
     return f"[shell] ran `{cmd}` → ok, {lines} lines"
 
 
-def _file_read_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
-    del content, lines
+def _file_read_marker(args: dict[str, Any], _content: str, chars: int, _lines: int) -> str:
     path = args.get("path", "?")
     start = args.get("start_line")
     end = args.get("end_line")
@@ -77,8 +75,7 @@ def _file_read_marker(args: dict[str, Any], content: str, chars: int, lines: int
     return f"[file_read] {path} ({span}, {chars:,} chars)"
 
 
-def _file_search_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
-    del chars
+def _file_search_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -> str:
     pattern = args.get("pattern", "?")
     path = args.get("path", ".")
     if content.startswith("(no matches)"):
@@ -86,8 +83,7 @@ def _file_search_marker(args: dict[str, Any], content: str, chars: int, lines: i
     return f"[file_search] '{pattern}' in {path} ({lines} result lines)"
 
 
-def _file_find_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
-    del chars
+def _file_find_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -> str:
     path = args.get("path", ".")
     pattern = args.get("pattern", "*")
     if content.startswith("(empty)"):
@@ -95,22 +91,19 @@ def _file_find_marker(args: dict[str, Any], content: str, chars: int, lines: int
     return f"[file_find] {pattern} in {path} ({lines} entries)"
 
 
-def _web_search_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
-    del lines
+def _web_search_marker(args: dict[str, Any], content: str, chars: int, _lines: int) -> str:
     query = _truncate(str(args.get("query", "")), _QUERY_PREVIEW_MAX)
     if content.startswith("No results"):
         return f"[web_search] '{query}' → no results"
     return f"[web_search] '{query}' ({chars:,} chars)"
 
 
-def _web_fetch_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
-    del content, lines
+def _web_fetch_marker(args: dict[str, Any], _content: str, chars: int, _lines: int) -> str:
     url = _truncate(str(args.get("url", "")), _URL_PREVIEW_MAX)
     return f"[web_fetch] {url} ({chars:,} chars)"
 
 
-def _obsidian_read_marker(args: dict[str, Any], content: str, chars: int, lines: int) -> str:
-    del content, lines
+def _obsidian_read_marker(args: dict[str, Any], _content: str, chars: int, _lines: int) -> str:
     filename = args.get("filename", "?")
     return f"[obsidian_read] {filename} ({chars:,} chars)"
 

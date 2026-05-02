@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 360
 
 from co_cli.config.core import REASONING_DISPLAY_SUMMARY
-from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context.compaction import is_context_overflow
 from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt

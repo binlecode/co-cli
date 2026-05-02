@@ -50,6 +50,7 @@ from co_cli.context._history_processors import (
     evict_batch_tool_outputs,
     evict_old_tool_results,
 )
+from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
@@ -78,6 +79,7 @@ __all__ = [
     "group_by_turn",
     "groups_to_messages",
     "is_compaction_marker",
+    "is_context_overflow",
     "latest_response_input_tokens",
     "plan_compaction_boundaries",
     "proactive_window_processor",
@@ -90,6 +92,19 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+
+def _reset_thrash_state(ctx: RunContext[CoDeps]) -> None:
+    """Reset proactive-compaction thrash counters after a forced overflow recovery.
+
+    Both reactive recovery paths (planner-based and emergency structural) reset
+    these unconditionally — overflow already proves the system needed to compact,
+    so crediting it as a clean resync prevents the gate from staying tripped and
+    suppressing the next proactive run.  The hint re-arms with the counter per
+    the banner-text contract.
+    """
+    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+    ctx.deps.runtime.compaction_thrash_hint_emitted = False
 
 
 _COMPACTION_BREAKER_TRIP: int = 3
@@ -311,14 +326,7 @@ async def recover_overflow_history(
         return None
 
     result, _ = await apply_compaction(ctx, messages, bounds, announce=False)
-    # Unconditional reset (asymmetric with proactive's yield-conditional bookkeeping):
-    # overflow is reactive, not speculative — a forced recovery already proves the
-    # system needed to compact. Crediting it as a clean resync prevents the gate from
-    # staying tripped and suppressing the next proactive run, which would just produce
-    # another overflow.
-    # hint re-arms with counter — banner-text contract
-    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-    ctx.deps.runtime.compaction_thrash_hint_emitted = False
+    _reset_thrash_state(ctx)
     return result
 
 
@@ -351,10 +359,7 @@ async def emergency_recover_overflow_history(
     ctx.deps.runtime.compaction_applied_this_turn = True
     ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
     ctx.deps.runtime.message_count_at_last_compaction = len(result)
-    # See recover_overflow_history for the unconditional-reset rationale.
-    # hint re-arms with counter — banner-text contract
-    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-    ctx.deps.runtime.compaction_thrash_hint_emitted = False
+    _reset_thrash_state(ctx)
     log.warning(
         "Emergency overflow recovery: planner returned None; dropped all middle groups "
         "(len(groups)=%d).",
