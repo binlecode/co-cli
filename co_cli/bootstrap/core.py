@@ -32,26 +32,27 @@ def _resolve_reranker(
     config: Settings,
     statuses: list[str],
 ) -> bool:
-    """Check TEI reranker availability. Returns False if TEI is configured but unreachable.
+    """Check TEI reranker availability. Returns False if TEI is absent or unreachable.
 
-    Called inside _discover_knowledge_backend only when an index is active (hybrid/fts5).
+    Hybrid mode requires TEI — False causes the caller to degrade to fts5.
     Skipped on grep — no index means no reranking.
-    False return signals to the caller that hybrid mode must not start.
     """
     from co_cli.bootstrap.check import check_cross_encoder
 
     cross_result = check_cross_encoder(config)
-    if cross_result.status == "skipped":
-        return True
     if cross_result.status == "ok":
         tei_batch = cross_result.extra.get("max_client_batch_size")
         if isinstance(tei_batch, int) and tei_batch > 0:
             config.knowledge.tei_rerank_batch_size = tei_batch
         return True
-    # TEI is configured but unreachable — hybrid cannot start without its reranker
-    statuses.append("  Hybrid requires TEI reranker — TEI cross-encoder unavailable")
-    logger.warning("TEI cross-encoder configured but unavailable; hybrid mode cannot start")
-    config.knowledge.cross_encoder_reranker_url = None
+    # TEI not configured or unreachable — hybrid requires TEI reranker
+    if cross_result.status == "skipped":
+        statuses.append("  Hybrid requires TEI reranker — cross_encoder_reranker_url not set")
+        logger.warning("TEI cross-encoder not configured; hybrid mode cannot start")
+    else:
+        statuses.append("  Hybrid requires TEI reranker — TEI cross-encoder unavailable")
+        logger.warning("TEI cross-encoder configured but unavailable; hybrid mode cannot start")
+        config.knowledge.cross_encoder_reranker_url = None
     return False
 
 
