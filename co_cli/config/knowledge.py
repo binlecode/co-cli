@@ -1,8 +1,8 @@
 """Knowledge search, embedding, chunking, and lifecycle settings."""
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "hybrid"
@@ -14,29 +14,6 @@ DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
-
-
-# Default reranker model per provider — single source of truth, overridable via settings.json.
-_RERANKER_DEFAULT_MODEL: dict[str, str] = {
-    "gemini": "gemini-3.1-flash-preview",
-    "ollama": "qwen2.5:3b",
-}
-
-
-class LlmModelSettings(BaseModel):
-    """A model+provider bundle for auxiliary model references (e.g. LLM reranker)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    model: str = Field(default="")
-    api_params: dict[str, Any] = Field(default_factory=dict)
-    provider: Literal["ollama", "gemini"]
-
-    @model_validator(mode="after")
-    def _fill_model_default(self) -> "LlmModelSettings":
-        if not self.model:
-            self.model = _RERANKER_DEFAULT_MODEL.get(self.provider, "")
-        return self
 
 
 class KnowledgeSettings(BaseSettings):
@@ -60,7 +37,6 @@ class KnowledgeSettings(BaseSettings):
         default=DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL
     )
     tei_rerank_batch_size: int = Field(default=DEFAULT_TEI_RERANK_BATCH_SIZE)
-    llm_reranker: LlmModelSettings | None = Field(default=None)
     embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
     chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)
     chunk_overlap: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, ge=0)

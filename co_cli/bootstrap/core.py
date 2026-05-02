@@ -31,33 +31,28 @@ def _summarize_backend_error(exc: Exception) -> str:
 def _resolve_reranker(
     config: Settings,
     statuses: list[str],
-) -> None:
-    """Resolve reranker availability, mutating config and appending degradation messages.
+) -> bool:
+    """Check TEI reranker availability. Returns False if TEI is configured but unreachable.
 
     Called inside _discover_knowledge_backend only when an index is active (hybrid/fts5).
     Skipped on grep — no index means no reranking.
+    False return signals to the caller that hybrid mode must not start.
     """
-    from co_cli.bootstrap.check import check_cross_encoder, check_reranker_llm
+    from co_cli.bootstrap.check import check_cross_encoder
 
     cross_result = check_cross_encoder(config)
-    if cross_result.status not in ("ok", "skipped"):
-        statuses.append(
-            "  Reranker degraded — TEI cross-encoder unavailable; search results will be unranked"
-        )
-        logger.warning("TEI cross-encoder unavailable; degrading to none")
-        config.knowledge.cross_encoder_reranker_url = None
-    elif cross_result.extra:
+    if cross_result.status == "skipped":
+        return True
+    if cross_result.status == "ok":
         tei_batch = cross_result.extra.get("max_client_batch_size")
         if isinstance(tei_batch, int) and tei_batch > 0:
             config.knowledge.tei_rerank_batch_size = tei_batch
-
-    reranker_result = check_reranker_llm(config)
-    if reranker_result.status not in ("ok", "skipped"):
-        statuses.append(
-            "  Reranker degraded — LLM reranker unavailable; search results will be unranked"
-        )
-        logger.warning("LLM reranker unavailable; degrading to none")
-        config.knowledge.llm_reranker = None
+        return True
+    # TEI is configured but unreachable — hybrid cannot start without its reranker
+    statuses.append("  Hybrid requires TEI reranker — TEI cross-encoder unavailable")
+    logger.warning("TEI cross-encoder configured but unavailable; hybrid mode cannot start")
+    config.knowledge.cross_encoder_reranker_url = None
+    return False
 
 
 def _discover_memory_backend(
@@ -82,14 +77,16 @@ def _discover_memory_backend(
     configured: KnowledgeBackendLiteral = config.knowledge.search_backend
     statuses: list[str] = []
 
-    # Resolve reranker — config fields must reflect actual availability
-    _resolve_reranker(config, statuses)
+    # Resolve reranker — if TEI is configured but unreachable, hybrid cannot start
+    reranker_ok = _resolve_reranker(config, statuses)
 
     # --- Level 1: hybrid (sqlite-vec + embedding) ---
     # Only attempt hybrid if that's what was configured; respect explicit fts5 choice.
     resolved_backend: KnowledgeBackendLiteral = "fts5"
     if configured == "hybrid":
-        if config.knowledge.embedding_provider == "none":
+        if not reranker_ok:
+            logger.warning("Hybrid skipped: TEI reranker configured but unavailable")
+        elif config.knowledge.embedding_provider == "none":
             logger.info("Hybrid skipped: embedding provider is 'none'")
         else:
             from co_cli.bootstrap.check import check_embedder
@@ -108,7 +105,8 @@ def _discover_memory_backend(
         frontend.on_status(status)
 
     if resolved_backend != configured:
-        degradations["knowledge"] = f"{configured} → {resolved_backend} (embedder unavailable)"
+        reason = "TEI reranker unavailable" if not reranker_ok else "embedder unavailable"
+        degradations["knowledge"] = f"{configured} → {resolved_backend} ({reason})"
     config.knowledge.search_backend = resolved_backend
 
     # --- Construct store with resolved config ---

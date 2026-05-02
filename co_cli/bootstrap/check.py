@@ -3,14 +3,13 @@
 Data types: CheckResult, RuntimeCheckResult.
 
 IO check functions (called on-demand by runtime diagnostics):
-  check_agent_llm, check_reranker_llm, check_embedder,
+  check_agent_llm, check_embedder,
   check_cross_encoder, check_ollama_model, check_mcp_server, check_tei.
 
 Public entry point:
   check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
 
 Bootstrap callers (direct, not via entry points):
-  check_reranker_llm      — bootstrap/core.py (_resolve_reranker, inside _discover_memory_backend)
   check_cross_encoder     — bootstrap/core.py (_resolve_reranker, inside _discover_memory_backend)
   check_embedder          — bootstrap/core.py (_discover_memory_backend)
 
@@ -208,23 +207,6 @@ def check_agent_llm(config: "Settings") -> CheckResult:
         )
 
     return CheckResult(ok=True, status="ok", detail="Provider and model configured")
-
-
-def check_reranker_llm(config: "Settings") -> CheckResult:
-    """Check LLM reranker availability.
-
-    Skipped if no LLM reranker is configured.
-    Gemini: validates API key presence.
-    Ollama: probes the reranker model specifically (not the agent reasoning model).
-    """
-    if config.knowledge.llm_reranker is None:
-        return CheckResult(ok=True, status="skipped", detail="LLM reranker not configured")
-
-    reranker = config.knowledge.llm_reranker
-    if reranker.provider == "gemini":
-        return _check_gemini_key(config.llm.api_key)
-
-    return check_ollama_model(config.llm.host, reranker.model)
 
 
 def check_embedder(config: "Settings") -> CheckResult:

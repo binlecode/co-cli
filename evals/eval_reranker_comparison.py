@@ -1,4 +1,4 @@
-"""Benchmark eval: FTS5 baseline vs LLM listwise vs fastembed cross-encoder reranker.
+"""Benchmark eval: FTS5 baseline vs TEI cross-encoder reranker.
 
 Harder corpus: 30 documents, 5 topics x 6 docs each.
 Each topic has:
@@ -10,13 +10,13 @@ Each topic has:
 
 NOTE: _build_fts_query uses AND-join, so all query tokens must be present for retrieval.
 rel_para docs have all tokens once; traps have them many times. BM25 naturally ranks
-traps above rel_para -> FTS5 NDCG is reduced. A semantic reranker that understands the
-traps are peripheral should demote traps and promote the paraphrase-rich rel_para docs.
+traps above rel_para -> FTS5 NDCG is reduced. TEI cross-encoder understands the traps
+are peripheral and demotes them, promoting the paraphrase-rich rel_para docs.
 
 Usage:
     uv run python evals/eval_reranker_comparison.py
-    uv run python evals/eval_reranker_comparison.py --ollama-model qwen2.5:3b
-    uv run python evals/eval_reranker_comparison.py --ollama-model qwen2.5:3b --runs 5
+    uv run python evals/eval_reranker_comparison.py --tei-url http://127.0.0.1:8282
+    uv run python evals/eval_reranker_comparison.py --runs 5
 """
 
 import argparse
@@ -479,31 +479,22 @@ def build_index(
     db_path: Path,
     *,
     backend: str = "fts5",
-    reranker_model: str | None = None,
-    ollama_host: str = "http://localhost:11434",
+    tei_url: str | None = None,
 ) -> MemoryStore:
     """Create a fresh MemoryStore with the full synthetic corpus loaded."""
     from co_cli.config.core import Settings
-    from co_cli.config.knowledge import KnowledgeSettings, LlmModelSettings
+    from co_cli.config.knowledge import KnowledgeSettings
     from co_cli.config.llm import LlmSettings
 
-    llm_reranker = (
-        LlmModelSettings(provider="ollama", model=reranker_model) if reranker_model else None
-    )
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
             provider="ollama",
-            host=ollama_host,
+            host="http://localhost:11434",
             model="dummy",
         ),
         knowledge=KnowledgeSettings.model_construct(
             search_backend=backend,
-            # Explicitly disable TEI cross-encoder so the correct reranker branch is
-            # reached: None → LLM listwise (if set) or none. Without this, the
-            # default "http://127.0.0.1:8282" always activates TEI regardless of
-            # whether llm_reranker is set.
-            cross_encoder_reranker_url=None,
-            llm_reranker=llm_reranker,
+            cross_encoder_reranker_url=tei_url,
         ),
     )
     idx = MemoryStore(config=config, memory_db_path=db_path)
@@ -612,14 +603,9 @@ def print_table(rows: list[dict]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Reranker benchmark eval")
     parser.add_argument(
-        "--ollama-host",
-        default=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
-        help="Ollama host URL",
-    )
-    parser.add_argument(
-        "--ollama-model",
-        default="qwen2.5:3b",
-        help="Ollama model for listwise reranking",
+        "--tei-url",
+        default=os.getenv("CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL", "http://127.0.0.1:8282"),
+        help="TEI cross-encoder reranker URL",
     )
     parser.add_argument(
         "--runs",
@@ -634,35 +620,34 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Config 1: FTS5 baseline — always runs
-        print("Running FTS5 baseline...")
+        # Config 1: FTS5 baseline (no reranker) — always runs
+        print("Running FTS5 baseline (no reranker)...")
         idx = build_index(tmp / "baseline" / "search.db", backend="fts5")
-        rows.append(run_benchmark(idx, "FTS5 baseline", runs=args.runs))
+        rows.append(run_benchmark(idx, "FTS5 (no reranker)", runs=args.runs))
         idx.close()
 
-        # Config 2: LLM listwise via Ollama
+        # Config 2: TEI cross-encoder reranker
         import httpx
 
-        ollama_ok = False
+        tei_ok = False
         try:
-            httpx.get(args.ollama_host, timeout=EVAL_PROBE_TIMEOUT_SECS)
-            ollama_ok = True
+            httpx.get(f"{args.tei_url}/info", timeout=EVAL_PROBE_TIMEOUT_SECS)
+            tei_ok = True
         except Exception:
             pass
 
-        if ollama_ok:
-            print(f"Running LLM listwise reranker ({args.ollama_model} via Ollama)...")
+        if tei_ok:
+            print(f"Running TEI cross-encoder reranker ({args.tei_url})...")
             idx = build_index(
-                tmp / "ollama" / "search.db",
+                tmp / "tei" / "search.db",
                 backend="fts5",
-                reranker_model=args.ollama_model,
-                ollama_host=args.ollama_host,
+                tei_url=args.tei_url,
             )
             rows.append(
                 run_benchmark(
                     idx,
-                    "LLM listwise",
-                    notes=f"{args.ollama_model} via Ollama",
+                    "TEI cross-encoder",
+                    notes=args.tei_url,
                     runs=args.runs,
                 )
             )
@@ -670,8 +655,8 @@ def main() -> None:
         else:
             rows.append(
                 {
-                    "label": "LLM listwise",
-                    "skip_reason": f"Ollama not reachable at {args.ollama_host}",
+                    "label": "TEI cross-encoder",
+                    "skip_reason": f"TEI not reachable at {args.tei_url}",
                 }
             )
 
