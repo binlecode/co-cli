@@ -1,15 +1,16 @@
-"""Slash command handlers for /skills and subcommands, plus get_skill_registry utility."""
+"""Slash command handlers for /skills and subcommands."""
 
 from __future__ import annotations
 
 from rich.table import Table
 
+from co_cli.commands._utils import _confirm
 from co_cli.commands.registry import (
     BUILTIN_COMMANDS,
     _refresh_completer,
     filter_namespace_conflicts,
 )
-from co_cli.commands.types import CommandContext, _confirm
+from co_cli.commands.types import CommandContext
 from co_cli.config.core import settings
 from co_cli.display.core import console
 from co_cli.skills.installer import (
@@ -21,21 +22,11 @@ from co_cli.skills.installer import (
     write_skill_file,
 )
 from co_cli.skills.loader import (
-    _diagnose_requires_failures,
-    _scan_skill_content,
+    diagnose_requires_failures,
     load_skills,
+    scan_skill_content,
 )
 from co_cli.skills.registry import set_skill_commands
-from co_cli.skills.skill_types import SkillConfig
-
-
-def get_skill_registry(skill_commands: dict[str, SkillConfig]) -> list[dict]:
-    """Derive model-facing skill registry from skill_commands."""
-    return [
-        {"name": s.name, "description": s.description}
-        for s in skill_commands.values()
-        if s.description and not s.disable_model_invocation
-    ]
 
 
 def _cmd_skills_list(ctx: CommandContext) -> None:
@@ -80,7 +71,7 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
                 requires = (
                     meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
                 )
-                failures = _diagnose_requires_failures(requires, settings)
+                failures = diagnose_requires_failures(requires, settings)
                 reason = "; ".join(failures) if failures else "name conflict with built-in"
                 table.add_row(path.name, "[bold red]✗ Skipped[/bold red]", reason)
             except Exception as e:
@@ -102,7 +93,7 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
         p = user_skills_dir / f"{name}.md"
         if p.exists():
             try:
-                for w in _scan_skill_content(p.read_text(encoding="utf-8")):
+                for w in scan_skill_content(p.read_text(encoding="utf-8")):
                     console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
             except Exception:
                 pass
@@ -164,7 +155,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
         console.print(f"[bold red]Failed to fetch skill:[/bold red] {e}")
         return
 
-    warnings = _scan_skill_content(content)
+    warnings = scan_skill_content(content)
     if warnings:
         console.print("[bold yellow]Security scan warnings:[/bold yellow]")
         for w in warnings:

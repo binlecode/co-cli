@@ -365,7 +365,7 @@ def check_runtime(
     knowledge_result = _check_memory_store(deps.memory_store, deps.config.knowledge.search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
-    from co_cli.commands.skills import get_skill_registry
+    from co_cli.skills.registry import get_skill_registry
 
     skills_result = _check_skills(get_skill_registry(deps.skill_commands))
 

@@ -64,7 +64,7 @@ _SKILL_SCAN_PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 
-def _scan_skill_content(content: str) -> list[str]:
+def scan_skill_content(content: str) -> list[str]:
     """Scan skill content for security patterns.
 
     Returns a list of tagged warning strings. Empty list = content is clean.
@@ -136,7 +136,7 @@ def _check_requires(name: str, requires: dict, settings: Any = None) -> bool:
     return True
 
 
-def _diagnose_requires_failures(requires: dict, settings: Any = None) -> list[str]:
+def diagnose_requires_failures(requires: dict, settings: Any = None) -> list[str]:
     """Evaluate the requires block and return human-readable failure strings.
 
     Empty list means all requirements are met.
@@ -210,7 +210,7 @@ def _load_skill_file(
             return
 
         if scan:
-            for w in _scan_skill_content(text):
+            for w in scan_skill_content(text):
                 logger.warning(f"Security scan warning in {path}: {w}")
 
         raw_env = meta.get("skill-env", {})

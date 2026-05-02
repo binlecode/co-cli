@@ -8,7 +8,7 @@ from typing import Any
 from co_cli.memory.artifact import KnowledgeArtifact
 
 
-def _apply_memory_filters(
+def apply_memory_filters(
     entries: list[KnowledgeArtifact], filters: dict[str, Any]
 ) -> list[KnowledgeArtifact]:
     """Apply older_than_days filter to a loaded artifact list.
@@ -28,7 +28,7 @@ def _apply_memory_filters(
     return result
 
 
-def _format_memory_row(m: KnowledgeArtifact) -> str:
+def format_memory_row(m: KnowledgeArtifact) -> str:
     id_prefix = m.id[:8]
     created = m.created[:10]
     snippet = m.content[:80]

@@ -7,7 +7,7 @@ from typing import Any
 from co_cli.commands.types import CommandContext
 from co_cli.display.core import console
 from co_cli.memory.artifact import load_knowledge_artifacts
-from co_cli.memory.query import _apply_memory_filters, _format_memory_row
+from co_cli.memory.query import apply_memory_filters, format_memory_row
 from co_cli.tools.memory.read import grep_recall
 
 _MEMORY_USAGE = (
@@ -61,14 +61,14 @@ async def _subcmd_memory_list(
         ctx.deps.knowledge_dir,
         artifact_kinds=[kind_filter] if kind_filter is not None else None,
     )
-    entries = _apply_memory_filters(entries, filters)
+    entries = apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
     if not entries:
         console.print("[dim]No memories found.[/dim]")
     else:
         for m in entries:
-            console.print(_format_memory_row(m))
+            console.print(format_memory_row(m))
     console.print(f"[dim]{len(entries)} memories[/dim]")
 
 
@@ -81,7 +81,7 @@ async def _subcmd_memory_count(
         ctx.deps.knowledge_dir,
         artifact_kinds=[kind_filter] if kind_filter is not None else None,
     )
-    entries = _apply_memory_filters(entries, filters)
+    entries = apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
     console.print(f"{len(entries)} memories")
@@ -107,7 +107,7 @@ async def _subcmd_memory_forget(
         ctx.deps.knowledge_dir,
         artifact_kinds=[kind_filter] if kind_filter is not None else None,
     )
-    entries = _apply_memory_filters(entries, filters)
+    entries = apply_memory_filters(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
 
@@ -116,7 +116,7 @@ async def _subcmd_memory_forget(
         return None
 
     for m in entries:
-        console.print(_format_memory_row(m))
+        console.print(format_memory_row(m))
 
     prompt_text = f"Delete {len(entries)} memories? [y/N] "
     confirmed = (

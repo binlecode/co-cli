@@ -37,7 +37,7 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         llm_provider = config.llm.provider
 
     from co_cli.commands.registry import BUILTIN_COMMANDS
-    from co_cli.commands.skills import get_skill_registry
+    from co_cli.skills.registry import get_skill_registry
 
     tool_count = len(deps.tool_index)
     skill_count = len(get_skill_registry(deps.skill_commands))

@@ -251,7 +251,7 @@ async def _chat_loop(
         current_session_path = restore_session(deps, frontend)
         init_session_index(deps, current_session_path, frontend)
         _sweep_tool_results(deps)
-        from co_cli.commands.skills import get_skill_registry
+        from co_cli.skills.registry import get_skill_registry
 
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
 

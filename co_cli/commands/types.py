@@ -47,12 +47,3 @@ class DelegateToAgent:
 
 
 type SlashOutcome = LocalOnly | ReplaceTranscript | DelegateToAgent
-
-
-def _confirm(ctx: CommandContext, msg: str) -> bool:
-    """Prompt user with msg; return True iff they confirmed (frontend or fallback)."""
-    from co_cli.display.core import console
-
-    if ctx.frontend:
-        return ctx.frontend.prompt_confirm(msg)
-    return console.input(msg).strip().lower() == "y"
