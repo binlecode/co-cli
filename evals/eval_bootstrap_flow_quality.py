@@ -3,8 +3,11 @@
 
 Validates the canonical startup path described in ``docs/specs/bootstrap.md``:
 
-  create_deps() -> build_agent() -> restore_session() -> init_session_store()
+  create_deps() -> restore_session() -> init_session_index()
   -> display_welcome_banner()
+
+Also validates that every recorded degradation in deps.degradations has a
+corresponding startup status emission (degradation-signals case).
 
 The eval uses the real configured system, records the emitted startup statuses,
 checks ordering and end-state invariants at the REPL boundary, and writes a
@@ -26,9 +29,8 @@ from pathlib import Path
 
 from evals._timeouts import EVAL_E2E_BOOTSTRAP_TIMEOUT_SECS
 
-from co_cli.agent.core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import create_deps, init_session_store, restore_session
+from co_cli.bootstrap.core import create_deps, init_session_index, restore_session
 from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
 from co_cli.commands.skills import get_skill_registry
 from co_cli.config.core import get_settings
@@ -277,43 +279,68 @@ async def _run_create_deps_case(
     )
 
 
-def _run_agent_case(deps: CoDeps | None) -> tuple[EvalCaseResult, object | None]:
-    """Build the foreground orchestrator agent from the assembled runtime."""
+def _run_degradation_signals_case(
+    deps: CoDeps | None,
+    frontend: HeadlessFrontend,
+) -> EvalCaseResult:
+    """Verify every recorded degradation has a corresponding startup status emission."""
     if deps is None:
-        return _make_skip_case("build-agent", "Skipped because create-deps failed"), None
+        return _make_skip_case("degradation-signals", "Skipped because create-deps failed")
 
     case_t0 = time.monotonic()
     steps: list[EvalStep] = []
+    failures: list[str] = []
 
-    try:
-        step_t0 = time.monotonic()
-        agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
-        steps.append(
-            EvalStep(
-                name="build_agent",
-                ms=(time.monotonic() - step_t0) * 1000,
-                detail=(
-                    f"agent_type={agent.__class__.__name__} "
-                    f"tool_registry={'yes' if deps.tool_registry is not None else 'no'}"
-                ),
-            )
+    step_t0 = time.monotonic()
+    knowledge_degraded = "knowledge" in deps.degradations
+    if knowledge_degraded and _first_status_index(frontend.statuses, "Knowledge degraded") is None:
+        failures.append(
+            f"knowledge degradation recorded "
+            f"({deps.degradations['knowledge']!r}) but no 'Knowledge degraded' status emitted"
         )
-        verdict = "PASS"
-        failure = None
-    except Exception as exc:
-        agent = None
-        verdict = "FAIL"
-        failure = f"build_agent() raised {exc.__class__.__name__}: {exc}"
+    steps.append(
+        EvalStep(
+            name="knowledge_signal",
+            ms=(time.monotonic() - step_t0) * 1000,
+            detail=(
+                f"degraded={knowledge_degraded} "
+                f"entry={deps.degradations.get('knowledge', 'none')!r}"
+            ),
+        )
+    )
 
-    return (
-        EvalCaseResult(
-            case_id="build-agent",
-            verdict=verdict,
-            duration_ms=(time.monotonic() - case_t0) * 1000,
-            steps=steps,
-            failure=failure,
-        ),
-        agent,
+    step_t0 = time.monotonic()
+    mcp_failures = {k[4:]: v for k, v in deps.degradations.items() if k.startswith("mcp.")}
+    for server_name in mcp_failures:
+        if _first_status_index(frontend.statuses, f"MCP server {server_name!r}") is None:
+            failures.append(
+                f"MCP server {server_name!r} degradation recorded but no matching status emitted"
+            )
+    steps.append(
+        EvalStep(
+            name="mcp_signals",
+            ms=(time.monotonic() - step_t0) * 1000,
+            detail=f"mcp_failures={len(mcp_failures)} servers={list(mcp_failures) or 'none'}",
+        )
+    )
+
+    step_t0 = time.monotonic()
+    total = len(deps.degradations)
+    steps.append(
+        EvalStep(
+            name="degradation_count",
+            ms=(time.monotonic() - step_t0) * 1000,
+            detail=f"total={total} keys={list(deps.degradations) or 'none'}",
+        )
+    )
+
+    verdict = "FAIL" if failures else "PASS"
+    return EvalCaseResult(
+        case_id="degradation-signals",
+        verdict=verdict,
+        duration_ms=(time.monotonic() - case_t0) * 1000,
+        steps=steps,
+        failure="; ".join(failures) if failures else None,
     )
 
 
@@ -321,7 +348,7 @@ def _run_session_case(
     deps: CoDeps | None,
     frontend: HeadlessFrontend,
 ) -> EvalCaseResult:
-    """Run restore_session() and init_session_store() and validate ordering/state."""
+    """Run restore_session() and init_session_index() and validate ordering/state."""
     if deps is None:
         return _make_skip_case("restore-session-index", "Skipped because create-deps failed")
 
@@ -341,15 +368,15 @@ def _run_session_case(
         )
 
         step_t0 = time.monotonic()
-        init_session_store(deps, current_session_path, frontend)
-        if deps.session_store is None:
-            index_detail = "session_store=None"
+        init_session_index(deps, current_session_path, frontend)
+        if deps.memory_store is None:
+            index_detail = "memory_store=None"
         else:
-            search_results = deps.session_store.search("bootstrap")
-            index_detail = f"session_store=ready search_results={len(search_results)}"
+            search_results = deps.memory_store.search("bootstrap")
+            index_detail = f"memory_store=ready search_results={len(search_results)}"
         steps.append(
             EvalStep(
-                name="init_session_store",
+                name="init_session_index",
                 ms=(time.monotonic() - step_t0) * 1000,
                 detail=index_detail,
             )
@@ -372,10 +399,10 @@ def _run_session_case(
         elif session_status_idx is not None and knowledge_status_idx >= session_status_idx:
             failures.append("knowledge sync/status did not occur before session restore status")
         if (
-            deps.session_store is None
+            deps.memory_store is None
             and _first_status_index(frontend.statuses, "Session index unavailable") is None
         ):
-            failures.append("memory index degraded but no degradation status was emitted")
+            failures.append("session index unavailable but no degradation status was emitted")
 
         if failures:
             verdict = "FAIL"
@@ -480,8 +507,8 @@ async def main() -> None:
             create_case, deps = await _run_create_deps_case(frontend, stack)
             cases.append(create_case)
 
-            agent_case, _ = _run_agent_case(deps)
-            cases.append(agent_case)
+            degradation_case = _run_degradation_signals_case(deps, frontend)
+            cases.append(degradation_case)
 
             session_case = _run_session_case(deps, frontend)
             cases.append(session_case)

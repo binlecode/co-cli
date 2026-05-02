@@ -2,17 +2,10 @@
 
 Data types: CheckResult, RuntimeCheckResult.
 
-IO check functions (called on-demand by runtime diagnostics):
-  check_agent_llm, check_embedder,
-  check_cross_encoder, check_ollama_model, check_mcp_server, check_tei.
-
 Public entry point:
   check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
 
-Bootstrap callers (direct, not via entry points):
-  check_cross_encoder     — bootstrap/core.py (_resolve_reranker, inside _discover_memory_backend)
-  check_embedder          — bootstrap/core.py (_discover_memory_backend)
-
+All individual IO check functions are package-private (underscore prefix).
 Config-shape validation lives on LlmSettings.validate_config() (config/_llm.py), not here.
 """
 
@@ -70,7 +63,7 @@ class CheckResult:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-def check_ollama_model(host: str, model: str) -> CheckResult:
+def _check_ollama_model(host: str, model: str) -> CheckResult:
     """Check a single Ollama model by querying /api/tags.
 
     Unreachable host → warn (Ollama may still be starting; caller decides impact).
@@ -99,7 +92,7 @@ def check_ollama_model(host: str, model: str) -> CheckResult:
 MIN_AGENTIC_CONTEXT = 65_536
 
 
-def probe_ollama_context(host: str, model: str) -> CheckResult:
+def _probe_ollama_context(host: str, model: str) -> CheckResult:
     """Probe Ollama /api/show for the model's runtime num_ctx.
 
     Returns CheckResult with extra={"num_ctx": N} on success.
@@ -174,7 +167,7 @@ def _check_gemini_key(api_key: str | None) -> CheckResult:
     )
 
 
-def check_agent_llm(config: "Settings") -> CheckResult:
+def _check_agent_llm(config: "Settings") -> CheckResult:
     """Check session agent LLM credentials and model availability in one pass.
 
     Gemini: validates API key presence (no HTTP call).
@@ -209,7 +202,7 @@ def check_agent_llm(config: "Settings") -> CheckResult:
     return CheckResult(ok=True, status="ok", detail="Provider and model configured")
 
 
-def check_embedder(config: "Settings") -> CheckResult:
+def _check_embedder(config: "Settings") -> CheckResult:
     """Check embedding provider availability.
 
     Skipped if provider is "none".
@@ -221,25 +214,25 @@ def check_embedder(config: "Settings") -> CheckResult:
     if provider == "none":
         return CheckResult(ok=True, status="skipped", detail="Embedding provider is 'none'")
     if provider == "tei":
-        return check_tei(config.knowledge.embed_api_url)
+        return _check_tei(config.knowledge.embed_api_url)
     if provider == "ollama":
-        return check_ollama_model(config.llm.host, config.knowledge.embedding_model)
+        return _check_ollama_model(config.llm.host, config.knowledge.embedding_model)
     if provider == "gemini":
         return _check_gemini_key(config.llm.api_key)
     return CheckResult(ok=True, status="skipped", detail=f"Unknown provider: {provider}")
 
 
-def check_cross_encoder(config: "Settings") -> CheckResult:
+def _check_cross_encoder(config: "Settings") -> CheckResult:
     """Check TEI cross-encoder reranker availability.
 
     Skipped if no cross-encoder URL is configured.
     """
     if config.knowledge.cross_encoder_reranker_url is None:
         return CheckResult(ok=True, status="skipped", detail="Cross-encoder not configured")
-    return check_tei(config.knowledge.cross_encoder_reranker_url)
+    return _check_tei(config.knowledge.cross_encoder_reranker_url)
 
 
-def check_mcp_server(command: str | None, url: str | None) -> CheckResult:
+def _check_mcp_server(command: str | None, url: str | None) -> CheckResult:
     """Check a single MCP server."""
     if url:
         return CheckResult(
@@ -264,7 +257,7 @@ def check_mcp_server(command: str | None, url: str | None) -> CheckResult:
     )
 
 
-def check_tei(url: str) -> CheckResult:
+def _check_tei(url: str) -> CheckResult:
     """Check a TEI service (embed or rerank) by GET /info.
 
     Returns server metadata (model_id, max_client_batch_size, etc.) in extra.
@@ -358,7 +351,7 @@ def check_runtime(
 
     # IO checks
     _emit_progress(progress, "Doctor: checking provider and model availability...")
-    provider_result = check_agent_llm(deps.config)
+    provider_result = _check_agent_llm(deps.config)
 
     _emit_progress(progress, "Doctor: checking configured integrations...")
     google_result = _check_google(deps.config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
@@ -380,7 +373,7 @@ def check_runtime(
     mcp_probes: list[tuple[str, CheckResult]] = []
     for name, cfg in (deps.config.mcp_servers or {}).items():
         _emit_progress(progress, f"Doctor: checking MCP server '{name}'...")
-        result = check_mcp_server(cfg.command, cfg.url)
+        result = _check_mcp_server(cfg.command, cfg.url)
         mcp_probes.append((f"mcp:{name}", result))
     mcp_count = sum(1 for _, r in mcp_probes if r.ok)
 

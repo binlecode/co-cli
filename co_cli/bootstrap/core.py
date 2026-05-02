@@ -37,9 +37,9 @@ def _resolve_reranker(
     Hybrid mode requires TEI — False causes the caller to degrade to fts5.
     Skipped on grep — no index means no reranking.
     """
-    from co_cli.bootstrap.check import check_cross_encoder
+    from co_cli.bootstrap.check import _check_cross_encoder
 
-    cross_result = check_cross_encoder(config)
+    cross_result = _check_cross_encoder(config)
     if cross_result.status == "ok":
         tei_batch = cross_result.extra.get("max_client_batch_size")
         if isinstance(tei_batch, int) and tei_batch > 0:
@@ -90,9 +90,9 @@ def _discover_memory_backend(
         elif config.knowledge.embedding_provider == "none":
             logger.info("Hybrid skipped: embedding provider is 'none'")
         else:
-            from co_cli.bootstrap.check import check_embedder
+            from co_cli.bootstrap.check import _check_embedder
 
-            embedder_check = check_embedder(config)
+            embedder_check = _check_embedder(config)
             if embedder_check.status not in ("ok", "skipped"):
                 logger.warning("Hybrid skipped: embedder unavailable — %s", embedder_check.detail)
                 statuses.append(
@@ -218,9 +218,9 @@ async def create_deps(
     # Step 2b: Ollama context probe — fail-fast on undersized models,
     # override num_ctx with runtime Modelfile value when they differ.
     if config.llm.uses_ollama():
-        from co_cli.bootstrap.check import probe_ollama_context
+        from co_cli.bootstrap.check import _probe_ollama_context
 
-        ctx_probe = probe_ollama_context(config.llm.host, config.llm.model)
+        ctx_probe = _probe_ollama_context(config.llm.host, config.llm.model)
         if ctx_probe.status == "error":
             raise ValueError(ctx_probe.detail)
         runtime_num_ctx = ctx_probe.extra.get("num_ctx", 0)
