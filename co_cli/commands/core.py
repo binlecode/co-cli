@@ -11,7 +11,7 @@ from co_cli.commands.clear import _cmd_clear
 from co_cli.commands.compact import _cmd_compact
 from co_cli.commands.help import _cmd_help
 from co_cli.commands.history import _cmd_history
-from co_cli.commands.knowledge import _cmd_knowledge, _cmd_memory
+from co_cli.commands.knowledge import _cmd_memory
 from co_cli.commands.new import _cmd_new
 from co_cli.commands.reasoning import _cmd_reasoning
 from co_cli.commands.registry import (
@@ -47,14 +47,9 @@ BUILTIN_COMMANDS["history"] = SlashCommand(
 BUILTIN_COMMANDS["compact"] = SlashCommand(
     "compact", "Summarize conversation via LLM to reduce context", _cmd_compact
 )
-BUILTIN_COMMANDS["knowledge"] = SlashCommand(
-    "knowledge",
-    "Manage knowledge artifacts — /knowledge list|count|forget|dream|restore|decay-review|stats [args]",
-    _cmd_knowledge,
-)
 BUILTIN_COMMANDS["memory"] = SlashCommand(
     "memory",
-    "[Deprecated] Use /knowledge — /memory list|count|forget [query] [flags]",
+    "Manage memory artifacts — /memory list|count|forget|dream|restore|decay-review|stats [args]",
     _cmd_memory,
 )
 BUILTIN_COMMANDS["approvals"] = SlashCommand(

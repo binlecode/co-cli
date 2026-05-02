@@ -1,4 +1,4 @@
-"""Slash command handlers for /knowledge and /memory (deprecated alias)."""
+"""Slash command handler for /memory."""
 
 from __future__ import annotations
 
@@ -11,12 +11,7 @@ from co_cli.memory.query import apply_memory_filters, format_memory_row
 from co_cli.tools.memory.read import grep_recall
 
 _MEMORY_USAGE = (
-    "[bold]Usage:[/bold] /memory list|count|forget [query] "
-    "[--older-than N] [--kind preference|feedback|rule|decision|article|reference|note]"
-)
-
-_KNOWLEDGE_USAGE = (
-    "[bold]Usage:[/bold] /knowledge list|count|forget|dream|restore|decay-review|stats "
+    "[bold]Usage:[/bold] /memory list|count|forget|dream|restore|decay-review|stats "
     "[query] [--older-than N] "
     "[--kind preference|feedback|rule|decision|article|reference|note] [--dry]"
 )
@@ -140,11 +135,12 @@ async def _subcmd_memory_forget(
 async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
     """Manually trigger a dream cycle; honour ``--dry`` for a non-destructive preview."""
     from co_cli.memory.dream import run_dream_cycle
+    from co_cli.tools.memory.write import memory_create
 
     tokens = rest.split()
     dry_run = "--dry" in tokens
 
-    result = await run_dream_cycle(ctx.deps, dry_run=dry_run)
+    result = await run_dream_cycle(ctx.deps, dry_run=dry_run, miner_tool=memory_create)
 
     header = "Dream cycle — dry run — no changes written" if dry_run else "Dream cycle complete"
     console.print(f"[info]{header}[/info]")
@@ -272,11 +268,11 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     console.print(f"Decay candidates: {len(candidates)}")
 
 
-async def _cmd_knowledge(ctx: CommandContext, args: str) -> None:
-    """Dispatch /knowledge subcommands: list, count, forget, dream, restore, decay-review, stats."""
+async def _cmd_memory(ctx: CommandContext, args: str) -> None:
+    """Dispatch /memory subcommands: list, count, forget, dream, restore, decay-review, stats."""
     parts = args.strip().split(maxsplit=1)
     if not parts:
-        console.print(_KNOWLEDGE_USAGE)
+        console.print(_MEMORY_USAGE)
         return None
     subcommand = parts[0].lower()
     rest = parts[1] if len(parts) > 1 else ""
@@ -297,28 +293,6 @@ async def _cmd_knowledge(ctx: CommandContext, args: str) -> None:
         await _subcmd_knowledge_decay_review(ctx, rest)
     elif subcommand == "stats":
         await _subcmd_knowledge_stats(ctx)
-    else:
-        console.print(f"[bold red]Unknown /knowledge subcommand:[/bold red] {subcommand}")
-        console.print(_KNOWLEDGE_USAGE)
-    return None
-
-
-async def _cmd_memory(ctx: CommandContext, args: str) -> None:
-    """[Deprecated] Use /knowledge instead. Dispatch /memory subcommands: list, count, forget."""
-    console.print("[dim]/memory is deprecated — use /knowledge instead.[/dim]")
-    parts = args.strip().split(maxsplit=1)
-    if not parts:
-        console.print(_MEMORY_USAGE)
-        return None
-    subcommand = parts[0].lower()
-    rest = parts[1] if len(parts) > 1 else ""
-    query, filters = _parse_memory_args(rest)
-    if subcommand == "list":
-        await _subcmd_memory_list(ctx, query, filters)
-    elif subcommand == "count":
-        await _subcmd_memory_count(ctx, query, filters)
-    elif subcommand == "forget":
-        await _subcmd_memory_forget(ctx, query, filters)
     else:
         console.print(f"[bold red]Unknown /memory subcommand:[/bold red] {subcommand}")
         console.print(_MEMORY_USAGE)
