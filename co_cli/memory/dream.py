@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 from opentelemetry import trace as otel_trace
 from pydantic import BaseModel, Field
@@ -34,9 +33,7 @@ from co_cli.memory.artifact import (
     load_knowledge_artifacts,
 )
 from co_cli.memory.decay import find_decay_candidates
-from co_cli.memory.frontmatter import artifact_to_frontmatter, render_knowledge_file
-from co_cli.memory.mutator import atomic_write
-from co_cli.memory.service import reindex, slugify
+from co_cli.memory.service import reindex, save_artifact
 from co_cli.memory.similarity import token_jaccard
 from co_cli.tools.memory.write import memory_create
 
@@ -138,9 +135,7 @@ def _chunk_dream_window(
     pos = 0
     step = max(1, chunk_size - overlap)
     while pos < len(window):
-        chunk = window[pos : pos + chunk_size]
-        if chunk:
-            chunks.append(chunk)
+        chunks.append(window[pos : pos + chunk_size])
         if pos + chunk_size >= len(window):
             break
         pos += step
@@ -304,51 +299,38 @@ def _write_consolidated_artifact(
     deps: CoDeps,
     cluster: list[KnowledgeArtifact],
     merged_body: str,
-) -> KnowledgeArtifact:
-    """Write a new consolidated artifact and index it. Source URL-less."""
-    artifact_id = str(uuid4())
+) -> Path:
+    """Write a new consolidated artifact via save_artifact and index it."""
     kind = cluster[0].artifact_kind
     title = cluster[0].title or f"consolidated {kind}"
-    slug = slugify(title)
-    filename = f"{slug}-{artifact_id[:8]}.md"
-    file_path = deps.knowledge_dir / filename
-
-    merged_artifact = KnowledgeArtifact(
-        id=artifact_id,
-        path=file_path,
+    result = save_artifact(
+        deps.knowledge_dir,
+        content=merged_body.strip(),
         artifact_kind=kind,
         title=title,
-        content=merged_body.strip(),
-        created=datetime.now(UTC).isoformat(),
         source_type=SourceTypeEnum.CONSOLIDATED.value,
-        source_ref=None,
     )
-
-    file_content = render_knowledge_file(merged_artifact)
-    atomic_write(file_path, file_content)
 
     if deps.memory_store is not None:
         reindex(
             deps.memory_store,
-            file_path,
-            merged_body.strip(),
-            file_content,
-            artifact_to_frontmatter(merged_artifact),
-            file_path.stem,
+            result.path,
+            result.content,
+            result.markdown_content,
+            result.frontmatter_dict,
+            result.filename_stem,
             chunk_size=deps.config.knowledge.chunk_size,
             chunk_overlap=deps.config.knowledge.chunk_overlap,
         )
 
-    return merged_artifact
+    return result.path
 
 
-async def _merge_cluster(
-    deps: CoDeps, cluster: list[KnowledgeArtifact]
-) -> KnowledgeArtifact | None:
+async def _merge_cluster(deps: CoDeps, cluster: list[KnowledgeArtifact]) -> Path | None:
     """Invoke the consolidation sub-agent and write one merged artifact.
 
-    Returns the new artifact on success; returns ``None`` when the sub-agent
-    output is too short or empty to trust (caller will skip archive).
+    Returns the new artifact's path on success; returns ``None`` when the
+    sub-agent output is too short or empty to trust (caller will skip archive).
     """
     prompt = _render_merge_prompt(cluster)
     merged_body = (await llm_call(deps, prompt, instructions=_DREAM_MERGE_PROMPT) or "").strip()

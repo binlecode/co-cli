@@ -1174,7 +1174,6 @@ class MemoryStore:
                     category=frontmatter.get("auto_category"),
                     created=frontmatter.get("created"),
                     updated=frontmatter.get("updated"),
-                    type=artifact_kind,
                     description=frontmatter.get("description"),
                     source_ref=frontmatter.get("source_ref"),
                     artifact_id=str(frontmatter["id"])

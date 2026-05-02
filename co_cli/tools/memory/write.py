@@ -62,6 +62,12 @@ async def memory_create(
             f"Unknown artifact_kind: {artifact_kind!r}. Valid values: {sorted(valid_kinds)}",
             ctx=ctx,
         )
+    if source_url is not None and artifact_kind != ArtifactKindEnum.ARTICLE.value:
+        return tool_error(
+            f"source_url requires artifact_kind={ArtifactKindEnum.ARTICLE.value!r}, "
+            f"got {artifact_kind!r}",
+            ctx=ctx,
+        )
 
     knowledge_dir = ctx.deps.knowledge_dir
 

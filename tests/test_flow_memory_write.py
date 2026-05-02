@@ -53,6 +53,8 @@ def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
             result.markdown_content,
             result.frontmatter_dict,
             result.filename_stem,
+            chunk_size=600,
+            chunk_overlap=80,
         )
 
         hits = store.search("pytest testing")

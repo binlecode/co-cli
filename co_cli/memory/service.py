@@ -33,12 +33,8 @@ from co_cli.memory.similarity import find_similar_artifacts, is_content_superset
 if TYPE_CHECKING:
     from co_cli.memory.memory_store import MemoryStore
 
-_LINE_PREFIX_RE = re.compile(r"(^|\n)\d+→ ", re.MULTILINE)
+_LINE_PREFIX_RE = re.compile(r"(?:^|\n)\d+→ ")
 _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
-
-# Match config defaults — used when memory_store reindexing is triggered without config access.
-_DEFAULT_CHUNK_SIZE = 600
-_DEFAULT_CHUNK_OVERLAP = 80
 
 
 @dataclass
@@ -97,8 +93,9 @@ def reindex(
     markdown_content: str,
     frontmatter: dict,
     filename_stem: str,
-    chunk_size: int = _DEFAULT_CHUNK_SIZE,
-    chunk_overlap: int = _DEFAULT_CHUNK_OVERLAP,
+    *,
+    chunk_size: int,
+    chunk_overlap: int,
 ) -> None:
     """Re-index a single knowledge file in the FTS store without RunContext."""
     content_hash = hashlib.sha256(markdown_content.encode()).hexdigest()
@@ -111,9 +108,7 @@ def reindex(
         content=body.strip(),
         mtime=path.stat().st_mtime,
         hash=content_hash,
-        tags=" ".join(frontmatter.get("tags", [])) or None,
         created=frontmatter.get("created"),
-        type=artifact_kind,
         description=frontmatter.get("description"),
         source_ref=frontmatter.get("source_ref"),
         artifact_id=str(frontmatter["id"]) if frontmatter.get("id") is not None else None,
@@ -131,9 +126,7 @@ def save_artifact(
     description: str | None = None,
     source_url: str | None = None,
     source_type: str = SourceTypeEnum.DETECTED.value,
-    source_ref: str | None = None,
     decay_protected: bool = False,
-    related: list[str] | None = None,
     consolidation_enabled: bool = False,
     consolidation_similarity_threshold: float = 0.75,
 ) -> SaveResult:
@@ -146,9 +139,7 @@ def save_artifact(
     """
     knowledge_dir.mkdir(parents=True, exist_ok=True)
 
-    # URL-keyed dedup path (web-fetched articles)
     if source_url is not None:
-        effective_decay = True  # web articles are always decay-protected
         existing_path = _find_article_by_url(knowledge_dir, source_url)
 
         if existing_path is not None:
@@ -167,7 +158,7 @@ def save_artifact(
                 related=list(frontmatter.get("related") or []),
                 source_type=SourceTypeEnum.WEB_FETCH.value,
                 source_ref=source_url,
-                decay_protected=effective_decay,
+                decay_protected=True,
             )
             markdown_content = render_knowledge_file(artifact)
             atomic_write(existing_path, markdown_content)
@@ -181,10 +172,9 @@ def save_artifact(
                 filename_stem=existing_path.stem,
             )
 
-        # New web article
         artifact_id = str(uuid4())
         slug = slugify((title or content)[:50])
-        filename = f"{slug}-{artifact_id[:6]}.md"
+        filename = f"{slug}-{artifact_id[:8]}.md"
         file_path = knowledge_dir / filename
         artifact = KnowledgeArtifact(
             id=artifact_id,
@@ -193,10 +183,9 @@ def save_artifact(
             title=title,
             content=content,
             created=datetime.now(UTC).isoformat(),
-            related=list(related or []),
             source_type=SourceTypeEnum.WEB_FETCH.value,
             source_ref=source_url,
-            decay_protected=effective_decay,
+            decay_protected=True,
         )
         markdown_content = render_knowledge_file(artifact)
         atomic_write(file_path, markdown_content)
@@ -210,7 +199,6 @@ def save_artifact(
             filename_stem=file_path.stem,
         )
 
-    # Jaccard dedup path
     if consolidation_enabled:
         threshold = consolidation_similarity_threshold
         existing = load_knowledge_artifacts(
@@ -221,7 +209,6 @@ def save_artifact(
         if matches:
             best_artifact, best_score = matches[0]
             if best_score > 0.9:
-                # Near-identical — skip without writing
                 return SaveResult(
                     path=best_artifact.path,
                     artifact_id=best_artifact.id,
@@ -252,7 +239,6 @@ def save_artifact(
                 filename_stem=best_artifact.path.stem,
             )
 
-    # Straight create
     artifact_id = str(uuid4())
     slug = slugify(title) if title else slugify(content[:50])
     filename = f"{slug}-{artifact_id[:8]}.md"
@@ -267,7 +253,6 @@ def save_artifact(
         created=datetime.now(UTC).isoformat(),
         description=description,
         source_type=source_type,
-        source_ref=source_ref,
         decay_protected=decay_protected,
     )
     markdown_content = render_knowledge_file(artifact)
@@ -321,9 +306,7 @@ def mutate_artifact(
                 "mutate_artifact action='replace' requires a non-empty target. "
                 "Provide the exact text passage to replace."
             )
-        body_text = body.expandtabs()
-        target_norm = target.expandtabs()
-        count = body_text.count(target_norm)
+        count = body.count(target)
         if count == 0:
             raise ValueError(
                 f"target not found in artifact '{filename_stem}'. "
@@ -334,7 +317,7 @@ def mutate_artifact(
                 f"target appears {count} times in '{filename_stem}'. "
                 "Provide more context to make it unique."
             )
-        updated_body = body_text.replace(target_norm, content, 1)
+        updated_body = body.replace(target, content, 1)
         result_action = "replaced"
 
     frontmatter["updated"] = datetime.now(UTC).isoformat()
