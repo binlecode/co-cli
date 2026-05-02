@@ -70,6 +70,7 @@ __all__ = [
     "build_todo_snapshot",
     "dedup_tool_results",
     "emergency_recover_overflow_history",
+    "estimate_message_tokens",
     "evict_batch_tool_outputs",
     "evict_old_tool_results",
     "find_first_run_end",
@@ -77,11 +78,14 @@ __all__ = [
     "group_by_turn",
     "groups_to_messages",
     "is_compaction_marker",
+    "latest_response_input_tokens",
     "plan_compaction_boundaries",
     "proactive_window_processor",
     "recover_overflow_history",
+    "resolve_compaction_budget",
     "static_marker",
     "summarize_dropped_messages",
+    "summarize_messages",
     "summary_marker",
 ]
 

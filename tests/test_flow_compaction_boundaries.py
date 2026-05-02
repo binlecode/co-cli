@@ -1,6 +1,5 @@
 """Behavioral tests for plan_compaction_boundaries and find_first_run_end.
 
-Production path: co_cli/context/_compaction_boundaries.py
 No LLM needed — pure function over message lists.
 """
 
@@ -12,7 +11,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.context._compaction_boundaries import (
+from co_cli.context.compaction import (
     find_first_run_end,
     group_by_turn,
     plan_compaction_boundaries,

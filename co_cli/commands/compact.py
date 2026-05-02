@@ -23,8 +23,8 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     from pydantic_ai.messages import TextPart as _TextPart
     from pydantic_ai.usage import RunUsage
 
-    from co_cli.context.compaction import apply_compaction
-    from co_cli.context.summarization import (
+    from co_cli.context.compaction import (
+        apply_compaction,
         estimate_message_tokens,
         resolve_compaction_budget,
     )

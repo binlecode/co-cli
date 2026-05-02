@@ -12,13 +12,13 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.context._history_processors import (
+from co_cli.context._tool_result_markers import is_cleared_marker
+from co_cli.context.compaction import (
     COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
     evict_batch_tool_outputs,
     evict_old_tool_results,
 )
-from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 

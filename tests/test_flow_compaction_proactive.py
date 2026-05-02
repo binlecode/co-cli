@@ -18,11 +18,11 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
-from co_cli.context._compaction_markers import is_compaction_marker
 from co_cli.context.compaction import (
     _COMPACTION_BREAKER_PROBE_EVERY,
     _COMPACTION_BREAKER_TRIP,
     _summarization_gate_open,
+    is_compaction_marker,
     proactive_window_processor,
 )
 from co_cli.deps import CoDeps, CoSessionState
