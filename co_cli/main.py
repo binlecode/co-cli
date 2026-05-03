@@ -89,7 +89,6 @@ async def _finalize_turn(
     try:
         deps.session.session_path = persist_session_history(
             session_path=deps.session.session_path,
-            sessions_dir=deps.sessions_dir,
             messages=turn_result.messages,
             persisted_message_count=deps.session.persisted_message_count,
             history_compacted=deps.runtime.compaction_applied_this_turn,
@@ -202,7 +201,6 @@ def _apply_command_outcome(
             try:
                 deps.session.session_path = persist_session_history(
                     session_path=deps.session.session_path,
-                    sessions_dir=deps.sessions_dir,
                     messages=outcome.history,
                     persisted_message_count=deps.session.persisted_message_count,
                     history_compacted=True,

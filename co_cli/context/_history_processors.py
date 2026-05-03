@@ -8,14 +8,11 @@ messages where at least one part changed.
 Registered processors:
     dedup_tool_results     — collapses identical-content tool returns to back-references
     evict_old_tool_results   — content-clears compactable tool results by recency
-    evict_batch_tool_outputs — spills oversized tool returns in the current batch
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import math
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 
@@ -289,137 +286,3 @@ def evict_old_tool_results(
         return _build_cleared_part(part, call_id_to_args)
 
     return _rewrite_tool_returns(messages, boundary, replacement_for=replacement_for)
-
-
-def _tool_return_part_size(part: ToolReturnPart) -> int:
-    """Return the serialized char size of a ToolReturnPart's content."""
-    if isinstance(part.content, str):
-        return len(part.content)
-    return len(json.dumps(part.content, default=str))
-
-
-def _collect_batch_parts(
-    messages: list[ModelMessage],
-) -> list[tuple[int, int, ToolReturnPart]]:
-    """Return (msg_idx, part_idx, part) for ToolReturnParts in the current batch.
-
-    The current batch starts immediately after the last ModelResponse containing
-    a ToolCallPart. Returns an empty list when no such response exists.
-    """
-    batch_start = len(messages)
-    for idx in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[idx], ModelResponse) and any(
-            isinstance(p, ToolCallPart) for p in messages[idx].parts
-        ):
-            batch_start = idx + 1
-            break
-    if batch_start >= len(messages):
-        return []
-    result: list[tuple[int, int, ToolReturnPart]] = []
-    for msg_idx in range(batch_start, len(messages)):
-        msg = messages[msg_idx]
-        if isinstance(msg, ModelRequest):
-            for part_idx, part in enumerate(msg.parts):
-                if isinstance(part, ToolReturnPart):
-                    result.append((msg_idx, part_idx, part))
-    return result
-
-
-def _apply_batch_replacements(
-    messages: list[ModelMessage],
-    replacements: dict[int, dict[int, str]],
-) -> list[ModelMessage]:
-    """Return a new message list with rebuilt parts for indexes in ``replacements``."""
-    result: list[ModelMessage] = []
-    for msg_idx, msg in enumerate(messages):
-        part_replacements = replacements.get(msg_idx)
-        if part_replacements is None or not isinstance(msg, ModelRequest):
-            result.append(msg)
-            continue
-        new_parts = []
-        for part_idx, part in enumerate(msg.parts):
-            if part_idx in part_replacements and isinstance(part, ToolReturnPart):
-                new_parts.append(
-                    ToolReturnPart(
-                        tool_name=part.tool_name,
-                        content=part_replacements[part_idx],
-                        tool_call_id=part.tool_call_id,
-                    )
-                )
-            else:
-                new_parts.append(part)
-        result.append(replace(msg, parts=new_parts))
-    return result
-
-
-def evict_batch_tool_outputs(
-    ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-) -> list[ModelMessage]:
-    """Per-batch aggregate spill: evict largest non-persisted tool returns
-    when aggregate content exceeds config.tools.batch_spill_chars.
-
-    Identifies the current batch as the ToolReturnParts that follow the last
-    ModelResponse with a ToolCallPart. Spills candidates largest-first via
-    persist_if_oversized(max_size=0) until aggregate fits or no eligible
-    candidates remain. Fails open: if persist_if_oversized returns unchanged
-    content (OSError fallback), that candidate is skipped.
-
-    Tools registered with max_result_size=math.inf are excluded from candidates —
-    the same contract that M1 (evict_old_tool_results) honours via COMPACTABLE_TOOLS.
-
-    Registered after evict_old_tool_results.
-    Not added to delegation sub-agent chains (short-lived, unnecessary overhead).
-    """
-    from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, persist_if_oversized
-
-    threshold = ctx.deps.config.tools.batch_spill_chars
-    batch_parts = _collect_batch_parts(messages)
-    if not batch_parts:
-        return messages
-
-    aggregate = sum(_tool_return_part_size(part) for _, _, part in batch_parts)
-    if aggregate <= threshold:
-        return messages
-
-    never_evict = {
-        name for name, info in ctx.deps.tool_index.items() if info.max_result_size == math.inf
-    }
-    candidates = [
-        (msg_idx, part_idx, part)
-        for msg_idx, part_idx, part in batch_parts
-        if isinstance(part.content, str)
-        and PERSISTED_OUTPUT_TAG not in part.content
-        and part.tool_name not in never_evict
-    ]
-    candidates.sort(key=lambda entry: _tool_return_part_size(entry[2]), reverse=True)
-
-    replacements: dict[int, dict[int, str]] = {}
-    for msg_idx, part_idx, part in candidates:
-        if aggregate <= threshold:
-            break
-        old_size = _tool_return_part_size(part)
-        spilled = persist_if_oversized(
-            str(part.content),
-            ctx.deps.tool_results_dir,
-            part.tool_name,
-            max_size=0,
-        )
-        if spilled != part.content:
-            replacements.setdefault(msg_idx, {})[part_idx] = spilled
-            aggregate -= old_size - len(spilled)
-
-    if aggregate > threshold:
-        signature = tuple(sorted(part.tool_call_id for _, _, part in batch_parts))
-        if ctx.deps.runtime.last_overbudget_batch_signature != signature:
-            log.warning(
-                "evict_batch_tool_outputs: batch still over budget (%d > %d) after exhausting candidates",
-                aggregate,
-                threshold,
-            )
-            ctx.deps.runtime.last_overbudget_batch_signature = signature
-
-    if not replacements:
-        return messages
-
-    return _apply_batch_replacements(messages, replacements)

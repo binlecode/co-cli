@@ -1,7 +1,7 @@
 """Extract indexable messages from session JSONL transcripts.
 
-Parses each JSONL line, skipping control markers (compact_boundary, session_meta)
-and noise parts (thinking, system-prompt, retry-prompt).
+Parses each JSONL line, skipping non-array lines and noise parts
+(thinking, system-prompt, retry-prompt).
 Returns user-prompt, text (assistant), tool-call, and tool-return parts as
 ExtractedMessage records.
 """
@@ -59,7 +59,7 @@ def _extract_from_line(
     results: list[ExtractedMessage],
 ) -> None:
     """Extract indexable parts from one parsed JSONL line, appending to results."""
-    # Skip non-array lines: compact_boundary, session_meta
+    # Skip non-array lines
     if not isinstance(data, list) or not data:
         return
     msg = data[0]

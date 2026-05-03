@@ -6,10 +6,10 @@ No LLM needed — filesystem only.
 Each test guards a specific regression:
 - test_normal_turn_appends_delta_to_existing_session: delta append miscounts
   cause messages to be written twice or skipped on reload.
-- test_compaction_branches_to_child_session: compacted history lost (never
-  branched) → session lost on resume after compaction.
-- test_load_transcript_skips_pre_boundary_on_large_file: large session reloads
-  full uncompacted history → OOM or wrong context on resume.
+- test_compaction_rewrites_session_in_place: compaction must overwrite the
+  current transcript in place — not fork a child file.
+- test_load_transcript_rejects_oversized_file: files above MAX_TRANSCRIPT_READ_BYTES
+  must be rejected to prevent OOM.
 """
 
 from pathlib import Path
@@ -18,11 +18,10 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 
 from co_cli.memory.session import new_session_path
 from co_cli.memory.transcript import (
-    SKIP_PRECOMPACT_THRESHOLD,
+    MAX_TRANSCRIPT_READ_BYTES,
     append_messages,
     load_transcript,
     persist_session_history,
-    write_compact_boundary,
 )
 
 
@@ -50,7 +49,6 @@ def test_normal_turn_appends_delta_to_existing_session(tmp_path: Path) -> None:
     # First persist: write the initial 2 messages (persisted_message_count=0).
     returned_path = persist_session_history(
         session_path=session_path,
-        sessions_dir=sessions_dir,
         messages=first_pair,
         persisted_message_count=0,
         history_compacted=False,
@@ -60,7 +58,6 @@ def test_normal_turn_appends_delta_to_existing_session(tmp_path: Path) -> None:
     # Second persist: append only the next 2 messages (delta from index 2).
     returned_path2 = persist_session_history(
         session_path=session_path,
-        sessions_dir=sessions_dir,
         messages=all_msgs,
         persisted_message_count=2,
         history_compacted=False,
@@ -84,11 +81,11 @@ def test_normal_turn_appends_delta_to_existing_session(tmp_path: Path) -> None:
     assert second_req_content == "second user message"
 
 
-def test_compaction_branches_to_child_session(tmp_path: Path) -> None:
-    """Compaction must branch to a fresh child session, leaving the parent intact.
+def test_compaction_rewrites_session_in_place(tmp_path: Path) -> None:
+    """Compaction must overwrite the current transcript in place, not fork a child.
 
-    Failure mode: compacted history lost (never branched) → session context
-    is missing on resume after compaction.
+    Failure mode: pre-compaction history leaks into the reloaded transcript, or
+    the session path changes after compaction.
     """
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
@@ -99,119 +96,68 @@ def test_compaction_branches_to_child_session(tmp_path: Path) -> None:
 
     compacted_msgs = [_req("compacted summary prompt"), _resp("compacted model reply")]
 
-    child_path = persist_session_history(
+    returned_path = persist_session_history(
         session_path=session_path,
-        sessions_dir=sessions_dir,
         messages=compacted_msgs,
         persisted_message_count=2,
         history_compacted=True,
     )
 
-    # Compaction must yield a different path, and the child file must exist.
-    assert child_path != session_path, (
-        "persist_session_history must branch to a new path when history_compacted=True"
+    # In-place rewrite — same path returned.
+    assert returned_path == session_path, (
+        "persist_session_history must return the same path when history_compacted=True"
     )
-    assert child_path.exists(), "Child session file must be created"
+    assert session_path.exists(), "Session file must still exist after in-place rewrite"
 
-    # Child contains only the compacted messages.
-    child_loaded = load_transcript(child_path)
-    assert len(child_loaded) == 2, (
-        f"Child session must contain 2 compacted messages, got {len(child_loaded)}"
-    )
-    child_req_content = next(
-        p.content for p in child_loaded[0].parts if isinstance(p, UserPromptPart)
-    )
-    assert child_req_content == "compacted summary prompt"
-
-    # Parent is unchanged — original 2 messages still there, child content absent.
-    parent_loaded = load_transcript(session_path)
-    assert len(parent_loaded) == 2, (
-        f"Parent session must still have 2 original messages, got {len(parent_loaded)}"
-    )
-    parent_req_content = next(
-        p.content for p in parent_loaded[0].parts if isinstance(p, UserPromptPart)
-    )
-    assert parent_req_content == "pre-compaction user"
-
-    # Verify compacted content does not bleed into parent.
-    all_parent_contents = [
-        p.content
-        for msg in parent_loaded
-        for p in (msg.parts if hasattr(msg, "parts") else [])
-        if isinstance(p, (UserPromptPart, TextPart))
-    ]
-    assert "compacted summary prompt" not in all_parent_contents, (
-        "Compacted message must not appear in the parent session"
+    # No sibling files created.
+    session_files = list(sessions_dir.iterdir())
+    assert len(session_files) == 1, (
+        f"Expected exactly 1 session file after compaction, found {len(session_files)}"
     )
 
-
-def test_load_transcript_skips_pre_boundary_on_large_file(tmp_path: Path) -> None:
-    """Files above SKIP_PRECOMPACT_THRESHOLD must drop all messages before the boundary.
-
-    Failure mode: large session reloads full uncompacted history → OOM or
-    wrong context injected on resume.
-    """
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    session_path = new_session_path(sessions_dir)
-
-    pre_boundary_msgs = [
-        _req("pre-boundary user A"),
-        _resp("pre-boundary model A"),
-    ]
-    post_boundary_msgs = [
-        _req("post-boundary user B"),
-        _resp("post-boundary model B"),
-    ]
-
-    # Step 1: write pre-boundary messages.
-    append_messages(session_path, pre_boundary_msgs)
-
-    # Step 2: pad the file past SKIP_PRECOMPACT_THRESHOLD (5 MB) so the
-    # load_transcript size-gate activates skip_precompact=True.
-    padding_line = "# padding\n"
-    total_padding = SKIP_PRECOMPACT_THRESHOLD + 1024  # just over the threshold
-    repeats = total_padding // len(padding_line) + 1
-    with session_path.open("a", encoding="utf-8") as f:
-        f.write(padding_line * repeats)
-
-    # Step 3: write the compact boundary marker.
-    write_compact_boundary(session_path)
-
-    # Step 4: write post-boundary messages.
-    append_messages(session_path, post_boundary_msgs)
-
-    # Sanity-check: file is indeed above the threshold.
-    assert session_path.stat().st_size > SKIP_PRECOMPACT_THRESHOLD, (
-        "Test setup error: file must exceed SKIP_PRECOMPACT_THRESHOLD before calling load_transcript"
-    )
-
+    # File contains only the compacted messages.
     loaded = load_transcript(session_path)
-
     assert len(loaded) == 2, (
-        f"Expected 2 post-boundary messages, got {len(loaded)}. "
-        "Pre-boundary messages must be dropped for large files."
+        f"Expected 2 compacted messages after in-place rewrite, got {len(loaded)}"
     )
+    loaded_req_content = next(p.content for p in loaded[0].parts if isinstance(p, UserPromptPart))
+    assert loaded_req_content == "compacted summary prompt"
 
-    loaded_contents = [
+    # Pre-compaction content must not be present.
+    all_contents = [
         p.content
         for msg in loaded
         for p in (msg.parts if hasattr(msg, "parts") else [])
         if isinstance(p, (UserPromptPart, TextPart))
     ]
-
-    # Post-boundary content must be present.
-    assert "post-boundary user B" in loaded_contents, (
-        "Post-boundary UserPromptPart must survive the boundary skip"
-    )
-    assert "post-boundary model B" in loaded_contents, (
-        "Post-boundary TextPart must survive the boundary skip"
+    assert "pre-compaction user" not in all_contents, (
+        "Pre-compaction message must be gone after in-place rewrite"
     )
 
-    # Pre-boundary content must be absent.
-    assert "pre-boundary user A" not in loaded_contents, (
-        "Pre-boundary UserPromptPart must be cleared by the compact boundary skip"
+
+def test_load_transcript_rejects_oversized_file(tmp_path: Path) -> None:
+    """Files above MAX_TRANSCRIPT_READ_BYTES must be rejected to prevent OOM.
+
+    Failure mode: load_transcript loads a giant file and exhausts memory.
+    """
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    session_path = new_session_path(sessions_dir)
+
+    # Write a couple of real messages first.
+    append_messages(session_path, [_req("user message"), _resp("model response")])
+
+    # Pad the file past MAX_TRANSCRIPT_READ_BYTES.
+    padding_line = "# padding\n"
+    total_padding = MAX_TRANSCRIPT_READ_BYTES + 1024
+    repeats = total_padding // len(padding_line) + 1
+    with session_path.open("a", encoding="utf-8") as f:
+        f.write(padding_line * repeats)
+
+    assert session_path.stat().st_size > MAX_TRANSCRIPT_READ_BYTES, (
+        "Test setup error: file must exceed MAX_TRANSCRIPT_READ_BYTES"
     )
-    assert "pre-boundary model A" not in loaded_contents, (
-        "Pre-boundary TextPart must be cleared by the compact boundary skip"
-    )
+
+    loaded = load_transcript(session_path)
+
+    assert loaded == [], f"Expected empty list for oversized file, got {len(loaded)} messages"

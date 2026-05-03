@@ -1,7 +1,7 @@
 # Co CLI — Compaction System
 
 
-Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (including child-session branching after compaction) lives in [memory.md](memory.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
+Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (in-place rewrite on compaction) lives in [memory.md](memory.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
 
 ## 1. Functional Architecture
 
@@ -318,7 +318,19 @@ Four sync processors in order; no LLM calls.
 
 ```
 budget = resolve_compaction_budget(config, ctx_window)
-reported = 0 if compaction_applied_this_turn else latest_response_input_tokens(messages)
+if compaction_applied_this_turn:
+    reported = 0
+elif post_compaction_token_estimate is not None:
+    # Stale-suppression window: provider report still reflects pre-compaction context.
+    # Use local estimate until message_count_at_last_compaction + 2 messages have landed
+    # (new ModelRequest + ModelResponse), at which point provider report is valid again.
+    if len(messages) >= message_count_at_last_compaction + 2:
+        clear post_compaction_token_estimate and message_count_at_last_compaction
+        reported = latest_response_input_tokens(messages)
+    else:
+        reported = post_compaction_token_estimate
+else:
+    reported = latest_response_input_tokens(messages)
 token_count = _effective_token_count(messages, reported)
 threshold = int(budget * cfg.compaction_ratio)
 if token_count <= threshold: return messages
@@ -346,25 +358,27 @@ _MIN_RETAINED_TURN_GROUPS = 1  # hardcoded correctness invariant
    tail_budget = tail_fraction * budget
    acc_tokens = 0; acc_groups = []
    for group in reversed(groups):
+     if group.start_index <= head_end: break  # stop before absorbing head region
      gt = estimate_message_tokens(group.messages)
      if len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS and acc_tokens + gt > tail_budget:
        break
      acc_groups.insert(0, group); acc_tokens += gt
+   if not acc_groups: return None
 4. tail_start = acc_groups[0].start_index
-5. Active-user anchoring: if the latest UserPromptPart falls in the dropped middle,
-   extend tail_start to that group's start_index.
-6. if tail_start <= head_end: return None
-7. return (head_end, tail_start, tail_start - head_end)
+5. if tail_start <= head_end: return None
+6. return (head_end, tail_start, tail_start - head_end)
 ```
 
 `_MIN_RETAINED_TURN_GROUPS = 1` is a hardcoded correctness invariant — not user-configurable. The last turn group is retained unconditionally even when its tokens alone exceed `tail_fraction * budget`.
+
+Active-user anchoring is structurally guaranteed (no explicit step): `group_by_turn` splits at every `UserPromptPart`, so the backward walk retains the last group unconditionally via `_MIN_RETAINED_TURN_GROUPS = 1`, ensuring `tail_start <= latest_user_idx` always holds.
 
 **Compaction assembly** (`apply_compaction`) — shared by M3, overflow recovery, and `/compact`:
 
 Summarizes `messages[head_end:tail_start]` via `_gated_summarize_or_none`, then assembles:
 `head | marker | [todo_snapshot] | [search breadcrumbs] | tail`
 
-Raw `summary_text` is stored in `ctx.deps.runtime.previous_compaction_summary` before `build_compaction_marker` adds the `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix; on failure the field is left untouched. Sets `compaction_applied_this_turn = True`.
+Raw `summary_text` is stored in `ctx.deps.runtime.previous_compaction_summary` before `build_compaction_marker` adds the `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix; on failure the field is left untouched. Sets `compaction_applied_this_turn = True`. After the turn, `_finalize_turn()` in `co_cli/main.py` reads this flag and passes it as `history_compacted=True` to `persist_session_history()`, which overwrites the transcript in place instead of appending.
 
 Summarizer surface:
 - `_summarization_gate_open(ctx)` — `False` when `ctx.deps.model is None` or circuit breaker tripped (and not at probe cadence).
@@ -437,13 +451,15 @@ flowchart LR
     classDef prior fill:#f5f5f5,stroke:#9e9e9e,stroke-dasharray:3 3
 ```
 
-**Template sections:** `## Active Task`, `## Goal`, `## Key Decisions`, `## User Corrections`†, `## Errors & Fixes`, `## Working Set`, `## Progress`, `## Pending User Asks`†, `## Resolved Questions`†, `## Next Step` (verbatim drift anchor), `## Critical Context`†. (†omitted when empty)
+**Template sections:** `## Active Task`, `## Goal`, `## Key Decisions`, `## User Corrections`†, `## Errors & Fixes`, `## Completed Actions`, `## In Progress`, `## Remaining Work`, `## Working Set`, `## Pending User Asks`†, `## Resolved Questions`†, `## Next Step` (verbatim drift anchor), `## Critical Context`†. (†omitted when empty)
 
 ### 2.7 Base system prompt advisory
 
-Static, cacheable paragraph — no per-turn interpolation; `5` sourced from `COMPACTABLE_KEEP_RECENT` at module-load time:
+`RECENCY_CLEARING_ADVISORY` — static, cacheable `## Tool result recency` section; no per-turn interpolation; `5` sourced from `COMPACTABLE_KEEP_RECENT` at module-load time:
 
-> "Tool results may be automatically cleared from context to free space. The 5 most recent results per tool type are always kept. Note important information from tool results in your response — the original output may be cleared on later turns."
+> "## Tool result recency
+>
+> Tool results may be automatically cleared from context to free space. The 5 most recent results per tool type are always kept. Note important information from tool results in your response — the original output may be cleared on later turns."
 
 ### 2.8 Trigger cadence and self-stabilization
 
@@ -526,13 +542,14 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `co_cli/context/summarization.py` | `summarize_messages`, token estimator, budget resolver, and prompt templates. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — provider overflow detection for 400/413. |
 | `co_cli/context/orchestrate.py` | `run_turn` overflow dispatch and anti-thrash gate reset. |
+| `co_cli/main.py` | `_finalize_turn()` — session persistence bridge; reads `compaction_applied_this_turn` and calls `persist_session_history(history_compacted=True)` to rewrite the transcript. |
 | `co_cli/tools/categories.py` | `COMPACTABLE_TOOLS`, `FILE_TOOLS`, `PATH_NORMALIZATION_TOOLS`. |
 | `co_cli/tools/tool_io.py` | M1: `persist_if_oversized`, `tool_output`, `check_tool_results_size`. |
 | `co_cli/tools/files/read.py` | `file_read` M1 override: `max_result_size=math.inf` (never persists). |
 | `co_cli/tools/shell/execute.py` | `shell` M1 override: `max_result_size=30_000`. |
 | `co_cli/config/tools.py` | `ToolsSettings` — `result_persist_chars`, `batch_spill_chars`. |
 | `co_cli/config/llm.py` | `num_ctx` (Ollama override), `ctx_token_budget` (fallback budget). |
-| `co_cli/context/assembly.py` | Prompt assembly: `assemble_system_prompt`; static `_TOOL_RESULT_ADVISORY` recency-clearing paragraph. |
+| `co_cli/context/assembly.py` | Prompt assembly: `build_static_instructions`; static `RECENCY_CLEARING_ADVISORY` recency-clearing paragraph. |
 | `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |
 | `evals/eval_compaction_proactive.py` | Proactive compaction end-to-end eval. |
 | `evals/eval_compaction_multi_cycle.py` | Multi-cycle compaction fidelity eval. |

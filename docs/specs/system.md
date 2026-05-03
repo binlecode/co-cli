@@ -95,7 +95,7 @@ Startup sequencing detail is in [bootstrap.md](bootstrap.md); turn execution in 
   - `skill_commands`: Discovered `SkillConfig` instances
 - **Mutable State** (split by lifecycle)
   - `session`: `CoSessionState` (persists across turns: `session_todos`, `background_tasks`, `session_approval_rules`, etc.)
-  - `runtime`: `CoRuntimeState` (managed by orchestration: `turn_usage`, `compaction_skip_count`, `compaction_applied_this_turn`, `consecutive_low_yield_proactive_compactions`, `previous_compaction_summary`)
+  - `runtime`: `CoRuntimeState` (managed by orchestration: `turn_usage`, `compaction_skip_count`, `compaction_applied_this_turn`, `consecutive_low_yield_proactive_compactions`, `previous_compaction_summary`, `post_compaction_token_estimate`, `message_count_at_last_compaction`)
 - **Paths** (resolved workspace and user-global paths)
   - `workspace_root`, `knowledge_dir`, `sessions_dir`, etc.
 - **Degradations**

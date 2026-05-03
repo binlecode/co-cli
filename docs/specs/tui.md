@@ -135,8 +135,7 @@ All built-in commands are registered in `BUILTIN_COMMANDS: dict[str, SlashComman
 | `/history` | — | Show delegation history (sub-agents + background) | `None` |
 | `/tools` | — | List registered agent tools with descriptions | `None` |
 | `/skills` | `[name]` | List loaded skills; show detail for named skill | `None` |
-| `/knowledge` | `list\|count\|forget\|dream\|restore\|decay-review\|stats [args] [flags]` | Manage knowledge artifacts; dream lifecycle details live in [dream.md](dream.md) | `None` |
-| `/memory` | `list\|count\|forget [query] [flags]` | [Deprecated — use `/knowledge`] Manage knowledge artifacts | `None` |
+| `/memory` | `list\|count\|forget\|dream\|restore\|decay-review\|stats [args] [flags]` | Manage knowledge artifacts; dream lifecycle details live in [dream.md](dream.md) | `None` |
 | `/approvals` | `list\|clear\|...` | View and manage session approval rules | `None` |
 | `/background` | `<command>` | Run a shell command in the background | `None` |
 | `/tasks` | `[status-filter \| task-id]` | List background tasks; pass a 12-hex-char task ID to show detail | `None` |
@@ -179,7 +178,7 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | File | Purpose |
 |---|---|
 | `co_cli/main.py` | REPL loop (`_chat_loop`), foreground turn entry, CLI command (`chat`) |
-| `co_cli/commands/core.py` | All handlers, `dispatch()`, `get_skill_registry` |
+| `co_cli/commands/core.py` | Slash-command registry and `dispatch()` |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, completer helpers |
 | `co_cli/commands/types.py` | `CommandContext`, `SlashOutcome`, `LocalOnly`, `ReplaceTranscript`, `DelegateToAgent`, `_confirm` |
 | `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `console`, `set_theme`, `PROMPT_CHAR` |

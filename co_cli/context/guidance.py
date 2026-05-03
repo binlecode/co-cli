@@ -11,14 +11,13 @@ from co_cli.deps import ToolInfo
 
 MEMORY_GUIDANCE = """\
 ## Memory
-Use memory_search when the user references past work, preferences, or context
-from a prior session, or when you suspect relevant context exists for the current task.
-It covers persistent knowledge artifacts and past session transcripts in one call —
-call it before asking the user to repeat themselves.
+Call memory_search before answering when:
+- The user references past work, a past conversation, preferences, or a prior decision
+- You recognize the topic but don't have context for this user's specific setup or preferences
+- The user asks "what did we do about X?", "what's my convention for Y?", "remember when…"
 
-If memory_search returns no results, make at most one broader retry when a
-clear broader query exists. After that, surface the miss explicitly instead of
-continuing to search variations."""
+It searches knowledge artifacts and past session transcripts in one call.
+If no results, make at most one broader retry; then surface the miss rather than continuing."""
 
 CAPABILITIES_GUIDANCE = """\
 ## Capability self-check

@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.8.111]
+
+### Fixes
+- Removed dead `evict_batch_tool_outputs` history processor (200k threshold never fired; redundant with at-write spill in `tool_output()`)
+- Removed `batch_spill_chars` config field and `last_overbudget_batch_signature` runtime state
+- Removed `asyncio.timeout(90)` from `_PerCallTimeoutCapability` — per-call timeout fired mid-stream causing `httpx.ReadError` crash; outer 360s segment hang timeout is the correct guard
+- Added `httpx.ReadError` to `run_turn` error handlers (pydantic-ai streaming path does not wrap this as `ModelAPIError`)
+- Added per-LLM-call timing to `_PerCallTimeoutCapability` — DEBUG log every call, WARNING when ≥81s
+- Fixed `AgentRunResult.data` → `.output` in eval judge (pydantic-ai API rename)
+- `eval_compaction_multi_cycle`: replaced broken LLM judge gate with deterministic keyword chain check; added `outcome="error"` turn detection; set `compaction_ratio=0.5` to trigger phase-2 earlier on local models; added summary content previews
+
+### Refactor
+- Centralize eval model construction — no local `build_model()` calls in eval files
+
 ## [0.8.107]
 
 ### Features

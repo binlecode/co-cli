@@ -13,6 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import httpx
 from pydantic_ai import (
     Agent,
     AgentRunResult,
@@ -223,7 +224,9 @@ async def _collect_deferred_tool_approvals(
 
         # Standard approval path
         args = decode_tool_args(call.args)
-        subject = resolve_approval_subject(call.tool_name, args)
+        subject = resolve_approval_subject(
+            call.tool_name, args, deps.tool_index.get(call.tool_name)
+        )
 
         # Auto-approval — skip prompt if subject already approved this session
         if is_auto_approved(subject, deps):
@@ -680,8 +683,11 @@ async def run_turn(
                     )
                     return _build_error_turn_result(turn_state)
 
-                except ModelAPIError as e:
-                    # Network errors already retried by SDK — terminal after SDK exhaustion
+                except (ModelAPIError, httpx.ReadError) as e:
+                    # ModelAPIError: network errors already retried by SDK — terminal.
+                    # httpx.ReadError: mid-stream HTTP teardown (e.g. timeout fires while
+                    # response stream is open; pydantic-ai does not wrap this on the
+                    # streaming path).
                     frontend.on_status(f"Network error: {e}")
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)

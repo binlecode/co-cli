@@ -283,13 +283,6 @@ async def memory_search(
     USE THIS for ALL recall tasks — saved preferences, past conversations, project
     conventions, saved articles.
 
-    USE THIS PROACTIVELY when:
-    - The user says "we did this before", "remember when", "last time", "as I mentioned"
-    - The user asks about a topic you've worked on but don't have in current context
-    - The user asks "what did we do about X?", "what was my preferred Y?", "our convention for Z?"
-    - The user references a project, person, decision, or concept that seems familiar
-    - The user asks about your character, your background, how you typically handle a situation, or references your source material
-
     Concrete examples:
     - "what do I prefer for testing?" → memory_search kinds=["user"]
     - "what did we figure out about docker last time?" → memory_search (searches sessions)

@@ -18,7 +18,7 @@ Dreaming serves the core product mission:
 ```mermaid
 flowchart TD
     subgraph Entry["Entry Points"]
-        Manual["/knowledge dream\n(manual trigger)"]
+        Manual["/memory dream\n(manual trigger)"]
         Auto["session teardown\n(if consolidation_enabled=true)"]
     end
 
@@ -55,11 +55,11 @@ Source-of-truth files:
 Manual trigger:
 
 ```text
-/knowledge dream
+/memory dream
   -> run_dream_cycle(dry_run=false)
   -> print extracted, merged, decayed, and errors
 
-/knowledge dream --dry
+/memory dream --dry
   -> run_dream_cycle(dry_run=true)
   -> report merge and decay counts only
   -> do not write files, archive artifacts, mine transcripts, or persist state
@@ -236,12 +236,12 @@ Dreaming is inspectable through slash commands:
 
 | Command | Purpose |
 | --- | --- |
-| `/knowledge dream --dry` | Preview merge and decay counts |
-| `/knowledge dream` | Run the cycle now |
-| `/knowledge stats` | Show active counts, archive count, last dream timestamp, cumulative dream stats, and decay candidates |
-| `/knowledge restore [slug]` | List archived artifacts or restore one archived file by unambiguous filename prefix |
-| `/knowledge decay-review --dry` | Preview decay candidates directly |
-| `/knowledge decay-review` | Archive decay candidates after confirmation |
+| `/memory dream --dry` | Preview merge and decay counts |
+| `/memory dream` | Run the cycle now |
+| `/memory stats` | Show active counts, archive count, last dream timestamp, cumulative dream stats, and decay candidates |
+| `/memory restore [slug]` | List archived artifacts or restore one archived file by unambiguous filename prefix |
+| `/memory decay-review --dry` | Preview decay candidates directly |
+| `/memory decay-review` | Archive decay candidates after confirmation |
 
 Archive restore moves an archived markdown file back to the active knowledge directory and reindexes the active directory when a store is available. Ambiguous restore slugs fail rather than guessing.
 
@@ -304,7 +304,7 @@ Internal caps:
 | `co_cli/memory/memory_store.py` | Derived index updates for consolidated and archived artifacts |
 | `co_cli/tools/memory/write.py` | `memory_create` tool used by dream mining |
 | `co_cli/main.py` | Session-end dream trigger (`_maybe_run_dream_cycle`) |
-| `co_cli/commands/knowledge.py` | `/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, and `/knowledge stats` |
+| `co_cli/commands/knowledge.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, and `/memory stats` |
 
 ## 5. Test Gates
 

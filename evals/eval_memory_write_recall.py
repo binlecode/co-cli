@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import anyio
 from evals._deps import make_eval_deps
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 from pydantic_ai.messages import ModelResponse, TextPart
@@ -83,7 +84,7 @@ async def run_agent_saves_artifact(
     deps = make_eval_deps(knowledge_dir=knowledge_dir, memory_store=ks)
 
     t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
+    with anyio.fail_after(EVAL_TURN_TIMEOUT_SECS):
         result = await run_turn(
             agent=_AGENT,
             user_input=(
@@ -213,7 +214,7 @@ async def run_agent_recalls_in_turn2(
     deps = make_eval_deps(knowledge_dir=knowledge_dir, memory_store=ks)
 
     t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
+    with anyio.fail_after(EVAL_TURN_TIMEOUT_SECS):
         result = await run_turn(
             agent=_AGENT,
             # Fresh session: no message history from W1 — agent must search memory
@@ -298,7 +299,7 @@ async def run_memory_modify_append(
     deps = make_eval_deps(knowledge_dir=knowledge_dir, memory_store=ks)
 
     t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
+    with anyio.fail_after(EVAL_TURN_TIMEOUT_SECS):
         result = await run_turn(
             agent=_AGENT,
             user_input=(
@@ -385,7 +386,7 @@ async def run_memory_modify_replace(
     deps = make_eval_deps(knowledge_dir=knowledge_dir, memory_store=ks)
 
     t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
+    with anyio.fail_after(EVAL_TURN_TIMEOUT_SECS):
         result = await run_turn(
             agent=_AGENT,
             user_input=(

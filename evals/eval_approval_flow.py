@@ -2,14 +2,15 @@
 """Eval: approval flow — shell policy, path approval, scope memory, question-prompt.
 
 Sub-cases:
-  A1  shell_allow            echo hello (safe prefix) executes without approval prompt
-  A2  shell_deny             DENY-pattern command blocked, never enters approval loop
+  A1  shell_allow                 echo hello (safe prefix) executes without approval prompt
+  A2  shell_deny                  DENY-pattern command blocked, never enters approval loop
   A3  shell_require_approval_yes  ls /tmp/... with 'y' response executes and returns output
   A4  shell_require_approval_no   ls /tmp/... with 'n' response is skipped; agent receives denial
-  A5  scope_always           'a' response on first call; second call to same utility skips prompt
-  A6  path_approval          file_write triggers path-scoped approval; approved write creates file
-  A7  domain_approval        resolve_approval_subject(web_fetch) returns DOMAIN kind with hostname
-  A8  question_prompt        clarify tool routes through QuestionPrompt; answer injected as user_answers
+  A5  scope_always                'a' response on first call; second call to same utility skips prompt
+  A6  path_approval               file_write triggers path-scoped approval; approved write creates file
+  A7  domain_approval             resolve_approval_subject(web_fetch) returns DOMAIN kind with hostname
+  A8  question_prompt             clarify tool routes through QuestionPrompt; answer injected as user_answers
+  A9  domain_approval_live_turn   synthetic DOMAIN-scoped tool: first call prompts once ('a'); second call auto-approves
 
 Writes: docs/REPORT-eval-approval-flow.md (prepends dated section each run).
 
@@ -28,25 +29,49 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import anyio
 from evals._deps import make_eval_deps
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
+from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelResponse, TextPart
 
 from co_cli.agent.core import build_agent
 from co_cli.config.core import settings
 from co_cli.context.orchestrate import run_turn
-from co_cli.deps import ApprovalKindEnum
+from co_cli.deps import (
+    ApprovalKindEnum,
+    ApprovalSubject,
+    CoDeps,
+    ToolInfo,
+    ToolSourceEnum,
+    VisibilityPolicyEnum,
+)
 from co_cli.display.headless import HeadlessFrontend
-from co_cli.tools._shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.approvals import resolve_approval_subject
+from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-approval-flow.md"
 
 _AGENT = build_agent(config=settings)
 
+# A9-specific agent with synthetic approval-required tool for domain-scope eval.
+_A9_AGENT = build_agent(config=settings)
+
+
+async def domain_fetch_test(ctx: RunContext[CoDeps], url: str) -> str:
+    """Fetch a URL (synthetic eval tool — domain approval scope test)."""
+    return f"fetched: {url}"
+
+
+_A9_AGENT.tool(domain_fetch_test, requires_approval=True)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
 
 def _response_text(result: Any) -> str:
-    """Extract all assistant text parts from a TurnResult."""
     parts = []
     for msg in result.messages:
         if isinstance(msg, ModelResponse):
@@ -54,6 +79,42 @@ def _response_text(result: Any) -> str:
                 if isinstance(part, TextPart):
                     parts.append(part.content)
     return " ".join(parts)
+
+
+async def _timed_turn(
+    agent: Any,
+    *,
+    user_input: str,
+    deps: Any,
+    message_history: list[Any],
+    frontend: Any,
+) -> tuple[Any, float]:
+    t = time.monotonic()
+    with anyio.fail_after(EVAL_TURN_TIMEOUT_SECS):
+        result = await run_turn(
+            agent=agent,
+            user_input=user_input,
+            deps=deps,
+            message_history=message_history,
+            frontend=frontend,
+        )
+    return result, (time.monotonic() - t) * 1000
+
+
+def _case_result(
+    case_id: str,
+    verdict: str,
+    failure: str | None,
+    steps: list[dict[str, Any]],
+    case_t0: float,
+) -> dict[str, Any]:
+    return {
+        "id": case_id,
+        "verdict": verdict,
+        "failure": failure,
+        "steps": steps,
+        "duration_ms": (time.monotonic() - case_t0) * 1000,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -78,30 +139,28 @@ async def run_shell_allow(tmp_dir: Path) -> dict[str, Any]:
     )
 
     if policy.decision != ShellDecisionEnum.ALLOW:
-        return {
-            "id": "shell_allow",
-            "verdict": "SKIP",
-            "failure": f"'echo' not in safe_commands on this system — cannot test ALLOW path (decision={policy.decision.value})",
-            "steps": steps,
-            "duration_ms": (time.monotonic() - case_t0) * 1000,
-        }
+        return _case_result(
+            "shell_allow",
+            "SKIP",
+            f"'echo' not in safe_commands on this system — cannot test ALLOW path (decision={policy.decision.value})",
+            steps,
+            case_t0,
+        )
 
-    frontend = HeadlessFrontend(approval_response="n")  # 'n' sentinel: must never fire
+    frontend = HeadlessFrontend(approval_response="n")  # sentinel: must never fire
     deps = make_eval_deps()
 
-    t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-        result = await run_turn(
-            agent=_AGENT,
-            user_input="Use the shell tool to run `echo hello` and tell me the exact output.",
-            deps=deps,
-            message_history=[],
-            frontend=frontend,
-        )
+    result, ms = await _timed_turn(
+        _AGENT,
+        user_input="Use the shell tool to run `echo hello` and tell me the exact output.",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
     steps.append(
         {
             "name": "run_turn",
-            "ms": (time.monotonic() - t) * 1000,
+            "ms": ms,
             "detail": f"outcome={result.outcome} approval_calls={len(frontend.approval_calls)}",
         }
     )
@@ -121,13 +180,7 @@ async def run_shell_allow(tmp_dir: Path) -> dict[str, Any]:
     else:
         verdict, failure = "PASS", None
 
-    return {
-        "id": "shell_allow",
-        "verdict": verdict,
-        "failure": failure,
-        "steps": steps,
-        "duration_ms": (time.monotonic() - case_t0) * 1000,
-    }
+    return _case_result("shell_allow", verdict, failure, steps, case_t0)
 
 
 # ---------------------------------------------------------------------------
@@ -153,34 +206,28 @@ async def run_shell_deny(tmp_dir: Path) -> dict[str, Any]:
     )
 
     if policy.decision != ShellDecisionEnum.DENY:
-        return {
-            "id": "shell_deny",
-            "verdict": "FAIL",
-            "failure": f"Expected DENY for {deny_cmd!r}, got {policy.decision.value}",
-            "steps": steps,
-            "duration_ms": (time.monotonic() - case_t0) * 1000,
-        }
+        return _case_result(
+            "shell_deny",
+            "FAIL",
+            f"Expected DENY for {deny_cmd!r}, got {policy.decision.value}",
+            steps,
+            case_t0,
+        )
 
-    # LLM turn: instruct agent to run the DENY command; no approval should fire
     frontend = HeadlessFrontend(approval_response="y")
     deps = make_eval_deps()
 
-    t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-        result = await run_turn(
-            agent=_AGENT,
-            user_input=(
-                f"Use the shell tool to run exactly this command: `{deny_cmd}`. "
-                "Report back what the tool returns."
-            ),
-            deps=deps,
-            message_history=[],
-            frontend=frontend,
-        )
+    result, ms = await _timed_turn(
+        _AGENT,
+        user_input=f"Use the shell tool to run exactly this command: `{deny_cmd}`. Report back what the tool returns.",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
     steps.append(
         {
             "name": "run_turn",
-            "ms": (time.monotonic() - t) * 1000,
+            "ms": ms,
             "detail": f"outcome={result.outcome} approval_calls={len(frontend.approval_calls)}",
         }
     )
@@ -188,8 +235,7 @@ async def run_shell_deny(tmp_dir: Path) -> dict[str, Any]:
     text = _response_text(result)
     steps.append({"name": "response_text", "ms": 0, "detail": text[:200]})
 
-    no_approval_prompted = len(frontend.approval_calls) == 0
-    if not no_approval_prompted:
+    if len(frontend.approval_calls) > 0:
         verdict, failure = (
             "FAIL",
             f"approval was prompted for DENY command; calls: {frontend.approval_calls}",
@@ -197,13 +243,7 @@ async def run_shell_deny(tmp_dir: Path) -> dict[str, Any]:
     else:
         verdict, failure = "PASS", None
 
-    return {
-        "id": "shell_deny",
-        "verdict": verdict,
-        "failure": failure,
-        "steps": steps,
-        "duration_ms": (time.monotonic() - case_t0) * 1000,
-    }
+    return _case_result("shell_deny", verdict, failure, steps, case_t0)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +256,7 @@ async def run_shell_require_approval_yes(tmp_dir: Path) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
 
-    # ls /tmp/... is REQUIRE_APPROVAL: 'ls' is safe prefix but '/' in args fails _validate_args
+    # ls with an absolute path is REQUIRE_APPROVAL: 'ls' is a safe prefix but '/' in args fails _validate_args
     cmd = "ls /tmp/eval-approval-test-a3-nonexistent"
     policy = evaluate_shell_command(cmd, settings.shell.safe_commands)
     steps.append(
@@ -230,50 +270,39 @@ async def run_shell_require_approval_yes(tmp_dir: Path) -> dict[str, Any]:
     frontend = HeadlessFrontend(approval_response="y")
     deps = make_eval_deps()
 
-    t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-        result = await run_turn(
-            agent=_AGENT,
-            user_input=f"Use the shell tool to run exactly: `{cmd}`. Report what the tool returns.",
-            deps=deps,
-            message_history=[],
-            frontend=frontend,
-        )
+    result, ms = await _timed_turn(
+        _AGENT,
+        user_input=f"Use the shell tool to run exactly: `{cmd}`. Report what the tool returns.",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
     steps.append(
         {
             "name": "run_turn",
-            "ms": (time.monotonic() - t) * 1000,
+            "ms": ms,
             "detail": f"outcome={result.outcome} approval_calls={len(frontend.approval_calls)}",
         }
     )
 
-    text = _response_text(result)
+    subject = frontend.last_approval_subject
     steps.append(
         {
             "name": "approval_subject",
             "ms": 0,
-            "detail": (
-                f"tool={frontend.last_approval_subject.tool_name if frontend.last_approval_subject else None}"
-                f" kind={frontend.last_approval_subject.kind if frontend.last_approval_subject else None}"
-            ),
+            "detail": f"tool={subject.tool_name if subject else None} kind={subject.kind if subject else None}",
         }
     )
 
-    approval_was_prompted = len(frontend.approval_calls) >= 1
+    text = _response_text(result)
     if result.outcome == "error":
         verdict, failure = "FAIL", f"turn error: {text[:200]}"
-    elif not approval_was_prompted:
+    elif len(frontend.approval_calls) == 0:
         verdict, failure = "FAIL", "approval prompt was never called — expected REQUIRE_APPROVAL"
     else:
         verdict, failure = "PASS", None
 
-    return {
-        "id": "shell_require_approval_yes",
-        "verdict": verdict,
-        "failure": failure,
-        "steps": steps,
-        "duration_ms": (time.monotonic() - case_t0) * 1000,
-    }
+    return _case_result("shell_require_approval_yes", verdict, failure, steps, case_t0)
 
 
 # ---------------------------------------------------------------------------
@@ -291,41 +320,39 @@ async def run_shell_require_approval_no(tmp_dir: Path) -> dict[str, Any]:
     frontend = HeadlessFrontend(approval_response="n")
     deps = make_eval_deps()
 
-    t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-        result = await run_turn(
-            agent=_AGENT,
-            user_input=f"Use the shell tool to run exactly: `{cmd}`. Report what the tool returns.",
-            deps=deps,
-            message_history=[],
-            frontend=frontend,
-        )
+    result, ms = await _timed_turn(
+        _AGENT,
+        user_input=f"Use the shell tool to run exactly: `{cmd}`. Report what the tool returns.",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
     steps.append(
         {
             "name": "run_turn",
-            "ms": (time.monotonic() - t) * 1000,
+            "ms": ms,
             "detail": f"outcome={result.outcome} approval_calls={len(frontend.approval_calls)}",
         }
     )
 
-    text = _response_text(result)
-    steps.append({"name": "response_text", "ms": 0, "detail": text[:200]})
+    subject = frontend.last_approval_subject
+    steps.append(
+        {
+            "name": "approval_subject",
+            "ms": 0,
+            "detail": f"tool={subject.tool_name if subject else None} kind={subject.kind if subject else None}",
+        }
+    )
 
-    approval_was_prompted = len(frontend.approval_calls) >= 1
+    text = _response_text(result)
     if result.outcome == "error":
         verdict, failure = "FAIL", f"turn error: {text[:200]}"
-    elif not approval_was_prompted:
+    elif len(frontend.approval_calls) == 0:
         verdict, failure = "FAIL", "approval prompt was never called — expected REQUIRE_APPROVAL"
     else:
         verdict, failure = "PASS", None
 
-    return {
-        "id": "shell_require_approval_no",
-        "verdict": verdict,
-        "failure": failure,
-        "steps": steps,
-        "duration_ms": (time.monotonic() - case_t0) * 1000,
-    }
+    return _case_result("shell_require_approval_no", verdict, failure, steps, case_t0)
 
 
 # ---------------------------------------------------------------------------
@@ -341,54 +368,46 @@ async def run_scope_always(tmp_dir: Path) -> dict[str, Any]:
     cmd1 = "ls /tmp/eval-approval-scope-always-1"
     cmd2 = "ls /tmp/eval-approval-scope-always-2"
 
-    # Shared deps — session_approval_rules must persist across both turns
     deps = make_eval_deps()
     frontend1 = HeadlessFrontend(approval_response="a")
 
-    t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-        result1 = await run_turn(
-            agent=_AGENT,
-            user_input=f"Use the shell tool to run exactly: `{cmd1}`. Report what the tool returns.",
-            deps=deps,
-            message_history=[],
-            frontend=frontend1,
-        )
+    result1, ms1 = await _timed_turn(
+        _AGENT,
+        user_input=f"Use the shell tool to run exactly: `{cmd1}`. Report what the tool returns.",
+        deps=deps,
+        message_history=[],
+        frontend=frontend1,
+    )
     steps.append(
         {
             "name": "turn1_run_turn",
-            "ms": (time.monotonic() - t) * 1000,
+            "ms": ms1,
             "detail": f"outcome={result1.outcome} approval_calls={len(frontend1.approval_calls)} rules={len(deps.session.session_approval_rules)}",
         }
     )
 
-    frontend2 = HeadlessFrontend(approval_response="n")  # 'n' sentinel: must never fire
+    frontend2 = HeadlessFrontend(approval_response="n")  # sentinel: must never fire
 
-    t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-        result2 = await run_turn(
-            agent=_AGENT,
-            user_input=f"Use the shell tool to run exactly: `{cmd2}`. Report what the tool returns.",
-            deps=deps,
-            message_history=result1.messages,
-            frontend=frontend2,
-        )
+    result2, ms2 = await _timed_turn(
+        _AGENT,
+        user_input=f"Use the shell tool to run exactly: `{cmd2}`. Report what the tool returns.",
+        deps=deps,
+        message_history=result1.messages,
+        frontend=frontend2,
+    )
     steps.append(
         {
             "name": "turn2_run_turn",
-            "ms": (time.monotonic() - t) * 1000,
+            "ms": ms2,
             "detail": f"outcome={result2.outcome} approval_calls={len(frontend2.approval_calls)}",
         }
     )
 
-    turn1_prompted = len(frontend1.approval_calls) >= 1
-    turn2_skipped = len(frontend2.approval_calls) == 0
-
-    if not turn1_prompted:
+    if len(frontend1.approval_calls) == 0:
         verdict, failure = "FAIL", "turn 1: approval prompt never called; 'a' scope test invalid"
     elif result2.outcome == "error":
         verdict, failure = "FAIL", f"turn 2 error: {_response_text(result2)[:200]}"
-    elif not turn2_skipped:
+    elif len(frontend2.approval_calls) > 0:
         verdict, failure = (
             "FAIL",
             f"turn 2: approval was prompted despite 'a' scope on turn 1; calls={frontend2.approval_calls}",
@@ -396,13 +415,7 @@ async def run_scope_always(tmp_dir: Path) -> dict[str, Any]:
     else:
         verdict, failure = "PASS", None
 
-    return {
-        "id": "scope_always",
-        "verdict": verdict,
-        "failure": failure,
-        "steps": steps,
-        "duration_ms": (time.monotonic() - case_t0) * 1000,
-    }
+    return _case_result("scope_always", verdict, failure, steps, case_t0)
 
 
 # ---------------------------------------------------------------------------
@@ -424,27 +437,21 @@ async def run_path_approval(tmp_dir: Path) -> dict[str, Any]:
         frontend = HeadlessFrontend(approval_response="y")
         deps = make_eval_deps()
 
-        t = time.monotonic()
-        async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-            result = await run_turn(
-                agent=_AGENT,
-                user_input=(
-                    f"Create a file named `eval-approval-test-a6.txt` "
-                    f"with the exact content: `{expected_content}`"
-                ),
-                deps=deps,
-                message_history=[],
-                frontend=frontend,
-            )
+        result, ms = await _timed_turn(
+            _AGENT,
+            user_input=f"Create a file named `eval-approval-test-a6.txt` with the exact content: `{expected_content}`",
+            deps=deps,
+            message_history=[],
+            frontend=frontend,
+        )
         steps.append(
             {
                 "name": "run_turn",
-                "ms": (time.monotonic() - t) * 1000,
+                "ms": ms,
                 "detail": f"outcome={result.outcome} approval_calls={len(frontend.approval_calls)}",
             }
         )
 
-        approval_was_prompted = len(frontend.approval_calls) >= 1
         subject = frontend.last_approval_subject
         subject_kind = subject.kind if subject else None
         steps.append(
@@ -471,9 +478,10 @@ async def run_path_approval(tmp_dir: Path) -> dict[str, Any]:
     finally:
         os.chdir(orig_cwd)
 
+    text = _response_text(result)
     if result.outcome == "error":
-        verdict, failure = "FAIL", f"turn error: {_response_text(result)[:200]}"
-    elif not approval_was_prompted:
+        verdict, failure = "FAIL", f"turn error: {text[:200]}"
+    elif len(frontend.approval_calls) == 0:
         verdict, failure = (
             "FAIL",
             "approval prompt never called — file_write did not trigger approval",
@@ -483,17 +491,11 @@ async def run_path_approval(tmp_dir: Path) -> dict[str, Any]:
     elif not file_created:
         verdict, failure = "FAIL", "file_write was approved but file does not exist on disk"
     elif not file_has_content:
-        verdict, failure = "SOFT PASS", None  # File created but content may vary
+        verdict, failure = "SOFT PASS", None
     else:
         verdict, failure = "PASS", None
 
-    return {
-        "id": "path_approval",
-        "verdict": verdict,
-        "failure": failure,
-        "steps": steps,
-        "duration_ms": (time.monotonic() - case_t0) * 1000,
-    }
+    return _case_result("path_approval", verdict, failure, steps, case_t0)
 
 
 # ---------------------------------------------------------------------------
@@ -506,8 +508,7 @@ async def run_domain_approval(tmp_dir: Path) -> dict[str, Any]:
 
     Note: web_fetch does not carry approval=True in the current tool registry
     (it is read-only). This case verifies the domain-scoped approval subject
-    resolution logic is correct for when web_fetch is approved through other means
-    (e.g. MCP tool wrapping or future policy change).
+    resolution logic is correct for when web_fetch is approved through other means.
     """
     steps: list[dict[str, Any]] = []
     case_t0 = time.monotonic()
@@ -525,7 +526,6 @@ async def run_domain_approval(tmp_dir: Path) -> dict[str, Any]:
         }
     )
 
-    # Also test a URL with a subdomain to verify hostname parsing
     subdomain_url = "https://api.example.org/v1/data"
     subject2 = resolve_approval_subject("web_fetch", {"url": subdomain_url})
     steps.append(
@@ -550,13 +550,7 @@ async def run_domain_approval(tmp_dir: Path) -> dict[str, Any]:
     else:
         verdict, failure = "PASS", None
 
-    return {
-        "id": "domain_approval",
-        "verdict": verdict,
-        "failure": failure,
-        "steps": steps,
-        "duration_ms": (time.monotonic() - case_t0) * 1000,
-    }
+    return _case_result("domain_approval", verdict, failure, steps, case_t0)
 
 
 # ---------------------------------------------------------------------------
@@ -573,22 +567,20 @@ async def run_question_prompt(tmp_dir: Path) -> dict[str, Any]:
     frontend = HeadlessFrontend(question_answer=secret_answer)
     deps = make_eval_deps()
 
-    t = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-        result = await run_turn(
-            agent=_AGENT,
-            user_input=(
-                "Use the clarify tool to ask me: 'What is the secret eval code?'. "
-                "After receiving my answer, repeat the exact code back to me in your response."
-            ),
-            deps=deps,
-            message_history=[],
-            frontend=frontend,
-        )
+    result, ms = await _timed_turn(
+        _AGENT,
+        user_input=(
+            "Use the clarify tool to ask me: 'What is the secret eval code?'. "
+            "After receiving my answer, repeat the exact code back to me in your response."
+        ),
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
     steps.append(
         {
             "name": "run_turn",
-            "ms": (time.monotonic() - t) * 1000,
+            "ms": ms,
             "detail": f"outcome={result.outcome} question_call_count={frontend.question_call_count}",
         }
     )
@@ -610,20 +602,96 @@ async def run_question_prompt(tmp_dir: Path) -> dict[str, Any]:
             "prompt_question never called — clarify did not route through QuestionPrompt",
         )
     elif secret_answer not in text:
-        verdict, failure = (
-            "SOFT PASS",
-            None,
-        )  # QuestionPrompt was routed; answer injection happened but not echoed
+        verdict, failure = "SOFT PASS", None
     else:
         verdict, failure = "PASS", None
 
-    return {
-        "id": "question_prompt",
-        "verdict": verdict,
-        "failure": failure,
-        "steps": steps,
-        "duration_ms": (time.monotonic() - case_t0) * 1000,
-    }
+    return _case_result("question_prompt", verdict, failure, steps, case_t0)
+
+
+# ---------------------------------------------------------------------------
+# A9: domain_approval_live_turn — domain scope remembered across turns
+# ---------------------------------------------------------------------------
+
+
+async def run_domain_approval_live_turn(tmp_dir: Path) -> dict[str, Any]:
+    """First call prompts once with 'a'; second call to same domain auto-approves."""
+    steps: list[dict[str, Any]] = []
+    case_t0 = time.monotonic()
+
+    deps = make_eval_deps()
+    deps.tool_index["domain_fetch_test"] = ToolInfo(
+        name="domain_fetch_test",
+        description="Fetch a URL (synthetic eval tool — domain approval scope test).",
+        source=ToolSourceEnum.NATIVE,
+        visibility=VisibilityPolicyEnum.ALWAYS,
+        approval=True,
+        approval_subject_fn=lambda args: ApprovalSubject(
+            tool_name="domain_fetch_test",
+            kind=ApprovalKindEnum.DOMAIN,
+            value="test.example.local",
+            display="domain_fetch_test(url=...)\n  (allow all fetches to test.example.local this session?)",
+            can_remember=True,
+        ),
+    )
+
+    frontend1 = HeadlessFrontend(approval_response="a")
+
+    result1, ms1 = await _timed_turn(
+        _A9_AGENT,
+        user_input='Call domain_fetch_test with url="https://test.example.local/page1" and tell me what it returned.',
+        deps=deps,
+        message_history=[],
+        frontend=frontend1,
+    )
+    steps.append(
+        {
+            "name": "turn1_run_turn",
+            "ms": ms1,
+            "detail": f"outcome={result1.outcome} approval_calls={len(frontend1.approval_calls)} rules={len(deps.session.session_approval_rules)}",
+        }
+    )
+
+    frontend2 = HeadlessFrontend(approval_response="n")  # sentinel: must never fire
+
+    result2, ms2 = await _timed_turn(
+        _A9_AGENT,
+        user_input='Call domain_fetch_test with url="https://test.example.local/page2" and tell me what it returned.',
+        deps=deps,
+        message_history=result1.messages,
+        frontend=frontend2,
+    )
+    steps.append(
+        {
+            "name": "turn2_run_turn",
+            "ms": ms2,
+            "detail": f"outcome={result2.outcome} approval_calls={len(frontend2.approval_calls)}",
+        }
+    )
+
+    steps.append(
+        {
+            "name": "approval_counts",
+            "ms": 0,
+            "detail": f"turn1={len(frontend1.approval_calls)} turn2={len(frontend2.approval_calls)} total={len(frontend1.approval_calls) + len(frontend2.approval_calls)}",
+        }
+    )
+
+    if result1.outcome == "error":
+        verdict, failure = "FAIL", f"turn 1 error: {_response_text(result1)[:200]}"
+    elif len(frontend1.approval_calls) == 0:
+        verdict, failure = "FAIL", "turn 1: approval never fired — tool not called or not deferred"
+    elif result2.outcome == "error":
+        verdict, failure = "FAIL", f"turn 2 error: {_response_text(result2)[:200]}"
+    elif len(frontend2.approval_calls) > 0:
+        verdict, failure = (
+            "FAIL",
+            "turn 2: approval fired despite session rule from turn 1 — domain scope not remembered",
+        )
+    else:
+        verdict, failure = "PASS", None
+
+    return _case_result("domain_approval_live_turn", verdict, failure, steps, case_t0)
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +763,7 @@ async def main() -> int:
         ("A6: path_approval", run_path_approval),
         ("A7: domain_approval", run_domain_approval),
         ("A8: question_prompt", run_question_prompt),
+        ("A9: domain_approval_live_turn", run_domain_approval_live_turn),
     ]
 
     with tempfile.TemporaryDirectory() as tmpdir:

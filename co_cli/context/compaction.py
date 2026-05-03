@@ -9,7 +9,7 @@ external callers have a single import surface.
 Submodule map:
     _compaction_boundaries  — TurnGroup, group_by_turn, plan_compaction_boundaries
     _compaction_markers     — static/summary/todo markers, enrichment context
-    _history_processors     — dedup_tool_results, evict_old_tool_results, evict_batch_tool_outputs
+    _history_processors     — dedup_tool_results, evict_old_tool_results
 """
 
 from __future__ import annotations
@@ -47,7 +47,6 @@ from co_cli.context._compaction_markers import (
 from co_cli.context._history_processors import (
     COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
-    evict_batch_tool_outputs,
     evict_old_tool_results,
 )
 from co_cli.context._http_error_classifier import is_context_overflow
@@ -72,7 +71,6 @@ __all__ = [
     "dedup_tool_results",
     "emergency_recover_overflow_history",
     "estimate_message_tokens",
-    "evict_batch_tool_outputs",
     "evict_old_tool_results",
     "find_first_run_end",
     "gather_compaction_context",

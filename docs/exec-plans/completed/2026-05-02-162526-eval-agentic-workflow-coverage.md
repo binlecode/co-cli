@@ -13,8 +13,8 @@ Current eval coverage after cleanup:
 | Eval | What it covers |
 |---|---|
 | `eval_approval_flow.py` ✓ DONE | Tool approval — shell allow/deny, path, domain, scope-always, question-prompt |
-| `eval_compaction_proactive.py` | Organic M3 fire via real research turns |
-| `eval_compaction_multi_cycle.py` | M3 fires twice, iterative summary chain preserves facts |
+| `eval_compaction_proactive.py` ✓ DONE | Organic M3 fire via real research turns |
+| `eval_compaction_multi_cycle.py` ✓ DONE | M3 fires twice, iterative summary chain preserves facts |
 | `eval_memory_write_recall.py` ✓ DONE | Agent saves artifact → indexed → recalled → appended → replaced |
 
 Six workflows still have zero flow UAT coverage:
@@ -97,7 +97,7 @@ appended, replaced — all verified.
 
 ---
 
-### EVAL-3 — `evals/eval_basic_chat.py`
+### EVAL-3 — `evals/eval_basic_chat.py` ✓ DONE
 
 **files:**
 - `evals/eval_basic_chat.py` (new)
@@ -121,7 +121,7 @@ appended, replaced — all verified.
 
 ---
 
-### EVAL-4 — `evals/eval_web_research.py`
+### EVAL-4 — `evals/eval_web_research.py` ✓ DONE
 
 **files:**
 - `evals/eval_web_research.py` (new)
@@ -147,7 +147,7 @@ appended, replaced — all verified.
 
 ---
 
-### EVAL-5 — `evals/eval_session_restore.py`
+### EVAL-5 — `evals/eval_session_restore.py` ✓ DONE
 
 **files:**
 - `evals/eval_session_restore.py` (new)
@@ -281,3 +281,12 @@ EVAL-8 (interrupt/abort)  — state hygiene; standalone after EVAL-3
 Each eval is self-verifying. No new `tests/` unit tests added — evals serve as
 the UAT gate for these flows. `uv run pytest -x` must still pass after all scripts
 are added (evals live in `evals/`, not `tests/`, so pytest does not pick them up).
+
+---
+
+## Superseded — 2026-05-03
+
+EVAL-3 through EVAL-5 delivered (files written, untracked). EVAL-6/7/8 pending tasks
+superseded by `2026-05-03-080705-eval-agentic-coverage.md` (EVAL-A/B/C) which carries
+corrected fixture approaches after Core Dev review. Compaction evals (proactive,
+multi-cycle) delivered and marked ✓ DONE above. Archiving this plan.

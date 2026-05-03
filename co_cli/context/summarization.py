@@ -1,7 +1,7 @@
 """Summarization engine — LLM summarizer agent, budget resolution, and token estimation.
 
-Shared by both the sliding-window history processor (``_history.py``) and the
-``/compact`` slash command (``_commands.py``).
+Shared by both the sliding-window history processor (``_history_processors.py``) and the
+``/compact`` slash command.
 
 Public API:
     summarize_messages        — async, LLM-based conversation summarization
@@ -31,8 +31,8 @@ _LLM_SUMMARIZE_TIMEOUT_SECS: int = 300
 """Hard deadline for a single summarization LLM call.
 
 One noreason call over a dropped-message window; measured at ~41s on a
-local 35B model for the heaviest compaction step (~58K chars). 60s gives
-~19s headroom for model load variation.
+local 35B model for the heaviest compaction step (~58K chars). 300s gives
+ample headroom for slow or cold model loads on large contexts.
 """
 
 

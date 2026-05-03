@@ -3,25 +3,56 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pydantic_ai import Agent, DeferredToolRequests
+from pydantic_ai import Agent, DeferredToolRequests, RunContext
+from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.capabilities.abstract import WrapModelRequestHandler
+from pydantic_ai.messages import ModelResponse
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.toolsets.combined import CombinedToolset
 
 from co_cli.config.core import Settings
 from co_cli.context.compaction import (
     dedup_tool_results,
-    evict_batch_tool_outputs,
     evict_old_tool_results,
     proactive_window_processor,
 )
 from co_cli.deps import CoDeps, ToolInfo
 from co_cli.tools.lifecycle import CoToolLifecycle
 
+if TYPE_CHECKING:
+    from pydantic_ai.models import ModelRequestContext
+
 logger = logging.getLogger(__name__)
+
+_LLM_PER_CALL_TIMEOUT_SECS: int = 90
+
+
+@dataclass
+class _PerCallTimeoutCapability(AbstractCapability[Any]):
+    async def wrap_model_request(
+        self,
+        ctx: RunContext[Any],
+        *,
+        request_context: ModelRequestContext,
+        handler: WrapModelRequestHandler,
+    ) -> ModelResponse:
+        _t0 = time.monotonic()
+        try:
+            return await handler(request_context)
+        finally:
+            elapsed = time.monotonic() - _t0
+            logger.debug("LLM call elapsed: %.1fs", elapsed)
+            if elapsed >= _LLM_PER_CALL_TIMEOUT_SECS * 0.9:
+                logger.warning(
+                    "LLM call near/over timeout: %.1fs (limit %ds)",
+                    elapsed,
+                    _LLM_PER_CALL_TIMEOUT_SECS,
+                )
 
 
 @dataclass(frozen=True)
@@ -157,11 +188,10 @@ def build_agent(
             history_processors=[
                 dedup_tool_results,
                 evict_old_tool_results,
-                evict_batch_tool_outputs,
                 proactive_window_processor,
             ],
             toolsets=[tool_registry.toolset],
-            capabilities=[CoToolLifecycle()],
+            capabilities=[CoToolLifecycle(), _PerCallTimeoutCapability()],
         )
 
         # Block 1: per-turn callbacks — real-time, not cached, tiny
@@ -180,7 +210,7 @@ def build_agent(
             output_type=output_type,
             instructions=instructions,
             retries=config.tool_retries,
-            capabilities=[CoToolLifecycle()],
+            capabilities=[CoToolLifecycle(), _PerCallTimeoutCapability()],
         )
         for fn in tool_fns or []:
             delegation_agent.tool(fn, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match

@@ -28,6 +28,7 @@ co_cli/tools/_shell_policy.py
   -> shell/code_execute approval policy
 co_cli/tools/files/read.py
 co_cli/tools/files/write.py
+co_cli/tools/memory/recall.py
 co_cli/tools/memory/read.py
 co_cli/tools/memory/write.py
 ```
@@ -103,7 +104,7 @@ Approval controls human permission; locks ensure structural correctness.
 
 Legend: **Tool** shows the callable signature · **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
 
-The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/mcp.py`, are always DEFERRED, and are not included in the 37-tool native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface. The grouping below is capability-oriented so it can be compared directly with peer inventories such as Hermes without changing the underlying visibility or approval semantics.
+The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/mcp.py`, are always DEFERRED, and are not included in the native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface. The grouping below is capability-oriented so it can be compared directly with peer inventories such as Hermes without changing the underlying visibility or approval semantics.
 
 ### Interaction & Session Control
 
@@ -128,13 +129,9 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `knowledge_search(query, *, kind=None, source=None, limit=10, tags=None, tag_match_mode="any", created_after=None, created_before=None)` | A | — | — | — | Unified search across local knowledge, Obsidian, and Drive; `kind="article"` returns article slugs for `knowledge_article_read` |
-| `knowledge_list(offset=0, limit=20, kind=None)` | A | — | — | — | Paginate knowledge artifact metadata |
-| `knowledge_article_read(slug)` | A | — | — | — | Fetch full markdown for a cached article by slug |
-| `memory_search(query="", *, limit=3)` | A | — | — | — | Episodic recall: empty query → recent-session browse (metadata, zero LLM cost); keyword query → LLM-summarized recaps of matching sessions; limit clamped to [1, 5] |
-| `knowledge_update(slug, old_content, new_content)` | D | ✓ | — | — | Surgical section replacement in a knowledge artifact |
-| `knowledge_append(slug, content)` | D | ✓ | — | — | Append to a knowledge artifact |
-| `knowledge_article_save(content, title, origin_url, tags=None, related=None)` | D | ✓ | — | — | Persist web content as a local markdown artifact |
+| `memory_search(query="", kinds=None, limit=10)` | A | — | — | — | Unified recall across saved artifacts, indexed past sessions, and canon; empty query browses recent sessions plus artifact inventory; keyword query returns chunk/snippet hits with no session summarizer LLM |
+| `memory_create(content, artifact_kind, title=None, description=None, source_url=None, decay_protected=False)` | A | ✓ | — | — | Persist a knowledge artifact; URL saves dedupe by `source_ref`; optional consolidation can skip, merge, or append near-duplicates |
+| `memory_modify(filename_stem, action, content, target="")` | A | ✓ | — | — | Append to or surgically replace text in an existing knowledge artifact, then reindex |
 
 ### Web, Browser & Media
 

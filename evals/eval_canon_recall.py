@@ -35,17 +35,13 @@ from pydantic_ai.usage import RunUsage
 from co_cli.bootstrap.core import _sync_canon_store
 from co_cli.config.core import settings
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.factory import build_model
 from co_cli.memory.memory_store import MemoryStore
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-canon-recall.md"
-
-
-class _SilentFrontend:
-    def on_status(self, msg: str) -> None:
-        pass
 
 
 def _make_ctx_with_store(tmp: Path, *, personality: str | None) -> RunContext:
@@ -67,7 +63,7 @@ def _make_ctx_with_store(tmp: Path, *, personality: str | None) -> RunContext:
     )
     store = MemoryStore(config=store_cfg, memory_db_path=tmp / "search.db")
     if personality:
-        _sync_canon_store(store, cfg, _SilentFrontend())
+        _sync_canon_store(store, cfg, HeadlessFrontend())
     llm_model = build_model(cfg.llm)
     deps = CoDeps(
         shell=ShellBackend(),

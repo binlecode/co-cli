@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 from pydantic_ai import ApprovalRequired, DeferredToolResults, ToolDenied
 
-from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, SessionApprovalRule
+from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, SessionApprovalRule, ToolInfo
 
 
 class QuestionRequired(ApprovalRequired):
@@ -58,15 +58,20 @@ def _build_file_write_preview(content: str | None) -> str | None:
 def resolve_approval_subject(
     tool_name: str,
     args: dict[str, Any],
+    tool_info: ToolInfo | None = None,
 ) -> ApprovalSubject:
     """Map a deferred tool call to its approval subject.
 
     Resolution order:
+      tool_info.approval_subject_fn → registered per-tool resolver (highest priority)
       shell → shell subject (utility = first token)
       file_write / file_patch → path subject (parent directory)
       web_fetch → domain subject (parsed hostname)
       everything else → tool subject (can_remember=True)
     """
+    if tool_info is not None and tool_info.approval_subject_fn is not None:
+        return tool_info.approval_subject_fn(args)
+
     # Shell branch: scope to the utility (first token of cmd) so "always" approval
     # covers all future invocations of the same utility, not just the exact command.
     if tool_name == "shell":

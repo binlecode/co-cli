@@ -106,6 +106,7 @@ class ToolInfo:
     retries: int | None = None
     requires_config: str | None = None
     check_fn: Callable[[CoDeps], bool] | None = None
+    approval_subject_fn: Callable[[dict[str, Any]], ApprovalSubject] | None = None
 
 
 @dataclass
@@ -142,7 +143,7 @@ class CoRuntimeState:
       compaction_applied_this_turn
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
-      consecutive_low_yield_proactive_compactions, last_overbudget_batch_signature,
+      consecutive_low_yield_proactive_compactions,
       previous_compaction_summary,
       post_compaction_token_estimate, message_count_at_last_compaction
     """
@@ -166,9 +167,6 @@ class CoRuntimeState:
     # the configured minimum savings threshold.
     # Reset by compaction.py when overflow recovery or hygiene fires.
     consecutive_low_yield_proactive_compactions: int = 0
-    # Dedup key for evict_batch_tool_outputs's "still over budget" warning.
-    # Same batch repeated request-to-request emits the warning once, not per cycle.
-    last_overbudget_batch_signature: tuple[str, ...] | None = None
     # Raw LLM-generated summary text from the most recent successful compaction —
     # feeds the iterative-update prompt branch on the next compaction. None on session
     # start; reset by /new and /clear; untouched by /compact failures and /resume.

@@ -474,19 +474,7 @@ These constraints reinforce the main conclusion of this document: `co` should bo
 
 The active Hermes research plan adds one more useful synthesis: the best next steps for `co` are not "more memory layers." They are operating-model improvements on top of the current knowledge layer.
 
-### 10.1 Add governance, not a second wiki backend
-
-The strongest Hermes-adjacent idea here is a lightweight governance overlay on top of `knowledge_dir`, not a replacement storage system.
-
-Most useful additions:
-
-- `knowledge_dir/_meta/SCHEMA.md` for corpus conventions and taxonomy
-- `knowledge_dir/_meta/index.md` for machine-maintained cataloging
-- `knowledge_dir/_meta/log.md` for append-only artifact mutation logging
-
-This is highly aligned with `co`'s second-brain goal because it improves auditability and legibility of the local knowledgebase without creating a parallel source of truth.
-
-### 10.2 Add first-class research ingestion
+### 10.1 Add first-class research ingestion
 
 The Hermes-derived plan is also right that `co` needs a more native research ingestion path if it is going to function as a serious local knowledge assistant.
 
@@ -500,7 +488,7 @@ Why this fits:
 - the current harness is well suited to metadata-first and abstract-first ingestion
 - this reinforces the local knowledgebase mission directly
 
-### 10.3 Add evidence discipline helpers
+### 10.2 Add evidence discipline helpers
 
 The best extract from Hermes's research workflows is not paper-writing scaffolding. It is:
 
@@ -515,7 +503,7 @@ That matters because a second brain should preserve:
 
 This is a higher-value addition to `co` than copying venue-specific research-writing flows.
 
-### 10.4 Defer continuous monitoring
+### 10.3 Defer continuous monitoring
 
 The plan is also correct to defer feed-watching and recurring monitoring.
 
@@ -529,11 +517,10 @@ Recommended order:
 
 1. Keep `co`'s current two-layer memory/knowledge architecture as the foundation.
 2. Add a clearer personalization split in the knowledge layer, borrowing from `hermes-agent`.
-3. Add governance and corpus-audit overlays on top of `knowledge_dir`.
-4. Add first-class research ingestion, especially arXiv metadata/abstract import.
-5. Add evidence-discipline helpers: citation verification and structured research journals.
-6. Improve dreaming, ranking, and decay by selectively borrowing from `openclaw`.
-7. Defer continuous monitoring and any daemon-like freshness loops.
+3. Add first-class research ingestion, especially arXiv metadata/abstract import.
+4. Add evidence-discipline helpers: citation verification and structured research journals.
+5. Improve dreaming, ranking, and decay by selectively borrowing from `openclaw`.
+6. Defer continuous monitoring and any daemon-like freshness loops.
 
 This sequencing is consistent with the peer comparison:
 
@@ -615,10 +602,12 @@ The primary runtime surface should be native tools and commands, not skill-only 
 
 **Still aspirational** (not yet shipped — from original April 23 target list):
 
-- `arxiv_search` — read-only paper discovery
-- `knowledge_import_article` or equivalent narrow import helper — metadata-first / abstract-first research import
 - `citation_verify` — evidence-discipline helper for references
 - `research_journal_save` — structured note capture for what was learned, why it is trusted, and what remains open
+
+**In-flight** (plan approved, pending implementation):
+
+- `arxiv_search` + `research-import` skill — see `docs/exec-plans/active/2026-05-03-113954-arxiv-research-ingestion.md`
 
 ### 13.2 Skills
 
@@ -646,13 +635,9 @@ Current state (`co_cli/memory/`):
 - recall via `memory_search` → BM25 chunk search → best chunk per unique session (no LLM)
 - sessions and knowledge artifacts are co-equal kinds under the unified `co_cli/memory/` module (April 28 collapse)
 
-Still aspirational:
-
-- stronger personalization split — explicitly separating user-profile artifacts from general/world/project artifacts within the existing `kind` taxonomy
-
 Borrowed ideas:
 
-- from `hermes-agent`: explicit user-profile vs general memory distinction
+- from `hermes-agent`: explicit user-profile vs general memory distinction, now shipped via `artifact_kind: user`
 - from `ReMe`: memory classes beyond pure profile facts
 
 ### 13.4 Knowledge
@@ -668,7 +653,6 @@ Current state (`co_cli/memory/` + `knowledge/*.md`):
 
 Still aspirational:
 
-- `knowledge/_meta/` governance overlay (schema, catalog, append-only log)
 - first-class research ingestion (arXiv metadata/abstract import)
 - evidence-discipline helpers (citation verification, structured research journals)
 
@@ -676,7 +660,7 @@ Borrowed ideas:
 
 - from `ReMe`: local corpus mentality and procedural/tool memory concepts
 - from `openclaw`: merge/decay/ranking/hygiene logic
-- from Hermes research adoption work: governance, ingestion, and evidence discipline
+- from Hermes research adoption work: ingestion and evidence discipline
 
 ## 14. Final Verdict
 
@@ -707,14 +691,7 @@ Updated: 2026-05-01. Reflects current source state after the April 28 module col
 | Static personality injected once at construction | `co_cli/context/assembly.py` | `hermes-agent` |
 | Age + access-based artifact decay | `co_cli/memory/dream.py:441` | `openclaw` |
 | Artifact dedup (Jaccard on write) | `co_cli/memory/service.py` | `openclaw` |
-
-### Gap 1 — Personalization split (high ROI, fits current harness)
-
-**From:** `hermes-agent` (`USER.md` vs `MEMORY.md`)
-
-**What's missing:** There is no enforced distinction between user-profile artifacts (preferences, goals, habits) and general/world/project knowledge. Both land in the same flat `knowledge/*.md` corpus under the same kind taxonomy. The result is that user-identity memory and durable factual knowledge compete for the same retrieval slots with no structural priority.
-
-**Minimum viable adoption:** A `scope` frontmatter field (`user` | `world` | `project`) plus a retrieval policy that boosts `user`-scoped results when the query is personal in nature. No new storage layer required.
+| Personalization split (`artifact_kind: user`) | `co_cli/memory/artifact.py` + `co_cli/tools/memory/recall.py` | `hermes-agent` |
 
 ### Gap 2 — Corpus governance (high ROI, fits current harness)
 
@@ -731,14 +708,6 @@ Updated: 2026-05-01. Reflects current source state after the April 28 module col
 **What's missing:** `memory_search` is available but nothing governs when the agent should call it before reasoning. Recall is entirely ad-hoc — the agent decides per-turn with no structural prompt or policy nudge to check memory before answering. `ReMe` makes pre-reasoning memory lookup a mandatory step, not an optional tool call.
 
 **Minimum viable adoption:** A system-prompt instruction that explicitly primes the agent to call `memory_search` before answering questions that reference past sessions, user preferences, or established decisions. Requires no code change, only guidance policy.
-
-### Gap 4 — Research ingestion pipeline (medium ROI, new tooling required)
-
-**From:** Hermes adoption plan + `co`'s existing `article` and `reference` artifact kinds
-
-**What's missing:** `article` and `reference` kinds are defined and storable, but there is no first-class ingest path. No arXiv discovery tool, no metadata-first import flow, no abstract-first ingestion. Research must be captured manually via `memory_create`.
-
-**Minimum viable adoption:** An `arxiv_search` tool (read-only paper discovery) and a `memory_create` flow that auto-populates frontmatter from arXiv metadata. Full-text ingestion stays deferred.
 
 ### Gap 5 — Evidence discipline (medium ROI, new tooling required)
 
@@ -768,10 +737,7 @@ Updated: 2026-05-01. Reflects current source state after the April 28 module col
 
 | Priority | Gap | Effort | Peer source |
 | --- | --- | --- | --- |
-| 1 | Personalization split | Low — frontmatter + retrieval policy | `hermes-agent` |
-| 2 | Corpus governance (`_meta/`) | Low — three markdown files + write-path hooks | `openclaw` + Hermes plan |
-| 3 | Pre-reasoning memory selection | Low — guidance policy only | `ReMe` |
-| 4 | Research ingestion | Medium — new arXiv tool + import flow | Hermes plan |
-| 5 | Evidence discipline | Medium — new artifact kind + optional tool | Hermes plan |
-| 6 | Retrieval diversity reranking | Medium — MMR pass in knowledge_store | `openclaw` |
-| 7 | Retrieval-aware decay | Low — `last_recalled_at` tracking | `openclaw` |
+| 1 | Pre-reasoning memory selection | Low — guidance policy only | `ReMe` |
+| 2 | Evidence discipline | Medium — new artifact kind + optional tool | Hermes plan |
+| 3 | Retrieval diversity reranking | Medium — MMR pass in knowledge_store | `openclaw` |
+| 4 | Retrieval-aware decay | Low — `last_recalled_at` tracking | `openclaw` |

@@ -52,28 +52,26 @@ Session transcripts are append-only JSONL files under `sessions_dir`:
 YYYY-MM-DD-THHMMSSZ-{uuid8}.jsonl
 ```
 
-Each JSONL line is a message row serialized through `ModelMessagesTypeAdapter`, a `session_meta` control row (written at the start of a branched child transcript), or a `compact_boundary` control row (honored on load for files above the precompact threshold).
+Each JSONL line is a message row serialized through `ModelMessagesTypeAdapter`.
 
 `persist_session_history()` is the only transcript persistence primitive:
 
 ```text
-if history was replaced OR persisted_message_count > len(messages):
-    new_path = new_session_path(sessions_dir)
-    write session_meta(parent_session=<old filename>, reason=<reason>)
-    append full compacted history to new_path
-    return new_path
+if history_compacted:
+    overwrite session_path with compacted messages (truncate + write)
 else:
     append only messages[persisted_message_count:]
-    return existing session_path
+return session_path  # path never changes
 ```
 
 Rules:
-- Transcript files are never rewritten or truncated.
-- History replacement branches to a child transcript; it never mutates the parent.
+- Normal turns append a delta tail; compaction rewrites the file in place.
+- Session path is stable for the lifetime of the conversation — no child sessions.
 - `CoSessionState.persisted_message_count` is the only durability cursor.
-- `load_transcript()` skips malformed lines and `session_meta` rows, honors `compact_boundary` skips for files > 5 MB, and refuses to load files > 50 MB.
+- `load_transcript()` skips malformed lines and refuses to load files > 50 MB.
+- `history_compacted` is sourced from `deps.runtime.compaction_applied_this_turn` by `_finalize_turn()` in `co_cli/main.py`; see compaction.md §2.3 for when `apply_compaction` sets it.
 
-Oversized tool results spill to `tool-results/{sha256[:16]}.txt`. The model sees a `<persisted-output>` placeholder with tool name, path, total size, a 2,000-char preview, and guidance to page the full file. Spill files are content-addressed and idempotent. Transcript and spill files are `chmod 0o600`.
+Oversized tool results appear as `<persisted-output>` placeholders in history (spilled to `tool-results/`); see compaction.md §2.1 M1 for thresholds, placeholder format, and per-tool overrides. Transcript files are `chmod 0o600`.
 
 ### 2.2 Lifecycle and Commands
 
@@ -84,7 +82,7 @@ Startup restore is path-only. `restore_session()` picks the latest `*.jsonl` by 
 | `/resume` | `list_sessions()` + interactive picker → `load_transcript(selected.path)`; adopts history and updates `session_path` |
 | `/new` | Fresh `session_path` and clears in-memory history (prints "Nothing to rotate" if history empty) |
 | `/clear` | Clears in-memory history; transcript files untouched |
-| `/compact` | Replaces in-memory history with compacted transcript; next write branches to a child session |
+| `/compact` | Run a compaction pass on current history — see compaction.md §1 manual entry for full behavior |
 | `/sessions [keyword]` | Lists session summaries, optionally filtered by title substring |
 
 ### 2.3 Sessions Recall
@@ -114,7 +112,7 @@ with transaction:
 
 Result shape: `{channel: "sessions", session_id, when, source, chunk_text, start_line, end_line, score}`
 
-To drill into a specific turn: `memory_read_session_turn(session_id, start_line, end_line)` — verbatim JSONL lines, capped at 200 lines / 16 KB.
+Source includes `memory_read_session_turn(session_id, start_line, end_line)` as a capped JSONL line-range reader, but it is not currently registered in the foreground native toolset. Registered `memory_search` results therefore expose session snippets and line bounds; exact follow-up reads require source wiring before they are model-callable.
 
 The active session is excluded from bootstrap sync; episodic search covers already-indexed transcripts only.
 
@@ -144,7 +142,6 @@ Knowledge artifact schema:
 | `related` | Soft links to related artifacts |
 | `source_type` | `detected`, `web_fetch`, `manual`, `obsidian`, `drive`, or `consolidated` |
 | `source_ref` | Pointer to source session, URL, file path, or artifact ID |
-| `certainty` | `high`, `medium`, or `low` |
 | `decay_protected` | Lifecycle protection flag; decay semantics in [dream.md](dream.md) |
 | `last_recalled` | Most recent recall timestamp |
 | `recall_count` | Recall hit counter |
@@ -164,13 +161,14 @@ MemoryStore.search(query, sources=['knowledge']):
     return _rerank_results(query, merged, limit)
 ```
 
-Backend degradation order:
+Backend resolution:
 
 | Backend | Mechanism | When used |
 | --- | --- | --- |
-| `hybrid` | FTS5 BM25 + sqlite-vec cosine, RRF merge | Embedding provider available |
-| `fts5` | BM25 over chunked text only | Embeddings unavailable |
-| `grep` | In-memory substring match over artifact title and content | MemoryStore unavailable |
+| `hybrid` | FTS5 BM25 + sqlite-vec cosine, RRF merge | Configured, TEI reranker reachable, embedding provider configured/reachable, and sqlite-vec available |
+| `fts5` | BM25 over chunked text only | Explicitly configured, or hybrid degrades before store construction |
+
+When `memory_store` is `None` (set when `search_backend="grep"` or store init fails), `_search_artifacts` falls back to `grep_recall` — in-memory substring match over artifact title and content. The sessions channel returns `[]` in this state.
 
 Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
 
@@ -182,11 +180,11 @@ Knowledge commands:
 
 | Command | Purpose |
 | --- | --- |
-| `/knowledge list [query] [flags]` | List matching artifacts |
-| `/knowledge count [query] [flags]` | Count matching artifacts |
-| `/knowledge forget <query> [flags]` | Delete matching active artifacts after confirmation |
+| `/memory list [query] [flags]` | List matching artifacts |
+| `/memory count [query] [flags]` | Count matching artifacts |
+| `/memory forget <query> [flags]` | Delete matching active artifacts after confirmation |
 
-Dream lifecycle commands (`/knowledge dream`, `/knowledge restore`, `/knowledge decay-review`, `/knowledge stats`) live in [dream.md](dream.md). `/memory` is a deprecated alias for `list`, `count`, and `forget`.
+Dream lifecycle commands (`/memory dream`, `/memory restore`, `/memory decay-review`, `/memory stats`) live in [dream.md](dream.md).
 
 ### 3.3 Artifact Write Paths
 
@@ -264,7 +262,7 @@ All three channels run in sequence. Results carry a `channel` field (`artifacts`
 | `knowledge.max_artifact_count` | *(no env var)* | `300` | soft cap on total artifact count |
 | `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | days before decay eligibility |
 | `knowledge.character_recall_limit` | `CO_KNOWLEDGE_CHARACTER_RECALL_LIMIT` | `3` | max canon hits per `memory_search` call (legacy alias: `CO_CHARACTER_RECALL_LIMIT`) |
-| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age-decay parameter in recall scoring |
+| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | defined lifecycle setting; not currently consumed by recall ranking |
 
 Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 
@@ -292,7 +290,12 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, size warnings |
 | `co_cli/bootstrap/core.py` | `restore_session()`, `init_session_index()` — startup bootstrap |
 | `co_cli/main.py` | `_finalize_turn()` — session persistence bridge and session-end dream trigger |
-| `co_cli/commands/core.py` | `/resume`, `/new`, `/clear`, `/compact`, `/sessions` command handlers |
+| `co_cli/commands/core.py` | slash-command registry and dispatch |
+| `co_cli/commands/resume.py` | `/resume` command handler |
+| `co_cli/commands/new.py` | `/new` command handler |
+| `co_cli/commands/clear.py` | `/clear` command handler |
+| `co_cli/commands/compact.py` | `/compact` command handler |
+| `co_cli/commands/sessions.py` | `/sessions` command handler |
 
 ### Knowledge
 
@@ -303,10 +306,9 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/memory/service.py` | pure-function write layer: `save_artifact()`, `mutate_artifact()` |
 | `co_cli/memory/_mutator.py` | `atomic_write()` — temp-file + `os.replace` write helper |
 | `co_cli/memory/archive.py` | `archive_artifacts()`, `restore_artifact()` |
-| `co_cli/memory/chunker.py` | knowledge artifact text chunking |
+| `co_cli/memory/text_chunker.py` | knowledge artifact text chunking |
 | `co_cli/memory/frontmatter.py` | frontmatter parse, validate, render |
 | `co_cli/memory/similarity.py` | Jaccard similarity and content-superset helpers |
-| `co_cli/memory/query.py` | artifact list filtering and display formatting |
 | `co_cli/memory/search_util.py` | `normalize_bm25()`, `run_fts()`, `sanitize_fts5_query()`, `snippet_around()` |
 | `co_cli/memory/_embedder.py` | `build_embedder()` — embedding provider dispatch |
 | `co_cli/memory/stopwords.py` | `STOPWORDS` frozenset |
@@ -314,7 +316,7 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/memory/dream.py` | dream-cycle orchestration (see [dream.md](dream.md)) |
 | `co_cli/tools/memory/recall.py` | `memory_search()` — unified recall tool |
 | `co_cli/tools/memory/write.py` | `memory_create()`, `memory_modify()` |
-| `co_cli/commands/knowledge.py` | `/knowledge` and `/memory` (deprecated) command handlers |
+| `co_cli/commands/knowledge.py` | `/memory` command family handler |
 
 ### Canon
 

@@ -1,4 +1,4 @@
-"""Tests for history processor behavior: dedup, evict-old, and batch spill."""
+"""Tests for history processor behavior: dedup and evict-old."""
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
@@ -16,7 +16,6 @@ from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.compaction import (
     COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
-    evict_batch_tool_outputs,
     evict_old_tool_results,
 )
 from co_cli.deps import CoDeps, CoSessionState
@@ -205,79 +204,3 @@ def test_evict_protects_tool_returns_in_last_turn():
         if isinstance(p, ToolReturnPart) and p.tool_call_id == "prot"
     )
     assert protected.content == protected_content
-
-
-# ---------------------------------------------------------------------------
-# evict_batch_tool_outputs
-# ---------------------------------------------------------------------------
-
-
-def test_evict_batch_spills_largest_output_when_over_threshold(tmp_path):
-    """Batch aggregate over batch_spill_chars must have the largest return spilled to disk."""
-    from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
-
-    threshold = SETTINGS_NO_MCP.tools.batch_spill_chars
-    large_content = "y" * (threshold + 10_000)
-
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=SETTINGS_NO_MCP,
-        session=CoSessionState(),
-        tool_results_dir=tmp_path,
-    )
-    messages = [
-        ModelResponse(
-            parts=[ToolCallPart(tool_name="file_read", args="{}", tool_call_id="call1")]
-        ),
-        ModelRequest(
-            parts=[
-                ToolReturnPart(tool_name="file_read", content=large_content, tool_call_id="call1")
-            ]
-        ),
-    ]
-    result = evict_batch_tool_outputs(_ctx(deps), messages)
-
-    spilled = next(
-        p
-        for msg in result
-        if isinstance(msg, ModelRequest)
-        for p in msg.parts
-        if isinstance(p, ToolReturnPart) and p.tool_call_id == "call1"
-    )
-    assert PERSISTED_OUTPUT_TAG in spilled.content
-    assert large_content not in spilled.content
-
-
-def test_evict_batch_passes_through_when_under_threshold(tmp_path):
-    """Batch aggregate under batch_spill_chars must pass through unchanged."""
-    from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
-
-    small_content = "z" * 100
-
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=SETTINGS_NO_MCP,
-        session=CoSessionState(),
-        tool_results_dir=tmp_path,
-    )
-    messages = [
-        ModelResponse(
-            parts=[ToolCallPart(tool_name="file_read", args="{}", tool_call_id="call1")]
-        ),
-        ModelRequest(
-            parts=[
-                ToolReturnPart(tool_name="file_read", content=small_content, tool_call_id="call1")
-            ]
-        ),
-    ]
-    result = evict_batch_tool_outputs(_ctx(deps), messages)
-
-    unchanged = next(
-        p
-        for msg in result
-        if isinstance(msg, ModelRequest)
-        for p in msg.parts
-        if isinstance(p, ToolReturnPart) and p.tool_call_id == "call1"
-    )
-    assert unchanged.content == small_content
-    assert PERSISTED_OUTPUT_TAG not in unchanged.content
