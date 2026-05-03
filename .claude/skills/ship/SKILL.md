@@ -43,9 +43,15 @@ Show `git status`. Confirm only files related to this delivery are staged. Ask t
 
 ## Step 4 — Version bump
 
-Read current version from `pyproject.toml`. Bump the **patch digit only**:
-- `+2` for a feature or enhancement (result is even)
-- `+1` for a bugfix (result is odd)
+Read current version from `pyproject.toml`. Bump the **patch digit only** to the nearest number with the correct parity:
+- Feature / refactor → next **even** patch number
+- Bugfix → next **odd** patch number
+
+The increment (+1 or +2) depends on the current parity. Examples:
+- `0.8.113` (odd) + feature → `0.8.114` (+1, next even)
+- `0.8.113` (odd) + bugfix  → `0.8.115` (+2, next odd)
+- `0.8.114` (even) + feature → `0.8.116` (+2, next even)
+- `0.8.114` (even) + bugfix  → `0.8.115` (+1, next odd)
 
 Stage `pyproject.toml`.
 

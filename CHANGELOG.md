@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.8.115]
+
+### Fixes
+- Corrected ship skill version bump rule: bump to nearest even (feature) or odd (bugfix) patch number, not a fixed +1/+2 increment
+
 ## [0.8.114]
 
 ### Refactor
