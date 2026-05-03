@@ -4,15 +4,14 @@
 
 ## 1. Architecture
 
-Three-channel recall model. `memory_search()` dispatches all channels in sequence. Static personality content (soul seed, mindsets, rules) is injected once at agent construction — it is not a recall channel.
+Two-channel recall model. `memory_search()` dispatches both channels in sequence. Static personality content (soul seed, mindsets, rules) is injected once at agent construction — it is not a recall channel.
 
 | Channel | Storage | Recall mechanism |
 | --- | --- | --- |
 | Sessions | `sessions/*.jsonl` → `co-cli-search.db` (`source='session'`) | BM25 chunk search → best chunk per unique session (dedup) → verbatim citations with JSONL line bounds; no LLM |
-| Knowledge | `knowledge/*.md` → `co-cli-search.db` (`source='knowledge'`) | FTS5 BM25 ± RRF vector merge → optional reranker → ranked structured rows; no LLM by default |
-| Canon | `souls/{role}/memories/*.md` → `co-cli-search.db` (`source='canon'`) | FTS5 BM25 → full body inline (no snippet truncation); indexed at bootstrap; no LLM |
+| Artifacts | `knowledge/*.md` → `source='knowledge'`; `souls/{role}/memories/*.md` → `source='canon'` | Three-pass FTS5 BM25: canon priority pass (full body inline), user priority pass, waterfall pass (rule/article/note, dual-capped by count and size); no LLM by default |
 
-`MemoryStore` is the shared search backend for all three channels. `memory_search()` in `co_cli/tools/memory/recall.py` dispatches all three channels.
+`MemoryStore` is the shared search backend for both channels. `memory_search()` in `co_cli/tools/memory/recall.py` dispatches both channels. Canon flows through the artifacts channel as `kind='canon'`.
 
 ```mermaid
 flowchart TD
@@ -134,7 +133,7 @@ Knowledge artifact schema:
 | Field | Purpose |
 | --- | --- |
 | `id` | Stable UUID |
-| `artifact_kind` | `user`, `rule`, `article`, or `note` |
+| `artifact_kind` | `user`, `rule`, `article`, `note`, or `canon` |
 | `title` | Human-readable label |
 | `description` | Short retrieval summary |
 | `created` | ISO8601 creation timestamp |
@@ -201,44 +200,51 @@ Writes use `atomic_write()` (temp-file + `os.replace`). `reindex()` is called at
 
 Archive/restore: `archive_artifacts()` moves files to `knowledge_dir/_archive/` and removes them from the index; `restore_artifact()` moves them back and re-indexes. The `_archive/` subdir is never traversed by default loaders.
 
-## 4. Canon Channel
+## 4. Canon Artifacts
 
 Canon files (`souls/{role}/memories/*.md`) are package-shipped and read-only. They are intentionally excluded from static prompt injection — a scene either matches the moment or it doesn't, and static injection pays full token cost whether it lands or not. Canon is served on demand via `memory_search`.
 
-**Indexing (bootstrap-time):** `_sync_canon_store()` in `co_cli/bootstrap/core.py` runs after knowledge sync. It calls `store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)`. The `no_chunk=True` flag stores each file as a single `Chunk(index=0)` — no splitting — because canon scenes are small (<1KB) and must be returned whole. Hash-skip, stale eviction, and frontmatter parsing work identically to other sources. No-ops when `store is None` or `config.personality` is empty.
+Canon flows through the artifacts channel as `kind='canon'`. It is not a separate third channel.
 
-**Recall:** `_search_canon_channel()` calls `store.search(query, sources=["canon"], limit=character_recall_limit)`, then fetches the full body with `store.get_chunk_content("canon", path, 0)` — direct `SELECT content FROM chunks` lookup. The FTS5 `snippet()` function is never used for canon; the stored full-body chunk is returned as-is. Returns `[]` when `memory_store is None` or `personality` is empty.
+**Indexing (bootstrap-time):** `_sync_canon_store()` in `co_cli/bootstrap/core.py` runs after knowledge sync. It calls `store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)`. The `no_chunk=True` flag stores each file as a single `Chunk(index=0)` — no splitting — because canon scenes are small (<1KB) and must be returned whole. `sync_dir()` auto-sets `kind='canon'` when `source='canon'` and the file carries no `artifact_kind` frontmatter. Hash-skip, stale eviction, and frontmatter parsing work identically to other sources. No-ops when `store is None` or `config.personality` is empty.
 
-Result shape: `{channel: "canon", role, title, body, score}` — full body inline, no follow-up needed.
+**Recall (canon priority pass in `_search_artifacts()`):** Canon is the first pass in the three-pass structure. When `kinds` is `None` or includes `'canon'`, and `personality` is set: calls `store.search(query, sources=["canon"], limit=_ARTIFACTS_CANON_CAP)`, then fetches the full body with `store.get_chunk_content("canon", path, 0)` — direct `SELECT content FROM chunks` lookup. The FTS5 `snippet()` function is never used for canon; the stored full-body chunk is placed in the `snippet` field. Returns no canon hits when `memory_store is None` or `personality` is empty. `kinds=['canon']` isolates canon-only results; `kinds=['user']` correctly excludes canon.
+
+Result shape: `{channel: "artifacts", kind: "canon", title, snippet, score, path, filename_stem}` — full body in `snippet` inline, no follow-up `file_read` needed. Canon hits are excluded from the grep fallback path (store=None) because canon files are not in `knowledge_dir`.
 
 ## 5. Full Recall Path
 
 ```
 memory_search(ctx, query, kinds, limit)             # tools/memory/recall.py
   ├─ _search_artifacts(ctx, query, kinds, limit)
-  │    ├─ [store available]
-  │    │    MemoryStore.search(query, sources=['knowledge'], kinds, limit)
-  │    │      ├─ FTS5 BM25 over chunks_fts
-  │    │      ├─ [hybrid] embed(query) → cosine over chunks_vec → RRF merge (k=60)
-  │    │      └─ _rerank_results(query, merged, limit)
-  │    │           └─ [tei] cross-encoder HTTP rerank
-  │    └─ [store unavailable]
-  │         load_knowledge_artifacts() → grep_recall()     # in-memory substring fallback
+  │    ├─ [store available] — three-pass structure:
+  │    │    Pass 1 — Canon priority (kinds=None or 'canon' in kinds, personality set):
+  │    │      store.search(query, sources=['canon'], limit=_ARTIFACTS_CANON_CAP)
+  │    │      for each hit: store.get_chunk_content('canon', path, 0) → snippet=full body
+  │    │      → channel='artifacts', kind='canon'
+  │    │
+  │    │    Pass 2 — User priority (kinds=None or 'user' in kinds):
+  │    │      store.search(query, sources=['knowledge'], kinds=['user'], limit=_ARTIFACTS_USER_CAP)
+  │    │      → channel='artifacts', kind='user'
+  │    │
+  │    │    Pass 3 — Waterfall (rule/article/note, or caller-specified non-priority kinds):
+  │    │      waterfall_kinds = (kinds or ['rule','article','note']) - {'canon','user'}
+  │    │      store.search(..., kinds=waterfall_kinds, limit=_ARTIFACTS_WATERFALL_CHUNK_CAP)
+  │    │      dual-cap: stop at _ARTIFACTS_WATERFALL_CHUNK_CAP count OR
+  │    │                _ARTIFACTS_WATERFALL_SIZE_CAP cumulative full-chunk chars
+  │    │      → channel='artifacts', kind=r.kind
+  │    │
+  │    └─ [store unavailable] → _grep_artifacts_fallback()
+  │         load_artifacts() → grep_recall()     # in-memory substring, canon excluded
   │
-  ├─ _search_sessions(ctx, query, span)
-  │    └─ MemoryStore.search(query, sources=['session'], limit=15)
-  │         └─ dedup to 3 unique sessions (_SESSIONS_CHANNEL_CAP); excludes current session
-  │
-  └─ _search_canon_channel(ctx, query)
-       └─ [store available + personality set]
-            store.search(query, sources=['canon'], limit)     # FTS5 BM25
-            for each hit: store.get_chunk_content('canon', path, 0)  → full body
-       └─ [store unavailable or personality empty] → []
+  └─ _search_sessions(ctx, query, span)
+       └─ MemoryStore.search(query, sources=['session'], limit=15)
+            └─ dedup to 3 unique sessions (_SESSIONS_CHANNEL_CAP); excludes current session
 
   └─ merge channels → format and return flat result list
 ```
 
-All three channels run in sequence. Results carry a `channel` field (`artifacts`, `sessions`, `canon`); scores are not cross-comparable across channels.
+Both channels run in sequence. Results carry a `channel` field (`artifacts` or `sessions`); scores are not cross-comparable across channels. Canon hits (`kind='canon'`) are rendered under a `**Character canon:**` header with full body (no snippet truncation).
 
 ## 6. Config
 
@@ -261,7 +267,7 @@ All three channels run in sequence. Results carry a `channel` field (`artifacts`
 | `knowledge.consolidation_similarity_threshold` | *(no env var)* | `0.75` | Jaccard score threshold for artifact dedup/merge |
 | `knowledge.max_artifact_count` | *(no env var)* | `300` | soft cap on total artifact count |
 | `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | days before decay eligibility |
-| `knowledge.character_recall_limit` | `CO_KNOWLEDGE_CHARACTER_RECALL_LIMIT` | `3` | max canon hits per `memory_search` call (legacy alias: `CO_CHARACTER_RECALL_LIMIT`) |
+| `knowledge.character_recall_limit` | `CO_KNOWLEDGE_CHARACTER_RECALL_LIMIT` or `CO_CHARACTER_RECALL_LIMIT` | `3` | **Deprecated** — superseded by `_ARTIFACTS_CANON_CAP` in `tools/memory/recall.py`; config key retained for one version for backward compatibility; not consumed by recall |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | defined lifecycle setting; not currently consumed by recall ranking |
 
 Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
@@ -324,7 +330,7 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | --- | --- |
 | `co_cli/bootstrap/core.py` | `_sync_canon_store()` — indexes canon scenes into FTS at bootstrap |
 | `co_cli/memory/memory_store.py` | `sync_dir(no_chunk=True)`, `get_chunk_content()` — canon indexing and full-body fetch |
-| `co_cli/tools/memory/recall.py` | `_search_canon_channel()` — BM25 recall over `source='canon'` |
+| `co_cli/tools/memory/recall.py` | canon priority pass in `_search_artifacts()` — BM25 recall over `source='canon'`, full body in `snippet` |
 | `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (canon explicitly excluded here) |
 
 ## 8. Test Gates
@@ -340,4 +346,5 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `save_artifact` URL dedup uses O(1) index when `memory_store` set | `tests/test_flow_memory_write.py` |
 | `sync_dir(no_chunk=True)` stores one chunk per file; `get_chunk_content()` returns full body; hash-skip on rerun | `tests/test_flow_memory_store_nochunk.py` |
 | `_sync_canon_store()` indexes real canon files; no-ops on `store=None` / `personality=None` | `tests/test_flow_bootstrap_canon.py` |
-| `_search_canon_channel()` returns full body; returns `[]` on no store or no personality | `tests/test_flow_canon_recall.py` |
+| Canon hits flow through `_search_artifacts()` with `channel='artifacts'`, `kind='canon'`, full body in `snippet`; returns no canon hits on no store or no personality | `tests/test_flow_canon_recall.py` |
+| Waterfall pass count cap stops at `_ARTIFACTS_WATERFALL_CHUNK_CAP`; size cap stops before count cap when chunks are large | `tests/test_flow_artifacts_waterfall_cap.py` |

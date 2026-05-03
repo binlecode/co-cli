@@ -1,4 +1,4 @@
-"""Memory tools — unified recall over knowledge artifacts, session transcripts, and canon."""
+"""Memory tools — unified recall over knowledge artifacts (including canon), session transcripts."""
 
 import logging
 from pathlib import Path
@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 
 _SESSIONS_CHANNEL_CAP = 3
 """Maximum number of unique sessions returned by the sessions channel."""
+
+_ARTIFACTS_CANON_CAP = 3
+"""Maximum canon hits per memory_search call."""
+
+_ARTIFACTS_USER_CAP = 3
+"""Maximum user-kind chunk results per memory_search call."""
+
+_ARTIFACTS_WATERFALL_CHUNK_CAP = 5
+"""Maximum waterfall-pass chunk count (count cap)."""
+
+_ARTIFACTS_WATERFALL_SIZE_CAP = 2000
+"""Maximum cumulative full-chunk content chars across waterfall results (size cap)."""
 
 # user-facing snippet truncation in tool output
 _SNIPPET_DISPLAY_CHARS = 100
@@ -82,36 +94,128 @@ def _list_artifacts(
     ]
 
 
+def _user_priority_pass(store: Any, query: str) -> list[dict]:
+    """User priority pass — BM25 search over user-kind artifacts, capped at _ARTIFACTS_USER_CAP."""
+    try:
+        user_hits = store.search(
+            query,
+            sources=["knowledge"],
+            kinds=["user"],
+            limit=_ARTIFACTS_USER_CAP,
+        )
+    except Exception as e:
+        logger.warning("User artifacts FTS search failed: %s", e)
+        user_hits = []
+    return [
+        {
+            "channel": "artifacts",
+            "kind": r.kind,
+            "title": r.title or (Path(r.path).stem if r.path else ""),
+            "snippet": r.snippet,
+            "score": r.score,
+            "path": r.path,
+            "filename_stem": Path(r.path).stem if r.path else "",
+        }
+        for r in user_hits
+    ]
+
+
 def _search_artifacts(
     ctx: RunContext[CoDeps],
     query: str,
     kinds: list[str] | None,
     limit: int,
 ) -> list[dict]:
-    """BM25 FTS / grep fallback over knowledge artifacts. Returns channel='artifacts' dicts."""
-    if ctx.deps.memory_store is not None:
-        try:
-            fts_results = ctx.deps.memory_store.search(
-                query,
-                sources=["knowledge"],
-                kinds=kinds,
-                limit=limit,
-            )
-            return [
-                {
-                    "channel": "artifacts",
-                    "kind": r.kind,
-                    "title": r.title or (Path(r.path).stem if r.path else ""),
-                    "snippet": r.snippet,
-                    "score": r.score,
-                    "path": r.path,
-                    "filename_stem": Path(r.path).stem if r.path else "",
-                }
-                for r in fts_results
-            ]
-        except Exception as e:
-            logger.warning("Artifacts FTS search failed, falling back to grep: %s", e)
-    artifacts = load_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
+    """BM25 FTS / grep fallback over knowledge artifacts and canon. Returns channel='artifacts' dicts.
+
+    Three-pass structure (FTS path): (1) canon priority pass — full body inline, capped at
+    _ARTIFACTS_CANON_CAP; (2) user priority pass — capped at _ARTIFACTS_USER_CAP;
+    (3) waterfall pass (rule / article / note) — dual-capped by count
+    (_ARTIFACTS_WATERFALL_CHUNK_CAP) and full-chunk content chars (_ARTIFACTS_WATERFALL_SIZE_CAP).
+    Grep fallback (store=None): canon excluded — canon files are not in knowledge_dir.
+    """
+    store = ctx.deps.memory_store
+    results: list[dict] = []
+
+    if store is not None:
+        # Canon priority pass
+        if (kinds is None or "canon" in kinds) and ctx.deps.config.personality:
+            try:
+                canon_hits = store.search(query, sources=["canon"], limit=_ARTIFACTS_CANON_CAP)
+            except Exception as e:
+                logger.warning("Canon FTS search failed: %s", e)
+                canon_hits = []
+            for r in canon_hits:
+                # real tars humor file body is ~700 chars; FTS5 snippet() would cap at ~200
+                body = store.get_chunk_content("canon", r.path, 0)
+                if body is None:
+                    logger.warning("canon hit missing chunk content: %s", r.path)
+                    continue
+                results.append(
+                    {
+                        "channel": "artifacts",
+                        "kind": "canon",
+                        "title": r.title or (Path(r.path).stem if r.path else ""),
+                        "snippet": body,
+                        "score": r.score,
+                        "path": r.path,
+                        "filename_stem": Path(r.path).stem if r.path else "",
+                    }
+                )
+
+        # User priority pass
+        if kinds is None or "user" in kinds:
+            results.extend(_user_priority_pass(store, query))
+
+        # Waterfall pass (rule / article / note — or caller-specified non-priority kinds)
+        # set subtraction avoids TypeError; empty guard prevents invalid SQL (kind IN ())
+        waterfall_kinds = list(set(kinds or ["rule", "article", "note"]) - {"canon", "user"})
+        if waterfall_kinds:
+            try:
+                candidates = store.search(
+                    query,
+                    sources=["knowledge"],
+                    kinds=waterfall_kinds,
+                    limit=_ARTIFACTS_WATERFALL_CHUNK_CAP,
+                )
+            except Exception as e:
+                logger.warning("Waterfall artifacts FTS search failed: %s", e)
+                candidates = []
+            total_chars = 0
+            for r in candidates:
+                if total_chars >= _ARTIFACTS_WATERFALL_SIZE_CAP:
+                    break
+                full_content = store.get_chunk_content(r.source, r.path, r.chunk_index or 0) or ""
+                results.append(
+                    {
+                        "channel": "artifacts",
+                        "kind": r.kind,
+                        "title": r.title or (Path(r.path).stem if r.path else ""),
+                        "snippet": r.snippet,
+                        "score": r.score,
+                        "path": r.path,
+                        "filename_stem": Path(r.path).stem if r.path else "",
+                    }
+                )
+                total_chars += len(full_content)
+
+        return results
+
+    # Grep fallback (store=None): canon excluded — canon files are not in knowledge_dir
+    return _grep_artifacts_fallback(ctx, query, kinds, limit)
+
+
+def _grep_artifacts_fallback(
+    ctx: RunContext[CoDeps],
+    query: str,
+    kinds: list[str] | None,
+    limit: int,
+) -> list[dict]:
+    """Grep-based artifact search used when MemoryStore is unavailable. Canon silently excluded."""
+    grep_kinds = [k for k in (kinds or ["user", "rule", "article", "note"]) if k != "canon"]
+    if not grep_kinds:
+        return []
+    artifacts = load_artifacts(ctx.deps.knowledge_dir, artifact_kinds=grep_kinds)
     matches = grep_recall(artifacts, query, limit)
     return [
         {
@@ -189,54 +293,18 @@ def _search_sessions(
     return results
 
 
-def _search_canon_channel(
-    ctx: RunContext[CoDeps],
-    query: str,
-) -> list[dict]:
-    """BM25 FTS search over the active role's canon scenes via MemoryStore.
-
-    Returns [] when no personality is configured or memory_store is None.
-    Canon channel has its own budget from config.knowledge.character_recall_limit.
-    """
-    role = ctx.deps.config.personality
-    store = ctx.deps.memory_store
-    if not role or store is None:
-        return []
-    limit = ctx.deps.config.knowledge.character_recall_limit
-    try:
-        results = store.search(query, sources=["canon"], limit=limit)
-    except Exception as e:
-        logger.warning("Canon FTS search failed: %s", e)
-        return []
-    hits: list[dict] = []
-    for r in results:
-        body = store.get_chunk_content("canon", r.path, 0)
-        if body is None:
-            logger.warning("canon hit missing chunk content: %s", r.path)
-            continue
-        hits.append(
-            {
-                "channel": "canon",
-                "role": role,
-                "title": r.title or Path(r.path).stem,
-                "body": body,
-                "score": r.score,
-            }
-        )
-    return hits
-
-
 def _format_search_display(query: str, all_results: list[dict]) -> str:
     """Build the display string for a non-empty search result set."""
     lines: list[str] = [f"Found {len(all_results)} result(s) for '{query}':\n"]
 
     artifact_results = [r for r in all_results if r["channel"] == "artifacts"]
     session_results = [r for r in all_results if r["channel"] == "sessions"]
-    char_canon_results = [r for r in all_results if r["channel"] == "canon"]
+    canon_artifact_results = [r for r in artifact_results if r.get("kind") == "canon"]
+    non_canon_artifact_results = [r for r in artifact_results if r.get("kind") != "canon"]
 
-    if artifact_results:
+    if non_canon_artifact_results:
         lines.append("**Saved artifacts:**")
-        for r in artifact_results:
+        for r in non_canon_artifact_results:
             kind_str = f" [{r['kind']}]" if r.get("kind") else ""
             path_str = f" @ {r['path']}" if r.get("path") else ""
             lines.append(
@@ -255,10 +323,10 @@ def _format_search_display(query: str, all_results: list[dict]) -> str:
             if preview:
                 lines.append(f"     {preview}")
 
-    if char_canon_results:
+    if canon_artifact_results:
         lines.append("\n**Character canon:**")
-        for r in char_canon_results:
-            lines.append(f"\n### {r['title']}\n{r['body']}")
+        for r in canon_artifact_results:
+            lines.append(f"\n### {r['title']}\n{r['snippet']}")
 
     return "\n".join(lines)
 
@@ -270,12 +338,15 @@ async def memory_search(
     kinds: list[str] | None = None,
     limit: int = 10,
 ) -> ToolReturn:
-    """Search memory across saved artifacts, past sessions, and canon in one call.
+    """Search memory across saved artifacts (including canon) and past sessions in one call.
 
-    Searches the artifacts channel (BM25 FTS5/grep), the sessions channel
-    (chunk-level index, no LLM), and the canon channel in sequence. Returns
-    a flat list with a "channel" field per result ("artifacts", "sessions", or "canon").
-    The sessions channel is capped at 3 unique sessions regardless of limit.
+    Searches the artifacts channel (BM25 FTS5/grep) and the sessions channel
+    (chunk-level index, no LLM). Returns a flat list with a "channel" field per result
+    ("artifacts" or "sessions"). The sessions channel is capped at 3 unique sessions
+    regardless of limit.
+
+    Canon flows through the artifacts channel as kind='canon'. Canon hits carry the full
+    body inline in the snippet field (no file_read follow-up needed).
 
     IMPORTANT: scores in results are NOT cross-comparable across channels — use the
     "channel" field to interpret each result's provenance.
@@ -296,6 +367,7 @@ async def memory_search(
         "rule"    — prescriptive guidance: mandates, decisions with rationale, conventions
         "article" — synthesized content: analysis, summaries, research notes, saved URLs
         "note"    — catch-all; rarely worth filtering to directly
+        "canon"   — read-only character scenes (full body inline)
 
       INTENT → KINDS:
         "what do I prefer / how do I like / who am I..."   → ["user"]
@@ -308,13 +380,13 @@ async def memory_search(
     phrases for exact match ("connection pool"), boolean (python NOT java), prefix (deploy*).
 
     Artifact hits render as `**<title>** [<kind>] @ <path>: <snippet>` — call file_read
-    on the `@ <path>` value when you need the full body. Canon hits render the full body
-    inline; no follow-up needed. Session hits render a chunk citation and snippet inline;
-    call memory_read_session_turn(session_id, start_line, end_line) for the verbatim turns.
+    on the `@ <path>` value when you need the full body. Canon hits (kind='canon') render
+    the full body inline; no follow-up needed. Session hits render a chunk citation and
+    snippet inline; call memory_read_session_turn(session_id, start_line, end_line) for
+    the verbatim turns.
 
     Artifacts result fields: channel, kind, title, snippet, score, path, filename_stem
     Sessions result fields:  channel, session_id, when, source, chunk_text, start_line, end_line, score
-    Canon result fields:     channel, role, title, body, score
 
     Args:
         query: FTS5 keyword query.
@@ -356,11 +428,8 @@ async def memory_search(
 
     knowledge_results = _search_artifacts(ctx, query, kinds, limit)
     session_results_raw = _search_sessions(ctx, query, span)
-    canon_results = _search_canon_channel(ctx, query)
 
-    all_results: list[dict] = (
-        list(knowledge_results) + list(session_results_raw) + list(canon_results)
-    )
+    all_results: list[dict] = list(knowledge_results) + list(session_results_raw)
 
     if not all_results:
         return tool_output(

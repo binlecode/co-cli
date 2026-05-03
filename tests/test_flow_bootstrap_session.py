@@ -135,17 +135,6 @@ def test_knowledge_settings_env_overrides_json_config(
     assert result.knowledge.chunk_size == 99
 
 
-def test_knowledge_settings_legacy_alias_env_var(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CO_CHARACTER_RECALL_LIMIT (legacy alias) still overrides character_recall_limit."""
-    monkeypatch.setenv("CO_CHARACTER_RECALL_LIMIT", "7")
-
-    result = load_config(_user_config_path=tmp_path / "settings.json")
-
-    assert result.knowledge.character_recall_limit == 7
-
-
 def test_knowledge_settings_json_config_applies_without_env(tmp_path: Path) -> None:
     """JSON config value is used for knowledge fields when no env var is set."""
     (tmp_path / "settings.json").write_text('{"knowledge": {"chunk_size": 300}}', encoding="utf-8")

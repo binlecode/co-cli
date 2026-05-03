@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 
+from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
@@ -57,6 +58,8 @@ from co_cli.context.summarization import (
     summarize_messages,
 )
 from co_cli.deps import CoDeps
+
+_TRACER = otel_trace.get_tracer("co-cli.compaction")
 
 __all__ = [
     "COMPACTABLE_KEEP_RECENT",
@@ -386,7 +389,19 @@ async def _run_window_compaction(
         )
         return None
 
-    _, _, dropped_count = bounds
+    head_end, tail_start, dropped_count = bounds
+    tail_count = len(messages) - tail_start
+    log.debug(
+        "Compaction boundaries: msgs=%d head=0..%d dropped=%d..%d(%d) tail=%d..%d(%d)",
+        len(messages),
+        head_end,
+        head_end,
+        tail_start,
+        dropped_count,
+        tail_start,
+        len(messages),
+        tail_count,
+    )
     result, summary_text = await apply_compaction(ctx, messages, bounds, announce=True)
     if summary_text is not None:
         log.info("Sliding window: summarised %d messages inline", dropped_count)
@@ -418,50 +433,136 @@ async def proactive_window_processor(
             return messages
         cfg = ctx.deps.config.compaction
 
+        # --- guard resolution ---
+        guard_active = False
+        guard_cleared = False
+        fresh_responses_after_compact = 0
+
         if ctx.deps.runtime.compaction_applied_this_turn:
             reported = 0
         elif ctx.deps.runtime.post_compaction_token_estimate is not None:
+            guard_active = True
             _count = ctx.deps.runtime.message_count_at_last_compaction
-            if _count is not None and len(messages) >= _count + 2:
-                # New ModelRequest + ModelResponse have landed — fresh provider count available.
-                ctx.deps.runtime.post_compaction_token_estimate = None
-                ctx.deps.runtime.message_count_at_last_compaction = None
-                reported = latest_response_input_tokens(messages)
+            # Only clear when a ModelResponse that actually saw the post-compaction
+            # history exists. Message-count delta alone is unreliable: the +2 messages
+            # may have been generated from the pre-compaction context (tool returns,
+            # user messages) with no fresh LLM call in between.
+            if _count is not None:
+                fresh_responses_after_compact = sum(
+                    1
+                    for m in messages[_count:]
+                    if isinstance(m, ModelResponse) and m.usage.input_tokens > 0
+                )
+                if fresh_responses_after_compact > 0:
+                    guard_cleared = True
+                    ctx.deps.runtime.post_compaction_token_estimate = None
+                    ctx.deps.runtime.message_count_at_last_compaction = None
+                    reported = latest_response_input_tokens(messages)
+                else:
+                    reported = ctx.deps.runtime.post_compaction_token_estimate
             else:
                 reported = ctx.deps.runtime.post_compaction_token_estimate
         else:
             reported = latest_response_input_tokens(messages)
+
         # Trigger threshold uses max(local, reported) — biases toward earlier compaction.
         # Savings ratio uses local-only on both sides — apples-to-apples yield comparison.
         tokens_before_local = estimate_message_tokens(messages)
         token_count = max(tokens_before_local, reported)
         token_threshold = int(budget * cfg.compaction_ratio)
 
-        if token_count <= token_threshold:
-            return messages
-
-        if (
-            ctx.deps.runtime.consecutive_low_yield_proactive_compactions
-            >= cfg.proactive_thrash_window
-        ):
-            log.info("Compaction: anti-thrashing gate active, skipping")
-            return messages
-
-        result = await _run_window_compaction(ctx, messages, budget)
-        if result is None:
-            return messages
-
-        tokens_after_local = estimate_message_tokens(result)
-        savings = (
-            (tokens_before_local - tokens_after_local) / tokens_before_local
-            if tokens_before_local > 0
-            else 0.0
+        # Count tool calls in current history for OTEL diagnostics.
+        tool_calls_in_history = sum(
+            1
+            for m in messages
+            if isinstance(m, ModelResponse)
+            for p in m.parts
+            if isinstance(p, ToolCallPart)
         )
-        if savings < cfg.min_proactive_savings:
-            ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
-        else:
-            ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-        return result
+
+        log.debug(
+            "Proactive check: msgs=%d local=%d reported=%d count=%d threshold=%d "
+            "guard=%s cleared=%s fresh_resp=%d tool_calls=%d",
+            len(messages),
+            tokens_before_local,
+            reported,
+            token_count,
+            token_threshold,
+            guard_active,
+            guard_cleared,
+            fresh_responses_after_compact,
+            tool_calls_in_history,
+        )
+
+        with _TRACER.start_as_current_span("compaction.proactive_check") as span:
+            span.set_attribute("compaction.msgs", len(messages))
+            span.set_attribute("compaction.local_tokens", tokens_before_local)
+            span.set_attribute("compaction.reported_tokens", reported)
+            span.set_attribute("compaction.token_count", token_count)
+            span.set_attribute("compaction.threshold", token_threshold)
+            span.set_attribute("compaction.budget", budget)
+            span.set_attribute("compaction.guard_active", guard_active)
+            span.set_attribute("compaction.guard_cleared", guard_cleared)
+            span.set_attribute(
+                "compaction.fresh_responses_after_compact", fresh_responses_after_compact
+            )
+            span.set_attribute("compaction.tool_calls_in_history", tool_calls_in_history)
+            span.set_attribute(
+                "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn
+            )
+
+            if token_count <= token_threshold:
+                span.set_attribute("compaction.fired", False)
+                span.set_attribute("compaction.skip_reason", "below_threshold")
+                return messages
+
+            log.debug(
+                "Compaction trigger: tokens=%d threshold=%d budget=%d msgs=%d",
+                token_count,
+                token_threshold,
+                budget,
+                len(messages),
+            )
+
+            if (
+                ctx.deps.runtime.consecutive_low_yield_proactive_compactions
+                >= cfg.proactive_thrash_window
+            ):
+                log.info("Compaction: anti-thrashing gate active, skipping")
+                span.set_attribute("compaction.fired", False)
+                span.set_attribute("compaction.skip_reason", "anti_thrash_gate")
+                return messages
+
+            result = await _run_window_compaction(ctx, messages, budget)
+            if result is None:
+                span.set_attribute("compaction.fired", False)
+                span.set_attribute("compaction.skip_reason", "no_boundary")
+                return messages
+
+            tokens_after_local = estimate_message_tokens(result)
+            savings = (
+                (tokens_before_local - tokens_after_local) / tokens_before_local
+                if tokens_before_local > 0
+                else 0.0
+            )
+            log.debug(
+                "Compaction result: tokens %d→%d (saved %.0f%%) msgs %d→%d",
+                tokens_before_local,
+                tokens_after_local,
+                savings * 100,
+                len(messages),
+                len(result),
+            )
+            span.set_attribute("compaction.fired", True)
+            span.set_attribute("compaction.tokens_after", tokens_after_local)
+            span.set_attribute("compaction.savings_pct", round(savings * 100, 1))
+            span.set_attribute("compaction.msgs_after", len(result))
+
+            if savings < cfg.min_proactive_savings:
+                ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
+            else:
+                ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+            return result
     except Exception:
         log.warning("Mid-turn compaction failed — skipping", exc_info=True)
         return messages

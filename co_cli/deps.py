@@ -173,8 +173,9 @@ class CoRuntimeState:
     previous_compaction_summary: str | None = None
     # Cross-turn stale-token suppression: set by apply_compaction / emergency_recover to
     # a local char-based estimate of the post-compaction message list. Used by
-    # proactive_window_processor as the `reported` value until a fresh ModelResponse has
-    # landed (len(messages) >= message_count_at_last_compaction + 2). Cleared by /new and /clear.
+    # proactive_window_processor as the `reported` value until a fresh ModelResponse
+    # (usage.input_tokens > 0) appears at index >= message_count_at_last_compaction,
+    # proving the LLM has seen the post-compaction context. Cleared by /new and /clear.
     post_compaction_token_estimate: int | None = None
     message_count_at_last_compaction: int | None = None
 

@@ -36,6 +36,18 @@ def test_sync_canon_store_indexes_real_tars_memories(tmp_path: Path) -> None:
         assert len(results) >= 1, (
             "expected at least 1 canon result for 'humor deadpan' after _sync_canon_store"
         )
+        # kind='canon' auto-set for canon source at index time
+        row = store._conn.execute("SELECT kind FROM docs WHERE source='canon' LIMIT 1").fetchone()
+        assert row is not None, "expected at least one doc row with source='canon'"
+        assert row["kind"] == "canon", f"expected kind='canon', got {row['kind']!r}"
+        # explicit kinds filter returns same paths as no filter
+        paths_all = {r.path for r in store.search("humor deadpan", sources=["canon"])}
+        paths_canon = {
+            r.path for r in store.search("humor deadpan", sources=["canon"], kinds=["canon"])
+        }
+        assert paths_all == paths_canon, (
+            "search with kinds=['canon'] should return same paths as search without kinds filter"
+        )
     finally:
         store.close()
 

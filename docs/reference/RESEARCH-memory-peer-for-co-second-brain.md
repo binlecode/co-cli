@@ -677,7 +677,7 @@ If the question is:
 
 ## 15. Remaining Gaps Against Converged Best Practice
 
-Updated: 2026-05-01. Reflects current source state after the April 28 module collapse.
+Updated: 2026-05-03. Reflects current source state after the April 28 module collapse and May 3 rules update.
 
 ### What is shipped
 
@@ -692,6 +692,9 @@ Updated: 2026-05-01. Reflects current source state after the April 28 module col
 | Age + access-based artifact decay | `co_cli/memory/dream.py:441` | `openclaw` |
 | Artifact dedup (Jaccard on write) | `co_cli/memory/service.py` | `openclaw` |
 | Personalization split (`artifact_kind: user`) | `co_cli/memory/artifact.py` + `co_cli/tools/memory/recall.py` | `hermes-agent` |
+| Pre-reasoning memory selection (guidance policy) | `co_cli/context/rules/04_tool_protocol.md` | `hermes-agent` + `ReMe` |
+| Declarative-facts memory writing rule | `co_cli/context/rules/04_tool_protocol.md` | `hermes-agent` |
+| Memory save priority metric | `co_cli/context/rules/02_safety.md` | `hermes-agent` |
 
 ### Gap 2 — Corpus governance (high ROI, fits current harness)
 
@@ -700,14 +703,6 @@ Updated: 2026-05-01. Reflects current source state after the April 28 module col
 **What's missing:** The `knowledge/` corpus has no schema, no machine-maintained catalog, and no mutation log. There is no way to audit what the corpus contains, enforce artifact conventions, or trace when an artifact was created or merged. The `_meta/` overlay proposed in Section 10.1 was never shipped.
 
 **Minimum viable adoption:** Three files under `knowledge/_meta/`: `SCHEMA.md` (corpus conventions and kind taxonomy), `index.md` (auto-maintained catalog), `log.md` (append-only artifact mutation log written by `memory_create` and `memory_modify`).
-
-### Gap 3 — Pre-reasoning memory selection (medium ROI, requires agent loop change)
-
-**From:** `ReMe` pre-reasoning context management
-
-**What's missing:** `memory_search` is available but nothing governs when the agent should call it before reasoning. Recall is entirely ad-hoc — the agent decides per-turn with no structural prompt or policy nudge to check memory before answering. `ReMe` makes pre-reasoning memory lookup a mandatory step, not an optional tool call.
-
-**Minimum viable adoption:** A system-prompt instruction that explicitly primes the agent to call `memory_search` before answering questions that reference past sessions, user preferences, or established decisions. Requires no code change, only guidance policy.
 
 ### Gap 5 — Evidence discipline (medium ROI, new tooling required)
 
@@ -729,15 +724,13 @@ Updated: 2026-05-01. Reflects current source state after the April 28 module col
 
 **From:** `openclaw` temporal scoring
 
-**What's missing:** Decay today is age + explicit-access based (`decay_after_days`, `decay_protected`). `openclaw`'s recency-weighted retrieval scoring — penalizing artifacts that haven't appeared in recent search results, not just ones that haven't been explicitly read — is not adopted. This matters for large corpora where stale artifacts can still match queries without ever being acted on.
-
-**Minimum viable adoption:** Track `last_recalled_at` in artifact frontmatter (written by `memory_search` on hit) and include it as a decay signal alongside `last_modified_at`.
+**What's missing:** `last_recalled` exists in `co_cli/memory/artifact.py` and `decay.py` reads it, but `memory_search` never writes it back on a hit. The decay branch that protects recently-recalled artifacts from pruning can never fire. Minimum viable fix: write `last_recalled` and increment `recall_count` in `memory_search` on each artifact hit.
 
 ### Priority order
 
 | Priority | Gap | Effort | Peer source |
 | --- | --- | --- | --- |
-| 1 | Pre-reasoning memory selection | Low — guidance policy only | `ReMe` |
+| 1 | Corpus governance | Medium — three `_meta/` files + write path | Hermes plan + `openclaw` |
 | 2 | Evidence discipline | Medium — new artifact kind + optional tool | Hermes plan |
-| 3 | Retrieval diversity reranking | Medium — MMR pass in knowledge_store | `openclaw` |
-| 4 | Retrieval-aware decay | Low — `last_recalled_at` tracking | `openclaw` |
+| 3 | Retrieval-aware decay | Low — write-back on search hit | `openclaw` |
+| 4 | Retrieval diversity reranking | Medium — MMR pass in knowledge_store | `openclaw` |

@@ -102,7 +102,11 @@ async def run_eval(tmp: Path) -> dict[str, Any]:
     # via body-token matches (both "humor" and "deadpan" appear in the body text).
     result = await memory_search(ctx_tars, "humor deadpan")
     rendered = result.return_value
-    canon_hits = [r for r in result.metadata["results"] if r["channel"] == "canon"]
+    canon_hits = [
+        r
+        for r in result.metadata["results"]
+        if r["channel"] == "artifacts" and r.get("kind") == "canon"
+    ]
 
     if not canon_hits:
         failures.append("canon-content: no hit for tars humor query")
@@ -110,8 +114,8 @@ async def run_eval(tmp: Path) -> dict[str, Any]:
     elif "**Character canon:**" not in rendered:
         failures.append("canon-content: '**Character canon:**' header missing despite hits")
         print("  [canon-content] FAIL - header missing")
-    elif "humor" not in (canon_hits[0].get("body") or "").lower():
-        failures.append("canon-content: top body lacks 'humor' - frontmatter strip regression?")
+    elif "humor" not in (canon_hits[0].get("snippet") or "").lower():
+        failures.append("canon-content: top snippet lacks 'humor' - frontmatter strip regression?")
         print("  [canon-content] FAIL - body lacks 'humor'")
     else:
         print(
@@ -156,7 +160,11 @@ async def run_eval(tmp: Path) -> dict[str, Any]:
     # Sub-case 4 — bleed: query has no canon-relevant tokens. Should produce zero canon hits.
     bleed_query = "json parse exception traceback"
     bleed_result = await memory_search(ctx_tars, bleed_query)
-    bleed_canon = [r for r in bleed_result.metadata["results"] if r["channel"] == "canon"]
+    bleed_canon = [
+        r
+        for r in bleed_result.metadata["results"]
+        if r["channel"] == "artifacts" and r.get("kind") == "canon"
+    ]
     if bleed_canon:
         leaked = [(h["title"][:40], h["score"]) for h in bleed_canon]
         failures.append(

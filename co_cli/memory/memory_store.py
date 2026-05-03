@@ -1040,6 +1040,8 @@ class MemoryStore:
 
                 frontmatter, body = parse_frontmatter(raw)
                 artifact_kind = frontmatter.get("artifact_kind") or frontmatter.get("kind")
+                if artifact_kind is None and source == "canon":
+                    artifact_kind = "canon"
                 title = frontmatter.get("title") or file_path.stem
                 mtime = file_path.stat().st_mtime
 

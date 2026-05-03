@@ -3,8 +3,8 @@
 Each eval defines a case-specific Pydantic result type and a domain-specific
 prompt, then calls run_judge() to obtain a structured quality verdict.
 
-The judge uses noreason model settings (no chain-of-thought overhead) and
-falls back to the base settings when noreason is not configured.
+The judge uses reasoning model settings (thinking enabled) for accurate
+fact-verification and semantic assessment.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from co_cli.llm.factory import LlmModel
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT: float = 30.0
+DEFAULT_TIMEOUT: float = 120.0
 DEFAULT_SYSTEM_PROMPT: str = (
     "You are a strict quality evaluator. Assess the provided content honestly "
     "and return a structured judgment. Score conservatively."
@@ -36,13 +36,13 @@ async def run_judge[T: BaseModel](
 ) -> tuple[T | None, str | None]:
     """Run an LLM judge and return (result, error_message).
 
-    Uses noreason model settings to avoid reasoning overhead; falls back to
-    base settings when noreason is not configured.
+    Uses reasoning model settings (thinking enabled) for accurate fact-verification.
+    DEFAULT_TIMEOUT is 120s to accommodate reasoning call duration.
 
     Returns (None, error_msg) on timeout or failure — callers treat this as a
     skip, not a hard failure.
     """
-    model_settings = llm_model.settings_noreason or llm_model.settings
+    model_settings = llm_model.settings
     judge_agent: Agent[None, T] = Agent(
         model=llm_model.model,
         output_type=result_type,

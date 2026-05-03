@@ -26,6 +26,7 @@ class ArtifactKindEnum(StrEnum):
     RULE = "rule"
     ARTICLE = "article"
     NOTE = "note"
+    CANON = "canon"
 
 
 class SourceTypeEnum(StrEnum):

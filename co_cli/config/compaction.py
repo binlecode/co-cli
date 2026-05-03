@@ -24,11 +24,13 @@ class CompactionSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     compaction_ratio: float = Field(
-        default=0.65,
+        default=0.50,
         description=(
             "Fraction of budget above which the proactive mid-turn trigger fires. "
             "Post-compact state ≈ tail_fraction + head (~3%) + marker (~3%); "
-            "headroom per pass ≈ compaction_ratio - post_compact_state."
+            "headroom per pass ≈ compaction_ratio - post_compact_state. "
+            "At 0.50 with a 32k context, trigger fires at ~16k tokens; "
+            "tail budget = 20% × 32k ≈ 6.5k tokens; headroom per pass ≈ 24%."
         ),
     )
     tail_fraction: float = Field(

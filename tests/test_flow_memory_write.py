@@ -4,11 +4,18 @@ Exercises: dedup (URL-keyed, Jaccard), straight save, indexing, append, and
 replace-uniqueness guard. No LLM — real filesystem + real FTS5 only.
 """
 
+from pathlib import Path
+
 import pytest
+from pydantic_ai import RunContext
+from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
 
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.memory.memory_store import MemoryStore
 from co_cli.memory.service import mutate_artifact, reindex, save_artifact
+from co_cli.tools.memory.write import memory_create
+from co_cli.tools.shell_backend import ShellBackend
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -263,3 +270,25 @@ def test_find_article_by_url_file_scan_fallback(tmp_path):
 
     assert result is not None, "file-scan fallback returned None for a known URL"
     assert result == saved.path, f"Expected {saved.path}, got {result}"
+
+
+@pytest.mark.asyncio
+async def test_memory_create_rejects_canon_artifact_kind(tmp_path: Path) -> None:
+    """memory_create must reject artifact_kind='canon' — canon is read-only package content.
+
+    Regression guard: adding CANON to ArtifactKindEnum would silently admit it as a writable
+    kind without this check.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS,
+        session=CoSessionState(),
+        knowledge_dir=tmp_path / "knowledge",
+    )
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    result = await memory_create(ctx, content="test content", artifact_kind="canon")
+
+    assert "canon" in result.return_value.lower(), "error message must mention the rejected kind"
+    assert result.metadata is not None, "tool_error must populate metadata"
+    assert result.metadata.get("error") is True, "tool_error must set error=True in metadata"

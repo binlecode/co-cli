@@ -129,7 +129,7 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `memory_search(query="", kinds=None, limit=10)` | A | — | — | — | Unified recall across saved artifacts, indexed past sessions, and canon; empty query browses recent sessions plus artifact inventory; keyword query returns chunk/snippet hits with no session summarizer LLM |
+| `memory_search(query="", kinds=None, limit=10)` | A | — | — | — | Unified recall across saved artifacts (including `kind='canon'` scenes) and indexed past sessions; empty query browses recent sessions plus artifact inventory; keyword query returns chunk/snippet hits with no session summarizer LLM |
 | `memory_create(content, artifact_kind, title=None, description=None, source_url=None, decay_protected=False)` | A | ✓ | — | — | Persist a knowledge artifact; URL saves dedupe by `source_ref`; optional consolidation can skip, merge, or append near-duplicates |
 | `memory_modify(filename_stem, action, content, target="")` | A | ✓ | — | — | Append to or surgically replace text in an existing knowledge artifact, then reindex |
 

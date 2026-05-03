@@ -56,7 +56,7 @@ async def memory_create(
         source_url: Source URL for web-fetched articles. Triggers URL-keyed dedup.
         decay_protected: Protect from automatic decay. Always True when source_url is set.
     """
-    valid_kinds = {e.value for e in ArtifactKindEnum}
+    valid_kinds = {e.value for e in ArtifactKindEnum if e != ArtifactKindEnum.CANON}
     if artifact_kind not in valid_kinds:
         return tool_error(
             f"Unknown artifact_kind: {artifact_kind!r}. Valid values: {sorted(valid_kinds)}",

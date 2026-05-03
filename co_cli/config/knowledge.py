@@ -46,7 +46,7 @@ class KnowledgeSettings(BaseSettings):
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     max_artifact_count: int = Field(default=300, ge=1)
     decay_after_days: int = Field(default=90, ge=1)
-    # Legacy env var CO_CHARACTER_RECALL_LIMIT predates the CO_KNOWLEDGE_ prefix; both accepted.
+    # Deprecated: superseded by _ARTIFACTS_CANON_CAP in tools/memory/recall.py. Config key retained for one version; not consumed by recall.
     character_recall_limit: int = Field(
         default=3,
         ge=1,

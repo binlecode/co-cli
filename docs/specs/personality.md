@@ -27,7 +27,7 @@ build_agent(config)
     → joined and set as Agent.instructions (static, once per session)
 
 Character memories (souls/{role}/memories/*.md) are NOT injected here.
-They are surfaced on demand via the canon channel in `memory_search`.
+They are surfaced on demand via `memory_search` as `kind='canon'` in the artifacts channel.
 ```
 
 ---
@@ -104,7 +104,7 @@ if config.personality:
 ```
 
 Character memories (`memories/*.md`) are NOT included — they are served on demand via
-the canon channel in `memory_search`.
+`memory_search` as `kind='canon'` in the artifacts channel.
 
 **Placement rationale:** Soul seed is first because early context has the strongest influence
 on the model's operating space. Review lens is last so it frames all operational guidance

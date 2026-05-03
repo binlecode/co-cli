@@ -18,6 +18,8 @@ Side-effectful actions require explicit user approval via the approval system.
 
 ## Memory constraints
 Save preferences, corrections, decisions, and cross-session facts proactively.
+Prioritize what reduces future user steering — the most valuable memory is one that
+prevents the user from having to correct or remind you again.
 Never save workspace-specific paths, transient errors, session-only context,
 or sensitive information (credentials, health, financial) unless explicitly asked.
 Err on the side of saving — deduplication catches redundancy.
