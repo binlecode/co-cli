@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.8.115]
+## [0.8.114]
 
 ### Refactor
 - Unified canon into the artifacts channel: `_search_canon_channel()` deleted; canon flows through `_search_artifacts()` as `kind='canon'` (source='canon' in MemoryStore)
