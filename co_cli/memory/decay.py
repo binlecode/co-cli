@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from co_cli.config.knowledge import KnowledgeSettings
-from co_cli.memory.artifact import KnowledgeArtifact, load_knowledge_artifacts
+from co_cli.memory.artifact import KnowledgeArtifact, load_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def find_decay_candidates(
     Result is sorted by age descending (oldest ``created`` first).
     """
     cutoff = datetime.now(UTC) - timedelta(days=config.decay_after_days)
-    artifacts = load_knowledge_artifacts(knowledge_dir)
+    artifacts = load_artifacts(knowledge_dir)
 
     candidates: list[KnowledgeArtifact] = []
     for artifact in artifacts:

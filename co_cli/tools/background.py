@@ -98,7 +98,7 @@ class BackgroundCleanupError(RuntimeError):
 
 async def kill_task(state: BackgroundTaskState) -> None:
     """SIGTERM → 200ms → SIGKILL via process group; drain monitor before returning."""
-    from co_cli.tools._shell_env import kill_process_tree
+    from co_cli.tools.shell_env import kill_process_tree
 
     state.cleanup_incomplete = False
     state.cleanup_error = None

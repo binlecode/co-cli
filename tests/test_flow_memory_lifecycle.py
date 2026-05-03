@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from co_cli.memory.artifact import load_knowledge_artifact
+from co_cli.memory.artifact import load_artifact
 from co_cli.memory.service import mutate_artifact
 
 
@@ -36,7 +36,7 @@ def test_mutate_artifact_replace_preserves_frontmatter(tmp_path: Path) -> None:
         target="original body content",
     )
 
-    art = load_knowledge_artifact(artifact_path)
+    art = load_artifact(artifact_path)
     assert art.content.strip() == "updated body content"
     assert art.id == "test-123"
     assert art.created == "2026-01-01T00:00:00+00:00"

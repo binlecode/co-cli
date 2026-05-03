@@ -30,7 +30,7 @@ from co_cli.memory.archive import archive_artifacts
 from co_cli.memory.artifact import (
     KnowledgeArtifact,
     SourceTypeEnum,
-    load_knowledge_artifacts,
+    load_artifacts,
 )
 from co_cli.memory.decay import find_decay_candidates
 from co_cli.memory.service import reindex, save_artifact
@@ -347,7 +347,7 @@ def _identify_mergeable_clusters(deps: CoDeps) -> list[list[KnowledgeArtifact]]:
     the configured threshold. Applied caps: per-cluster size and per-cycle count.
     """
     threshold = deps.config.knowledge.consolidation_similarity_threshold
-    artifacts = load_knowledge_artifacts(deps.knowledge_dir)
+    artifacts = load_artifacts(deps.knowledge_dir)
     if not artifacts:
         return []
 

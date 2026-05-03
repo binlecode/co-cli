@@ -84,7 +84,7 @@ def artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
     return frontmatter
 
 
-def render_knowledge_file(artifact: KnowledgeArtifact) -> str:
+def render_artifact_file(artifact: KnowledgeArtifact) -> str:
     """Render a KnowledgeArtifact to a .md file (YAML frontmatter + body)."""
     frontmatter = artifact_to_frontmatter(artifact)
     return render_frontmatter(frontmatter, artifact.content)
@@ -94,7 +94,7 @@ def render_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
     """Serialize a frontmatter dict + body to .md text.
 
     Used by in-place updates that already hold a parsed frontmatter dict.
-    For new writes, prefer ``render_knowledge_file(artifact)``.
+    For new writes, prefer ``render_artifact_file(artifact)``.
     """
     yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
     return f"---\n{yaml_text}---\n\n{body.strip()}\n"

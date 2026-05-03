@@ -3,7 +3,7 @@
 Archived artifacts live in ``knowledge_dir/_archive/`` and are removed from the
 FTS index. Restore moves a file back to the active directory and re-indexes it.
 The ``_archive/`` subdir is never traversed by the default top-level loaders
-(see ``load_knowledge_artifacts``), so archived files are invisible to recall
+(see ``load_artifacts``), so archived files are invisible to recall
 but preserved on disk for later restore.
 
 Collisions on the destination filename are resolved by suffixing the stem with

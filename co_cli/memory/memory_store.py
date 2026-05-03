@@ -217,6 +217,15 @@ class SearchResult:
 type _ChunkKey = tuple[str, int | None]
 
 
+def _dedup_by_path(results: list["SearchResult"]) -> list["SearchResult"]:
+    """Collapse chunk-level results to doc-level, keeping max score per path, sorted descending."""
+    seen: dict[str, SearchResult] = {}
+    for r in results:
+        if r.path not in seen or r.score > seen[r.path].score:
+            seen[r.path] = r
+    return sorted(seen.values(), key=lambda r: r.score, reverse=True)
+
+
 class MemoryStore:
     """SQLite FTS5 index for ranked search across all memory sources.
 
@@ -596,12 +605,7 @@ class MemoryStore:
             logger.warning(f"Vector search failed, falling back to FTS: {e}")
 
         # Fallback: collapse chunk-level FTS results to doc-level
-        fallback_seen: dict[str, SearchResult] = {}
-        for r in fts_chunks:
-            if r.path not in fallback_seen or r.score > fallback_seen[r.path].score:
-                fallback_seen[r.path] = r
-        fts_results = sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)
-        return self._rerank_results(fts_query, fts_results, limit)
+        return self._rerank_results(fts_query, _dedup_by_path(fts_chunks), limit)
 
     @staticmethod
     def _chunk_row_to_result(row: Any) -> "SearchResult":
@@ -649,13 +653,7 @@ class MemoryStore:
 
         results = [self._chunk_row_to_result(row) for row, _leg in all_rows]
 
-        # Deduplicate by path, keep highest score per document
-        seen: dict[str, SearchResult] = {}
-        for r in results:
-            if r.path not in seen or r.score > seen[r.path].score:
-                seen[r.path] = r
-        sorted_results = sorted(seen.values(), key=lambda r: r.score, reverse=True)
-        return sorted_results[:limit]
+        return _dedup_by_path(results)[:limit]
 
     def _run_chunks_fts(
         self,
@@ -1024,8 +1022,8 @@ class MemoryStore:
         if not directory.exists():
             return 0
 
-        from co_cli.memory.chunker import Chunk
-        from co_cli.memory.chunker import chunk_text as _chunk_text
+        from co_cli.memory.text_chunker import Chunk
+        from co_cli.memory.text_chunker import chunk_text as _chunk_text
 
         current_paths: set[str] = set()
         indexed = 0
@@ -1099,9 +1097,9 @@ class MemoryStore:
         Idempotent — content hash skip avoids re-embedding unchanged sessions.
         doc_path = uuid8 (8-char ID from the session filename).
         """
-        from co_cli.memory.chunker import Chunk
         from co_cli.memory.session import parse_session_filename
         from co_cli.memory.session_chunker import chunk_session
+        from co_cli.memory.text_chunker import Chunk
 
         parsed = parse_session_filename(session_path.name)
         if parsed is None:
@@ -1118,7 +1116,7 @@ class MemoryStore:
             return
 
         full_text = "\n\n".join(c.text for c in sess_chunks)
-        content_hash = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+        content_hash = _sha256(full_text)
 
         if not self.needs_reindex("session", uuid8, content_hash):
             return  # hash-skip — content unchanged

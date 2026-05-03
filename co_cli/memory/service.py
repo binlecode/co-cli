@@ -6,6 +6,7 @@ functions, then call reindex explicitly after a successful write.
 """
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,19 +20,22 @@ from co_cli.memory.artifact import (
     IndexSourceEnum,
     KnowledgeArtifact,
     SourceTypeEnum,
-    load_knowledge_artifacts,
+    load_artifact,
+    load_artifacts,
 )
-from co_cli.memory.chunker import chunk_text
 from co_cli.memory.frontmatter import (
     artifact_to_frontmatter,
     parse_frontmatter,
+    render_artifact_file,
     render_frontmatter,
-    render_knowledge_file,
 )
 from co_cli.memory.similarity import find_similar_artifacts, is_content_superset
+from co_cli.memory.text_chunker import chunk_text
 
 if TYPE_CHECKING:
     from co_cli.memory.memory_store import MemoryStore
+
+logger = logging.getLogger(__name__)
 
 _LINE_PREFIX_RE = re.compile(r"(?:^|\n)\d+→ ")
 _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
@@ -152,28 +156,33 @@ def save_artifact(
         existing_path = _find_article_by_url(knowledge_dir, source_url, memory_store)
 
         if existing_path is not None:
-            raw = existing_path.read_text(encoding="utf-8")
-            frontmatter, _ = parse_frontmatter(raw)
-            artifact_id = str(frontmatter.get("id") or "")
-            created = frontmatter.get("created") or datetime.now(UTC).isoformat()
+            try:
+                existing = load_artifact(existing_path)
+            except (ValueError, OSError) as exc:
+                logger.warning(
+                    "Cannot load existing article at %s: %s — creating new", existing_path, exc
+                )
+                existing = None
+
+        if existing_path is not None and existing is not None:
             artifact = KnowledgeArtifact(
-                id=artifact_id,
+                id=existing.id,
                 path=existing_path,
                 artifact_kind=ArtifactKindEnum.ARTICLE.value,
-                title=title or frontmatter.get("title", existing_path.stem),
+                title=title or existing.title or existing_path.stem,
                 content=content,
-                created=created,
+                created=existing.created,
                 updated=datetime.now(UTC).isoformat(),
-                related=list(frontmatter.get("related") or []),
+                related=list(existing.related),
                 source_type=SourceTypeEnum.WEB_FETCH.value,
                 source_ref=source_url,
                 decay_protected=True,
             )
-            markdown_content = render_knowledge_file(artifact)
+            markdown_content = render_artifact_file(artifact)
             atomic_write(existing_path, markdown_content)
             return SaveResult(
                 path=existing_path,
-                artifact_id=artifact_id,
+                artifact_id=existing.id,
                 action="merged",
                 content=content,
                 frontmatter_dict=artifact_to_frontmatter(artifact),
@@ -196,7 +205,7 @@ def save_artifact(
             source_ref=source_url,
             decay_protected=True,
         )
-        markdown_content = render_knowledge_file(artifact)
+        markdown_content = render_artifact_file(artifact)
         atomic_write(file_path, markdown_content)
         return SaveResult(
             path=file_path,
@@ -210,7 +219,7 @@ def save_artifact(
 
     if consolidation_enabled:
         threshold = consolidation_similarity_threshold
-        existing = load_knowledge_artifacts(
+        existing = load_artifacts(
             knowledge_dir,
             artifact_kinds=[artifact_kind] if artifact_kind is not None else None,
         )
@@ -264,7 +273,7 @@ def save_artifact(
         source_type=source_type,
         decay_protected=decay_protected,
     )
-    markdown_content = render_knowledge_file(artifact)
+    markdown_content = render_artifact_file(artifact)
     atomic_write(file_path, markdown_content)
     return SaveResult(
         path=file_path,

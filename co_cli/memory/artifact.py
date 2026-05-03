@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -82,7 +83,7 @@ def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> Knowle
     )
 
 
-def load_knowledge_artifact(path: Path) -> KnowledgeArtifact:
+def load_artifact(path: Path) -> KnowledgeArtifact:
     """Load a single .md file as a KnowledgeArtifact.
 
     Requires ``kind: knowledge`` frontmatter with ``id`` and ``created`` set.
@@ -99,7 +100,7 @@ def load_knowledge_artifact(path: Path) -> KnowledgeArtifact:
     return _coerce_fields(frontmatter, body, path)
 
 
-def load_knowledge_artifacts(
+def load_artifacts(
     knowledge_dir: Path,
     *,
     artifact_kinds: list[str] | None = None,
@@ -115,7 +116,7 @@ def load_knowledge_artifacts(
     artifacts: list[KnowledgeArtifact] = []
     for path in knowledge_dir.glob("*.md"):
         try:
-            artifact = load_knowledge_artifact(path)
+            artifact = load_artifact(path)
         except Exception as exc:
             logger.warning("Failed to load %s: %s", path, exc)
             continue
@@ -123,3 +124,30 @@ def load_knowledge_artifacts(
             continue
         artifacts.append(artifact)
     return artifacts
+
+
+def filter_artifacts(
+    entries: list[KnowledgeArtifact], filters: dict[str, Any]
+) -> list[KnowledgeArtifact]:
+    """Apply older_than_days filter to a loaded artifact list.
+
+    ``kind`` is applied upstream via ``load_artifacts(artifact_kinds=...)``
+    and is not re-applied here.
+    """
+    result = entries
+    if "older_than_days" in filters:
+        cutoff_days = filters["older_than_days"]
+        now = datetime.now(UTC)
+        result = [
+            m
+            for m in result
+            if (now - datetime.fromisoformat(m.created.replace("Z", "+00:00"))).days > cutoff_days
+        ]
+    return result
+
+
+def format_artifact_row(m: KnowledgeArtifact) -> str:
+    id_prefix = m.id[:8]
+    created = m.created[:10]
+    snippet = m.content[:80]
+    return f"{id_prefix}  {created}  [{m.artifact_kind}]  {snippet}"

@@ -5,9 +5,9 @@ from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.tools._shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.files.helpers import _enforce_workspace_boundary
+from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
 logger = logging.getLogger(__name__)

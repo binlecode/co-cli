@@ -10,7 +10,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.memory.artifact import load_knowledge_artifacts
+from co_cli.memory.artifact import load_artifacts
 from co_cli.memory.session_browser import list_sessions
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.memory.read import grep_recall
@@ -64,7 +64,7 @@ def _list_artifacts(
         results = ctx.deps.memory_store.list_artifacts(kinds, limit)
         span.set_attribute("memory.artifacts.count", len(results))
         return results
-    artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
+    artifacts = load_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
     artifacts.sort(key=lambda a: a.created, reverse=True)
     page = artifacts[:limit]
     span.set_attribute("memory.artifacts.count", len(page))
@@ -111,7 +111,7 @@ def _search_artifacts(
             ]
         except Exception as e:
             logger.warning("Artifacts FTS search failed, falling back to grep: %s", e)
-    artifacts = load_knowledge_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
+    artifacts = load_artifacts(ctx.deps.knowledge_dir, artifact_kinds=kinds)
     matches = grep_recall(artifacts, query, limit)
     return [
         {
