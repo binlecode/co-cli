@@ -9,7 +9,7 @@ Personality is assembled from these sources in this order:
 
 Character memories (``souls/{role}/memories/*.md``) are NOT loaded here. They are
 surfaced on demand via the canon channel in ``memory_search`` (see
-``co_cli/tools/memory/_canon_recall.py``).
+``co_cli/tools/memory/recall.py``).
 
 Each role is fully self-contained under ``souls/{role}/``. Adding a role requires
 only a new directory with the required files — no Python changes.

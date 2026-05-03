@@ -99,8 +99,26 @@ async def test_summarize_messages_from_scratch_returns_structured_text():
 async def test_summarize_messages_iterative_incorporates_new_turns():
     """Iterative summarizer must produce output that incorporates both prior summary and new turns."""
     prior_summary = (
-        "## Active Task\nUser asked: 'Write a function that reverses a string in Python.'\n"
-        "## Completed Actions\n1. WRITE reverse_string() — slice-based reversal"
+        "## Active Task\n"
+        "User asked: 'Write a function that reverses a string in Python.'\n\n"
+        "## Goal\n"
+        "Implement a string reversal utility in Python.\n\n"
+        "## Key Decisions\n"
+        "Used slice-based reversal (`[::-1]`) for simplicity over explicit loop.\n\n"
+        "## Errors & Fixes\n"
+        "None.\n\n"
+        "## Completed Actions\n"
+        "1. WRITE reverse_string.py — added reverse_string() with slice reversal [tool: file_write]\n\n"
+        "## In Progress\n"
+        "None.\n\n"
+        "## Remaining Work\n"
+        "Add tests for reverse_string().\n\n"
+        "## Working Set\n"
+        "reverse_string.py\n\n"
+        "## Next Step\n"
+        "Write unit tests. Verbatim: 'Write a function that reverses a string in Python.'\n\n"
+        "## Critical Context\n"
+        "None."
     )
     new_messages = [
         ModelRequest(parts=[UserPromptPart(content="Now add a test for it.")]),

@@ -12,6 +12,7 @@ from opentelemetry import trace
 if TYPE_CHECKING:
     from co_cli.memory.memory_store import MemoryStore
 
+import co_cli.personality
 from co_cli.config.core import Settings, get_settings
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display.core import TerminalFrontend
@@ -190,6 +191,27 @@ def _sync_memory_store(
     return store
 
 
+def _sync_canon_store(
+    store: MemoryStore | None,
+    config: Settings,
+    frontend: TerminalFrontend,
+) -> None:
+    """Index canon scene files into the unified FTS pipeline under source='canon'.
+
+    No-ops when store is None (grep backend) or personality is not set.
+    """
+    if store is None or not config.personality:
+        return
+    souls_dir = (Path(co_cli.personality.__file__).parent / "prompts" / "souls").resolve()
+    canon_dir = souls_dir / config.personality / "memories"
+    try:
+        count = store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)
+        logger.debug("Canon synced — %d file(s) for role=%s", count, config.personality)
+    except Exception as exc:
+        logger.warning("Canon store sync failed: %s", exc)
+        frontend.on_status(f"  Canon sync failed — {exc}")
+
+
 async def create_deps(
     frontend: TerminalFrontend,
     stack: AsyncExitStack,
@@ -288,6 +310,9 @@ async def create_deps(
         frontend,
         knowledge_dir=paths["knowledge_dir"],
     )
+
+    # Step 7b: index canon scenes into the unified FTS pipeline
+    _sync_canon_store(memory_store, config, frontend)
 
     # Step 8: assemble deps
     runtime = CoRuntimeState()

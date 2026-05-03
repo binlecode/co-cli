@@ -480,7 +480,7 @@ async def _file_patch_replace(
     )
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, retries=1)
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, approval=True, retries=1)
 async def file_write(
     ctx: RunContext[CoDeps],
     path: str,
@@ -529,7 +529,7 @@ async def file_write(
         )
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, retries=1)
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, approval=True, retries=1)
 async def file_patch(
     ctx: RunContext[CoDeps],
     mode: str = "replace",

@@ -77,36 +77,33 @@ def _parse_kv(tail: str) -> dict[str, str]:
 
 
 def _infer_flow(test_id: str) -> str:
-    """Derive a human-readable flow label from a test node ID."""
+    """Derive a human-readable flow label from a test node ID.
+
+    Test-name patterns take priority over module name so tool-calling sub-flows
+    get specific labels regardless of which file they live in. Everything else
+    falls back to the module name with the test_flow_ / test_ prefix stripped.
+    """
     parts = test_id.split("::")
     name = parts[-1].lower() if parts else test_id.lower()
-    param_m = re.search(r"\[([^\]]+)\]", name)
-    param = param_m.group(1).lower() if param_m else ""
     base = re.sub(r"\[.*\]", "", name)
 
-    if "approval" in base:
-        return "approval"
-    if ("extraction" in base and "memory" in base) or "distiller" in base:
-        return "memory extraction"
-    if "circuit_breaker" in base or re.search(r"\bcompact\b", base):
-        return "history compaction"
-    if "dream_cycle" in base:
-        return "knowledge dream cycle"
-    if "dream_mine" in base:
-        return "knowledge dream mining"
-    if "dream_merge" in base:
-        return "knowledge dream merge"
-    if "tool_selection" in base or "arg_extraction" in base:
-        for keyword, label in (("shell", "shell"), ("web", "web"), ("knowledge", "knowledge")):
-            if keyword in param:
+    # Tool calling sub-flows — ordered most-specific first
+    if "refusal" in base or "no_tool" in base:
+        return "tool calling: no-tool"
+    if "denied_tool" in base:
+        return "tool calling: denied"
+    if "auto_approval" in base:
+        return "tool calling: approval"
+    if "tool_selection" in base:
+        for keyword, label in (("shell", "shell"), ("web", "web"), ("memory", "memory")):
+            if keyword in base:
                 return f"tool calling: {label}"
         return "tool calling"
-    if "no_tool" in base or "refusal" in base:
-        return "tool calling: no-tool"
-    if "intent_routing" in base:
-        return "intent routing"
+
+    # Module-level label: strip test_flow_ / test_ prefix and .py suffix
     mod = parts[0].split("/")[-1] if parts else ""
-    return re.sub(r"^test_|\.py$", "", mod).replace("_", " ") or "unknown"
+    label = re.sub(r"^test_flow_|^test_|\.py$", "", mod).replace("_", " ")
+    return label or "unknown"
 
 
 def _parse_log(log_path: Path) -> tuple[list[_LogSpan], float, float]:

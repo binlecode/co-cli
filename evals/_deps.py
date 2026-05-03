@@ -1,8 +1,6 @@
-"""Eval session setup: CoDeps factory, model detection, model settings."""
+"""Eval session setup: CoDeps factory and model detection."""
 
 from typing import Any
-
-from pydantic_ai.settings import ModelSettings
 
 from co_cli.config.core import get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
@@ -62,45 +60,3 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     if knowledge_dir is not None:
         deps.knowledge_dir = knowledge_dir
     return deps
-
-
-def make_eval_settings(
-    model_settings: ModelSettings | None = None,
-    *,
-    max_tokens: int | None = None,
-) -> ModelSettings:
-    """Build eval settings from real model configuration.
-
-    All values are passed through as-is from resolved model settings so evals run
-    against the same parameters as live sessions. Both providers now supply
-    model_settings via build_agent():
-      - Ollama: temperature from model defaults (e.g. 0.6 for qwen3). Never override
-        to 0 — thinking models produce degenerate loops at temperature=0.
-      - Gemini: temperature from model defaults (typically 1.0 for thinking models).
-        Google's guidance: setting below 1.0 causes looping in thinking models.
-
-    Falls back to temperature=0 only when no model settings exist at all
-    (e.g. unit tests / unknown providers).
-
-    Args:
-        model_settings: Settings from build_agent(), or None for fallback.
-        max_tokens: Optional override for max_tokens. Omit to use the resolved default.
-    """
-    if model_settings is None:
-        base: dict[str, Any] = {"temperature": 0}
-        if max_tokens is not None:
-            base["max_tokens"] = max_tokens
-        return ModelSettings(**base)
-
-    # ModelSettings is a TypedDict — plain dict at runtime, use .get() not getattr
-    base = {}
-    for key in ("temperature", "top_p", "max_tokens"):
-        val = model_settings.get(key)
-        if val is not None:
-            base[key] = val
-    extra_body = model_settings.get("extra_body")
-    if extra_body:
-        base["extra_body"] = extra_body
-    if max_tokens is not None:
-        base["max_tokens"] = max_tokens
-    return ModelSettings(**base)

@@ -34,6 +34,9 @@ from pydantic import BaseModel, field_validator
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.ollama import OllamaProvider
+from pydantic_ai.settings import ModelSettings
+
+from co_cli.config.core import load_config
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parent
@@ -49,26 +52,20 @@ _CONTENT_FLOWS = frozenset(
         "tool calling",
         "tool calling: shell",
         "tool calling: web",
-        "tool calling: knowledge",
+        "tool calling: memory",
         "tool calling: no-tool",
-        "history compaction",
-        "knowledge dream cycle",
-        "knowledge dream mining",
-        "knowledge dream merge",
-        "intent routing",
+        "tool calling: denied",
+        "tool calling: approval",
+        "compaction summarization",
+        "compaction proactive",
+        "compaction recovery",
+        "llm call",
     }
 )
 
 # Flows where thinking blocks are expected — absence is a warning signal.
-_THINKING_FLOWS = frozenset(
-    {
-        "llm thinking",
-        "knowledge dream cycle",
-        "knowledge dream mining",
-        "knowledge dream merge",
-        "history compaction",
-    }
-)
+# Empty: current setup uses qwen3.5:35b-a3b-agentic which does not emit thinking blocks.
+_THINKING_FLOWS: frozenset[str] = frozenset()
 
 
 def _has_thinking(span: FlowChatSpan) -> bool:
@@ -204,7 +201,11 @@ def _tool_ctx(tool_defs: str | None) -> str:
 
 
 async def _judge_span(
-    span: FlowChatSpan, model: Any, idx: int = 0, total: int = 0
+    span: FlowChatSpan,
+    model: Any,
+    model_settings: ModelSettings | None = None,
+    idx: int = 0,
+    total: int = 0,
 ) -> JudgeResult | None:
     """Return JudgeResult or None. None when span lacks output_msgs or finish_reason."""
     label = f"[{idx}/{total}]" if total else ""
@@ -236,15 +237,16 @@ async def _judge_span(
     )
 
     t0 = time.perf_counter()
-    result = await _audit_judge.run(prompt, model=model)
+    result = await _audit_judge.run(prompt, model=model, model_settings=model_settings)
     elapsed = time.perf_counter() - t0
 
     jr = result.output
-    # Enforce score nullity by finish reason — local models sometimes ignore the rule.
+    # Enforce score nullity — local models sometimes ignore the rubric rules.
     jr = jr.model_copy(
         update={
             "tool_score": jr.tool_score if "tool_call" in span.finish_reasons else None,
             "response_score": jr.response_score if "stop" in span.finish_reasons else None,
+            "thinking_score": jr.thinking_score if thinking_parts else None,
         }
     )
 
@@ -472,34 +474,19 @@ def _section_per_flow_thinking(spans: list[FlowChatSpan]) -> str:
 async def _judge_all_spans(
     spans: list[FlowChatSpan],
     model: Any,
+    model_settings: ModelSettings | None = None,
 ) -> list[tuple[FlowChatSpan, JudgeResult | None]]:
     total = len(spans)
     t_wall = time.perf_counter()
 
     async def _call(idx: int, span: FlowChatSpan) -> tuple[FlowChatSpan, JudgeResult | None]:
-        jr = await _judge_span(span, model, idx=idx, total=total)
+        jr = await _judge_span(span, model, model_settings, idx=idx, total=total)
         return span, jr
 
     pairs = await asyncio.gather(*[_call(i, s) for i, s in enumerate(spans, 1)])
     elapsed = time.perf_counter() - t_wall
     print(f"  done — {elapsed:.1f}s wall time for {total} spans")
     return list(pairs)
-
-
-def _resolve_ollama_host(cli_host: str | None) -> str:
-    if cli_host:
-        return cli_host
-    settings_path = Path.home() / ".co-cli" / "settings.json"
-    if settings_path.exists():
-        try:
-            with settings_path.open() as f:
-                settings = json.load(f)
-            host = settings.get("llm", {}).get("host")
-            if isinstance(host, str) and host:
-                return host
-        except (json.JSONDecodeError, OSError):
-            pass
-    return "http://localhost:11434"
 
 
 def _eval_section(eval_pairs: list[tuple[FlowChatSpan, JudgeResult | None]]) -> str:
@@ -830,13 +817,15 @@ def main() -> None:
 
     out_path = out_dir / f"REPORT-llm-audit-eval-{now}.md"
     report = _generate_report(spans, log_path, db_path, len(db_spans), matched_count)
-    ollama_host = _resolve_ollama_host(args.ollama_host)
+    config = load_config()
+    ollama_host = args.ollama_host or config.llm.host
+    noreason_settings = config.llm.noreason_model_settings()
     print(f"Evaluating {len(spans)} spans via {args.judge_model} at {ollama_host}...")
     judge_model = OpenAIChatModel(
         args.judge_model,
         provider=OllamaProvider(base_url=f"{ollama_host}/v1"),
     )
-    eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model))
+    eval_pairs = asyncio.run(_judge_all_spans(spans, judge_model, noreason_settings))
     report += "\n" + _eval_section(eval_pairs)
     out_path.write_text(report)
 

@@ -46,6 +46,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ _discover_knowledge_backend(config, frontend, degradations)
 │  ├─ _sync_memory_store(store, config, frontend, knowledge_dir)
 │  │      indexes every .md in knowledge_dir under source="knowledge"; on failure closes store and falls back to grep
+│  ├─ _sync_canon_store(store, config, frontend)
+│  │      indexes souls/{role}/memories/*.md under source="canon" (no_chunk=True); no-op when store=None or personality empty
 │  └─ return CoDeps(...)
 │
 ├─ deps.session.reasoning_display = CLI-selected mode
@@ -53,7 +55,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 │
 ├─ restore_session(deps, frontend) → current_session_path
-├─ init_session_store(deps, current_session_path, frontend)
+├─ init_session_index(deps, current_session_path, frontend)
 ├─ frontend.on_status("  {skill_count} skill(s) loaded")
 ├─ [if restored path exists] console.print("Previous session available — /resume to continue")
 ├─ display_welcome_banner(deps)
@@ -140,6 +142,10 @@ When degradation happens, bootstrap records the reason in `deps.degradations`. D
 
 If a `MemoryStore` exists, bootstrap syncs every `.md` file under `knowledge_dir` into the index under a single `source="knowledge"` label — extracted facts and articles alike are indexed into `docs` + `chunks_fts` (and `chunks_vec` in hybrid mode). Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and disables indexed retrieval for the session; the CLI continues without aborting startup.
 
+### Step 9b. Sync canon scenes
+
+If a `MemoryStore` and a `config.personality` exist, bootstrap calls `_sync_canon_store()` to index the active role's character memory files (`souls/{role}/memories/*.md`) into the FTS pipeline under `source='canon'`. Each file is stored as a single unchunked chunk (full body) so recall can return complete scenes. Hash-skip prevents re-indexing unchanged files. This step no-ops when `store is None` or `config.personality` is empty.
+
 ### Step 10. Assemble `CoDeps`
 
 After model setup, MCP discovery, skill loading, backend resolution, and sync, bootstrap creates `CoDeps`.
@@ -173,21 +179,21 @@ else:
 
 No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing memory/session lifecycle are owned by [memory.md](memory.md).
 
-### Step 12b. Initialise the memory index
+### Step 12b. Initialise the session index
 
-After `restore_session()` returns, `init_session_store()` opens or creates the user-global FTS5 session index (`~/.co-cli/session-index.db`) and syncs past sessions into it. The current session path is excluded from sync.
+After `restore_session()` returns, `init_session_index()` syncs past sessions into the unified `MemoryStore`. The current session path is excluded from sync.
 
 ```text
-store = SessionStore(db_path=sessions_dir.parent / "session-index.db")
-store.sync_sessions(sessions_dir, exclude=current_session_path)
-deps.memory_index = store
+if deps.memory_store is None: print status, return
+remove legacy session-index.db if present  # superseded by unified chunks pipeline
+deps.memory_store.sync_sessions(sessions_dir, exclude=current_session_path)
 
 on failure:
     log warning
-    deps.memory_index = None  # graceful degradation; memory_search returns empty
+    print status  # memory_search returns empty for sessions channel
 ```
 
-The session index is derived and rebuildable: deleting `~/.co-cli/session-index.db` and restarting rebuilds cleanly from `*.jsonl` files. Change detection is size-based (append-only transcripts). (The knowledge index at `~/.co-cli/co-cli-search.db` is separate — owned by Step 8/9 and rebuilt from `knowledge_dir/*.md`.)
+Session data is derived and rebuildable: restarting re-syncs from `*.jsonl` files. The unified DB at `~/.co-cli/co-cli-search.db` holds both knowledge artifacts and session transcripts under separate `source=` labels.
 
 ### Step 13. Print startup status and enter the REPL boundary
 
@@ -242,5 +248,4 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
 | `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/memory/memory_store.py` | Implements the `MemoryStore` used when bootstrap enables indexed retrieval |
-| `co_cli/memory/session_store.py` | `SessionStore` — FTS5 session index opened and synced during bootstrap |
 | `co_cli/memory/indexer.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |

@@ -277,7 +277,8 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
         terminal = item.config.pluginmanager.get_plugin("terminalreporter")
         if terminal is not None:
             terminal.write_line(_summary_line(item.nodeid, duration_s, outcome, spans))
-            if outcome != "passed" or duration_s * 1000 >= _SLOW_MS:
+            has_llm_calls = any(r.name.startswith("chat ") for r in spans)
+            if outcome != "passed" or duration_s * 1000 >= _SLOW_MS or has_llm_calls:
                 for row in spans[:_DETAIL_LIMIT]:
                     terminal.write_line(f"[pytest-harness]   {_span_detail(row)}")
                 hidden = len(spans) - _DETAIL_LIMIT

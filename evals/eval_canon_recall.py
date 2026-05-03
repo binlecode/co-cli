@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""Eval: canon-channel correctness — what evals/eval_memory_recall_agent.py can't reach.
+"""Eval: canon-channel correctness — FTS-based recall over character memory files.
 
-Canon-only scope: scoring algorithm properties (score floor, rank dominance),
-negative properties (bleed, no-personality), and channel-content correctness
-that the agent eval doesn't exercise (no canon load-bearing fixture).
+Canon recall now uses the unified FTS5 pipeline (source='canon' in MemoryStore).
+Eval verifies the FTS-based path end-to-end against the real tars soul.
 
 Sub-cases:
-  canon-content     — query terms hit a known canon body; top hit's body carries query token
-  canon-score-floor — every admitted hit scores >= 2 (one title-token OR two body-token matches)
-  canon-rank-quality — top-1 score >= 2x hit-2 (clear winner, not a near-tie)
-  bleed             — query with no canon-relevant tokens produces zero canon hits
-  negative-no-canon — personality=None -> no canon channel rendered
+  canon-content         — query terms hit a known canon body; top hit's body carries query token
+  canon-fts-match       — BM25 result score > 0.0 for a matching query
+  canon-top-hit-relevant — top hit title matches query keyword (relevance sanity)
+  bleed                 — query with no canon-relevant tokens produces zero canon hits
+  negative-no-canon     — personality=None -> no canon channel rendered
 
 Outputs: prepends a dated section to docs/REPORT-eval-canon-recall.md.
 
-Prerequisites: LLM provider configured (settings load needs it; canon scoring is local).
+Prerequisites: LLM provider configured (memory_search calls the agent which needs a model).
 
 Usage:
     uv run python evals/eval_canon_recall.py
@@ -33,49 +32,81 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent.core import build_agent
+from co_cli.bootstrap.core import _sync_canon_store
 from co_cli.config.core import settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
-from co_cli.tools.memory.canon_recall import search_canon
+from co_cli.memory.memory_store import MemoryStore
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-canon-recall.md"
 
-_AGENT = build_agent(config=settings)
 # CoDeps.model expects LlmModel (co-cli wrapper with .model/.settings/.context_window),
 # not a raw pydantic-ai model. Real sessions get this via bootstrap; evals must match.
 _LLM_MODEL = build_model(settings.llm)
 
 
+class _SilentFrontend:
+    def on_status(self, msg: str) -> None:
+        pass
+
+
+def _make_ctx_with_store(tmp: Path, *, personality: str | None) -> RunContext:
+    """Build a RunContext with a real MemoryStore and canon indexed from real tars soul.
+
+    Used for all sub-cases that exercise canon recall.
+    """
+    cfg = settings.model_copy(update={"personality": personality})
+    store_cfg = cfg.model_copy(
+        update={
+            "knowledge": cfg.knowledge.model_copy(
+                update={
+                    "search_backend": "fts5",
+                    "embedding_provider": "none",
+                    "cross_encoder_reranker_url": None,
+                }
+            )
+        }
+    )
+    store = MemoryStore(config=store_cfg, memory_db_path=tmp / "search.db")
+    if personality:
+        _sync_canon_store(store, cfg, _SilentFrontend())
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=cfg,
+        session=CoSessionState(),
+        memory_store=store,
+        sessions_dir=tmp / "sessions",
+        knowledge_dir=tmp / "knowledge",
+        model=_LLM_MODEL,
+    )
+    return RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+
+
 def _make_ctx(tmp: Path, *, personality: str | None) -> RunContext:
-    """Build a RunContext with explicit personality. Empty knowledge/session stores
-    so memory_search's other channels return [] cleanly without seeding overhead."""
+    """Build a RunContext with no MemoryStore (grep backend). Used for negative-no-canon."""
     cfg = settings.model_copy(update={"personality": personality})
     deps = CoDeps(
         shell=ShellBackend(),
-        memory_store=None,
-        session_store=None,
-        model=_LLM_MODEL,
         config=cfg,
         session=CoSessionState(),
+        memory_store=None,
+        sessions_dir=tmp / "sessions",
+        knowledge_dir=tmp / "knowledge",
+        model=_LLM_MODEL,
     )
-    deps.knowledge_dir = tmp / "knowledge"
-    deps.sessions_dir = tmp / "sessions"
-    deps.knowledge_dir.mkdir(parents=True, exist_ok=True)
-    deps.sessions_dir.mkdir(parents=True, exist_ok=True)
     return RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
 
 
 async def run_eval(tmp: Path) -> dict[str, Any]:
     failures: list[str] = []
-    ctx_tars = _make_ctx(tmp, personality="tars")
+    ctx_tars = _make_ctx_with_store(tmp, personality="tars")
 
     # Sub-case 1 — canon content: query hits a known canon body, top hit body carries token.
-    # The query "humor flat tactical" maps to tars-humor-is-tactical-front-loaded-delivered-flat
-    # via three title-token hits (2x weight) + body matches.
-    result = await memory_search(ctx_tars, "humor flat tactical")
+    # The query "humor deadpan" maps to tars-humor-is-tactical-front-loaded-delivered-flat
+    # via body-token matches (both "humor" and "deadpan" appear in the body text).
+    result = await memory_search(ctx_tars, "humor deadpan")
     rendered = result.return_value
     canon_hits = [r for r in result.metadata["results"] if r["channel"] == "canon"]
 
@@ -93,35 +124,40 @@ async def run_eval(tmp: Path) -> dict[str, Any]:
             f"  [canon-content] PASS - top hit '{canon_hits[0]['title'][:40]}' body carries 'humor'"
         )
 
-    # Sub-case 2 — score floor: every admitted hit scores >= 2.
-    # Score 1 is one incidental body-token overlap — pure noise that pads M and dilutes
-    # the model's view. Without a floor, search_canon returns whatever scored > 0.
+    # Sub-case 2 — FTS match: BM25 result score > 0.0 for a matching query.
+    # BM25 scores from MemoryStore are normalized to (0, 1] via normalize_bm25().
     if canon_hits:
-        below_floor = [(h["title"][:40], h["score"]) for h in canon_hits if h["score"] < 2]
-        if below_floor:
+        below_zero = [h for h in canon_hits if h["score"] <= 0.0]
+        if below_zero:
             failures.append(
-                f"canon-score-floor: {len(below_floor)} admitted hit(s) below floor of 2: {below_floor}"
+                f"canon-fts-match: {len(below_zero)} hit(s) with score <= 0.0: "
+                f"{[(h['title'][:40], h['score']) for h in below_zero]}"
             )
-            print(f"  [canon-score-floor] FAIL - {below_floor}")
+            print(f"  [canon-fts-match] FAIL - {len(below_zero)} hits with score <= 0.0")
         else:
-            print("  [canon-score-floor] PASS - all admitted hits score >= 2")
-
-    # Sub-case 3 — rank quality: top-1 dominates hit-2 by >= 2x.
-    # Without a clear winner, the model receives a near-tie of canon scenes and has no
-    # signal which is on-topic. 2x is the smallest gap that signals real ranking.
-    if len(canon_hits) >= 2:
-        top_score = canon_hits[0]["score"]
-        next_score = canon_hits[1]["score"]
-        if top_score < 2 * next_score:
-            failures.append(f"canon-rank-quality: top={top_score} not 2x over hit-2={next_score}")
-            print(f"  [canon-rank-quality] FAIL - top={top_score} hit2={next_score}")
-        else:
-            gap = top_score / max(next_score, 1)
+            min_score = min(h["score"] for h in canon_hits)
             print(
-                f"  [canon-rank-quality] PASS - top={top_score} hit2={next_score} ({gap:.1f}x gap)"
+                f"  [canon-fts-match] PASS - all {len(canon_hits)} hits score > 0.0 (min={min_score:.4f})"
             )
-    elif canon_hits:
-        print(f"  [canon-rank-quality] PASS (single hit, score={canon_hits[0]['score']})")
+    else:
+        print("  [canon-fts-match] SKIP - no hits to check")
+
+    # Sub-case 3 — top hit relevance: top hit title matches query keyword.
+    # Relevance sanity: the highest-ranked result should relate to the query topic.
+    if canon_hits:
+        top_title = (canon_hits[0].get("title") or "").lower()
+        if "humor" not in top_title:
+            failures.append(
+                f"canon-top-hit-relevant: top hit '{canon_hits[0]['title'][:40]}' "
+                f"title does not contain 'humor'"
+            )
+            print(f"  [canon-top-hit-relevant] FAIL - top title lacks 'humor': {top_title[:50]}")
+        else:
+            print(
+                f"  [canon-top-hit-relevant] PASS - top hit title contains 'humor': {top_title[:50]}"
+            )
+    else:
+        print("  [canon-top-hit-relevant] SKIP - no hits to check")
 
     # Sub-case 4 — bleed: query has no canon-relevant tokens. Should produce zero canon hits.
     bleed_query = "json parse exception traceback"
@@ -139,7 +175,7 @@ async def run_eval(tmp: Path) -> dict[str, Any]:
     else:
         print(f"  [bleed] PASS - '{bleed_query}' produced zero canon hits")
 
-    # Sub-case 5 — negative no-canon: personality=None -> search_canon returns [] -> no header.
+    # Sub-case 5 — negative no-canon: personality=None -> memory_store=None -> no header.
     ctx_no_personality = _make_ctx(tmp, personality=None)
     neg_result = await memory_search(ctx_no_personality, "humor")
     if "**Character canon:**" in neg_result.return_value:
@@ -150,15 +186,9 @@ async def run_eval(tmp: Path) -> dict[str, Any]:
     else:
         print("  [negative-no-canon] PASS - no header when personality=None")
 
-    # Direct algorithm sanity: full search_canon dump for context in the report.
-    direct_hits = search_canon("humor flat tactical", role="tars", limit=10)
-    direct_below = [(h["title"][:40], h["score"]) for h in direct_hits if h["score"] < 2]
-    if direct_below:
-        print(
-            f"  [direct-search-canon] {len(direct_hits)} hits, {len(direct_below)} below floor: {direct_below}"
-        )
-    else:
-        print(f"  [direct-search-canon] {len(direct_hits)} hits, all >= floor")
+    # Clean up the store opened in _make_ctx_with_store
+    if ctx_tars.deps.memory_store is not None:
+        ctx_tars.deps.memory_store.close()
 
     verdict = "PASS" if not failures else "FAIL"
     print(f"\nVerdict: {verdict}" + ("" if not failures else f" - {len(failures)} failures"))

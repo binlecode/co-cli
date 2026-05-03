@@ -999,6 +999,7 @@ class MemoryStore:
         source: str,
         directory: Path,
         glob: str = "**/*.md",
+        no_chunk: bool = False,
     ) -> int:
         """Incrementally index a directory of markdown files.
 
@@ -1007,9 +1008,12 @@ class MemoryStore:
         Every indexed file is also chunked into ``chunks_fts``.
 
         Args:
-            source: Source label ('knowledge', 'obsidian', 'drive').
+            source: Source label ('knowledge', 'obsidian', 'drive', 'canon').
             directory: Directory to scan.
             glob: Glob pattern for files (default '**/*.md', recursive).
+            no_chunk: When True, store full body as a single Chunk(index=0) — no chunking.
+                Canon uses this flag; rebuild() does not forward it so canon must be
+                re-populated via _sync_canon_store(), not rebuild().
 
         Returns:
             Number of files indexed (new or changed).
@@ -1017,6 +1021,7 @@ class MemoryStore:
         if not directory.exists():
             return 0
 
+        from co_cli.memory.chunker import Chunk
         from co_cli.memory.chunker import chunk_text as _chunk_text
 
         current_paths: set[str] = set()
@@ -1053,11 +1058,22 @@ class MemoryStore:
                     if frontmatter.get("id") is not None
                     else None,
                 )
-                text_chunks = _chunk_text(
-                    body.strip(),
-                    chunk_size=self._chunk_size,
-                    overlap=self._chunk_overlap,
-                )
+                body_stripped = body.strip()
+                if no_chunk:
+                    text_chunks = [
+                        Chunk(
+                            index=0,
+                            content=body_stripped,
+                            start_line=0,
+                            end_line=max(0, len(body_stripped.splitlines()) - 1),
+                        )
+                    ]
+                else:
+                    text_chunks = _chunk_text(
+                        body_stripped,
+                        chunk_size=self._chunk_size,
+                        overlap=self._chunk_overlap,
+                    )
                 self.index_chunks(source, path_str, text_chunks)
                 indexed += 1
             except Exception as e:
@@ -1065,6 +1081,14 @@ class MemoryStore:
 
         self.remove_stale(source, current_paths, directory=directory)
         return indexed
+
+    def get_chunk_content(self, source: str, doc_path: str, chunk_index: int) -> str | None:
+        """Return the stored content for a specific chunk, or None if not found."""
+        row = self._conn.execute(
+            "SELECT content FROM chunks WHERE source=? AND doc_path=? AND chunk_index=?",
+            (source, doc_path, chunk_index),
+        ).fetchone()
+        return row["content"] if row else None
 
     def index_session(self, session_path: Path) -> None:
         """Index a session JSONL into chunks/chunks_fts/chunks_vec.

@@ -10,9 +10,9 @@ Three-channel recall model. `memory_search()` dispatches all channels in sequenc
 | --- | --- | --- |
 | Sessions | `sessions/*.jsonl` → `co-cli-search.db` (`source='session'`) | BM25 chunk search → best chunk per unique session (dedup) → verbatim citations with JSONL line bounds; no LLM |
 | Knowledge | `knowledge/*.md` → `co-cli-search.db` (`source='knowledge'`) | FTS5 BM25 ± RRF vector merge → optional reranker → ranked structured rows; no LLM by default |
-| Canon | `souls/{role}/memories/*.md` (in-process scan) | Token-overlap scoring (title 2× weight) → ranked snippets; no FTS DB, no LLM |
+| Canon | `souls/{role}/memories/*.md` → `co-cli-search.db` (`source='canon'`) | FTS5 BM25 → full body inline (no snippet truncation); indexed at bootstrap; no LLM |
 
-`MemoryStore` is the shared search backend for sessions and knowledge artifacts. `memory_search()` in `co_cli/tools/memory/recall.py` dispatches all three channels.
+`MemoryStore` is the shared search backend for all three channels. `memory_search()` in `co_cli/tools/memory/recall.py` dispatches all three channels.
 
 ```mermaid
 flowchart TD
@@ -26,6 +26,7 @@ flowchart TD
 
     subgraph Knowledge["Knowledge Layer"]
         KDir["knowledge/*.md"]
+        CanonDir["souls/{role}/memories/*.md"]
         SearchDB["co-cli-search.db\n(chunks + FTS5 + optional vec)"]
     end
 
@@ -37,6 +38,7 @@ flowchart TD
     Sessions --> Dream
     Dream --> KDir
     KDir -->|"sync_dir() → source='knowledge'"| SearchDB
+    CanonDir -->|"sync_dir() → source='canon' (bootstrap)"| SearchDB
     SearchDB --> MemorySearch
 ```
 
@@ -205,11 +207,9 @@ Archive/restore: `archive_artifacts()` moves files to `knowledge_dir/_archive/` 
 
 Canon files (`souls/{role}/memories/*.md`) are package-shipped and read-only. They are intentionally excluded from static prompt injection — a scene either matches the moment or it doesn't, and static injection pays full token cost whether it lands or not. Canon is served on demand via `memory_search`.
 
-`search_canon()`:
-- No FTS DB — in-process token-overlap scoring
-- Title match weighted 2× relative to body
-- Supports YAML frontmatter via `parse_frontmatter()`
-- Returns up to `character_recall_limit` hits per `memory_search` call
+**Indexing (bootstrap-time):** `_sync_canon_store()` in `co_cli/bootstrap/core.py` runs after knowledge sync. It calls `store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)`. The `no_chunk=True` flag stores each file as a single `Chunk(index=0)` — no splitting — because canon scenes are small (<1KB) and must be returned whole. Hash-skip, stale eviction, and frontmatter parsing work identically to other sources. No-ops when `store is None` or `config.personality` is empty.
+
+**Recall:** `_search_canon_channel()` calls `store.search(query, sources=["canon"], limit=character_recall_limit)`, then fetches the full body with `store.get_chunk_content("canon", path, 0)` — direct `SELECT content FROM chunks` lookup. The FTS5 `snippet()` function is never used for canon; the stored full-body chunk is returned as-is. Returns `[]` when `memory_store is None` or `personality` is empty.
 
 Result shape: `{channel: "canon", role, title, body, score}` — full body inline, no follow-up needed.
 
@@ -232,8 +232,10 @@ memory_search(ctx, query, kinds, limit)             # tools/memory/recall.py
   │         └─ dedup to 3 unique sessions (_SESSIONS_CHANNEL_CAP); excludes current session
   │
   └─ _search_canon_channel(ctx, query)
-       └─ search_canon(query, role, limit)     # tools/memory/canon_recall.py
-            └─ token-overlap scoring over souls/{role}/memories/*.md
+       └─ [store available + personality set]
+            store.search(query, sources=['canon'], limit)     # FTS5 BM25
+            for each hit: store.get_chunk_content('canon', path, 0)  → full body
+       └─ [store unavailable or personality empty] → []
 
   └─ merge channels → format and return flat result list
 ```
@@ -318,8 +320,9 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/tools/memory/canon_recall.py` | `search_canon()` — token-overlap scoring over `souls/{role}/memories/*.md` |
-| `co_cli/memory/stopwords.py` | `STOPWORDS` frozenset — shared with `similarity.py` |
+| `co_cli/bootstrap/core.py` | `_sync_canon_store()` — indexes canon scenes into FTS at bootstrap |
+| `co_cli/memory/memory_store.py` | `sync_dir(no_chunk=True)`, `get_chunk_content()` — canon indexing and full-body fetch |
+| `co_cli/tools/memory/recall.py` | `_search_canon_channel()` — BM25 recall over `source='canon'` |
 | `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly |
 | `co_cli/agent/_instructions.py` | `current_time_prompt()` — per-turn date/time injection |
 
@@ -334,3 +337,6 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `grep_recall` returns artifact matched by title only | `tests/test_flow_memory_recall.py` |
 | `_list_artifacts` delegates to index when store is available | `tests/test_flow_memory_recall.py` |
 | `save_artifact` URL dedup uses O(1) index when `memory_store` set | `tests/test_flow_memory_write.py` |
+| `sync_dir(no_chunk=True)` stores one chunk per file; `get_chunk_content()` returns full body; hash-skip on rerun | `tests/test_flow_memory_store_nochunk.py` |
+| `_sync_canon_store()` indexes real canon files; no-ops on `store=None` / `personality=None` | `tests/test_flow_bootstrap_canon.py` |
+| `_search_canon_channel()` returns full body; returns `[]` on no store or no personality | `tests/test_flow_canon_recall.py` |

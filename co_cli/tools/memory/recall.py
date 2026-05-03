@@ -13,7 +13,6 @@ from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.memory.artifact import load_knowledge_artifacts
 from co_cli.memory.session_browser import list_sessions
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.memory.canon_recall import search_canon
 from co_cli.tools.memory.read import grep_recall
 from co_cli.tools.tool_io import tool_output
 
@@ -194,16 +193,37 @@ def _search_canon_channel(
     ctx: RunContext[CoDeps],
     query: str,
 ) -> list[dict]:
-    """Token-overlap search over the active role's character memory files.
+    """BM25 FTS search over the active role's canon scenes via MemoryStore.
 
-    Returns [] when no personality is configured or the query has no content tokens.
+    Returns [] when no personality is configured or memory_store is None.
     Canon channel has its own budget from config.knowledge.character_recall_limit.
     """
     role = ctx.deps.config.personality
-    if not role:
+    store = ctx.deps.memory_store
+    if not role or store is None:
         return []
     limit = ctx.deps.config.knowledge.character_recall_limit
-    return search_canon(query, role=role, limit=limit)
+    try:
+        results = store.search(query, sources=["canon"], limit=limit)
+    except Exception as e:
+        logger.warning("Canon FTS search failed: %s", e)
+        return []
+    hits: list[dict] = []
+    for r in results:
+        body = store.get_chunk_content("canon", r.path, 0)
+        if body is None:
+            logger.warning("canon hit missing chunk content: %s", r.path)
+            continue
+        hits.append(
+            {
+                "channel": "canon",
+                "role": role,
+                "title": r.title or Path(r.path).stem,
+                "body": body,
+                "score": r.score,
+            }
+        )
+    return hits
 
 
 def _format_search_display(query: str, all_results: list[dict]) -> str:
