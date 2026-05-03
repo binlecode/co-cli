@@ -42,10 +42,6 @@ from co_cli.tools.shell_backend import ShellBackend
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-canon-recall.md"
 
-# CoDeps.model expects LlmModel (co-cli wrapper with .model/.settings/.context_window),
-# not a raw pydantic-ai model. Real sessions get this via bootstrap; evals must match.
-_LLM_MODEL = build_model(settings.llm)
-
 
 class _SilentFrontend:
     def on_status(self, msg: str) -> None:
@@ -72,6 +68,7 @@ def _make_ctx_with_store(tmp: Path, *, personality: str | None) -> RunContext:
     store = MemoryStore(config=store_cfg, memory_db_path=tmp / "search.db")
     if personality:
         _sync_canon_store(store, cfg, _SilentFrontend())
+    llm_model = build_model(cfg.llm)
     deps = CoDeps(
         shell=ShellBackend(),
         config=cfg,
@@ -79,14 +76,15 @@ def _make_ctx_with_store(tmp: Path, *, personality: str | None) -> RunContext:
         memory_store=store,
         sessions_dir=tmp / "sessions",
         knowledge_dir=tmp / "knowledge",
-        model=_LLM_MODEL,
+        model=llm_model,
     )
-    return RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+    return RunContext(deps=deps, model=llm_model.model, usage=RunUsage())
 
 
 def _make_ctx(tmp: Path, *, personality: str | None) -> RunContext:
     """Build a RunContext with no MemoryStore (grep backend). Used for negative-no-canon."""
     cfg = settings.model_copy(update={"personality": personality})
+    llm_model = build_model(cfg.llm)
     deps = CoDeps(
         shell=ShellBackend(),
         config=cfg,
@@ -94,9 +92,9 @@ def _make_ctx(tmp: Path, *, personality: str | None) -> RunContext:
         memory_store=None,
         sessions_dir=tmp / "sessions",
         knowledge_dir=tmp / "knowledge",
-        model=_LLM_MODEL,
+        model=llm_model,
     )
-    return RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+    return RunContext(deps=deps, model=llm_model.model, usage=RunUsage())
 
 
 async def run_eval(tmp: Path) -> dict[str, Any]:

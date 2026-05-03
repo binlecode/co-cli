@@ -37,22 +37,9 @@ from pydantic_ai.messages import (
 
 from co_cli.agent.core import build_agent
 from co_cli.bootstrap.core import create_deps
-from co_cli.config.core import settings
 from co_cli.context.compaction import SUMMARY_MARKER_PREFIX
 from co_cli.context.orchestrate import run_turn
 from co_cli.display.headless import HeadlessFrontend
-
-# ---------------------------------------------------------------------------
-# Config — real settings with eval-local overrides
-# ---------------------------------------------------------------------------
-
-_EVAL_CONFIG = settings.model_copy(
-    update={
-        "mcp_servers": {},
-        "llm": settings.llm.model_copy(update={"num_ctx": 32768}),
-    }
-)
-
 
 # ---------------------------------------------------------------------------
 # Helpers

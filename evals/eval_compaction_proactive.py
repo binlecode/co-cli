@@ -32,25 +32,10 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
 from co_cli.agent.core import build_agent
 from co_cli.bootstrap.core import create_deps
-from co_cli.config.core import KNOWLEDGE_DIR, TOOL_RESULTS_DIR, settings
+from co_cli.config.core import KNOWLEDGE_DIR, TOOL_RESULTS_DIR
 from co_cli.context.compaction import SUMMARY_MARKER_PREFIX
 from co_cli.context.orchestrate import run_turn
 from co_cli.display.headless import HeadlessFrontend
-
-# ---------------------------------------------------------------------------
-# Config — real settings with eval-local overrides
-# ---------------------------------------------------------------------------
-
-# Cut context budget to 32k (half of 131k Ollama default) so M3 fires at ~21k
-# tokens rather than ~85k. 32768 is a legitimate local Ollama context size;
-# all compaction ratios scale against this budget, so M1→M3 layering is intact.
-_EVAL_CONFIG = settings.model_copy(
-    update={
-        "mcp_servers": {},
-        "llm": settings.llm.model_copy(update={"num_ctx": 32768}),
-    }
-)
-
 
 # ---------------------------------------------------------------------------
 # Helpers
