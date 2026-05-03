@@ -29,7 +29,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_LLM_PER_CALL_TIMEOUT_SECS: int = 90
+_LLM_CALL_WARN_SECS: int = 90
+"""Elapsed threshold for the per-call slow-call warning. Fires before the hard
+limit (_LLM_CALL_TIMEOUT_SECS in orchestrate.py) to give early signal on slow
+local models without blocking the call.
+"""
 
 
 @dataclass
@@ -47,11 +51,11 @@ class _PerCallTimeoutCapability(AbstractCapability[Any]):
         finally:
             elapsed = time.monotonic() - _t0
             logger.debug("LLM call elapsed: %.1fs", elapsed)
-            if elapsed >= _LLM_PER_CALL_TIMEOUT_SECS * 0.9:
+            if elapsed >= _LLM_CALL_WARN_SECS:
                 logger.warning(
-                    "LLM call near/over timeout: %.1fs (limit %ds)",
+                    "LLM call slow: %.1fs (warn threshold %ds)",
                     elapsed,
-                    _LLM_PER_CALL_TIMEOUT_SECS,
+                    _LLM_CALL_WARN_SECS,
                 )
 
 

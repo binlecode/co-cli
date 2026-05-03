@@ -57,10 +57,13 @@ TurnOutcome = Literal["continue", "error"]
 _TRACER = otel_trace.get_tracer("co-cli.orchestrate")
 logger = logging.getLogger(__name__)
 
-# Per-segment hang-prevention timeout. Applied to each individual agent.run_stream_events()
-# call inside _execute_stream_segment(). Not a behavioral spec — a safety net that prevents
-# an unresponsive LLM from hanging a turn indefinitely.
-_LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 360
+_LLM_CALL_TIMEOUT_SECS: int = 360
+"""Hard ceiling for one LLM call end-to-end (streaming included).
+
+Applied per agent.run_stream_events() call in _execute_stream_segment().
+Shared with _PerCallTimeoutCapability in agent/core.py which uses it as the
+reference for the per-call elapsed warning.
+"""
 
 from co_cli.config.core import REASONING_DISPLAY_SUMMARY
 from co_cli.context.compaction import is_context_overflow
@@ -353,7 +356,7 @@ async def _execute_stream_segment(
     renderer = StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)
 
     try:
-        async with asyncio.timeout(_LLM_SEGMENT_HANG_TIMEOUT_SECS):
+        async with asyncio.timeout(_LLM_CALL_TIMEOUT_SECS):
             async for event in agent.run_stream_events(
                 turn_state.current_input,
                 deps=deps,
