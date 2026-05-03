@@ -7,8 +7,11 @@ source writes to. The ``source`` column distinguishes origin; the ``kind`` /
 Source namespace:
   source='knowledge' — reusable artifacts under ~/.co-cli/knowledge/
                        (user, rule, article, note)
+  source='canon'     — character memory scenes under souls/{role}/memories/
+                       (indexed at bootstrap, one chunk per file, no splitting)
   source='obsidian'  — Obsidian vault notes
   source='drive'     — Google Drive docs (indexed on read)
+  source='session'   — past session transcripts (chunked JSONL turns)
 
 All sources chunk into ``chunks_fts`` (and ``chunks_vec`` in hybrid mode). The
 index is derived and rebuildable — deleting ``search.db`` and restarting

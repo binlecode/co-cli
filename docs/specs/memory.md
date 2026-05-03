@@ -263,7 +263,7 @@ All three channels run in sequence. Results carry a `channel` field (`artifacts`
 | `knowledge.consolidation_similarity_threshold` | *(no env var)* | `0.75` | Jaccard score threshold for artifact dedup/merge |
 | `knowledge.max_artifact_count` | *(no env var)* | `300` | soft cap on total artifact count |
 | `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | days before decay eligibility |
-| `knowledge.character_recall_limit` | `CO_CHARACTER_RECALL_LIMIT` | `3` | max canon hits per `memory_search` call |
+| `knowledge.character_recall_limit` | `CO_KNOWLEDGE_CHARACTER_RECALL_LIMIT` | `3` | max canon hits per `memory_search` call (legacy alias: `CO_CHARACTER_RECALL_LIMIT`) |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age-decay parameter in recall scoring |
 
 Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
@@ -275,7 +275,7 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | knowledge artifact source-of-truth directory |
 | `sessions_dir` | — | `~/.co-cli/sessions/` | transcript directory |
 | `tool_results_dir` | — | `~/.co-cli/tool-results/` | spill directory for oversized tool results |
-| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (sessions + knowledge) |
+| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (sessions + knowledge + canon) |
 
 ## 7. Files
 
@@ -323,8 +323,7 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 | `co_cli/bootstrap/core.py` | `_sync_canon_store()` — indexes canon scenes into FTS at bootstrap |
 | `co_cli/memory/memory_store.py` | `sync_dir(no_chunk=True)`, `get_chunk_content()` — canon indexing and full-body fetch |
 | `co_cli/tools/memory/recall.py` | `_search_canon_channel()` — BM25 recall over `source='canon'` |
-| `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly |
-| `co_cli/agent/_instructions.py` | `current_time_prompt()` — per-turn date/time injection |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (canon explicitly excluded here) |
 
 ## 8. Test Gates
 
