@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.119]
+
+### Refactor
+- Removed `context_window` from `_INFERENCE_DEFAULTS` — static fallbacks replaced by runtime probe
+- Added `max_ctx` to `LlmSettings` as a safety ceiling on the Ollama probe result
+- `effective_num_ctx()` now returns 0 when probe has not run (unknown) instead of a stale static default; caps probe result at `max_ctx`
+- Removed `LlmModel.context_window` and `reasoning_context_window()` — compaction budget now sourced exclusively from `effective_num_ctx()`
+- Simplified `resolve_compaction_budget` signature: no `context_window` param; uses `effective_num_ctx()` directly
+
 ## [0.8.117]
 
 ### Refactor

@@ -305,8 +305,7 @@ async def recover_overflow_history(
     Returns None when no compaction boundary exists — caller should fall back to
     ``emergency_recover_overflow_history``.
     """
-    ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
-    budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
+    budget = resolve_compaction_budget(ctx.deps.config)
     cfg = ctx.deps.config.compaction
     bounds = plan_compaction_boundaries(
         messages,
@@ -427,8 +426,7 @@ async def proactive_window_processor(
     docs/specs/compaction.md for the design choice.
     """
     try:
-        ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
-        budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
+        budget = resolve_compaction_budget(ctx.deps.config)
         if budget <= 0:
             return messages
         cfg = ctx.deps.config.compaction

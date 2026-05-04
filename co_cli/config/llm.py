@@ -33,7 +33,6 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
         "qwen3.6": {
             "reasoning": {
                 "max_tokens": 32768,
-                "context_window": 131072,
             },
             # think=false is the authoritative noreason control; reasoning_effort="none" is a
             # secondary hint honored by Ollama versions that map it to think=false.
@@ -47,7 +46,6 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
         "qwen3.5": {
             "reasoning": {
                 "max_tokens": 32768,
-                "context_window": 131072,
             },
             # think=false is the authoritative noreason control; reasoning_effort="none" is a
             # secondary hint honored by Ollama versions that map it to think=false.
@@ -65,7 +63,6 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
                 "temperature": 1.0,
                 "top_p": 0.95,
                 "max_tokens": 65536,
-                "context_window": 1048576,
             },
             # MINIMAL is the lowest ThinkingLevel for Gemini 3 models; keeps helper calls fast.
             "noreason": {
@@ -157,9 +154,12 @@ class LlmSettings(BaseModel):
     provider: Literal["ollama", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)
     host: str = Field(default=DEFAULT_LLM_HOST)
     model: str = Field(default=DEFAULT_LLM_MODEL)
-    # User/bootstrap override for Ollama context window. 0 = unset (use model spec).
-    # Bootstrap sets this from the runtime probe; user can also set it in settings.json.
+    # Probe result from Ollama bootstrap (Ollama's num_ctx Modelfile parameter). 0 = probe not yet run.
+    # Bootstrap writes this; user can also set it in settings.json as a manual override.
     num_ctx: int = Field(default=0)
+    # Safety ceiling applied to the probe result. Guards against Ollama reporting an
+    # unreasonably large value for quantized models.
+    max_ctx: int = Field(default=131072)
     ctx_token_budget: int = Field(default=100_000)
     reasoning: InferenceSettings = Field(default_factory=InferenceSettings)
     noreason: InferenceSettings = Field(default_factory=InferenceSettings)
@@ -175,12 +175,13 @@ class LlmSettings(BaseModel):
     def effective_num_ctx(self) -> int:
         """Return the effective Ollama context window size.
 
-        Resolution order: explicit num_ctx override (user/bootstrap) → model spec
-        context_window → 0 (unknown).
+        Returns 0 when the bootstrap probe has not run (num_ctx unset).
+        Otherwise returns the probe result capped by max_ctx.
         """
-        if self.num_ctx > 0:
-            return self.num_ctx
-        return self.reasoning_context_window() or 0
+        raw = self.num_ctx
+        if raw <= 0:
+            return 0
+        return min(raw, self.max_ctx)
 
     def supports_context_ratio_tracking(self) -> bool:
         """Return True when input/output usage can be compared against an Ollama context budget."""
@@ -207,10 +208,6 @@ class LlmSettings(BaseModel):
         if extra_body:
             settings["extra_body"] = extra_body
         return settings
-
-    def reasoning_context_window(self) -> int | None:
-        """Return the configured or model-default context window for the main model."""
-        return self._inference("reasoning").get("context_window")
 
     def noreason_model_settings(self) -> ModelSettings:
         """Return ModelSettings for non-reasoning helper calls (provider-aware)."""

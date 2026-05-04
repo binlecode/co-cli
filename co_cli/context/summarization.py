@@ -22,18 +22,11 @@ from pydantic_ai.messages import (
 )
 
 from co_cli.config.core import Settings
+from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
 
 log = logging.getLogger(__name__)
-
-_LLM_SUMMARIZE_TIMEOUT_SECS: int = 300
-"""Hard deadline for a single summarization LLM call.
-
-One noreason call over a dropped-message window; measured at ~41s on a
-local 35B model for the heaviest compaction step (~58K chars). 300s gives
-ample headroom for slow or cold model loads on large contexts.
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -86,31 +79,17 @@ def latest_response_input_tokens(messages: list[ModelMessage]) -> int:
 # ---------------------------------------------------------------------------
 
 
-def resolve_compaction_budget(
-    config: Settings,
-    context_window: int | None,
-) -> int:
+def resolve_compaction_budget(config: Settings) -> int:
     """Resolve the token budget used as the compaction trigger baseline.
 
-    Resolution order (first match wins):
-    1. Raw context_window from model spec.
-       For Ollama, config.llm.num_ctx overrides the spec (user's Modelfile is truth).
-    2. Ollama config: config.llm.num_ctx when provider is ollama.
-    3. Fallback: config.llm.ctx_token_budget.
+    Uses effective_num_ctx() (probe result capped by max_ctx) when available.
+    Falls back to config.llm.ctx_token_budget when probe has not run.
 
     The ratio multiplier is NOT applied here — callers apply their own trigger policy.
     """
-    if context_window is not None and context_window > 0:
-        # For Ollama: user-configured llm_num_ctx overrides spec
-        # (real limit is baked in the Modelfile, not the declared spec)
-        if config.llm.uses_ollama() and config.llm.num_ctx > 0:
-            context_window = config.llm.num_ctx
-        return context_window
-
-    # Ollama config fallback (no model spec but llm_num_ctx configured)
-    if config.llm.uses_ollama() and config.llm.num_ctx > 0:
-        return config.llm.num_ctx
-
+    effective = config.llm.effective_num_ctx()
+    if effective > 0:
+        return effective
     return config.llm.ctx_token_budget
 
 
@@ -257,7 +236,6 @@ async def summarize_messages(
     deps: CoDeps,
     messages: list[ModelMessage],
     *,
-    prompt: str = _SUMMARIZE_PROMPT,
     personality_active: bool = False,
     context: str | None = None,
     focus: str | None = None,
@@ -281,10 +259,15 @@ async def summarize_messages(
         "compaction_summarize_branch=%s",
         "iterative" if previous_summary is not None else "from_scratch",
     )
-    if previous_summary is not None:
-        prompt = _build_iterative_template(previous_summary)
-    final_prompt = _build_summarizer_prompt(prompt, context, personality_active, focus)
-    async with asyncio.timeout(_LLM_SUMMARIZE_TIMEOUT_SECS):
+    template = (
+        _build_iterative_template(previous_summary)
+        if previous_summary is not None
+        else _SUMMARIZE_PROMPT
+    )
+    final_prompt = _build_summarizer_prompt(template, context, personality_active, focus)
+    # Needed only for the /compact command path, which has no outer segment timeout.
+    # On the proactive path the segment timeout already caps this call.
+    async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
         return await llm_call(
             deps,
             final_prompt,

@@ -24,7 +24,6 @@ _LLM_NOREASON = LlmModel(
     model=_LLM_MODEL.model,
     settings=_LLM_MODEL.settings_noreason,
     settings_noreason=_LLM_MODEL.settings_noreason,
-    context_window=_LLM_MODEL.context_window,
 )
 _AGENT = build_agent(config=_CONFIG_NO_MCP, model=_LLM_NOREASON, tool_registry=_TOOL_REG)
 

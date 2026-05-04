@@ -29,7 +29,6 @@ class LlmModel:
     model: Any
     settings: ModelSettings | None
     settings_noreason: ModelSettings | None = None
-    context_window: int | None = None
 
 
 def build_model(llm: LlmSettings) -> LlmModel:
@@ -40,8 +39,7 @@ def build_model(llm: LlmSettings) -> LlmModel:
     ollama   → OpenAIChatModel via OllamaProvider (OpenAI-compatible endpoint)
     gemini   → GoogleModel with GoogleProvider (api_key injected via constructor)
 
-    Returns an LlmModel with the model object, base ModelSettings from llm settings,
-    and context_window from resolved model defaults (None when not declared).
+    Returns an LlmModel with the model object and base ModelSettings from llm settings.
 
     Raises ValueError for unsupported providers.
     """
@@ -62,7 +60,6 @@ def build_model(llm: LlmSettings) -> LlmModel:
             model=model,
             settings=llm.reasoning_model_settings(),
             settings_noreason=llm.noreason_model_settings(),
-            context_window=llm.reasoning_context_window(),
         )
 
     if llm.uses_gemini():
@@ -71,7 +68,6 @@ def build_model(llm: LlmSettings) -> LlmModel:
             model=google_model,
             settings=llm.reasoning_model_settings(),
             settings_noreason=llm.noreason_model_settings(),
-            context_window=llm.reasoning_context_window(),
         )
 
     raise ValueError(f"Unsupported provider: {llm.provider!r}")

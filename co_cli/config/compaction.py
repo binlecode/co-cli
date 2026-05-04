@@ -13,7 +13,7 @@ COMPACTION_ENV_MAP: dict[str, str] = {
 class CompactionSettings(BaseModel):
     """Tuning knobs for the context compaction system.
 
-    All ratios apply to the raw context_window budget returned by resolve_compaction_budget().
+    All ratios apply to the token budget returned by resolve_compaction_budget().
     Threshold knobs are integers (token counts). All fields are overridable via settings.json.
 
     Shape invariant: tail_fraction < compaction_ratio. Post-compact state
