@@ -188,7 +188,7 @@ flowchart TD
 
     subgraph Setup["Planner setup — budget=resolve_compaction_budget(), TAIL_FRACTION=0.20"]
         direction LR
-        s_bres["resolve_compaction_budget:\nctx_window (model spec) → num_ctx if non-zero (Ollama) → ctx_token_budget (100K fallback)"]:::meta --> s_msgs["messages\nG0, G1, G2, G3"]:::head --> s_hinit["head_end\n= first_run_end + 1"]:::meta --> s_grps["groups = group_by_turn(messages)\n4 groups ≥ min+1 = 2 → proceed"]:::meta
+        s_bres["resolve_compaction_budget:\nmodel_max_ctx (probed + capped by llm.max_ctx) → ctx_token_budget (100K fallback)"]:::meta --> s_msgs["messages\nG0, G1, G2, G3"]:::head --> s_hinit["head_end\n= first_run_end + 1"]:::meta --> s_grps["groups = group_by_turn(messages)\n4 groups ≥ min+1 = 2 → proceed"]:::meta
     end
 
     Check{len groups\n&lt; min+1?}
@@ -337,7 +337,7 @@ if token_count <= threshold: return messages
 if consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window: return messages
 ```
 
-**Budget resolution** (`resolve_compaction_budget`): model-reported `ctx_window` → `config.llm.num_ctx` (Ollama override) → `config.llm.ctx_token_budget` (default 100,000).
+**Budget resolution** (`resolve_compaction_budget`): `deps.model_max_ctx` (Ollama probe result capped by `config.llm.max_ctx`, set at bootstrap) → `config.llm.ctx_token_budget` fallback (default 100,000).
 
 **Token counting — three functions:**
 - `estimate_message_tokens(messages)` — `total_chars // 4` over text-bearing parts and `ToolCallPart.args` (JSON-serialized). Args are included because M2a only clears return content, never call args — omitting them would undercount on tool-heavy transcripts (Gap E fix).
@@ -493,7 +493,7 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `llm.num_ctx` | `CO_LLM_NUM_CTX` | `0` (unset) | Ollama context window override; `0` means use model spec. Supersedes `ctx_window` for budget resolution when non-zero. |
+| `llm.max_ctx` | — | `131072` | Ceiling on the Ollama-probed context window; `deps.model_max_ctx = min(probe, max_ctx)`. Used as the compaction budget when the probe succeeds. |
 
 **Compaction tuning** (`CompactionSettings` in `co_cli/config/compaction.py`):
 
@@ -548,7 +548,7 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `co_cli/tools/files/read.py` | `file_read` M1 override: `max_result_size=math.inf` (never persists). |
 | `co_cli/tools/shell/execute.py` | `shell` M1 override: `max_result_size=30_000`. |
 | `co_cli/config/tools.py` | `ToolsSettings` — `result_persist_chars`, `batch_spill_chars`. |
-| `co_cli/config/llm.py` | `num_ctx` (Ollama override), `ctx_token_budget` (fallback budget). |
+| `co_cli/config/llm.py` | `max_ctx` (Ollama probe ceiling), `ctx_token_budget` (fallback budget). |
 | `co_cli/context/assembly.py` | Prompt assembly: `build_static_instructions`; static `RECENCY_CLEARING_ADVISORY` recency-clearing paragraph. |
 | `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |
 | `evals/eval_compaction_proactive.py` | Proactive compaction end-to-end eval. |

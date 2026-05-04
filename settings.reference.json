@@ -3,15 +3,14 @@
     "provider": "ollama-openai",
     "host": "http://localhost:11434",
     "model": "qwen3.5:35b-a3b-think",
-    "num_ctx": 262144,
+    "max_ctx": 262144,
     "api_key": null,
     "ctx_warn_threshold": 0.85,
     "ctx_overflow_threshold": 1.0,
     "reasoning": {
       "temperature": 1.0,
       "top_p": 0.95,
-      "max_tokens": 32768,
-      "num_ctx": 131072
+      "max_tokens": 32768
     },
     "noreason": {
       "temperature": 0.7,

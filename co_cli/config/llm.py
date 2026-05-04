@@ -17,6 +17,9 @@ DEFAULT_LLM_HOST = "http://localhost:11434"
 DEFAULT_LLM_MODEL = "qwen3.6:27b-agentic"
 DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 
+DEFAULT_MAX_CTX = 131_072
+DEFAULT_CTX_TOKEN_BUDGET = 100_000
+
 
 # ---------------------------------------------------------------------------
 # Inference defaults tree
@@ -34,8 +37,8 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
             "reasoning": {
                 "max_tokens": 32768,
             },
-            # think=false is the authoritative noreason control; reasoning_effort="none" is a
-            # secondary hint honored by Ollama versions that map it to think=false.
+            # reasoning_effort="none" is the canonical noreason knob on the OpenAI-compatible
+            # path; think=false is belt-and-suspenders for older Ollama versions.
             "noreason": {
                 "extra_body": {
                     "think": False,
@@ -47,8 +50,6 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
             "reasoning": {
                 "max_tokens": 32768,
             },
-            # think=false is the authoritative noreason control; reasoning_effort="none" is a
-            # secondary hint honored by Ollama versions that map it to think=false.
             "noreason": {
                 "extra_body": {
                     "think": False,
@@ -102,7 +103,6 @@ LLM_ENV_MAP: dict[str, str] = {
     "provider": "CO_LLM_PROVIDER",
     "host": "CO_LLM_HOST",
     "model": "CO_LLM_MODEL",
-    "num_ctx": "CO_LLM_NUM_CTX",
 }
 
 _PROVIDER_API_KEY_VARS: dict[str, str] = {
@@ -130,7 +130,7 @@ class InferenceSettings(BaseModel):
     """User-configurable overrides applied on top of per-model inference defaults.
 
     Only provider-agnostic scalar params are exposed — provider-specific fields
-    (extra_body, thinking_config, num_ctx, etc.) belong in _INFERENCE_DEFAULTS.
+    (extra_body, thinking_config, etc.) belong in _INFERENCE_DEFAULTS.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -154,13 +154,9 @@ class LlmSettings(BaseModel):
     provider: Literal["ollama", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)
     host: str = Field(default=DEFAULT_LLM_HOST)
     model: str = Field(default=DEFAULT_LLM_MODEL)
-    # Probe result from Ollama bootstrap (Ollama's num_ctx Modelfile parameter). 0 = probe not yet run.
-    # Bootstrap writes this; user can also set it in settings.json as a manual override.
-    num_ctx: int = Field(default=0)
-    # Safety ceiling applied to the probe result. Guards against Ollama reporting an
-    # unreasonably large value for quantized models.
-    max_ctx: int = Field(default=131072)
-    ctx_token_budget: int = Field(default=100_000)
+    # User-configurable ceiling; probed Ollama num_ctx is capped to this at bootstrap.
+    max_ctx: int = Field(default=DEFAULT_MAX_CTX)
+    ctx_token_budget: int = Field(default=DEFAULT_CTX_TOKEN_BUDGET)
     reasoning: InferenceSettings = Field(default_factory=InferenceSettings)
     noreason: InferenceSettings = Field(default_factory=InferenceSettings)
 
@@ -171,21 +167,6 @@ class LlmSettings(BaseModel):
     def uses_gemini(self) -> bool:
         """Return True when the session LLM backend is Gemini."""
         return self.provider == "gemini"
-
-    def effective_num_ctx(self) -> int:
-        """Return the effective Ollama context window size.
-
-        Returns 0 when the bootstrap probe has not run (num_ctx unset).
-        Otherwise returns the probe result capped by max_ctx.
-        """
-        raw = self.num_ctx
-        if raw <= 0:
-            return 0
-        return min(raw, self.max_ctx)
-
-    def supports_context_ratio_tracking(self) -> bool:
-        """Return True when input/output usage can be compared against an Ollama context budget."""
-        return self.uses_ollama() and self.effective_num_ctx() > 0
 
     def _inference(self, mode: str) -> dict[str, Any]:
         model_key = self.model.split(":")[0]
@@ -199,8 +180,6 @@ class LlmSettings(BaseModel):
         """Return ModelSettings for the main reasoning model."""
         inference = self._inference("reasoning")
         extra_body = dict(inference.get("extra_body", {}))
-        if (num_ctx := inference.get("num_ctx")) is not None and "num_ctx" not in extra_body:
-            extra_body["num_ctx"] = num_ctx
         settings: ModelSettings = {}
         for key in ("temperature", "top_p", "max_tokens"):
             if key in inference:

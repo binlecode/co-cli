@@ -277,7 +277,7 @@ Compaction behavior:
 - `proactive_window_processor()` gathers side-channel context via `gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds `cfg.compaction_ratio` (0.65) of the budget
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
-- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's resolved `context_window` (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
+- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: `deps.model_max_ctx` (Ollama probe result capped by `llm.max_ctx`, set at bootstrap), then `llm.ctx_token_budget` (default 100,000)
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_skip_count`) trips at `_COMPACTION_BREAKER_TRIP` (3) consecutive failures; tripped state uses static markers but probes the LLM once every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
@@ -308,7 +308,7 @@ Error matrix:
 Output-limit diagnostics happen only after a successful final segment:
 
 1. if `latest_result.response.finish_reason == "length"`, show a truncation status message
-2. if the provider supports context-ratio tracking, compare `deps.runtime.turn_usage.input_tokens / deps.config.llm.num_ctx`
+2. if `deps.model_max_ctx` is set, compare `latest_response_input_tokens / deps.model_max_ctx`
 3. emit either a warning or overflow message based on `ctx_warn_threshold` and `ctx_overflow_threshold`
 
 Interrupt handling is conservative:

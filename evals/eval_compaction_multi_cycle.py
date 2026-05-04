@@ -15,23 +15,20 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import sys
 import time
-from contextlib import AsyncExitStack, redirect_stdout
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 import httpx
-from evals._timeouts import (
-    EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS,
-    EVAL_PROBE_TIMEOUT_SECS,
-)
+from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 
@@ -40,6 +37,54 @@ from co_cli.bootstrap.core import create_deps
 from co_cli.context.compaction import SUMMARY_MARKER_PREFIX
 from co_cli.context.orchestrate import run_turn
 from co_cli.display.headless import HeadlessFrontend
+
+# ---------------------------------------------------------------------------
+# Context breakdown helpers
+# ---------------------------------------------------------------------------
+
+
+def _context_breakdown(history: list[ModelMessage]) -> dict[str, int]:
+    """Return counts of each message/part type in history."""
+    n_req = sum(1 for m in history if isinstance(m, ModelRequest))
+    n_resp = sum(1 for m in history if isinstance(m, ModelResponse))
+    n_tool_calls = sum(
+        1
+        for m in history
+        if isinstance(m, ModelResponse)
+        for p in m.parts
+        if isinstance(p, ToolCallPart)
+    )
+    n_tool_returns = sum(
+        1
+        for m in history
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, ToolReturnPart)
+    )
+    total_chars = sum(
+        len(p.content)
+        for m in history
+        for p in m.parts
+        if hasattr(p, "content") and isinstance(p.content, str)
+    )
+    return {
+        "msgs": len(history),
+        "req": n_req,
+        "resp": n_resp,
+        "tool_calls": n_tool_calls,
+        "tool_returns": n_tool_returns,
+        "chars": total_chars,
+    }
+
+
+def _print_breakdown(bd: dict[str, int], label: str) -> None:
+    print(
+        f"    {label}: {bd['msgs']} msgs  "
+        f"req={bd['req']} resp={bd['resp']} "
+        f"calls={bd['tool_calls']} returns={bd['tool_returns']}  "
+        f"~{bd['chars']:,} chars"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -181,10 +226,12 @@ async def step_multi_cycle_compaction() -> bool:
     ]
 
     max_turns = 40
+    # step-timing table: one row per turn
+    _step_rows: list[dict] = []
 
     async with AsyncExitStack() as stack:
         deps = await create_deps(frontend, stack)
-        deps.config.llm.num_ctx = 32768
+        deps.config.llm.max_ctx = 32768
         agent = build_agent(
             config=deps.config,
             model=deps.model,
@@ -205,39 +252,54 @@ async def step_multi_cycle_compaction() -> bool:
                 user_input = _phase2_prompts[min(phase2_turn, len(_phase2_prompts) - 1)]
                 phase2_turn += 1
 
-            prev_len = len(message_history)
-            print(f"  Turn {turn_idx + 1}/{max_turns} [phase {phase}] — history: {prev_len} msgs")
+            bd_before = _context_breakdown(message_history)
+            prev_len = bd_before["msgs"]
+            print(
+                f"  Turn {turn_idx + 1}/{max_turns} [phase {phase}] — prompt: {user_input[:60]!r}"
+            )
+            _print_breakdown(bd_before, "before")
 
             _turn_start = time.monotonic()
-            try:
-                async with asyncio.timeout(EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS):
-                    turn_result = await run_turn(
-                        agent=agent,
-                        user_input=user_input,
-                        deps=deps,
-                        message_history=message_history,
-                        frontend=frontend,
-                    )
-            except TimeoutError:
-                print(
-                    f"UAT: FAIL (turn timeout): turn {turn_idx + 1} exceeded"
-                    f" {EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS} seconds"
-                )
-                return False
+            turn_result = await run_turn(
+                agent=agent,
+                user_input=user_input,
+                deps=deps,
+                message_history=message_history,
+                frontend=frontend,
+            )
             _elapsed = time.monotonic() - _turn_start
             print(f"    turn elapsed: {_elapsed:.1f}s")
 
-            # run_turn absorbs segment hang timeouts and returns outcome="error" instead of
-            # raising — the eval's asyncio.timeout never fires. Detect and fail explicitly.
             if turn_result.outcome == "error":
                 print(
-                    f"UAT: FAIL (turn error): turn {turn_idx + 1} — LLM segment error or timeout "
+                    f"UAT: FAIL (turn error): turn {turn_idx + 1} — LLM call error or timeout "
                     f"({_elapsed:.1f}s); context may be too large for the local model"
                 )
                 return False
 
             message_history = turn_result.messages
             summary_texts = _count_summary_markers(message_history)
+
+            bd_after = _context_breakdown(message_history)
+            _print_breakdown(bd_after, "after ")
+            print(
+                f"    delta: msgs={bd_after['msgs'] - bd_before['msgs']:+d}  "
+                f"calls={bd_after['tool_calls'] - bd_before['tool_calls']:+d}  "
+                f"chars={bd_after['chars'] - bd_before['chars']:+,}"
+            )
+            _step_rows.append(
+                {
+                    "turn": turn_idx + 1,
+                    "phase": phase,
+                    "elapsed": _elapsed,
+                    "msgs_before": bd_before["msgs"],
+                    "msgs_after": bd_after["msgs"],
+                    "calls": bd_after["tool_calls"] - bd_before["tool_calls"],
+                    "chars_before": bd_before["chars"],
+                    "chars_after": bd_after["chars"],
+                    "compacted": summary_texts != markers_snapshot,
+                }
+            )
 
             # Compaction detection: any change in marker content (add OR replace).
             # Phase-2 compaction rewrites history and replaces the phase-1 marker,
@@ -282,6 +344,24 @@ async def step_multi_cycle_compaction() -> bool:
                 f" only {total_compactions}/2 compactions fired"
             )
             return False
+
+    # Step-timing table
+    print("\n  Step timing summary:")
+    print(
+        f"  {'Turn':>4}  {'Ph':>2}  {'Elapsed':>8}  {'MsgsBefore':>10}  {'MsgsAfter':>9}  {'Calls':>5}  {'CharsBefore':>11}  {'CharsAfter':>10}  {'Compact':>7}"
+    )
+    print(
+        f"  {'-' * 4}  {'-' * 2}  {'-' * 8}  {'-' * 10}  {'-' * 9}  {'-' * 5}  {'-' * 11}  {'-' * 10}  {'-' * 7}"
+    )
+    for r in _step_rows:
+        print(
+            f"  {r['turn']:>4}  {r['phase']:>2}  {r['elapsed']:>7.1f}s"
+            f"  {r['msgs_before']:>10}  {r['msgs_after']:>9}"
+            f"  {r['calls']:>5}  {r['chars_before']:>11,}  {r['chars_after']:>10,}"
+            f"  {'YES' if r['compacted'] else '':>7}"
+        )
+    total_elapsed = sum(r["elapsed"] for r in _step_rows)
+    print(f"  {'total':>4}  {'':>2}  {total_elapsed:>7.1f}s")
 
     # Validate iterative summary chain via keyword check
     summary_1 = all_summary_texts[0] if len(all_summary_texts) >= 1 else ""
@@ -331,7 +411,7 @@ _LAST_RESULTS: dict[str, bool] = {}
 _NOISE_PATTERNS = ("WARNING:", "Compacting conversation")
 
 
-def _build_report(raw_output: str, results: dict[str, bool]) -> str:
+def _build_report(results: dict[str, bool]) -> str:
     lines: list[str] = []
     total = len(results)
     passed_count = sum(1 for v in results.values() if v)
@@ -352,7 +432,6 @@ def _build_report(raw_output: str, results: dict[str, bool]) -> str:
 
 
 async def _run_all() -> int:
-    global _LAST_RESULTS
     print("=" * 60)
     print("  Eval: Compaction — Multi-Cycle UAT (M3 × 2)")
     print("=" * 60)
@@ -381,9 +460,9 @@ def main() -> int:
     logging.basicConfig(level=logging.WARNING)
 
     # Targeted DEBUG handlers — root stays at WARNING; only these modules bubble to stdout.
-    _debug_fmt = logging.Formatter("  [%(name)s] %(message)s")
     for _mod, _tag in [
-        ("co_cli.agent.core", "timing"),
+        ("co_cli.agent.core", "agent"),
+        ("co_cli.context.orchestrate", "llm"),
         ("co_cli.context.compaction", "compaction"),
     ]:
         _h = logging.StreamHandler(sys.stdout)
@@ -394,27 +473,10 @@ def main() -> int:
         _l.addHandler(_h)
         _l.propagate = False
 
-    buf = io.StringIO()
-
-    class Tee:
-        def __init__(self, *targets):
-            self.targets = targets
-
-        def write(self, s):
-            for t in self.targets:
-                t.write(s)
-            return len(s)
-
-        def flush(self):
-            for t in self.targets:
-                t.flush()
-
-    tee = Tee(sys.stdout, buf)
-    with redirect_stdout(tee):
-        exit_code = asyncio.run(_run_all())
+    exit_code = asyncio.run(_run_all())
 
     report_path = Path("docs/REPORT-compaction-multi-cycle.md")
-    report_path.write_text(_build_report(buf.getvalue(), _LAST_RESULTS), encoding="utf-8")
+    report_path.write_text(_build_report(_LAST_RESULTS), encoding="utf-8")
     print(f"\nReport: {report_path}")
     return exit_code
 

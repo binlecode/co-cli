@@ -38,7 +38,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ create_deps(frontend, stack)
 │  ├─ config = settings; paths = resolve_workspace_paths(config, cwd)
 │  ├─ config.llm.validate_config()
-│  ├─ [if ollama-openai] probe_ollama_context() → maybe overwrite llm.num_ctx
+│  ├─ [if ollama] probe_ollama_model() → model_max_ctx = min(probe.num_ctx, llm.max_ctx)
 │  ├─ build_model(config.llm)
 │  ├─ build_tool_registry(config)
 │  ├─ enter MCP toolsets on stack; discover_mcp_tools(); merge MCP tool_index
@@ -100,7 +100,7 @@ Bootstrap calls `config.llm.validate_config()` before building long-lived runtim
 | Gemini provider with missing API key | raise `ValueError`; session never starts |
 | Provider connectivity problem | startup continues; first runtime model call surfaces the error |
 
-If the provider is `ollama-openai`, bootstrap also probes the model's runtime `num_ctx`. When the runtime value differs from config, bootstrap overwrites `config.llm.num_ctx` so runtime state reflects the actual allocation. If the probed value is below the minimum supported agentic context, startup fails immediately.
+If the provider is `ollama`, bootstrap probes the model's runtime `num_ctx` from the Modelfile via `/api/show`. The probe result is capped by `config.llm.max_ctx` and stored as `deps.model_max_ctx`. If the capped value is below the minimum supported agentic context, startup fails immediately.
 
 ### Step 5. Build the foreground model and local tool registry
 
@@ -224,7 +224,7 @@ These settings most directly affect bootstrap behavior.
 | `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Selects provider-specific bootstrap checks and model wiring |
 | `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Host used by Ollama checks and runtime model calls |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
-| `llm.num_ctx` | `CO_LLM_NUM_CTX` | provider default | Context window target; may be overwritten by the Ollama runtime probe |
+| `llm.max_ctx` | — | `131072` | Ceiling on probed Ollama context window; `deps.model_max_ctx = min(probe, max_ctx)` |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
 | `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge` | User-global knowledge artifact directory synced during bootstrap (extracted facts, articles, notes) |
@@ -238,7 +238,7 @@ These settings most directly affect bootstrap behavior.
 | --- | --- |
 | `co_cli/main.py` | Owns module-load logging and telemetry setup, `_chat_loop()` startup orchestration, and the REPL boundary |
 | `co_cli/bootstrap/core.py` | Owns `create_deps()`, `restore_session()`, and `init_session_index()` |
-| `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama `num_ctx` checks |
+| `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama model probe checks |
 | `co_cli/bootstrap/banner.py` | Renders the welcome banner that marks bootstrap completion |
 | `co_cli/bootstrap/security.py` | Security posture checks run once at startup (`check_security`, `render_security_findings`) |
 | `co_cli/deps.py` | Defines `CoDeps`, path resolution, and sub-agent inheritance rules |

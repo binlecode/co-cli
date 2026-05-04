@@ -26,10 +26,7 @@ from pathlib import Path
 
 import httpx
 from evals._judge import run_judge
-from evals._timeouts import (
-    EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS,
-    EVAL_PROBE_TIMEOUT_SECS,
-)
+from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
 from pydantic import BaseModel
 from pydantic_ai.messages import (
     ModelMessage,
@@ -271,7 +268,7 @@ async def step_proactive_compaction() -> bool:
 
     Open-ended loop driven by real run_turn. co decides what to fetch and in what
     order; M1 persists oversized results at emit time; M3 fires organically when
-    context pressure crosses 65% of num_ctx (32768 — halved from the Ollama default
+    context pressure crosses 65% of max_ctx (32768 — halved from the Ollama default
     so M3 triggers at ~21k tokens rather than ~85k). No hand-built history, no
     article caps, no fallback content.
     """
@@ -311,7 +308,7 @@ async def step_proactive_compaction() -> bool:
 
     async with AsyncExitStack() as stack:
         deps = await create_deps(frontend, stack)
-        deps.config.llm.num_ctx = 32768
+        deps.config.llm.max_ctx = 32768
 
         # Assign a real session path so persist_session_history has a target.
         deps.session.session_path = new_session_path(deps.sessions_dir)
@@ -399,23 +396,22 @@ async def step_proactive_compaction() -> bool:
             print(f"  Turn {turn_idx + 1}/{max_turns} — history: {prev_len} msgs")
 
             _turn_start = time.monotonic()
-            try:
-                async with asyncio.timeout(EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS):
-                    turn_result = await run_turn(
-                        agent=agent,
-                        user_input=user_input,
-                        deps=deps,
-                        message_history=message_history,
-                        frontend=frontend,
-                    )
-            except TimeoutError:
-                print(
-                    f"UAT: FAIL (turn timeout): turn {turn_idx + 1} exceeded"
-                    f" {EVAL_DEEP_LEARNING_TURN_TIMEOUT_SECS} seconds"
-                )
-                return False
+            turn_result = await run_turn(
+                agent=agent,
+                user_input=user_input,
+                deps=deps,
+                message_history=message_history,
+                frontend=frontend,
+            )
             _elapsed = time.monotonic() - _turn_start
             print(f"    turn elapsed: {_elapsed:.1f}s")
+
+            if turn_result.outcome == "error":
+                print(
+                    f"UAT: FAIL (turn error): turn {turn_idx + 1} — LLM call error or timeout"
+                    f" ({_elapsed:.1f}s); context may be too large for the local model"
+                )
+                return False
 
             message_history = turn_result.messages
             persist_session_history(

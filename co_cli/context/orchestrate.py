@@ -9,6 +9,7 @@ interaction here.
 
 import asyncio
 import logging
+import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -57,15 +58,11 @@ TurnOutcome = Literal["continue", "error"]
 _TRACER = otel_trace.get_tracer("co-cli.orchestrate")
 logger = logging.getLogger(__name__)
 
-_LLM_CALL_TIMEOUT_SECS: int = 360
-"""Hard ceiling for one LLM call end-to-end (streaming included).
-
-Applied per agent.run_stream_events() call in _execute_stream_segment().
-Shared with _PerCallTimeoutCapability in agent/core.py which uses it as the
-reference for the per-call elapsed warning.
-"""
+_LLM_SEGMENT_WARN_SECS: int = 90
+"""Slow-segment warning threshold."""
 
 from co_cli.config.core import REASONING_DISPLAY_SUMMARY
+from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.context.compaction import is_context_overflow
 from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.deps import CoDeps
@@ -354,9 +351,9 @@ async def _execute_stream_segment(
     """
     result: SessionRunResult | None = None
     renderer = StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)
-
+    _t0 = time.monotonic()
     try:
-        async with asyncio.timeout(_LLM_CALL_TIMEOUT_SECS):
+        async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
             async for event in agent.run_stream_events(
                 turn_state.current_input,
                 deps=deps,
@@ -372,11 +369,15 @@ async def _execute_stream_segment(
                 event_result = _handle_stream_event(event, renderer, deps, frontend)
                 if event_result is not None:
                     result = event_result
-
-            # Normal completion — commit remaining buffers
             renderer.finish()
     finally:
         frontend.cleanup()
+    elapsed = time.monotonic() - _t0
+    logger.debug("LLM segment elapsed: %.1fs", elapsed)
+    if elapsed >= _LLM_SEGMENT_WARN_SECS:
+        logger.warning(
+            "LLM segment slow: %.1fs (warn threshold %ds)", elapsed, _LLM_SEGMENT_WARN_SECS
+        )
 
     if result is None:
         raise RuntimeError(
@@ -499,16 +500,15 @@ def _check_output_limits(
             "Response may be truncated (hit output token limit). Use /continue to extend."
         )
     latest_input = latest_response_input_tokens(turn_state.current_history)
-    if latest_input > 0 and deps.config.llm.supports_context_ratio_tracking():
-        effective_ctx = deps.config.llm.effective_num_ctx()
-        ratio = latest_input / effective_ctx
+    if latest_input > 0 and deps.model_max_ctx is not None:
+        ratio = latest_input / deps.model_max_ctx
         with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
             ctx_span.set_attribute("ctx.input_tokens", latest_input)
-            ctx_span.set_attribute("ctx.num_ctx", effective_ctx)
+            ctx_span.set_attribute("ctx.max_ctx", deps.model_max_ctx)
             ctx_span.set_attribute("ctx.ratio", ratio)
             if ratio >= 1.0:
                 frontend.on_status(
-                    f"Context limit reached ({latest_input:,} / {effective_ctx:,} tokens)"
+                    f"Context limit reached ({latest_input:,} / {deps.model_max_ctx:,} tokens)"
                     " — prompt may have been truncated. Use /compact or /new."
                 )
             elif ratio >= deps.config.compaction.compaction_ratio:
@@ -518,7 +518,7 @@ def _check_output_limits(
                 thrash_count = deps.runtime.consecutive_low_yield_proactive_compactions
                 if thrash_count >= deps.config.compaction.proactive_thrash_window:
                     frontend.on_status(
-                        f"Context {ratio:.0%} full ({latest_input:,} / {effective_ctx:,} tokens)."
+                        f"Context {ratio:.0%} full ({latest_input:,} / {deps.model_max_ctx:,} tokens)."
                         " Auto-compaction paused — try /compact for one more pass or /new for a fresh session."
                     )
 
@@ -697,7 +697,7 @@ async def run_turn(
 
                 except TimeoutError:
                     frontend.on_status(
-                        "LLM segment timed out — model did not respond. Try a shorter prompt, or ask Co 'what can you do right now?' or run /doctor."
+                        "LLM call timed out — model did not respond in time. Try a shorter prompt, or ask Co 'what can you do right now?' or run /doctor."
                     )
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)

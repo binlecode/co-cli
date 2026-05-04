@@ -78,11 +78,11 @@ Settings load order is `env > ~/.co-cli/settings.json > defaults`.
 | `llm.provider` | `CO_LLM_PROVIDER` | `"ollama"` | Provider selection: `ollama` or `gemini` |
 | `llm.host` | `CO_LLM_HOST` | `"http://localhost:11434"` | LLM server base URL for Ollama OpenAI-compatible requests |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Single model name used for all tasks (reasoning, subagents, compaction, memory) |
-| `llm.num_ctx` | `CO_LLM_NUM_CTX` | `262144` | Context size hint (ignored by Ollama API — set in Modelfile) |
+| `llm.max_ctx` | — | `131072` | Ceiling on probed Ollama context window; `deps.model_max_ctx = min(probe, max_ctx)` |
 | `llm.ctx_warn_threshold` | `CO_LLM_CTX_WARN_THRESHOLD` | `0.85` | Warn threshold for context ratio |
 | `llm.ctx_overflow_threshold` | `CO_LLM_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
 | `llm.api_key` | `GEMINI_API_KEY` (when `provider=gemini`), else `CO_LLM_API_KEY` | `None` | Provider API key; `GEMINI_API_KEY` takes precedence for Gemini, `CO_LLM_API_KEY` is the generic fallback |
-| `llm.reasoning.temperature/top_p/max_tokens/num_ctx/context_window/extra_body` | — | unset | Optional explicit overrides for the main agent's reasoning model settings; merged over provider/model defaults |
+| `llm.reasoning.temperature/top_p/max_tokens` | — | unset | Optional explicit overrides for the main agent's reasoning model settings; merged over provider/model defaults |
 | `llm.noreason.temperature/top_p/max_tokens/extra_body` | — | `None` / `{}` (resolved from provider defaults at build time) | Pure-override noreason settings model; all fields default to `None`/`{}` — non-`None` values win over provider/model defaults in `resolve_noreason_inference()` |
 
 ## 4. Provider Runtime Settings

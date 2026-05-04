@@ -41,15 +41,14 @@ def _resp(content: str) -> ModelResponse:
 
 
 def _tight_settings():
-    """Settings with num_ctx=200 → budget=200, token_threshold≈130, tail_budget≈40.
+    """Settings used with model_max_ctx=200 → budget=200, token_threshold≈130, tail_budget≈40.
 
     Each message part uses 160 chars = 40 tokens. A 4-turn history (8 messages)
     totals 320 tokens >> threshold. The head-guard keeps only group[3] in the
     tail (start_index=6 > head_end=2), so plan_compaction_boundaries returns
     non-None and compaction can proceed.
     """
-    llm = SETTINGS_NO_MCP.llm.model_copy(update={"num_ctx": 200})
-    return SETTINGS_NO_MCP.model_copy(update={"llm": llm})
+    return SETTINGS_NO_MCP
 
 
 def _above_threshold_messages() -> list:
@@ -67,7 +66,7 @@ def _above_threshold_messages() -> list:
     ]
 
 
-_TIGHT_MODEL = build_model(_tight_settings().llm)
+_TIGHT_MODEL = _LLM_MODEL
 
 
 @pytest.mark.asyncio
@@ -97,7 +96,7 @@ async def test_processor_returns_messages_unchanged_when_below_threshold() -> No
 async def test_processor_applies_compaction_when_above_threshold() -> None:
     """Processor compacts and returns a shorter list when token count is above threshold.
 
-    Uses tight budget (num_ctx=200, token_threshold≈130) against a 4-turn history
+    Uses tight budget (max_ctx=200, token_threshold≈130) against a 4-turn history
     of ~320 tokens. Makes a real LLM summarizer call.
     Failure mode: above-threshold history is silently passed through → context
     window exhaustion, no proactive compaction ever fires.
@@ -107,6 +106,7 @@ async def test_processor_applies_compaction_when_above_threshold() -> None:
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
+        model_max_ctx=200,
     )
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
@@ -140,6 +140,7 @@ async def test_anti_thrash_gate_skips_compaction_after_consecutive_low_yield() -
         model=_TIGHT_MODEL,
         config=settings,
         session=CoSessionState(),
+        model_max_ctx=200,
     )
     # Trip the anti-thrash gate to exactly the trip threshold
     deps.runtime.consecutive_low_yield_proactive_compactions = (
@@ -251,6 +252,7 @@ async def test_successful_compaction_resets_skip_count() -> None:
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
+        model_max_ctx=200,
     )
     # Below trip threshold (< 3) so the gate remains open for the LLM call.
     deps.runtime.compaction_skip_count = 2

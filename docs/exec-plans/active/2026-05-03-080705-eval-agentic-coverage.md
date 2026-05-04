@@ -132,7 +132,7 @@ Out of scope: production code changes, new `tests/` unit tests, structural evals
 *(O1 merges original O1+O2 — both call `recover_overflow_history()` once on the same fixture and assert complementary properties of the same returned list.)*
 
 **Fixture approach:**
-- Build a long synthetic message history (inline): large `ToolReturnPart`s totalling at least 2× `config.llm.num_ctx` char-estimated tokens. Include a known unique token in the tail `UserPromptPart`.
+- Build a long synthetic message history (inline): large `ToolReturnPart`s totalling at least 2× `config.llm.max_ctx` char-estimated tokens. Include a known unique token in the tail `UserPromptPart`.
 - O1 *(algorithm correctness)*: construct a `RunContext` with the synthetic deps and call `await recover_overflow_history(run_ctx, history)`. Signature: `async def recover_overflow_history(ctx: RunContext[CoDeps], messages: list[ModelMessage]) -> list[ModelMessage] | None`. Assert returned history is shorter and contains a compaction marker; assert tail `UserPromptPart` with the unique token is present.
 - O2 *(provider-conditional)*: if `deps.config.llm.provider` is not `ollama`, call `run_turn()` with the overfilled history and assert `outcome == "continue"`. Under Ollama emit `SKIP`: `"Ollama does not enforce context limits — HTTP overflow path not exercisable"`.
 - O3: call recovery twice; assert second result is same length as first.

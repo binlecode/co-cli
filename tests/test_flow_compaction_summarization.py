@@ -67,25 +67,28 @@ def test_estimate_message_tokens_empty_list():
     assert estimate_message_tokens([]) == 0
 
 
-def test_resolve_compaction_budget_uses_effective_num_ctx_when_probe_ran():
-    """resolve_compaction_budget must return effective_num_ctx() when probe has run."""
-    from co_cli.config.core import Settings
-
-    probe_value = SETTINGS_NO_MCP.llm.max_ctx // 2
-    settings = Settings.model_validate(
-        {
-            **SETTINGS_NO_MCP.model_dump(),
-            "llm": {**SETTINGS_NO_MCP.llm.model_dump(), "num_ctx": probe_value},
-        }
+def test_resolve_compaction_budget_uses_model_max_ctx_when_probed():
+    """resolve_compaction_budget must return model_max_ctx when set on deps."""
+    probed = 32_768
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+        model_max_ctx=probed,
     )
-    budget = resolve_compaction_budget(settings)
-    assert budget == probe_value
+    assert resolve_compaction_budget(deps) == probed
 
 
-def test_resolve_compaction_budget_falls_back_to_ctx_token_budget_when_probe_not_run():
-    """resolve_compaction_budget must fall back to ctx_token_budget when probe has not run (num_ctx=0)."""
-    budget = resolve_compaction_budget(SETTINGS_NO_MCP)
-    assert budget == SETTINGS_NO_MCP.llm.ctx_token_budget
+def test_resolve_compaction_budget_falls_back_to_ctx_token_budget_when_no_probe():
+    """resolve_compaction_budget must fall back to ctx_token_budget when model_max_ctx is None."""
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+    )
+    assert resolve_compaction_budget(deps) == SETTINGS_NO_MCP.llm.ctx_token_budget
 
 
 # ---------------------------------------------------------------------------
