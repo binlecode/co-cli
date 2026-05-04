@@ -2,11 +2,12 @@
 
 Data types: CheckResult, RuntimeCheckResult.
 
-Public entry point:
-  check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
+Public entry points:
+  check_runtime(deps)             — tools/capabilities.py (full runtime diagnostic)
+  probe_ollama_model(host, model) — bootstrap/core.py (context size + capabilities)
 
 All individual IO check functions are package-private (underscore prefix).
-Config-shape validation lives on LlmSettings.validate_config() (config/_llm.py), not here.
+Config-shape validation lives on LlmSettings.validate_config() (config/llm.py), not here.
 """
 
 import os
@@ -63,6 +64,39 @@ class CheckResult:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
+def probe_ollama_model(host: str, model: str) -> tuple[int | None, list[str]]:
+    """Probe Ollama /api/show for the loaded model's context size and capabilities.
+
+    Returns (num_ctx, capabilities); num_ctx is None on any error or if unparseable.
+    """
+    try:
+        import httpx
+
+        resp = httpx.post(
+            f"{host}/api/show",
+            json={"model": model},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return None, []
+
+    num_ctx: int | None = None
+    raw_params = data.get("parameters", "")
+    if isinstance(raw_params, str):
+        for line in raw_params.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] == "num_ctx":
+                try:
+                    num_ctx = int(parts[1])
+                except ValueError:
+                    pass
+                break
+
+    return num_ctx, data.get("capabilities") or []
+
+
 def _check_ollama_model(host: str, model: str) -> CheckResult:
     """Check a single Ollama model by querying /api/tags.
 
@@ -90,71 +124,6 @@ def _check_ollama_model(host: str, model: str) -> CheckResult:
 # + safety margin (~5.5K) cannot fit. The agent would compact every turn,
 # and the summarizer call itself would consume most of the remaining context.
 MIN_AGENTIC_CONTEXT = 65_536
-
-
-def _probe_ollama_context(host: str, model: str) -> CheckResult:
-    """Probe Ollama /api/show for the model's runtime num_ctx.
-
-    Returns CheckResult with extra={"num_ctx": N} on success.
-    The num_ctx value comes from the Modelfile's PARAMETER section —
-    this is the actual runtime allocation, not the model architecture's
-    theoretical maximum (model_info.*.context_length).
-
-    Fail-fast: if num_ctx < MIN_AGENTIC_CONTEXT (64K), returns error
-    with actionable remediation message.
-
-    Unreachable host or missing model → warn (caller decides impact).
-    """
-    try:
-        import httpx
-
-        resp = httpx.post(f"{host}/api/show", json={"model": model}, timeout=5)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as err:
-        return CheckResult(
-            ok=True,
-            status="warn",
-            detail=f"Ollama context probe skipped — {err}",
-        )
-
-    # Parse num_ctx from the parameters string (Modelfile values)
-    num_ctx = 0
-    params_str = data.get("parameters", "")
-    for line in params_str.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[0] == "num_ctx":
-            try:
-                num_ctx = int(parts[1])
-            except ValueError:
-                pass
-            break
-
-    if num_ctx <= 0:
-        return CheckResult(
-            ok=True,
-            status="warn",
-            detail=f"Could not read num_ctx from Modelfile for {model}",
-        )
-
-    if num_ctx < MIN_AGENTIC_CONTEXT:
-        return CheckResult(
-            ok=False,
-            status="error",
-            detail=(
-                f"Model {model} has num_ctx={num_ctx:,} — minimum for agentic "
-                f"tool use is {MIN_AGENTIC_CONTEXT:,} (64K). "
-                f"Update your Modelfile: PARAMETER num_ctx {MIN_AGENTIC_CONTEXT}"
-            ),
-            extra={"num_ctx": num_ctx},
-        )
-
-    return CheckResult(
-        ok=True,
-        status="ok",
-        detail=f"Runtime num_ctx={num_ctx:,}",
-        extra={"num_ctx": num_ctx},
-    )
 
 
 def _check_gemini_key(api_key: str | None) -> CheckResult:

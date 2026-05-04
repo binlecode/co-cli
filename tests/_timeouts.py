@@ -14,9 +14,9 @@ pytest-timeout (pyproject.toml: timeout = 120) is the safety net. It catches:
 - sync code that hangs (fixture setup, subprocess, file IO with no await)
 - an await that was accidentally left unwrapped
 
-Why 120s: the largest single per-await budget is LLM_REASONING_TIMEOUT_SECS
+Why 120s: the largest single per-await budget is LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 (60s). 120s = 2x that, leaving room for fixture setup/teardown around one
-reasoning call. A test that legitimately needs more than 120s total must wrap
+summarization call. A test that legitimately needs more than 120s total must wrap
 each sequential LLM call with its own asyncio.timeout and use
 @pytest.mark.timeout(N) to raise the outer safety net to N = sum(per-call
 budgets) + overhead. Raise individual constants if model latency increases;
@@ -41,13 +41,6 @@ no registered tools in the agent. For compaction summaries (400–900 tokens
 output) use LLM_COMPACTION_SUMMARY_TIMEOUT_SECS instead.
 """
 
-LLM_SESSION_SUMMARY_TIMEOUT_SECS: int = 30
-"""Session summarization calls (noreason, 5-point structured summary, ~200–400 tokens output).
-
-At ~30 tok/s on local 35B hardware, a 400-token summary takes ~13s.
-30s gives ~2–4x headroom. Distinct from LLM_NON_REASONING_TIMEOUT_SECS (10–30 tokens)
-and LLM_COMPACTION_SUMMARY_TIMEOUT_SECS (400–900 tokens).
-"""
 
 LLM_COMPACTION_SUMMARY_TIMEOUT_SECS: int = 60
 """Compaction LLM summarizer calls (reasoning disabled, no tool schemas).
@@ -57,6 +50,15 @@ Output is long-form structured text (400–900 tokens). At ~30 tok/s on local
 headroom without masking a stalled call.
 Distinct from LLM_NON_REASONING_TIMEOUT_SECS, which is calibrated for
 low-output calls where >10s indicates a misconfigured reasoning mode.
+"""
+
+LLM_REASONING_TIMEOUT_SECS: int = 30
+"""Reasoning-mode calls (think enabled, simple prompt, no tool schemas).
+
+For tests that intentionally exercise the reasoning settings path. The model
+emits thinking tokens before the final response; even a one-word answer takes
+several seconds on local 35B hardware. 30s covers worst-case thinking budget
+on a low-output prompt without masking a stall.
 """
 
 LLM_TOOL_CONTEXT_TIMEOUT_SECS: int = 20
@@ -70,34 +72,10 @@ Use for tool-selection tests (test_tool_calling_functional) and approval-flow te
 (test_commands) that require the production tool set.
 """
 
-LLM_GEMINI_NOREASON_TIMEOUT_SECS: int = 30
-"""Gemini cloud noreason calls (thinking_level=low for Pro, thinking_budget=0 for Flash).
-
-Gemini Pro minimum is thinking_level=low — not truly no-thinking like Ollama's think=false.
-Network round-trip + minimal thinking trace exceeds the 10s Ollama budget.
-30s allows for API latency variance without masking runaway thinking.
-"""
-
-LLM_REASONING_TIMEOUT_SECS: int = 60
-"""Full chain-of-thought calls (reasoning/thinking enabled).
-
-Thinking traces consume output budget before visible content; 60s gives the
-32K num_predict budget room to complete without false timeout failures.
-"""
-
 # HTTP / external services
-HTTP_EXTERNAL_TIMEOUT_SECS: int = 10
-"""Outbound HTTP calls to external services (web search, web fetch, APIs)."""
-
 HTTP_HEALTH_TIMEOUT_SECS: int = 15
 """Integration health probes: Ollama /api/tags ping, MCP list, capabilities check."""
 
 # Local async operations
-SUBPROCESS_TIMEOUT_SECS: int = 10
-"""Background task / subprocess: start + first result cycle."""
-
-SUBPROCESS_START_TIMEOUT_SECS: int = 5
-"""Subprocess spawn or first-tick check (process just launched)."""
-
 FILE_DB_TIMEOUT_SECS: int = 30
 """Filesystem + SQLite operations: knowledge index sync, session restore, task status reads."""

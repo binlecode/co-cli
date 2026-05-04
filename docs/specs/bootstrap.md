@@ -96,9 +96,14 @@ Bootstrap calls `config.llm.validate_config()` before building long-lived runtim
 
 | Condition | Behavior |
 | --- | --- |
-| No model configured | raise `ValueError`; session never starts |
 | Gemini provider with missing API key | raise `ValueError`; session never starts |
+| Model unknown for provider (no `_INFERENCE_MODEL_SETTINGS` entry) | raise `ValueError`; session never starts |
+| Model is noreason-only (no `reasoning` mode entry) | raise `ValueError`; session never starts |
 | Provider connectivity problem | startup continues; first runtime model call surfaces the error |
+
+An unset `llm.model` is auto-resolved to `DEFAULT_LLM_MODELS[provider]` by a pydantic
+`model_validator` before `validate_config()` runs, so "no model configured" is not a
+reachable bootstrap failure.
 
 If the provider is `ollama`, bootstrap probes the model's runtime `num_ctx` from the Modelfile via `/api/show`. The probe result is capped by `config.llm.max_ctx` and stored as `deps.model_max_ctx`. If the capped value is below the minimum supported agentic context, startup fails immediately.
 

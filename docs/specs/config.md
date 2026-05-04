@@ -32,7 +32,8 @@ graph TD
 | `get_settings()` | `core.py` | Lazy module-level singleton — calls `load_config()` on first access |
 | `LlmSettings` | `llm.py` | Provider, model, inference defaults, context settings |
 | `InferenceSettings` | `llm.py` | User-configurable scalar overrides (temperature, top_p, max_tokens) |
-| `_INFERENCE_DEFAULTS` | `llm.py` | Provider→model→mode defaults tree used by `build_model()` |
+| `_INFERENCE_MODEL_SETTINGS` | `llm.py` | Provider→model→mode canonical inference knobs used by `build_model()` |
+| `DEFAULT_LLM_MODELS` | `llm.py` | Per-provider default model id (full id with variant tag) — used when `llm.model` is unset |
 | `KnowledgeSettings` | `knowledge.py` | Search backend, embedding, chunking, and lifecycle settings |
 | `CompactionSettings` | `compaction.py` | Context compaction trigger ratios and anti-thrash knobs |
 | `WebSettings` | `web.py` | Domain allowlist/blocklist and HTTP retry policy |
@@ -94,17 +95,22 @@ before Pydantic validation. Flat fields have their own inline map in `fill_from_
 `KnowledgeSettings` uses `pydantic-settings` with `env_prefix="CO_KNOWLEDGE_"` rather than
 the manual `ENV_MAP` pattern; its env vars are applied by `pydantic-settings` machinery.
 
-### LLM inference defaults
+### LLM inference model settings
 
-`_INFERENCE_DEFAULTS` is the central table for per-provider, per-model inference parameters.
-`model_key` is derived from `llm.model` by splitting on `:` (`"qwen3.6:27b-agentic"` → `"qwen3.6"`).
+`_INFERENCE_MODEL_SETTINGS` is the central table of per-provider, per-model inference knobs —
+the canonical source of truth (not "defaults" of anything). `model_key` is derived from
+`llm.model` by splitting on `:` (`"qwen3.6:27b-agentic"` → `"qwen3.6"`).
 
 ```
 _inference(mode):
-  base = _INFERENCE_DEFAULTS[provider][model_key][mode]   # or {} if absent
+  base = _INFERENCE_MODEL_SETTINGS[provider][model_key][mode]   # or {} if absent
   override = InferenceSettings (reasoning or noreason) — non-None/non-default fields only
   return {**base, **override}
 ```
+
+Per-provider default model id (used when `llm.model` is unset) lives separately in
+`DEFAULT_LLM_MODELS[provider]` — full id including variant tag, since
+`_INFERENCE_MODEL_SETTINGS` keys are variant-stripped base names.
 
 Defined entries:
 
@@ -116,9 +122,11 @@ Defined entries:
 | `gemini` | `gemini-2.5-flash` | noreason only | `thinking_config: {thinking_budget: 0}` |
 | `gemini` | `gemini-2.5-flash-lite` | noreason only | `thinking_config: {thinking_budget: 0}` |
 
-`validate_config()` (no IO) enforces: model non-empty, Gemini API key present, model key in
-`_INFERENCE_DEFAULTS`, and model key has a `reasoning` entry (noreason-only models cannot be
-the main agent model).
+`validate_config()` (no IO) enforces: Gemini API key present when provider is gemini, model
+key in `_INFERENCE_MODEL_SETTINGS`, and model key has a `reasoning` entry (noreason-only
+models cannot be the main agent model). Empty `llm.model` is auto-resolved to
+`DEFAULT_LLM_MODELS[provider]` by a pydantic `model_validator`, so the no-model case is
+handled before validation runs.
 
 `reasoning_model_settings()` → `ModelSettings` for the main agent.
 `noreason_model_settings()` → `ModelSettings` (Ollama) or `GoogleModelSettings` (Gemini) for
@@ -208,7 +216,7 @@ comma-separated strings from env vars. Blocked list takes precedence over allowe
 | `llm.noreason.max_tokens` | — | None | User override for noreason max_tokens |
 
 User overrides in `llm.reasoning` / `llm.noreason` are scalar-only. Provider-specific fields
-(`extra_body`, `thinking_config`) are not user-configurable — they live in `_INFERENCE_DEFAULTS`.
+(`extra_body`, `thinking_config`) are not user-configurable — they live in `_INFERENCE_MODEL_SETTINGS`.
 
 ### Knowledge (`knowledge.*`)
 
@@ -307,7 +315,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | File | Purpose |
 |------|---------|
 | `co_cli/config/core.py` | `Settings`, `load_config()`, `get_settings()`, `fill_from_env`; path constants (`USER_DIR`, `SETTINGS_FILE`, `SEARCH_DB`, etc.) |
-| `co_cli/config/llm.py` | `LlmSettings`, `InferenceSettings`, `_INFERENCE_DEFAULTS`; `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` |
+| `co_cli/config/llm.py` | `LlmSettings`, `InferenceSettings`, `_INFERENCE_MODEL_SETTINGS`, `DEFAULT_LLM_MODELS`; `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` |
 | `co_cli/config/knowledge.py` | `KnowledgeSettings` — search backend, embedding, chunking, lifecycle |
 | `co_cli/config/compaction.py` | `CompactionSettings` — trigger ratio, tail fraction, anti-thrash window |
 | `co_cli/config/web.py` | `WebSettings` — domain policy, HTTP retry and backoff |

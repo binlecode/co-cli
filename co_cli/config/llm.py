@@ -5,33 +5,34 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_ai.settings import ModelSettings
 
 # ---------------------------------------------------------------------------
-# LLM defaults  (used as LlmSettings field defaults — must stay named)
+# LLM defaults
 # ---------------------------------------------------------------------------
 
 DEFAULT_LLM_PROVIDER = "ollama"
 DEFAULT_LLM_HOST = "http://localhost:11434"
-DEFAULT_LLM_MODEL = "qwen3.6:27b-agentic"
-DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
+
+DEFAULT_LLM_MODELS: dict[str, str] = {
+    "ollama": "qwen3.6:27b-agentic",
+    "gemini": "gemini-3-flash-preview",
+}
 
 DEFAULT_MAX_CTX = 131_072
 DEFAULT_CTX_TOKEN_BUDGET = 100_000
 
 
 # ---------------------------------------------------------------------------
-# Inference defaults tree
+# Inference model settings — canonical per-model knobs
 #
-# Structure: provider → model → {reasoning?, noreason?}
-# "_default" is the fallback for any unlisted model.
-# Each entry is complete for the modes it defines — no merging between
-# _default and model entries; one or the other is used as the base.
-# Resolution: model entry (or _default fallback) → merge user explicit config.
+# Structure: provider → model (variant-stripped base name) → {reasoning?, noreason?}
+# Lookup: self.model.split(":")[0]  (Ollama variants share base entries)
+# Resolution: model entry → merge user explicit config from InferenceSettings.
 # ---------------------------------------------------------------------------
 
-_INFERENCE_DEFAULTS: dict[str, Any] = {
+_INFERENCE_MODEL_SETTINGS: dict[str, Any] = {
     "ollama": {
         "qwen3.6": {
             "reasoning": {
@@ -127,10 +128,10 @@ def resolve_api_key_from_env(env: Mapping[str, str], llm_data: dict) -> str | No
 
 
 class InferenceSettings(BaseModel):
-    """User-configurable overrides applied on top of per-model inference defaults.
+    """User-configurable overrides applied on top of per-model inference settings.
 
     Only provider-agnostic scalar params are exposed — provider-specific fields
-    (extra_body, thinking_config, etc.) belong in _INFERENCE_DEFAULTS.
+    (extra_body, thinking_config, etc.) belong in _INFERENCE_MODEL_SETTINGS.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -138,6 +139,31 @@ class InferenceSettings(BaseModel):
     temperature: float | None = Field(default=None)
     top_p: float | None = Field(default=None)
     max_tokens: int | None = Field(default=None)
+
+
+# ---------------------------------------------------------------------------
+# Inference dict → pydantic-ai ModelSettings translators
+# ---------------------------------------------------------------------------
+
+
+def _scalar_settings(inference: dict[str, Any]) -> dict[str, Any]:
+    return {k: inference[k] for k in ("temperature", "top_p", "max_tokens") if k in inference}
+
+
+def _ollama_settings(inference: dict[str, Any]) -> ModelSettings:
+    settings: ModelSettings = _scalar_settings(inference)  # type: ignore[assignment]
+    if extra_body := dict(inference.get("extra_body", {})):
+        settings["extra_body"] = extra_body
+    return settings
+
+
+def _gemini_settings(inference: dict[str, Any]) -> ModelSettings:
+    from pydantic_ai.models.google import GoogleModelSettings
+
+    kwargs = _scalar_settings(inference)
+    if thinking_config := inference.get("thinking_config"):
+        kwargs["google_thinking_config"] = dict(thinking_config)
+    return GoogleModelSettings(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -153,12 +179,18 @@ class LlmSettings(BaseModel):
     api_key: str | None = Field(default=None)
     provider: Literal["ollama", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)
     host: str = Field(default=DEFAULT_LLM_HOST)
-    model: str = Field(default=DEFAULT_LLM_MODEL)
+    model: str = Field(default="")
     # User-configurable ceiling; probed Ollama num_ctx is capped to this at bootstrap.
     max_ctx: int = Field(default=DEFAULT_MAX_CTX)
     ctx_token_budget: int = Field(default=DEFAULT_CTX_TOKEN_BUDGET)
     reasoning: InferenceSettings = Field(default_factory=InferenceSettings)
     noreason: InferenceSettings = Field(default_factory=InferenceSettings)
+
+    @model_validator(mode="after")
+    def _default_model_per_provider(self) -> LlmSettings:
+        if not self.model:
+            self.model = DEFAULT_LLM_MODELS[self.provider]
+        return self
 
     def uses_ollama(self) -> bool:
         """Return True when the session LLM backend is Ollama's OpenAI-compatible API."""
@@ -170,52 +202,28 @@ class LlmSettings(BaseModel):
 
     def _inference(self, mode: str) -> dict[str, Any]:
         model_key = self.model.split(":")[0]
-        base = _INFERENCE_DEFAULTS.get(self.provider, {}).get(model_key, {}).get(mode, {})
+        base = _INFERENCE_MODEL_SETTINGS.get(self.provider, {}).get(model_key, {}).get(mode, {})
         override = (self.reasoning if mode == "reasoning" else self.noreason).model_dump(
             exclude_defaults=True, exclude_none=True
         )
         return {**base, **override}
 
     def reasoning_model_settings(self) -> ModelSettings:
-        """Return ModelSettings for the main reasoning model."""
+        """Return ModelSettings for the main reasoning model (provider-aware)."""
         inference = self._inference("reasoning")
-        extra_body = dict(inference.get("extra_body", {}))
-        settings: ModelSettings = {}
-        for key in ("temperature", "top_p", "max_tokens"):
-            if key in inference:
-                settings[key] = inference[key]  # type: ignore[literal-required]
-        if extra_body:
-            settings["extra_body"] = extra_body
-        return settings
+        return _gemini_settings(inference) if self.uses_gemini() else _ollama_settings(inference)
 
     def noreason_model_settings(self) -> ModelSettings:
         """Return ModelSettings for non-reasoning helper calls (provider-aware)."""
         inference = self._inference("noreason")
-        if self.uses_gemini():
-            from pydantic_ai.models.google import GoogleModelSettings
-
-            kwargs: dict[str, Any] = {
-                k: inference[k] for k in ("temperature", "top_p", "max_tokens") if k in inference
-            }
-            if "thinking_config" in inference:
-                kwargs["google_thinking_config"] = dict(inference["thinking_config"])
-            return GoogleModelSettings(**kwargs)
-        settings: ModelSettings = {}
-        for key in ("temperature", "top_p", "max_tokens"):
-            if key in inference:
-                settings[key] = inference[key]  # type: ignore[literal-required]
-        if extra_body := dict(inference.get("extra_body", {})):
-            settings["extra_body"] = extra_body
-        return settings
+        return _gemini_settings(inference) if self.uses_gemini() else _ollama_settings(inference)
 
     def validate_config(self) -> str | None:
         """Validate LLM config shape — no IO. Returns error message or None if valid."""
-        if not self.model:
-            return "No model configured — set llm.model in settings.json"
         if self.uses_gemini() and not self.api_key:
             return "Set GEMINI_API_KEY or CO_LLM_API_KEY — required for Gemini provider"
         model_key = self.model.split(":")[0]
-        known = _INFERENCE_DEFAULTS.get(self.provider, {})
+        known = _INFERENCE_MODEL_SETTINGS.get(self.provider, {})
         if model_key not in known:
             return f"Model {model_key!r} has no inference defaults for provider {self.provider!r}. Known: {', '.join(known)}"
         if "reasoning" not in known[model_key]:

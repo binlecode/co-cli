@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.8.122]
+
+### Refactor
+- Renamed `_INFERENCE_DEFAULTS` → `_INFERENCE_MODEL_SETTINGS` — the table is canonical per-model knobs, not "defaults" of anything; bootstrap defaults are kept separately at the top of `llm.py`
+- Added `DEFAULT_LLM_MODELS: dict[str, str]` for per-provider default model id (full id with variant tag); replaces the single hardcoded `DEFAULT_LLM_MODEL` constant
+- Pydantic `model_validator` on `LlmSettings` auto-resolves empty `llm.model` to `DEFAULT_LLM_MODELS[provider]`; "no model configured" is no longer a reachable bootstrap failure mode
+- Deduplicated scalar + extra_body extraction across `reasoning_model_settings()` / `noreason_model_settings()` via `_ollama_settings()` and `_gemini_settings()` translators
+- `reasoning_model_settings()` is now provider-aware (closes a latent gap where Gemini-specific keys were silently ignored)
+- Stale path comment in `bootstrap/check.py` (`config/_llm.py` → `config/llm.py`)
+
+### Tests
+- Added `test_flow_llm_settings.py` exercising `reasoning_model_settings()` end-to-end against real Ollama; closes the reasoning-path coverage gap (existing `test_flow_llm_call.py` only covers noreason)
+- Added `LLM_REASONING_TIMEOUT_SECS = 30` constant for reasoning-mode tests
+
+### Docs
+- Synced `docs/specs/config.md` to the renamed table and new `DEFAULT_LLM_MODELS`
+- Updated `docs/specs/bootstrap.md` failure-mode table — removed the now-unreachable "No model configured" entry; added unknown-model and noreason-only-model failure modes
+
 ## [0.8.119]
 
 ### Refactor
