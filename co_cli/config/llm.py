@@ -14,7 +14,7 @@ from pydantic_ai.settings import ModelSettings
 
 DEFAULT_LLM_PROVIDER = "ollama"
 DEFAULT_LLM_HOST = "http://localhost:11434"
-DEFAULT_LLM_MODEL = "qwen3.5:35b-a3b-agentic"
+DEFAULT_LLM_MODEL = "qwen3.6:27b-agentic"
 DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 
 
@@ -30,35 +30,31 @@ DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 
 _INFERENCE_DEFAULTS: dict[str, Any] = {
     "ollama": {
-        "qwen3.5": {
+        "qwen3.6": {
             "reasoning": {
-                "temperature": 1.0,
-                "top_p": 0.95,
                 "max_tokens": 32768,
                 "context_window": 131072,
-                "extra_body": {
-                    "top_k": 20,
-                    "min_p": 0.0,
-                    "presence_penalty": 1.5,
-                    "repeat_penalty": 1.0,
-                },
             },
-            # think=false is the authoritative noreason control for qwen3.5 via Ollama.
-            # reasoning_effort="none" is a secondary hint — honored by Ollama versions that
-            # map it to think=false, silently ignored by versions that do not.
+            # think=false is the authoritative noreason control; reasoning_effort="none" is a
+            # secondary hint honored by Ollama versions that map it to think=false.
             "noreason": {
-                "temperature": 0.7,
-                "top_p": 0.8,
-                "max_tokens": 16384,
                 "extra_body": {
                     "think": False,
                     "reasoning_effort": "none",
-                    "top_k": 20,
-                    "min_p": 0.0,
-                    "presence_penalty": 1.5,
-                    "repeat_penalty": 1.0,
-                    "num_ctx": 131072,
-                    "num_predict": 16384,
+                },
+            },
+        },
+        "qwen3.5": {
+            "reasoning": {
+                "max_tokens": 32768,
+                "context_window": 131072,
+            },
+            # think=false is the authoritative noreason control; reasoning_effort="none" is a
+            # secondary hint honored by Ollama versions that map it to think=false.
+            "noreason": {
+                "extra_body": {
+                    "think": False,
+                    "reasoning_effort": "none",
                 },
             },
         },
@@ -204,12 +200,13 @@ class LlmSettings(BaseModel):
         extra_body = dict(inference.get("extra_body", {}))
         if (num_ctx := inference.get("num_ctx")) is not None and "num_ctx" not in extra_body:
             extra_body["num_ctx"] = num_ctx
-        return ModelSettings(
-            temperature=inference["temperature"],
-            top_p=inference["top_p"],
-            max_tokens=inference["max_tokens"],
-            extra_body=extra_body,
-        )
+        settings: ModelSettings = {}
+        for key in ("temperature", "top_p", "max_tokens"):
+            if key in inference:
+                settings[key] = inference[key]  # type: ignore[literal-required]
+        if extra_body:
+            settings["extra_body"] = extra_body
+        return settings
 
     def reasoning_context_window(self) -> int | None:
         """Return the configured or model-default context window for the main model."""
@@ -222,19 +219,18 @@ class LlmSettings(BaseModel):
             from pydantic_ai.models.google import GoogleModelSettings
 
             kwargs: dict[str, Any] = {
-                "temperature": inference["temperature"],
-                "top_p": inference["top_p"],
-                "max_tokens": inference["max_tokens"],
+                k: inference[k] for k in ("temperature", "top_p", "max_tokens") if k in inference
             }
             if "thinking_config" in inference:
                 kwargs["google_thinking_config"] = dict(inference["thinking_config"])
             return GoogleModelSettings(**kwargs)
-        return ModelSettings(
-            temperature=inference["temperature"],
-            top_p=inference["top_p"],
-            max_tokens=inference["max_tokens"],
-            extra_body=dict(inference.get("extra_body", {})),
-        )
+        settings: ModelSettings = {}
+        for key in ("temperature", "top_p", "max_tokens"):
+            if key in inference:
+                settings[key] = inference[key]  # type: ignore[literal-required]
+        if extra_body := dict(inference.get("extra_body", {})):
+            settings["extra_body"] = extra_body
+        return settings
 
     def validate_config(self) -> str | None:
         """Validate LLM config shape — no IO. Returns error message or None if valid."""

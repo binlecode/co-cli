@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.8.117]
+
+### Refactor
+- Trimmed `_INFERENCE_DEFAULTS` for ollama qwen3.x: reasoning down to `max_tokens` + `context_window`; noreason down to `think=false` + `reasoning_effort=none` — all other params deferred to the served model
+- `reasoning_model_settings()` and `noreason_model_settings()` now build `ModelSettings` conditionally, omitting absent keys rather than hard-coding them
+
 ## [0.8.115]
 
 ### Fixes

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import ModelResponse, ToolCallPart
-from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM
@@ -14,6 +13,7 @@ from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 from co_cli.agent.core import build_agent, build_tool_registry
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
+from co_cli.display.headless import HeadlessFrontend as SilentFrontend
 from co_cli.llm.factory import LlmModel, build_model
 from co_cli.tools.shell_backend import ShellBackend
 
