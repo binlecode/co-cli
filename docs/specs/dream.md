@@ -1,7 +1,7 @@
 # Co CLI — Dream
 
 
-This spec owns the dream-cycle lifecycle. The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [system.md](system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for dream miner and merge calls lives in [llm-models.md](llm-models.md).
+This spec owns the dream-cycle lifecycle. The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [system.md](system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for dream miner and merge calls lives in [config.md](config.md).
 
 ## 1. What & How
 

@@ -129,7 +129,7 @@ The specialized DESIGN docs own the detailed behavior inside each boundary:
 - tool registration and approval behavior: [tools.md](tools.md)
 - skill loading and dispatch: [skills.md](skills.md)
 - personality configuration, character assets, and soul files: [personality.md](personality.md)
-- provider and model selection rules: [llm-models.md](llm-models.md)
+- provider, model, and configuration: [config.md](config.md)
 - tracing and log viewers: [observability.md](observability.md)
 
 ## 3. Config
