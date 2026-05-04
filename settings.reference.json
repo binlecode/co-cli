@@ -1,31 +1,11 @@
 {
   "llm": {
-    "provider": "ollama-openai",
+    "provider": "ollama",
     "host": "http://localhost:11434",
-    "model": "qwen3.5:35b-a3b-think",
-    "max_ctx": 262144,
+    "model": "qwen3.6:27b-agentic",
     "api_key": null,
-    "ctx_warn_threshold": 0.85,
-    "ctx_overflow_threshold": 1.0,
-    "reasoning": {
-      "temperature": 1.0,
-      "top_p": 0.95,
-      "max_tokens": 32768
-    },
-    "noreason": {
-      "temperature": 0.7,
-      "top_p": 0.8,
-      "max_tokens": 16384,
-      "extra_body": {
-        "reasoning_effort": "none",
-        "top_k": 20,
-        "min_p": 0.0,
-        "presence_penalty": 1.5,
-        "repeat_penalty": 1.0,
-        "num_ctx": 131072,
-        "num_predict": 16384
-      }
-    }
+    "max_ctx": 131072,
+    "ctx_token_budget": 100000
   },
   "knowledge": {
     "search_backend": "hybrid",
@@ -37,12 +17,24 @@
     "tei_rerank_batch_size": 50,
     "chunk_size": 600,
     "chunk_overlap": 80,
-    "llm_reranker": null
+    "session_chunk_tokens": 400,
+    "session_chunk_overlap": 80,
+    "max_artifact_count": 300,
+    "decay_after_days": 90,
+    "consolidation_enabled": false,
+    "consolidation_trigger": "session_end",
+    "consolidation_lookback_sessions": 5,
+    "consolidation_similarity_threshold": 0.75,
+    "character_recall_limit": 3
+  },
+  "compaction": {
+    "compaction_ratio": 0.50,
+    "tail_fraction": 0.20,
+    "min_proactive_savings": 0.10,
+    "proactive_thrash_window": 2
   },
   "memory": {
-    "recall_half_life_days": 30,
-    "injection_max_chars": 2000,
-    "extract_every_n_turns": 3
+    "recall_half_life_days": 30
   },
   "web": {
     "fetch_allowed_domains": [],
@@ -52,14 +44,8 @@
     "http_backoff_max_seconds": 8.0,
     "http_jitter_ratio": 0.2
   },
-  "subagent": {
-    "scope_chars": 120,
-    "max_requests_research": 10,
-    "max_requests_analysis": 8,
-    "max_requests_thinking": 3
-  },
   "shell": {
-    "max_timeout": 600,
+    "max_timeout": 300,
     "safe_commands": [
       "ls", "tree", "find", "fd",
       "cat", "head", "tail",
@@ -78,21 +64,26 @@
     "log_backup_count": 3
   },
   "tools": {
-    "result_persist_chars": 50000,
-    "batch_spill_chars": 200000
+    "result_persist_chars": 50000
   },
 
   "obsidian_vault_path": "",
   "google_credentials_path": "",
   "brave_search_api_key": "",
-  "library_path": "",
+  "knowledge_path": "",
 
   "theme": "light",
   "personality": "tars",
-  "tool_retries": 3,
   "reasoning_display": "summary",
+  "tool_retries": 3,
   "doom_loop_threshold": 3,
   "max_reflections": 3,
 
-  "mcp_servers": {}
+  "mcp_servers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"],
+      "approval": "auto"
+    }
+  }
 }

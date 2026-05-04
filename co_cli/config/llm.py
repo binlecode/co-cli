@@ -25,14 +25,13 @@ DEFAULT_CTX_TOKEN_BUDGET = 100_000
 
 
 # ---------------------------------------------------------------------------
-# Inference model settings — canonical per-model knobs
+# Per-model inference settings — canonical knobs per provider/model/mode.
 #
 # Structure: provider → model (variant-stripped base name) → {reasoning?, noreason?}
 # Lookup: self.model.split(":")[0]  (Ollama variants share base entries)
-# Resolution: model entry → merge user explicit config from InferenceSettings.
 # ---------------------------------------------------------------------------
 
-_INFERENCE_MODEL_SETTINGS: dict[str, Any] = {
+_LLM_SETTINGS: dict[str, Any] = {
     "ollama": {
         "qwen3.6": {
             "reasoning": {
@@ -123,25 +122,6 @@ def resolve_api_key_from_env(env: Mapping[str, str], llm_data: dict) -> str | No
 
 
 # ---------------------------------------------------------------------------
-# Settings override models
-# ---------------------------------------------------------------------------
-
-
-class InferenceSettings(BaseModel):
-    """User-configurable overrides applied on top of per-model inference settings.
-
-    Only provider-agnostic scalar params are exposed — provider-specific fields
-    (extra_body, thinking_config, etc.) belong in _INFERENCE_MODEL_SETTINGS.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    temperature: float | None = Field(default=None)
-    top_p: float | None = Field(default=None)
-    max_tokens: int | None = Field(default=None)
-
-
-# ---------------------------------------------------------------------------
 # Inference dict → pydantic-ai ModelSettings translators
 # ---------------------------------------------------------------------------
 
@@ -183,8 +163,6 @@ class LlmSettings(BaseModel):
     # User-configurable ceiling; probed Ollama num_ctx is capped to this at bootstrap.
     max_ctx: int = Field(default=DEFAULT_MAX_CTX)
     ctx_token_budget: int = Field(default=DEFAULT_CTX_TOKEN_BUDGET)
-    reasoning: InferenceSettings = Field(default_factory=InferenceSettings)
-    noreason: InferenceSettings = Field(default_factory=InferenceSettings)
 
     @model_validator(mode="after")
     def _default_model_per_provider(self) -> LlmSettings:
@@ -202,11 +180,7 @@ class LlmSettings(BaseModel):
 
     def _inference(self, mode: str) -> dict[str, Any]:
         model_key = self.model.split(":")[0]
-        base = _INFERENCE_MODEL_SETTINGS.get(self.provider, {}).get(model_key, {}).get(mode, {})
-        override = (self.reasoning if mode == "reasoning" else self.noreason).model_dump(
-            exclude_defaults=True, exclude_none=True
-        )
-        return {**base, **override}
+        return _LLM_SETTINGS.get(self.provider, {}).get(model_key, {}).get(mode, {})
 
     def reasoning_model_settings(self) -> ModelSettings:
         """Return ModelSettings for the main reasoning model (provider-aware)."""
@@ -223,7 +197,7 @@ class LlmSettings(BaseModel):
         if self.uses_gemini() and not self.api_key:
             return "Set GEMINI_API_KEY or CO_LLM_API_KEY — required for Gemini provider"
         model_key = self.model.split(":")[0]
-        known = _INFERENCE_MODEL_SETTINGS.get(self.provider, {})
+        known = _LLM_SETTINGS.get(self.provider, {})
         if model_key not in known:
             return f"Model {model_key!r} has no inference defaults for provider {self.provider!r}. Known: {', '.join(known)}"
         if "reasoning" not in known[model_key]:

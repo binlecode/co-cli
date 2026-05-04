@@ -97,7 +97,7 @@ Bootstrap calls `config.llm.validate_config()` before building long-lived runtim
 | Condition | Behavior |
 | --- | --- |
 | Gemini provider with missing API key | raise `ValueError`; session never starts |
-| Model unknown for provider (no `_INFERENCE_MODEL_SETTINGS` entry) | raise `ValueError`; session never starts |
+| Model unknown for provider (no `_LLM_SETTINGS` entry) | raise `ValueError`; session never starts |
 | Model is noreason-only (no `reasoning` mode entry) | raise `ValueError`; session never starts |
 | Provider connectivity problem | startup continues; first runtime model call surfaces the error |
 

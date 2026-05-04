@@ -31,8 +31,7 @@ graph TD
 | `load_config()` | `core.py` | Loads `settings.json`, merges `.env`, applies env; returns `Settings` |
 | `get_settings()` | `core.py` | Lazy module-level singleton — calls `load_config()` on first access |
 | `LlmSettings` | `llm.py` | Provider, model, inference defaults, context settings |
-| `InferenceSettings` | `llm.py` | User-configurable scalar overrides (temperature, top_p, max_tokens) |
-| `_INFERENCE_MODEL_SETTINGS` | `llm.py` | Provider→model→mode canonical inference knobs used by `build_model()` |
+| `_LLM_SETTINGS` | `llm.py` | Provider→model→mode canonical inference knobs used by `build_model()` |
 | `DEFAULT_LLM_MODELS` | `llm.py` | Per-provider default model id (full id with variant tag) — used when `llm.model` is unset |
 | `KnowledgeSettings` | `knowledge.py` | Search backend, embedding, chunking, and lifecycle settings |
 | `CompactionSettings` | `compaction.py` | Context compaction trigger ratios and anti-thrash knobs |
@@ -97,20 +96,18 @@ the manual `ENV_MAP` pattern; its env vars are applied by `pydantic-settings` ma
 
 ### LLM inference model settings
 
-`_INFERENCE_MODEL_SETTINGS` is the central table of per-provider, per-model inference knobs —
-the canonical source of truth (not "defaults" of anything). `model_key` is derived from
+`_LLM_SETTINGS` is the central table of per-provider, per-model inference knobs —
+the canonical source of truth, not user-overridable. `model_key` is derived from
 `llm.model` by splitting on `:` (`"qwen3.6:27b-agentic"` → `"qwen3.6"`).
 
 ```
 _inference(mode):
-  base = _INFERENCE_MODEL_SETTINGS[provider][model_key][mode]   # or {} if absent
-  override = InferenceSettings (reasoning or noreason) — non-None/non-default fields only
-  return {**base, **override}
+  return _LLM_SETTINGS[provider][model_key][mode]   # or {} if absent
 ```
 
 Per-provider default model id (used when `llm.model` is unset) lives separately in
 `DEFAULT_LLM_MODELS[provider]` — full id including variant tag, since
-`_INFERENCE_MODEL_SETTINGS` keys are variant-stripped base names.
+`_LLM_SETTINGS` keys are variant-stripped base names.
 
 Defined entries:
 
@@ -123,7 +120,7 @@ Defined entries:
 | `gemini` | `gemini-2.5-flash-lite` | noreason only | `thinking_config: {thinking_budget: 0}` |
 
 `validate_config()` (no IO) enforces: Gemini API key present when provider is gemini, model
-key in `_INFERENCE_MODEL_SETTINGS`, and model key has a `reasoning` entry (noreason-only
+key in `_LLM_SETTINGS`, and model key has a `reasoning` entry (noreason-only
 models cannot be the main agent model). Empty `llm.model` is auto-resolved to
 `DEFAULT_LLM_MODELS[provider]` by a pydantic `model_validator`, so the no-model case is
 handled before validation runs.
@@ -208,15 +205,9 @@ comma-separated strings from env vars. Blocked list takes precedence over allowe
 | `llm.max_ctx` | — | `131072` | Ceiling on probed Ollama context window |
 | `llm.ctx_token_budget` | — | `100000` | Fallback token budget when probe is absent (Gemini) |
 | `llm.api_key` | `GEMINI_API_KEY` (gemini), else `CO_LLM_API_KEY` | `None` | Provider API key |
-| `llm.reasoning.temperature` | — | None | User override for reasoning temperature |
-| `llm.reasoning.top_p` | — | None | User override for reasoning top_p |
-| `llm.reasoning.max_tokens` | — | None | User override for reasoning max_tokens |
-| `llm.noreason.temperature` | — | None | User override for noreason temperature |
-| `llm.noreason.top_p` | — | None | User override for noreason top_p |
-| `llm.noreason.max_tokens` | — | None | User override for noreason max_tokens |
 
-User overrides in `llm.reasoning` / `llm.noreason` are scalar-only. Provider-specific fields
-(`extra_body`, `thinking_config`) are not user-configurable — they live in `_INFERENCE_MODEL_SETTINGS`.
+Inference knobs (temperature, top_p, max_tokens, extra_body, thinking_config) are not
+user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 
 ### Knowledge (`knowledge.*`)
 
@@ -315,7 +306,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | File | Purpose |
 |------|---------|
 | `co_cli/config/core.py` | `Settings`, `load_config()`, `get_settings()`, `fill_from_env`; path constants (`USER_DIR`, `SETTINGS_FILE`, `SEARCH_DB`, etc.) |
-| `co_cli/config/llm.py` | `LlmSettings`, `InferenceSettings`, `_INFERENCE_MODEL_SETTINGS`, `DEFAULT_LLM_MODELS`; `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` |
+| `co_cli/config/llm.py` | `LlmSettings`, `_LLM_SETTINGS`, `DEFAULT_LLM_MODELS`; `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` |
 | `co_cli/config/knowledge.py` | `KnowledgeSettings` — search backend, embedding, chunking, lifecycle |
 | `co_cli/config/compaction.py` | `CompactionSettings` — trigger ratio, tail fraction, anti-thrash window |
 | `co_cli/config/web.py` | `WebSettings` — domain policy, HTTP retry and backoff |
