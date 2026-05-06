@@ -13,9 +13,7 @@ from co_cli.tools.tool_io import tool_error, tool_output
 logger = logging.getLogger(__name__)
 
 
-@agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True, max_result_size=30_000
-)
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 async def shell(
     ctx: RunContext[CoDeps], cmd: str, timeout: int = 120, workdir: str | None = None
 ) -> ToolReturn:

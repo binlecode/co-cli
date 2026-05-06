@@ -14,18 +14,17 @@ from co_cli.agent.core import build_agent, build_tool_registry
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend
-from co_cli.llm.factory import LlmModel, build_model
+from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
-# Production agent via build_agent() with noreason settings per test policy for tool-calling tests.
-_LLM_NOREASON = LlmModel(
-    model=_LLM_MODEL.model,
-    settings=_LLM_MODEL.settings_noreason,
-    settings_noreason=_LLM_MODEL.settings_noreason,
-)
-_AGENT = build_agent(config=_CONFIG_NO_MCP, model=_LLM_NOREASON, tool_registry=_TOOL_REG)
+# Tool-routing tests use the production reasoning settings: Qwen3-family models on
+# Ollama need the reasoning pass to emit a structured tool_calls array reliably.
+# With think disabled, qwen3.6:27b-agentic emits free-form text (e.g. "shell> git status")
+# instead of routing — verified via tmp/probe_qwen36_raw.py and matching OpenCode's
+# transform.ts:926-938 (DashScope Qwen also requires enable_thinking=true).
+_AGENT = build_agent(config=_CONFIG_NO_MCP, model=_LLM_MODEL, tool_registry=_TOOL_REG)
 
 
 def _make_deps() -> CoDeps:
@@ -35,6 +34,7 @@ def _make_deps() -> CoDeps:
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(),
+        model_max_ctx=_CONFIG_NO_MCP.llm.max_ctx,
     )
 
 

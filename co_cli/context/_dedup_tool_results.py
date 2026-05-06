@@ -33,7 +33,7 @@ a net savings in every triggered case.
 def _content_hash(content: str) -> str:
     """16-hex-char SHA-256 prefix. 64 bits of entropy — collision-free at session scale.
 
-    Matches the prefix length used by ``persist_if_oversized`` in
+    Matches the prefix length used by ``spill_if_oversized`` in
     ``co_cli/tools/tool_io.py`` for disk-level content addressing, keeping
     hashing conventions consistent across the codebase.
     """

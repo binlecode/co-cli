@@ -9,16 +9,16 @@ Covers how co-cli keeps context bounded under pressure. Prompt assembly and hist
 flowchart TD
     subgraph Emit["M1 — tool emit"]
         T[tool returns]
-        T --> S{size &gt; max_result_size?}
+        T --> S{size &gt; spill_threshold_chars?}
         S -->|yes| P[persist to .co-cli/tool-results/&lt;sha&gt;.txt]
         P --> Ph[placeholder + 2KB preview]
         S -->|no| Pass[unchanged]
     end
 
-    subgraph PerReq["M2 + M3 — per ModelRequestNode"]
+    subgraph PerReq["M2 + M2L + M3 — per ModelRequestNode"]
         R0[dedup_tool_results<br/>M2-pre]
         R1[evict_old_tool_results<br/>M2a]
-        R1b[evict_batch_tool_outputs<br/>M2b]
+        R1b[enforce_turn_budget<br/>M2L aggregate spill]
         R5[proactive_window_processor<br/>M3]
         R0 --> R1 --> R1b --> R5
     end
@@ -188,7 +188,7 @@ flowchart TD
 
     subgraph Setup["Planner setup — budget=resolve_compaction_budget(), TAIL_FRACTION=0.20"]
         direction LR
-        s_bres["resolve_compaction_budget:\nmodel_max_ctx (probed + capped by llm.max_ctx) → ctx_token_budget (100K fallback)"]:::meta --> s_msgs["messages\nG0, G1, G2, G3"]:::head --> s_hinit["head_end\n= first_run_end + 1"]:::meta --> s_grps["groups = group_by_turn(messages)\n4 groups ≥ min+1 = 2 → proceed"]:::meta
+        s_bres["resolve_compaction_budget:\nmodel_max_ctx (probed + capped by llm.max_ctx; always set at bootstrap)"]:::meta --> s_msgs["messages\nG0, G1, G2, G3"]:::head --> s_hinit["head_end\n= first_run_end + 1"]:::meta --> s_grps["groups = group_by_turn(messages)\n4 groups ≥ min+1 = 2 → proceed"]:::meta
     end
 
     Check{len groups\n&lt; min+1?}
@@ -241,7 +241,7 @@ flowchart TD
 
 ### Diagram 5: M2 pre-compaction context compensation pipeline
 
-Message strip at each processor stage for an example conversation with duplicate file reads, six shell runs in the pre-tail region, and an oversized current batch. Processors run in pipeline order on the pre-tail region (everything before the last `UserPromptPart`); M2b additionally fires on the current batch. Same color scheme as Diagrams 2 and 3: gray-dashed = pre-tail content eligible for clearing, green = protected tail, purple = semantic markers and back-references replacing cleared content, orange = M1-persisted placeholder.
+Message strip at each processor stage for an example conversation with duplicate file reads, six shell runs in the pre-tail region, and an oversized current batch. Processors run in pipeline order on the pre-tail region (everything before the last `UserPromptPart`); enforce_turn_budget additionally fires on the current batch. Same color scheme as Diagrams 2 and 3: gray-dashed = pre-tail content eligible for clearing, green = protected tail, purple = semantic markers and back-references replacing cleared content, orange = M1-persisted placeholder.
 
 ```mermaid
 flowchart TD
@@ -260,14 +260,14 @@ flowchart TD
         t_h["head"]:::head --> t_fd1["→ see fd2"]:::marker --> t_fd2["TR(file_read)\nabc.py\n(1 of 1 — kept)"]:::prior --> t_s1["[shell] run 1\n→ exit 0, N lines"]:::marker --> t_s2["TR(shell)\nrun 2"]:::prior --> t_s3["TR(shell)\nrun 3"]:::prior --> t_s4["TR(shell)\nrun 4"]:::prior --> t_s5["TR(shell)\nrun 5"]:::prior --> t_s6["TR(shell)\nrun 6"]:::prior --> t_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> t_s7["TR(shell)\nrun 7\n250K chars"]:::tail
     end
 
-    subgraph AfterBatch["After M2b — evict_batch_tool_outputs: run 7 aggregate exceeds batch_spill_chars → M1 persist"]
+    subgraph AfterBatch["After M2L — enforce_turn_budget: run 7 aggregate exceeds turn_aggregate_threshold_tokens → force-spill"]
         direction LR
         b_h["head"]:::head --> b_fd1["→ see fd2"]:::marker --> b_fd2["TR(file_read)\nabc.py"]:::prior --> b_s1["[shell] run 1\n→ exit 0, N lines"]:::marker --> b_s2["TR(shell)\nrun 2"]:::prior --> b_s3["TR(shell)\nrun 3"]:::prior --> b_s4["TR(shell)\nrun 4"]:::prior --> b_s5["TR(shell)\nrun 5"]:::prior --> b_s6["TR(shell)\nrun 6"]:::prior --> b_sep["UserPromptPart\n(current)\n[protected]"]:::tail --> b_s7["TR(shell)\nrun 7\n→ &lt;persisted-output&gt;"]:::syspr
     end
 
     Raw -->|"M2-pre: dedup_tool_results"| AfterDedup
     AfterDedup -->|"M2a: evict_old_tool_results"| AfterTrunc
-    AfterTrunc -->|"M2b: evict_batch_tool_outputs"| AfterBatch
+    AfterTrunc -->|"M2L: enforce_turn_budget"| AfterBatch
 
     classDef syspr fill:#fff3e0,stroke:#f57c00
     classDef head fill:#e8f4f8,stroke:#6baed6
@@ -294,13 +294,12 @@ Spills any single tool result exceeding its per-tool threshold to `.co-cli/tool-
 
 **Trigger:** `len(display) > threshold` inside `tool_output()`.
 
-| Tool | `max_result_size` | Note |
+| Tool | `spill_threshold_chars` | Note |
 |---|---|---|
-| Default | `config.tools.result_persist_chars` (50,000) | falls through to config |
-| `file_read` | `math.inf` | never persists — prevents persist→read→persist recursion |
-| `shell` | 30,000 | explicit override |
+| Default | `SPILL_THRESHOLD_CHARS` (4,000) | module constant in `tool_io.py` |
+| `file_read` | `math.inf` | never spills — prevents spill→read→spill recursion |
 
-Placeholder: `<persisted-output>tool: … file: … size: N chars (X KB/MB)\npreview: first 2000 chars</persisted-output>`. Model retrieves full content via `file_read(path, start_line=, end_line=)`.
+Placeholder: `<persisted-output>tool: … file: … size: N chars (X KB/MB)\npreview: first 1500 chars</persisted-output>`. Model retrieves full content via `file_read(path, start_line=, end_line=)`.
 
 ### 2.2 M2 — Prepass recency clearing
 
@@ -310,14 +309,14 @@ Four sync processors in order; no LLM calls.
 
 **`evict_old_tool_results` (M2a)** — protects the last `UserPromptPart` onward; in the pre-tail region keeps the 5 most recent returns per tool in `COMPACTABLE_TOOLS` and replaces older returns with a per-tool semantic marker (`semantic_marker()` in `co_cli/context/_tool_result_markers.py`). Marker carries tool name, 1-3 key args from `ToolCallPart.args` (looked up via a `tool_call_id` index), and a size/outcome signal — e.g. `[shell] ran \`uv run pytest\` → exit 0, 47 lines`, `[file_read] src/foo.py (full, 1,200 chars)`. Non-string content falls back to `_CLEARED_PLACEHOLDER`. `tool_name` and `tool_call_id` preserved; non-compactable tools (writes, approvals) never cleared.
 
-**`evict_batch_tool_outputs` (M2b).** Fires on the current batch — the `ToolReturnPart`s that follow the last `ModelResponse` with a `ToolCallPart`. If the aggregate size of that batch exceeds `config.tools.batch_spill_chars`, spills the largest non-persisted returns via `persist_if_oversized(max_size=0)`, largest-first, until the aggregate fits. Skips already-persisted parts (those containing `<persisted-output>`). Fails open: if persist raises `OSError`, the candidate is skipped. Operates only on the current batch — no cross-turn state mutation.
+**`enforce_turn_budget` (M2L — L2 aggregate spill).** Fires on the current batch — the `ToolReturnPart`s that follow the last `UserPromptPart`. Aggregates return sizes using `CHARS_PER_TOKEN = 4` to estimate tokens; if the aggregate exceeds `deps.turn_aggregate_threshold_tokens` (bootstrapped as `int(tail_fraction * model_max_ctx)`), force-spills the largest non-persisted returns via `spill_if_oversized(..., force=True)`, largest-first, until the aggregate fits. Skips already-persisted parts (those containing `<persisted-output>`). Fails open: if spill raises `OSError`, the candidate is skipped. Writes `deps.runtime.current_turn_aggregate_tokens_after_spill` for OTEL reporting. Emits `tool_budget.enforce_turn_aggregate` span.
 
 ### 2.3 M3 — Window compaction
 
 **Trigger** (async processor, last in chain, runs before every `ModelRequestNode`):
 
 ```
-budget = resolve_compaction_budget(config, ctx_window)
+budget = resolve_compaction_budget(deps)
 if compaction_applied_this_turn:
     reported = 0
 elif post_compaction_token_estimate is not None:
@@ -337,10 +336,10 @@ if token_count <= threshold: return messages
 if consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window: return messages
 ```
 
-**Budget resolution** (`resolve_compaction_budget`): `deps.model_max_ctx` (Ollama probe result capped by `config.llm.max_ctx`, set at bootstrap) → `config.llm.ctx_token_budget` fallback (default 100,000).
+**Budget resolution** (`resolve_compaction_budget`): returns `deps.model_max_ctx` directly (Ollama probe result capped by `config.llm.max_ctx`, set at bootstrap).
 
 **Token counting — three functions:**
-- `estimate_message_tokens(messages)` — `total_chars // 4` over text-bearing parts and `ToolCallPart.args` (JSON-serialized). Args are included because M2a only clears return content, never call args — omitting them would undercount on tool-heavy transcripts (Gap E fix).
+- `estimate_message_tokens(messages)` — `total_chars // CHARS_PER_TOKEN` over text-bearing parts and `ToolCallPart.args` (JSON-serialized). Args are included because M2a only clears return content, never call args — omitting them would undercount on tool-heavy transcripts (Gap E fix).
 - `latest_response_input_tokens(messages)` — provider-reported input count from the most recent `ModelResponse`. Lags by one turn; zeroed when `compaction_applied_this_turn` because the post-compaction context is smaller than what the provider last counted — using the stale figure would suppress the trigger.
 - `_effective_token_count(messages, reported)` — `max(local, reported)`. Local estimate can drift from provider tokenization; provider report lags. Taking the max ensures neither under-count can delay compaction.
 
@@ -513,20 +512,22 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `_COMPACTION_BREAKER_TRIP` | `3` | Consecutive failures that trip the circuit breaker |
 | `_COMPACTION_BREAKER_PROBE_EVERY` | `10` | Skips between probe attempts when circuit breaker is tripped |
 
-**M1 and M2b thresholds** (`co_cli/config/tools.py`):
+**M1 and M2L constants** (module-level in `co_cli/tools/tool_io.py`; not user-configurable):
 
-| Setting | Env Var | Default | Description |
-|---|---|---|---|
-| `tools.result_persist_chars` | `CO_TOOLS_RESULT_PERSIST_CHARS` | `50,000` | M1 default per-tool emit-time persist threshold |
-| `tools.batch_spill_chars` | `CO_TOOLS_BATCH_SPILL_CHARS` | `200,000` | M2b aggregate batch budget before spill |
-
-**Per-tool M1 overrides** (set via `@agent_tool(max_result_size=...)` in each tool's own file):
-
-| Tool | `max_result_size` | Notes |
+| Constant | Value | Purpose |
 |---|---|---|
-| Default | `None` (→ `config.tools.result_persist_chars`) | falls through to config |
-| `file_read` | `math.inf` | never persists |
-| `shell` | `30,000` chars | explicit override |
+| `SPILL_THRESHOLD_CHARS` | `4,000` | M1 default per-tool emit-time spill threshold |
+| `TOOL_RESULT_PREVIEW_CHARS` | `1,500` | Preview chars included in the `<persisted-output>` placeholder |
+| `CHARS_PER_TOKEN` | `4` | Fast chars→tokens proxy used by M2L aggregate estimate |
+
+**L2 aggregate threshold** (`deps.turn_aggregate_threshold_tokens`) — computed at bootstrap as `int(tail_fraction * model_max_ctx)` and cached on `CoDeps`; not directly configurable (controlled via `compaction.tail_fraction` and `llm.max_ctx`).
+
+**Per-tool M1 overrides** (set via `@agent_tool(spill_threshold_chars=...)` in each tool's own file):
+
+| Tool | `spill_threshold_chars` | Notes |
+|---|---|---|
+| Default | `None` (→ `SPILL_THRESHOLD_CHARS`) | falls through to module constant |
+| `file_read` | `math.inf` | never spills |
 
 ## 4. Files
 
@@ -537,18 +538,18 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | `co_cli/context/_compaction_boundaries.py` | Boundary planner: `TurnGroup`, `group_by_turn`, `plan_compaction_boundaries`, active-user anchoring. |
 | `co_cli/context/_compaction_markers.py` | Marker builders, `gather_compaction_context` enrichment helper, `SUMMARY_MARKER_PREFIX`. |
 | `co_cli/context/_dedup_tool_results.py` | M2-pre dedup helpers: content hash, eligibility predicate (`is_dedup_candidate`), back-reference builder (`build_dedup_part`). |
-| `co_cli/context/_history_processors.py` | M2 processors: `dedup_tool_results`, `evict_old_tool_results`, `evict_batch_tool_outputs`. |
+| `co_cli/context/_history_processors.py` | M2 processors: `dedup_tool_results`, `evict_old_tool_results`, `enforce_turn_budget`. |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker` per-tool format and `is_cleared_marker` predicate. |
 | `co_cli/context/summarization.py` | `summarize_messages`, token estimator, budget resolver, and prompt templates. |
+| `co_cli/context/tokens.py` | `CHARS_PER_TOKEN` shared constant. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — provider overflow detection for 400/413. |
 | `co_cli/context/orchestrate.py` | `run_turn` overflow dispatch and anti-thrash gate reset. |
 | `co_cli/main.py` | `_finalize_turn()` — session persistence bridge; reads `compaction_applied_this_turn` and calls `persist_session_history(history_compacted=True)` to rewrite the transcript. |
 | `co_cli/tools/categories.py` | `COMPACTABLE_TOOLS`, `FILE_TOOLS`, `PATH_NORMALIZATION_TOOLS`. |
-| `co_cli/tools/tool_io.py` | M1: `persist_if_oversized`, `tool_output`, `check_tool_results_size`. |
-| `co_cli/tools/files/read.py` | `file_read` M1 override: `max_result_size=math.inf` (never persists). |
-| `co_cli/tools/shell/execute.py` | `shell` M1 override: `max_result_size=30_000`. |
-| `co_cli/config/tools.py` | `ToolsSettings` — `result_persist_chars`, `batch_spill_chars`. |
-| `co_cli/config/llm.py` | `max_ctx` (Ollama probe ceiling), `ctx_token_budget` (fallback budget). |
+| `co_cli/tools/tool_io.py` | M1: `spill_if_oversized`, `tool_output`, `check_tool_results_size`; `SPILL_THRESHOLD_CHARS`, `TOOL_RESULT_PREVIEW_CHARS`. |
+| `co_cli/tools/files/read.py` | `file_read` M1 override: `spill_threshold_chars=math.inf` (never spills). |
+| `co_cli/agent/_tool_call_limit.py` | `MAX_TOOL_CALLS_PER_MODEL_TURN`, `MaxToolCallsExceededPayload`, `make_exceeded_payload`. |
+| `co_cli/config/llm.py` | `max_ctx` (Ollama probe ceiling). |
 | `co_cli/context/assembly.py` | Prompt assembly: `build_static_instructions`; static `RECENCY_CLEARING_ADVISORY` recency-clearing paragraph. |
 | `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |
 | `evals/eval_compaction_proactive.py` | Proactive compaction end-to-end eval. |
@@ -558,11 +559,18 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 
 | Property | Test file |
 |---|---|
-| M1 persist path exercised: oversized batch result spilled to disk, placeholder format confirmed | `tests/test_flow_history_processors.py` |
+| M1 spill path: oversized result spilled to disk, placeholder format confirmed | `tests/test_flow_spill_threshold.py` |
+| M1 constant values pinned: `SPILL_THRESHOLD_CHARS`, `TOOL_RESULT_PREVIEW_CHARS` | `tests/test_flow_spill_threshold.py` |
+| M1 threshold boundary: below 4000 passes through unchanged; above 4000 spills | `tests/test_flow_spill_threshold.py` |
+| M1 `force=True`: force-spills even below threshold when above preview size | `tests/test_flow_spill_threshold.py` |
+| M1 OTEL: `tool_budget.spill_tool_result` span emitted; tracer name `co-cli.tool_budget` | `tests/test_flow_spill_otel.py` |
+| M2L `enforce_turn_budget`: below-threshold no spill; largest-first spill ordering | `tests/test_flow_turn_budget.py` |
+| M2L cached threshold: `turn_aggregate_threshold_tokens` from `CoDeps` used without recompute | `tests/test_flow_turn_budget.py` |
+| L0 tool-call cap: `MAX_TOOL_CALLS_PER_MODEL_TURN` constant pinned; allow up to cap; reject above cap with JSON payload | `tests/test_flow_tool_call_limit.py` |
+| L0 run_step counter: resets on `ctx.run_step` transition | `tests/test_flow_tool_call_limit.py` |
 | M2-pre dedup: identical return collapses to back-reference; short content and distinct content pass through | `tests/test_flow_history_processors.py` |
 | M2a `evict_old_tool_results`: clears oldest when over keep limit; keeps all at limit; protects last-turn returns | `tests/test_flow_history_processors.py` |
 | M2a `is_cleared_marker` recognizes cleared markers; recent returns left untouched | `tests/test_flow_history_processors.py` |
-| M2b `evict_batch_tool_outputs`: spills largest return when aggregate exceeds threshold; passes through when under | `tests/test_flow_history_processors.py` |
 | `group_by_turn` correctly partitions multi-turn message list into turn groups | `tests/test_flow_history_processors.py` |
 | M3 below-threshold fast path: messages object returned unchanged, no compaction | `tests/test_flow_compaction_proactive.py` |
 | M3 above-threshold compaction: result shorter than input, compaction marker present | `tests/test_flow_compaction_proactive.py` |
@@ -574,7 +582,7 @@ M3 fires before every `ModelRequestNode` but produces at most one summarizer cal
 | Boundary planner: oversized last-group retained unconditionally even over tail budget | `tests/test_flow_compaction_boundaries.py` |
 | `find_first_run_end` anchors at first `TextPart` response, skips tool-only responses | `tests/test_flow_compaction_boundaries.py` |
 | `estimate_message_tokens` scales with content length; returns 0 for empty list | `tests/test_flow_compaction_summarization.py` |
-| `resolve_compaction_budget` prefers explicit `context_window`; falls back to plausible default | `tests/test_flow_compaction_summarization.py` |
+| `resolve_compaction_budget` returns `deps.model_max_ctx` | `tests/test_flow_compaction_summarization.py` |
 | Summarizer from-scratch branch: returns non-empty structured text | `tests/test_flow_compaction_summarization.py` |
 | Summarizer iterative branch: output incorporates prior summary and new turns | `tests/test_flow_compaction_summarization.py` |
 | Emergency overflow recovery: pending user turn preserved after structural fallback | `tests/test_flow_compaction_recovery.py` |

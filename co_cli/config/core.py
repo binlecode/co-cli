@@ -23,7 +23,6 @@ from co_cli.config.mcp import DEFAULT_MCP_SERVERS, MCPServerSettings, parse_mcp_
 from co_cli.config.memory import MEMORY_ENV_MAP, MemorySettings
 from co_cli.config.observability import OBSERVABILITY_ENV_MAP, ObservabilitySettings
 from co_cli.config.shell import SHELL_ENV_MAP, ShellSettings
-from co_cli.config.tools import TOOLS_ENV_MAP, ToolsSettings
 from co_cli.config.web import WEB_ENV_MAP, WebSettings
 
 # Canonical user-global root: ~/.co-cli (overridable via CO_HOME).
@@ -85,7 +84,6 @@ class Settings(BaseModel):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     shell: ShellSettings = Field(default_factory=ShellSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
-    tools: ToolsSettings = Field(default_factory=ToolsSettings)
     compaction: CompactionSettings = Field(default_factory=CompactionSettings)
 
     # Flat — integration paths
@@ -155,7 +153,6 @@ class Settings(BaseModel):
             "shell": SHELL_ENV_MAP,
             "web": WEB_ENV_MAP,
             "observability": OBSERVABILITY_ENV_MAP,
-            "tools": TOOLS_ENV_MAP,
             "compaction": COMPACTION_ENV_MAP,
         }
         for group, fields in nested_env_map.items():

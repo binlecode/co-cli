@@ -11,6 +11,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.toolsets.combined import CombinedToolset
 
 from co_cli.config.core import Settings
+from co_cli.context._history_processors import enforce_turn_budget
 from co_cli.context.compaction import (
     dedup_tool_results,
     evict_old_tool_results,
@@ -143,6 +144,7 @@ def build_agent(
             history_processors=[
                 dedup_tool_results,
                 evict_old_tool_results,
+                enforce_turn_budget,
                 proactive_window_processor,
             ],
             toolsets=[tool_registry.toolset],

@@ -21,8 +21,8 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from co_cli.config.core import Settings
 from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
+from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
 
@@ -59,7 +59,7 @@ def estimate_message_tokens(messages: list[ModelMessage]) -> int:
                 args = part.args_as_dict()
                 if args:
                     total_chars += len(json.dumps(args, ensure_ascii=False))
-    return total_chars // 4
+    return total_chars // CHARS_PER_TOKEN
 
 
 def latest_response_input_tokens(messages: list[ModelMessage]) -> int:
@@ -79,18 +79,15 @@ def latest_response_input_tokens(messages: list[ModelMessage]) -> int:
 # ---------------------------------------------------------------------------
 
 
-def resolve_compaction_budget(config: Settings) -> int:
+def resolve_compaction_budget(deps: CoDeps) -> int:
     """Resolve the token budget used as the compaction trigger baseline.
 
-    Uses effective_num_ctx() (probe result capped by max_ctx) when available.
-    Falls back to config.llm.ctx_token_budget when probe has not run.
-
-    The ratio multiplier is NOT applied here — callers apply their own trigger policy.
+    Single source of truth — never None. ``deps.model_max_ctx`` is set unconditionally at
+    bootstrap (Ollama probe capped by max_ctx, with max_ctx fallback on probe failure or
+    non-Ollama providers). The ratio multiplier is NOT applied here — callers apply their
+    own trigger policy.
     """
-    effective = config.llm.effective_num_ctx()
-    if effective > 0:
-        return effective
-    return config.llm.ctx_token_budget
+    return deps.model_max_ctx
 
 
 # ---------------------------------------------------------------------------

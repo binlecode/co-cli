@@ -262,7 +262,7 @@ Processor roles:
 | Processor | Role |
 | --- | --- |
 | `truncate_tool_results` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn (from last `UserPromptPart` onward) |
-| `enforce_batch_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `config.tools.batch_spill_chars`; fails open |
+| `enforce_turn_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `deps.turn_aggregate_threshold_tokens`; fails open |
 | `proactive_window_processor` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 
 Preflight is called before every model-bound segment but not on approval-resume segments (SDK skips `ModelRequestNode` on resume, so preflight would inject into a non-model path). Preflight injections are ephemeral — they are not stored back to `turn_state.current_history`, so retry iterations always start from the clean history without accumulated injections.
@@ -277,7 +277,7 @@ Compaction behavior:
 - `proactive_window_processor()` gathers side-channel context via `gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds `cfg.compaction_ratio` (0.65) of the budget
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
-- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: `deps.model_max_ctx` (Ollama probe result capped by `llm.max_ctx`, set at bootstrap), then `llm.ctx_token_budget` (default 100,000)
+- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: returns `deps.model_max_ctx` directly (Ollama probe result capped by `llm.max_ctx`, set at bootstrap)
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_skip_count`) trips at `_COMPACTION_BREAKER_TRIP` (3) consecutive failures; tripped state uses static markers but probes the LLM once every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call

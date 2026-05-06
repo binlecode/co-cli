@@ -446,7 +446,7 @@ async def file_find(
     visibility=VisibilityPolicyEnum.ALWAYS,
     is_read_only=True,
     is_concurrent_safe=True,
-    max_result_size=math.inf,
+    spill_threshold_chars=math.inf,
 )
 async def file_read(
     ctx: RunContext[CoDeps],

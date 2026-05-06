@@ -23,7 +23,7 @@ def agent_tool(
     integration: str | None = None,
     requires_config: str | None = None,
     retries: int | None = None,
-    max_result_size: int | float | None = None,
+    spill_threshold_chars: int | float | None = None,
     check_fn: Callable | None = None,
 ) -> Callable[[F], F]:
     """Decorator that attaches ToolInfo policy metadata to a native tool function.
@@ -50,7 +50,7 @@ def agent_tool(
             integration=integration,
             requires_config=requires_config,
             retries=retries,
-            max_result_size=max_result_size,
+            spill_threshold_chars=spill_threshold_chars,
             check_fn=check_fn,
         )
         setattr(fn, AGENT_TOOL_ATTR, info)

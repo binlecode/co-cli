@@ -54,7 +54,7 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
 
     post_tokens = estimate_message_tokens(new_history)
-    budget = resolve_compaction_budget(ctx.deps.config)
+    budget = resolve_compaction_budget(ctx.deps)
     fallback_note = "" if summary is not None else " (static marker — summary unavailable)"
     console.print(
         f"[info]Compacted: {old_len} → {len(new_history)} messages "

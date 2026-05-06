@@ -305,7 +305,7 @@ async def recover_overflow_history(
     Returns None when no compaction boundary exists — caller should fall back to
     ``emergency_recover_overflow_history``.
     """
-    budget = resolve_compaction_budget(ctx.deps.config)
+    budget = resolve_compaction_budget(ctx.deps)
     cfg = ctx.deps.config.compaction
     bounds = plan_compaction_boundaries(
         messages,
@@ -426,7 +426,7 @@ async def proactive_window_processor(
     docs/specs/compaction.md for the design choice.
     """
     try:
-        budget = resolve_compaction_budget(ctx.deps.config)
+        budget = resolve_compaction_budget(ctx.deps)
         if budget <= 0:
             return messages
         cfg = ctx.deps.config.compaction
@@ -507,6 +507,14 @@ async def proactive_window_processor(
             span.set_attribute("compaction.tool_calls_in_history", tool_calls_in_history)
             span.set_attribute(
                 "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn
+            )
+
+            from co_cli.agent._tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+
+            span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
+            span.set_attribute(
+                "compaction.turn_aggregate_tokens_after_spill",
+                ctx.deps.runtime.current_turn_aggregate_tokens_after_spill or -1,
             )
 
             if token_count <= token_threshold:

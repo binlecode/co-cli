@@ -100,7 +100,7 @@ class ToolInfo:
     source: ToolSourceEnum
     visibility: VisibilityPolicyEnum
     integration: str | None = None
-    max_result_size: int | float | None = None
+    spill_threshold_chars: int | float | None = None
     is_read_only: bool = False
     is_concurrent_safe: bool = False
     retries: int | None = None
@@ -148,6 +148,11 @@ class CoRuntimeState:
       post_compaction_token_estimate, message_count_at_last_compaction
     """
 
+    # Per-model-turn brake counter; resets implicitly on ctx.run_step transition.
+    tool_call_limit_run_step: int = -1
+    tool_calls_in_model_turn: int = 0
+    # Written by enforce_turn_budget after force-spill; read by compaction.proactive_check.
+    current_turn_aggregate_tokens_after_spill: int | None = None
     # Circuit breaker for inline compaction summarisation.
     compaction_skip_count: int = 0
     turn_usage: RunUsage | None = None
@@ -186,6 +191,7 @@ class CoRuntimeState:
         self.status_callback = None
         self.resume_tool_names = None
         self.compaction_applied_this_turn = False
+        self.current_turn_aggregate_tokens_after_spill = None
 
 
 # Path defaults — all user-global; resolved from USER_DIR constants at runtime
@@ -236,6 +242,16 @@ class CoDeps:
     memory_db_path: Path = field(default_factory=lambda: SEARCH_DB)
     sessions_dir: Path = field(default_factory=lambda: _DEFAULT_SESSIONS_DIR)
     tool_results_dir: Path = field(default_factory=lambda: _DEFAULT_TOOL_RESULTS_DIR)
+
+    # Effective context window size — single source of truth, set unconditionally at bootstrap.
+    # Ollama: read from the loaded Modelfile via /api/show, capped by max_ctx (probe-failure
+    # fallback: max_ctx). Other providers: max_ctx ceiling.
+    model_max_ctx: int = 0
+    # Model capability strings probed at bootstrap (e.g. ["completion", "tools", "thinking"]).
+    model_capabilities: list[str] = field(default_factory=list)
+    # Bootstrap-cached: int(tail_fraction x model_max_ctx). Immutable after bootstrap.
+    # Read by enforce_turn_budget; never recomputed at read sites.
+    turn_aggregate_threshold_tokens: int = 0
 
     # Runtime degradation state — mutated during bootstrap, read-only after
     degradations: dict[str, str] = field(default_factory=dict)
@@ -302,5 +318,8 @@ def fork_deps(base: CoDeps) -> CoDeps:
         memory_db_path=base.memory_db_path,
         sessions_dir=base.sessions_dir,
         tool_results_dir=base.tool_results_dir,
+        model_max_ctx=base.model_max_ctx,
+        model_capabilities=base.model_capabilities,
+        turn_aggregate_threshold_tokens=base.turn_aggregate_threshold_tokens,
         degradations=base.degradations,
     )

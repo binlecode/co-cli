@@ -8,6 +8,7 @@ messages where at least one part changed.
 Registered processors:
     dedup_tool_results     — collapses identical-content tool returns to back-references
     evict_old_tool_results   — content-clears compactable tool results by recency
+    enforce_turn_budget       — force-spill tool returns in current user turn to fit tail budget
 """
 
 from __future__ import annotations
@@ -286,3 +287,122 @@ def evict_old_tool_results(
         return _build_cleared_part(part, call_id_to_args)
 
     return _rewrite_tool_returns(messages, boundary, replacement_for=replacement_for)
+
+
+def enforce_turn_budget(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage]:
+    """Force-spill tool returns in the current user turn until aggregate fits the tail budget.
+
+    Aggregates token count for all tool returns since the last user turn boundary
+    (spans all model iterations within that user turn). If over
+    deps.turn_aggregate_threshold_tokens:
+      - Sorts non-spilled candidates largest-first and force-spills until within budget.
+      - If all candidates are already spilled, bails out (returns messages unchanged).
+    Always emits a tool_budget.enforce_turn_aggregate span.
+    """
+    from opentelemetry import trace as otel_trace
+
+    from co_cli.context.tokens import CHARS_PER_TOKEN
+    from co_cli.tools.tool_io import (
+        PERSISTED_OUTPUT_TAG,
+        spill_if_oversized,
+    )
+
+    _tracer = otel_trace.get_tracer("co-cli.tool_budget")
+    threshold = ctx.deps.turn_aggregate_threshold_tokens
+
+    # Collect all ToolReturnParts from the current user turn (everything after last UserPromptPart)
+    boundary = _find_last_turn_start(messages)
+    turn_messages = messages[boundary:] if boundary else messages
+
+    # Gather (message_idx_in_turn, part_idx, part) for all ToolReturnParts in the turn
+    turn_tool_returns: list[tuple[int, int, ToolReturnPart]] = []
+    for msg_idx, msg in enumerate(turn_messages):
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part_idx, part in enumerate(msg.parts):
+            if isinstance(part, ToolReturnPart) and isinstance(part.content, str):
+                turn_tool_returns.append((msg_idx, part_idx, part))
+
+    # Compute aggregate tokens
+    tokens_before = sum(
+        len(p.content) // CHARS_PER_TOKEN
+        for _, _, p in turn_tool_returns
+        if isinstance(p.content, str)
+    )
+
+    with _tracer.start_as_current_span("tool_budget.enforce_turn_aggregate") as span:
+        span.set_attribute("budget.context_window_tokens", ctx.deps.model_max_ctx)
+        span.set_attribute("turn_aggregate.threshold_tokens", threshold)
+        span.set_attribute("turn_aggregate.tokens_before", tokens_before)
+        span.set_attribute("turn_aggregate.candidates_count", len(turn_tool_returns))
+
+        if tokens_before <= threshold:
+            span.set_attribute("turn_aggregate.tokens_after", tokens_before)
+            span.set_attribute("turn_aggregate.spilled_count", 0)
+            span.set_attribute("turn_aggregate.spill_fired", False)
+            span.set_attribute("turn_aggregate.skip_reason", "below_threshold")
+            return messages
+
+        # Identify non-spilled candidates (content doesn't start with PERSISTED_OUTPUT_TAG)
+        candidates = [
+            (msg_idx, part_idx, part)
+            for msg_idx, part_idx, part in turn_tool_returns
+            if isinstance(part.content, str) and not part.content.startswith(PERSISTED_OUTPUT_TAG)
+        ]
+
+        if not candidates:
+            span.set_attribute("turn_aggregate.tokens_after", tokens_before)
+            span.set_attribute("turn_aggregate.spilled_count", 0)
+            span.set_attribute("turn_aggregate.spill_fired", False)
+            span.set_attribute("turn_aggregate.skip_reason", "no_candidates_all_spilled")
+            return messages
+
+        # Sort largest-first by content length
+        candidates.sort(key=lambda t: len(t[2].content), reverse=True)
+
+        # Build mutable copy of turn_messages for rewriting
+        rewritten = list(turn_messages)
+        aggregate_tokens = tokens_before
+        spilled_count = 0
+
+        for msg_idx, part_idx, part in candidates:
+            if aggregate_tokens <= threshold:
+                break
+            msg = rewritten[msg_idx]
+            if not isinstance(msg, ModelRequest):
+                continue
+            old_content = part.content
+            new_content = spill_if_oversized(
+                old_content,
+                ctx.deps.tool_results_dir,
+                part.tool_name,
+                force=True,
+            )
+            if new_content == old_content:
+                continue
+
+            new_part = ToolReturnPart(
+                tool_name=part.tool_name,
+                content=new_content,
+                tool_call_id=part.tool_call_id,
+            )
+            new_parts = list(msg.parts)
+            new_parts[part_idx] = new_part
+            rewritten[msg_idx] = replace(msg, parts=new_parts)
+
+            old_tokens = len(old_content) // CHARS_PER_TOKEN
+            new_tokens = len(new_content) // CHARS_PER_TOKEN
+            aggregate_tokens -= old_tokens - new_tokens
+            spilled_count += 1
+
+        ctx.deps.runtime.current_turn_aggregate_tokens_after_spill = aggregate_tokens
+
+        span.set_attribute("turn_aggregate.tokens_after", aggregate_tokens)
+        span.set_attribute("turn_aggregate.spilled_count", spilled_count)
+        span.set_attribute("turn_aggregate.spill_fired", True)
+        span.set_attribute("turn_aggregate.skip_reason", "")
+
+        return [*messages[:boundary], *rewritten] if boundary else rewritten

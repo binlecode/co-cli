@@ -80,15 +80,18 @@ def test_resolve_compaction_budget_uses_model_max_ctx_when_probed():
     assert resolve_compaction_budget(deps) == probed
 
 
-def test_resolve_compaction_budget_falls_back_to_ctx_token_budget_when_no_probe():
-    """resolve_compaction_budget must fall back to ctx_token_budget when model_max_ctx is None."""
+def test_resolve_compaction_budget_returns_model_max_ctx_after_bootstrap_fallback():
+    """resolve_compaction_budget returns deps.model_max_ctx — bootstrap always sets it
+    (probed value or max_ctx ceiling on probe failure / non-Ollama providers)."""
+    fallback = SETTINGS_NO_MCP.llm.max_ctx
     deps = CoDeps(
         shell=ShellBackend(),
         model=_LLM_MODEL,
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
+        model_max_ctx=fallback,
     )
-    assert resolve_compaction_budget(deps) == SETTINGS_NO_MCP.llm.ctx_token_budget
+    assert resolve_compaction_budget(deps) == fallback
 
 
 # ---------------------------------------------------------------------------

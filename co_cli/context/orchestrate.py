@@ -500,7 +500,7 @@ def _check_output_limits(
             "Response may be truncated (hit output token limit). Use /continue to extend."
         )
     latest_input = latest_response_input_tokens(turn_state.current_history)
-    if latest_input > 0 and deps.model_max_ctx is not None:
+    if latest_input > 0:
         ratio = latest_input / deps.model_max_ctx
         with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
             ctx_span.set_attribute("ctx.input_tokens", latest_input)

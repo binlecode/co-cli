@@ -17,12 +17,14 @@ For call sites without RunContext (helper functions, lifecycle modules):
 
 import hashlib
 import logging
+import math
 import os
 import re
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry import trace as otel_trace
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
 
@@ -39,9 +41,12 @@ log = logging.getLogger(__name__)
 # Result persistence
 # ---------------------------------------------------------------------------
 
-TOOL_RESULT_PREVIEW_SIZE = 2_000
+TOOL_RESULT_PREVIEW_CHARS = 1_500
+SPILL_THRESHOLD_CHARS = 4_000
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
+
+_TRACER = otel_trace.get_tracer("co-cli.tool_budget")
 
 
 def _generate_preview(content: str, max_chars: int) -> tuple[str, bool]:
@@ -58,16 +63,17 @@ def _generate_preview(content: str, max_chars: int) -> tuple[str, bool]:
     return truncated, True
 
 
-def persist_if_oversized(
+def spill_if_oversized(
     content: str,
     tool_results_dir: Path,
     tool_name: str,
     *,
-    max_size: int | float,
+    force: bool = False,
 ) -> str:
     """Persist content to disk if oversized, returning a preview placeholder.
 
-    If content length <= max_size, returns content unchanged.
+    If not forced and content length <= SPILL_THRESHOLD_CHARS, returns content unchanged.
+    If content length <= TOOL_RESULT_PREVIEW_CHARS, returns content unchanged regardless.
     Otherwise, writes content to a content-addressed file and returns an XML
     placeholder with tool name, file path, human-readable size, and a preview.
 
@@ -75,12 +81,15 @@ def persist_if_oversized(
         content: The full tool result text.
         tool_results_dir: Directory for persisted tool result files.
         tool_name: Name of the tool that produced the result.
-        max_size: Per-tool result size threshold. Pass 0 to force spill.
+        force: When True, bypasses the SPILL_THRESHOLD_CHARS check (used by
+            enforce_turn_budget for aggregate budget enforcement).
 
     Returns:
         The original content if under threshold, or a preview placeholder.
     """
-    if len(content) <= max_size:
+    if not force and len(content) <= SPILL_THRESHOLD_CHARS:
+        return content
+    if len(content) <= TOOL_RESULT_PREVIEW_CHARS:
         return content
 
     try:
@@ -93,7 +102,7 @@ def persist_if_oversized(
             tmp_path.write_text(content, encoding="utf-8")
             os.replace(tmp_path, file_path)
 
-        preview, has_more = _generate_preview(content, TOOL_RESULT_PREVIEW_SIZE)
+        preview, has_more = _generate_preview(content, TOOL_RESULT_PREVIEW_CHARS)
         elision = "\n..." if has_more else ""
 
         size_chars = len(content)
@@ -104,10 +113,10 @@ def persist_if_oversized(
 
         return (
             f"{PERSISTED_OUTPUT_TAG}\n"
+            f"This tool result was too large ({size_chars:,} chars, {size_human}).\n"
             f"tool: {tool_name}\n"
             f"file: {file_path}\n"
-            f"size: {size_chars:,} chars ({size_human})\n"
-            f"To read the full output, call read_file with the path above and use "
+            f"To read the full output, call file_read with the path above and use "
             f"start_line/end_line to page through it in chunks.\n"
             f"preview:\n{preview}{elision}\n"
             f"{PERSISTED_OUTPUT_CLOSING_TAG}"
@@ -134,9 +143,9 @@ def _pid_alive(pid: int) -> bool:
 
 
 def sweep_tool_result_orphans(tool_results_dir: Path) -> int:
-    """Unlink stale `*.tmp.*` sidecars left by crashed persist_if_oversized writes.
+    """Unlink stale `*.tmp.*` sidecars left by crashed spill_if_oversized writes.
 
-    Matches files with the shape produced at line 91 above: `<hash>.txt.tmp.<pid>.<uuid>`.
+    Matches files with the shape produced above: `<hash>.txt.tmp.<pid>.<uuid>`.
     Preserves sidecars whose embedded PID is still a live process — another `co`
     process's in-flight write is safe. Never raises; sweep failures must not block startup.
 
@@ -210,18 +219,32 @@ def tool_output(
     """Construct a ToolReturn with display as return_value and extras as metadata."""
     tool_name = ctx.tool_name or ""
     info = ctx.deps.tool_index.get(tool_name)
-    threshold = (
-        info.max_result_size
-        if info and info.max_result_size is not None
-        else ctx.deps.config.tools.result_persist_chars
+    threshold: int | float = (
+        info.spill_threshold_chars
+        if info and info.spill_threshold_chars is not None
+        else SPILL_THRESHOLD_CHARS
     )
-    if len(display) > threshold:
-        display = persist_if_oversized(
+    content_chars = len(display)
+    spill_fired = False
+    if content_chars > threshold:
+        new_display = spill_if_oversized(
             display,
             ctx.deps.tool_results_dir,
             tool_name,
-            max_size=threshold,
         )
+        spill_fired = new_display != display
+        display = new_display
+
+    span_threshold = SPILL_THRESHOLD_CHARS if math.isinf(threshold) else int(threshold)
+    with _TRACER.start_as_current_span("tool_budget.spill_tool_result") as span:
+        span.set_attribute("tool.name", tool_name)
+        span.set_attribute("spill.threshold_chars", span_threshold)
+        span.set_attribute("spill.content_chars", content_chars)
+        span.set_attribute("spill.fired", spill_fired)
+        span.set_attribute("spill.forced", False)
+        if spill_fired:
+            span.set_attribute("spill.savings_chars", content_chars - len(display))
+
     return ToolReturn(return_value=display, metadata=metadata or None)
 
 
