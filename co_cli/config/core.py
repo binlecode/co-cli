@@ -17,7 +17,7 @@ from pydantic import (
 )
 
 from co_cli.config.compaction import COMPACTION_ENV_MAP, CompactionSettings
-from co_cli.config.knowledge import KnowledgeSettings
+from co_cli.config.knowledge import KNOWLEDGE_ENV_MAP, KnowledgeSettings
 from co_cli.config.llm import LLM_ENV_MAP, LlmSettings, resolve_api_key_from_env
 from co_cli.config.mcp import DEFAULT_MCP_SERVERS, MCPServerSettings, parse_mcp_servers_from_env
 from co_cli.config.memory import MEMORY_ENV_MAP, MemorySettings
@@ -25,8 +25,6 @@ from co_cli.config.observability import OBSERVABILITY_ENV_MAP, ObservabilitySett
 from co_cli.config.shell import SHELL_ENV_MAP, ShellSettings
 from co_cli.config.tools import TOOLS_ENV_MAP, ToolsSettings
 from co_cli.config.web import WEB_ENV_MAP, WebSettings
-
-APP_NAME = "co-cli"
 
 # Canonical user-global root: ~/.co-cli (overridable via CO_HOME).
 # Module-level constant: USER_DIR must resolve before Settings is constructed
@@ -152,6 +150,7 @@ class Settings(BaseModel):
         # Nested fields — each group owns its env-var map in its own module
         nested_env_map: dict[str, dict[str, str]] = {
             "llm": LLM_ENV_MAP,
+            "knowledge": KNOWLEDGE_ENV_MAP,
             "memory": MEMORY_ENV_MAP,
             "shell": SHELL_ENV_MAP,
             "web": WEB_ENV_MAP,

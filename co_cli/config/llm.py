@@ -16,12 +16,11 @@ DEFAULT_LLM_PROVIDER = "ollama"
 DEFAULT_LLM_HOST = "http://localhost:11434"
 
 DEFAULT_LLM_MODELS: dict[str, str] = {
-    "ollama": "qwen3.6:27b-agentic",
+    "ollama": "qwen3.5:35b-a3b",
     "gemini": "gemini-3-flash-preview",
 }
 
-DEFAULT_MAX_CTX = 131_072
-DEFAULT_CTX_TOKEN_BUDGET = 100_000
+DEFAULT_MAX_CTX = 32_768
 
 
 # ---------------------------------------------------------------------------
@@ -48,12 +47,17 @@ _LLM_SETTINGS: dict[str, Any] = {
         },
         "qwen3.5": {
             "reasoning": {
-                "max_tokens": 32768,
+                "max_tokens": 4096,
+                "extra_body": {
+                    "options": {"num_ctx": 32_768},
+                },
             },
             "noreason": {
+                "max_tokens": 4096,
                 "extra_body": {
                     "think": False,
                     "reasoning_effort": "none",
+                    "options": {"num_ctx": 32_768},
                 },
             },
         },
@@ -162,7 +166,6 @@ class LlmSettings(BaseModel):
     model: str = Field(default="")
     # User-configurable ceiling; probed Ollama num_ctx is capped to this at bootstrap.
     max_ctx: int = Field(default=DEFAULT_MAX_CTX)
-    ctx_token_budget: int = Field(default=DEFAULT_CTX_TOKEN_BUDGET)
 
     @model_validator(mode="after")
     def _default_model_per_provider(self) -> LlmSettings:
@@ -191,6 +194,13 @@ class LlmSettings(BaseModel):
         """Return ModelSettings for non-reasoning helper calls (provider-aware)."""
         inference = self._inference("noreason")
         return _gemini_settings(inference) if self.uses_gemini() else _ollama_settings(inference)
+
+    def ollama_num_ctx(self) -> int | None:
+        """Return the static num_ctx baked into per-call extra_body for this model, or None."""
+        if not self.uses_ollama():
+            return None
+        inference = self._inference("noreason")
+        return inference.get("extra_body", {}).get("options", {}).get("num_ctx")
 
     def validate_config(self) -> str | None:
         """Validate LLM config shape — no IO. Returns error message or None if valid."""

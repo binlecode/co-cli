@@ -2,10 +2,9 @@
   "llm": {
     "provider": "ollama",
     "host": "http://localhost:11434",
-    "model": "qwen3.6:27b-agentic",
+    "model": "qwen3.5:35b-a3b",
     "api_key": null,
-    "max_ctx": 131072,
-    "ctx_token_budget": 100000
+    "max_ctx": 32768
   },
   "knowledge": {
     "search_backend": "hybrid",

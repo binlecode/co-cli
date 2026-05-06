@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import yaml
-from tests._settings import make_settings
+from tests._settings import SETTINGS, make_settings
 
 from co_cli.memory.memory_store import MemoryStore
 
@@ -28,7 +28,7 @@ def test_fts5_search_finds_indexed_entry(tmp_path: Path):
     _write_knowledge_file(knowledge_dir / "001-test.md", body="Finch the robot dog test")
 
     config = make_settings(
-        knowledge=make_settings().knowledge.model_copy(
+        knowledge=SETTINGS.knowledge.model_copy(
             update={
                 "search_backend": "fts5",
                 "embedding_provider": "none",

@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 from tests._settings import SETTINGS, SETTINGS_NO_MCP
 
 from co_cli.bootstrap.core import restore_session
@@ -112,25 +111,24 @@ def test_check_security_no_dot_env_no_finding(tmp_path: Path) -> None:
     assert not any(f.check_id == "dot-env-permissions" for f in findings)
 
 
-def test_knowledge_settings_env_prefix_overrides_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CO_KNOWLEDGE_<FIELD> env var overrides the KnowledgeSettings default."""
-    monkeypatch.setenv("CO_KNOWLEDGE_CHUNK_SIZE", "42")
-
-    result = load_config(_user_config_path=tmp_path / "settings.json")
+def test_knowledge_settings_env_prefix_overrides_default(tmp_path: Path) -> None:
+    """CO_KNOWLEDGE_CHUNK_SIZE env var overrides the KnowledgeSettings default."""
+    result = load_config(
+        _user_config_path=tmp_path / "settings.json",
+        _env={"CO_KNOWLEDGE_CHUNK_SIZE": "42"},
+    )
 
     assert result.knowledge.chunk_size == 42
 
 
-def test_knowledge_settings_env_overrides_json_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_knowledge_settings_env_overrides_json_config(tmp_path: Path) -> None:
     """Env var takes priority over the JSON config value for knowledge fields."""
     (tmp_path / "settings.json").write_text('{"knowledge": {"chunk_size": 200}}', encoding="utf-8")
-    monkeypatch.setenv("CO_KNOWLEDGE_CHUNK_SIZE", "99")
 
-    result = load_config(_user_config_path=tmp_path / "settings.json")
+    result = load_config(
+        _user_config_path=tmp_path / "settings.json",
+        _env={"CO_KNOWLEDGE_CHUNK_SIZE": "99"},
+    )
 
     assert result.knowledge.chunk_size == 99
 

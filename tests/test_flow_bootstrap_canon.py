@@ -5,6 +5,7 @@ from pathlib import Path
 from tests._settings import SETTINGS
 
 from co_cli.bootstrap.core import _sync_canon_store
+from co_cli.display.core import TerminalFrontend
 from co_cli.memory.memory_store import MemoryStore
 
 _FTS5_CONFIG = SETTINGS.knowledge.model_copy(
@@ -17,11 +18,6 @@ _FTS5_CONFIG = SETTINGS.knowledge.model_copy(
 _STORE_CONFIG = SETTINGS.model_copy(update={"knowledge": _FTS5_CONFIG})
 
 
-class _SilentFrontend:
-    def on_status(self, msg: str) -> None:
-        pass
-
-
 def _make_store(tmp_path: Path) -> MemoryStore:
     return MemoryStore(config=_STORE_CONFIG, memory_db_path=tmp_path / "search.db")
 
@@ -31,7 +27,7 @@ def test_sync_canon_store_indexes_real_tars_memories(tmp_path: Path) -> None:
     config = SETTINGS.model_copy(update={"personality": "tars"})
     store = _make_store(tmp_path)
     try:
-        _sync_canon_store(store, config, _SilentFrontend())
+        _sync_canon_store(store, config, TerminalFrontend())
         results = store.search("humor deadpan", sources=["canon"])
         assert len(results) >= 1, (
             "expected at least 1 canon result for 'humor deadpan' after _sync_canon_store"
@@ -55,7 +51,7 @@ def test_sync_canon_store_indexes_real_tars_memories(tmp_path: Path) -> None:
 def test_sync_canon_store_noop_when_store_is_none() -> None:
     """_sync_canon_store silently returns when store=None — no AttributeError on None."""
     config = SETTINGS.model_copy(update={"personality": "tars"})
-    _sync_canon_store(None, config, _SilentFrontend())
+    _sync_canon_store(None, config, TerminalFrontend())
 
 
 def test_sync_canon_store_noop_when_personality_none(tmp_path: Path) -> None:
@@ -63,7 +59,7 @@ def test_sync_canon_store_noop_when_personality_none(tmp_path: Path) -> None:
     config = SETTINGS.model_copy(update={"personality": None})
     store = _make_store(tmp_path)
     try:
-        _sync_canon_store(store, config, _SilentFrontend())
+        _sync_canon_store(store, config, TerminalFrontend())
         row = store._conn.execute(
             "SELECT COUNT(*) AS cnt FROM chunks WHERE source='canon'"
         ).fetchone()

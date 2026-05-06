@@ -2,8 +2,7 @@
 
 from typing import Literal
 
-from pydantic import AliasChoices, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "hybrid"
 DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "tei"
@@ -15,15 +14,31 @@ DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
 
+KNOWLEDGE_ENV_MAP: dict[str, str] = {
+    "search_backend": "CO_KNOWLEDGE_SEARCH_BACKEND",
+    "embedding_provider": "CO_KNOWLEDGE_EMBEDDING_PROVIDER",
+    "embedding_model": "CO_KNOWLEDGE_EMBEDDING_MODEL",
+    "embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
+    "cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
+    "tei_rerank_batch_size": "CO_KNOWLEDGE_TEI_RERANK_BATCH_SIZE",
+    "embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
+    "chunk_size": "CO_KNOWLEDGE_CHUNK_SIZE",
+    "chunk_overlap": "CO_KNOWLEDGE_CHUNK_OVERLAP",
+    "consolidation_enabled": "CO_KNOWLEDGE_CONSOLIDATION_ENABLED",
+    "consolidation_trigger": "CO_KNOWLEDGE_CONSOLIDATION_TRIGGER",
+    "consolidation_lookback_sessions": "CO_KNOWLEDGE_CONSOLIDATION_LOOKBACK_SESSIONS",
+    "consolidation_similarity_threshold": "CO_KNOWLEDGE_CONSOLIDATION_SIMILARITY_THRESHOLD",
+    "max_artifact_count": "CO_KNOWLEDGE_MAX_ARTIFACT_COUNT",
+    "decay_after_days": "CO_KNOWLEDGE_DECAY_AFTER_DAYS",
+    "session_chunk_tokens": "CO_KNOWLEDGE_SESSION_CHUNK_TOKENS",
+    "session_chunk_overlap": "CO_KNOWLEDGE_SESSION_CHUNK_OVERLAP",
+}
 
-class KnowledgeSettings(BaseSettings):
+
+class KnowledgeSettings(BaseModel):
     """Knowledge search, embedding, and chunking settings."""
 
-    model_config = SettingsConfigDict(
-        extra="forbid",
-        env_prefix="CO_KNOWLEDGE_",
-        env_nested_delimiter="__",
-    )
+    model_config = ConfigDict(extra="forbid")
 
     search_backend: Literal["grep", "fts5", "hybrid"] = Field(
         default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND
@@ -47,19 +62,6 @@ class KnowledgeSettings(BaseSettings):
     max_artifact_count: int = Field(default=300, ge=1)
     decay_after_days: int = Field(default=90, ge=1)
     # Deprecated: superseded by _ARTIFACTS_CANON_CAP in tools/memory/recall.py. Config key retained for one version; not consumed by recall.
-    character_recall_limit: int = Field(
-        default=3,
-        ge=1,
-        validation_alias=AliasChoices(
-            "CO_KNOWLEDGE_CHARACTER_RECALL_LIMIT",
-            "CO_CHARACTER_RECALL_LIMIT",
-            "character_recall_limit",
-        ),
-    )
+    character_recall_limit: int = Field(default=3, ge=1)
     session_chunk_tokens: int = Field(default=400, ge=64)
     session_chunk_overlap: int = Field(default=80, ge=0)
-
-    @classmethod
-    def settings_customise_sources(cls, settings_cls, **kwargs) -> tuple:
-        # env vars take priority over init kwargs (JSON config) — preserves existing contract.
-        return (kwargs["env_settings"], kwargs["init_settings"])

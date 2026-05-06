@@ -8,6 +8,7 @@ from tests._settings import SETTINGS
 
 from co_cli.bootstrap.core import _sync_canon_store
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.display.core import TerminalFrontend
 from co_cli.memory.memory_store import MemoryStore
 from co_cli.tools.memory.recall import _ARTIFACTS_CANON_CAP, _search_artifacts
 from co_cli.tools.shell_backend import ShellBackend
@@ -22,11 +23,6 @@ _FTS5_CONFIG = SETTINGS.knowledge.model_copy(
 _STORE_CONFIG = SETTINGS.model_copy(update={"knowledge": _FTS5_CONFIG})
 
 
-class _SilentFrontend:
-    def on_status(self, msg: str) -> None:
-        pass
-
-
 def _make_store(tmp_path: Path) -> MemoryStore:
     return MemoryStore(config=_STORE_CONFIG, memory_db_path=tmp_path / "search.db")
 
@@ -36,7 +32,7 @@ def _make_ctx_with_store(tmp_path: Path, *, personality: str | None) -> RunConte
     store = _make_store(tmp_path)
     config = SETTINGS.model_copy(update={"personality": personality})
     if personality:
-        _sync_canon_store(store, config, _SilentFrontend())
+        _sync_canon_store(store, config, TerminalFrontend())
     deps = CoDeps(
         shell=ShellBackend(),
         config=config,
