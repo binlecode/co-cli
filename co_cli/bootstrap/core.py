@@ -212,11 +212,21 @@ def _sync_canon_store(
         frontend.on_status(f"  Canon sync failed — {exc}")
 
 
+def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
+    """Raise ValueError when the model's num_ctx undercuts the configured max_ctx floor."""
+    if num_ctx < max_ctx:
+        raise ValueError(
+            f"Ollama model {model!r} reports num_ctx={num_ctx:,} "
+            f"but max_ctx={max_ctx:,} is configured. "
+            f"Raise the model's num_ctx (Modelfile) or lower max_ctx in settings."
+        )
+
+
 def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
     """Resolve model_max_ctx and model_capabilities from config + Ollama probe.
 
-    Ollama: probe loaded Modelfile, cap by max_ctx.
-    Non-Ollama or probe failure: fall back to configured max_ctx ceiling.
+    Ollama: probe loaded Modelfile; raise if num_ctx < max_ctx (floor contract).
+    Non-Ollama or probe failure: fall back to configured max_ctx.
     Raises ValueError on hard constraint violations.
     """
     if not config.llm.uses_ollama():
@@ -230,16 +240,35 @@ def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
     from co_cli.bootstrap.check import probe_ollama_model, validate_ollama_num_ctx
 
     num_ctx, capabilities = probe_ollama_model(config.llm.host, config.llm.model)
-    model_max_ctx: int = config.llm.max_ctx
     if num_ctx is not None:
-        model_max_ctx = min(num_ctx, config.llm.max_ctx)
+        _check_ollama_num_ctx_floor(num_ctx, config.llm.model, config.llm.max_ctx)
     else:
         logger.warning(
-            "ollama ctx probe failed; using configured max_ctx ceiling=%d as fallback",
+            "ollama ctx probe failed; using configured max_ctx=%d as fallback",
             config.llm.max_ctx,
         )
     validate_ollama_num_ctx(config)
-    return model_max_ctx, capabilities
+    return config.llm.max_ctx, capabilities
+
+
+def _emit_tool_budget_span(
+    model_max_ctx: int,
+    tail_fraction: float,
+    *,
+    _tracer: trace.Tracer | None = None,
+) -> None:
+    from co_cli.agent._tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+    from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
+
+    if _tracer is None:
+        _tracer = trace.get_tracer("co-cli.tool_budget")
+    turn_aggregate = int(tail_fraction * model_max_ctx)
+    with _tracer.start_as_current_span("tool_budget.resolved") as span:
+        span.set_attribute("budget.context_window_tokens", model_max_ctx)
+        span.set_attribute("budget.tail_fraction", tail_fraction)
+        span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
+        span.set_attribute("budget.spill_threshold_chars", SPILL_THRESHOLD_CHARS)
+        span.set_attribute("budget.turn_aggregate_threshold_tokens", turn_aggregate)
 
 
 async def create_deps(
@@ -280,15 +309,7 @@ async def create_deps(
     tail_fraction = config.compaction.tail_fraction
     turn_aggregate_threshold_tokens = int(tail_fraction * model_max_ctx)
 
-    _tool_budget_tracer = trace.get_tracer("co-cli.tool_budget")
-    with _tool_budget_tracer.start_as_current_span("tool_budget.resolved") as _span:
-        _span.set_attribute("budget.context_window_tokens", model_max_ctx)
-        _span.set_attribute("budget.tail_fraction", tail_fraction)
-        _span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
-        _span.set_attribute("budget.spill_threshold_chars", SPILL_THRESHOLD_CHARS)
-        _span.set_attribute(
-            "budget.turn_aggregate_threshold_tokens", turn_aggregate_threshold_tokens
-        )
+    _emit_tool_budget_span(model_max_ctx=model_max_ctx, tail_fraction=tail_fraction)
 
     logger.info(
         "tool-budget bounds: context_window=%d tool_call_limit=%d spill=%dc turn_aggregate=%d tokens",

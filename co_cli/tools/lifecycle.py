@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from opentelemetry import trace as otel_trace
@@ -25,8 +25,6 @@ from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
 
 logger = logging.getLogger(__name__)
 
-_TRACER = otel_trace.get_tracer("co-cli.tool_budget")
-
 
 @dataclass
 class CoToolLifecycle(AbstractCapability[CoDeps]):
@@ -38,6 +36,10 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     - before_tool_execute: path normalization for file tools
     - after_tool_execute: span enrichment + audit logging
     """
+
+    _tracer: otel_trace.Tracer = field(
+        default_factory=lambda: otel_trace.get_tracer("co-cli.tool_budget")
+    )
 
     async def wrap_tool_execute(
         self,
@@ -74,7 +76,7 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         allowed = min(issued, MAX_TOOL_CALLS_PER_MODEL_TURN)
         rejected = max(0, issued - MAX_TOOL_CALLS_PER_MODEL_TURN)
 
-        with _TRACER.start_as_current_span("tool_budget.enforce_tool_call_limit") as span:
+        with self._tracer.start_as_current_span("tool_budget.enforce_tool_call_limit") as span:
             span.set_attribute("budget.context_window_tokens", ctx.deps.model_max_ctx)
             span.set_attribute("tool_calls.limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
             span.set_attribute("tool_calls.issued", issued)

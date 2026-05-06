@@ -167,7 +167,7 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 | `tool_budget.resolved` | INTERNAL | `budget.context_window_tokens`, `budget.tail_fraction`, `budget.tool_call_limit`, `budget.spill_threshold_chars`, `budget.turn_aggregate_threshold_tokens` — emitted once at bootstrap by `co-cli.tool_budget` tracer; records the resolved tool budget constants for the session |
 | `tool_budget.spill_tool_result` | INTERNAL | `tool.name`, `spill.threshold_chars`, `spill.content_chars`, `spill.fired` (bool), `spill.forced` (bool), `spill.savings_chars` — emitted by `co-cli.tool_budget` tracer on every M1 emit-time spill check |
 | `tool_budget.enforce_turn_aggregate` | INTERNAL | `turn_aggregate.threshold_tokens`, `tokens_before`, `tokens_after`, `candidates_count`, `spilled_count`, `spill_fired` (bool), `skip_reason` — emitted by `co-cli.tool_budget` tracer when M2L aggregate-spill processor runs |
-| `tool_budget.turn_tool_calls` | INTERNAL | `tool_call.count`, `tool_call.limit`, `tool_call.run_step` — emitted by `co-cli.tool_budget` tracer after each model turn via `CoToolLifecycle.after_node_run` |
+| `tool_budget.enforce_tool_call_limit` | INTERNAL | `budget.context_window_tokens`, `tool_calls.limit`, `tool_calls.issued`, `tool_calls.allowed`, `tool_calls.rejected`, `tool_calls.limit_exceeded` (bool) — emitted by `co-cli.tool_budget` tracer after each `CallToolsNode` via `CoToolLifecycle.after_node_run`; records the L0 brake outcome for the turn |
 
 ### Trace HTML Viewer (`co traces`)
 

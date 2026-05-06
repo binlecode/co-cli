@@ -2,7 +2,7 @@
 
 from typing import Literal, TypedDict
 
-MAX_TOOL_CALLS_PER_MODEL_TURN = 6  # one worst-case model turn fits the tail at 32K; see Sizing
+MAX_TOOL_CALLS_PER_MODEL_TURN = 6  # 6 non-spilling calls fit the 64K-floor tail; see Sizing
 
 
 class MaxToolCallsExceededPayload(TypedDict):
