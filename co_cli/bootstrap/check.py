@@ -118,14 +118,6 @@ def _check_ollama_model(host: str, model: str) -> CheckResult:
     return CheckResult(ok=True, status="ok", detail=f"Model available: {model}")
 
 
-# Minimum context window for agentic tool-use sessions.
-# Below this, system prompt + tools (~5.5K) + working history (~20K) +
-# one tool result (~5K) + compaction headroom (13K) + output reserve (~16K)
-# + safety margin (~5.5K) cannot fit. The agent would compact every turn,
-# and the summarizer call itself would consume most of the remaining context.
-MIN_AGENTIC_CONTEXT = 65_536
-
-
 def _check_gemini_key(api_key: str | None) -> CheckResult:
     if api_key:
         return CheckResult(ok=True, status="ok", detail="Gemini API key configured")

@@ -39,7 +39,6 @@ graph TD
 | `ShellSettings` | `shell.py` | Shell timeout limit and auto-approval safe command list |
 | `MemorySettings` | `memory.py` | Memory recall half-life |
 | `ObservabilitySettings` | `observability.py` | Log level, rotation, OTel span redaction patterns |
-| `ToolsSettings` | `tools.py` | Tool result persistence threshold |
 | `MCPServerSettings` | `mcp.py` | Per-server transport config (stdio or HTTP) |
 
 `Settings` is constructed once per session by `create_deps()` via `get_settings()`, then
@@ -137,17 +136,15 @@ during `create_deps()` before `build_model()`:
 ```
 num_ctx, capabilities = probe_ollama_model(host, model)
 model_max_ctx = min(num_ctx, config.llm.max_ctx)   # capped by user ceiling
-if model_max_ctx < MIN_AGENTIC_CONTEXT (65536): raise ValueError
 ```
 
-`MIN_AGENTIC_CONTEXT = 65_536` — minimum for system prompt + tools + history + compaction
-headroom + output reserve. Ollama silently ignores `num_ctx` in request params
-(ollama/ollama#5356); context window must be baked into the Modelfile.
-Gemini: no probe; `deps.model_max_ctx = None`.
+Ollama silently ignores `num_ctx` in request params (ollama/ollama#5356); context window
+must be baked into the Modelfile. Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx`
+(ceiling used as-is).
 
 `resolve_compaction_budget(deps)` (`context/summarization.py`):
 ```
-deps.model_max_ctx if set, else config.llm.ctx_token_budget
+deps.model_max_ctx
 ```
 
 ### MCP servers
@@ -201,9 +198,8 @@ comma-separated strings from env vars. Blocked list takes precedence over allowe
 |---------|---------|---------|-------------|
 | `llm.provider` | `CO_LLM_PROVIDER` | `"ollama"` | Provider: `ollama` or `gemini` |
 | `llm.host` | `CO_LLM_HOST` | `"http://localhost:11434"` | Ollama server base URL |
-| `llm.model` | `CO_LLM_MODEL` | `"qwen3.6:27b-agentic"` | Single model name for all tasks |
+| `llm.model` | `CO_LLM_MODEL` | `"qwen3.5:35b-a3b"` (Ollama default) | Single model name for all tasks; falls back to `DEFAULT_LLM_MODELS[provider]` when unset |
 | `llm.max_ctx` | — | `131072` | Ceiling on probed Ollama context window |
-| `llm.ctx_token_budget` | — | `100000` | Fallback token budget when probe is absent (Gemini) |
 | `llm.api_key` | `GEMINI_API_KEY` (gemini), else `CO_LLM_API_KEY` | `None` | Provider API key |
 
 Inference knobs (temperature, top_p, max_tokens, extra_body, thinking_config) are not
@@ -279,12 +275,6 @@ Default safe commands: `ls`, `tree`, `find`, `fd`, `cat`, `head`, `tail`, `grep`
 
 Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub tokens, generic `API_KEY:` patterns, AWS `AKIA*` keys, PEM private key headers.
 
-### Tools (`tools.*`)
-
-| Setting | Env Var | Default | Description |
-|---------|---------|---------|-------------|
-| `tools.result_persist_chars` | `CO_TOOLS_RESULT_PERSIST_CHARS` | `50000` | Default persist threshold in chars; per-tool `ToolInfo.max_result_size` overrides this |
-
 ### MCP servers (`mcp_servers.*`)
 
 | Field | Default | Description |
@@ -313,13 +303,12 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `co_cli/config/shell.py` | `ShellSettings` — timeout, safe command list |
 | `co_cli/config/memory.py` | `MemorySettings` — recall half-life |
 | `co_cli/config/observability.py` | `ObservabilitySettings` — log level, rotation, redaction patterns |
-| `co_cli/config/tools.py` | `ToolsSettings` — result persist threshold |
 | `co_cli/config/mcp.py` | `MCPServerSettings`, `DEFAULT_MCP_SERVERS`, `parse_mcp_servers_from_env()` |
 | `co_cli/llm/factory.py` | `LlmModel` dataclass; `build_model()` — constructs pydantic-ai model + both `ModelSettings` from `LlmSettings` |
 | `co_cli/llm/call.py` | `llm_call()` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
-| `co_cli/bootstrap/check.py` | `probe_ollama_model()` — `/api/show` probe for num_ctx + capabilities; `MIN_AGENTIC_CONTEXT` constant |
+| `co_cli/bootstrap/check.py` | `probe_ollama_model()` — `/api/show` probe for num_ctx + capabilities |
 | `co_cli/bootstrap/core.py` | `create_deps()` — calls `validate_config()`, `probe_ollama_model()`, `build_model()` at startup |
-| `co_cli/context/summarization.py` | `resolve_compaction_budget(deps)` — reads `deps.model_max_ctx` with `ctx_token_budget` fallback |
+| `co_cli/context/summarization.py` | `resolve_compaction_budget(deps)` — returns `deps.model_max_ctx` directly |
 
 
 ## 5. Test Gates

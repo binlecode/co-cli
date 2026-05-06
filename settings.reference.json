@@ -4,7 +4,7 @@
     "host": "http://localhost:11434",
     "model": "qwen3.5:35b-a3b",
     "api_key": null,
-    "max_ctx": 32768
+    "max_ctx": 65536
   },
   "knowledge": {
     "search_backend": "hybrid",
@@ -62,10 +62,6 @@
     "log_max_size_mb": 5,
     "log_backup_count": 3
   },
-  "tools": {
-    "result_persist_chars": 50000
-  },
-
   "obsidian_vault_path": "",
   "google_credentials_path": "",
   "brave_search_api_key": "",

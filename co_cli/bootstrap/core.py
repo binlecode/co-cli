@@ -212,6 +212,42 @@ def _sync_canon_store(
         frontend.on_status(f"  Canon sync failed — {exc}")
 
 
+def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
+    """Resolve model_max_ctx and model_capabilities from config + Ollama probe.
+
+    Ollama: probe loaded Modelfile, cap by max_ctx.
+    Non-Ollama or probe failure: fall back to configured max_ctx ceiling.
+    Raises ValueError on hard constraint violations.
+    """
+    if not config.llm.uses_ollama():
+        logger.debug(
+            "non-ollama provider %s; using configured max_ctx=%d",
+            config.llm.provider,
+            config.llm.max_ctx,
+        )
+        return config.llm.max_ctx, []
+
+    from co_cli.bootstrap.check import probe_ollama_model
+
+    num_ctx, capabilities = probe_ollama_model(config.llm.host, config.llm.model)
+    model_max_ctx: int = config.llm.max_ctx
+    if num_ctx is not None:
+        model_max_ctx = min(num_ctx, config.llm.max_ctx)
+    else:
+        logger.warning(
+            "ollama ctx probe failed; using configured max_ctx ceiling=%d as fallback",
+            config.llm.max_ctx,
+        )
+    required_num_ctx = config.llm.ollama_num_ctx()
+    if required_num_ctx is not None and required_num_ctx > config.llm.max_ctx:
+        raise ValueError(
+            f"Model {config.llm.model!r} requests num_ctx={required_num_ctx:,} per call "
+            f"but max_ctx={config.llm.max_ctx:,}. Raise max_ctx in settings or lower "
+            f"num_ctx in _LLM_SETTINGS."
+        )
+    return model_max_ctx, capabilities
+
+
 async def create_deps(
     frontend: TerminalFrontend,
     stack: AsyncExitStack,
@@ -240,22 +276,33 @@ async def create_deps(
     if error:
         raise ValueError(error)
 
-    # Step 2b: Ollama context probe — fail-fast on undersized models,
-    # override num_ctx with runtime Modelfile value when they differ.
-    if config.llm.uses_ollama():
-        from co_cli.bootstrap.check import _probe_ollama_context
+    # Step 2b: resolve runtime context budget (Ollama probe or configured ceiling).
+    model_max_ctx, model_capabilities = _probe_model_ctx(config)
 
-        ctx_probe = _probe_ollama_context(config.llm.host, config.llm.model)
-        if ctx_probe.status == "error":
-            raise ValueError(ctx_probe.detail)
-        runtime_num_ctx = ctx_probe.extra.get("num_ctx", 0)
-        if runtime_num_ctx > 0 and runtime_num_ctx != config.llm.num_ctx:
-            logger.info(
-                "Ollama runtime num_ctx=%d differs from config llm.num_ctx=%d — using runtime value",
-                runtime_num_ctx,
-                config.llm.num_ctx,
-            )
-            config.llm.num_ctx = runtime_num_ctx
+    # Cache turn-aggregate budget for L2 aggregate spill processor.
+    from co_cli.agent._tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+    from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
+
+    tail_fraction = config.compaction.tail_fraction
+    turn_aggregate_threshold_tokens = int(tail_fraction * model_max_ctx)
+
+    _tool_budget_tracer = trace.get_tracer("co-cli.tool_budget")
+    with _tool_budget_tracer.start_as_current_span("tool_budget.resolved") as _span:
+        _span.set_attribute("budget.context_window_tokens", model_max_ctx)
+        _span.set_attribute("budget.tail_fraction", tail_fraction)
+        _span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
+        _span.set_attribute("budget.spill_threshold_chars", SPILL_THRESHOLD_CHARS)
+        _span.set_attribute(
+            "budget.turn_aggregate_threshold_tokens", turn_aggregate_threshold_tokens
+        )
+
+    logger.info(
+        "tool-budget bounds: context_window=%d tool_call_limit=%d spill=%dc turn_aggregate=%d tokens",
+        model_max_ctx,
+        MAX_TOOL_CALLS_PER_MODEL_TURN,
+        SPILL_THRESHOLD_CHARS,
+        turn_aggregate_threshold_tokens,
+    )
 
     # Step 3: build registries
     llm_model = build_model(config.llm)
@@ -325,6 +372,9 @@ async def create_deps(
         tool_registry=tool_registry,
         skill_commands=skill_commands,
         runtime=runtime,
+        model_max_ctx=model_max_ctx,
+        model_capabilities=model_capabilities,
+        turn_aggregate_threshold_tokens=turn_aggregate_threshold_tokens,
         degradations=degradations,
         **paths,
     )
