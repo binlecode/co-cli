@@ -4,7 +4,7 @@ Task type: code-feature
 
 ## Status
 
-Delivered in commit `491ab27` (v0.8.126). L0 cap, L1 refit, L2 aggregate spill, OTEL coverage, and 23 unit tests are in main. Two follow-up items remain.
+Delivered in commit `491ab27` (v0.8.126). L0 cap, L1 refit, L2 aggregate spill, OTEL coverage, and 23 unit tests are in main. All follow-up items closed. Shipped at v0.8.128.
 
 ## Remaining tasks
 
@@ -24,7 +24,7 @@ Fixture monkeypatches `lifecycle_module._TRACER` with an `InMemorySpanExporter`-
 done_when:
 - `uv run pytest tests/test_flow_tool_call_limit_otel.py -x` green. ✓
 
-### TASK-B — Fix stale inline comment
+### TASK-B — Fix stale inline comment ✓ DONE
 
 prerequisites: []
 
@@ -42,7 +42,7 @@ done_when:
 
 success_signal: a reader following the comment back to Sizing finds the math it claims to summarize.
 
-### TASK-C — Fail fast when probed `num_ctx` undercuts configured `max_ctx`
+### TASK-C — Fail fast when probed `num_ctx` undercuts configured `max_ctx` ✓ DONE
 
 prerequisites: []
 
