@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import logging
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from pydantic_ai import Agent, DeferredToolRequests, RunContext
-from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.capabilities.abstract import WrapModelRequestHandler
-from pydantic_ai.messages import ModelResponse
+from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.toolsets.combined import CombinedToolset
 
@@ -23,40 +18,6 @@ from co_cli.context.compaction import (
 )
 from co_cli.deps import CoDeps, ToolInfo
 from co_cli.tools.lifecycle import CoToolLifecycle
-
-if TYPE_CHECKING:
-    from pydantic_ai.models import ModelRequestContext
-
-logger = logging.getLogger(__name__)
-
-_LLM_CALL_WARN_SECS: int = 90
-"""Elapsed threshold for the per-call slow-call warning. Fires before the hard
-limit (_LLM_CALL_TIMEOUT_SECS in orchestrate.py) to give early signal on slow
-local models without blocking the call.
-"""
-
-
-@dataclass
-class _PerCallTimeoutCapability(AbstractCapability[Any]):
-    async def wrap_model_request(
-        self,
-        ctx: RunContext[Any],
-        *,
-        request_context: ModelRequestContext,
-        handler: WrapModelRequestHandler,
-    ) -> ModelResponse:
-        _t0 = time.monotonic()
-        try:
-            return await handler(request_context)
-        finally:
-            elapsed = time.monotonic() - _t0
-            logger.debug("LLM call elapsed: %.1fs", elapsed)
-            if elapsed >= _LLM_CALL_WARN_SECS:
-                logger.warning(
-                    "LLM call slow: %.1fs (warn threshold %ds)",
-                    elapsed,
-                    _LLM_CALL_WARN_SECS,
-                )
 
 
 @dataclass(frozen=True)
@@ -86,8 +47,6 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
     native_toolset, native_index = _build_native_toolset(config)
     mcp_entries = _build_mcp_toolsets(config)
 
-    # Combine all toolsets under one filter so approval-resume narrowing
-    # applies uniformly to native and MCP tools.
     combined = CombinedToolset([native_toolset, *(e.toolset for e in mcp_entries)])
     filtered = combined.filtered(_approval_resume_filter)
 
@@ -102,9 +61,7 @@ def build_agent(
     *,
     config: Settings,
     model: Any = None,
-    # Orchestrator path
     tool_registry: ToolRegistry | None = None,
-    # Delegation tool path
     instructions: str | None = None,
     tool_fns: list[Callable] | None = None,
     output_type: type | None = None,
@@ -125,7 +82,7 @@ def build_agent(
     Delegation path: output_type is provided; builds a minimal agent.
     Raises ValueError if delegation path intent detected but output_type is None.
     """
-    is_delegation = output_type is not None or instructions is not None or bool(tool_fns or [])
+    is_delegation = output_type is not None or instructions is not None or bool(tool_fns)
 
     if is_delegation and output_type is None:
         raise ValueError(
@@ -133,12 +90,8 @@ def build_agent(
             "Pass tool_registry instead for the orchestrator path."
         )
 
-    # Normalize model: accept LlmModel or raw pydantic-ai model.
-    # Orchestrator path: model=None → build from config.
-    # Delegation path: model is expected to be a raw pydantic-ai model.
     from co_cli.llm.factory import LlmModel as _LlmModel
 
-    raw_model = model
     llm_settings = None
     if model is None:
         from co_cli.llm.factory import build_model
@@ -149,9 +102,10 @@ def build_agent(
     elif isinstance(model, _LlmModel):
         raw_model = model.model
         llm_settings = model.settings
+    else:
+        raw_model = model
 
     if not is_delegation:
-        # Orchestrator path
         if tool_registry is None:
             tool_registry = build_tool_registry(config)
 
@@ -160,7 +114,6 @@ def build_agent(
         from co_cli.context.guidance import build_toolset_guidance
         from co_cli.tools.deferred_prompt import build_category_awareness_prompt
 
-        # Block 0: session-stable; cached across all turns and sessions
         static_parts = [build_static_instructions(config)]
 
         tool_guidance = build_toolset_guidance(tool_registry.tool_index)
@@ -180,8 +133,6 @@ def build_agent(
 
         static_instructions = "\n\n".join(static_parts)
 
-        # Static layer — set once at agent construction; does not change between turns.
-        # Single filtered toolset (native + MCP combined); SDK adds ToolSearchToolset automatically.
         agent: Agent[CoDeps, Any] = Agent(
             raw_model,
             deps_type=CoDeps,
@@ -195,27 +146,22 @@ def build_agent(
                 proactive_window_processor,
             ],
             toolsets=[tool_registry.toolset],
-            capabilities=[CoToolLifecycle(), _PerCallTimeoutCapability()],
+            capabilities=[CoToolLifecycle()],
         )
 
-        # Block 1: per-turn callbacks — real-time, not cached, tiny
-        # safety_prompt: structural behavioral guidance; sits above ephemeral grounding
-        # current_time_prompt: tail position — ephemeral grounding just before model sees user turn
         agent.instructions(safety_prompt)
         agent.instructions(current_time_prompt)
 
         return agent
 
-    else:
-        # Delegation path: minimal agent with inline instructions and tool_fns.
-        delegation_agent: Agent[CoDeps, Any] = Agent(
-            raw_model,
-            deps_type=CoDeps,
-            output_type=output_type,
-            instructions=instructions,
-            retries=config.tool_retries,
-            capabilities=[CoToolLifecycle(), _PerCallTimeoutCapability()],
-        )
-        for fn in tool_fns or []:
-            delegation_agent.tool(fn, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match
-        return delegation_agent
+    delegation_agent: Agent[CoDeps, Any] = Agent(
+        raw_model,
+        deps_type=CoDeps,
+        output_type=output_type,
+        instructions=instructions,
+        retries=config.tool_retries,
+        capabilities=[CoToolLifecycle()],
+    )
+    for fn in tool_fns or []:
+        delegation_agent.tool(fn, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match
+    return delegation_agent
