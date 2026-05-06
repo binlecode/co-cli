@@ -5,6 +5,7 @@ Data types: CheckResult, RuntimeCheckResult.
 Public entry points:
   check_runtime(deps)             — tools/capabilities.py (full runtime diagnostic)
   probe_ollama_model(host, model) — bootstrap/core.py (context size + capabilities)
+  validate_ollama_num_ctx(config) — bootstrap/core.py (per-call num_ctx ceiling guard)
 
 All individual IO check functions are package-private (underscore prefix).
 Config-shape validation lives on LlmSettings.validate_config() (config/llm.py), not here.
@@ -95,6 +96,17 @@ def probe_ollama_model(host: str, model: str) -> tuple[int | None, list[str]]:
                 break
 
     return num_ctx, data.get("capabilities") or []
+
+
+def validate_ollama_num_ctx(config: "Settings") -> None:
+    """Raise ValueError if the per-call num_ctx exceeds the configured max_ctx ceiling."""
+    required_num_ctx = config.llm.ollama_num_ctx()
+    if required_num_ctx is not None and required_num_ctx > config.llm.max_ctx:
+        raise ValueError(
+            f"Model {config.llm.model!r} requests num_ctx={required_num_ctx:,} per call "
+            f"but max_ctx={config.llm.max_ctx:,}. Raise max_ctx in settings or lower "
+            f"num_ctx in _LLM_SETTINGS."
+        )
 
 
 def _check_ollama_model(host: str, model: str) -> CheckResult:

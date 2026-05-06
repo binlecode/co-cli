@@ -227,7 +227,7 @@ def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
         )
         return config.llm.max_ctx, []
 
-    from co_cli.bootstrap.check import probe_ollama_model
+    from co_cli.bootstrap.check import probe_ollama_model, validate_ollama_num_ctx
 
     num_ctx, capabilities = probe_ollama_model(config.llm.host, config.llm.model)
     model_max_ctx: int = config.llm.max_ctx
@@ -238,13 +238,7 @@ def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
             "ollama ctx probe failed; using configured max_ctx ceiling=%d as fallback",
             config.llm.max_ctx,
         )
-    required_num_ctx = config.llm.ollama_num_ctx()
-    if required_num_ctx is not None and required_num_ctx > config.llm.max_ctx:
-        raise ValueError(
-            f"Model {config.llm.model!r} requests num_ctx={required_num_ctx:,} per call "
-            f"but max_ctx={config.llm.max_ctx:,}. Raise max_ctx in settings or lower "
-            f"num_ctx in _LLM_SETTINGS."
-        )
+    validate_ollama_num_ctx(config)
     return model_max_ctx, capabilities
 
 
