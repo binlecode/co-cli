@@ -91,5 +91,5 @@ addopts = "-x --durations=0 -p _co_harness"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["tests"]
-timeout = 120
-session_timeout = 300
+timeout = 180
+session_timeout = 600

@@ -231,7 +231,6 @@ async def step_multi_cycle_compaction() -> bool:
 
     async with AsyncExitStack() as stack:
         deps = await create_deps(frontend, stack)
-        deps.config.llm.max_ctx = 32768
         agent = build_agent(
             config=deps.config,
             model=deps.model,

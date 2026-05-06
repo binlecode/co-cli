@@ -14,13 +14,18 @@ pytest-timeout (pyproject.toml: timeout = 120) is the safety net. It catches:
 - sync code that hangs (fixture setup, subprocess, file IO with no await)
 - an await that was accidentally left unwrapped
 
-Why 120s: the largest single per-await budget is LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
-(60s). 120s = 2x that, leaving room for fixture setup/teardown around one
-summarization call. A test that legitimately needs more than 120s total must wrap
-each sequential LLM call with its own asyncio.timeout and use
-@pytest.mark.timeout(N) to raise the outer safety net to N = sum(per-call
-budgets) + overhead. Raise individual constants if model latency increases;
-raise the pytest ceiling only when correctly-wrapped sequential calls sum past it.
+Why 180s: the largest single per-await budget is LLM_TOOL_CONTEXT_TIMEOUT_SECS
+doubled by callers (50s x 2 = 100s for approval-roundtrip tool tests). The
+pytest ceiling additionally covers infra prep around the wrapped await —
+notably ensure_ollama_warm()'s mid-suite KV-cache flush, which can take
+~50s after a heavy preceding test. 180s = 100s wrapped + ~50s flush + small
+overhead. Per-call budgets remain warm-only and never include cold start;
+that separation is preserved here. A test that legitimately needs more than
+180s total must wrap each sequential LLM call with its own asyncio.timeout
+and use @pytest.mark.timeout(N) to raise the outer safety net to
+N = sum(per-call budgets) + infra prep + overhead. Raise individual constants
+if warm-call latency increases; raise the pytest ceiling only when correctly-wrapped
+sequential calls plus infra prep exceed it.
 
 Usage::
 
@@ -46,7 +51,7 @@ LLM_COMPACTION_SUMMARY_TIMEOUT_SECS: int = 60
 """Compaction LLM summarizer calls (reasoning disabled, no tool schemas).
 
 Output is long-form structured text (400–900 tokens). At ~30 tok/s on local
-35B hardware, worst observed output (883 tokens) takes ~29s. 60s gives 2×
+35B hardware, worst observed output (883 tokens) takes ~29s. 60s gives 2x
 headroom without masking a stalled call.
 Distinct from LLM_NON_REASONING_TIMEOUT_SECS, which is calibrated for
 low-output calls where >10s indicates a misconfigured reasoning mode.
@@ -61,13 +66,14 @@ several seconds on local 35B hardware. 30s covers worst-case thinking budget
 on a low-output prompt without masking a stall.
 """
 
-LLM_TOOL_CONTEXT_TIMEOUT_SECS: int = 20
-"""Non-reasoning calls with full tool context (reasoning_effort=none, 28 built-in tools, ~10K schema tokens).
+LLM_TOOL_CONTEXT_TIMEOUT_SECS: int = 50
+"""Reasoning calls with full tool context (~16 built-in tools after MCP-strip, ~10K schema tokens).
 
-MCP servers are stripped from test configs (mcp_servers={}) to keep the tool count at 28.
-Tool schemas are sent in every request: 28 tools × avg schema = ~41K bytes ≈ 10K tokens.
-Processing 10K schema tokens without reasoning takes ~12s on this hardware (confirmed:
-reasoning_effort=none verified in request, no thinking output, pure KV-fill cost).
+Qwen3-family models on Ollama need reasoning enabled to emit structured tool_calls
+reliably; with think disabled they fall back to free-form text. Reasoning + tool
+schemas raises the per-call budget: prefill (~10K schema tokens) plus thinking
+tokens before the tool_calls array typically lands in 20-40s on local 27-35B
+hardware. 50s gives ~25% headroom; multi-step tests double via *2.
 Use for tool-selection tests (test_tool_calling_functional) and approval-flow tests
 (test_commands) that require the production tool set.
 """

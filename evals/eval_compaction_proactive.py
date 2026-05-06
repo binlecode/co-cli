@@ -267,10 +267,9 @@ async def step_proactive_compaction() -> bool:
     """UAT: co autonomously researches Finch (2021) until M3 compaction fires.
 
     Open-ended loop driven by real run_turn. co decides what to fetch and in what
-    order; M1 persists oversized results at emit time; M3 fires organically when
-    context pressure crosses 65% of max_ctx (32768 — halved from the Ollama default
-    so M3 triggers at ~21k tokens rather than ~85k). No hand-built history, no
-    article caps, no fallback content.
+    order; M1 persists oversized results at emit time; M3 fires organically at the
+    production context budget (whatever bootstrap probes from the loaded model).
+    No hand-built history, no article caps, no fallback content.
     """
     print("\n--- UAT: Proactive M3 compaction via run_turn (Finch/2021) ---")
 
@@ -308,7 +307,6 @@ async def step_proactive_compaction() -> bool:
 
     async with AsyncExitStack() as stack:
         deps = await create_deps(frontend, stack)
-        deps.config.llm.max_ctx = 32768
 
         # Assign a real session path so persist_session_history has a target.
         deps.session.session_path = new_session_path(deps.sessions_dir)
