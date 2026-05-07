@@ -61,6 +61,12 @@ logger = logging.getLogger(__name__)
 _LLM_SEGMENT_WARN_SECS: int = 90
 """Slow-segment warning threshold."""
 
+_LENGTH_RETRY_CEILING = 16_384
+"""Max output tokens ceiling for length-continuation auto-retry. Doublings from 4096 → 8192 → 16384."""
+
+_LENGTH_RETRY_BOOST = 2
+"""Multiplier applied to max_tokens on each length-continuation retry."""
+
 from co_cli.config.core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.context.compaction import is_context_overflow
@@ -523,6 +529,50 @@ def _check_output_limits(
                     )
 
 
+def _emit_final_output_if_needed(
+    turn_state: _TurnState,
+    latest_result: SessionRunResult,
+    frontend: Frontend,
+) -> None:
+    """Emit final output text when the stream did not already render it inline."""
+    if not turn_state.latest_streamed_text and isinstance(latest_result.output, str):
+        frontend.on_final_output(latest_result.output)
+
+
+def _length_retry_settings(
+    result: SessionRunResult,
+    active_settings: ModelSettings | None,
+) -> ModelSettings | None:
+    """Return boosted ModelSettings if a length-continuation retry should fire, else None.
+
+    Fires when:
+      - finish_reason is 'length' (output was truncated)
+      - active_settings has a max_tokens value below the ceiling (boost is possible)
+      - the response contains at least one TextPart or ToolCallPart (thinking-exhaustion gate)
+
+    Returns a new settings dict with max_tokens doubled (capped at _LENGTH_RETRY_CEILING),
+    or None when the conditions are not met (no retry).
+    """
+    if result.response.finish_reason != "length":
+        return None
+    current_max = active_settings.get("max_tokens", 0) if active_settings else 0
+    if not current_max or current_max >= _LENGTH_RETRY_CEILING:
+        return None
+    if not any(isinstance(p, (TextPart, ToolCallPart)) for p in result.response.parts):
+        return None
+    boosted = min(current_max * _LENGTH_RETRY_BOOST, _LENGTH_RETRY_CEILING)
+    new_settings: dict = {**active_settings, "max_tokens": boosted}
+    # Ollama ignores max_completion_tokens (pydantic-ai's mapping of max_tokens) and instead
+    # honors max_tokens when injected via extra_body (merged to the request root by the openai
+    # client). Boost max_tokens inside extra_body in lockstep so the continuation segment
+    # actually gets the expanded output budget on Ollama.
+    extra = dict(new_settings.get("extra_body") or {})
+    if "max_tokens" in extra:
+        extra["max_tokens"] = boosted
+        new_settings["extra_body"] = extra
+    return new_settings  # type: ignore[return-value]
+
+
 def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessage]:
     """Materialize the in-flight user prompt into history for retryable recovery paths."""
     if turn_state.current_input is None:
@@ -595,25 +645,32 @@ async def run_turn(
 
     with _TRACER.start_as_current_span("co.turn") as span:
         try:
+            active_settings: ModelSettings | None = model_settings
             while True:
                 try:
                     await _execute_stream_segment(
                         turn_state,
                         agent,
                         deps,
-                        model_settings,
+                        active_settings,
                         frontend,
                         message_history=turn_state.current_history,
                     )
 
-                    await _run_approval_loop(turn_state, agent, deps, model_settings, frontend)
+                    await _run_approval_loop(turn_state, agent, deps, active_settings, frontend)
                     latest_result = turn_state.latest_result
                     assert latest_result is not None
                     turn_state.current_history = latest_result.all_messages()
-                    if not turn_state.latest_streamed_text and isinstance(
-                        latest_result.output, str
-                    ):
-                        frontend.on_final_output(latest_result.output)
+                    _emit_final_output_if_needed(turn_state, latest_result, frontend)
+
+                    boosted_settings = _length_retry_settings(latest_result, active_settings)
+                    if boosted_settings is not None:
+                        active_settings = boosted_settings
+                        turn_state.current_input = None
+                        frontend.on_status(
+                            f"Response truncated — retrying with {active_settings['max_tokens']:,} output tokens…"
+                        )
+                        continue
 
                     _check_output_limits(turn_state, deps, frontend)
 
