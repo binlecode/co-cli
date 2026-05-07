@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,6 +14,7 @@ from pydantic_ai.capabilities import (
     AbstractCapability,
     AgentNode,
     NodeResult,
+    RawToolArgs,
     ValidatedToolArgs,
     WrapToolExecuteHandler,
 )
@@ -25,6 +27,87 @@ from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
 
 logger = logging.getLogger(__name__)
 
+_CLOSE_FOR: dict[str, str] = {"{": "}", "[": "]"}
+_OPEN_FOR: dict[str, str] = {v: k for k, v in _CLOSE_FOR.items()}
+_TRAILING_COMMA = re.compile(r",\s*([}\]])")
+
+
+def _try_parse(s: str) -> str | None:
+    try:
+        return json.dumps(json.loads(s, strict=False))
+    except json.JSONDecodeError:
+        return None
+
+
+def _balance_brackets(s: str) -> str:
+    """Append missing closing brackets by tracking the open-bracket stack."""
+    stack: list[str] = []
+    in_str = False
+    escape_next = False
+    for ch in s:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_str:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in _CLOSE_FOR:
+            stack.append(ch)
+        elif ch in _OPEN_FOR and stack and stack[-1] == _OPEN_FOR[ch]:
+            stack.pop()
+    return s + "".join(_CLOSE_FOR[o] for o in reversed(stack))
+
+
+def _repair_json_args(raw: str) -> str:
+    """Apply syntactic repair passes to a malformed tool-call arguments string.
+
+    Purely syntactic — no value inference or schema awareness. Returns a valid
+    JSON string on success, or '{}' if all passes fail (so pydantic validation
+    can raise ModelRetry rather than crashing the session).
+    """
+    if not raw or not raw.strip():
+        return "{}"
+    s = raw.strip()
+
+    if s == "None":
+        return "{}"
+
+    # Pass 3: control-char escape — strict=False accepts literal tabs/newlines;
+    # re-serialise to produce a spec-compliant string.
+    result = _try_parse(s)
+    if result is not None:
+        return result
+
+    # Pass 4: trailing-comma strip (common in quantized-model output)
+    s = _TRAILING_COMMA.sub(r"\1", s)
+    result = _try_parse(s)
+    if result is not None:
+        return result
+
+    # Pass 5: balance unclosed brackets, then re-strip trailing commas that now
+    # precede the appended closer.
+    s = _TRAILING_COMMA.sub(r"\1", _balance_brackets(s))
+    result = _try_parse(s)
+    if result is not None:
+        return result
+
+    # Pass 6: trim excess trailing closing delimiters (bounded to 50 steps).
+    for _ in range(50):
+        s = s.rstrip()
+        if not s or s[-1] not in ("}", "]"):
+            break
+        s = s[:-1]
+        result = _try_parse(s)
+        if result is not None:
+            return result
+
+    return "{}"
+
 
 @dataclass
 class CoToolLifecycle(AbstractCapability[CoDeps]):
@@ -33,6 +116,7 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     Hooks:
     - wrap_tool_execute: per-call cap brake (N times per model turn)
     - after_node_run: per-turn aggregate span after all tool calls complete
+    - before_tool_validate: syntactic JSON repair for malformed model output
     - before_tool_execute: path normalization for file tools
     - after_tool_execute: span enrichment + audit logging
     """
@@ -85,6 +169,18 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
             span.set_attribute("tool_calls.limit_exceeded", rejected > 0)
 
         return result
+
+    async def before_tool_validate(
+        self,
+        ctx: RunContext[CoDeps],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: RawToolArgs,
+    ) -> RawToolArgs:
+        if isinstance(args, str):
+            return _repair_json_args(args)
+        return args
 
     async def after_tool_execute(
         self,
