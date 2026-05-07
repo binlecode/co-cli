@@ -168,6 +168,7 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 | `tool_budget.spill_tool_result` | INTERNAL | `tool.name`, `spill.threshold_chars`, `spill.content_chars`, `spill.fired` (bool), `spill.forced` (bool), `spill.savings_chars` — emitted by `co-cli.tool_budget` tracer on every M1 emit-time spill check |
 | `tool_budget.enforce_turn_aggregate` | INTERNAL | `turn_aggregate.threshold_tokens`, `tokens_before`, `tokens_after`, `candidates_count`, `spilled_count`, `spill_fired` (bool), `skip_reason` — emitted by `co-cli.tool_budget` tracer when M2L aggregate-spill processor runs |
 | `tool_budget.enforce_tool_call_limit` | INTERNAL | `budget.context_window_tokens`, `tool_calls.limit`, `tool_calls.issued`, `tool_calls.allowed`, `tool_calls.rejected`, `tool_calls.limit_exceeded` (bool) — emitted by `co-cli.tool_budget` tracer after each `CallToolsNode` via `CoToolLifecycle.after_node_run`; records the L0 brake outcome for the turn |
+| `tool_budget.dedup_tool_calls` | INTERNAL | `dedup.parts_before`, `dedup.parts_after`, `dedup.dropped` (int) — emitted by `co-cli.tool_budget` tracer in `CoToolLifecycle.before_node_run` only when one or more duplicate `(tool_name, args)` `ToolCallPart`s are dropped from a `ModelResponse`; absent when no duplicates were found |
 
 ### Trace HTML Viewer (`co traces`)
 

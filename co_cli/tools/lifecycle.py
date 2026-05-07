@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from opentelemetry import trace as otel_trace
@@ -18,10 +18,10 @@ from pydantic_ai.capabilities import (
     ValidatedToolArgs,
     WrapToolExecuteHandler,
 )
-from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.messages import ModelResponsePart, ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 
-from co_cli.agent._tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
+from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
 from co_cli.deps import CoDeps
 from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
 
@@ -109,11 +109,39 @@ def _repair_json_args(raw: str) -> str:
     return "{}"
 
 
+def _args_dedup_key(args: str | dict[str, Any] | None) -> str:
+    """Stable key for ``ToolCallPart.args``; raw strings and parsed dicts both supported."""
+    if isinstance(args, str):
+        return args.strip()
+    if isinstance(args, dict):
+        return json.dumps(args, sort_keys=True)
+    return ""
+
+
+def _dedup_tool_call_parts(
+    parts: list[ModelResponsePart],
+) -> list[ModelResponsePart] | None:
+    """Drop later ``ToolCallPart``s with the same ``(tool_name, args)`` as an earlier one; ``None`` if no duplicates."""
+    seen: set[tuple[str, str]] = set()
+    new_parts: list[ModelResponsePart] = []
+    modified = False
+    for part in parts:
+        if isinstance(part, ToolCallPart):
+            key = (part.tool_name, _args_dedup_key(part.args))
+            if key in seen:
+                modified = True
+                continue
+            seen.add(key)
+        new_parts.append(part)
+    return new_parts if modified else None
+
+
 @dataclass
 class CoToolLifecycle(AbstractCapability[CoDeps]):
     """SDK capability for cross-cutting tool concerns.
 
     Hooks:
+    - before_node_run: dedup duplicate tool calls within one ModelResponse
     - wrap_tool_execute: per-call cap brake (N times per model turn)
     - after_node_run: per-turn aggregate span after all tool calls complete
     - before_tool_validate: syntactic JSON repair for malformed model output
@@ -124,6 +152,28 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     _tracer: otel_trace.Tracer = field(
         default_factory=lambda: otel_trace.get_tracer("co-cli.tool_budget")
     )
+
+    async def before_node_run(
+        self,
+        ctx: RunContext[CoDeps],
+        *,
+        node: AgentNode[CoDeps],
+    ) -> AgentNode[CoDeps]:
+        if not isinstance(node, CallToolsNode):
+            return node
+        deduped = _dedup_tool_call_parts(node.model_response.parts)
+        if deduped is None:
+            return node
+        before = len(node.model_response.parts)
+        after = len(deduped)
+        dropped = before - after
+        with self._tracer.start_as_current_span("tool_budget.dedup_tool_calls") as span:
+            span.set_attribute("dedup.parts_before", before)
+            span.set_attribute("dedup.parts_after", after)
+            span.set_attribute("dedup.dropped", dropped)
+        node.model_response = replace(node.model_response, parts=deduped)
+        logger.debug("dedup_tool_calls dropped=%d", dropped)
+        return node
 
     async def wrap_tool_execute(
         self,

@@ -15,7 +15,7 @@ co_cli/agent/_native_toolset.py
 co_cli/agent/mcp.py
   -> _build_mcp_toolsets(), discover_mcp_tools()
 co_cli/tools/lifecycle.py
-  -> before_tool_execute(), after_tool_execute()
+  -> before_node_run(), before_tool_validate(), before_tool_execute(), after_tool_execute()
 co_cli/tools/deferred_prompt.py
   -> category awareness prompt for DEFERRED tools
 co_cli/tools/approvals.py
@@ -82,8 +82,10 @@ run_turn()
 Resume segments execute on the main agent with `deferred_tool_results=...`; on that path the SDK skips `ModelRequestNode`, so the approval-resume loop does not send a new model prompt just to execute approved tools.
 
 **Execution Pipeline via CoToolLifecycle:**
-1. **`before_tool_execute`:** Intercepts invocations to resolve relative paths to absolute system paths.
-2. **`after_tool_execute`:** Enriches OpenTelemetry traces: `co.tool.result_size` (all tool spans, including delegation); `co.tool.source` and `co.tool.requires_approval` set for native tools only (present in `tool_index`).
+1. **`before_node_run`:** On `CallToolsNode`, drops later `ToolCallPart`s whose `(tool_name, args)` matches an earlier one in the same `ModelResponse`. Runs before approval prompts and parallel dispatch, so duplicate emissions from smaller Qwen / GLM variants do not trigger double approval, double side effects, or wasted tool execution. Order is preserved; non-`ToolCallPart` parts (`TextPart`, `ThinkingPart`) pass through unchanged.
+2. **`before_tool_validate`:** Applies syntactic JSON repair to malformed tool-call argument strings from quantized models (trailing commas, unclosed braces, control chars, bare `None`) before pydantic validates the args. Dict args pass through unchanged.
+3. **`before_tool_execute`:** Intercepts invocations to resolve relative paths to absolute system paths.
+4. **`after_tool_execute`:** Enriches OpenTelemetry traces: `co.tool.result_size` (all tool spans, including delegation); `co.tool.source` and `co.tool.requires_approval` set for native tools only (present in `tool_index`).
 
 **Approval & Errors:**
 - **Auto-Approve:** `_collect_deferred_tool_approvals()` writes `True` into `DeferredToolResults`; the actual tool call runs only after the resumed segment starts.

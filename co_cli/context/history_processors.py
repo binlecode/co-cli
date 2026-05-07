@@ -285,7 +285,7 @@ def evict_old_tool_results(
         return messages
 
     keep_ids = _build_keep_ids(messages[:boundary])
-    call_id_to_args = _build_call_id_to_args(messages)
+    call_id_to_args = _build_call_id_to_args(messages[:boundary])
 
     def replacement_for(part: ToolReturnPart) -> ToolReturnPart | None:
         if part.tool_name not in COMPACTABLE_TOOLS or id(part) in keep_ids:

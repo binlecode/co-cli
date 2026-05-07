@@ -54,7 +54,7 @@ output is silently lost", not just "annoying".
   walks `content` on request parts and both `content` and `args` on response
   parts) and registered as a history processor in `co_cli/agent/core.py:149`.
 
-### 1.4 `sanitize_tool_schemas` — llama.cpp grammar compatibility
+### 1.4 `sanitize_tool_schemas` — llama.cpp grammar compatibility — CLOSED
 
 - Hermes: `tools/schema_sanitizer.py:40` (`sanitize_tool_schemas`),
   `:90` (`strip_nullable_unions`), `:152` (`_sanitize_node`)
@@ -65,11 +65,14 @@ output is silently lost", not just "annoying".
   unconstrained `additionalProperties`, invalid `required` entries.
 - Failure mode: llama.cpp returns HTTP 400 "Unable to generate parser for
   this template" and the request is rejected outright.
-- Co-cli status: missing. pydantic-ai produces clean schemas from typed
-  Python signatures, so our hand-defined tools are safe today. The risk
-  surface opens when MCP is re-enabled — upstream MCP servers ship raw
-  schemas with no scrubbing, and several common MCP servers do emit nullable
-  unions.
+- Co-cli status: **closed**. `context7` ships as the default MCP server and
+  arbitrary user-defined MCP servers are accepted via `settings.json`. Native
+  tool schemas (typed Python signatures → pydantic-ai) remain clean. MCP
+  ingestion-time sanitization is implemented via `co_cli/tools/mcp_schema.py`
+  (`sanitize_mcp_schema`) and a `_SanitizingMCPServer` proxy in
+  `co_cli/agent/mcp.py` that patches `inputSchema` on every `list_tools()`
+  response before pydantic-ai consumes it.
+  Plan: `docs/exec-plans/active/2026-05-07-112044-mcp-schema-sanitizer.md`.
 
 ## 2. Tier 2 — recovery loops (silent-failure prevention)
 
@@ -90,7 +93,7 @@ producing the wrong result.
   "Unknown tool" or aborts.
 - Co-cli status: missing. Adding the repair is cheap insurance.
 
-### 2.2 `_deduplicate_tool_calls` — strip duplicate tool calls
+### 2.2 `_deduplicate_tool_calls` — strip duplicate tool calls — CLOSED
 
 - Hermes: `run_agent.py:5152-5167`, called at `:12816`
 - What it does: removes duplicate `(name, args)` pairs within a single
@@ -98,7 +101,12 @@ producing the wrong result.
 - Failure mode: smaller Qwen / GLM variants occasionally emit the same
   tool_call twice. Without dedup, the tool runs twice — wasted tokens,
   potential side effects, double approval prompts.
-- Co-cli status: missing.
+- Co-cli status: **closed**. Implemented as `before_node_run` on
+  `CoToolLifecycle` (`co_cli/tools/lifecycle.py`) — fires once per
+  `CallToolsNode` before approval prompts and parallel tool dispatch.
+  Uses `_dedup_tool_call_parts` to drop later `ToolCallPart`s whose
+  `(tool_name, args)` matches an earlier one; non-`ToolCallPart` parts
+  pass through unchanged. Coverage: `tests/test_flow_tool_call_dedup.py`.
 
 ### 2.3 XML tool-call tag stripping
 
@@ -183,8 +191,9 @@ by probability of hitting the failure × cost of the fix.
    status hint at `co_cli/context/orchestrate.py:498-501` to an
    automatic resume. Bigger change — touches orchestrate and the
    pytest expectations around `finish_reason`.
-5. **`_deduplicate_tool_calls` (2.2)** — ~10 lines; cost is low, not
-   yet observed in production.
+5. ~~**`_deduplicate_tool_calls` (2.2)**~~ — closed; `before_node_run`
+   on `CoToolLifecycle` dedups `(tool_name, args)` pairs in each
+   `ModelResponse` before approval and dispatch.
 6. **XML tool-call tag stripping (2.3)** — reachable with open-source
    fine-tunes that fall back to text-mode tool calling. Worth porting.
 
@@ -198,9 +207,7 @@ by probability of hitting the failure × cost of the fix.
 
 - **Qwen Portal headers** (`run_agent.py:~1998-2010`) — co-cli targets
   Ollama, not the Qwen portal API.
-- **`sanitize_tool_schemas` for llama.cpp (1.4)** — pydantic-ai produces
-  clean schemas from typed Python signatures. Revisit only when MCP is
-  re-enabled and external schema sources can land in the registry.
+- ~~**`sanitize_tool_schemas` for llama.cpp (1.4)**~~ — closed; see §1.4.
 - **Anthropic prompt caching (`prompt_caching.py`)** — Anthropic-only;
   Ollama's OpenAI-compatible endpoint has no `cache_control` field. Not a
   gap, just a provider limit.
