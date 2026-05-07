@@ -22,8 +22,8 @@ _FTS5_CONFIG = SETTINGS.knowledge.model_copy(
         "search_backend": "fts5",
         "embedding_provider": "none",
         "cross_encoder_reranker_url": None,
-        "chunk_size": 600,
-        "chunk_overlap": 0,
+        "chunk_tokens": 600,
+        "chunk_overlap_tokens": 0,
     }
 )
 _STORE_CONFIG = SETTINGS.model_copy(update={"knowledge": _FTS5_CONFIG})
@@ -91,7 +91,7 @@ def test_waterfall_count_cap(tmp_path: Path) -> None:
 def test_waterfall_size_cap(tmp_path: Path) -> None:
     """Waterfall pass stops when cumulative full-chunk chars reach _ARTIFACTS_WATERFALL_SIZE_CAP.
 
-    With chunk_size=600 each ~500-char note body fits in one chunk. Size accumulates as
+    With chunk_tokens=600 each ~500-char note body fits in one chunk. Size accumulates as
     4 x 500 = 2000, which equals the size cap before the count cap of 5 is reached.
 
     Regression: if deleted, the size cap is no longer tested and oversized context

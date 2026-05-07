@@ -10,8 +10,8 @@ DEFAULT_KNOWLEDGE_EMBEDDING_MODEL = "embeddinggemma"
 DEFAULT_KNOWLEDGE_EMBEDDING_DIMS = 1024
 DEFAULT_KNOWLEDGE_EMBED_API_URL = "http://127.0.0.1:8283"
 DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
-DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
-DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
+DEFAULT_KNOWLEDGE_CHUNK_TOKENS = 600
+DEFAULT_KNOWLEDGE_CHUNK_OVERLAP_TOKENS = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
 
 KNOWLEDGE_ENV_MAP: dict[str, str] = {
@@ -22,8 +22,8 @@ KNOWLEDGE_ENV_MAP: dict[str, str] = {
     "cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
     "tei_rerank_batch_size": "CO_KNOWLEDGE_TEI_RERANK_BATCH_SIZE",
     "embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
-    "chunk_size": "CO_KNOWLEDGE_CHUNK_SIZE",
-    "chunk_overlap": "CO_KNOWLEDGE_CHUNK_OVERLAP",
+    "chunk_tokens": "CO_KNOWLEDGE_CHUNK_TOKENS",
+    "chunk_overlap_tokens": "CO_KNOWLEDGE_CHUNK_OVERLAP_TOKENS",
     "consolidation_enabled": "CO_KNOWLEDGE_CONSOLIDATION_ENABLED",
     "consolidation_trigger": "CO_KNOWLEDGE_CONSOLIDATION_TRIGGER",
     "consolidation_lookback_sessions": "CO_KNOWLEDGE_CONSOLIDATION_LOOKBACK_SESSIONS",
@@ -53,8 +53,8 @@ class KnowledgeSettings(BaseModel):
     )
     tei_rerank_batch_size: int = Field(default=DEFAULT_TEI_RERANK_BATCH_SIZE)
     embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
-    chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)
-    chunk_overlap: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, ge=0)
+    chunk_tokens: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_TOKENS, ge=0)
+    chunk_overlap_tokens: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_OVERLAP_TOKENS, ge=0)
     consolidation_enabled: bool = Field(default=False)
     consolidation_trigger: Literal["session_end", "manual"] = Field(default="session_end")
     consolidation_lookback_sessions: int = Field(default=5, ge=1)

@@ -14,6 +14,7 @@ Registered processors:
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 
@@ -24,8 +25,13 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
+    SystemPromptPart,
+    TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 
 from co_cli.context._compaction_boundaries import _find_last_turn_start
@@ -406,3 +412,70 @@ def enforce_turn_budget(
         span.set_attribute("turn_aggregate.skip_reason", "")
 
         return [*messages[:boundary], *rewritten] if boundary else rewritten
+
+
+# ---------------------------------------------------------------------------
+# Surrogate sanitizer — gap 1.3 from RESEARCH-hermes-ollama-stability-gaps.md
+# ---------------------------------------------------------------------------
+
+_LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def _replace_surrogates(text: str) -> str:
+    return _LONE_SURROGATE_RE.sub("�", text)
+
+
+def _sanitize_request_parts(msg: ModelRequest) -> ModelRequest:
+    new_parts: list = []
+    modified = False
+    for part in msg.parts:
+        if isinstance(
+            part, (UserPromptPart, SystemPromptPart, RetryPromptPart, ToolReturnPart)
+        ) and isinstance(part.content, str):
+            sanitized = _replace_surrogates(part.content)
+            if sanitized != part.content:
+                part = replace(part, content=sanitized)
+                modified = True
+        new_parts.append(part)
+    return replace(msg, parts=new_parts) if modified else msg
+
+
+def _sanitize_response_parts(msg: ModelResponse) -> ModelResponse:
+    new_parts: list = []
+    modified = False
+    for part in msg.parts:
+        if isinstance(part, (TextPart, ThinkingPart)):
+            if isinstance(part.content, str):
+                sanitized = _replace_surrogates(part.content)
+                if sanitized != part.content:
+                    part = replace(part, content=sanitized)
+                    modified = True
+        elif isinstance(part, ToolCallPart) and isinstance(part.args, str):
+            sanitized = _replace_surrogates(part.args)
+            if sanitized != part.args:
+                part = replace(part, args=sanitized)
+                modified = True
+        new_parts.append(part)
+    return replace(msg, parts=new_parts) if modified else msg
+
+
+def sanitize_surrogate_codepoints(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage]:
+    """Replace lone Unicode surrogate code points (U+D800-U+DFFF) with U+FFFD.
+
+    Byte-token reasoning models (Qwen3 quantizations, GLM-5, Kimi K2.5)
+    occasionally emit lone surrogates that crash json.dumps() with
+    UnicodeEncodeError inside the OpenAI SDK. Registered last so it runs on
+    the final budget-trimmed message list.
+    """
+    result: list[ModelMessage] = []
+    for msg in messages:
+        if isinstance(msg, ModelRequest):
+            result.append(_sanitize_request_parts(msg))
+        elif isinstance(msg, ModelResponse):
+            result.append(_sanitize_response_parts(msg))
+        else:
+            result.append(msg)
+    return result

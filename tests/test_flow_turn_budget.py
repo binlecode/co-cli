@@ -13,7 +13,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.context._history_processors import enforce_turn_budget
+from co_cli.context.history_processors import enforce_turn_budget
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG

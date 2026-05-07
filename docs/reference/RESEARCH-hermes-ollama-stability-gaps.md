@@ -19,23 +19,7 @@ line numbers are listed in a separate "unverified" section.
 These are the patterns where the failure mode is "session crashes" or "model
 output is silently lost", not just "annoying".
 
-### 1.1 `_repair_tool_call_arguments` — JSON argument recovery
-
-- Hermes: `run_agent.py:591-647`, called at `:6807` and `:10668`
-- What it does: applies six repair passes to malformed tool-call argument JSON:
-  empty/whitespace → `{}`; Python `None` literal → `{}`; control-char escape
-  via `json.loads(strict=False)` re-serialize; trailing-comma strip; balance
-  unclosed braces/brackets (bounded to 50 iterations); trim excess closing
-  delimiters.
-- Failure mode: GLM-5.1 / quantized Qwen on Ollama emit truncated or
-  trailing-comma JSON inside `tool_calls.arguments`. Without repair, the
-  request fails with HTTP 400 "invalid tool call arguments" and the session
-  dies.
-- Co-cli status: missing. pydantic-ai validates tool args at the SDK layer
-  with no repair fallback — malformed JSON raises and bubbles up as an
-  unrecoverable error.
-
-### 1.2 `query_ollama_num_ctx` — per-request num_ctx injection
+### 1.1 `query_ollama_num_ctx` — per-request num_ctx injection — CLOSED
 
 - Hermes: `run_agent.py:139` (import), `:2044` (per-request inject)
 - What it does: probes Ollama `/api/show` for the loaded Modelfile's
@@ -45,31 +29,17 @@ output is silently lost", not just "annoying".
 - Failure mode: without injection, Ollama serves the request at 2048 tokens
   even when the Modelfile declares a larger window — tool schemas get
   truncated out of the system prompt and the model hallucinates.
-- Co-cli status: partial. `co_cli/bootstrap/check.py:68` probes `/api/show`
-  once at bootstrap and uses the value as a compaction ceiling
-  (`co_cli/bootstrap/core.py:243-262`). The probed value is **never injected
-  into the request body**. We get away with it today because qwen3.6's
-  Modelfile already declares `num_ctx=65536` and Ollama honors that as the
-  Modelfile-level default; any model whose Modelfile doesn't declare an
-  explicit num_ctx would silently truncate.
+- Co-cli status: **closed**. `_LLM_SETTINGS` in `co_cli/config/llm.py`
+  hardcodes `extra_body["options"]["num_ctx"]` per model/mode; `_ollama_settings()`
+  passes it through to every request. Injection is static (not dynamically
+  probed), with `max_ctx` as the contract pivot: the probed Modelfile value
+  must be `>= max_ctx` (floor check, `bootstrap/core.py:_check_ollama_num_ctx_floor`),
+  and the static config value must be `<= max_ctx` (ceiling check,
+  `bootstrap/check.py:validate_ollama_num_ctx`). `validate_config()` rejects
+  any model without an `_LLM_SETTINGS` entry, so all supported models get
+  the injection.
 
-### 1.3 `_stream_stale_timeout = float("inf")` for local + 30s heartbeats
-
-- Hermes: `run_agent.py:7165-7167` (timeout disable), `:7184-7203`
-  (heartbeat loop)
-- What it does: detects `is_local_endpoint(base_url)` and disables the 180s
-  stale-stream timeout; pings `_touch_activity()` every 30s to keep the
-  gateway alive during long prefill.
-- Failure mode: small local models on a 32K+ context can take 300+ seconds to
-  emit the first token. Default HTTP read timeouts kill the connection mid
-  prefill.
-- Co-cli status: missing, but **not directly applicable**. Co-cli's HTTP
-  read timeout is 300s (`co_cli/llm/factory.py:16`) and pydantic-ai owns the
-  streaming path — there is no place to wedge in a heartbeat. The 300s
-  ceiling is enough headroom for our current workload (qwen3.6 prefill
-  observed at 25-50s).
-
-### 1.4 `_sanitize_surrogates` — replace lone surrogate code points
+### 1.3 `_sanitize_surrogates` — replace lone surrogate code points — CLOSED
 
 - Hermes: `run_agent.py:433` (definition), called at `:8454, :8456, :8482,
   :10097, :10099` and one more site
@@ -79,10 +49,12 @@ output is silently lost", not just "annoying".
 - Failure mode: byte-token-level reasoning models (Kimi K2.5, GLM-5, some
   Qwen3 quantizations) occasionally emit lone surrogates that crash
   `json.dumps()` inside the OpenAI SDK with `UnicodeEncodeError`.
-- Co-cli status: missing. We have not observed this in production yet, but
-  the failure is silent until it isn't.
+- Co-cli status: **closed**. `sanitize_surrogate_codepoints` is implemented
+  in `co_cli/context/history_processors.py:418-479` (regex `[\ud800-\udfff]`,
+  walks `content` on request parts and both `content` and `args` on response
+  parts) and registered as a history processor in `co_cli/agent/core.py:149`.
 
-### 1.5 `sanitize_tool_schemas` — llama.cpp grammar compatibility
+### 1.4 `sanitize_tool_schemas` — llama.cpp grammar compatibility
 
 - Hermes: `tools/schema_sanitizer.py:40` (`sanitize_tool_schemas`),
   `:90` (`strip_nullable_unions`), `:152` (`_sanitize_node`)
@@ -116,26 +88,9 @@ producing the wrong result.
 - Failure mode: models trained on class-style tool names emit
   `TodoTool` when the registry has `todo`. Without repair, agent loops on
   "Unknown tool" or aborts.
-- Co-cli status: missing. We have not observed this pattern with qwen3.6,
-  but adding the repair is cheap insurance.
+- Co-cli status: missing. Adding the repair is cheap insurance.
 
-### 2.2 `_should_treat_stop_as_truncated` + `_is_ollama_glm_backend`
-
-- Hermes: `run_agent.py:3027` (backend check), `:3037` (truncation check),
-  called at `:11120`
-- What it does: detects Ollama-hosted GLM models (or `zai` provider GLM)
-  that misreport `finish_reason="stop"` when the response was actually
-  truncated. Conservative gate: model contains "glm", local endpoint,
-  message history contains tool results, current assistant has no
-  tool_calls, content suggests incomplete response.
-- Failure mode: GLM on Ollama silently runs out of tokens mid-response
-  but reports `stop`, so the agent stops too early instead of triggering
-  a `/continue` retry.
-- Co-cli status: missing. Only matters if you run GLM models — which
-  co-cli does not target today, but the check is GLM-specific and
-  inexpensive.
-
-### 2.3 `_deduplicate_tool_calls` — strip duplicate tool calls
+### 2.2 `_deduplicate_tool_calls` — strip duplicate tool calls
 
 - Hermes: `run_agent.py:5152-5167`, called at `:12816`
 - What it does: removes duplicate `(name, args)` pairs within a single
@@ -145,7 +100,7 @@ producing the wrong result.
   potential side effects, double approval prompts.
 - Co-cli status: missing.
 
-### 2.4 XML tool-call tag stripping
+### 2.3 XML tool-call tag stripping
 
 - Hermes: `run_agent.py:~3120-3150` (regex `r'</(?:tool_call|tool_calls|tool_result|function_call|function_calls|function)>\s*'`)
 - What it does: strips standalone XML tool-call blocks from assistant
@@ -155,12 +110,10 @@ producing the wrong result.
   some open-source fine-tunes) emit `<tool_call>{...}</tool_call>` in
   content and an empty `tool_calls` array. Without stripping, the visible
   output is polluted; without parsing, the tool call is lost.
-- Co-cli status: missing. qwen3.6 in noreason mode was observed emitting
-  `<tool_code>\nshell git status\n</tool_code>` (probe at
-  `tmp/probe_qwen36_with_tools.py`), so the failure mode is reachable in
-  practice.
+- Co-cli status: missing. The failure mode is reachable with open-source
+  fine-tunes that fall back to text-mode tool calling.
 
-### 2.5 Length-continuation retry on `finish_reason == "length"`
+### 2.4 Length-continuation retry on `finish_reason == "length"`
 
 - Hermes: `run_agent.py:~10731-10762` (continuation flag), main loop
   rebuilds the request with the partial response prepended.
@@ -187,16 +140,6 @@ producing the wrong result.
 - Co-cli status: missing. pydantic-ai's parallel execution mode is
   configurable per-agent (`parallel_tool_call_execution_mode` attribute);
   setting it to sequential when `clarify` is present is the equivalent.
-
-### 3.2 `_escape_invalid_chars_in_json_strings` — pre-pass control-char escape
-
-- Hermes: `run_agent.py:549-588`
-- What it does: char-walk to escape literal control chars (0x00-0x1F)
-  inside JSON string values before parse. This is repair pass 0 of
-  `_repair_tool_call_arguments` (1.1) — bundled with that fix.
-- Failure mode: llama.cpp backends emit literal tabs/newlines inside
-  JSON string values; `json.loads(strict=False)` rejects them.
-- Co-cli status: missing. Picked up automatically if 1.1 is ported.
 
 ## 4. Patterns mentioned but not verified
 
@@ -227,52 +170,35 @@ by probability of hitting the failure × cost of the fix.
 
 ### 5.1 Highest payoff, low cost
 
-1. **Port `_repair_tool_call_arguments` (1.1)** — drop ~80 lines of
-   pure-Python JSON repair into a defensive wrapper around pydantic-ai's
-   tool-args parser. Catches the GLM/Qwen malformed-JSON crash class
-   entirely. Includes the control-char escape pass (3.2) as a side
-   effect.
-2. **Port `_sanitize_surrogates` (1.4)** — ~40 lines, runs once before
-   the message dict goes to the SDK. Cheap insurance against byte-token
-   reasoning models. Zero regression risk.
-3. **Inject `num_ctx` per request (1.2 upgrade)** — co-cli already
-   probes; just thread the probed value through `LlmSettings.noreason_model_settings`
-   and `reasoning_model_settings` as `extra_body["options"]["num_ctx"]`.
-   Today's safety net is the qwen3.6 Modelfile; this fix removes the
-   silent dependency on Modelfile authorship.
+1. ~~**Port `_sanitize_surrogates` (1.3)**~~ — closed; `sanitize_surrogate_codepoints`
+   implemented in `history_processors.py` and registered in `agent/core.py`.
+2. ~~**Inject `num_ctx` per request (1.1)**~~ — closed; static injection
+   via `_LLM_SETTINGS` extra_body is in place for all supported models.
 
 ### 5.2 Medium payoff
 
-4. **`_repair_tool_call` fuzzy tool-name (2.1)** — useful only for
-   models that emit class-style names; we have not seen this in
-   qwen3.6:27b-agentic. Defer until we see it in a production run.
-5. **Length-continuation retry (2.5)** — promote the existing
+3. **`_repair_tool_call` fuzzy tool-name (2.1)** — useful only for
+   models that emit class-style names. Defer until we see it in a production run.
+4. **Length-continuation retry (2.4)** — promote the existing
    status hint at `co_cli/context/orchestrate.py:498-501` to an
    automatic resume. Bigger change — touches orchestrate and the
    pytest expectations around `finish_reason`.
-6. **`_deduplicate_tool_calls` (2.3)** — ~10 lines; cost is low, but
-   we have not observed duplicates from qwen3.6.
-7. **XML tool-call tag stripping (2.4)** — observed in our own probes,
-   so the failure mode is reachable. Lower priority because the fix
-   we shipped (enable reasoning for tool-routing tests) eliminates the
-   most common path to the failure.
+5. **`_deduplicate_tool_calls` (2.2)** — ~10 lines; cost is low, not
+   yet observed in production.
+6. **XML tool-call tag stripping (2.3)** — reachable with open-source
+   fine-tunes that fall back to text-mode tool calling. Worth porting.
 
 ### 5.3 Low priority / observe-first
 
-8. **`_NEVER_PARALLEL_TOOLS` analog (3.1)** — depends on whether we
+7. **`_NEVER_PARALLEL_TOOLS` analog (3.1)** — depends on whether we
    add interactive tools that race with concurrent tools. Today the
    only candidate is `clarify`.
-9. **GLM stop-misreport detection (2.2)** — only matters if we add
-   GLM to the supported model set.
 
 ## 6. Skip / not applicable
 
-- **Stream-stale timeout + heartbeats (1.3)** — pydantic-ai owns the
-  streaming path; there is no insertion point. Co-cli's HTTP read timeout
-  of 300s in `co_cli/llm/factory.py:16` is enough for our current workload.
 - **Qwen Portal headers** (`run_agent.py:~1998-2010`) — co-cli targets
   Ollama, not the Qwen portal API.
-- **`sanitize_tool_schemas` for llama.cpp (1.5)** — pydantic-ai produces
+- **`sanitize_tool_schemas` for llama.cpp (1.4)** — pydantic-ai produces
   clean schemas from typed Python signatures. Revisit only when MCP is
   re-enabled and external schema sources can land in the registry.
 - **Anthropic prompt caching (`prompt_caching.py`)** — Anthropic-only;

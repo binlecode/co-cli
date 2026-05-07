@@ -5,7 +5,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from co_cli.agent._tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
 from co_cli.bootstrap.core import _check_ollama_num_ctx_floor, _emit_tool_budget_span
 from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 

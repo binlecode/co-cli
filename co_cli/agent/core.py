@@ -11,12 +11,12 @@ from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.toolsets.combined import CombinedToolset
 
 from co_cli.config.core import Settings
-from co_cli.context._history_processors import enforce_turn_budget
 from co_cli.context.compaction import (
     dedup_tool_results,
     evict_old_tool_results,
     proactive_window_processor,
 )
+from co_cli.context.history_processors import enforce_turn_budget, sanitize_surrogate_codepoints
 from co_cli.deps import CoDeps, ToolInfo
 from co_cli.tools.lifecycle import CoToolLifecycle
 
@@ -146,6 +146,7 @@ def build_agent(
                 evict_old_tool_results,
                 enforce_turn_budget,
                 proactive_window_processor,
+                sanitize_surrogate_codepoints,
             ],
             toolsets=[tool_registry.toolset],
             capabilities=[CoToolLifecycle()],
