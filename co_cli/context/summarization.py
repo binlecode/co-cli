@@ -1,6 +1,6 @@
 """Summarization engine — LLM summarizer agent, budget resolution, and token estimation.
 
-Shared by both the sliding-window history processor (``_history_processors.py``) and the
+Shared by both the sliding-window history processor (``history_processors.py``) and the
 ``/compact`` slash command.
 
 Public API:
@@ -40,8 +40,8 @@ def estimate_message_tokens(messages: list[ModelMessage]) -> int:
     Counts:
       - str content on any part
       - dict or list content (JSON-serialized length) — structured tool returns
-      - ToolCallPart.args via args_as_dict() + JSON (never truncated by processor #1,
-        load-bearing for trigger accuracy on tool-heavy transcripts — Gap E fix)
+      - ToolCallPart.args via args_as_dict() + JSON (never truncated by dedup_tool_results;
+        load-bearing for trigger accuracy on tool-heavy transcripts)
 
     Used for the proactive compaction trigger. Used as a floor (via max())
     against the provider-reported usage so a stale or missing report cannot

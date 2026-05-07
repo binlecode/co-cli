@@ -112,9 +112,9 @@ def _gather_file_paths(dropped: list[ModelMessage]) -> str | None:
     """Extract file working set from ToolCallPart.args in the dropped range.
 
     Scoped to ``dropped`` only — paths already visible in the preserved tail
-    would duplicate in the enrichment and waste summarizer attention
-    (Gap M regression guard). ``ToolCallPart.args`` is never truncated by
-    processor #1 so the args of dropped calls are still readable here.
+    would duplicate in the enrichment and waste summarizer attention.
+    ``ToolCallPart.args`` is never truncated by ``dedup_tool_results``
+    so the args of dropped calls are still readable here.
     """
     file_paths: set[str] = set()
     for msg in dropped:

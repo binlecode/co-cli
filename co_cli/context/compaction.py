@@ -9,7 +9,8 @@ external callers have a single import surface.
 Submodule map:
     _compaction_boundaries  — TurnGroup, group_by_turn, plan_compaction_boundaries
     _compaction_markers     — static/summary/todo markers, enrichment context
-    _history_processors     — dedup_tool_results, evict_old_tool_results
+    history_processors     — dedup_tool_results, evict_old_tool_results,
+                             enforce_turn_budget, sanitize_surrogate_codepoints
 """
 
 from __future__ import annotations
@@ -45,12 +46,12 @@ from co_cli.context._compaction_markers import (
     static_marker,
     summary_marker,
 )
-from co_cli.context._history_processors import (
+from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context.history_processors import (
     COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
     evict_old_tool_results,
 )
-from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
@@ -509,7 +510,7 @@ async def proactive_window_processor(
                 "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn
             )
 
-            from co_cli.agent._tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+            from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
 
             span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
             span.set_attribute(
