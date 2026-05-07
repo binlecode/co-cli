@@ -181,8 +181,8 @@ def google_drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
 
                 drive_chunks = chunk_text(
                     text,
-                    chunk_size=ctx.deps.config.knowledge.chunk_size,
-                    overlap=ctx.deps.config.knowledge.chunk_overlap,
+                    chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
+                    overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
                 )
                 ctx.deps.memory_store.index_chunks("drive", file_id, drive_chunks)
             except Exception:

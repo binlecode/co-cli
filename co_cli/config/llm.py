@@ -32,19 +32,6 @@ DEFAULT_MAX_CTX = 32_768
 
 _LLM_SETTINGS: dict[str, Any] = {
     "ollama": {
-        "qwen3.6": {
-            "reasoning": {
-                "max_tokens": 32768,
-            },
-            # reasoning_effort="none" is the canonical noreason knob on the OpenAI-compatible
-            # path; think=false is belt-and-suspenders for older Ollama versions.
-            "noreason": {
-                "extra_body": {
-                    "think": False,
-                    "reasoning_effort": "none",
-                },
-            },
-        },
         "qwen3.5": {
             "reasoning": {
                 "max_tokens": 4096,
@@ -164,7 +151,9 @@ class LlmSettings(BaseModel):
     provider: Literal["ollama", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)
     host: str = Field(default=DEFAULT_LLM_HOST)
     model: str = Field(default="")
-    # User-configurable ceiling; probed Ollama num_ctx is capped to this at bootstrap.
+    # Contract pivot for Ollama context: static num_ctx in _LLM_SETTINGS must be <= max_ctx
+    # (ceiling check); probed Modelfile num_ctx must be >= max_ctx (floor check).
+    # Both checks use max_ctx as the reference — they do not compare against each other.
     max_ctx: int = Field(default=DEFAULT_MAX_CTX)
 
     @model_validator(mode="after")

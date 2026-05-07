@@ -40,14 +40,14 @@ Three-channel recall model: **artifacts** (persistent knowledge artifacts), **se
 
 Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store artifact entries (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (artifacts + Obsidian + sessions). Implementation lives in `co_cli/memory/` (sessions and artifacts as co-equal kinds) with the unified tool surface in `co_cli/tools/memory/`. See `docs/specs/memory.md` for the Memory model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
 
-Four unified `memory_*` tools cover all channels:
+Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browsing is `memory_search` with an empty or kind-filtered query; full-body artifact reads use the generic `file_read` tool against the path that `memory_search` surfaces.
+
+Three unified `memory_*` tools cover the active surface:
 - `memory_search` — recall across artifacts (BM25) + sessions (LLM-summarized) + canon in one call
-- `memory_list` — paginated inventory of artifacts
 - `memory_create` — save a new artifact (all kinds: user | rule | article | note)
 - `memory_modify` — append or surgically replace a passage in an existing artifact
 
-Full-body artifact reads use the generic `file_read` tool against the path that
-`memory_search` surfaces. Canon hits ship full body inline; sessions ship LLM summaries inline.
+Canon hits ship full body inline; sessions ship LLM summaries inline. A `memory_read_session_turn` reader exists in source but is intentionally not registered — see `docs/specs/memory.md` for the rationale.
 
 ## Engineering Rules
 

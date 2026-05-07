@@ -182,8 +182,8 @@ def _seed_artifacts(knowledge_dir, store, count=3):
             r.markdown_content,
             r.frontmatter_dict,
             r.filename_stem,
-            chunk_size=600,
-            chunk_overlap=80,
+            chunk_tokens=600,
+            chunk_overlap_tokens=80,
         )
         results.append(r)
     return results

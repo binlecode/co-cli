@@ -21,9 +21,9 @@ _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 # Tool-routing tests use the production reasoning settings: Qwen3-family models on
 # Ollama need the reasoning pass to emit a structured tool_calls array reliably.
-# With think disabled, qwen3.6:27b-agentic emits free-form text (e.g. "shell> git status")
-# instead of routing — verified via tmp/probe_qwen36_raw.py and matching OpenCode's
-# transform.ts:926-938 (DashScope Qwen also requires enable_thinking=true).
+# Qwen3-family models on Ollama require reasoning mode to emit structured tool_calls reliably;
+# noreason (think=false) produces free-form text instead (verified for qwen3.5; OpenCode
+# transform.ts:926-938 confirms DashScope Qwen requires enable_thinking=true similarly).
 _AGENT = build_agent(config=_CONFIG_NO_MCP, model=_LLM_MODEL, tool_registry=_TOOL_REG)
 
 

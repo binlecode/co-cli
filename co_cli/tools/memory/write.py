@@ -96,8 +96,8 @@ async def memory_create(
                 result.markdown_content,
                 result.frontmatter_dict,
                 result.filename_stem,
-                chunk_size=ctx.deps.config.knowledge.chunk_size,
-                chunk_overlap=ctx.deps.config.knowledge.chunk_overlap,
+                chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
+                chunk_overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
             )
 
     if result.action == "skipped":
@@ -183,8 +183,8 @@ async def memory_modify(
                         result.markdown_content,
                         result.frontmatter,
                         result.filename_stem,
-                        chunk_size=ctx.deps.config.knowledge.chunk_size,
-                        chunk_overlap=ctx.deps.config.knowledge.chunk_overlap,
+                        chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
+                        chunk_overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
                     )
 
             return tool_output(

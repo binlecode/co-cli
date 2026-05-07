@@ -260,10 +260,10 @@ class MemoryStore:
         self._embed_api_url = config.knowledge.embed_api_url
         self._cross_encoder_url = config.knowledge.cross_encoder_reranker_url
         self._tei_batch_size = config.knowledge.tei_rerank_batch_size
-        self._chunk_size = config.knowledge.chunk_size
-        self._chunk_overlap = (
-            max(0, min(config.knowledge.chunk_overlap, config.knowledge.chunk_size - 1))
-            if config.knowledge.chunk_size > 0
+        self._chunk_tokens = config.knowledge.chunk_tokens
+        self._chunk_overlap_tokens = (
+            max(0, min(config.knowledge.chunk_overlap_tokens, config.knowledge.chunk_tokens - 1))
+            if config.knowledge.chunk_tokens > 0
             else 0
         )
         self._session_chunk_tokens = config.knowledge.session_chunk_tokens
@@ -1074,8 +1074,8 @@ class MemoryStore:
                 else:
                     text_chunks = _chunk_text(
                         body_stripped,
-                        chunk_size=self._chunk_size,
-                        overlap=self._chunk_overlap,
+                        chunk_tokens=self._chunk_tokens,
+                        overlap_tokens=self._chunk_overlap_tokens,
                     )
                 self.index_chunks(source, path_str, text_chunks)
                 indexed += 1

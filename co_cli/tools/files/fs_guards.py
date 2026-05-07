@@ -1,9 +1,9 @@
-"""Shared helpers for file system tools."""
+"""File system guards and utilities for file tools."""
 
 from pathlib import Path
 
 
-def _enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
+def enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
     """Resolve path against workspace_root and verify it stays within.
 
     Defense in depth: CoToolLifecycle.before_tool_execute pre-resolves paths,
@@ -18,7 +18,7 @@ def _enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
     return resolved
 
 
-def _safe_mtime(p: Path) -> float:
+def safe_mtime(p: Path) -> float:
     """Return file mtime, falling back to 0.0 for broken symlinks or inaccessible paths."""
     try:
         return p.stat().st_mtime
@@ -26,7 +26,7 @@ def _safe_mtime(p: Path) -> float:
         return 0.0
 
 
-def _detect_encoding(path: Path) -> str:
+def detect_encoding(path: Path) -> str:
     """Detect file encoding from BOM prefix — returns 'utf-16' or 'utf-8'."""
     with open(path, "rb") as fh:
         raw = fh.read(2048)
@@ -35,6 +35,6 @@ def _detect_encoding(path: Path) -> str:
     return "utf-8"
 
 
-def _is_recursive_pattern(pattern: str) -> bool:
+def is_recursive_pattern(pattern: str) -> bool:
     """Return True when the glob pattern requires recursive traversal."""
     return "**" in pattern or "/" in pattern

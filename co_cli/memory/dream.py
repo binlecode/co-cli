@@ -48,8 +48,8 @@ _DREAM_MERGE_PROMPT_PATH = Path(__file__).parent / "prompts" / "dream_merge.md"
 _DREAM_WINDOW_MAX_TEXT = 50
 _DREAM_WINDOW_MAX_TOOL = 50
 _DREAM_WINDOW_SOFT_CHAR_LIMIT = 16_000
-_DREAM_WINDOW_CHUNK_SIZE = 12_000
-_DREAM_WINDOW_CHUNK_OVERLAP = 2_000
+_DREAM_WINDOW_CHUNK_CHARS = 12_000
+_DREAM_WINDOW_CHUNK_OVERLAP_CHARS = 2_000
 _MAX_MERGES_PER_CYCLE = 10
 _MAX_CLUSTER_SIZE = 5
 _MERGED_BODY_MIN_CHARS = 20
@@ -122,8 +122,8 @@ def _chunk_dream_window(
     window: str,
     *,
     soft_limit: int = _DREAM_WINDOW_SOFT_CHAR_LIMIT,
-    chunk_size: int = _DREAM_WINDOW_CHUNK_SIZE,
-    overlap: int = _DREAM_WINDOW_CHUNK_OVERLAP,
+    chunk_chars: int = _DREAM_WINDOW_CHUNK_CHARS,
+    overlap_chars: int = _DREAM_WINDOW_CHUNK_OVERLAP_CHARS,
 ) -> list[str]:
     """Split an oversized window into overlapping chunks; return a single-element
     list when the window fits under ``soft_limit``.
@@ -132,10 +132,10 @@ def _chunk_dream_window(
         return [window]
     chunks: list[str] = []
     pos = 0
-    step = max(1, chunk_size - overlap)
+    step = max(1, chunk_chars - overlap_chars)
     while pos < len(window):
-        chunks.append(window[pos : pos + chunk_size])
-        if pos + chunk_size >= len(window):
+        chunks.append(window[pos : pos + chunk_chars])
+        if pos + chunk_chars >= len(window):
             break
         pos += step
     return chunks
@@ -318,8 +318,8 @@ def _write_consolidated_artifact(
             result.markdown_content,
             result.frontmatter_dict,
             result.filename_stem,
-            chunk_size=deps.config.knowledge.chunk_size,
-            chunk_overlap=deps.config.knowledge.chunk_overlap,
+            chunk_tokens=deps.config.knowledge.chunk_tokens,
+            chunk_overlap_tokens=deps.config.knowledge.chunk_overlap_tokens,
         )
 
     return result.path

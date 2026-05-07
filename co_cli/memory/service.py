@@ -105,8 +105,8 @@ def reindex(
     frontmatter: dict,
     filename_stem: str,
     *,
-    chunk_size: int,
-    chunk_overlap: int,
+    chunk_tokens: int,
+    chunk_overlap_tokens: int,
 ) -> None:
     """Re-index a single knowledge file in the FTS store without RunContext."""
     if store is None:
@@ -125,7 +125,9 @@ def reindex(
         source_ref=frontmatter.get("source_ref"),
         artifact_id=str(frontmatter["id"]) if frontmatter.get("id") is not None else None,
     )
-    chunks = chunk_text(body.strip(), chunk_size=chunk_size, overlap=chunk_overlap)
+    chunks = chunk_text(
+        body.strip(), chunk_tokens=chunk_tokens, overlap_tokens=chunk_overlap_tokens
+    )
     store.index_chunks(IndexSourceEnum.KNOWLEDGE, str(path), chunks)
 
 

@@ -213,7 +213,12 @@ def _sync_canon_store(
 
 
 def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
-    """Raise ValueError when the model's num_ctx undercuts the configured max_ctx floor."""
+    """Raise ValueError when the model's num_ctx undercuts the configured max_ctx floor.
+
+    max_ctx is the contract pivot: probed Modelfile num_ctx must be >= max_ctx (floor),
+    and the static num_ctx in _LLM_SETTINGS must be <= max_ctx (ceiling, checked separately
+    by validate_ollama_num_ctx). The two checks do not compare against each other.
+    """
     if num_ctx < max_ctx:
         raise ValueError(
             f"Ollama model {model!r} reports num_ctx={num_ctx:,} "
@@ -257,7 +262,7 @@ def _emit_tool_budget_span(
     *,
     _tracer: trace.Tracer | None = None,
 ) -> None:
-    from co_cli.agent._tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+    from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     if _tracer is None:
@@ -303,7 +308,7 @@ async def create_deps(
     model_max_ctx, model_capabilities = _probe_model_ctx(config)
 
     # Cache turn-aggregate budget for L2 aggregate spill processor.
-    from co_cli.agent._tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+    from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     tail_fraction = config.compaction.tail_fraction

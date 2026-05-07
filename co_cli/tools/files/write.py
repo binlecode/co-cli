@@ -16,10 +16,10 @@ from co_cli.tools.files._v4a import (
     PatchOperation,
     parse_v4a_patch,
 )
-from co_cli.tools.files.helpers import (
-    _detect_encoding,
-    _enforce_workspace_boundary,
-    _safe_mtime,
+from co_cli.tools.files.fs_guards import (
+    detect_encoding,
+    enforce_workspace_boundary,
+    safe_mtime,
 )
 from co_cli.tools.tool_io import tool_error, tool_output
 
@@ -258,7 +258,7 @@ def _check_patch_preconditions(
         return f"Read the file with file_read before patching: {path}"
     if path_key in ctx.deps.file_partial_reads:
         return f"Only part of this file was read — call file_read without start_line/end_line before patching: {path}"
-    if _safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]:
+    if safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]:
         return "File changed since last read — re-read before writing"
     return None
 
@@ -299,7 +299,7 @@ def _compute_v4a_update(
     if resolved.stat().st_size > _MAX_EDIT_BYTES:
         return f"File too large to patch: {rel_path}"
 
-    enc = _detect_encoding(resolved)
+    enc = detect_encoding(resolved)
     original = resolved.read_text(encoding=enc)
     current = original
 
@@ -371,7 +371,7 @@ async def _write_v4a_pending(
                 else:
                     resolved.parent.mkdir(parents=True, exist_ok=True)
                     resolved.write_text(content, encoding=enc)
-                    ctx.deps.file_read_mtimes[str(resolved)] = _safe_mtime(resolved)
+                    ctx.deps.file_read_mtimes[str(resolved)] = safe_mtime(resolved)
         except ResourceBusyError:
             return f"{rel_path} is being modified by another tool call — retry next turn"
 
@@ -398,7 +398,7 @@ async def _apply_v4a_patch(
 
     for op in ops:
         try:
-            resolved = _enforce_workspace_boundary(Path(op.file_path), workspace_root)
+            resolved = enforce_workspace_boundary(Path(op.file_path), workspace_root)
         except ValueError as e:
             return str(e)
 
@@ -435,7 +435,7 @@ async def _file_patch_replace(
         return tool_error("new_string is required in replace mode", ctx=ctx)
 
     try:
-        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
+        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -455,7 +455,7 @@ async def _file_patch_replace(
                     f"File too large to edit in-place ({resolved.stat().st_size // 1024} KB) — use shell tools",
                     ctx=ctx,
                 )
-            enc = _detect_encoding(resolved)
+            enc = detect_encoding(resolved)
             content = resolved.read_text(encoding=enc)
             resolution = _resolve_patch_strategies(
                 content, old_string, new_string, replace_all, show_diff, path
@@ -464,7 +464,7 @@ async def _file_patch_replace(
                 return tool_error(resolution, ctx=ctx)
             updated, display, count, strategy = resolution
             resolved.write_text(updated, encoding=enc)
-            ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
+            ctx.deps.file_read_mtimes[path_key] = safe_mtime(resolved)
     except ResourceBusyError:
         return tool_error(
             f"File {path} is being modified by another tool call — retry next turn", ctx=ctx
@@ -499,7 +499,7 @@ async def file_write(
         content: Text content to write.
     """
     try:
-        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
+        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -510,13 +510,13 @@ async def file_write(
             path_key = str(resolved)
             if (
                 path_key in ctx.deps.file_read_mtimes
-                and _safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]
+                and safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]
             ):
                 return tool_error("File changed since last read — re-read before writing", ctx=ctx)
             resolved.parent.mkdir(parents=True, exist_ok=True)
             resolved.write_text(content, encoding="utf-8")
             byte_count = len(content.encode("utf-8"))
-            ctx.deps.file_read_mtimes[path_key] = _safe_mtime(resolved)
+            ctx.deps.file_read_mtimes[path_key] = safe_mtime(resolved)
             return tool_output(
                 f"Written: {path} ({byte_count} bytes)",
                 ctx=ctx,

@@ -97,7 +97,7 @@ the manual `ENV_MAP` pattern; its env vars are applied by `pydantic-settings` ma
 
 `_LLM_SETTINGS` is the central table of per-provider, per-model inference knobs —
 the canonical source of truth, not user-overridable. `model_key` is derived from
-`llm.model` by splitting on `:` (`"qwen3.6:27b-agentic"` → `"qwen3.6"`).
+`llm.model` by splitting on `:` (`"qwen3.5:35b-a3b"` → `"qwen3.5"`).
 
 ```
 _inference(mode):
@@ -112,7 +112,6 @@ Defined entries:
 
 | Provider | Model key | Modes | Key noreason knob |
 |----------|-----------|-------|-------------------|
-| `ollama` | `qwen3.6` | reasoning, noreason | `extra_body: {think: false, reasoning_effort: "none"}` |
 | `ollama` | `qwen3.5` | reasoning, noreason | `extra_body: {think: false, reasoning_effort: "none"}` |
 | `gemini` | `gemini-3-flash-preview` | reasoning, noreason | `thinking_config: {thinking_level: "MINIMAL"}` |
 | `gemini` | `gemini-2.5-flash` | noreason only | `thinking_config: {thinking_budget: 0}` |
@@ -131,16 +130,17 @@ functional calls (compaction, memory extraction, dream merge) via `llm_call()`.
 ### Ollama context window probe
 
 `probe_ollama_model(host, model)` posts to `/api/show`, parses `parameters.num_ctx`. Called
-during `create_deps()` before `build_model()`:
+during `create_deps()` before `build_model()`. `max_ctx` is the contract pivot:
 
-```
-num_ctx, capabilities = probe_ollama_model(host, model)
-model_max_ctx = min(num_ctx, config.llm.max_ctx)   # capped by user ceiling
-```
+- **Floor check**: probed Modelfile `num_ctx` must be `>= max_ctx`; fails fast otherwise.
+- **Ceiling check**: static `num_ctx` in `_LLM_SETTINGS` (injected per-request via
+  `extra_body["options"]["num_ctx"]`) must be `<= max_ctx`; fails fast otherwise.
 
-Ollama silently ignores `num_ctx` in request params (ollama/ollama#5356); context window
-must be baked into the Modelfile. Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx`
-(ceiling used as-is).
+The two checks use `max_ctx` as the shared reference and do not compare against each other.
+`deps.model_max_ctx` is always `config.llm.max_ctx` — the probed value is only used for the
+floor validation, not as a dynamic injection value.
+
+Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is).
 
 `resolve_compaction_budget(deps)` (`context/summarization.py`):
 ```

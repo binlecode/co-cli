@@ -60,8 +60,8 @@ def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
             result.markdown_content,
             result.frontmatter_dict,
             result.filename_stem,
-            chunk_size=600,
-            chunk_overlap=80,
+            chunk_tokens=600,
+            chunk_overlap_tokens=80,
         )
 
         hits = store.search("pytest testing")
@@ -223,8 +223,8 @@ def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
             first.markdown_content,
             first.frontmatter_dict,
             first.filename_stem,
-            chunk_size=600,
-            chunk_overlap=80,
+            chunk_tokens=600,
+            chunk_overlap_tokens=80,
         )
 
         second = save_artifact(

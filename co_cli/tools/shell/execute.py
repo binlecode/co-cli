@@ -6,7 +6,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.files.helpers import _enforce_workspace_boundary
+from co_cli.tools.files.fs_guards import enforce_workspace_boundary
 from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
@@ -69,7 +69,7 @@ async def shell(
     if workdir is not None:
         try:
             resolved_cwd = str(
-                _enforce_workspace_boundary(Path(workdir), Path(ctx.deps.shell.workspace_dir))
+                enforce_workspace_boundary(Path(workdir), Path(ctx.deps.shell.workspace_dir))
             )
         except ValueError as e:
             return tool_error(str(e), ctx=ctx)

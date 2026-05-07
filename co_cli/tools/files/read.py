@@ -14,15 +14,15 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.files.helpers import (
-    _detect_encoding,
-    _enforce_workspace_boundary,
-    _is_recursive_pattern,
-    _safe_mtime,
+from co_cli.tools.files.fs_guards import (
+    detect_encoding,
+    enforce_workspace_boundary,
+    is_recursive_pattern,
+    safe_mtime,
 )
 from co_cli.tools.tool_io import tool_error, tool_output
 
-_READ_DEFAULT_LIMIT = 500
+_READ_DEFAULT_LIMIT_LINES = 500
 _READ_MAX_LINES = 2000
 _READ_MAX_LINE_CHARS = 2000
 _READ_MAX_FILE_BYTES = 500_000
@@ -40,7 +40,7 @@ def _compute_read_slice(
         hi = min(requested_hi, lo + _READ_MAX_LINES)
         return lo, hi, True
     lo = 0
-    hi = min(total_line_count, _READ_DEFAULT_LIMIT)
+    hi = min(total_line_count, _READ_DEFAULT_LIMIT_LINES)
     return lo, hi, hi < total_line_count
 
 
@@ -75,8 +75,8 @@ async def _glob_python(
 ) -> tuple[list[dict[str, str]], bool]:
     entries = []
     truncated = False
-    if _is_recursive_pattern(pattern):
-        raw = sorted(resolved.glob(pattern), key=_safe_mtime, reverse=True)
+    if is_recursive_pattern(pattern):
+        raw = sorted(resolved.glob(pattern), key=safe_mtime, reverse=True)
         for entry in raw:
             kind = "dir" if entry.is_dir() else "file"
             try:
@@ -403,7 +403,7 @@ async def file_find(
         max_entries: Maximum entries returned (default: 200).
     """
     try:
-        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
+        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -418,7 +418,7 @@ async def file_find(
     entries: list[dict[str, str]] = []
     truncated = False
 
-    if _is_recursive_pattern(pattern) and _has_command("rg"):
+    if is_recursive_pattern(pattern) and _has_command("rg"):
         rg_result = await _glob_ripgrep(resolved, workspace_root, pattern, max_entries)
         if rg_result is not None:
             entries, truncated = rg_result
@@ -473,7 +473,7 @@ async def file_read(
         end_line: Last line to include (1-indexed, inclusive). Optional.
     """
     try:
-        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
+        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -500,7 +500,7 @@ async def file_read(
         )
 
     try:
-        enc = _detect_encoding(resolved)
+        enc = detect_encoding(resolved)
         content = resolved.read_text(encoding=enc)
     except UnicodeDecodeError:
         return tool_error(f"Binary file — cannot display as text: {path}", ctx=ctx)
@@ -584,7 +584,7 @@ async def file_search(
 
     workspace_root = ctx.deps.workspace_root
     try:
-        search_root = _enforce_workspace_boundary(Path(path), workspace_root)
+        search_root = enforce_workspace_boundary(Path(path), workspace_root)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
     if not search_root.is_dir():

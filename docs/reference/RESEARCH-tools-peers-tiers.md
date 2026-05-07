@@ -436,8 +436,8 @@ co-cli column shows current coverage status.
 | Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
 | Persistent memory store (CRUD) | (subsystem) | memory | — | — | 2 | `memory_create/modify` ✓ |
-| Paginated memory inventory | — | — | — | — | 0 | `memory_list` ✓ (unique) |
-| Full memory artifact read by slug | — | — | — | — | 0 | `memory_read` ✓ (unique) |
+| Paginated memory inventory | — | — | — | — | 0 | ✗ deliberate gap — see docs/specs/memory.md |
+| Full memory artifact read by slug | — | — | — | — | 0 | ✗ deliberate gap — see docs/specs/memory.md |
 | Session / history search | — | session_search | — | — | 1 | `memory_search` (T1) ✓ |
 | T2 artifact search (FTS5 BM25) | — | — | — | — | 0 | `memory_search` (T2) ✓ (unique) |
 | Role-filtered session search | — | session_search(role_filter) | — | — | 1 | ✗ gap |
@@ -723,8 +723,6 @@ co-cli equivalent: user reads CLAUDE.md directly; no model-callable config surfa
 
 | Capability | co-cli tool(s) |
 |---|---|
-| T2 artifact inventory (paginated) | `memory_list` |
-| T2 artifact full read by slug | `memory_read` |
 | T2 artifact CRUD (create / modify) | `memory_create`, `memory_modify` |
 | FTS5 BM25 knowledge search | `memory_search` (T2 tier) |
 | Runtime capability introspection | `capabilities_check` |
