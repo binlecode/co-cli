@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.8.135]
+
+### Fix
+- **`docs/specs/compaction.md`** — add a `Scope` column to the functional architecture table (per-tool-result / per-turn / multi-turn / housekeeping) plus a one-paragraph scope-levels intro above the table. Docs-only formatting cleanup; clarifies how each compaction mechanism fits in the budget hierarchy.
+
 ## [0.8.134]
 
 ### Feature

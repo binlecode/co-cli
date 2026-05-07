@@ -5,16 +5,18 @@ Covers how co-cli keeps context bounded under pressure. Prompt assembly and hist
 
 ## 1. Functional Architecture
 
-| Mechanism | When | Target | Effect | LLM? | Reversible? |
-|---|---|---|---|---|---|
-| **COMP_SPILL** | Tool returns when `len > spill_threshold_chars` | Single tool result | Content written to disk; `<persisted-output>` placeholder in context | No | No |
-| **COMP_DEDUP** | Every `ModelRequestNode` | Duplicate returns in pre-tail region | Identical `(tool, content-hash)` pairs collapsed to back-reference pointing at latest `tool_call_id` | No | No (session) |
-| **COMP_EVICT** | Every `ModelRequestNode` | `COMPACTABLE_TOOLS` returns in pre-tail older than the 5 most-recent per tool name | Content replaced with a semantic marker (name, key args, size/outcome signal); non-compactable tools pass through untouched | No | No (session) |
-| **COMP_TURN_BUDGET** | Every `ModelRequestNode` when current-turn aggregate > budget | Current-turn `ToolReturnPart` batch | Largest unspilled returns force-spilled to disk, largest-first, until aggregate ≤ budget | No | No |
-| **COMP_WINDOW** | Every `ModelRequestNode` when `token_count > compaction_ratio × budget` | Middle turn-groups (head and tail always preserved) | Middle replaced by LLM summary marker; head / marker / breadcrumbs / tail assembled | Yes (static marker fallback) | Lossy |
-| **COMP_SANE** | Every `ModelRequestNode`, after COMP_WINDOW | All messages | Lone surrogates (U+D800–U+DFFF) replaced with U+FFFD | No | Yes |
-| **Overflow recovery** | Provider HTTP 400/413, once per turn | Middle turn-groups | Planner-based (same as COMP_WINDOW) then emergency structural fallback (first+last group) | Yes (static marker fallback) | Lossy |
-| **`/compact`** | User command | Full history, bounds `(0, n, n)` | Same assembly as COMP_WINDOW via `apply_compaction` | Yes (static marker fallback) | Lossy |
+**Scope levels:** COMP_SPILL is per tool result (single `ToolReturnPart`); COMP_TURN_BUDGET is per turn (aggregate of all results since the last `UserPromptPart`); COMP_WINDOW is multi-turn (groups across the full history window). COMP_DEDUP, COMP_EVICT, and COMP_SANE are housekeeping passes with no scope-level framing.
+
+| Mechanism | Scope | When | Target | Effect | LLM? | Reversible? |
+|---|---|---|---|---|---|---|
+| **COMP_SPILL** | per tool result | Tool returns when `len > spill_threshold_chars` | Single tool result | Content written to disk; `<persisted-output>` placeholder in context | No | No |
+| **COMP_DEDUP** | housekeeping | Every `ModelRequestNode` | Duplicate returns in pre-tail region | Identical `(tool, content-hash)` pairs collapsed to back-reference pointing at latest `tool_call_id` | No | No (session) |
+| **COMP_EVICT** | housekeeping | Every `ModelRequestNode` | `COMPACTABLE_TOOLS` returns in pre-tail older than the 5 most-recent per tool name | Content replaced with a semantic marker (name, key args, size/outcome signal); non-compactable tools pass through untouched | No | No (session) |
+| **COMP_TURN_BUDGET** | per turn | Every `ModelRequestNode` when current-turn aggregate > budget | Current-turn `ToolReturnPart` batch | Largest unspilled returns force-spilled to disk, largest-first, until aggregate ≤ budget | No | No |
+| **COMP_WINDOW** | multi-turn | Every `ModelRequestNode` when `token_count > compaction_ratio × budget` | Middle turn-groups (head and tail always preserved) | Middle replaced by LLM summary marker; head / marker / breadcrumbs / tail assembled | Yes (static marker fallback) | Lossy |
+| **COMP_SANE** | housekeeping | Every `ModelRequestNode`, after COMP_WINDOW | All messages | Lone surrogates (U+D800–U+DFFF) replaced with U+FFFD | No | Yes |
+| **Overflow recovery** | multi-turn | Provider HTTP 400/413, once per turn | Middle turn-groups | Planner-based (same as COMP_WINDOW) then emergency structural fallback (first+last group) | Yes (static marker fallback) | Lossy |
+| **`/compact`** | multi-turn | User command | Full history, bounds `(0, n, n)` | Same assembly as COMP_WINDOW via `apply_compaction` | Yes (static marker fallback) | Lossy |
 
 ### pydantic-ai agent loop — node hookup
 
