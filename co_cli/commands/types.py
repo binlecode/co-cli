@@ -18,8 +18,8 @@ class CommandContext:
     message_history: list[Any]
     deps: CoDeps
     agent: Agent[CoDeps, str | DeferredToolRequests]
-    # Holds the live WordCompleter from chat_loop() — typed Any to keep this module
-    # free of prompt_toolkit imports (design boundary). None outside REPL context.
+    # Holds the live SlashCommandCompleter from chat_loop() — typed Any to keep this
+    # module free of prompt_toolkit imports (design boundary). None outside REPL context.
     completer: Any = None
     frontend: Frontend | None = None
 

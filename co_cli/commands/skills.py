@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from rich.table import Table
-
 from co_cli.commands._utils import _confirm
 from co_cli.commands.registry import (
     BUILTIN_COMMANDS,
-    _refresh_completer,
     filter_namespace_conflicts,
+    refresh_completer,
 )
 from co_cli.commands.types import CommandContext
 from co_cli.config.core import settings
-from co_cli.display.core import console
+from co_cli.display.core import console, make_table
 from co_cli.skills.installer import (
     SkillFetchError,
     discover_skill_files,
@@ -33,11 +31,7 @@ def _cmd_skills_list(ctx: CommandContext) -> None:
     if not ctx.deps.skill_commands:
         console.print("[dim]No skills loaded.[/dim]")
         return
-    table = Table(title="Loaded Skills", border_style="accent", expand=False)
-    table.add_column("Name", style="accent")
-    table.add_column("Description")
-    table.add_column("Requires")
-    table.add_column("User-Invocable")
+    table = make_table("Name", "Description", "Requires", "User-Invocable")
     for skill in ctx.deps.skill_commands.values():
         req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
         table.add_row(
@@ -56,10 +50,7 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
         console.print("[dim]No skill files found.[/dim]")
         return
 
-    table = Table(title="Skills Check", border_style="accent", expand=False)
-    table.add_column("File", style="accent")
-    table.add_column("Status")
-    table.add_column("Reason")
+    table = make_table("File", "Status", "Reason")
 
     for path in all_paths:
         name = path.stem
@@ -99,7 +90,7 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
                 pass
     old_names = set(ctx.deps.skill_commands.keys())
     set_skill_commands(new_skills, ctx.deps)
-    _refresh_completer(ctx)
+    refresh_completer(ctx)
     added = set(new_skills.keys()) - old_names
     removed = old_names - set(new_skills.keys())
     if added:
@@ -183,7 +174,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
     for msg in errors:
         console.print(f"[warning]{msg}[/warning]")
     set_skill_commands(new_skills, ctx.deps)
-    _refresh_completer(ctx)
+    refresh_completer(ctx)
 
     console.print(f"[success]✓ Installed skill: {filename.removesuffix('.md')}[/success]")
 

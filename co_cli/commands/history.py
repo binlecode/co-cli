@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
-from rich.table import Table
 
 from co_cli.commands.types import CommandContext
-from co_cli.display.core import console
+from co_cli.display.core import console, make_table
 
 _DELEGATION_TOOLS = frozenset(
     {
@@ -47,12 +46,7 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
         console.print("[dim]No delegations this session.[/dim]")
         return None
 
-    table = Table(title="Delegation History", border_style="accent", expand=False)
-    table.add_column("Tool", style="accent")
-    table.add_column("Run ID")
-    table.add_column("Role")
-    table.add_column("Requests")
-    table.add_column("Scope")
+    table = make_table("Tool", "Run ID", "Role", "Requests", "Scope")
     for r in rows:
         table.add_row(r["tool"], r["run_id"], r["role"], r["requests"], r["scope"])
     console.print(table)

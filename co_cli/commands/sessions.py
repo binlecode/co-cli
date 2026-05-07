@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from rich.table import Table
-
 from co_cli.commands.types import CommandContext
-from co_cli.display.core import console
+from co_cli.display.core import console, make_table
 
 
 async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
@@ -21,10 +19,7 @@ async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
         console.print("[dim]No sessions found.[/dim]")
         return None
 
-    table = Table(title="Sessions", border_style="accent", expand=False)
-    table.add_column("Title", style="accent")
-    table.add_column("Date")
-    table.add_column("Size")
+    table = make_table("Title", "Date", "Size")
     for s in summaries:
         table.add_row(
             s.title,

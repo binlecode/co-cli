@@ -6,8 +6,8 @@ from contextlib import AsyncExitStack
 
 import typer
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.styles import Style
 from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.agent import InstrumentationSettings
 from pydantic_ai.messages import ModelMessage
@@ -16,8 +16,9 @@ from co_cli.agent.core import build_agent
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, init_session_index, restore_session
 from co_cli.bootstrap.project_info import project_info
+from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.commands.core import dispatch as dispatch_command
-from co_cli.commands.registry import BUILTIN_COMMANDS, build_completer_words
+from co_cli.commands.registry import build_completer_entries
 from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
@@ -222,17 +223,31 @@ def _apply_command_outcome(
     return True, message_history, "", {}
 
 
+_COMPLETION_STYLE = Style.from_dict(
+    {
+        "completion-menu": "bg:default",
+        "completion-menu.completion": "bg:default",
+        "completion-menu.completion.current": "bold bg:default",
+        "completion-menu.meta.completion": "fg:#888888 bg:default",
+        "completion-menu.meta.completion.current": "fg:#aaaaaa bg:default bold",
+        "scrollbar.background": "bg:default",
+        "scrollbar.button": "fg:#888888 bg:default",
+    }
+)
+
+
 async def _chat_loop(
     reasoning_display: str = DEFAULT_REASONING_DISPLAY,
     theme: str | None = None,
 ):
     frontend = TerminalFrontend()
 
-    completer = WordCompleter([f"/{name}" for name in BUILTIN_COMMANDS], sentence=True)
+    completer = SlashCommandCompleter()
     session = PromptSession(
         history=FileHistory(str(USER_DIR / "history.txt")),
         completer=completer,
-        complete_while_typing=False,
+        complete_while_typing=True,
+        style=_COMPLETION_STYLE,
     )
     stack = AsyncExitStack()
     deps: CoDeps | None = None
@@ -244,7 +259,7 @@ async def _chat_loop(
             raise SystemExit(1) from e
         deps.session.reasoning_display = reasoning_display
 
-        completer.words = build_completer_words(deps.skill_commands)
+        completer.update(build_completer_entries(deps.skill_commands))
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
         current_session_path = restore_session(deps, frontend)

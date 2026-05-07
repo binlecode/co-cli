@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from rich.table import Table
-
 from co_cli.commands.types import CommandContext
 from co_cli.deps import ApprovalKindEnum
-from co_cli.display.core import console
+from co_cli.display.core import console, make_table
 
 
 def _rule_label(kind: ApprovalKindEnum, value: str) -> tuple[str, str]:
@@ -33,10 +31,7 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
         if not rules:
             console.print("[dim]No session approval rules this session.[/dim]")
             return None
-        table = Table(title="Session Approval Rules", border_style="accent")
-        table.add_column("#", style="dim")
-        table.add_column("Scope")
-        table.add_column("Approved For")
+        table = make_table("#", "Scope", "Approved For")
         for i, rule in enumerate(rules):
             label, hint = _rule_label(rule.kind, rule.value)
             table.add_row(str(i), label, hint)

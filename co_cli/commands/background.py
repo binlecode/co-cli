@@ -31,7 +31,7 @@ async def _cmd_background(ctx: CommandContext, args: str) -> None:
     try:
         await spawn_task(state, ctx.deps.session)
         console.print(f"[success][{task_id}] started[/success]")
-        console.print(f"[dim]Use /status {task_id} to check progress.[/dim]")
+        console.print(f"[dim]Use /tasks {task_id} to check progress.[/dim]")
     except Exception as e:
         console.print(f"[bold red]Failed to start background task:[/bold red] {e}")
     return None

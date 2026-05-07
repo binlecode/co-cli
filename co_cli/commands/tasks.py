@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import re
 
-from rich.table import Table
-
 from co_cli.commands.types import CommandContext
-from co_cli.display.core import console
+from co_cli.display.core import console, make_table
 
 _TASK_ID_RE = re.compile(r"^[0-9a-f]{8,}$")
 
@@ -22,9 +20,7 @@ async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
         if state is None:
             console.print(f"[bold red]Task not found:[/bold red] {arg}")
             return None
-        table = Table(title=f"Task: {arg}", border_style="accent", expand=False)
-        table.add_column("Field", style="accent")
-        table.add_column("Value")
+        table = make_table("Field", "Value")
         for k, v in [
             ("task_id", state.task_id),
             ("status", state.status),
@@ -54,12 +50,7 @@ async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
         console.print(f"[dim]No background tasks{filter_note}.[/dim]")
         return None
 
-    label = f"Background Tasks ({status_filter or 'all'})"
-    table = Table(title=label, border_style="accent", expand=False)
-    table.add_column("Task ID", style="accent")
-    table.add_column("Status")
-    table.add_column("Command")
-    table.add_column("Started")
+    table = make_table("Task ID", "Status", "Command", "Started")
     for s in tasks:
         started = (s.started_at or "")[:19]
         table.add_row(s.task_id, s.status, s.command, started)

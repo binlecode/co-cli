@@ -10,6 +10,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.rule import Rule
+from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
@@ -85,6 +86,14 @@ def display_error(message: str, hint: str | None = None) -> None:
 def display_info(message: str) -> None:
     """Themed info message."""
     console.print(f"[info]{INFO} {message}[/info]")
+
+
+def make_table(*columns: str) -> Table:
+    """Minimal borderless table — the standard list style across all commands."""
+    t = Table(box=None, expand=False, show_header=False, pad_edge=False, style="on default")
+    for col in columns:
+        t.add_column(col)
+    return t
 
 
 def _render_selection(items: list[str], selected: int, current: str | None) -> None:
