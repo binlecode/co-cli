@@ -1,7 +1,8 @@
 """Agent tools for background task management.
 
 All four tools follow the standard pattern: RunContext[CoDeps], return ToolReturn.
-Background task state lives in ctx.deps.session.background_tasks (session-scoped, no disk I/O).
+Background task state lives in ctx.deps.session.background_tasks; stdout+stderr
+streams to a per-task log file under LOGS_DIR for the session lifetime.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from co_cli.tools.background import (
     kill_task,
     make_task_id,
     spawn_task,
+    tail_log,
 )
 from co_cli.tools.tool_io import tool_output
 
@@ -41,9 +43,10 @@ async def task_start(
     Prefer foreground shell execution when the very next action depends on the
     command's output — background tasks add overhead and delay for short commands.
 
-    The command runs in a subprocess with stdout+stderr captured in memory
-    (last 500 lines). No interactive input is possible — commands that prompt
-    for stdin will stall; always use foreground execution for interactive commands.
+    The command runs in a subprocess with stdout+stderr streamed to a per-task
+    log file under ~/.co-cli/logs/ for the duration of the session. No
+    interactive input is possible — commands that prompt for stdin will stall;
+    always use foreground execution for interactive commands.
 
     Args:
         command: Shell command to run (e.g. "uv run pytest", "grep -r foo src/").
@@ -109,7 +112,9 @@ async def task_status(
             is_binary=False,
         )
 
-    output_lines = list(state.output_lines)[-tail_lines:]
+    output_lines = (
+        [state.spawn_error] if state.spawn_error else tail_log(state.log_path, tail_lines)
+    )
     output_display = "\n".join(output_lines) if output_lines else "[no output yet]"
 
     duration: float | None = None

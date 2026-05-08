@@ -6,6 +6,7 @@ import re
 
 from co_cli.commands.types import CommandContext
 from co_cli.display.core import console, make_table
+from co_cli.tools.background import tail_log
 
 _TASK_ID_RE = re.compile(r"^[0-9a-f]{8,}$")
 
@@ -32,7 +33,7 @@ async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
         ]:
             table.add_row(k, v)
         console.print(table)
-        lines = list(state.output_lines)[-20:]
+        lines = [state.spawn_error] if state.spawn_error else tail_log(state.log_path, 20)
         if lines:
             console.print("[dim]--- Output (last 20 lines) ---[/dim]")
             for line in lines:

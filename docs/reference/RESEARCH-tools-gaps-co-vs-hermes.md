@@ -223,12 +223,36 @@ obsidian_list). Adding a tool to a profile is one decorator edit; new optional
 integrations (e.g. obsidian) are gated automatically via `requires_config`.
 
 ### 3.5 No MCP dynamic tool refresh
-`discover_mcp_tools()` runs once at bootstrap; ignores `notifications/tools/list_changed`.
-Tool index goes stale if an MCP server adds/removes/renames mid-session.
+**Deferred.** `discover_mcp_tools()` runs once at bootstrap; ignores
+`notifications/tools/list_changed`. Tool index goes stale if an MCP server
+adds/removes/renames mid-session. In practice no MCP server in co-cli's typical
+install set (filesystem, github, brave-search, atlassian, context7) emits
+`list_changed`; failure mode is bounded (model lacks awareness of new tools but
+existing tools stay callable on the live connection); `/mcp restart` is a one-line
+user fix. Revisit if a concrete server in the install set starts emitting the
+notification — port is ~half a day, copying hermes's lock-protected refresh
+(`tools/mcp_tool.py:907+`).
 
 ### 3.6 Background task output is lossy and in-memory only
-`BackgroundTaskState.output_lines = deque(maxlen=500)` (`tools/background.py:23`). Older
-lines silently dropped; session crash → all lost. Hermes tees stdout to a file per session.
+**Done (code-verified 2026-05-08).** `BackgroundTaskState.output_lines` deque is
+removed. Each task streams stdout+stderr to a per-task log file at
+`LOGS_DIR / f"bg-{task_id}.log"` (`tools/background.py`). `_monitor` writes
+through a line-buffered `open(...)` inside a `with` block so the handle closes
+on EOF, cancellation, or exception. Reads (`task_status`, `/tasks`) tail the
+file via the new `tail_log(path, n)` helper (64 KB seek-from-end window).
+`spawn_task` accepts an injectable `logs_dir` for test isolation. Files are
+unlinked at session end by `_drain_and_cleanup` (`co_cli/main.py:137-153`).
+Hermes-equivalent shape minus the redundant in-memory rolling buffer — the
+file is the single source of truth, so full per-task history is retained for
+the session and arbitrary slices are addressable via `file_read` / `shell grep`
+(no longer locked to the most-recent N lines). Covered by
+`tests/test_flow_background_tasks.py` (6 tests, including a 5000-line
+oversized-run case that demonstrates lines previously evicted by the deque cap
+are now recoverable).
+
+**Not ported:** orphan reaper for files left by sessions that died before
+`_drain_and_cleanup` ran. Out of scope until disk accumulation in `LOGS_DIR`
+becomes a real complaint.
 
 ### 3.7 No persistent approval rules
 `session_approval_rules` clears at session end by design. Hermes persists
@@ -302,6 +326,6 @@ Status legend: ✅ done · 🟢 in flight (active exec-plan) · 🟠 open · ⚪
 | **Low** | ✅ | Named toolset profiles for delegation (§3.4, §4.5) | Tool-list drift in delegation | Done — `delegation` field on `@agent_tool` + `discover_delegation_tools()`, code-verified 2026-05-08 |
 | **Low** | 🟠 | `file_read_mtimes` unbounded (§4.3) | Memory in very long sessions | Low — cap dict or evict on turn reset |
 | **Low** | ⚪ | No permanent approval persistence (§3.7) | UX friction | Medium — deliberate security tradeoff |
-| **Low** | 🟠 | Background task ring-buffer lossy (§3.6) | Output loss for long commands | Medium — optional file sink on spawn |
-| **Low** | 🟠 | MCP dynamic tool refresh (§3.5) | Stale tool index in long sessions | Medium — subscribe to `notifications/tools/list_changed` |
+| **Low** | ✅ | Background task ring-buffer lossy (§3.6) | Output loss for long commands | Done — file-only per-task log under `LOGS_DIR`, ring buffer removed; `tail_log` helper for reads; `_drain_and_cleanup` unlinks at session end. Code-verified 2026-05-08. |
+| **Low** | ⚪ | MCP dynamic tool refresh (§3.5) | Stale tool index in long sessions | Medium — subscribe to `notifications/tools/list_changed`. Deferred: no observed MCP server in co-cli's install set emits `list_changed`; failure mode is bounded (stale-but-additive); `/mcp restart` is a one-line user fix. |
 | **Low** | ⚪ | `check_fn` result cache (§3.9) | Wasted work *if* external-probe `check_fn`s are added | Low — copy hermes's 30 s TTL pattern when needed |

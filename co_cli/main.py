@@ -147,6 +147,8 @@ async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None
                     await kill_task(task_state)
                 except Exception:
                     pass
+            if task_state.log_path is not None:
+                task_state.log_path.unlink(missing_ok=True)
         deps.shell.cleanup()
     await stack.aclose()
 

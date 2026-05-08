@@ -1,13 +1,22 @@
-"""Session-scoped background task execution — no file I/O."""
+"""Session-scoped background task execution.
+
+Each task's stdout+stderr is streamed to a per-task log file under LOGS_DIR
+(`bg-{task_id}.log`). The file is the single source of truth for task output;
+no in-memory buffer. Reads (`task_status`, `/tasks`) tail the file. Files are
+unlinked at session shutdown by `_drain_and_cleanup`.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
-from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+from co_cli.config.core import LOGS_DIR
 
 if TYPE_CHECKING:
     from co_cli.deps import CoSessionState
@@ -20,7 +29,8 @@ class BackgroundTaskState:
     cwd: str
     description: str
     status: str  # "running" | "completed" | "failed" | "cancelled"
-    output_lines: deque[str] = field(default_factory=lambda: deque(maxlen=500))
+    log_path: Path | None = None
+    spawn_error: str | None = None
     process: asyncio.subprocess.Process | None = None
     started_at: str = ""
     completed_at: str | None = None
@@ -48,9 +58,19 @@ def _close_process_transport(proc: asyncio.subprocess.Process) -> None:
         transport.close()
 
 
-async def spawn_task(state: BackgroundTaskState, session: CoSessionState) -> None:
-    """Create subprocess; store process on state; launch _monitor coroutine."""
+async def spawn_task(
+    state: BackgroundTaskState,
+    session: CoSessionState,
+    logs_dir: Path = LOGS_DIR,
+) -> None:
+    """Create subprocess; store process on state; launch _monitor coroutine.
+
+    `logs_dir` is created BEFORE spawning the subprocess so that an mkdir
+    failure cannot leave a running process with no `log_path` and no
+    monitor coroutine to drain its stdout.
+    """
     try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
         proc = await asyncio.create_subprocess_shell(
             state.command,
             stdout=asyncio.subprocess.PIPE,
@@ -62,24 +82,26 @@ async def spawn_task(state: BackgroundTaskState, session: CoSessionState) -> Non
         state.status = "failed"
         state.exit_code = -1
         state.completed_at = _now()
-        state.output_lines.append(f"[spawn failed: {e}]")
+        state.spawn_error = f"spawn failed: {e}"
         return
+    state.log_path = logs_dir / f"bg-{state.task_id}.log"
     state.process = proc
     state._monitor_task = asyncio.create_task(_monitor(state.task_id, session))
 
 
 async def _monitor(task_id: str, session: CoSessionState) -> None:
-    """Drain stdout/stderr line-by-line into output_lines; update state on EOF."""
+    """Drain stdout/stderr line-by-line into the task's log file; update state on EOF."""
     state = session.background_tasks.get(task_id)
-    if state is None or state.process is None:
+    if state is None or state.process is None or state.log_path is None:
         return
     proc = state.process
     assert proc.stdout is not None
-    async for line in proc.stdout:
-        state.output_lines.append(line.decode(errors="replace").rstrip("\n"))
-    # Wait for the child exit after EOF so returncode is final before state is
-    # published as completed/failed.
-    await proc.wait()
+    with open(state.log_path, "w", buffering=1) as f:
+        async for line in proc.stdout:
+            f.write(line.decode(errors="replace").rstrip("\n") + "\n")
+        # Wait for the child exit after EOF so returncode is final before state is
+        # published as completed/failed.
+        await proc.wait()
     # Process.wait() does not close the subprocess transport. Close it
     # explicitly after stdout reaches EOF so asyncio does not defer cleanup to
     # BaseSubprocessTransport.__del__ on a closed event loop.
@@ -90,6 +112,33 @@ async def _monitor(task_id: str, session: CoSessionState) -> None:
     state.status = "completed" if exit_code == 0 else "failed"
     state.completed_at = _now()
     state.process = None
+
+
+def tail_log(path: Path | None, n: int) -> list[str]:
+    """Return the last n lines of a log file, or [] if path is None or missing.
+
+    Reads from the end with a 64 KB seek window — sufficient for the typical
+    n ≤ 100 case without loading the whole file. Falls back to a full read
+    when the file is smaller than the window.
+    """
+    if path is None or not path.exists() or n <= 0:
+        return []
+    window = 64 * 1024
+    try:
+        size = path.stat().st_size
+        if size == 0:
+            return []
+        with open(path, "rb") as f:
+            if size <= window:
+                data = f.read()
+            else:
+                f.seek(size - window, os.SEEK_SET)
+                data = f.read()
+        text = data.decode(errors="replace")
+        lines = text.splitlines()
+        return lines[-n:]
+    except OSError:
+        return []
 
 
 class BackgroundCleanupError(RuntimeError):
