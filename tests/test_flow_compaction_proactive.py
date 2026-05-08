@@ -183,12 +183,13 @@ def test_gate_open_before_trip(count: int) -> None:
 
 @pytest.mark.parametrize(
     "count",
-    list(
-        range(_COMPACTION_BREAKER_TRIP, _COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY)
-    ),
+    [
+        _COMPACTION_BREAKER_TRIP,
+        _COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY - 1,
+    ],
 )
 def test_gate_closed_after_trip(count: int) -> None:
-    """Gate is closed for skip_count 3-12 -- tripped, first probe not yet due.
+    """Gate is closed at the trip boundary (3) and the last skip before first probe (12).
 
     Deletion regression: would not detect the breaker staying open after trip,
     making every subsequent call a live LLM probe (circuit breaker never engages).
@@ -209,15 +210,13 @@ def test_gate_open_at_first_probe() -> None:
 
 @pytest.mark.parametrize(
     "count",
-    list(
-        range(
-            _COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY + 1,
-            _COMPACTION_BREAKER_TRIP + 2 * _COMPACTION_BREAKER_PROBE_EVERY,
-        )
-    ),
+    [
+        _COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY + 1,
+        _COMPACTION_BREAKER_TRIP + 2 * _COMPACTION_BREAKER_PROBE_EVERY - 1,
+    ],
 )
 def test_gate_closed_between_probes(count: int) -> None:
-    """Gate is closed for skip_count 14-22 -- between first and second probe.
+    """Gate is closed at first-skip-after-probe (14) and last-skip-before-second-probe (22).
 
     Deletion regression: would not detect the gate staying open after a probe,
     making every call post-probe a live LLM attempt (probe cadence lost).

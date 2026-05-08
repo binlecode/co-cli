@@ -47,12 +47,7 @@ from co_cli.context._compaction_markers import (
     summary_marker,
 )
 from co_cli.context._http_error_classifier import is_context_overflow
-from co_cli.context.history_processors import (
-    COMPACTABLE_KEEP_RECENT,
-    dedup_tool_results,
-    evict_old_tool_results,
-    strip_all_tool_returns,
-)
+from co_cli.context.history_processors import strip_all_tool_returns
 from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
@@ -64,7 +59,6 @@ from co_cli.deps import CoDeps
 _TRACER = otel_trace.get_tracer("co-cli.compaction")
 
 __all__ = [
-    "COMPACTABLE_KEEP_RECENT",
     "STATIC_MARKER_PREFIX",
     "SUMMARY_MARKER_PREFIX",
     "TODO_SNAPSHOT_PREFIX",
@@ -73,9 +67,7 @@ __all__ = [
     "apply_compaction",
     "build_compaction_marker",
     "build_todo_snapshot",
-    "dedup_tool_results",
     "estimate_message_tokens",
-    "evict_old_tool_results",
     "find_first_run_end",
     "gather_compaction_context",
     "group_by_turn",
@@ -497,8 +489,8 @@ async def proactive_window_processor(
 
             span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
             span.set_attribute(
-                "compaction.request_aggregate_tokens_after_spill",
-                ctx.deps.runtime.current_request_aggregate_tokens_after_spill or -1,
+                "compaction.request_tokens_after_spill",
+                ctx.deps.runtime.current_request_tokens_after_spill or -1,
             )
 
             if token_count <= token_threshold:

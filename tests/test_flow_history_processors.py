@@ -13,7 +13,7 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.context._tool_result_markers import is_cleared_marker
-from co_cli.context.compaction import (
+from co_cli.context.history_processors import (
     COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
     evict_old_tool_results,

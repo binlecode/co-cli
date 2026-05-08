@@ -265,10 +265,9 @@ Processor roles:
 | --- | --- |
 | `dedup_tool_results` | collapses identical `(tool_name, content-hash)` `ToolReturnPart`s in the pre-tail region into back-references pointing at the latest `tool_call_id` |
 | `evict_old_tool_results` | content-clears `COMPACTABLE_TOOLS` returns older than the 5-most-recent per tool name; replaces with a semantic marker; protects the last turn (from last `UserPromptPart` onward) |
+| `enforce_request_size` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; the cheap (non-LLM) path that fires before `proactive_window_processor` |
 | `proactive_window_processor` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 | `sanitize_surrogate_codepoints` | replaces lone Unicode surrogates (U+D800–U+DFFF) with U+FFFD across all parts; guards against `UnicodeEncodeError` from byte-token reasoning models |
-
-The L2 aggregate request-budget (`_enforce_request_budget`) is not a history processor — it is wired as a capability hook on `CoToolLifecycle.after_node_run` and fires on `CallToolsNode` exit, operating on the upcoming `ModelRequest`'s parts. See `docs/specs/compaction.md` §2.4.
 
 Preflight is called before every model-bound segment but not on approval-resume segments (SDK skips `ModelRequestNode` on resume, so preflight would inject into a non-model path). Preflight injections are ephemeral — they are not stored back to `turn_state.current_history`, so retry iterations always start from the clean history without accumulated injections.
 
@@ -381,8 +380,8 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/compaction.py` | public entry points (registered history processors and `proactive_window_processor` for L3; overflow-recovery entry point `recover_overflow_history` — single-tier strip-then-summarize); backed by private submodules `_compaction_boundaries.py` (planner), `_compaction_markers.py` (marker builders and enrichment), and `history_processors.py` (dedup / evict / surrogate-sanitize transformers and the `strip_all_tool_returns` recovery helper) |
-| `co_cli/tools/_request_budget.py` | `_enforce_request_budget` — L2 request-budget hook helper called from `CoToolLifecycle.after_node_run` on the upcoming `ModelRequest`'s parts (post-tool-exec, pre-next-request) |
+| `co_cli/context/compaction.py` | public entry points (`proactive_window_processor` for L3; overflow-recovery entry point `recover_overflow_history` — single-tier strip-then-summarize); backed by private submodules `_compaction_boundaries.py` (planner) and `_compaction_markers.py` (marker builders and enrichment) |
+| `co_cli/context/history_processors.py` | registered history processors (`dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`, `sanitize_surrogate_codepoints`) and the `strip_all_tool_returns` recovery helper |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/agent/core.py` | main agent factory |

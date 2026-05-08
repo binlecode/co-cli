@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 COMPACTION_ENV_MAP: dict[str, str] = {
     "compaction_ratio": "CO_COMPACTION_RATIO",
     "tail_fraction": "CO_COMPACTION_TAIL_FRACTION",
+    "spill_ratio": "CO_COMPACTION_SPILL_RATIO",
     "min_proactive_savings": "CO_COMPACTION_MIN_PROACTIVE_SAVINGS",
     "proactive_thrash_window": "CO_COMPACTION_PROACTIVE_THRASH_WINDOW",
 }
@@ -41,6 +42,17 @@ class CompactionSettings(BaseModel):
             "summary marker, so the tail carries only the recent reasoning chain."
         ),
     )
+    spill_ratio: float = Field(
+        default=0.50,
+        description=(
+            "Fraction of context window above which enforce_request_size spills tool returns "
+            "to disk. Must be ≤ compaction_ratio so that after spilling, total tokens fall to "
+            "or below the proactive trigger and proactive_window_processor fast-paths instead "
+            "of firing LLM summarization. Spill is the primary cheap response; proactive's "
+            "LLM summarization is the fallback when spill exhausts candidates and total is "
+            "still above compaction_ratio."
+        ),
+    )
     min_proactive_savings: float = Field(
         default=0.10,
         description="Minimum token savings fraction to count a proactive compaction as effective.",
@@ -61,5 +73,14 @@ class CompactionSettings(BaseModel):
                 f"tail_fraction ({self.tail_fraction}) must be < compaction_ratio "
                 f"({self.compaction_ratio}): post-compact state must leave headroom "
                 "before the trigger re-fires"
+            )
+        if not 0 < self.spill_ratio < 1.0:
+            raise ValueError(f"spill_ratio must be in (0, 1.0), got {self.spill_ratio}")
+        if not self.spill_ratio <= self.compaction_ratio:
+            raise ValueError(
+                f"spill_ratio ({self.spill_ratio}) must be <= compaction_ratio "
+                f"({self.compaction_ratio}): otherwise proactive summarization fires "
+                "in the band between compaction_ratio and spill_ratio without spill "
+                "having a chance to run, defeating the consolidation goal"
             )
         return self

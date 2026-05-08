@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.context.compaction import COMPACTABLE_KEEP_RECENT
+from co_cli.context.history_processors import COMPACTABLE_KEEP_RECENT
 
 if TYPE_CHECKING:
     from co_cli.config.core import Settings

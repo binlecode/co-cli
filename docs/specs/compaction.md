@@ -7,14 +7,14 @@ Covers how co-cli keeps context bounded under pressure. Prompt assembly and hist
 
 **Cycle terminology.** A *user turn* runs from one `UserPromptPart` to the final response; it contains one or more *LLM requests* (`ModelRequestNode` → one HTTP call to the model). A turn that drives K tool-call batches fires K+1 LLM requests; a no-tool turn fires 1.
 
-**Trigger cadence vs. scope.** Four history processors fire before every `ModelRequestNode` (pydantic-ai's pre-flight hook). They never skip a request. The L2 request-budget enforcer fires post-tool-exec on `CallToolsNode` exit, on the upcoming `ModelRequest`'s parts only. What differs between mechanisms is *scope* — which slice of the message list each one acts on. See the **Scope** column.
+**Trigger cadence vs. scope.** Five history processors fire before every `ModelRequestNode` (pydantic-ai's pre-flight hook). They never skip a request. What differs between mechanisms is *scope* — which slice of the message list each one acts on. See the **Scope** column.
 
 | Mechanism | Scope | When | Gate logic | Target | Effect | LLM? |
 |---|---|---|---|---|---|---|
 | **`spill_if_oversized`** | per tool result | At tool emit time | `len(display) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS`); `force=True` overrides threshold | Single tool result | Content written to disk; `<persisted-output>` placeholder in context | No |
 | **`dedup_tool_results`** | housekeeping | Every `ModelRequestNode` | last `UserPromptPart` exists (boundary); per-part: `is_dedup_candidate` (string ≥ 200 chars, in `COMPACTABLE_TOOLS`); latest-id target in `durable_call_ids` (will survive eviction) | Duplicate returns in pre-tail region | Identical `(tool, content-hash)` pairs collapsed to back-reference pointing at latest `tool_call_id` | No |
 | **`evict_old_tool_results`** | housekeeping | Every `ModelRequestNode` | last `UserPromptPart` exists; per-part: tool in `COMPACTABLE_TOOLS` AND not in 5-most-recent `keep_ids` per tool name | `COMPACTABLE_TOOLS` returns in pre-tail older than the 5 most-recent per tool name | Content replaced with a semantic marker (name, key args, size/outcome signal); non-compactable tools pass through untouched | No |
-| **`_enforce_request_budget`** (capability hook) | latest tool-call batch | `CallToolsNode` exit (when next node is `ModelRequestNode`) | `result is ModelRequestNode` (else final-result path, no-op); `tokens_before > request_aggregate_threshold_tokens`; ≥ 1 non-already-spilled candidate | `ToolReturnPart`s in `ModelRequestNode.request.parts` (the just-produced batch) | Largest unspilled returns force-spilled to disk, largest-first, until aggregate ≤ budget | No |
+| **`enforce_request_size`** | full message list | Every `ModelRequestNode`, after `evict_old_tool_results`, before `proactive_window_processor` | `total > deps.spill_threshold_tokens` (where `total = max(estimate_message_tokens, latest_response_input_tokens)`); ≥ 1 non-already-spilled candidate | All string `ToolReturnPart`s across the message list | Largest unspilled returns force-spilled to disk, largest-first, until aggregate ≤ threshold | No |
 | **`proactive_window_processor`** | multi-user-turn | Every `ModelRequestNode` | `token_count > compaction_ratio × budget`; `consecutive_low_yield_proactive_compactions < proactive_thrash_window`; `plan_compaction_boundaries` returns non-`None`; circuit breaker not tripped (else static marker, no LLM); `ctx.deps.model is not None` (else static marker) | Middle user-turn groups (head and tail always preserved) | Middle replaced by LLM summary marker; head / marker / breadcrumbs / tail assembled | Yes (static marker fallback) |
 | **`sanitize_surrogate_codepoints`** | housekeeping | Every `ModelRequestNode`, after `proactive_window_processor` | None — unconditional sweep (no-op when no surrogates present) | All messages | Lone surrogates (U+D800–U+DFFF) replaced with U+FFFD | No |
 | **Overflow recovery** | multi-user-turn | Provider HTTP 400/413 | `is_context_overflow` true (HTTP 413 unconditional; 400 with overflow evidence); `turn_state.overflow_recovery_attempted` False (one-shot per turn) | All `ToolReturnPart`s, then middle user-turn groups if still over budget | Strip every tool return to a semantic marker; if stripped fits budget, return; else run planner + `apply_compaction` on the stripped history | Yes (static marker fallback) |
@@ -24,13 +24,13 @@ All three LLM-capable paths (`proactive_window_processor`, overflow recovery, `/
 
 **Why per-request cadence.** Context pressure rises mid-turn — a single tool round can append a 50K-char shell output plus several `file_read` results, pushing the next request over budget before the user speaks again. Per-turn cadence would catch overflow only reactively via HTTP 400/413.
 
-**Effective work ≠ uniform trigger.** Per the **Gate logic** column above: `sanitize_surrogate_codepoints` runs unconditionally; `dedup_tool_results` / `evict_old_tool_results` act whenever eligible parts exist (cheap); `proactive_window_processor` fast-paths until thresholds trip. `_enforce_request_budget` runs on a different rail entirely — only when `CallToolsNode` exits with a `ModelRequestNode` as its next node — and skips the final-result path.
+**Effective work ≠ uniform trigger.** Per the **Gate logic** column above: `sanitize_surrogate_codepoints` runs unconditionally; `dedup_tool_results` / `evict_old_tool_results` act whenever eligible parts exist (cheap); `enforce_request_size` fast-paths whenever `total ≤ deps.spill_threshold_tokens`; `proactive_window_processor` fast-paths until its own threshold trips. The two threshold-gated processors are intentionally tiered — spill (cheap) targets ≤ `spill_ratio × budget` (default 0.50); proactive (LLM) only fires when spill exhausted candidates and total still exceeds `compaction_ratio × budget` (default 0.50, gating proactive's `>`-check).
 
 **Manual entry:** `/compact [focus]` — full-history replacement via `apply_compaction` with bounds `(0, n, n)`. Inherits the proactive path's degradation policy (no-model / circuit-breaker / failure all fall back to a static marker). `[focus]` threads to `summarize_messages` for topic emphasis.
 
 ### Diagram 1: Overall compaction pipeline
 
-End-to-end flow: `UserPromptPart` → `ModelRequestNode` pre-flight hook (the **MRN** subgraph — four `history_processors`) → model HTTP → `CallToolsNode` (the **CTN** subgraph — per-result `spill_if_oversized` then post-batch `_enforce_request_budget` on `CallToolsNode` exit); overflow recovery branches off HTTP 400/413. See §2.3 for per-stage message transformation; §2.4 for `_enforce_request_budget`; §2.5 for `proactive_window_processor` internals.
+End-to-end flow: `UserPromptPart` → `ModelRequestNode` pre-flight hook (the **MRN** subgraph — five `history_processors`) → model HTTP → `CallToolsNode` (the **CTN** subgraph — per-result `spill_if_oversized` only); overflow recovery branches off HTTP 400/413. See §2.3 for per-stage message transformation; §2.4 for `enforce_request_size`; §2.5 for `proactive_window_processor` internals.
 
 ```mermaid
 flowchart TD
@@ -38,16 +38,16 @@ flowchart TD
     FINAL(["FinalResult"])
     RTYPE{"response type?"}
 
-    subgraph MRN["ModelRequestNode — root_capability.before_model_request() chain → HTTP"]
+    subgraph MRN["ModelRequestNode — history_processors chain → HTTP"]
         direction LR
-        C0["dedup_tool_results"] --> C1["evict_old_tool_results"] --> C2["proactive_window_processor"] --> C3["sanitize_surrogate_codepoints"] --> HTTP["model.request()\nHTTP → model"]
+        C0["dedup_tool_results"] --> C1["evict_old_tool_results"] --> CE["enforce_request_size"] --> C2["proactive_window_processor"] --> C3["sanitize_surrogate_codepoints"] --> HTTP["model.request()\nHTTP → model"]
     end
 
-    subgraph CTN["CallToolsNode — execute_tools (spill_if_oversized fires per result, then request-budget on exit)"]
+    subgraph CTN["CallToolsNode — execute_tools (per-result spill_if_oversized only)"]
         direction LR
         TCALL["model response:\nToolCallPart(s)"] --> EXEC["tool executes"] --> M1["spill_if_oversized"] --> HIST["ToolReturnPart →\nbatch parts"] --> MORE{"more tool calls?"}
         MORE -->|yes| EXEC
-        MORE -->|"no — batch complete"| ENFORCE["_enforce_request_budget\n(after_node_run hook)"]
+        MORE -->|"no — batch complete"| NEXT["next ModelRequestNode"]
     end
 
     subgraph OVF["overflow recovery — HTTP 400/413"]
@@ -66,11 +66,11 @@ flowchart TD
     OV3 --> C0
     RTYPE -->|ToolCallPart| TCALL
     RTYPE -->|TextPart| FINAL
-    ENFORCE -.->|"re-enter MRN"| C0
+    NEXT -.->|"re-enter MRN"| C0
 
     classDef hook fill:#ede0f5,stroke:#9c6fc7
     classDef term fill:#d4edda,stroke:#74c476
-    class C0,C1,C2,C3,M1,ENFORCE hook
+    class C0,C1,CE,C2,C3,M1 hook
     class UPN,FINAL term
 ```
 
@@ -147,10 +147,10 @@ The first defense in co-cli's four-layer budget stack — L0 caps how many tool 
 |---|---|---|---|
 | **L0** | `MAX_TOOL_CALLS_PER_MODEL_TURN = 6` | per `ModelResponse` | Admission control — preventive |
 | **L1** | `spill_if_oversized` | per `ToolReturnPart` | Per-result emit-time persistence — reactive |
-| **L2** | `_enforce_request_budget` (in `CoToolLifecycle.after_node_run` capability hook) | latest tool-call batch | Aggregate cap on the just-produced `ToolReturnPart`s before they enter `message_history` — reactive |
-| **L3** | `proactive_window_processor` (+ `recover_overflow_history`) | full history window | Window-scale compaction — reactive |
+| **L2** | `enforce_request_size` (history processor at `ModelRequestNode` entry) | full message list | Per-request size cap — force-spill largest tool returns until total fits — reactive |
+| **L3** | `proactive_window_processor` (+ `recover_overflow_history`) | full history window | Window-scale LLM compaction — reactive, fallback when L2 spill alone can't fit |
 
-**Constant.** `MAX_TOOL_CALLS_PER_MODEL_TURN = 6` in `co_cli/agent/tool_call_limit.py`; non-configurable. Sized so 6 non-spilling (≤ 4K char) tool returns aggregate inside L2's tail-fraction budget.
+**Constant.** `MAX_TOOL_CALLS_PER_MODEL_TURN = 6` in `co_cli/agent/tool_call_limit.py`; non-configurable. Sized so 6 non-spilling (≤ 4K char) tool returns aggregate inside the per-request spill threshold.
 
 **Trigger surface.** `CoToolLifecycle.before_tool_execute` — runs inside `CallToolsNode`, before each tool handler is invoked, on every `ToolCallPart` in the model response.
 
@@ -189,8 +189,8 @@ The first 6 calls execute normally. Calls 7+ are **rejected without running** �
 
 **Relationship to L1-L3.** L0 is preventive; L1-L3 are reactive. Even with L0 in place:
 - A malformed tool returning a 1MB blob still needs L1 (`spill_if_oversized`) to size-cap.
-- Six oversized returns still need L2 (`_enforce_request_budget`) to aggregate-cap.
-- Long conversations still need L3 (`proactive_window_processor`) to window-cap.
+- Multi-batch accumulation across one user turn still needs L2 (`enforce_request_size`) to aggregate-cap the upcoming request.
+- Long conversations with non-tool-return pressure still need L3 (`proactive_window_processor`) to window-cap.
 
 L0 just bounds the *worst-case fan-out per turn* so the lower layers can be sized for realistic load instead of pathological model output.
 
@@ -267,48 +267,65 @@ AFTER evict_old_tool_results
 
 **`sanitize_surrogate_codepoints`.** Runs after `proactive_window_processor` — last in the pipeline. Replaces lone Unicode surrogate code points (U+D800–U+DFFF) with U+FFFD in all `ModelRequest` and `ModelResponse` parts. Applies to string content on `UserPromptPart`, `SystemPromptPart`, `RetryPromptPart`, `ToolReturnPart`, `TextPart`, `ThinkingPart`, and `ToolCallPart.args`. Guards against `UnicodeEncodeError` inside the OpenAI SDK caused by byte-token reasoning models that occasionally emit lone surrogates.
 
-### 2.4 `_enforce_request_budget` — Per-request budget (capability hook)
+### 2.4 `enforce_request_size` — Per-request size control (history processor)
 
-L2's aggregate cap. Operates on one `ModelRequest`'s `parts` (the upcoming request that `CallToolsNode` just assembled) — not on a multi-message "round". The helper lives in `co_cli/tools/_request_budget.py` and is invoked from `CoToolLifecycle.after_node_run` in `co_cli/tools/lifecycle.py`. Distinct from the prepass processors above — fires on a different rail (`CallToolsNode` exit, not `ModelRequestNode` entry) and operates on a different scope (one upcoming request's parts, not the full message list).
+L2's per-request cap. Operates on the **full message list** at `ModelRequestNode` entry — not on a single batch. Implemented as a sync history processor in `co_cli/context/history_processors.py` alongside `dedup_tool_results`, `evict_old_tool_results`, and `sanitize_surrogate_codepoints`. Replaces a prior post-tool-exec hook design (`_enforce_request_budget`) which only saw the just-produced batch and over-fired on small histories while under-firing on multi-batch accumulation.
 
-**Hook placement and ordering.** `CallToolsNode.run` produces `output_parts`, wraps them into `ModelRequest(parts=output_parts)`, and assigns the new `ModelRequestNode` as its next node. `after_node_run` then fires with `result = ModelRequestNode`, which is the mutation point — the helper rewrites `result.request.parts` in-place via `dataclasses.replace`. The graph next advances to `ModelRequestNode.run` → `_prepare_request` appends the (already-spilled) request to `message_history`, then the four pre-flight history processors run on the now-current history. Spilled content is therefore visible to dedup/evict/proactive on the very next request, not the one after.
+**Chain placement.** Fires after `dedup_tool_results` and `evict_old_tool_results` (so cheap reductions happen first — no point spilling content the next processor would have deduped) and before `proactive_window_processor` (which fast-paths whenever spill brought total under `compaction_ratio × budget`, sparing the LLM call).
 
-**Scope.** The just-produced batch only — `ModelRequest.parts` of the next `ModelRequestNode`. No reverse-scan, no boundary search, no message-list walk. Each batch is enforced exactly once, on the `CallToolsNode` exit that produced it.
+**Scope.** The full message list visible at MRN entry. Walks every `ModelRequest` and collects every string `ToolReturnPart`, regardless of region (no protected tail at this stage — recency protection is `evict_old_tool_results`'s job).
 
 **Skip cases:**
 
-| Condition | Behavior |
-|---|---|
-| `node` is not `CallToolsNode` | Hook returns `result` unchanged (existing guard). No L0 or L2 span. |
-| `result` is `End[FinalResult]` (final-result tool path) | L0 span fires; L2 short-circuits — no L2 span. (No further LLM request will be made.) |
-| `parts` has no string `ToolReturnPart`s | `candidates_count=0`, span emitted, `skip_reason="below_threshold"`, no rewrite. |
-| Aggregate fits | `skip_reason="below_threshold"`, span emitted, no rewrite. |
-| All candidates already persisted | `skip_reason="no_candidates_all_spilled"`, span emitted, no rewrite. |
-| Spill `OSError` on a candidate | That candidate is skipped (`new == old`); others continue. |
+| Condition | `skip_reason` | Behavior |
+|---|---|---|
+| `total ≤ deps.spill_threshold_tokens` | `below_threshold` | Fast path; no rewrite. Span emitted with `tokens_before == tokens_after`. |
+| No string `ToolReturnPart`s in history | `no_candidates` | No rewrite. |
+| All candidates already persisted (content starts with `PERSISTED_OUTPUT_TAG`) | `all_spilled` | No rewrite. |
+| Spill exhausted candidates but aggregate still > threshold | `fallback_to_summarize` | Returns the (possibly partially-rewritten) message list; `proactive_window_processor` runs next and decides whether to fire LLM summarization. |
+| Spill brought aggregate ≤ threshold | `""` (empty) | Rewritten message list returned. |
+| Spill `OSError` on a candidate | (per-candidate, counted in `spill_errors`) | That candidate skipped (`new == old`); loop continues. |
 
-**Algorithm.** Aggregate `len(content) // CHARS_PER_TOKEN` (4) over string `ToolReturnPart`s in `parts`. If `tokens_before > deps.request_aggregate_threshold_tokens` (bootstrapped as `int(tail_fraction * model_max_ctx)`), filter out parts whose content starts with `PERSISTED_OUTPUT_TAG`, sort the remainder by content length descending, and force-spill via `spill_if_oversized(..., force=True)` until aggregate ≤ threshold. Returns a new parts list (or `None` for no rewrite); caller substitutes via `result.request = replace(result.request, parts=new_parts)`.
+**Algorithm.**
 
-**Span.** `tool_budget.enforce_request_aggregate` — sibling to `tool_budget.enforce_tool_call_limit` (L0); both fire on `CallToolsNode` exit, both children of the surrounding graph span. Attributes: `budget.context_window_tokens`, `request_aggregate.threshold_tokens / tokens_before / tokens_after / candidates_count / spilled_count / spill_fired / skip_reason`.
+1. `total = max(estimate_message_tokens(messages), latest_response_input_tokens(messages))` — folds local char-based estimate with the most recent provider-reported input-token count to bias toward earlier spilling.
+2. If `total ≤ deps.spill_threshold_tokens`, fast-path.
+3. Walk every `ModelRequest`, collect all `ToolReturnPart`s with string content as candidates. Filter spillable: those whose content does not start with `PERSISTED_OUTPUT_TAG`.
+4. Sort spillable largest-first by `len(content)`.
+5. Force-spill via `spill_if_oversized(content, deps.tool_results_dir, tool_name, force=True)` until aggregate ≤ threshold or candidates exhaust. Track replacements by `id(part)`.
+6. Apply rewrites via `_rewrite_tool_returns(messages, len(messages), replacement_for=lambda p: spilled.get(id(p)))` — only messages with rewritten parts are rebuilt; unchanged messages pass through verbatim.
 
-**Side effect.** Writes `deps.runtime.current_request_aggregate_tokens_after_spill = aggregate` on every spill-fired path; remains `None` on skip paths. Read by `proactive_window_processor` for OTEL — diagnostic only, no logic branches on it.
+**Span.** `tool_budget.enforce_request_size` — emitted by tracer `co-cli.tool_budget` on every call. Attributes: `budget.context_window_tokens`, `request.threshold_tokens / tokens_before / tokens_after / candidates_count / spillable_count / spilled_count / spill_errors / spill_fired (bool) / skip_reason`.
 
-**Worked example.** Latest `CallToolsNode` produces a batch with one 250K-char `shell` return and two small ones; threshold is 16K tokens (≈ 64K chars).
+**Side effect.** Writes `deps.runtime.current_request_tokens_after_spill = aggregate` on every path (including fast paths). Read by `proactive_window_processor` for OTEL — diagnostic only, no logic branches on it.
+
+**Threshold.** `deps.spill_threshold_tokens = int(spill_ratio × model_max_ctx)`, computed once at bootstrap and cached on `CoDeps`. The `compaction.spill_ratio` knob is validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths.
+
+**Worked example.** Multi-batch turn: history contains three `ModelRequest`s carrying tool returns of 24K chars (≈ 6K tokens) each, plus a small head. Threshold = 6K tokens.
 
 ```text
-BEFORE _enforce_request_budget (result.request.parts)
+BEFORE enforce_request_size (full message list)
 ─────────────────────────────────────────────────────────────────────
-  TR(shell)      run 7   [250K chars ≈ 62K tokens]   ← oversized
-  TR(file_read)  cfg.py  [2K chars]
-  TR(file_find)  *.py    [1K chars]
+  ModelRequest    UserPromptPart  (turn start)
+  ModelResponse   ToolCallPart    shell
+  ModelRequest    ToolReturnPart  shell run 1   [24K chars ≈ 6K tokens]
+  ModelResponse   ToolCallPart    shell
+  ModelRequest    ToolReturnPart  shell run 2   [24K chars ≈ 6K tokens]
+  ModelResponse   ToolCallPart    shell
+  ModelRequest    ToolReturnPart  shell run 3   [24K chars ≈ 6K tokens]
 
-      aggregate ≈ 63K tokens > 16K threshold → spill_fired=True
-      spillable: run 7 (largest, not yet persisted)
+      aggregate ≈ 18K tokens > 6K threshold → spill_fired=True
+      spillable largest-first: run 1 == run 2 == run 3 (any order)
 
-AFTER _enforce_request_budget
+AFTER enforce_request_size
 ─────────────────────────────────────────────────────────────────────
-  TR(shell)      run 7   <persisted-output>          ← force-spilled to disk
-  TR(file_read)  cfg.py  [2K chars]
-  TR(file_find)  *.py    [1K chars]
+  ModelRequest    UserPromptPart  (turn start)
+  ModelResponse   ToolCallPart    shell
+  ModelRequest    ToolReturnPart  shell run 1   <persisted-output>   ← spilled
+  ModelResponse   ToolCallPart    shell
+  ModelRequest    ToolReturnPart  shell run 2   <persisted-output>   ← spilled
+  ModelResponse   ToolCallPart    shell
+  ModelRequest    ToolReturnPart  shell run 3   [24K chars]          ← spill stopped: aggregate ≤ 6K
 ```
 
 ### 2.5 `proactive_window_processor` — Window compaction
@@ -409,7 +426,7 @@ Summarizer surface:
 
 ### 2.6 Enrichment helper
 
-`gather_compaction_context` collects signal that survives `dedup_tool_results` / `evict_old_tool_results` / `_enforce_request_budget`. Called from `summarize_dropped_messages` so every LLM-capable compaction path inherits it.
+`gather_compaction_context` collects signal that survives `dedup_tool_results` / `evict_old_tool_results` / `enforce_request_size`. Called from `summarize_dropped_messages` so every LLM-capable compaction path inherits it.
 
 | Source | Function | Why it survives |
 |---|---|---|
@@ -536,6 +553,7 @@ flowchart LR
 |---|---|---|---|
 | `compaction.compaction_ratio` | `CO_COMPACTION_RATIO` | `0.50` | Fraction of budget above which `proactive_window_processor` fires |
 | `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.20` | Fraction of budget targeted for the preserved tail |
+| `compaction.spill_ratio` | `CO_COMPACTION_SPILL_RATIO` | `0.50` | Fraction of context window above which `enforce_request_size` force-spills tool returns. Validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths. |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Consecutive low-yield proactive compactions before anti-thrashing gate activates |
 
@@ -554,9 +572,9 @@ flowchart LR
 |---|---|---|---|
 | `SPILL_THRESHOLD_CHARS` | `co_cli/tools/tool_io.py` | `4,000` | `spill_if_oversized` default per-tool emit-time spill threshold |
 | `TOOL_RESULT_PREVIEW_CHARS` | `co_cli/tools/tool_io.py` | `1,500` | Preview chars included in the `<persisted-output>` placeholder |
-| `CHARS_PER_TOKEN` | `co_cli/context/tokens.py` | `4` | Fast chars→tokens proxy used by `_enforce_request_budget` aggregate estimate |
+| `CHARS_PER_TOKEN` | `co_cli/context/tokens.py` | `4` | Fast chars→tokens proxy used by `enforce_request_size` aggregate estimate |
 
-**L2 aggregate threshold** (`deps.request_aggregate_threshold_tokens`) — computed at bootstrap as `int(tail_fraction * model_max_ctx)` and cached on `CoDeps`; not directly configurable (controlled via `compaction.tail_fraction` and `llm.max_ctx`).
+**L2 spill threshold** (`deps.spill_threshold_tokens`) — computed at bootstrap as `int(spill_ratio * model_max_ctx)` and cached on `CoDeps`; not directly configurable (controlled via `compaction.spill_ratio` and `llm.max_ctx`).
 
 **Per-tool `spill_if_oversized` overrides** (set via `@agent_tool(spill_threshold_chars=...)` in each tool's own file):
 
@@ -574,9 +592,8 @@ flowchart LR
 | `co_cli/context/_compaction_boundaries.py` | Boundary planner: `TurnGroup`, `group_by_turn`, `plan_compaction_boundaries`, active-user anchoring. |
 | `co_cli/context/_compaction_markers.py` | Marker builders, `gather_compaction_context` enrichment helper, `SUMMARY_MARKER_PREFIX`. |
 | `co_cli/context/_dedup_tool_results.py` | `dedup_tool_results` helpers: content hash, eligibility predicate (`is_dedup_candidate`), back-reference builder (`build_dedup_part`). |
-| `co_cli/context/history_processors.py` | Pure history processors (registered): `dedup_tool_results`, `evict_old_tool_results`, `sanitize_surrogate_codepoints`. Recovery helper (unregistered): `strip_all_tool_returns`. |
-| `co_cli/tools/_request_budget.py` | `_enforce_request_budget` — L2 request-budget hook helper called from `CoToolLifecycle.after_node_run` on the upcoming `ModelRequest`'s parts. Package-private to `co_cli/tools/`. |
-| `co_cli/tools/lifecycle.py` | `CoToolLifecycle` capability: dedup tool calls (`before_node_run`), per-call cap brake (`wrap_tool_execute`), L0 tool-call-limit span + L2 request-budget enforcement via `_enforce_request_budget` (`after_node_run`), JSON repair (`before_tool_validate`), path normalization (`before_tool_execute`), audit/span enrichment (`after_tool_execute`). |
+| `co_cli/context/history_processors.py` | Pure history processors (registered): `dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`, `sanitize_surrogate_codepoints`. Recovery helper (unregistered): `strip_all_tool_returns`. |
+| `co_cli/tools/lifecycle.py` | `CoToolLifecycle` capability: dedup tool calls (`before_node_run`), per-call cap brake (`wrap_tool_execute`), L0 tool-call-limit span (`after_node_run`), JSON repair (`before_tool_validate`), path normalization (`before_tool_execute`), audit/span enrichment (`after_tool_execute`). |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker` per-tool format and `is_cleared_marker` predicate. |
 | `co_cli/context/summarization.py` | `summarize_messages`, token estimator, budget resolver, and prompt templates. |
 | `co_cli/context/tokens.py` | `CHARS_PER_TOKEN` shared constant. |
@@ -602,8 +619,8 @@ flowchart LR
 | `spill_if_oversized` threshold boundary: below 4000 passes through unchanged; above 4000 spills | `tests/test_flow_spill_threshold.py` |
 | `spill_if_oversized` `force=True`: force-spills even below threshold when above preview size | `tests/test_flow_spill_threshold.py` |
 | `spill_if_oversized` OTEL: `tool_budget.spill_tool_result` span emitted; tracer name `co-cli.tool_budget` | `tests/test_flow_spill_otel.py` |
-| `_enforce_request_budget` hook: below-threshold no spill; largest-first spill ordering; final-result path no-op; non-`CallToolsNode` passthrough | `tests/test_flow_request_budget.py` |
-| `_enforce_request_budget` cached threshold: `request_aggregate_threshold_tokens` from `CoDeps` used without recompute | `tests/test_flow_request_budget.py` |
+| `enforce_request_size`: below-threshold fast path; largest-first spill across full message list; cross-batch accumulation (multiple `ModelRequest`s); already-spilled exclusion; OTEL span `tool_budget.enforce_request_size` | `tests/test_flow_enforce_request_size.py` |
+| `enforce_request_size` cached threshold: `spill_threshold_tokens` from `CoDeps` used without recompute | `tests/test_flow_enforce_request_size.py` |
 | L0 tool-call cap: `MAX_TOOL_CALLS_PER_MODEL_TURN` constant pinned; allow up to cap; reject above cap with JSON payload | `tests/test_flow_tool_call_limit.py` |
 | L0 run_step counter: resets on `ctx.run_step` transition | `tests/test_flow_tool_call_limit.py` |
 | `dedup_tool_results`: identical return collapses to back-reference; short content and distinct content pass through | `tests/test_flow_history_processors.py` |

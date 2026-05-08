@@ -8,6 +8,8 @@ one part changed.
 Registered processors:
     dedup_tool_results          — collapses identical-content tool returns to back-references
     evict_old_tool_results      — content-clears compactable tool results by recency
+    enforce_request_size        — force-spills largest unspilled tool returns when full
+                                  request exceeds spill_threshold_tokens
     sanitize_surrogate_codepoints — replaces lone Unicode surrogates with U+FFFD
 
 Recovery helpers (not registered as processors):
@@ -23,9 +25,11 @@ import logging
 import re
 from collections.abc import Callable, Iterator
 from dataclasses import replace
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
@@ -47,8 +51,13 @@ from co_cli.context._dedup_tool_results import (
     is_dedup_candidate,
 )
 from co_cli.context._tool_result_markers import is_cleared_marker, semantic_marker
+from co_cli.context.summarization import estimate_message_tokens, latest_response_input_tokens
+from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.tools.categories import COMPACTABLE_TOOLS
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, spill_if_oversized
+
+_TRACER = otel_trace.get_tracer("co-cli.tool_budget")
 
 COMPACTABLE_KEEP_RECENT = 5
 """Keep the N most-recent tool returns per compactable tool type; clear older.
@@ -306,6 +315,156 @@ def evict_old_tool_results(
         return _build_cleared_part(part, call_id_to_args)
 
     return _rewrite_tool_returns(messages, boundary, replacement_for=replacement_for)
+
+
+def _collect_tool_return_candidates(messages: list[ModelMessage]) -> list[ToolReturnPart]:
+    """Collect every string-content ``ToolReturnPart`` across the message list."""
+    candidates: list[ToolReturnPart] = []
+    for msg in messages:
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part in msg.parts:
+            if isinstance(part, ToolReturnPart) and isinstance(part.content, str):
+                candidates.append(part)
+    return candidates
+
+
+def _spill_largest_first(
+    spillable: list[ToolReturnPart],
+    *,
+    starting_tokens: int,
+    threshold: int,
+    tool_results_dir: Path,
+) -> tuple[dict[int, ToolReturnPart], int, int, int]:
+    """Force-spill candidates largest-first until aggregate fits or candidates exhaust.
+
+    Returns ``(spilled_by_id, aggregate, spilled_count, spill_errors)`` keyed by
+    ``id(part)`` so the caller can look up replacements via
+    ``_rewrite_tool_returns``.
+    """
+    spilled_by_id: dict[int, ToolReturnPart] = {}
+    aggregate = starting_tokens
+    spilled_count = 0
+    spill_errors = 0
+    for part in sorted(spillable, key=lambda p: len(p.content), reverse=True):
+        if aggregate <= threshold:
+            break
+        old_content = part.content
+        new_content = spill_if_oversized(
+            old_content,
+            tool_results_dir,
+            part.tool_name,
+            force=True,
+        )
+        if new_content == old_content:
+            spill_errors += 1
+            continue
+        spilled_by_id[id(part)] = ToolReturnPart(
+            tool_name=part.tool_name,
+            content=new_content,
+            tool_call_id=part.tool_call_id,
+        )
+        aggregate -= (len(old_content) - len(new_content)) // CHARS_PER_TOKEN
+        spilled_count += 1
+    return spilled_by_id, aggregate, spilled_count, spill_errors
+
+
+def enforce_request_size(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage]:
+    """Force-spill the largest unspilled ``ToolReturnPart``s until the request fits.
+
+    Runs after ``dedup_tool_results`` / ``evict_old_tool_results`` (so cheap
+    reductions happen first) and before ``proactive_window_processor`` (which
+    fast-paths when this processor brought total tokens under
+    ``compaction_ratio x budget``). Operates on the full message list -- not
+    a single batch -- so it sees whatever pressure the upcoming request will
+    actually carry.
+
+    Algorithm:
+      1. ``total = max(estimate_message_tokens, latest_response_input_tokens)``.
+      2. If ``total <= deps.spill_threshold_tokens``, fast-path.
+      3. Collect ``ToolReturnPart`` candidates with string content; filter
+         spillable (content does not start with ``PERSISTED_OUTPUT_TAG``).
+      4. Sort spillable largest-first by ``len(content)``.
+      5. Force-spill via ``spill_if_oversized(..., force=True)`` until aggregate
+         falls to or below the threshold or candidates exhaust.
+
+    Skip reasons surfaced via the OTEL span ``tool_budget.enforce_request_size``:
+      - ``below_threshold``      -- total under threshold; nothing to do.
+      - ``no_candidates``        -- no string ``ToolReturnPart``s present.
+      - ``all_spilled``          -- every candidate is already on disk.
+      - ``fallback_to_summarize``-- spill exhausted but total still over; let
+                                    ``proactive_window_processor`` handle it.
+      - empty string             -- spill fired and brought total under threshold.
+    """
+    deps = ctx.deps
+    threshold = deps.spill_threshold_tokens
+
+    with _TRACER.start_as_current_span("tool_budget.enforce_request_size") as span:
+        span.set_attribute("budget.context_window_tokens", deps.model_max_ctx)
+        span.set_attribute("request.threshold_tokens", threshold)
+
+        total = max(estimate_message_tokens(messages), latest_response_input_tokens(messages))
+        span.set_attribute("request.tokens_before", total)
+
+        candidates = _collect_tool_return_candidates(messages)
+        spillable = [p for p in candidates if not p.content.startswith(PERSISTED_OUTPUT_TAG)]
+        span.set_attribute("request.candidates_count", len(candidates))
+        span.set_attribute("request.spillable_count", len(spillable))
+
+        def _emit_terminal(
+            skip_reason: str,
+            *,
+            tokens_after: int,
+            spilled: int = 0,
+            errors: int = 0,
+        ) -> None:
+            span.set_attribute("request.tokens_after", tokens_after)
+            span.set_attribute("request.spilled_count", spilled)
+            span.set_attribute("request.spill_errors", errors)
+            span.set_attribute("request.spill_fired", spilled > 0)
+            span.set_attribute("request.skip_reason", skip_reason)
+            deps.runtime.current_request_tokens_after_spill = tokens_after
+
+        if total <= threshold:
+            _emit_terminal("below_threshold", tokens_after=total)
+            return messages
+        if not candidates:
+            _emit_terminal("no_candidates", tokens_after=total)
+            return messages
+        if not spillable:
+            _emit_terminal("all_spilled", tokens_after=total)
+            return messages
+
+        spilled_by_id, aggregate, spilled_count, spill_errors = _spill_largest_first(
+            spillable,
+            starting_tokens=total,
+            threshold=threshold,
+            tool_results_dir=deps.tool_results_dir,
+        )
+
+        if not spilled_by_id:
+            _emit_terminal(
+                "fallback_to_summarize" if aggregate > threshold else "all_spilled",
+                tokens_after=aggregate,
+                errors=spill_errors,
+            )
+            return messages
+
+        result = _rewrite_tool_returns(
+            messages,
+            len(messages),
+            replacement_for=lambda p: spilled_by_id.get(id(p)),
+        )
+        _emit_terminal(
+            "" if aggregate <= threshold else "fallback_to_summarize",
+            tokens_after=aggregate,
+            spilled=spilled_count,
+            errors=spill_errors,
+        )
+        return result
 
 
 def strip_all_tool_returns(messages: list[ModelMessage]) -> list[ModelMessage]:

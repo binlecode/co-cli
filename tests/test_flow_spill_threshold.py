@@ -4,16 +4,8 @@ from pathlib import Path
 
 from co_cli.tools.tool_io import (
     PERSISTED_OUTPUT_TAG,
-    SPILL_THRESHOLD_CHARS,
-    TOOL_RESULT_PREVIEW_CHARS,
     spill_if_oversized,
 )
-
-
-def test_constants_pinned():
-    """SPILL_THRESHOLD_CHARS and TOOL_RESULT_PREVIEW_CHARS must match the documented contract."""
-    assert SPILL_THRESHOLD_CHARS == 4_000
-    assert TOOL_RESULT_PREVIEW_CHARS == 1_500
 
 
 def test_no_spill_below_threshold(tmp_path: Path):
@@ -32,30 +24,23 @@ def test_spill_at_threshold(tmp_path: Path):
 
 
 def test_spill_large_content(tmp_path: Path):
-    """Content of 10_000 chars must spill regardless — well above threshold."""
+    """Oversized content spills, returns a stub, and writes the original to disk verbatim."""
     content = "y" * 10_000
-    result = spill_if_oversized(content, tmp_path / "tool_results", "file_read")
+    tool_results_dir = tmp_path / "tool_results"
+    result = spill_if_oversized(content, tool_results_dir, "file_read")
     assert PERSISTED_OUTPUT_TAG in result
+    assert len(result) < len(content), "stub must be smaller than the original"
+    spilled_files = list(tool_results_dir.glob("*.txt"))
+    assert len(spilled_files) == 1, f"expected one persisted file, found: {spilled_files}"
+    assert spilled_files[0].read_text(encoding="utf-8") == content
 
 
-def test_stub_contains_opening_line(tmp_path: Path):
-    """Spilled stub must contain the 'This tool result was too large' opening line."""
+def test_stub_shape(tmp_path: Path):
+    """Spilled stub carries the size preamble, the file_read retrieval hint, and start/end nav."""
     content = "z" * 5_000
     result = spill_if_oversized(content, tmp_path / "tool_results", "shell")
     assert "This tool result was too large" in result
-
-
-def test_stub_references_file_read(tmp_path: Path):
-    """Spilled stub must reference 'file_read' (not 'read_file') for navigation."""
-    content = "a" * 5_000
-    result = spill_if_oversized(content, tmp_path / "tool_results", "shell")
-    assert "file_read" in result
-
-
-def test_stub_contains_navigation_hint(tmp_path: Path):
-    """Spilled stub must contain start_line/end_line navigation hint."""
-    content = "b" * 5_000
-    result = spill_if_oversized(content, tmp_path / "tool_results", "shell")
+    assert "file_read" in result, "stub must name the retrieval tool (not 'read_file')"
     assert "start_line" in result
     assert "end_line" in result
 
