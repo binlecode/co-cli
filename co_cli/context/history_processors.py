@@ -372,6 +372,8 @@ def _spill_largest_first(
 def enforce_request_size(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
+    *,
+    _tracer: otel_trace.Tracer | None = None,
 ) -> list[ModelMessage]:
     """Force-spill the largest unspilled ``ToolReturnPart``s until the request fits.
 
@@ -402,12 +404,16 @@ def enforce_request_size(
     deps = ctx.deps
     threshold = deps.spill_threshold_tokens
 
-    with _TRACER.start_as_current_span("tool_budget.enforce_request_size") as span:
+    with (_tracer or _TRACER).start_as_current_span("tool_budget.enforce_request_size") as span:
         span.set_attribute("budget.context_window_tokens", deps.model_max_ctx)
         span.set_attribute("request.threshold_tokens", threshold)
 
-        total = max(estimate_message_tokens(messages), latest_response_input_tokens(messages))
-        span.set_attribute("request.tokens_before", total)
+        local_total = estimate_message_tokens(messages)
+        reported_total = latest_response_input_tokens(messages)
+        trigger = max(local_total, reported_total)
+        span.set_attribute("request.tokens_before", trigger)
+        span.set_attribute("request.local_tokens", local_total)
+        span.set_attribute("request.reported_tokens", reported_total)
 
         candidates = _collect_tool_return_candidates(messages)
         spillable = [p for p in candidates if not p.content.startswith(PERSISTED_OUTPUT_TAG)]
@@ -428,27 +434,34 @@ def enforce_request_size(
             span.set_attribute("request.skip_reason", skip_reason)
             deps.runtime.current_request_tokens_after_spill = tokens_after
 
-        if total <= threshold:
-            _emit_terminal("below_threshold", tokens_after=total)
+        if trigger <= threshold:
+            _emit_terminal("below_threshold", tokens_after=trigger)
             return messages
         if not candidates:
-            _emit_terminal("no_candidates", tokens_after=total)
+            _emit_terminal("no_candidates", tokens_after=trigger)
             return messages
         if not spillable:
-            _emit_terminal("all_spilled", tokens_after=total)
+            _emit_terminal("all_spilled", tokens_after=trigger)
             return messages
 
-        spilled_by_id, aggregate, spilled_count, spill_errors = _spill_largest_first(
+        # Loop accumulator runs in local space: delta subtractions are char-based,
+        # so starting_tokens must be the local estimate, not max(local, reported).
+        spilled_by_id, local_after, spilled_count, spill_errors = _spill_largest_first(
             spillable,
-            starting_tokens=total,
+            starting_tokens=local_total,
             threshold=threshold,
             tool_results_dir=deps.tool_results_dir,
         )
 
+        # Reported didn't change (the spilled tool returns were already seen by the
+        # provider in prior responses), so effective post-spill estimate is still
+        # max-shaped.
+        effective_after = max(local_after, reported_total)
+
         if not spilled_by_id:
             _emit_terminal(
-                "fallback_to_summarize" if aggregate > threshold else "all_spilled",
-                tokens_after=aggregate,
+                "fallback_to_summarize" if effective_after > threshold else "all_spilled",
+                tokens_after=effective_after,
                 errors=spill_errors,
             )
             return messages
@@ -459,8 +472,8 @@ def enforce_request_size(
             replacement_for=lambda p: spilled_by_id.get(id(p)),
         )
         _emit_terminal(
-            "" if aggregate <= threshold else "fallback_to_summarize",
-            tokens_after=aggregate,
+            "" if effective_after <= threshold else "fallback_to_summarize",
+            tokens_after=effective_after,
             spilled=spilled_count,
             errors=spill_errors,
         )

@@ -23,10 +23,9 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.context import history_processors as hp
 from co_cli.context.history_processors import enforce_request_size
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
@@ -248,13 +247,12 @@ async def test_already_spilled_excluded_but_counted(tmp_path: Path):
     assert PERSISTED_OUTPUT_TAG in returns["tc_fresh"]
 
 
-@pytest.mark.asyncio
-async def test_otel_span_emitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_otel_span_emitted(tmp_path: Path):
     """tool_budget.enforce_request_size span fires with required attributes."""
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(hp, "_TRACER", provider.get_tracer("co-cli.tool_budget"))
+    tracer = provider.get_tracer("co-cli.tool_budget")
 
     content = "z" * 32_000
     messages: list[ModelMessage] = [
@@ -264,7 +262,7 @@ async def test_otel_span_emitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ]
     deps = _make_deps(tmp_path, threshold_tokens=4_000)
 
-    enforce_request_size(_ctx(deps), messages)
+    enforce_request_size(_ctx(deps), messages, _tracer=tracer)
 
     spans = [
         s for s in exporter.get_finished_spans() if s.name == "tool_budget.enforce_request_size"
@@ -276,3 +274,95 @@ async def test_otel_span_emitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert attrs["request.spill_fired"] is True
     assert attrs["request.spilled_count"] == 1
     assert attrs["request.skip_reason"] == ""
+
+
+def test_high_reported_emits_local_and_reported_attrs(tmp_path: Path):
+    """Provider-reported tokens dominate local estimate: span emits both attributes.
+
+    When reported >> local and local content is small enough that spilling won't
+    close the gap, the processor punts to fallback_to_summarize while still
+    emitting the new local_tokens / reported_tokens span attributes.  This
+    verifies the trigger uses max(local, reported) and the loop accumulator
+    stays in local space — so no spill fires when local is already under
+    threshold even though reported is far above it.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("co-cli.tool_budget")
+
+    small_content = "result: " + "x" * 200
+    messages: list[ModelMessage] = [
+        _user_request("run"),
+        # Provider reports 20K input tokens; local content is far below threshold.
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="shell", args={}, tool_call_id="tc1")],
+            usage=RequestUsage(input_tokens=20_000),
+        ),
+        _tool_request("shell", "tc1", small_content),
+    ]
+    # threshold = 8K; local ≈ 50 tokens < threshold < reported = 20K.
+    # trigger fires (max(50, 20K) > 8K), but loop exits without spilling
+    # because local_total < threshold → effective_after = max(50, 20K) → fallback.
+    deps = _make_deps(tmp_path, threshold_tokens=8_000)
+
+    result = enforce_request_size(_ctx(deps), messages, _tracer=tracer)
+
+    # Content unchanged: local space had nothing to spill.
+    returns = _collect_returns(result)
+    assert not returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)
+
+    spans = [
+        s for s in exporter.get_finished_spans() if s.name == "tool_budget.enforce_request_size"
+    ]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes)
+    assert attrs["request.reported_tokens"] == 20_000
+    assert attrs["request.local_tokens"] < 8_000
+    assert attrs["request.spill_fired"] is False
+    assert attrs["request.skip_reason"] == "fallback_to_summarize"
+
+
+def test_high_reported_spill_uses_local_loop_space(tmp_path: Path):
+    """Loop accumulator stays in local space even when reported >> local.
+
+    Large local content (spill can close the local gap) + high reported tokens.
+    Spill fires because local_total > threshold. After spill the loop exits when
+    local_after <= threshold, then effective_after = max(local_after, reported)
+    is used for the span and skip_reason.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("co-cli.tool_budget")
+
+    # 40K chars ≈ 10K tokens > 8K threshold in local space.
+    big_content = "data: " + "y" * 40_000
+    messages: list[ModelMessage] = [
+        _user_request("run"),
+        # Provider also reports high tokens — reported > threshold too.
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="shell", args={}, tool_call_id="tc1")],
+            usage=RequestUsage(input_tokens=20_000),
+        ),
+        _tool_request("shell", "tc1", big_content),
+    ]
+    deps = _make_deps(tmp_path, threshold_tokens=8_000)
+
+    result = enforce_request_size(_ctx(deps), messages, _tracer=tracer)
+
+    # Spill fires on the large return.
+    returns = _collect_returns(result)
+    assert returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)
+
+    spans = [
+        s for s in exporter.get_finished_spans() if s.name == "tool_budget.enforce_request_size"
+    ]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes)
+    assert attrs["request.reported_tokens"] == 20_000
+    assert attrs["request.local_tokens"] > 8_000
+    assert attrs["request.spill_fired"] is True
+    # effective_after = max(local_after_small, 20K) still > 8K threshold →
+    # proactive will handle the remaining reported pressure.
+    assert attrs["request.skip_reason"] == "fallback_to_summarize"
