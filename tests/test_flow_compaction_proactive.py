@@ -13,7 +13,7 @@ import asyncio
 import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
@@ -265,4 +265,70 @@ async def test_successful_compaction_resets_skip_count() -> None:
     assert result is not messages
     assert deps.runtime.compaction_skip_count == 0, (
         "skip_count must reset to 0 after a successful summarization"
+    )
+
+
+@pytest.mark.asyncio
+async def test_thrash_counter_not_incremented_for_reported_driven_compaction() -> None:
+    """Reported-dominant trigger must not produce a false low-yield event.
+
+    When provider-reported input_tokens >> local char-based estimate, the
+    compaction marker preamble overhead causes local_after > local_before
+    even when the LLM produces a concise summary. With the old savings formula
+    (local_before as denominator), savings would be negative, tripping the thrash
+    counter for a legitimate compaction. The fix uses max(local, reported) as
+    the effective-before, so effective savings = (reported - local_after) / reported
+    which is clearly positive whenever local_after < reported.
+
+    Failure mode: two consecutive reported-driven compactions trip the anti-thrash
+    gate (proactive_thrash_window=2) and silence proactive compaction for the session.
+    """
+    settings = _tight_settings()
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_TIGHT_MODEL,
+        config=settings,
+        session=CoSessionState(),
+        model_max_ctx=200,
+    )
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
+
+    # 4-turn meaningful conversation — local estimate ~119 tokens, just above threshold
+    # of 100 (model_max_ctx=200, compaction_ratio=0.50). The last ModelResponse carries
+    # input_tokens=2000 (reported >> local), so token_count = max(119, 2000) = 2000.
+    #
+    # After compaction the marker preamble overhead pushes local_after > local_before
+    # (~522 tokens for the result vs ~119 for the input), making local savings negative.
+    # OLD savings formula: (119 - 522) / 119 ≈ -338%  → counter increments (bug).
+    # NEW savings formula: (2000 - 522) / 2000 ≈  74%  → counter stays at 0 (fixed).
+    messages = [
+        _req("Tell me about machine learning."),
+        _resp("Machine learning is a branch of AI that enables systems to learn from data."),
+        _req("What algorithms are commonly used?"),
+        _resp("Common algorithms include linear regression, decision trees, and neural networks."),
+        _req("How does gradient descent work?"),
+        _resp(
+            "Gradient descent minimizes loss by iteratively updating parameters "
+            "in the direction of the negative gradient."
+        ),
+        _req("What is overfitting?"),
+        ModelResponse(
+            parts=[
+                TextPart(
+                    content="Overfitting occurs when a model learns training data "
+                    "too well and fails to generalize to new data."
+                )
+            ],
+            usage=RequestUsage(input_tokens=2000),
+        ),
+    ]
+
+    await ensure_ollama_warm(TEST_LLM.model)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        result = await proactive_window_processor(ctx, messages)
+
+    assert result is not messages, "Compaction must have fired"
+    assert deps.runtime.compaction_applied_this_turn is True
+    assert deps.runtime.consecutive_low_yield_proactive_compactions == 0, (
+        "Reported-driven compaction must not increment the thrash counter"
     )

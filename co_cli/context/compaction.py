@@ -439,8 +439,9 @@ async def proactive_window_processor(
         else:
             reported = latest_response_input_tokens(messages)
 
-        # Trigger threshold uses max(local, reported) — biases toward earlier compaction.
-        # Savings ratio uses local-only on both sides — apples-to-apples yield comparison.
+        # Trigger uses max(local, reported) to bias toward earlier compaction.
+        # Savings uses the same effective-before so reported-driven triggers don't
+        # appear low-yield when local estimate is near the post-compaction value.
         tokens_before_local = estimate_message_tokens(messages)
         token_count = max(tokens_before_local, reported)
         token_threshold = int(budget * cfg.compaction_ratio)
@@ -522,21 +523,23 @@ async def proactive_window_processor(
                 return messages
 
             tokens_after_local = estimate_message_tokens(result)
+            tokens_before_effective = token_count  # max(local, reported) — same as trigger
+            tokens_after_effective = tokens_after_local  # provider hasn't seen result yet
             savings = (
-                (tokens_before_local - tokens_after_local) / tokens_before_local
-                if tokens_before_local > 0
+                (tokens_before_effective - tokens_after_effective) / tokens_before_effective
+                if tokens_before_effective > 0
                 else 0.0
             )
             log.debug(
                 "Compaction result: tokens %d→%d (saved %.0f%%) msgs %d→%d",
-                tokens_before_local,
-                tokens_after_local,
+                tokens_before_effective,
+                tokens_after_effective,
                 savings * 100,
                 len(messages),
                 len(result),
             )
             span.set_attribute("compaction.fired", True)
-            span.set_attribute("compaction.tokens_after", tokens_after_local)
+            span.set_attribute("compaction.tokens_after", tokens_after_effective)
             span.set_attribute("compaction.savings_pct", round(savings * 100, 1))
             span.set_attribute("compaction.msgs_after", len(result))
 
