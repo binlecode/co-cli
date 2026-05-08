@@ -138,7 +138,7 @@ producing the wrong result.
 
 ## 3. Tier 3 — applicable but lower priority
 
-### 3.1 `_NEVER_PARALLEL_TOOLS` — block interactive tools from parallel exec
+### 3.1 `_NEVER_PARALLEL_TOOLS` — block interactive tools from parallel exec — CLOSED
 
 - Hermes: `run_agent.py:303` (`frozenset({"clarify"})`)
 - What it does: when a model emits multiple tool calls and one is in
@@ -146,9 +146,15 @@ producing the wrong result.
   ThreadPoolExecutor.
 - Failure mode: interactive tools like `clarify` race with concurrent
   tools and the user sees the prompt flash before the other tools finish.
-- Co-cli status: missing. pydantic-ai's parallel execution mode is
-  configurable per-agent (`parallel_tool_call_execution_mode` attribute);
-  setting it to sequential when `clarify` is present is the equivalent.
+- Co-cli status: **closed**. `ToolInfo.is_concurrent_safe` on native tools
+  maps to `ToolDefinition.sequential` via `_build_native_toolset`
+  (`_native_toolset.py:148`). For MCP tools, `_SequentialMCPToolset` in
+  `co_cli/agent/mcp.py` wraps each MCP toolset and patches
+  `ToolDefinition.sequential = not info.is_concurrent_safe` in
+  `get_tools()` at step time, using a live reference to `tool_index`.
+  pydantic-ai's `get_parallel_execution_mode()` returns `'sequential'`
+  for the whole batch when any tool has `sequential=True`, so one
+  non-concurrent-safe tool in a mixed batch forces full serialization.
 
 ## 4. Patterns mentioned but not verified
 
@@ -200,9 +206,9 @@ by probability of hitting the failure × cost of the fix.
 
 ### 5.3 Low priority / observe-first
 
-7. **`_NEVER_PARALLEL_TOOLS` analog (3.1)** — depends on whether we
-   add interactive tools that race with concurrent tools. Today the
-   only candidate is `clarify`.
+7. ~~**`_NEVER_PARALLEL_TOOLS` analog (3.1)**~~ — closed; `_SequentialMCPToolset`
+   propagates `is_concurrent_safe` to `ToolDefinition.sequential` for MCP tools,
+   matching native tool behavior in `_native_toolset.py`.
 
 ## 6. Skip / not applicable
 

@@ -2,15 +2,40 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
-from pydantic_ai.toolsets import DeferredLoadingToolset
+from pydantic_ai import RunContext
+from pydantic_ai.toolsets import AbstractToolset, DeferredLoadingToolset, WrapperToolset
+from pydantic_ai.toolsets.abstract import ToolsetTool
 
 from co_cli.config.core import Settings
 from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _SequentialMCPToolset(WrapperToolset):
+    """Patches ToolDefinition.sequential from tool_index.is_concurrent_safe for MCP tools.
+
+    Holds a mutable reference to tool_index — populated by discover_mcp_tools()
+    before the first get_tools() call, so the patch is always current at step time.
+    """
+
+    tool_index: dict[str, ToolInfo]
+
+    async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
+        tools = await self.wrapped.get_tools(ctx)
+        return {
+            name: replace(
+                tool,
+                tool_def=replace(tool.tool_def, sequential=not info.is_concurrent_safe),
+            )
+            if (info := self.tool_index.get(name)) is not None
+            else tool
+            for name, tool in tools.items()
+        }
 
 
 @dataclass(frozen=True)
@@ -23,7 +48,7 @@ class MCPToolsetEntry:
     reads them without inspecting wrapper topology.
     """
 
-    toolset: DeferredLoadingToolset
+    toolset: AbstractToolset
     server: Any  # MCPServer subclass — lazily imported; avoids top-level pydantic_ai.mcp import
     approval: bool
     prefix: str

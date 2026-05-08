@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pydantic_ai import Agent, DeferredToolRequests
@@ -43,10 +43,20 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
     MCP tool_index entries are added later by discover_mcp_tools().
     """
     from co_cli.agent._native_toolset import _approval_resume_filter, _build_native_toolset
-    from co_cli.agent.mcp import _build_mcp_toolsets
+    from co_cli.agent.mcp import _build_mcp_toolsets, _SequentialMCPToolset
 
     native_toolset, native_index = _build_native_toolset(config)
     mcp_entries = _build_mcp_toolsets(config)
+
+    tool_index: dict[str, ToolInfo] = dict(native_index)
+
+    # Wrap each MCP toolset so is_concurrent_safe propagates to ToolDefinition.sequential,
+    # matching native tool behavior. tool_index is a mutable ref — discover_mcp_tools()
+    # populates it before the first get_tools() call at agent step time.
+    mcp_entries = [
+        replace(entry, toolset=_SequentialMCPToolset(entry.toolset, tool_index))
+        for entry in mcp_entries
+    ]
 
     combined = CombinedToolset([native_toolset, *(e.toolset for e in mcp_entries)])
     filtered = combined.filtered(_approval_resume_filter)
@@ -54,7 +64,7 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
     return ToolRegistry(
         toolset=filtered,
         mcp_toolsets=mcp_entries,
-        tool_index=native_index,
+        tool_index=tool_index,
     )
 
 
