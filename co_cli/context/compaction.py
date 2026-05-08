@@ -10,7 +10,7 @@ Submodule map:
     _compaction_boundaries  — TurnGroup, group_by_turn, plan_compaction_boundaries
     _compaction_markers     — static/summary/todo markers, enrichment context
     history_processors     — dedup_tool_results, evict_old_tool_results,
-                             enforce_turn_budget, sanitize_surrogate_codepoints
+                             sanitize_surrogate_codepoints
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ from co_cli.context.history_processors import (
     COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
     evict_old_tool_results,
+    strip_all_tool_returns,
 )
 from co_cli.context.summarization import (
     estimate_message_tokens,
@@ -73,7 +74,6 @@ __all__ = [
     "build_compaction_marker",
     "build_todo_snapshot",
     "dedup_tool_results",
-    "emergency_recover_overflow_history",
     "estimate_message_tokens",
     "evict_old_tool_results",
     "find_first_run_end",
@@ -99,13 +99,32 @@ log = logging.getLogger(__name__)
 def _reset_thrash_state(ctx: RunContext[CoDeps]) -> None:
     """Reset proactive-compaction thrash counters after a forced overflow recovery.
 
-    Both reactive recovery paths (planner-based and emergency structural) reset
-    these unconditionally — overflow already proves the system needed to compact,
-    so crediting it as a clean resync prevents the gate from staying tripped and
-    suppressing the next proactive run.  The hint re-arms with the counter per
-    the banner-text contract.
+    Recovery paths reset these unconditionally — overflow already proves the
+    system needed to compact, so crediting it as a clean resync prevents the
+    gate from staying tripped and suppressing the next proactive run. The hint
+    re-arms with the counter per the banner-text contract. Not called from
+    ``apply_compaction``: proactive callers must NOT reset on every successful
+    compaction (the thrash gate is there to suppress repeated low-yield runs).
     """
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+
+
+def _mark_compaction_applied(ctx: RunContext[CoDeps], result: list[ModelMessage]) -> None:
+    """Pin compaction-applied runtime state in one place.
+
+    Sets ``compaction_applied_this_turn``, ``post_compaction_token_estimate``,
+    and ``message_count_at_last_compaction``. Called by both ``apply_compaction``
+    and the strip-only-fits path of ``recover_overflow_history`` so the field
+    set is locked to a single write site and cannot drift between the two paths.
+
+    Does NOT call ``_reset_thrash_state`` — that's recovery-specific (see its
+    docstring); folding it in would silently change the proactive sliding-window
+    path's semantics. Does NOT touch ``previous_compaction_summary`` — that is
+    summarizer-success state, owned by ``apply_compaction``'s summary path.
+    """
+    ctx.deps.runtime.compaction_applied_this_turn = True
+    ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
+    ctx.deps.runtime.message_count_at_last_compaction = len(result)
 
 
 _COMPACTION_BREAKER_TRIP: int = 3
@@ -278,91 +297,55 @@ async def apply_compaction(
         *_preserve_search_tool_breadcrumbs(dropped),
         *messages[tail_start:],
     ]
-    ctx.deps.runtime.compaction_applied_this_turn = True
-    ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
-    ctx.deps.runtime.message_count_at_last_compaction = len(result)
+    _mark_compaction_applied(ctx, result)
     return result, summary_text
-
-
-def _effective_token_count(messages: list[ModelMessage], reported: int) -> int:
-    """Token count for threshold checks: max of local estimate and provider-reported.
-
-    Two signals, neither fully trustworthy: the local char-based estimate
-    can drift from provider tokenization, and the provider-reported count
-    lags by a turn. Taking the max biases toward earlier compaction — safer
-    than under-counting.
-    """
-    return max(estimate_message_tokens(messages), reported)
 
 
 async def recover_overflow_history(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage] | None:
-    """Recover from provider context overflow via the shared boundary planner.
+    """Single-tier overflow recovery: strip-then-summarize.
 
-    Calls ``plan_compaction_boundaries`` with config-sourced tail settings.
-    The last turn group is always preserved via ``_MIN_RETAINED_TURN_GROUPS=1``.
-    Returns None when no compaction boundary exists — caller should fall back to
-    ``emergency_recover_overflow_history``.
+    Step 1: strip every ToolReturnPart to a per-tool semantic marker (no
+            ``COMPACTABLE_TOOLS`` filter, no recency cap, no boundary). If the
+            stripped history fits the budget, return it directly — no LLM call.
+
+    Step 2: run ``plan_compaction_boundaries`` + ``apply_compaction`` on the
+            stripped history. Returns None when the planner cannot find valid
+            bounds (e.g. only one turn group total) — caller (run_turn) drives
+            the terminal error path.
+
+    Replaces the previous two-tier cascade. The strip primitive is more
+    granular than the structural emergency tier was: it preserves message
+    count and replaces tool returns with named per-tool markers (intent +
+    outcome) instead of dropping all middle groups to a single static marker.
     """
+    if not messages:
+        return None
+
+    stripped = strip_all_tool_returns(messages)
+
     budget = resolve_compaction_budget(ctx.deps)
+    if estimate_message_tokens(stripped) <= budget:
+        _mark_compaction_applied(ctx, stripped)
+        _reset_thrash_state(ctx)
+        return stripped
+
     cfg = ctx.deps.config.compaction
-    bounds = plan_compaction_boundaries(
-        messages,
-        budget,
-        cfg.tail_fraction,
-    )
+    bounds = plan_compaction_boundaries(stripped, budget, cfg.tail_fraction)
     if bounds is None:
         log.warning(
-            "Compaction: overflow recovery boundary planning returned None. "
-            "budget=%d tail_fraction=%.2f token_count=%d — caller must try emergency fallback.",
+            "Compaction: overflow recovery boundary planning returned None after strip. "
+            "budget=%d tail_fraction=%.2f token_count=%d — terminal.",
             budget,
             cfg.tail_fraction,
-            _effective_token_count(messages, latest_response_input_tokens(messages)),
+            estimate_message_tokens(stripped),
         )
         return None
 
-    result, _ = await apply_compaction(ctx, messages, bounds, announce=False)
+    result, _ = await apply_compaction(ctx, stripped, bounds, announce=False)
     _reset_thrash_state(ctx)
-    return result
-
-
-async def emergency_recover_overflow_history(
-    ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-) -> list[ModelMessage] | None:
-    """Structural last-resort overflow recovery — no planner, no LLM.
-
-    Drops all middle turn groups, keeping first + static marker + last. Preserves
-    the non-LLM continuity state that the planner-based path preserves: the todo
-    snapshot from session state and search_tools breadcrumbs from the dropped
-    range. Used when ``recover_overflow_history`` returns None despite a provider
-    overflow rejection (estimator underestimate; the planner sees no work to do).
-    Returns None when ``len(groups) <= 2`` — the pre-existing structural
-    first-turn-overflow limit.
-    """
-    groups = group_by_turn(messages)
-    if len(groups) <= 2:
-        return None
-    dropped = groups_to_messages(groups[1:-1])
-    todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
-    result = [
-        *groups_to_messages([groups[0]]),
-        static_marker(len(dropped)),
-        *([todo_snapshot] if todo_snapshot is not None else []),
-        *_preserve_search_tool_breadcrumbs(dropped),
-        *groups_to_messages([groups[-1]]),
-    ]
-    ctx.deps.runtime.compaction_applied_this_turn = True
-    ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
-    ctx.deps.runtime.message_count_at_last_compaction = len(result)
-    _reset_thrash_state(ctx)
-    log.warning(
-        "Emergency overflow recovery: planner returned None; dropped all middle groups "
-        "(len(groups)=%d).",
-        len(groups),
-    )
     return result
 
 
@@ -514,8 +497,8 @@ async def proactive_window_processor(
 
             span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
             span.set_attribute(
-                "compaction.turn_aggregate_tokens_after_spill",
-                ctx.deps.runtime.current_turn_aggregate_tokens_after_spill or -1,
+                "compaction.request_aggregate_tokens_after_spill",
+                ctx.deps.runtime.current_request_aggregate_tokens_after_spill or -1,
             )
 
             if token_count <= token_threshold:

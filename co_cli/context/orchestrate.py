@@ -71,7 +71,7 @@ assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for ret
 
 from co_cli.config.core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
-from co_cli.context.compaction import is_context_overflow
+from co_cli.context.compaction import is_context_overflow, recover_overflow_history
 from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
@@ -590,32 +590,6 @@ def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessag
     ]
 
 
-async def _attempt_overflow_recovery(
-    recovery_ctx: RunContext[CoDeps],
-    recovery_history: list[ModelMessage],
-) -> tuple[list[ModelMessage] | None, str]:
-    """Normal planner-based compaction, else structural emergency fallback.
-
-    Returns ``(compacted, status_msg)``. ``compacted is None`` signals terminal
-    overflow — happens only when ``len(groups) <= 2`` (first-turn structural limit).
-    """
-    from co_cli.context.compaction import (
-        emergency_recover_overflow_history,
-        recover_overflow_history,
-    )
-
-    compacted = await recover_overflow_history(recovery_ctx, recovery_history)
-    if compacted is not None:
-        return compacted, "Context overflow — compacting and retrying..."
-
-    compacted = await emergency_recover_overflow_history(recovery_ctx, recovery_history)
-    if compacted is not None:
-        return compacted, "Context overflow — emergency compaction (first + last turn only)."
-
-    return None, ""
-
-
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
@@ -703,16 +677,15 @@ async def run_turn(
                                 usage=turn_state.latest_usage or RunUsage(),
                             )
                             recovery_history = _history_with_pending_user_input(turn_state)
-                            compacted, status_msg = await _attempt_overflow_recovery(
-                                recovery_ctx,
-                                recovery_history,
+                            compacted = await recover_overflow_history(
+                                recovery_ctx, recovery_history
                             )
                             if compacted is not None:
                                 turn_state.current_history = compacted
                                 turn_state.current_input = None
-                                frontend.on_status(status_msg)
+                                frontend.on_status("Context overflow — compacting and retrying...")
                                 continue
-                        # Terminal: either second overflow after retry, or both attempts returned None.
+                        # Terminal: either second overflow after retry, or recovery returned None.
                         frontend.on_status("Context overflow — unrecoverable.")
                         turn_state.outcome = "error"
                         return _build_error_turn_result(turn_state)

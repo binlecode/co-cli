@@ -1,14 +1,20 @@
 """Pure history transformers registered via ``Agent(history_processors=[...])``.
 
 Each processor runs before every model request and returns a transformed
-message list. None of them mutate ``CoDeps`` or the original
-``ModelMessage`` objects — ``_rewrite_tool_returns`` rebuilds only the
-messages where at least one part changed.
+message list. None of them mutate ``CoDeps`` or the original ``ModelMessage``
+objects — ``_rewrite_tool_returns`` rebuilds only the messages where at least
+one part changed.
 
 Registered processors:
-    dedup_tool_results     — collapses identical-content tool returns to back-references
-    evict_old_tool_results   — content-clears compactable tool results by recency
-    enforce_turn_budget       — force-spill tool returns in current user turn to fit tail budget
+    dedup_tool_results          — collapses identical-content tool returns to back-references
+    evict_old_tool_results      — content-clears compactable tool results by recency
+    sanitize_surrogate_codepoints — replaces lone Unicode surrogates with U+FFFD
+
+Recovery helpers (not registered as processors):
+    strip_all_tool_returns      — collapses every tool return to a semantic marker;
+                                  used by overflow recovery to cut tokens before retry.
+                                  Differs from evict_old_tool_results: no COMPACTABLE_TOOLS
+                                  filter, no recency cap, no boundary protection.
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ from co_cli.context._dedup_tool_results import (
     dedup_key,
     is_dedup_candidate,
 )
-from co_cli.context._tool_result_markers import semantic_marker
+from co_cli.context._tool_result_markers import is_cleared_marker, semantic_marker
 from co_cli.deps import CoDeps
 from co_cli.tools.categories import COMPACTABLE_TOOLS
 
@@ -245,9 +251,16 @@ def _build_cleared_part(
     """Construct the replacement ToolReturnPart for an older-than-5 compactable return.
 
     Non-string content falls back to the static placeholder — markers need a
-    readable content string for char/line/outcome heuristics.
+    readable content string for char/line/outcome heuristics. Already-marked
+    string content is returned unchanged so re-running over a previously
+    stripped/evicted history does not degrade the size signal (e.g. EVICT
+    fires earlier in the same turn, then recovery strip would otherwise
+    re-mark ``[file_read] /path (full, 8,432 chars)`` based on the marker
+    string itself, losing the original char count).
     """
     content = part.content
+    if isinstance(content, str) and is_cleared_marker(content):
+        return part
     if not isinstance(content, str):
         replacement = _CLEARED_PLACEHOLDER
     else:
@@ -295,123 +308,26 @@ def evict_old_tool_results(
     return _rewrite_tool_returns(messages, boundary, replacement_for=replacement_for)
 
 
-def enforce_turn_budget(
-    ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-) -> list[ModelMessage]:
-    """Force-spill tool returns in the current user turn until aggregate fits the tail budget.
+def strip_all_tool_returns(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """Replace every ToolReturnPart.content with a semantic marker.
 
-    Aggregates token count for all tool returns since the last user turn boundary
-    (spans all model iterations within that user turn). If over
-    deps.turn_aggregate_threshold_tokens:
-      - Sorts non-spilled candidates largest-first and force-spills until within budget.
-      - If all candidates are already spilled, bails out (returns messages unchanged).
-    Always emits a tool_budget.enforce_turn_aggregate span.
+    Differs from ``evict_old_tool_results`` in three ways: no
+    ``COMPACTABLE_TOOLS`` filter, no recency cap, no boundary protection.
+    Every tool return — compactable and non-compactable, including writes,
+    approvals, and memory ops — is reduced to a one-line marker. Tool-call
+    pairing is preserved by construction (only ``.content`` is rewritten,
+    ``tool_name`` and ``tool_call_id`` survive).
+
+    Used exclusively by overflow recovery, where preserving signal in
+    non-compactable returns is less valuable than recovering the turn.
+    Cheap: pure, no LLM, no I/O.
     """
-    from opentelemetry import trace as otel_trace
+    call_id_to_args = _build_call_id_to_args(messages)
 
-    from co_cli.context.tokens import CHARS_PER_TOKEN
-    from co_cli.tools.tool_io import (
-        PERSISTED_OUTPUT_TAG,
-        spill_if_oversized,
-    )
+    def replacement_for(part: ToolReturnPart) -> ToolReturnPart | None:
+        return _build_cleared_part(part, call_id_to_args)
 
-    _tracer = otel_trace.get_tracer("co-cli.tool_budget")
-    threshold = ctx.deps.turn_aggregate_threshold_tokens
-
-    # Collect all ToolReturnParts from the current user turn (everything after last UserPromptPart)
-    boundary = _find_last_turn_start(messages)
-    turn_messages = messages[boundary:] if boundary else messages
-
-    # Gather (message_idx_in_turn, part_idx, part) for all ToolReturnParts in the turn
-    turn_tool_returns: list[tuple[int, int, ToolReturnPart]] = []
-    for msg_idx, msg in enumerate(turn_messages):
-        if not isinstance(msg, ModelRequest):
-            continue
-        for part_idx, part in enumerate(msg.parts):
-            if isinstance(part, ToolReturnPart) and isinstance(part.content, str):
-                turn_tool_returns.append((msg_idx, part_idx, part))
-
-    # Compute aggregate tokens
-    tokens_before = sum(
-        len(p.content) // CHARS_PER_TOKEN
-        for _, _, p in turn_tool_returns
-        if isinstance(p.content, str)
-    )
-
-    with _tracer.start_as_current_span("tool_budget.enforce_turn_aggregate") as span:
-        span.set_attribute("budget.context_window_tokens", ctx.deps.model_max_ctx)
-        span.set_attribute("turn_aggregate.threshold_tokens", threshold)
-        span.set_attribute("turn_aggregate.tokens_before", tokens_before)
-        span.set_attribute("turn_aggregate.candidates_count", len(turn_tool_returns))
-
-        if tokens_before <= threshold:
-            span.set_attribute("turn_aggregate.tokens_after", tokens_before)
-            span.set_attribute("turn_aggregate.spilled_count", 0)
-            span.set_attribute("turn_aggregate.spill_fired", False)
-            span.set_attribute("turn_aggregate.skip_reason", "below_threshold")
-            return messages
-
-        # Identify non-spilled candidates (content doesn't start with PERSISTED_OUTPUT_TAG)
-        candidates = [
-            (msg_idx, part_idx, part)
-            for msg_idx, part_idx, part in turn_tool_returns
-            if isinstance(part.content, str) and not part.content.startswith(PERSISTED_OUTPUT_TAG)
-        ]
-
-        if not candidates:
-            span.set_attribute("turn_aggregate.tokens_after", tokens_before)
-            span.set_attribute("turn_aggregate.spilled_count", 0)
-            span.set_attribute("turn_aggregate.spill_fired", False)
-            span.set_attribute("turn_aggregate.skip_reason", "no_candidates_all_spilled")
-            return messages
-
-        # Sort largest-first by content length
-        candidates.sort(key=lambda t: len(t[2].content), reverse=True)
-
-        # Build mutable copy of turn_messages for rewriting
-        rewritten = list(turn_messages)
-        aggregate_tokens = tokens_before
-        spilled_count = 0
-
-        for msg_idx, part_idx, part in candidates:
-            if aggregate_tokens <= threshold:
-                break
-            msg = rewritten[msg_idx]
-            if not isinstance(msg, ModelRequest):
-                continue
-            old_content = part.content
-            new_content = spill_if_oversized(
-                old_content,
-                ctx.deps.tool_results_dir,
-                part.tool_name,
-                force=True,
-            )
-            if new_content == old_content:
-                continue
-
-            new_part = ToolReturnPart(
-                tool_name=part.tool_name,
-                content=new_content,
-                tool_call_id=part.tool_call_id,
-            )
-            new_parts = list(msg.parts)
-            new_parts[part_idx] = new_part
-            rewritten[msg_idx] = replace(msg, parts=new_parts)
-
-            old_tokens = len(old_content) // CHARS_PER_TOKEN
-            new_tokens = len(new_content) // CHARS_PER_TOKEN
-            aggregate_tokens -= old_tokens - new_tokens
-            spilled_count += 1
-
-        ctx.deps.runtime.current_turn_aggregate_tokens_after_spill = aggregate_tokens
-
-        span.set_attribute("turn_aggregate.tokens_after", aggregate_tokens)
-        span.set_attribute("turn_aggregate.spilled_count", spilled_count)
-        span.set_attribute("turn_aggregate.spill_fired", True)
-        span.set_attribute("turn_aggregate.skip_reason", "")
-
-        return [*messages[:boundary], *rewritten] if boundary else rewritten
+    return _rewrite_tool_returns(messages, len(messages), replacement_for=replacement_for)
 
 
 # ---------------------------------------------------------------------------

@@ -19,8 +19,12 @@ def test_tool_budget_resolved_span_emits_all_attrs():
 
     model_max_ctx = 32768
     tail_fraction = 0.8
+    request_aggregate_threshold_tokens = int(tail_fraction * model_max_ctx)
     _emit_tool_budget_span(
-        model_max_ctx=model_max_ctx, tail_fraction=tail_fraction, _tracer=tracer
+        model_max_ctx=model_max_ctx,
+        tail_fraction=tail_fraction,
+        request_aggregate_threshold_tokens=request_aggregate_threshold_tokens,
+        _tracer=tracer,
     )
 
     spans = exporter.get_finished_spans()
@@ -32,7 +36,7 @@ def test_tool_budget_resolved_span_emits_all_attrs():
     assert attrs["budget.tail_fraction"] == tail_fraction
     assert attrs["budget.tool_call_limit"] == MAX_TOOL_CALLS_PER_MODEL_TURN
     assert attrs["budget.spill_threshold_chars"] == SPILL_THRESHOLD_CHARS
-    assert attrs["budget.turn_aggregate_threshold_tokens"] == int(tail_fraction * model_max_ctx)
+    assert attrs["budget.request_aggregate_threshold_tokens"] == request_aggregate_threshold_tokens
 
 
 def test_ollama_num_ctx_floor_raises_when_undercut():

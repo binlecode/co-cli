@@ -35,6 +35,7 @@ from co_cli.memory.artifact import (
 from co_cli.memory.decay import find_decay_candidates
 from co_cli.memory.service import reindex, save_artifact
 from co_cli.memory.similarity import token_jaccard
+from co_cli.tools.lifecycle import CoToolLifecycle
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
@@ -115,6 +116,7 @@ def build_dream_miner_agent(memory_create: Any) -> Agent[CoDeps, str]:
     return Agent(
         instructions=_DREAM_PROMPT_PATH.read_text(encoding="utf-8").strip(),
         tools=[memory_create],
+        capabilities=[CoToolLifecycle()],
     )
 
 

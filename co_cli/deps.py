@@ -151,8 +151,8 @@ class CoRuntimeState:
     # Per-model-turn brake counter; resets implicitly on ctx.run_step transition.
     tool_call_limit_run_step: int = -1
     tool_calls_in_model_turn: int = 0
-    # Written by enforce_turn_budget after force-spill; read by compaction.proactive_check.
-    current_turn_aggregate_tokens_after_spill: int | None = None
+    # Written by the L2 request-budget hook after force-spill; read by compaction.proactive_check.
+    current_request_aggregate_tokens_after_spill: int | None = None
     # Circuit breaker for inline compaction summarisation.
     compaction_skip_count: int = 0
     turn_usage: RunUsage | None = None
@@ -191,7 +191,7 @@ class CoRuntimeState:
         self.status_callback = None
         self.resume_tool_names = None
         self.compaction_applied_this_turn = False
-        self.current_turn_aggregate_tokens_after_spill = None
+        self.current_request_aggregate_tokens_after_spill = None
 
 
 # Path defaults — all user-global; resolved from USER_DIR constants at runtime
@@ -250,8 +250,8 @@ class CoDeps:
     # Model capability strings probed at bootstrap (e.g. ["completion", "tools", "thinking"]).
     model_capabilities: list[str] = field(default_factory=list)
     # Bootstrap-cached: int(tail_fraction x model_max_ctx). Immutable after bootstrap.
-    # Read by enforce_turn_budget; never recomputed at read sites.
-    turn_aggregate_threshold_tokens: int = 0
+    # Read by the L2 request-budget hook; never recomputed at read sites.
+    request_aggregate_threshold_tokens: int = 0
 
     # Runtime degradation state — mutated during bootstrap, read-only after
     degradations: dict[str, str] = field(default_factory=dict)
@@ -320,6 +320,6 @@ def fork_deps(base: CoDeps) -> CoDeps:
         tool_results_dir=base.tool_results_dir,
         model_max_ctx=base.model_max_ctx,
         model_capabilities=base.model_capabilities,
-        turn_aggregate_threshold_tokens=base.turn_aggregate_threshold_tokens,
+        request_aggregate_threshold_tokens=base.request_aggregate_threshold_tokens,
         degradations=base.degradations,
     )

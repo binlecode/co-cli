@@ -4,6 +4,8 @@
 **Verdict: FAIL** — 6/13 steps passed  
 **Raw output:** `tmp/eval_compaction_quality_<timestamp>.log`
 
+> **Naming note (added 2026-05-08):** the processor `truncate_tool_results` referenced below has since been split into two separate history processors — `dedup_tool_results` (back-reference collapse) and `evict_old_tool_results` (5-most-recent-per-tool retention). See `docs/specs/compaction.md` §1 for the current pipeline. Body content is preserved as a historical record of the eval state at the date above.
+
 ---
 
 ## Summary

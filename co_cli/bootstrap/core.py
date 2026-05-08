@@ -259,6 +259,7 @@ def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
 def _emit_tool_budget_span(
     model_max_ctx: int,
     tail_fraction: float,
+    request_aggregate_threshold_tokens: int,
     *,
     _tracer: trace.Tracer | None = None,
 ) -> None:
@@ -267,13 +268,14 @@ def _emit_tool_budget_span(
 
     if _tracer is None:
         _tracer = trace.get_tracer("co-cli.tool_budget")
-    turn_aggregate = int(tail_fraction * model_max_ctx)
     with _tracer.start_as_current_span("tool_budget.resolved") as span:
         span.set_attribute("budget.context_window_tokens", model_max_ctx)
         span.set_attribute("budget.tail_fraction", tail_fraction)
         span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
         span.set_attribute("budget.spill_threshold_chars", SPILL_THRESHOLD_CHARS)
-        span.set_attribute("budget.turn_aggregate_threshold_tokens", turn_aggregate)
+        span.set_attribute(
+            "budget.request_aggregate_threshold_tokens", request_aggregate_threshold_tokens
+        )
 
 
 async def create_deps(
@@ -307,21 +309,25 @@ async def create_deps(
     # Step 2b: resolve runtime context budget (Ollama probe or configured ceiling).
     model_max_ctx, model_capabilities = _probe_model_ctx(config)
 
-    # Cache turn-aggregate budget for L2 aggregate spill processor.
+    # Cache request-aggregate budget for the L2 aggregate spill processor.
     from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     tail_fraction = config.compaction.tail_fraction
-    turn_aggregate_threshold_tokens = int(tail_fraction * model_max_ctx)
+    request_aggregate_threshold_tokens = int(tail_fraction * model_max_ctx)
 
-    _emit_tool_budget_span(model_max_ctx=model_max_ctx, tail_fraction=tail_fraction)
+    _emit_tool_budget_span(
+        model_max_ctx=model_max_ctx,
+        tail_fraction=tail_fraction,
+        request_aggregate_threshold_tokens=request_aggregate_threshold_tokens,
+    )
 
     logger.info(
-        "tool-budget bounds: context_window=%d tool_call_limit=%d spill=%dc turn_aggregate=%d tokens",
+        "tool-budget bounds: context_window=%d tool_call_limit=%d spill=%dc request_aggregate=%d tokens",
         model_max_ctx,
         MAX_TOOL_CALLS_PER_MODEL_TURN,
         SPILL_THRESHOLD_CHARS,
-        turn_aggregate_threshold_tokens,
+        request_aggregate_threshold_tokens,
     )
 
     # Step 3: build registries
@@ -394,7 +400,7 @@ async def create_deps(
         runtime=runtime,
         model_max_ctx=model_max_ctx,
         model_capabilities=model_capabilities,
-        turn_aggregate_threshold_tokens=turn_aggregate_threshold_tokens,
+        request_aggregate_threshold_tokens=request_aggregate_threshold_tokens,
         degradations=degradations,
         **paths,
     )

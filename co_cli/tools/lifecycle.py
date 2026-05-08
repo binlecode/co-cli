@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from opentelemetry import trace as otel_trace
-from pydantic_ai import CallToolsNode, RunContext
+from pydantic_ai import CallToolsNode, ModelRequestNode, RunContext
 from pydantic_ai.capabilities import (
     AbstractCapability,
     AgentNode,
@@ -23,6 +23,7 @@ from pydantic_ai.tools import ToolDefinition
 
 from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
 from co_cli.deps import CoDeps
+from co_cli.tools._request_budget import _enforce_request_budget
 from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,8 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     Hooks:
     - before_node_run: dedup duplicate tool calls within one ModelResponse
     - wrap_tool_execute: per-call cap brake (N times per model turn)
-    - after_node_run: per-turn aggregate span after all tool calls complete
+    - after_node_run: tool-call-limit span (L0) + request-budget enforcement (L2)
+      on the upcoming ModelRequest — see ``_enforce_request_budget``.
     - before_tool_validate: syntactic JSON repair for malformed model output
     - before_tool_execute: path normalization for file tools
     - after_tool_execute: span enrichment + audit logging
@@ -217,6 +219,11 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
             span.set_attribute("tool_calls.allowed", allowed)
             span.set_attribute("tool_calls.rejected", rejected)
             span.set_attribute("tool_calls.limit_exceeded", rejected > 0)
+
+        if isinstance(result, ModelRequestNode):
+            new_parts = _enforce_request_budget(list(result.request.parts), ctx.deps, self._tracer)
+            if new_parts is not None:
+                result.request = replace(result.request, parts=new_parts)
 
         return result
 

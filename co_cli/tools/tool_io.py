@@ -82,7 +82,7 @@ def spill_if_oversized(
         tool_results_dir: Directory for persisted tool result files.
         tool_name: Name of the tool that produced the result.
         force: When True, bypasses the SPILL_THRESHOLD_CHARS check (used by
-            enforce_turn_budget for aggregate budget enforcement).
+            the L2 round-budget hook for aggregate budget enforcement).
 
     Returns:
         The original content if under threshold, or a preview placeholder.

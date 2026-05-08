@@ -21,7 +21,7 @@ flowchart TD
 
     subgraph PerRequest["per model request"]
         Dynamic["@agent.instructions callbacks"]
-        Processors["history processors 1..5"]
+        Processors["history processors 1..4"]
         Model[model request]
         Dynamic --> Processors --> Model
     end
@@ -72,13 +72,16 @@ New dynamic surfaces go in the tail. Audit every new `@agent.instructions` regis
 
 ### 2.4 History Processors And Dynamic Instructions
 
-Three pure-transformer processors run in this exact order (registered in `build_agent()`):
+Pure-transformer processors run in this exact order (registered in `build_agent()`):
 
 | Processor | Behavior |
 | --- | --- |
-| `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
-| `enforce_turn_budget` | spills largest non-persisted `ToolReturnPart`s in the current batch when aggregate size exceeds `deps.turn_aggregate_threshold_tokens`; fails open |
+| `dedup_tool_results` | collapses identical `(tool_name, content-hash)` returns in the pre-tail region into back-references pointing at the latest `tool_call_id` |
+| `evict_old_tool_results` | content-clears `COMPACTABLE_TOOLS` returns older than the 5-most-recent per tool name; protects last user turn |
 | `proactive_window_processor` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full design in [compaction.md](compaction.md) |
+| `sanitize_surrogate_codepoints` | replaces lone Unicode surrogates (U+D800–U+DFFF) with U+FFFD across all parts; guards against `UnicodeEncodeError` |
+
+The L2 aggregate request-budget (`_enforce_request_budget`) is wired as a capability hook on `CoToolLifecycle.after_node_run`, not a history processor — it fires on `CallToolsNode` exit, on the upcoming `ModelRequest`'s parts. See [compaction.md](compaction.md) §2.4.
 
 Two dynamic instruction functions are registered via `agent.instructions()` and run before every model request:
 
@@ -88,7 +91,8 @@ Two dynamic instruction functions are registered via `agent.instructions()` and 
 | `current_time_prompt` | returns current date/time string at tail position — ephemeral grounding just before the model sees the user turn; keeps Block 0 cache-stable |
 
 **Ordering rationale:**
-- **#1–2 before #3**: truncation runs before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set, todos) to compensate.
+- **#1–2 before #3**: dedup and eviction run before summarization. The summarizer sees a smaller, deduped history and receives rich side-channel context (file working set, todos) to compensate.
+- **#4 last**: surrogate sanitization runs after `proactive_window_processor` so the summary text it produces is also swept.
 - **`safety_prompt` before `current_time_prompt`**: structural behavioral guidance sits above ephemeral grounding. `current_time_prompt` is at the tail — the last thing the model sees before the user turn — because ephemeral grounding is most effective close to the user message.
 - **Dynamic instructions before model request**: these functions run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
 

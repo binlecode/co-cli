@@ -79,7 +79,7 @@ output is silently lost", not just "annoying".
 These patterns recover from output drift instead of crashing or silently
 producing the wrong result.
 
-### 2.1 `_repair_tool_call` — fuzzy tool-name normalization
+### 2.1 `_repair_tool_call` — fuzzy tool-name normalization — DEFERRED
 
 - Hermes: `run_agent.py:5169-5240`
 - What it does: when `tool_calls.function.name` does not match the
@@ -91,7 +91,8 @@ producing the wrong result.
 - Failure mode: models trained on class-style tool names emit
   `TodoTool` when the registry has `todo`. Without repair, agent loops on
   "Unknown tool" or aborts.
-- Co-cli status: missing. Adding the repair is cheap insurance.
+- Co-cli status: **deferred**. Only relevant for models that emit class-style
+  names; defer until a production run surfaces the failure.
 
 ### 2.2 `_deduplicate_tool_calls` — strip duplicate tool calls — CLOSED
 
@@ -108,7 +109,7 @@ producing the wrong result.
   `(tool_name, args)` matches an earlier one; non-`ToolCallPart` parts
   pass through unchanged. Coverage: `tests/test_flow_tool_call_dedup.py`.
 
-### 2.3 XML tool-call tag stripping
+### 2.3 XML tool-call tag stripping - DEFERRED
 
 - Hermes: `run_agent.py:~3120-3150` (regex `r'</(?:tool_call|tool_calls|tool_result|function_call|function_calls|function)>\s*'`)
 - What it does: strips standalone XML tool-call blocks from assistant
@@ -185,8 +186,8 @@ by probability of hitting the failure × cost of the fix.
 
 ### 5.2 Medium payoff
 
-3. **`_repair_tool_call` fuzzy tool-name (2.1)** — useful only for
-   models that emit class-style names. Defer until we see it in a production run.
+3. ~~**`_repair_tool_call` fuzzy tool-name (2.1)**~~ — deferred; only relevant for
+   models that emit class-style names. Revisit if a production run surfaces the failure.
 4. **Length-continuation retry (2.4)** — promote the existing
    status hint at `co_cli/context/orchestrate.py:498-501` to an
    automatic resume. Bigger change — touches orchestrate and the
