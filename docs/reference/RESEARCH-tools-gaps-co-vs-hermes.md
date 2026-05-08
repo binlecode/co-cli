@@ -187,21 +187,36 @@ These are architecture choices, not tool ports — covered in §3 and §4.
 ## 3. Architecture-Level Gaps
 
 ### 3.1 No spill enforcement on MCP tool results
-**Fixed.** `CoToolLifecycle.after_tool_execute` (`lifecycle.py`) now coerces MCP-source
-string results through `spill_if_oversized()` before the OTel span block, using the
-per-tool `spill_threshold_chars` override or the global `SPILL_THRESHOLD_CHARS` fallback.
+**Done (code-verified 2026-05-08).** `CoToolLifecycle.after_tool_execute` (`lifecycle.py:249-257`)
+coerces MCP-source string results through `spill_if_oversized()` before the OTel span block.
+Guard condition: `isinstance(result, str) and info and info.source == ToolSourceEnum.MCP`.
+Uses per-tool `spill_threshold_chars` override, falls back to global `SPILL_THRESHOLD_CHARS`.
 
 ### 3.2 `NATIVE_TOOLS` is a manual tuple
-Decorating with `@agent_tool` is not enough — a function must also be appended to
-`agent/_native_toolset.py:44`. The reverse-direction guard exists (listed-but-undecorated
-raises `TypeError` at `_native_toolset.py:140`); decorated-but-unlisted is silent.
-`memory_read_session_turn` is the intentional case. **Fix:** module scan for
-`@agent_tool`-decorated functions at import, with an explicit opt-out marker.
+**Done (code-verified 2026-05-08).** `_assert_decorated_tools_listed()`
+(`_native_toolset.py:126-153`) is the symmetric counterpart to the existing
+listed-but-undecorated guard at `_native_toolset.py:143-149`. It walks the modules
+referenced by `NATIVE_TOOLS` (derived via `fn.__module__`), collects callables carrying
+`AGENT_TOOL_ATTR`, and raises `RuntimeError` on any not in `NATIVE_TOOLS ∪ _OPT_OUT_TOOLS`.
+Called at the top of `_build_native_toolset` (`_native_toolset.py:169`).
+
+`_OPT_OUT_TOOLS = frozenset({memory_read_session_turn})` is defined adjacent to
+`NATIVE_TOOLS` (`_native_toolset.py:97`); the comment above it points at
+`docs/specs/memory.md` for the rationale.
+
+Why this design:
+- **No CI test** — `agent_docs/testing.md` forbids structural asserts on registration tables.
+- **No module-level decorator registry** — `agent_tool.py` is deliberately side-effect-free
+  beyond `setattr(fn, AGENT_TOOL_ATTR, info)`. Adding mutable global state would couple
+  correctness to import order and bleed across tests.
+- **Targeted module walk, not `sys.modules` prefix scan** — catches the realistic failure
+  mode (developer adds `@agent_tool` to a sibling in an existing tool module). A truly-new
+  module that nothing imports can't manifest the bug.
 
 ### 3.3 Sequential MCP `list_tools()` discovery
-**Still open** (verified `agent/mcp.py:118` — `for entry in mcp_entries:` with
-per-iteration `async with asyncio.timeout(entry.timeout)`). Worst-case startup
-delay is `N × timeout`. **Fix:** `asyncio.gather(*[_one(entry) for entry in mcp_entries], return_exceptions=True)`.
+**Fixed.** `discover_mcp_tools()` (`agent/mcp.py`) now fans out all `list_tools()`
+calls concurrently via `asyncio.gather` through a `_discover_one` helper. Startup
+delay is now `max(timeouts)` instead of `N × timeout`.
 
 ### 3.4 No named toolset profiles for delegation
 `web_research` / `knowledge_analyze` / `reason` (`tools/agents/delegation.py`) take
@@ -269,19 +284,19 @@ Symptom of §3.4. New tool → invisible to `web_research` / `knowledge_analyze`
 
 ## 5. Priority Ordering
 
-Status legend: 🟢 in flight (active exec-plan) · 🟠 open · ⚪ deferred / out of scope.
+Status legend: ✅ done · 🟢 in flight (active exec-plan) · 🟠 open · ⚪ deferred / out of scope.
 
 | Priority | Status | Item | Risk | Effort |
 |---|---|---|---|---|
 | **High** | 🟢 | MCP `inputSchema` sanitization (§3.8) | MCP tools silently dropped on Ollama / llama.cpp; Anthropic schema rejection | Medium — see active plan `2026-05-07-112044-mcp-schema-sanitizer.md` |
-| **High** | 🟢 | MCP tool results not spill-gated (§3.1) | Context overflow via runaway MCP | Fixed — coercion in `CoToolLifecycle.after_tool_execute` |
+| **High** | ✅ | MCP tool results not spill-gated (§3.1) | Context overflow via runaway MCP | Done — `lifecycle.py:249-257`, code-verified 2026-05-08 |
 | **High** | 🟠 | `tool_output_raw()` bypasses spill gate (§4.1) | Silent context overflow | Medium — audit callsites, enforce ctx-less restriction |
 | **Medium** | 🟢 | Add model-callable `skills_list` / `skill_view` (§2.1) | Skill discovery requires user slash commands | Medium — see active plan `2026-05-07-125538-skill-tools-hermes-port.md` |
-| **Medium** | 🟠 | Concurrent MCP `list_tools()` discovery (§3.3) | Cumulative startup delay = N × timeout | Low — wrap loop in `asyncio.gather(..., return_exceptions=True)` |
+| **Medium** | ✅ | Concurrent MCP `list_tools()` discovery (§3.3) | Cumulative startup delay = N × timeout | Done — `_discover_one` + `asyncio.gather` in `agent/mcp.py` |
 | **Medium** | 🟠 | Port `terminal.pty` + `terminal.watch_patterns` to `shell` / `task_*` (§1.5) | Missing capability for interactive CLIs and long-running watch | Medium — add `pty` flag to `shell`, `watch_patterns` to `task_start` |
 | **Medium** | 🟠 | Port `web_fetch` to accept `urls: list[str]` with parallel fetch (§1.4) | Sequential latency | Low — `asyncio.gather` over existing fetch |
 | **Medium** | 🟠 | `ModelRetry` / `tool_error` unenforced (§4.2) | Retry-budget waste | Medium — ruff rule or base-class signal |
-| **Medium** | 🟠 | `NATIVE_TOOLS` manual tuple (§3.2) | Tool silently omitted | Low — module scan for `@agent_tool`-decorated functions at import |
+| **Medium** | ✅ | `NATIVE_TOOLS` manual tuple (§3.2) | Tool silently omitted | Done — `_assert_decorated_tools_listed()` at `_native_toolset.py:126`, code-verified 2026-05-08 |
 | **Low** | 🟠 | Add `vision_analyze` tool (§2.1) | No vision capability | Medium — new tool + model wrapper |
 | **Low** | 🟠 | Add `role_filter` to `memory_search` (§1.3) | Cannot narrow recall to assistant-vs-user messages | Low — pass through to FTS5 query |
 | **Low** | 🟠 | Named toolset profiles for delegation (§3.4, §4.5) | Tool-list drift in delegation | Medium — `toolsets.py`-style registry |

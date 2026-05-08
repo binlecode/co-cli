@@ -100,6 +100,36 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
     return entries
 
 
+async def _discover_one(
+    entry: MCPToolsetEntry, exclude: set[str]
+) -> tuple[list[tuple[str, ToolInfo]], str | None]:
+    prefix = entry.prefix
+    try:
+        async with asyncio.timeout(entry.timeout):
+            tools = await entry.server.list_tools()
+        hits: list[tuple[str, ToolInfo]] = []
+        for t in tools:
+            name = f"{prefix}_{t.name}" if prefix else t.name
+            if name not in exclude:
+                hits.append(
+                    (
+                        name,
+                        ToolInfo(
+                            name=name,
+                            description=t.description or "",
+                            approval=entry.approval,
+                            source=ToolSourceEnum.MCP,
+                            visibility=VisibilityPolicyEnum.DEFERRED,
+                            integration=prefix or None,
+                        ),
+                    )
+                )
+        return hits, None
+    except Exception as e:
+        logger.warning("MCP tool list failed for %r: %s", prefix or "(no prefix)", e)
+        return [], str(e)
+
+
 async def discover_mcp_tools(
     mcp_entries: list[MCPToolsetEntry], exclude: set[str]
 ) -> tuple[list[str], dict[str, str], dict[str, ToolInfo]]:
@@ -110,30 +140,18 @@ async def discover_mcp_tools(
     maps server prefix to the error string for each server where list_tools()
     failed, and mcp_index maps tool name to ToolInfo metadata. Tool names exclude
     any in ``exclude``. MCP tools are deferred by default (DEFERRED visibility).
+    All servers are queried concurrently; startup delay is max(timeouts) not sum.
     """
     mcp_tool_names: list[str] = []
     errors: dict[str, str] = {}
     mcp_index: dict[str, ToolInfo] = {}
 
-    for entry in mcp_entries:
-        prefix = entry.prefix
-        try:
-            async with asyncio.timeout(entry.timeout):
-                tools = await entry.server.list_tools()
-            for t in tools:
-                name = f"{prefix}_{t.name}" if prefix else t.name
-                if name not in exclude:
-                    mcp_tool_names.append(name)
-                    mcp_index[name] = ToolInfo(
-                        name=name,
-                        description=t.description or "",
-                        approval=entry.approval,
-                        source=ToolSourceEnum.MCP,
-                        visibility=VisibilityPolicyEnum.DEFERRED,
-                        integration=prefix or None,
-                    )
-        except Exception as e:
-            logger.warning("MCP tool list failed for %r: %s", prefix or "(no prefix)", e)
-            errors[prefix] = str(e)
+    results = await asyncio.gather(*[_discover_one(entry, exclude) for entry in mcp_entries])
+    for entry, (hits, err) in zip(mcp_entries, results, strict=True):
+        if err is not None:
+            errors[entry.prefix] = err
+        for name, info in hits:
+            mcp_tool_names.append(name)
+            mcp_index[name] = info
 
     return sorted(mcp_tool_names), errors, mcp_index

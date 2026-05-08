@@ -1,5 +1,6 @@
 """Native toolset construction and approval-resume filter."""
 
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -21,6 +22,7 @@ from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search
 from co_cli.tools.google.drive import google_drive_read, google_drive_search
 from co_cli.tools.google.gmail import google_gmail_draft, google_gmail_list, google_gmail_search
+from co_cli.tools.memory.read import memory_read_session_turn
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.memory.write import (
     memory_create,
@@ -90,6 +92,10 @@ NATIVE_TOOLS: tuple[Callable, ...] = (
     google_gmail_draft,
 )
 
+# Decorated with @agent_tool but intentionally not registered. See docs/specs/memory.md
+# for why memory_read_session_turn is exposed as source-only and not as a model tool.
+_OPT_OUT_TOOLS: frozenset[Callable] = frozenset({memory_read_session_turn})
+
 
 def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
     """Filter for approval-resume narrowing only.
@@ -117,6 +123,35 @@ def _make_prepare(fn: Callable[[CoDeps], bool]):
     return prepare
 
 
+def _assert_decorated_tools_listed() -> None:
+    """Symmetric counterpart to the listed-but-undecorated guard in _build_native_toolset.
+
+    Walks the modules NATIVE_TOOLS imports from, collects callables carrying
+    AGENT_TOOL_ATTR, and raises if any are neither in NATIVE_TOOLS nor _OPT_OUT_TOOLS.
+    Catches the case where a developer adds @agent_tool to a function but forgets
+    to register it in the tuple.
+    """
+    listed = set(NATIVE_TOOLS)
+    listed_modules = {fn.__module__ for fn in NATIVE_TOOLS}
+    for mod_name in listed_modules:
+        mod = sys.modules.get(mod_name)
+        if mod is None:
+            continue
+        for attr_name in dir(mod):
+            obj = getattr(mod, attr_name, None)
+            if (
+                callable(obj)
+                and hasattr(obj, AGENT_TOOL_ATTR)
+                and obj not in listed
+                and obj not in _OPT_OUT_TOOLS
+            ):
+                raise RuntimeError(
+                    f"{mod_name}.{attr_name}: decorated with @agent_tool "
+                    "but missing from NATIVE_TOOLS. Add it to the tuple, or "
+                    "to _OPT_OUT_TOOLS if intentionally unregistered."
+                )
+
+
 def _build_native_toolset(
     config: Settings,
 ) -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInfo]]":
@@ -131,6 +166,7 @@ def _build_native_toolset(
     Returns (native_toolset, native_index) where native_index maps each tool name
     to its ToolInfo metadata.
     """
+    _assert_decorated_tools_listed()
     toolset: FunctionToolset[CoDeps] = FunctionToolset()
     index: dict[str, ToolInfo] = {}
 
