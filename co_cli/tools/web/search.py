@@ -278,6 +278,7 @@ def _get_api_key(ctx: RunContext[CoDeps]) -> str:
     is_read_only=True,
     is_concurrent_safe=True,
     retries=3,
+    delegation=frozenset({"web_research"}),
 )
 async def web_search(
     ctx: RunContext[CoDeps],

@@ -193,9 +193,7 @@ async def web_research(
     if not ctx.deps.model:
         raise ModelRetry("Research agent is unavailable — handle this task directly.")
 
-    from co_cli.agent.core import build_agent
-    from co_cli.tools.web.fetch import web_fetch
-    from co_cli.tools.web.search import web_search
+    from co_cli.agent.core import build_agent, discover_delegation_tools
 
     _default_max_requests = 10
     budget = max_requests or _default_max_requests
@@ -211,7 +209,7 @@ async def web_research(
         config=ctx.deps.config,
         model=model_obj,
         instructions=_researcher_instructions(ctx.deps),
-        tool_fns=[web_search, web_fetch],
+        tool_fns=discover_delegation_tools("web_research", ctx.deps.config),
         output_type=AgentOutput,
     )
 
@@ -299,9 +297,7 @@ async def knowledge_analyze(
     if not ctx.deps.model:
         raise ModelRetry("Analysis agent is unavailable — handle this task directly.")
 
-    from co_cli.agent.core import build_agent
-    from co_cli.tools.google.drive import google_drive_search
-    from co_cli.tools.memory.recall import memory_search
+    from co_cli.agent.core import build_agent, discover_delegation_tools
 
     _default_max_requests = 8
     budget = max_requests or _default_max_requests
@@ -314,7 +310,7 @@ async def knowledge_analyze(
         config=ctx.deps.config,
         model=ctx.deps.model.model,
         instructions=_analyst_instructions(ctx.deps),
-        tool_fns=[memory_search, google_drive_search],
+        tool_fns=discover_delegation_tools("knowledge_analyze", ctx.deps.config),
         output_type=AgentOutput,
     )
     return await _delegate_agent(

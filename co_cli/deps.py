@@ -107,6 +107,7 @@ class ToolInfo:
     requires_config: str | None = None
     check_fn: Callable[[CoDeps], bool] | None = None
     approval_subject_fn: Callable[[dict[str, Any]], ApprovalSubject] | None = None
+    delegation: frozenset[str] | None = None
 
 
 @dataclass

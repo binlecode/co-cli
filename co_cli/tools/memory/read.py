@@ -46,6 +46,7 @@ def grep_recall(
     visibility=VisibilityPolicyEnum.ALWAYS,
     is_read_only=True,
     is_concurrent_safe=True,
+    register=False,
 )
 async def memory_read_session_turn(
     ctx: RunContext[CoDeps],

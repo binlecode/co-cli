@@ -331,7 +331,12 @@ def _format_search_display(query: str, all_results: list[dict]) -> str:
     return "\n".join(lines)
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    delegation=frozenset({"knowledge_analyze"}),
+)
 async def memory_search(
     ctx: RunContext[CoDeps],
     query: str = "",

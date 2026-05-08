@@ -169,6 +169,7 @@ def _grep_search_notes(
     integration="obsidian",
     requires_config="obsidian_vault_path",
     check_fn=_obsidian_available,
+    delegation=frozenset({"knowledge_analyze"}),
 )
 def obsidian_search(
     ctx: RunContext[CoDeps],
@@ -234,6 +235,7 @@ def obsidian_search(
     integration="obsidian",
     requires_config="obsidian_vault_path",
     check_fn=_obsidian_available,
+    delegation=frozenset({"knowledge_analyze"}),
 )
 def obsidian_list(
     ctx: RunContext[CoDeps],

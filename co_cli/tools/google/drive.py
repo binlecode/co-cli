@@ -67,6 +67,7 @@ def _format_drive_results(
     requires_config="google_credentials_path",
     retries=3,
     check_fn=_google_available,
+    delegation=frozenset({"knowledge_analyze"}),
 )
 def google_drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
     """Search files in Google Drive by name or content. Returns up to 10

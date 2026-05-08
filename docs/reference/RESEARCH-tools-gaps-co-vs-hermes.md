@@ -193,25 +193,18 @@ Guard condition: `isinstance(result, str) and info and info.source == ToolSource
 Uses per-tool `spill_threshold_chars` override, falls back to global `SPILL_THRESHOLD_CHARS`.
 
 ### 3.2 `NATIVE_TOOLS` is a manual tuple
-**Done (code-verified 2026-05-08).** `_assert_decorated_tools_listed()`
-(`_native_toolset.py:126-153`) is the symmetric counterpart to the existing
-listed-but-undecorated guard at `_native_toolset.py:143-149`. It walks the modules
-referenced by `NATIVE_TOOLS` (derived via `fn.__module__`), collects callables carrying
-`AGENT_TOOL_ATTR`, and raises `RuntimeError` on any not in `NATIVE_TOOLS ∪ _OPT_OUT_TOOLS`.
-Called at the top of `_build_native_toolset` (`_native_toolset.py:169`).
+**Done (code-verified 2026-05-08).** `NATIVE_TOOLS` is gone. `@agent_tool(register=True)`
+(default) self-registers the decorated function into `TOOL_REGISTRY` (`agent_tool.py:19`)
+at module import time. `_native_toolset.py` imports all tool modules as a side effect to
+populate the registry, then iterates it in `_build_native_toolset()`. `register=False`
+opts out at the definition site (`memory_read_session_turn` is the only opt-out today).
 
-`_OPT_OUT_TOOLS = frozenset({memory_read_session_turn})` is defined adjacent to
-`NATIVE_TOOLS` (`_native_toolset.py:97`); the comment above it points at
-`docs/specs/memory.md` for the rationale.
-
-Why this design:
-- **No CI test** — `agent_docs/testing.md` forbids structural asserts on registration tables.
-- **No module-level decorator registry** — `agent_tool.py` is deliberately side-effect-free
-  beyond `setattr(fn, AGENT_TOOL_ATTR, info)`. Adding mutable global state would couple
-  correctness to import order and bleed across tests.
-- **Targeted module walk, not `sys.modules` prefix scan** — catches the realistic failure
-  mode (developer adds `@agent_tool` to a sibling in an existing tool module). A truly-new
-  module that nothing imports can't manifest the bug.
+The previous `_OPT_OUT_TOOLS` frozenset and `_assert_decorated_tools_listed()` guard
+are removed — registration IS the decorator, so the listed-vs-decorated consistency
+check is meaningless. The earlier "no module-level decorator registry" stance was
+reversed: import-order coupling is bounded by `_native_toolset.py` importing every
+tool module up front, and `discover_delegation_tools()` triggers the same import as a
+guard for standalone callers.
 
 ### 3.3 Sequential MCP `list_tools()` discovery
 **Fixed.** `discover_mcp_tools()` (`agent/mcp.py`) now fans out all `list_tools()`
@@ -219,9 +212,15 @@ calls concurrently via `asyncio.gather` through a `_discover_one` helper. Startu
 delay is now `max(timeouts)` instead of `N × timeout`.
 
 ### 3.4 No named toolset profiles for delegation
-`web_research` / `knowledge_analyze` / `reason` (`tools/agents/delegation.py`) take
-explicit `tool_fns=[...]` lists — a new web tool stays invisible until threaded in by
-hand. Hermes uses `toolsets.py:resolve_toolset()` for group-level access.
+**Done (code-verified 2026-05-08).** `@agent_tool` accepts a `delegation:
+frozenset[str] | set[str] | None` field that tags a tool with one or more delegation
+profile names. `discover_delegation_tools(profile, config)` (`agent/core.py`) iterates
+`TOOL_REGISTRY`, filters by `info.delegation` membership and `info.requires_config`,
+and returns the matching list. Delegation agents call this helper instead of hardcoded
+lists. Tools currently tagged: `"web_research"` (web_search, web_fetch),
+`"knowledge_analyze"` (memory_search, google_drive_search, obsidian_search,
+obsidian_list). Adding a tool to a profile is one decorator edit; new optional
+integrations (e.g. obsidian) are gated automatically via `requires_config`.
 
 ### 3.5 No MCP dynamic tool refresh
 `discover_mcp_tools()` runs once at bootstrap; ignores `notifications/tools/list_changed`.
@@ -277,8 +276,9 @@ Intentional for cross-agent staleness detection, but unbounded in long sessions.
 values than production runs.
 
 ### 4.5 Delegation agents re-enumerate tool lists by hand
-Symptom of §3.4. New tool → invisible to `web_research` / `knowledge_analyze` until the
-`tool_fns=` list is updated.
+**Done (code-verified 2026-05-08).** Resolved alongside §3.4 — the `delegation` profile
+field on `@agent_tool` + `discover_delegation_tools()` removes the per-agent hardcoded
+`tool_fns=[...]` enumeration.
 
 ---
 
@@ -296,10 +296,10 @@ Status legend: ✅ done · 🟢 in flight (active exec-plan) · 🟠 open · ⚪
 | **Medium** | 🟠 | Port `terminal.pty` + `terminal.watch_patterns` to `shell` / `task_*` (§1.5) | Missing capability for interactive CLIs and long-running watch | Medium — add `pty` flag to `shell`, `watch_patterns` to `task_start` |
 | **Medium** | 🟠 | Port `web_fetch` to accept `urls: list[str]` with parallel fetch (§1.4) | Sequential latency | Low — `asyncio.gather` over existing fetch |
 | **Medium** | 🟠 | `ModelRetry` / `tool_error` unenforced (§4.2) | Retry-budget waste | Medium — ruff rule or base-class signal |
-| **Medium** | ✅ | `NATIVE_TOOLS` manual tuple (§3.2) | Tool silently omitted | Done — `_assert_decorated_tools_listed()` at `_native_toolset.py:126`, code-verified 2026-05-08 |
+| **Medium** | ✅ | `NATIVE_TOOLS` manual tuple (§3.2) | Tool silently omitted | Done — `TOOL_REGISTRY` self-registration via `@agent_tool`, code-verified 2026-05-08 |
 | **Low** | 🟠 | Add `vision_analyze` tool (§2.1) | No vision capability | Medium — new tool + model wrapper |
 | **Low** | 🟠 | Add `role_filter` to `memory_search` (§1.3) | Cannot narrow recall to assistant-vs-user messages | Low — pass through to FTS5 query |
-| **Low** | 🟠 | Named toolset profiles for delegation (§3.4, §4.5) | Tool-list drift in delegation | Medium — `toolsets.py`-style registry |
+| **Low** | ✅ | Named toolset profiles for delegation (§3.4, §4.5) | Tool-list drift in delegation | Done — `delegation` field on `@agent_tool` + `discover_delegation_tools()`, code-verified 2026-05-08 |
 | **Low** | 🟠 | `file_read_mtimes` unbounded (§4.3) | Memory in very long sessions | Low — cap dict or evict on turn reset |
 | **Low** | ⚪ | No permanent approval persistence (§3.7) | UX friction | Medium — deliberate security tradeoff |
 | **Low** | 🟠 | Background task ring-buffer lossy (§3.6) | Output loss for long commands | Medium — optional file sink on spawn |

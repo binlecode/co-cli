@@ -1,6 +1,5 @@
 """Native toolset construction and approval-resume filter."""
 
-import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -10,91 +9,40 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from co_cli.config.core import Settings
 from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
-from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
-from co_cli.tools.agents.delegation import (
-    knowledge_analyze,
-    reason,
-    web_research,
-)
-from co_cli.tools.code.execute import code_execute
-from co_cli.tools.files.read import file_find, file_read, file_search
-from co_cli.tools.files.write import file_patch, file_write
-from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search
-from co_cli.tools.google.drive import google_drive_read, google_drive_search
-from co_cli.tools.google.gmail import google_gmail_draft, google_gmail_list, google_gmail_search
-from co_cli.tools.memory.read import memory_read_session_turn
-from co_cli.tools.memory.recall import memory_search
-from co_cli.tools.memory.write import (
-    memory_create,
-    memory_modify,
-)
-from co_cli.tools.obsidian.tools import obsidian_list, obsidian_read, obsidian_search
-from co_cli.tools.shell.execute import shell
-from co_cli.tools.system.capabilities import capabilities_check
-from co_cli.tools.system.user_input import clarify
-from co_cli.tools.tasks.control import (
-    task_cancel,
-    task_list,
-    task_start,
-    task_status,
-)
-from co_cli.tools.todo.rw import todo_read, todo_write
-from co_cli.tools.web.fetch import web_fetch
-from co_cli.tools.web.search import web_search
+from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
 
-# Flat explicit list — order is presentation order (no behavioral impact).
-NATIVE_TOOLS: tuple[Callable, ...] = (
-    # User interaction
-    clarify,
-    # Introspection & todos
-    capabilities_check,
-    todo_write,
-    todo_read,
-    # Knowledge reads
-    memory_search,
-    # Workspace reads
-    file_find,
-    file_read,
-    file_search,
-    # Web
-    web_search,
-    web_fetch,
-    # Execution
-    shell,
-    # File writes (deferred)
-    file_write,
-    file_patch,
-    # Knowledge writes (deferred)
-    memory_create,
-    memory_modify,
-    # Background tasks (deferred)
-    task_start,
-    task_status,
-    task_cancel,
-    task_list,
-    # Code execution (deferred)
-    code_execute,
-    # Delegation (deferred)
-    web_research,
+# Import all tool modules to trigger @agent_tool self-registration into TOOL_REGISTRY.
+from co_cli.tools.agents.delegation import (  # noqa: F401
     knowledge_analyze,
     reason,
-    # Obsidian (requires obsidian_vault_path)
-    obsidian_list,
-    obsidian_search,
-    obsidian_read,
-    # Google (requires google_credentials_path)
-    google_drive_search,
-    google_drive_read,
+    web_research,
+)
+from co_cli.tools.code.execute import code_execute  # noqa: F401
+from co_cli.tools.files.read import file_find, file_read, file_search  # noqa: F401
+from co_cli.tools.files.write import file_patch, file_write  # noqa: F401
+from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search  # noqa: F401
+from co_cli.tools.google.drive import google_drive_read, google_drive_search  # noqa: F401
+from co_cli.tools.google.gmail import (  # noqa: F401
+    google_gmail_draft,
     google_gmail_list,
     google_gmail_search,
-    google_calendar_list,
-    google_calendar_search,
-    google_gmail_draft,
 )
-
-# Decorated with @agent_tool but intentionally not registered. See docs/specs/memory.md
-# for why memory_read_session_turn is exposed as source-only and not as a model tool.
-_OPT_OUT_TOOLS: frozenset[Callable] = frozenset({memory_read_session_turn})
+from co_cli.tools.memory.read import memory_read_session_turn  # noqa: F401
+from co_cli.tools.memory.recall import memory_search  # noqa: F401
+from co_cli.tools.memory.write import memory_create, memory_modify  # noqa: F401
+from co_cli.tools.obsidian.tools import obsidian_list, obsidian_read, obsidian_search  # noqa: F401
+from co_cli.tools.shell.execute import shell  # noqa: F401
+from co_cli.tools.system.capabilities import capabilities_check  # noqa: F401
+from co_cli.tools.system.user_input import clarify  # noqa: F401
+from co_cli.tools.tasks.control import (  # noqa: F401
+    task_cancel,
+    task_list,
+    task_start,
+    task_status,
+)
+from co_cli.tools.todo.rw import todo_read, todo_write  # noqa: F401
+from co_cli.tools.web.fetch import web_fetch  # noqa: F401
+from co_cli.tools.web.search import web_search  # noqa: F401
 
 
 def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
@@ -123,35 +71,6 @@ def _make_prepare(fn: Callable[[CoDeps], bool]):
     return prepare
 
 
-def _assert_decorated_tools_listed() -> None:
-    """Symmetric counterpart to the listed-but-undecorated guard in _build_native_toolset.
-
-    Walks the modules NATIVE_TOOLS imports from, collects callables carrying
-    AGENT_TOOL_ATTR, and raises if any are neither in NATIVE_TOOLS nor _OPT_OUT_TOOLS.
-    Catches the case where a developer adds @agent_tool to a function but forgets
-    to register it in the tuple.
-    """
-    listed = set(NATIVE_TOOLS)
-    listed_modules = {fn.__module__ for fn in NATIVE_TOOLS}
-    for mod_name in listed_modules:
-        mod = sys.modules.get(mod_name)
-        if mod is None:
-            continue
-        for attr_name in dir(mod):
-            obj = getattr(mod, attr_name, None)
-            if (
-                callable(obj)
-                and hasattr(obj, AGENT_TOOL_ATTR)
-                and obj not in listed
-                and obj not in _OPT_OUT_TOOLS
-            ):
-                raise RuntimeError(
-                    f"{mod_name}.{attr_name}: decorated with @agent_tool "
-                    "but missing from NATIVE_TOOLS. Add it to the tuple, or "
-                    "to _OPT_OUT_TOOLS if intentionally unregistered."
-                )
-
-
 def _build_native_toolset(
     config: Settings,
 ) -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInfo]]":
@@ -166,17 +85,11 @@ def _build_native_toolset(
     Returns (native_toolset, native_index) where native_index maps each tool name
     to its ToolInfo metadata.
     """
-    _assert_decorated_tools_listed()
     toolset: FunctionToolset[CoDeps] = FunctionToolset()
     index: dict[str, ToolInfo] = {}
 
-    for fn in NATIVE_TOOLS:
-        info: ToolInfo | None = getattr(fn, AGENT_TOOL_ATTR, None)
-        if info is None:
-            raise TypeError(
-                f"{fn.__module__}.{fn.__name__}: missing @agent_tool(...) decorator. "
-                "Every function in NATIVE_TOOLS must declare policy at definition site."
-            )
+    for fn in TOOL_REGISTRY:
+        info: ToolInfo = getattr(fn, AGENT_TOOL_ATTR)
         if info.requires_config is not None and not getattr(config, info.requires_config, None):
             continue
         kwargs: dict[str, Any] = {

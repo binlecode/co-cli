@@ -69,6 +69,22 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
     )
 
 
+def discover_delegation_tools(profile: str, config: Settings) -> list[Callable]:
+    """Return tool functions tagged for the given delegation profile, filtered by config."""
+    import co_cli.agent._native_toolset  # noqa: F401  -- side effect: ensure TOOL_REGISTRY is fully populated
+    from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
+
+    result = []
+    for fn in TOOL_REGISTRY:
+        info: ToolInfo = getattr(fn, AGENT_TOOL_ATTR)
+        if info.delegation is None or profile not in info.delegation:
+            continue
+        if info.requires_config is not None and not getattr(config, info.requires_config, None):
+            continue
+        result.append(fn)
+    return result
+
+
 def build_agent(
     *,
     config: Settings,
