@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from opentelemetry import trace as otel_trace
-from pydantic_ai import CallToolsNode, ModelRequestNode, RunContext
+from pydantic_ai import CallToolsNode, RunContext
 from pydantic_ai.capabilities import (
     AbstractCapability,
     AgentNode,
@@ -22,9 +22,9 @@ from pydantic_ai.messages import ModelResponsePart, ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 
 from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
-from co_cli.deps import CoDeps
-from co_cli.tools._request_budget import _enforce_request_budget
+from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
+from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS, spill_if_oversized
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +144,8 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     Hooks:
     - before_node_run: dedup duplicate tool calls within one ModelResponse
     - wrap_tool_execute: per-call cap brake (N times per model turn)
-    - after_node_run: tool-call-limit span (L0) + request-budget enforcement (L2)
-      on the upcoming ModelRequest — see ``_enforce_request_budget``.
+    - after_node_run: tool-call-limit span (L0). Per-request size enforcement
+      lives in ``enforce_request_size`` (history processor at MRN entry), not here.
     - before_tool_validate: syntactic JSON repair for malformed model output
     - before_tool_execute: path normalization for file tools
     - after_tool_execute: span enrichment + audit logging
@@ -220,11 +220,6 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
             span.set_attribute("tool_calls.rejected", rejected)
             span.set_attribute("tool_calls.limit_exceeded", rejected > 0)
 
-        if isinstance(result, ModelRequestNode):
-            new_parts = _enforce_request_budget(list(result.request.parts), ctx.deps, self._tracer)
-            if new_parts is not None:
-                result.request = replace(result.request, parts=new_parts)
-
         return result
 
     async def before_tool_validate(
@@ -250,6 +245,17 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     ) -> Any:
         span = otel_trace.get_current_span()
         info = ctx.deps.tool_index.get(call.tool_name)
+
+        # MCP results are plain strings that bypass tool_output() — enforce spill gate here.
+        if isinstance(result, str) and info and info.source == ToolSourceEnum.MCP:
+            threshold = (
+                info.spill_threshold_chars
+                if info.spill_threshold_chars is not None
+                else SPILL_THRESHOLD_CHARS
+            )
+            if len(result) > threshold:
+                result = spill_if_oversized(result, ctx.deps.tool_results_dir, call.tool_name)
+
         if span.is_recording():
             span.set_attribute("co.tool.result_size", len(str(result)))
             if info:
