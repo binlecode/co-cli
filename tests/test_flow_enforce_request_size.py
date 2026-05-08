@@ -277,15 +277,7 @@ def test_otel_span_emitted(tmp_path: Path):
 
 
 def test_high_reported_emits_local_and_reported_attrs(tmp_path: Path):
-    """Provider-reported tokens dominate local estimate: span emits both attributes.
-
-    When reported >> local and local content is small enough that spilling won't
-    close the gap, the processor punts to fallback_to_summarize while still
-    emitting the new local_tokens / reported_tokens span attributes.  This
-    verifies the trigger uses max(local, reported) and the loop accumulator
-    stays in local space — so no spill fires when local is already under
-    threshold even though reported is far above it.
-    """
+    """Reported-dominant pressure: span emits local_tokens and reported_tokens; falls back to summarize."""
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -324,13 +316,7 @@ def test_high_reported_emits_local_and_reported_attrs(tmp_path: Path):
 
 
 def test_high_reported_spill_uses_local_loop_space(tmp_path: Path):
-    """Loop accumulator stays in local space even when reported >> local.
-
-    Large local content (spill can close the local gap) + high reported tokens.
-    Spill fires because local_total > threshold. After spill the loop exits when
-    local_after <= threshold, then effective_after = max(local_after, reported)
-    is used for the span and skip_reason.
-    """
+    """Large local content + high reported: spill fires; effective_after = max(local_after, reported) drives fallback."""
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
