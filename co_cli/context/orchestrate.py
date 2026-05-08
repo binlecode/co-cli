@@ -67,6 +67,8 @@ _LENGTH_RETRY_CEILING = 16_384
 _LENGTH_RETRY_BOOST = 2
 """Multiplier applied to max_tokens on each length-continuation retry."""
 
+assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
+
 from co_cli.config.core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.context.compaction import is_context_overflow
@@ -503,7 +505,7 @@ def _check_output_limits(
 
     if latest_result.response.finish_reason == "length":
         frontend.on_status(
-            "Response may be truncated (hit output token limit). Use /continue to extend."
+            "Response truncated at output token ceiling — use /compact to free context."
         )
     latest_input = latest_response_input_tokens(turn_state.current_history)
     if latest_input > 0:
@@ -548,7 +550,12 @@ def _length_retry_settings(
     Fires when:
       - finish_reason is 'length' (output was truncated)
       - active_settings has a max_tokens value below the ceiling (boost is possible)
-      - the response contains at least one TextPart or ToolCallPart (thinking-exhaustion gate)
+      - the response contains at least one TextPart (text-presence gate)
+
+    Text-only gate: a truncated ToolCallPart would carry malformed JSON args into
+    retry history, producing an assistant message with an unanswered tool_calls
+    entry — the OpenAI/Ollama protocol rejects that. Tool-call truncations fall
+    through to _check_output_limits' ceiling status instead of retrying.
 
     Returns a new settings dict with max_tokens doubled (capped at _LENGTH_RETRY_CEILING),
     or None when the conditions are not met (no retry).
@@ -558,7 +565,7 @@ def _length_retry_settings(
     current_max = active_settings.get("max_tokens", 0) if active_settings else 0
     if not current_max or current_max >= _LENGTH_RETRY_CEILING:
         return None
-    if not any(isinstance(p, (TextPart, ToolCallPart)) for p in result.response.parts):
+    if not any(isinstance(p, TextPart) for p in result.response.parts):
         return None
     boosted = min(current_max * _LENGTH_RETRY_BOOST, _LENGTH_RETRY_CEILING)
     new_settings: dict = {**active_settings, "max_tokens": boosted}
