@@ -24,7 +24,7 @@ from pydantic_ai.tools import ToolDefinition
 from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
 from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
-from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS, spill_if_oversized
+from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS, spill_with_span
 
 logger = logging.getLogger(__name__)
 
@@ -253,8 +253,12 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
                 if info.spill_threshold_chars is not None
                 else SPILL_THRESHOLD_CHARS
             )
-            if len(result) > threshold:
-                result = spill_if_oversized(result, ctx.deps.tool_results_dir, call.tool_name)
+            result = spill_with_span(
+                result,
+                tool_name=call.tool_name,
+                tool_results_dir=ctx.deps.tool_results_dir,
+                threshold_chars=threshold,
+            )
 
         if span.is_recording():
             span.set_attribute("co.tool.result_size", len(str(result)))

@@ -152,9 +152,9 @@ class CoRuntimeState:
     # Per-model-turn brake counter; resets implicitly on ctx.run_step transition.
     tool_call_limit_run_step: int = -1
     tool_calls_in_model_turn: int = 0
-    # Written by enforce_request_size after spill; read by proactive_window_processor
+    # Written by enforce_request_size (all exit paths); read by proactive_window_processor
     # for OTEL diagnostics only (no logic branches on it).
-    current_request_tokens_after_spill: int | None = None
+    current_request_tokens_estimate: int | None = None
     # Circuit breaker for inline compaction summarisation.
     compaction_skip_count: int = 0
     turn_usage: RunUsage | None = None
@@ -193,7 +193,7 @@ class CoRuntimeState:
         self.status_callback = None
         self.resume_tool_names = None
         self.compaction_applied_this_turn = False
-        self.current_request_tokens_after_spill = None
+        self.current_request_tokens_estimate = None
 
 
 # Path defaults — all user-global; resolved from USER_DIR constants at runtime

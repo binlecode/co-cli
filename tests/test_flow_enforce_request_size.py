@@ -97,8 +97,8 @@ async def test_below_threshold_fast_path(tmp_path: Path):
     assert out is messages
     returns = _collect_returns(out)
     assert PERSISTED_OUTPUT_TAG not in returns["tc1"]
-    assert deps.runtime.current_request_tokens_after_spill is not None
-    assert deps.runtime.current_request_tokens_after_spill <= 50_000
+    assert deps.runtime.current_request_tokens_estimate is not None
+    assert deps.runtime.current_request_tokens_estimate <= 50_000
 
 
 @pytest.mark.asyncio
@@ -171,8 +171,8 @@ async def test_uses_cached_threshold(tmp_path: Path):
 
     returns = _collect_returns(out)
     assert PERSISTED_OUTPUT_TAG in returns["tc1"]
-    assert deps.runtime.current_request_tokens_after_spill is not None
-    assert deps.runtime.current_request_tokens_after_spill <= 12_000
+    assert deps.runtime.current_request_tokens_estimate is not None
+    assert deps.runtime.current_request_tokens_estimate <= 12_000
 
 
 @pytest.mark.asyncio

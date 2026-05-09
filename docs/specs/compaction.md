@@ -15,7 +15,7 @@ USER PROMPT
   ▼
 run_turn() (orchestrate.py:run_turn)
   ├── reset_for_turn()                # clears: turn_usage, status_callback, compaction_applied_this_turn,
-  │                                   #          current_request_tokens_after_spill
+  │                                   #          current_request_tokens_estimate
   └── while True:
         await _execute_stream_segment(...)
           │
@@ -208,7 +208,7 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Five fields are p
 | Field | Written by | Read by | Reset by |
 |---|---|---|---|
 | `compaction_applied_this_turn` | `compact_to_bounds`, `compact_under_budget`, `recover_overflow_history` PATH 1 (each writes inline as its commit step) | `proactive_window_processor` (zeros `reported`); `_finalize_turn` (drives transcript rewrite) | `reset_for_turn` |
-| `current_request_tokens_after_spill` | `enforce_request_size` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch) | `reset_for_turn` |
+| `current_request_tokens_estimate` | `enforce_request_size` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch) | `reset_for_turn` |
 | `tool_call_limit_run_step`, `tool_calls_in_model_turn` | `lifecycle.wrap_tool_execute` per call | L0 cap check + telemetry span | `lifecycle.wrap_tool_execute` on `ctx.run_step` change |
 | `previous_compaction_summary` | `compact_to_bounds`, `compact_under_budget` (only on summarizer success) | `_compose_compacted_history` reads it (iterative-update prompt branch); `gather_compaction_context` (skip flag) | `/new`, `/clear` |
 | `post_compaction_token_estimate` | `compact_to_bounds`, `compact_under_budget`, `recover_overflow_history` PATH 1 | `proactive_window_processor` (cross-turn stale guard) | `/new`, `/clear`; proactive on observed fresh `ModelResponse` |
@@ -353,7 +353,7 @@ L2's per-request cap. Operates on the **full message list** at `ModelRequestNode
 
 **Span.** `tool_budget.enforce_request_size` — emitted by tracer `co-cli.tool_budget` on every call. Attributes: `budget.context_window_tokens`, `request.threshold_tokens / tokens_before / local_tokens / reported_tokens / tokens_after / candidates_count / spillable_count / spilled_count / spill_errors / spill_fired (bool) / skip_reason`.
 
-**Threshold.** `deps.spill_threshold_tokens = int(spill_ratio × model_max_ctx)`, computed once at bootstrap and cached on `CoDeps`. The `compaction.spill_ratio` knob is validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths. (Runtime side effect on `current_request_tokens_after_spill`: see §1.5.)
+**Threshold.** `deps.spill_threshold_tokens = int(spill_ratio × model_max_ctx)`, computed once at bootstrap and cached on `CoDeps`. The `compaction.spill_ratio` knob is validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths. (Runtime side effect on `current_request_tokens_estimate`: see §1.5.)
 
 **Worked example.** Multi-batch turn: history contains three `ModelRequest`s carrying tool returns of 24K chars (≈ 6K tokens) each, plus a small head. Threshold = 6K tokens.
 

@@ -129,6 +129,33 @@ def spill_if_oversized(
         return content
 
 
+def spill_with_span(
+    content: str,
+    *,
+    tool_name: str,
+    tool_results_dir: Path,
+    threshold_chars: int | float,
+    forced: bool = False,
+) -> str:
+    """Spill content to disk if oversized, always emitting a tracing span."""
+    span_threshold = SPILL_THRESHOLD_CHARS if math.isinf(threshold_chars) else int(threshold_chars)
+    content_chars = len(content)
+    spill_fired = False
+    if content_chars > threshold_chars:
+        new_content = spill_if_oversized(content, tool_results_dir, tool_name, force=forced)
+        spill_fired = new_content != content
+        content = new_content
+    with _TRACER.start_as_current_span("tool_budget.spill_tool_result") as span:
+        span.set_attribute("tool.name", tool_name)
+        span.set_attribute("spill.threshold_chars", span_threshold)
+        span.set_attribute("spill.content_chars", content_chars)
+        span.set_attribute("spill.fired", spill_fired)
+        span.set_attribute("spill.forced", forced)
+        if spill_fired:
+            span.set_attribute("spill.savings_chars", content_chars - len(content))
+    return content
+
+
 _TMP_RESULT_NAME_RE = re.compile(r"^[0-9a-f]+\.txt\.tmp\.(\d+)\.[0-9a-f]+$")
 
 
@@ -224,27 +251,12 @@ def tool_output(
         if info and info.spill_threshold_chars is not None
         else SPILL_THRESHOLD_CHARS
     )
-    content_chars = len(display)
-    spill_fired = False
-    if content_chars > threshold:
-        new_display = spill_if_oversized(
-            display,
-            ctx.deps.tool_results_dir,
-            tool_name,
-        )
-        spill_fired = new_display != display
-        display = new_display
-
-    span_threshold = SPILL_THRESHOLD_CHARS if math.isinf(threshold) else int(threshold)
-    with _TRACER.start_as_current_span("tool_budget.spill_tool_result") as span:
-        span.set_attribute("tool.name", tool_name)
-        span.set_attribute("spill.threshold_chars", span_threshold)
-        span.set_attribute("spill.content_chars", content_chars)
-        span.set_attribute("spill.fired", spill_fired)
-        span.set_attribute("spill.forced", False)
-        if spill_fired:
-            span.set_attribute("spill.savings_chars", content_chars - len(display))
-
+    display = spill_with_span(
+        display,
+        tool_name=tool_name,
+        tool_results_dir=ctx.deps.tool_results_dir,
+        threshold_chars=threshold,
+    )
     return ToolReturn(return_value=display, metadata=metadata or None)
 
 

@@ -129,14 +129,12 @@ def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
     count = ctx.deps.runtime.compaction_skip_count
     # skips_since_trip == 0 blocks the initial trip; probes fire every PROBE_EVERY skips after that
     skips_since_trip = count - _COMPACTION_BREAKER_TRIP
-    if count >= _COMPACTION_BREAKER_TRIP and (
-        skips_since_trip == 0 or skips_since_trip % _COMPACTION_BREAKER_PROBE_EVERY != 0
-    ):
-        log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
-        return (False, False)
-    if count >= _COMPACTION_BREAKER_TRIP:
+    if count < _COMPACTION_BREAKER_TRIP:
+        return (True, False)
+    if skips_since_trip != 0 and skips_since_trip % _COMPACTION_BREAKER_PROBE_EVERY == 0:
         return (True, True)
-    return (True, False)
+    log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
+    return (False, False)
 
 
 async def summarize_dropped_messages(
@@ -557,8 +555,8 @@ async def proactive_window_processor(
 
             span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
             span.set_attribute(
-                "compaction.request_tokens_after_spill",
-                ctx.deps.runtime.current_request_tokens_after_spill or -1,
+                "compaction.request_tokens_estimate",
+                ctx.deps.runtime.current_request_tokens_estimate or -1,
             )
 
             if token_count <= token_threshold:

@@ -432,7 +432,7 @@ def enforce_request_size(
             span.set_attribute("request.spill_errors", errors)
             span.set_attribute("request.spill_fired", spilled > 0)
             span.set_attribute("request.skip_reason", skip_reason)
-            deps.runtime.current_request_tokens_after_spill = tokens_after
+            deps.runtime.current_request_tokens_estimate = tokens_after
 
         if trigger <= threshold:
             _emit_terminal("below_threshold", tokens_after=trigger)
