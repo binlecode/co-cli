@@ -201,7 +201,7 @@ case and the span emits both attributes. Pin
 
 ---
 
-### TASK 3: Proactive's `except Exception` leaks partial runtime state
+### TASK 3: Proactive's `except Exception` leaks partial runtime state ✓ DONE
 
 **Symptom.** If any code path in `proactive_window_processor` AFTER
 `apply_compaction` raises (e.g., savings computation hits a

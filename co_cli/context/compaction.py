@@ -64,9 +64,10 @@ __all__ = [
     "TODO_SNAPSHOT_PREFIX",
     "CompactionBoundaries",
     "TurnGroup",
-    "apply_compaction",
     "build_compaction_marker",
     "build_todo_snapshot",
+    "compact_to_bounds",
+    "compact_under_budget",
     "estimate_message_tokens",
     "find_first_run_end",
     "gather_compaction_context",
@@ -95,28 +96,11 @@ def _reset_thrash_state(ctx: RunContext[CoDeps]) -> None:
     system needed to compact, so crediting it as a clean resync prevents the
     gate from staying tripped and suppressing the next proactive run. The hint
     re-arms with the counter per the banner-text contract. Not called from
-    ``apply_compaction``: proactive callers must NOT reset on every successful
-    compaction (the thrash gate is there to suppress repeated low-yield runs).
+    ``compact_under_budget``: proactive callers must NOT reset on every
+    successful compaction (the thrash gate is there to suppress repeated
+    low-yield runs).
     """
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
-
-
-def _mark_compaction_applied(ctx: RunContext[CoDeps], result: list[ModelMessage]) -> None:
-    """Pin compaction-applied runtime state in one place.
-
-    Sets ``compaction_applied_this_turn``, ``post_compaction_token_estimate``,
-    and ``message_count_at_last_compaction``. Called by both ``apply_compaction``
-    and the strip-only-fits path of ``recover_overflow_history`` so the field
-    set is locked to a single write site and cannot drift between the two paths.
-
-    Does NOT call ``_reset_thrash_state`` — that's recovery-specific (see its
-    docstring); folding it in would silently change the proactive sliding-window
-    path's semantics. Does NOT touch ``previous_compaction_summary`` — that is
-    summarizer-success state, owned by ``apply_compaction``'s summary path.
-    """
-    ctx.deps.runtime.compaction_applied_this_turn = True
-    ctx.deps.runtime.post_compaction_token_estimate = estimate_message_tokens(result)
-    ctx.deps.runtime.message_count_at_last_compaction = len(result)
 
 
 _COMPACTION_BREAKER_TRIP: int = 3
@@ -253,43 +237,73 @@ def _preserve_search_tool_breadcrumbs(
     return result
 
 
-async def apply_compaction(
+async def _compose_compacted_history(
     ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-    bounds: CompactionBoundaries,
     *,
-    announce: bool,
+    head: list[ModelMessage],
+    dropped: list[ModelMessage],
+    tail: list[ModelMessage],
     focus: str | None = None,
+    announce: bool = False,
 ) -> tuple[list[ModelMessage], str | None]:
-    """Assemble a compacted history from bounds and set runtime flags.
+    """Run the gated summarizer over ``dropped``, build the marker, and assemble.
 
-    Bounds may come from ``plan_compaction_boundaries`` (automatic compaction) or
-    represent a full-history replacement ``(0, n, n)`` (manual ``/compact``). When
-    summarization is unavailable (no model, circuit breaker tripped, or LLM
-    failure), assembly continues with a static marker.
-
-    Returns ``(result, summary_text)``. ``summary_text`` is None when the
-    summarizer fell back to a static marker, letting callers log success
-    conditionally.
+    Pure: does NOT commit runtime, does NOT compute savings. Shared by both
+    public compaction functions. ``announce`` flows through to
+    ``_gated_summarize_or_none`` (status callback fires after gate check, before
+    LLM call).
     """
-    head_end, tail_start, dropped_count = bounds
-    dropped = messages[head_end:tail_start]
     previous_summary = ctx.deps.runtime.previous_compaction_summary
     summary_text = await _gated_summarize_or_none(
         ctx, dropped, announce=announce, focus=focus, previous_summary=previous_summary
     )
-    if summary_text is not None:
-        ctx.deps.runtime.previous_compaction_summary = summary_text
-    marker = build_compaction_marker(dropped_count, summary_text)
+    marker = build_compaction_marker(len(dropped), summary_text)
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
     result = [
-        *messages[:head_end],
+        *head,
         marker,
         *([todo_snapshot] if todo_snapshot is not None else []),
         *_preserve_search_tool_breadcrumbs(dropped),
-        *messages[tail_start:],
+        *tail,
     ]
-    _mark_compaction_applied(ctx, result)
+    return result, summary_text
+
+
+async def compact_to_bounds(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+    bounds: CompactionBoundaries,
+    *,
+    focus: str | None = None,
+) -> tuple[list[ModelMessage], str | None]:
+    """Atomic compaction at caller-supplied bounds.
+
+    Slices ``messages`` by ``bounds``, summarizes the dropped middle, assembles
+    the new history, and commits runtime — all in one call. Used by recovery
+    PATH 2 (planner-supplied bounds) and ``/compact`` (full-history bounds
+    ``(0, n, n)``). Both callers emit their own status messaging upstream, so
+    no announce.
+
+    Returns ``(result, summary_text)``. ``summary_text`` is None when the
+    summarizer fell back to a static marker.
+    """
+    head_end, tail_start, _ = bounds
+    result, summary_text = await _compose_compacted_history(
+        ctx,
+        head=messages[:head_end],
+        dropped=messages[head_end:tail_start],
+        tail=messages[tail_start:],
+        focus=focus,
+        announce=False,
+    )
+    # Pre-compute before any runtime write so a token-estimator failure leaves
+    # runtime untouched (partial-commit prevention).
+    post_token_estimate = estimate_message_tokens(result)
+    ctx.deps.runtime.compaction_applied_this_turn = True
+    ctx.deps.runtime.post_compaction_token_estimate = post_token_estimate
+    ctx.deps.runtime.message_count_at_last_compaction = len(result)
+    if summary_text is not None:
+        ctx.deps.runtime.previous_compaction_summary = summary_text
     return result, summary_text
 
 
@@ -299,11 +313,11 @@ async def recover_overflow_history(
 ) -> list[ModelMessage] | None:
     """Single-tier overflow recovery: strip-then-summarize.
 
-    Step 1: strip every ToolReturnPart to a per-tool semantic marker (no
+    PATH 1: strip every ToolReturnPart to a per-tool semantic marker (no
             ``COMPACTABLE_TOOLS`` filter, no recency cap, no boundary). If the
             stripped history fits the budget, return it directly — no LLM call.
 
-    Step 2: run ``plan_compaction_boundaries`` + ``apply_compaction`` on the
+    PATH 2: run ``plan_compaction_boundaries`` + ``compact_to_bounds`` on the
             stripped history. Returns None when the planner cannot find valid
             bounds (e.g. only one turn group total) — caller (run_turn) drives
             the terminal error path.
@@ -317,10 +331,14 @@ async def recover_overflow_history(
         return None
 
     stripped = strip_all_tool_returns(messages)
+    stripped_tokens = estimate_message_tokens(stripped)
 
     budget = resolve_compaction_budget(ctx.deps)
-    if estimate_message_tokens(stripped) <= budget:
-        _mark_compaction_applied(ctx, stripped)
+    if stripped_tokens <= budget:
+        # PATH 1: strip-only-fits — no LLM, no marker, just commit and return.
+        ctx.deps.runtime.compaction_applied_this_turn = True
+        ctx.deps.runtime.post_compaction_token_estimate = stripped_tokens
+        ctx.deps.runtime.message_count_at_last_compaction = len(stripped)
         _reset_thrash_state(ctx)
         return stripped
 
@@ -332,26 +350,33 @@ async def recover_overflow_history(
             "budget=%d tail_fraction=%.2f token_count=%d — terminal.",
             budget,
             cfg.tail_fraction,
-            estimate_message_tokens(stripped),
+            stripped_tokens,
         )
         return None
 
-    result, _ = await apply_compaction(ctx, stripped, bounds, announce=False)
+    # PATH 2: atomic compact_to_bounds (commits runtime internally).
+    result, _ = await compact_to_bounds(ctx, stripped, bounds, focus=None)
     _reset_thrash_state(ctx)
     return result
 
 
-async def _run_window_compaction(
+async def compact_under_budget(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
     budget: int,
-) -> list[ModelMessage] | None:
-    """Plan boundaries and apply compaction.
+    tokens_before: int,
+) -> tuple[list[ModelMessage] | None, str | None]:
+    """Atomic proactive compaction under budget pressure.
 
-    Called after the caller's gate checks have already passed. Returns the
-    original ``messages`` reference unchanged when boundary planning fails;
-    otherwise returns a freshly-constructed list. Per-layer state updates
-    (e.g. proactive thrash tracking) are the caller's responsibility.
+    Plans bounds from ``budget``, summarizes the dropped middle, computes
+    savings using ``tokens_before`` as the denominator (same value the trigger
+    used — ``max(local, reported)``), updates the thrash counter, emits OTEL
+    execution attributes onto the current span, and commits runtime. Commit is
+    the last step before returning; any exception before it leaves runtime
+    untouched (the caller's bare ``except`` returns original messages).
+
+    Returns ``(None, None)`` when the bounds planner fails (e.g., only one
+    turn group). Used only by ``proactive_window_processor``.
     """
     cfg = ctx.deps.config.compaction
     bounds = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
@@ -362,7 +387,7 @@ async def _run_window_compaction(
             budget,
             cfg.tail_fraction,
         )
-        return None
+        return None, None
 
     head_end, tail_start, dropped_count = bounds
     tail_count = len(messages) - tail_start
@@ -377,10 +402,46 @@ async def _run_window_compaction(
         len(messages),
         tail_count,
     )
-    result, summary_text = await apply_compaction(ctx, messages, bounds, announce=True)
+
+    result, summary_text = await _compose_compacted_history(
+        ctx,
+        head=messages[:head_end],
+        dropped=messages[head_end:tail_start],
+        tail=messages[tail_start:],
+        focus=None,
+        announce=True,
+    )
     if summary_text is not None:
         log.info("Sliding window: summarised %d messages inline", dropped_count)
-    return result
+
+    tokens_after = estimate_message_tokens(result)
+    savings = (tokens_before - tokens_after) / tokens_before if tokens_before > 0 else 0.0
+    log.debug(
+        "Compaction result: tokens %d→%d (saved %.0f%%) msgs %d→%d",
+        tokens_before,
+        tokens_after,
+        savings * 100,
+        len(messages),
+        len(result),
+    )
+
+    span = otel_trace.get_current_span()
+    span.set_attribute("compaction.tokens_after", tokens_after)
+    span.set_attribute("compaction.savings_pct", round(savings * 100, 1))
+    span.set_attribute("compaction.msgs_after", len(result))
+
+    if savings < cfg.min_proactive_savings:
+        ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
+    else:
+        ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+
+    ctx.deps.runtime.compaction_applied_this_turn = True
+    ctx.deps.runtime.post_compaction_token_estimate = tokens_after
+    ctx.deps.runtime.message_count_at_last_compaction = len(result)
+    if summary_text is not None:
+        ctx.deps.runtime.previous_compaction_summary = summary_text
+
+    return result, summary_text
 
 
 async def proactive_window_processor(
@@ -516,37 +577,14 @@ async def proactive_window_processor(
                 span.set_attribute("compaction.skip_reason", "anti_thrash_gate")
                 return messages
 
-            result = await _run_window_compaction(ctx, messages, budget)
+            result, _ = await compact_under_budget(
+                ctx, messages, budget, tokens_before=token_count
+            )
             if result is None:
                 span.set_attribute("compaction.fired", False)
                 span.set_attribute("compaction.skip_reason", "no_boundary")
                 return messages
-
-            tokens_after_local = estimate_message_tokens(result)
-            tokens_before_effective = token_count  # max(local, reported) — same as trigger
-            tokens_after_effective = tokens_after_local  # provider hasn't seen result yet
-            savings = (
-                (tokens_before_effective - tokens_after_effective) / tokens_before_effective
-                if tokens_before_effective > 0
-                else 0.0
-            )
-            log.debug(
-                "Compaction result: tokens %d→%d (saved %.0f%%) msgs %d→%d",
-                tokens_before_effective,
-                tokens_after_effective,
-                savings * 100,
-                len(messages),
-                len(result),
-            )
             span.set_attribute("compaction.fired", True)
-            span.set_attribute("compaction.tokens_after", tokens_after_effective)
-            span.set_attribute("compaction.savings_pct", round(savings * 100, 1))
-            span.set_attribute("compaction.msgs_after", len(result))
-
-            if savings < cfg.min_proactive_savings:
-                ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
-            else:
-                ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
             return result
     except Exception:
         log.warning("Mid-turn compaction failed — skipping", exc_info=True)

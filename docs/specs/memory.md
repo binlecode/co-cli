@@ -68,7 +68,7 @@ Rules:
 - Session path is stable for the lifetime of the conversation — no child sessions.
 - `CoSessionState.persisted_message_count` is the only durability cursor.
 - `load_transcript()` skips malformed lines and refuses to load files > 50 MB.
-- `history_compacted` is sourced from `deps.runtime.compaction_applied_this_turn` by `_finalize_turn()` in `co_cli/main.py`; see compaction.md §2.3 for when `apply_compaction` sets it.
+- `history_compacted` is sourced from `deps.runtime.compaction_applied_this_turn` by `_finalize_turn()` in `co_cli/main.py`; see compaction.md §1.5 / §2.6 for the four call sites that set it (`compact_to_bounds`, `compact_under_budget`, `recover_overflow_history` PATH 1).
 
 Oversized tool results appear as `<persisted-output>` placeholders in history (spilled to `tool-results/`); see compaction.md §2.1 M1 for thresholds, placeholder format, and per-tool overrides. Transcript files are `chmod 0o600`.
 
