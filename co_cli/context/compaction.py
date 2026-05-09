@@ -150,7 +150,7 @@ async def summarize_dropped_messages(
     a model is configured and the circuit breaker permits the LLM call. Raises on
     summarizer failure (including ``asyncio.CancelledError``).
     """
-    enrichment = gather_compaction_context(ctx, dropped)
+    enrichment = gather_compaction_context(ctx)
     return await summarize_messages(
         ctx.deps,
         dropped,

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.8.152]
+
+### Refactor
+- **Enricher simplification — `gather_compaction_context`.** Dropped `_gather_file_paths` and `_gather_prior_summaries` (recoverable LLM-side); removed four cap constants (`_FILE_PATHS_MAX_CHARS`, `_PRIOR_SUMMARIES_MAX_CHARS`, `_CONTEXT_MAX_CHARS`, `_cap()` helper); simplified function signature (dropped unused `dropped` parameter); extracted `_format_active_todos` shared formatter to eliminate bullet-format drift between `_gather_session_todos` and `build_todo_snapshot`. Single remaining source (session todos) has clear session-orthogonal value. ~50 lines removed.
+
+### Docs
+- **`docs/specs/compaction.md` §2.6.3** — Enrichment table reduced to one source row (session todos); cap table reduced to one entry; rationale updated.
+
 ## [0.8.150]
 
 ### Test

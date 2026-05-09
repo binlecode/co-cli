@@ -10,20 +10,13 @@ from __future__ import annotations
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
-    ModelMessage,
     ModelRequest,
-    ModelResponse,
-    ToolCallPart,
     UserPromptPart,
 )
 
 from co_cli.deps import CoDeps
-from co_cli.tools.categories import FILE_TOOLS
 
-_FILE_PATHS_MAX_CHARS = 1_500
 _TODOS_MAX_CHARS = 1_500
-_PRIOR_SUMMARIES_MAX_CHARS = 2_000
-_CONTEXT_MAX_CHARS = 4_000
 
 STATIC_MARKER_PREFIX = "[CONTEXT COMPACTION — STATIC MARKER] "
 """Sentinel prefix for static (no-LLM) compaction markers.
@@ -37,8 +30,6 @@ SUMMARY_MARKER_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] This session is
 """Stable sentinel prefix for post-compaction LLM summary markers.
 
 Only ``summary_marker`` starts its ``UserPromptPart`` content with this string.
-``_gather_prior_summaries`` matches on this prefix to embed prior summaries in
-the summarizer enrichment context.
 
 Note: old session transcripts from before STATIC_MARKER_PREFIX was introduced
 may contain static markers that also start with this prefix. Those are
@@ -108,26 +99,6 @@ def is_compaction_marker(content: object) -> bool:
     return content.startswith(SUMMARY_MARKER_PREFIX) or content.startswith(STATIC_MARKER_PREFIX)
 
 
-def _gather_file_paths(dropped: list[ModelMessage]) -> str | None:
-    """Extract file working set from ToolCallPart.args in the dropped range.
-
-    Scoped to ``dropped`` only — paths already visible in the preserved tail
-    would duplicate in the enrichment and waste summarizer attention.
-    ``ToolCallPart.args`` is never truncated by ``dedup_tool_results``
-    so the args of dropped calls are still readable here.
-    """
-    file_paths: set[str] = set()
-    for msg in dropped:
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, ToolCallPart) and part.tool_name in FILE_TOOLS:
-                    args = part.args_as_dict()
-                    path = args.get("path") or args.get("file_path")
-                    if path:
-                        file_paths.add(path)
-    return f"Files touched: {', '.join(sorted(file_paths)[:20])}" if file_paths else None
-
-
 def _active_todos(todos: list) -> list:
     """Return only todos whose status is pending or in_progress."""
     if not todos:
@@ -135,13 +106,18 @@ def _active_todos(todos: list) -> list:
     return [t for t in todos if t.get("status") not in ("completed", "cancelled")]
 
 
+def _format_active_todos(active: list) -> list[str]:
+    """Format active todo items as bullet lines."""
+    return [f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in active[:10]]
+
+
 def _gather_session_todos(todos: list) -> str | None:
     """Format pending session todos for compaction context."""
     active = _active_todos(todos)
     if not active:
         return None
-    todo_lines = [f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in active[:10]]
-    return "Active tasks:\n" + "\n".join(todo_lines)
+    result = "Active tasks:\n" + "\n".join(_format_active_todos(active))
+    return result[:_TODOS_MAX_CHARS]
 
 
 def build_todo_snapshot(todos: list) -> ModelRequest | None:
@@ -154,68 +130,16 @@ def build_todo_snapshot(todos: list) -> ModelRequest | None:
     active = _active_todos(todos)
     if not active:
         return None
-    todo_lines = [f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in active[:10]]
-    content = TODO_SNAPSHOT_PREFIX + "\n" + "\n".join(todo_lines)
+    content = TODO_SNAPSHOT_PREFIX + "\n" + "\n".join(_format_active_todos(active))
     return ModelRequest(parts=[UserPromptPart(content=content)])
 
 
-def _gather_prior_summaries(dropped: list[ModelMessage]) -> str | None:
-    """Extract prior summary text from dropped messages."""
-    summaries: list[str] = []
-    for msg in dropped:
-        if isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if (
-                    isinstance(part, UserPromptPart)
-                    and isinstance(part.content, str)
-                    and part.content.startswith(SUMMARY_MARKER_PREFIX)
-                ):
-                    summaries.append(f"Prior summary:\n{part.content}")
-    return "\n\n".join(summaries) if summaries else None
+def gather_compaction_context(ctx: RunContext[CoDeps]) -> str | None:
+    """Side-channel context the summarizer can't recover from dropped messages.
 
-
-def _cap(text: str | None, limit: int) -> str | None:
-    """Truncate ``text`` to ``limit`` chars; pass through None."""
-    if text is None:
-        return None
-    return text if len(text) <= limit else text[:limit]
-
-
-def gather_compaction_context(
-    ctx: RunContext[CoDeps],
-    dropped: list[ModelMessage],
-) -> str | None:
-    """Gather side-channel context for the summarizer from sources that survive truncation.
-
-    Sources, all scoped to the dropped range or session state:
-    1. File working set from ToolCallPart.args in ``dropped``
-    2. Pending session todos from ``ctx.deps.session``
-    3. Prior-summary text from ``dropped`` — skipped when
-       ``ctx.deps.runtime.previous_compaction_summary`` is non-None, because the
-       iterative-update prompt branch already embeds that content as PREVIOUS SUMMARY;
-       including it again as enrichment would duplicate it inside the prompt.
-
-    Each source is capped independently so a long entry in one source cannot
-    starve the others. The joined result is then bounded by ``_CONTEXT_MAX_CHARS``
-    as a final safety net.
-
-    Returns None when no context was gathered.
+    Session todos live on ``ctx.deps.session``, not in the conversation
+    history, so the summarizer cannot infer them from message content alone.
+    File paths and prior summaries are recoverable LLM-side and intentionally
+    omitted.
     """
-    prior_summaries = (
-        None
-        if ctx.deps.runtime.previous_compaction_summary is not None
-        else _gather_prior_summaries(dropped)
-    )
-    context_parts = [
-        p
-        for p in [
-            _cap(_gather_file_paths(dropped), _FILE_PATHS_MAX_CHARS),
-            _cap(_gather_session_todos(ctx.deps.session.session_todos), _TODOS_MAX_CHARS),
-            _cap(prior_summaries, _PRIOR_SUMMARIES_MAX_CHARS),
-        ]
-        if p is not None
-    ]
-    if not context_parts:
-        return None
-    result = "\n\n".join(context_parts)
-    return result[:_CONTEXT_MAX_CHARS]
+    return _gather_session_todos(ctx.deps.session.session_todos)

@@ -492,24 +492,19 @@ After the turn, `_finalize_turn()` (`co_cli/main.py`) reads `compaction_applied_
 
 #### 2.6.3 Enrichment — `gather_compaction_context`
 
-Collects signal that survives `dedup_tool_results` / `evict_old_tool_results` / `enforce_request_size` and feeds it to `summarize_messages` as side-channel context.
+Collects session-orthogonal facts that the summarizer cannot recover from the message history and feeds them to `summarize_messages` as side-channel context. Only session-orthogonal state is enriched — file paths and prior summaries are recoverable from `ToolCallPart.args` and the conversation history respectively, so the summarizer handles them LLM-side.
 
-| Source | Function | Per-source filter / cap | Why it survives recency clearing |
+| Source | Function | Filter / cap | Why it can't be inferred from messages |
 |---|---|---|---|
-| File paths | `_gather_file_paths(dropped)` | `ToolCallPart.args` of tools in `FILE_TOOLS`; reads `args.get("path") or args.get("file_path")`; deduped, sorted, **first 20** | Recency-clearing rewrites `ToolReturnPart.content` only — `ToolCallPart.args` is never touched. |
-| Session todos | `_gather_session_todos(session_todos)` | `_active_todos` filter (status NOT in `{completed, cancelled}`); **first 10** | Read from `ctx.deps.session.session_todos`; orthogonal to the message list. |
-| Prior summaries | `_gather_prior_summaries(dropped)` | Matches `UserPromptPart.content.startswith(SUMMARY_MARKER_PREFIX)` in `dropped`; **skipped at the caller** when `runtime.previous_compaction_summary is not None` (iterative branch already embeds it as `PREVIOUS SUMMARY:`) | Marker prefix is unique and never rewritten by recency processors. |
+| Session todos | `_gather_session_todos(session_todos)` | `_active_todos` filter (status NOT in `{completed, cancelled}`); first 10; `_TODOS_MAX_CHARS` hard cap | Read from `ctx.deps.session.session_todos`; orthogonal to the message list. |
 
-**Char caps** (constants in `_compaction_markers.py`):
+**Char cap** (constant in `_compaction_markers.py`):
 
 | Cap | Value | Scope |
 |---|---|---|
-| `_FILE_PATHS_MAX_CHARS` | 1,500 | per-source truncation for file-paths block |
-| `_TODOS_MAX_CHARS` | 1,500 | per-source truncation for todos block |
-| `_PRIOR_SUMMARIES_MAX_CHARS` | 2,000 | per-source truncation for prior-summaries block |
-| `_CONTEXT_MAX_CHARS` | 4,000 | final hard cap on the joined result |
+| `_TODOS_MAX_CHARS` | 1,500 | hard cap on the todos block |
 
-Per-source caps are applied independently so a long entry in one source cannot starve the others. Returns `None` when every source yields empty/None — `summarize_messages` then runs without an enrichment block.
+Returns `None` when no active todos exist — `summarize_messages` then runs without an enrichment block.
 
 #### 2.6.4 `summarize_messages` — LLM call
 
