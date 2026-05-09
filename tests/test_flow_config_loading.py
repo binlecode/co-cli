@@ -1,47 +1,15 @@
-"""Consolidated E2E tests for test_flow_bootstrap_session."""
+"""Behavioral tests for config loading at startup — dotenv, env precedence, security, skills.
+
+Covers: load_config() (dotenv merging, env precedence, knowledge sub-settings),
+check_security() (.env permissions), and load_skills() (project skill registration).
+"""
 
 from pathlib import Path
 
-from tests._settings import SETTINGS, SETTINGS_NO_MCP
+from tests._settings import SETTINGS
 
-from co_cli.bootstrap.core import restore_session
 from co_cli.bootstrap.security import check_security
 from co_cli.config.core import load_config
-from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
-from co_cli.display.core import TerminalFrontend
-from co_cli.memory.session import session_filename
-from co_cli.tools.shell_backend import ShellBackend
-
-
-def _make_deps(tmp_path: Path) -> CoDeps:
-    return CoDeps(
-        shell=ShellBackend(),
-        memory_store=None,
-        config=SETTINGS_NO_MCP,
-        session=CoSessionState(),
-        runtime=CoRuntimeState(),
-        sessions_dir=tmp_path / "sessions",
-        knowledge_dir=tmp_path / "knowledge",
-    )
-
-
-def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
-    """restore_session() must pick the most recent session by lexicographic filename sort."""
-    from datetime import UTC, datetime
-
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir(parents=True)
-    older = datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC)
-    newer = datetime(2026, 4, 11, 12, 0, 0, tzinfo=UTC)
-    old_path = sessions_dir / session_filename(older, "aaaaaaaa-0000-0000-0000-000000000000")
-    new_path = sessions_dir / session_filename(newer, "bbbbbbbb-0000-0000-0000-000000000000")
-    old_path.touch()
-    new_path.touch()
-
-    deps = _make_deps(tmp_path)
-    result = restore_session(deps, TerminalFrontend())
-
-    assert result == new_path, "restore_session() must pick the most recently dated session"
 
 
 def test_load_config_dotenv_applied(tmp_path: Path) -> None:

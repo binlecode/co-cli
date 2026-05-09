@@ -1,9 +1,13 @@
-"""Behavioral tests for persist_session_history and load_transcript round-trip.
+"""Behavioral tests for session persistence — restore, transcript round-trip, oversized read.
 
-Production path: co_cli/memory/transcript.py
+Production paths:
+  - co_cli/bootstrap/core.py:restore_session — picks the most recent session at startup.
+  - co_cli/memory/transcript.py — append/load/in-place rewrite.
+
 No LLM needed — filesystem only.
 
 Each test guards a specific regression:
+- test_restore_session_picks_most_recent: glob ordering bug → wrong session resumed.
 - test_normal_turn_appends_delta_to_existing_session: delta append miscounts
   cause messages to be written twice or skipped on reload.
 - test_compaction_rewrites_session_in_place: compaction must overwrite the
@@ -12,17 +16,23 @@ Each test guards a specific regression:
   must be rejected to prevent OOM.
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.memory.session import new_session_path
+from co_cli.bootstrap.core import restore_session
+from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
+from co_cli.display.core import TerminalFrontend
+from co_cli.memory.session import new_session_path, session_filename
 from co_cli.memory.transcript import (
     MAX_TRANSCRIPT_READ_BYTES,
     append_messages,
     load_transcript,
     persist_session_history,
 )
+from co_cli.tools.shell_backend import ShellBackend
 
 
 def _req(content: str) -> ModelRequest:
@@ -31,6 +41,39 @@ def _req(content: str) -> ModelRequest:
 
 def _resp(content: str) -> ModelResponse:
     return ModelResponse(parts=[TextPart(content=content)])
+
+
+def _make_deps(tmp_path: Path) -> CoDeps:
+    return CoDeps(
+        shell=ShellBackend(),
+        memory_store=None,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+        runtime=CoRuntimeState(),
+        sessions_dir=tmp_path / "sessions",
+        knowledge_dir=tmp_path / "knowledge",
+    )
+
+
+def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
+    """restore_session() must pick the most recent session by lexicographic filename sort.
+
+    Failure mode: glob/sort order bug → user resumes the oldest session at startup,
+    losing access to their most recent conversation.
+    """
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True)
+    older = datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC)
+    newer = datetime(2026, 4, 11, 12, 0, 0, tzinfo=UTC)
+    old_path = sessions_dir / session_filename(older, "aaaaaaaa-0000-0000-0000-000000000000")
+    new_path = sessions_dir / session_filename(newer, "bbbbbbbb-0000-0000-0000-000000000000")
+    old_path.touch()
+    new_path.touch()
+
+    deps = _make_deps(tmp_path)
+    result = restore_session(deps, TerminalFrontend())
+
+    assert result == new_path, "restore_session() must pick the most recently dated session"
 
 
 def test_normal_turn_appends_delta_to_existing_session(tmp_path: Path) -> None:

@@ -337,14 +337,14 @@ Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
 
 | Property | Test file |
 | --- | --- |
-| FTS5 search finds an indexed artifact entry | `tests/test_flow_memory_search.py` |
-| `mutate_artifact` replace preserves frontmatter | `tests/test_flow_memory_lifecycle.py` |
-| `mutate_artifact` append adds to body | `tests/test_flow_memory_lifecycle.py` |
-| Session restore picks the most recent transcript | `tests/test_flow_bootstrap_session.py` |
+| FTS5 search finds an indexed artifact entry | `tests/test_flow_memory_store.py` |
+| `mutate_artifact` replace preserves frontmatter | `tests/test_flow_memory_write.py` |
+| `mutate_artifact` append adds to body | `tests/test_flow_memory_write.py` |
+| Session restore picks the most recent transcript | `tests/test_flow_session_persistence.py` |
 | `grep_recall` returns artifact matched by title only | `tests/test_flow_memory_recall.py` |
 | `_list_artifacts` delegates to index when store is available | `tests/test_flow_memory_recall.py` |
 | `save_artifact` URL dedup uses O(1) index when `memory_store` set | `tests/test_flow_memory_write.py` |
-| `sync_dir(no_chunk=True)` stores one chunk per file; `get_chunk_content()` returns full body; hash-skip on rerun | `tests/test_flow_memory_store_nochunk.py` |
+| `sync_dir(no_chunk=True)` stores one chunk per file; `get_chunk_content()` returns full body; hash-skip on rerun | `tests/test_flow_memory_store.py` |
 | `_sync_canon_store()` indexes real canon files; no-ops on `store=None` / `personality=None` | `tests/test_flow_bootstrap_canon.py` |
 | Canon hits flow through `_search_artifacts()` with `channel='artifacts'`, `kind='canon'`, full body in `snippet`; returns no canon hits on no store or no personality | `tests/test_flow_canon_recall.py` |
 | Waterfall pass count cap stops at `_ARTIFACTS_WATERFALL_CHUNK_CAP`; size cap stops before count cap when chunks are large | `tests/test_flow_artifacts_waterfall_cap.py` |

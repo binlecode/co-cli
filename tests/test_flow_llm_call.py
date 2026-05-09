@@ -1,4 +1,4 @@
-"""Tests for the non-agent LLM call primitive."""
+"""Tests for the non-agent LLM call primitive — noreason and reasoning paths."""
 
 import asyncio
 
@@ -6,7 +6,7 @@ import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
-from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.call import llm_call
@@ -57,3 +57,23 @@ async def test_llm_call_threads_message_history():
             message_history=history,
         )
     assert "ZEPHYR" in result.upper()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_model_settings_drive_real_call():
+    """reasoning_model_settings() must produce ModelSettings the configured provider accepts.
+
+    Tests above cover the noreason path (llm_call defaults to settings_noreason). This
+    test guards the reasoning path — exercises the provider-aware dispatch in
+    LlmSettings.reasoning_model_settings() against a real provider call.
+    """
+    settings = SETTINGS_NO_MCP.llm.reasoning_model_settings()
+    await ensure_ollama_warm(TEST_LLM.model)
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
+        result = await llm_call(
+            _DEPS,
+            "Reply with the single word: PONG",
+            model_settings=settings,
+        )
+    assert isinstance(result, str)
+    assert result.strip()

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.8.150]
+
+### Test
+- **Test surface hygiene — file consolidation.** Five merges, one split/rename, two test deletions, and 3x near-identical delegation tests parametrized into one. Files reduced 40 → 34 (−15%); tests 204 → 202 (−2). Suite green at 202 passed in 155.85s. Specifics:
+  - `test_flow_llm_settings.py` → folded into `test_flow_llm_call.py` (single reasoning-settings test alongside 3 noreason tests, same `llm_call` surface).
+  - `test_flow_memory_lifecycle.py` → folded into `test_flow_memory_write.py` (`mutate_artifact` replace test joins the existing `mutate_artifact` group).
+  - `test_flow_memory_search.py` → folded into `test_flow_memory_store_nochunk.py`; the combined file renamed to `test_flow_memory_store.py` (covers chunked FTS5 + `no_chunk=True` + `get_chunk_content` end-to-end, all `MemoryStore` direct).
+  - `test_flow_mcp_spill.py` + `test_flow_spill_threshold.py` → unified `test_flow_spill.py` covering both the `spill_if_oversized` helper and the `CoToolLifecycle.after_tool_execute` MCP path in one place.
+  - `test_flow_compact_command.py` → folded into `test_flow_slash_commands.py` (slash-command tests grouped: `/clear` + `/compact`).
+  - `test_flow_bootstrap_session.py` was a 4-concern grab-bag; split: `test_restore_session_picks_most_recent` → `test_flow_session_persistence.py` (its actual home), remainder renamed to `test_flow_config_loading.py` (load_config dotenv/env, security checks, skill loading).
+  - `test_flow_agent_delegation.py`: deleted redundant `test_reason_raises_model_retry_beyond_max_depth` (subsumed by `_at_max_depth`); folded `test_fork_deps_depth_propagates_through_chain` into a combined `test_fork_deps_increments_agent_depth` (single-level test alone passes the bug class where production sets `depth=1` constant rather than incrementing); 3x near-identical depth tests for `reason`/`knowledge_analyze`/`web_research` parametrized into one (3 collected instances, same coverage).
+  - Bundled coworker test-hygiene edit: `test_flow_compaction_proactive.py` deletion of `test_post_compaction_failure_leaves_runtime_clean` (used `monkeypatch`, forbidden by `agent_docs/testing.md`).
+
+### Docs
+- **`docs/specs/compaction.md`** — replaced 4 references to deleted `test_flow_spill_threshold.py` with `test_flow_spill.py`; removed stale row pointing to long-deleted `test_flow_spill_otel.py`; added new MCP-lifecycle test row.
+- **`docs/specs/memory.md`** — updated test-gate refs after the memory_search → memory_store, memory_lifecycle → memory_write, and bootstrap_session → session_persistence moves.
+
 ## [0.8.149]
 
 ### Fixed

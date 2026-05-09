@@ -1,8 +1,9 @@
-"""Tests for MemoryStore.sync_dir(no_chunk=True) and get_chunk_content()."""
+"""Tests for MemoryStore — chunked FTS5 search and sync_dir(no_chunk=True) + get_chunk_content()."""
 
 from pathlib import Path
 
-from tests._settings import SETTINGS
+import yaml
+from tests._settings import SETTINGS, make_settings
 
 from co_cli.memory.memory_store import MemoryStore
 
@@ -114,5 +115,51 @@ def test_hash_skip_produces_zero_writes_on_rerun(tmp_path: Path) -> None:
 
         second = store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)
         assert second == 0, f"expected 0 files indexed on second run (hash-skip), got {second}"
+    finally:
+        store.close()
+
+
+# ---------------------------------------------------------------------------
+# Chunked FTS5 search — default sync_dir path used by knowledge artifacts
+# ---------------------------------------------------------------------------
+
+
+def _write_knowledge_file(path: Path, *, body: str) -> None:
+    fm = {
+        "id": "test-1",
+        "kind": "knowledge",
+        "artifact_kind": "user",
+        "created": "2026-01-01T00:00:00+00:00",
+    }
+    path.write_text(
+        f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body}\n",
+        encoding="utf-8",
+    )
+
+
+def test_fts5_search_finds_indexed_entry(tmp_path: Path) -> None:
+    """MemoryStore FTS5-only path must return results for a synced artifact."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    _write_knowledge_file(knowledge_dir / "001-test.md", body="Finch the robot dog test")
+
+    config = make_settings(
+        knowledge=SETTINGS.knowledge.model_copy(
+            update={
+                "search_backend": "fts5",
+                "embedding_provider": "none",
+                "cross_encoder_reranker_url": None,
+            }
+        ),
+    )
+    expected_path = str(knowledge_dir / "001-test.md")
+    store = MemoryStore(config=config, memory_db_path=tmp_path / "search.db")
+    try:
+        store.sync_dir("knowledge", knowledge_dir)
+        results = store.search("Finch robot", sources=["knowledge"], limit=5)
+        assert len(results) > 0, "FTS5 search returned no results for a synced artifact"
+        assert results[0].path == expected_path, (
+            f"expected result path {expected_path!r}, got {results[0].path!r}"
+        )
     finally:
         store.close()
