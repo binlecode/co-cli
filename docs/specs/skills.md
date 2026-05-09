@@ -92,7 +92,7 @@ Skills that fail a gate are skipped, not loaded in a degraded state.
 
 ### Security Scan
 
-Skill content is scanned by `_scan_skill_content()` using static regex checks before or during load. Current warning classes include:
+Skill content is scanned by `scan_skill_content()` using static regex checks before or during load. Current warning classes include:
 
 1. credential exfiltration patterns
 2. curl or wget piped into shell
@@ -181,7 +181,40 @@ The built-in `/skills` command family is implemented in `_cmd_skills()` and rela
 
 Installed skills are written to `~/.co-cli/skills/`.
 
-## 3. Config
+## 3. Model-Callable Surface
+
+The model can discover and manage skills via three always-visible tools registered in `co_cli/tools/system/skills.py`.
+
+### Read tools
+
+| Tool | Purpose |
+| --- | --- |
+| `skills_list(category=None)` | List all model-callable skills (name + description). Skills with `disable-model-invocation: true` are excluded. `category` is accepted for hermes parity but is a pass-through today (no category field on `SkillConfig`). |
+| `skill_view(name, file_path=None)` | Return a skill's full SKILL.md body and an empty `linked_files` dict. Plugin-qualified names (`plugin:skill`) are accepted; the prefix is stripped and the bare name used. `spill_threshold_chars=inf` so the body always lands inline regardless of size. `file_path` always returns `tool_error` (co-cli flat-file model has no linked files today). |
+
+### Write tool
+
+`skill_manage(action, name, ...)` is the single write entry point. Action routing:
+
+| Action | Behaviour |
+| --- | --- |
+| `create` | Write new `<name>.md` to `user_skills_dir`; reject if already exists; validate frontmatter (`description` required, ≤ 1 024 chars); run security scan; rollback (delete) on flag; reload. |
+| `edit` | Full rewrite of an existing user-installed skill; validate + scan + rollback on flag; reload. |
+| `patch` | Find-and-replace within a skill body; `replace_all=False` enforces exactly one match; scan + rollback on flag; reload. |
+| `delete` | Remove user-installed skill; reload; returns `shadowed_bundled=true` when a bundled skill of the same name becomes active. |
+| `write_file` / `remove_file` | Parity stubs — return `tool_error` (linked-file loader not yet built). |
+
+**Bundled-skill protection.** `edit`, `patch`, and `delete` reject any name that exists only in the bundled directory with a "copy to `~/.co-cli/skills/` first" error.
+
+**Security scan.** After every successful write, `scan_skill_content()` is run on the full file text. If any pattern fires (credential exfil, pipe-to-shell, destructive shell, prompt injection), the write is rolled back and `tool_error` is returned listing the matched pattern names.
+
+**Reload on success.** After any successful write, `load_skills()` + `set_skill_commands()` re-populate `deps.skill_commands` so the new/changed skill is immediately dispatchable in the same session.
+
+**Approval.** `skill_manage` is `approval=True`. The approval subject is scoped per-action and per-skill (`tool:skill_manage:<action>:<name>`), so allow-rules can be narrowed at that granularity.
+
+**Deferred items.** `write_file`/`remove_file` and `patch` with `file_path` require a skills-as-directories loader (not yet built). `category` routing requires adding a `category` field to `SkillConfig` and loader. See `RESEARCH-skills-peers-tiers.md §T3-D`.
+
+## 4. Config
 
 The skill system is lightly configured. The main runtime dependencies are the resolved skill paths on `CoDeps`.
 
@@ -193,16 +226,16 @@ The skill system is lightly configured. The main runtime dependencies are the re
 
 There is no separate skills config object today.
 
-## 4. Files
+## 5. Files
 
 | File | Purpose |
 | --- | --- |
 | `co_cli/skills/skill_types.py` | `SkillConfig` frozen dataclass |
-| `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `_scan_skill_content`, `_check_requires` |
+| `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content`, `_check_requires` |
 | `co_cli/skills/installer.py` | `fetch_skill_content`, `write_skill_file`, `discover_skill_files`, `find_skill_source_url`, `read_skill_meta` |
-| `co_cli/skills/registry.py` | `set_skill_commands()` — replaces `deps.skill_commands` |
+| `co_cli/skills/registry.py` | `set_skill_commands()` — replaces `deps.skill_commands`; `get_skill_registry()` — derives model-facing list |
 | `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/reload/upgrade) and `get_skill_registry` |
+| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/reload/upgrade) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, `_build_completer_words` |
 | `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
@@ -212,4 +245,5 @@ There is no separate skills config object today.
 | `~/.co-cli/skills/` | user-global skill files; override bundled skills on name collision |
 | `docs/specs/bootstrap.md` | when skills load during startup |
 | `docs/specs/core-loop.md` | how dispatched skill bodies flow through a normal turn |
+| `co_cli/tools/system/skills.py` | `skills_list`, `skill_view`, `skill_manage` — model-callable read and write surface |
 | `docs/specs/tools.md` | callable tool capabilities used by skills after dispatch |

@@ -30,6 +30,7 @@ def agent_tool(
     retries: int | None = None,
     spill_threshold_chars: int | float | None = None,
     check_fn: Callable | None = None,
+    approval_subject_fn: Callable | None = None,
     delegation: frozenset[str] | set[str] | None = None,
     register: bool = True,
 ) -> Callable[[F], F]:
@@ -60,6 +61,7 @@ def agent_tool(
             retries=retries,
             spill_threshold_chars=spill_threshold_chars,
             check_fn=check_fn,
+            approval_subject_fn=approval_subject_fn,
             delegation=frozenset(delegation) if delegation is not None else None,
         )
         setattr(fn, AGENT_TOOL_ATTR, info)

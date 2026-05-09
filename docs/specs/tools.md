@@ -11,7 +11,7 @@ Section 2 owns the execution flow. This section only names the files that own th
 co_cli/agent/core.py
   -> build_tool_registry(), build_agent()
 co_cli/agent/_native_toolset.py
-  -> NATIVE_TOOLS, _build_native_toolset(), _approval_resume_filter()
+  -> _build_native_toolset(), _approval_resume_filter()
 co_cli/agent/mcp.py
   -> _build_mcp_toolsets(), discover_mcp_tools()
 co_cli/tools/lifecycle.py
@@ -21,7 +21,7 @@ co_cli/tools/deferred_prompt.py
 co_cli/tools/approvals.py
   -> approval subject resolution and remembered session rules
 co_cli/tools/agent_tool.py
-  -> @agent_tool metadata attachment
+  -> @agent_tool metadata attachment, TOOL_REGISTRY (self-populating; each @agent_tool registers at import time)
 co_cli/tools/tool_io.py
   -> tool_output(), tool_output_raw(), tool_error()
 co_cli/tools/_shell_policy.py
@@ -106,7 +106,7 @@ Approval controls human permission; locks ensure structural correctness.
 
 Legend: **Tool** shows the callable signature · **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
 
-The catalog below is the native tool list from `co_cli/agent/_native_toolset.py::NATIVE_TOOLS`. MCP tools are discovered at runtime via `co_cli/agent/mcp.py`, are always DEFERRED, and are not included in the native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface. The grouping below is capability-oriented so it can be compared directly with peer inventories such as Hermes without changing the underlying visibility or approval semantics.
+The catalog below is the native tool list from `TOOL_REGISTRY` in `co_cli/tools/agent_tool.py`, populated by `@agent_tool` at import time. MCP tools are discovered at runtime via `co_cli/agent/mcp.py`, are always DEFERRED, and are not included in the native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface. The grouping below is capability-oriented so it can be compared directly with peer inventories such as Hermes without changing the underlying visibility or approval semantics.
 
 ### Interaction & Session Control
 
@@ -124,8 +124,8 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | `file_find(path=".", pattern="*", max_entries=200)` | A | — | — | — | List directory or find files by path/name pattern |
 | `file_read(path, start_line=None, end_line=None)` | A | — | — | — | Read workspace file; 500-line default cap with continuation hint; 500 KB full-read gate; 2000-char per-line truncation; fuzzy name suggestions on not-found |
 | `file_search(pattern, path=".", glob="**/*", case_insensitive=False, output_mode="content", context_lines=0, head_limit=250, offset=0)` | A | — | — | — | Regex content search across workspace; use `glob` to limit the searched file set |
-| `file_write(path, content)` | D | ✓ | ✓ | — | Create or overwrite a file |
-| `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` | D | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
+| `file_write(path, content)` | A | ✓ | ✓ | — | Create or overwrite a file |
+| `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` | A | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
 
 ### Knowledge, Memory & Skills
 
@@ -134,6 +134,9 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | `memory_search(query="", kinds=None, limit=10)` | A | — | — | — | Unified recall across saved artifacts (including `kind='canon'` scenes) and indexed past sessions; empty query browses recent sessions plus artifact inventory; keyword query returns chunk/snippet hits with no session summarizer LLM |
 | `memory_create(content, artifact_kind, title=None, description=None, source_url=None, decay_protected=False)` | A | ✓ | — | — | Persist a knowledge artifact; URL saves dedupe by `source_ref`; optional consolidation can skip, merge, or append near-duplicates |
 | `memory_modify(filename_stem, action, content, target="")` | A | ✓ | — | — | Append to or surgically replace text in an existing knowledge artifact, then reindex |
+| `skills_list(category=None)` | A | — | — | — | List model-callable skills (name + description); `category` accepted for hermes parity, pass-through today |
+| `skill_view(name, file_path=None)` | A | — | — | — | Load a skill's full SKILL.md body; plugin-qualified `plugin:skill` names are accepted; spill-threshold disabled so body always lands inline; `file_path` returns error (flat-file model, no linked files today) |
+| `skill_manage(action, name, ...)` | A | ✓ | — | — | Lifecycle write surface for user-installed skills: `create`, `edit`, `patch`, `delete`; bundled skills are read-only; security scan + rollback on every write; `write_file`/`remove_file`/`patch` with `file_path` are parity stubs |
 
 ### Web, Browser & Media
 
@@ -178,7 +181,7 @@ The catalog below is the native tool list from `co_cli/agent/_native_toolset.py:
 | `google_calendar_search(query, days_back=0, days_ahead=30, max_results=25)` | D | — | — | ✓ | Search primary-calendar events by keyword |
 | `google_gmail_draft(to, subject, body)` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
 
-**Total: 37 native tools** (14 ALWAYS · 23 DEFERRED · 7 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically)
+**Total: 36 native tools** (18 ALWAYS · 18 DEFERRED · 7 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically)
 
 ## 4. Config
 
