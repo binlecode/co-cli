@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.158]
+
+### Refactor
+- **Compaction API surface — collapse multi-path to single primitive.** Removed `compact_under_budget` and `compact_to_bounds` from the public surface; added `compact_messages(ctx, messages, bounds, *, focus)` (shared assembly primitive — slices, runs gated summarizer, builds marker, returns `(result, summary_text)` without writing runtime) and `commit_compaction(ctx, result)` (sole writer of the three "applied" runtime fields). Proactive-only policy (savings, status callback, OTEL execution attributes, thrash counter, commit) bundled into private helper `_record_proactive_outcome`. `_gated_summarize_or_none` drops its `announce` parameter — opening status callback always fires when the gate is open. Three callers (`proactive_window_processor`, `recover_overflow_history` PATH 1+2, `/compact`) all use `compact_messages` + `commit_compaction` with their own policy layered on top. Eliminates leaky `tokens_before` parameter, triplicated runtime-commit code, and asymmetric public API.
+
+### Docs
+- **`docs/specs/compaction.md`** — §1.1 trace, §1.2 layered budget, §1.3 mermaid diagram, §1.5 runtime flag map + sole-callback paragraph, §2.5 STEPs framing + Task-3 invariant + STEP 6, §2.6 callers table + callstack diagram + commit table, §2.7 PATH 1/PATH 2/thrash-reset, §4 files table — all synced to new API.
+- **`docs/specs/memory.md`** §2.1, **`docs/specs/core-loop.md`** §3 — cross-spec references updated.
+
 ## [0.8.154]
 
 ### Feature

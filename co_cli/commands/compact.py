@@ -24,7 +24,8 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     from pydantic_ai.usage import RunUsage
 
     from co_cli.context.compaction import (
-        compact_to_bounds,
+        commit_compaction,
+        compact_messages,
         estimate_message_tokens,
         resolve_compaction_budget,
     )
@@ -39,12 +40,13 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     raw_model = ctx.deps.model.model if ctx.deps.model else None
     run_ctx: RunContext[CoDeps] = RunContext(deps=ctx.deps, model=raw_model, usage=RunUsage())
     console.print("[dim]Compacting conversation...[/dim]")
-    new_history, summary = await compact_to_bounds(
+    new_history, summary = await compact_messages(
         run_ctx,
         ctx.message_history,
         (0, old_len, old_len),
         focus=args.strip() or None,
     )
+    commit_compaction(run_ctx, new_history)
     new_history.append(
         ModelResponse(
             parts=[_TextPart(content="Understood. I have the conversation context.")],
