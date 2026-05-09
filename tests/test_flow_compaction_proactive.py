@@ -178,7 +178,8 @@ def test_gate_open_before_trip(count: int) -> None:
     failures, blocking the LLM prematurely.
     """
     ctx, _ = _gate_ctx(count)
-    assert _summarization_gate_open(ctx) is True
+    gate_open, _ = _summarization_gate_open(ctx)
+    assert gate_open is True
 
 
 @pytest.mark.parametrize(
@@ -195,7 +196,8 @@ def test_gate_closed_after_trip(count: int) -> None:
     making every subsequent call a live LLM probe (circuit breaker never engages).
     """
     ctx, _ = _gate_ctx(count)
-    assert _summarization_gate_open(ctx) is False
+    gate_open, _ = _summarization_gate_open(ctx)
+    assert gate_open is False
 
 
 def test_gate_open_at_first_probe() -> None:
@@ -205,7 +207,8 @@ def test_gate_open_at_first_probe() -> None:
     silently skipped), leaving the LLM permanently bypassed after any 3 failures.
     """
     ctx, _ = _gate_ctx(_COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY)
-    assert _summarization_gate_open(ctx) is True
+    gate_open, _ = _summarization_gate_open(ctx)
+    assert gate_open is True
 
 
 @pytest.mark.parametrize(
@@ -222,7 +225,8 @@ def test_gate_closed_between_probes(count: int) -> None:
     making every call post-probe a live LLM attempt (probe cadence lost).
     """
     ctx, _ = _gate_ctx(count)
-    assert _summarization_gate_open(ctx) is False
+    gate_open, _ = _summarization_gate_open(ctx)
+    assert gate_open is False
 
 
 def test_gate_open_at_second_probe() -> None:
@@ -232,7 +236,8 @@ def test_gate_open_at_second_probe() -> None:
     cycle, leaving the LLM permanently blocked after the first probe fails.
     """
     ctx, _ = _gate_ctx(_COMPACTION_BREAKER_TRIP + 2 * _COMPACTION_BREAKER_PROBE_EVERY)
-    assert _summarization_gate_open(ctx) is True
+    gate_open, _ = _summarization_gate_open(ctx)
+    assert gate_open is True
 
 
 @pytest.mark.asyncio

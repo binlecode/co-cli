@@ -113,17 +113,18 @@ PROBE_EVERY counts thereafter (23, 33, …). A successful probe resets the count
 """
 
 
-def _summarization_gate_open(ctx: RunContext[CoDeps]) -> bool:
+def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
     """Decide whether the LLM summarizer may run for the next compaction pass.
 
-    Returns False when the model is absent or the circuit breaker requires a skip;
-    returns True otherwise. Increments ``compaction_skip_count`` on a breaker-blocked
-    skip so the existing probe cadence is preserved. The caller resets the count on a
-    successful summary and increments it on summarizer failure.
+    Read-only; never mutates runtime. Returns ``(gate_open, is_probe)``.
+    ``gate_open`` is False when the model is absent or the circuit breaker
+    requires a skip. ``is_probe`` is True when the breaker allows a probe
+    attempt at the current skip count. The caller owns all writes to
+    ``compaction_skip_count``.
     """
     if not ctx.deps.model:
         log.info("Compaction: model absent, using static marker")
-        return False
+        return (False, False)
 
     count = ctx.deps.runtime.compaction_skip_count
     # skips_since_trip == 0 blocks the initial trip; probes fire every PROBE_EVERY skips after that
@@ -132,11 +133,10 @@ def _summarization_gate_open(ctx: RunContext[CoDeps]) -> bool:
         skips_since_trip == 0 or skips_since_trip % _COMPACTION_BREAKER_PROBE_EVERY != 0
     ):
         log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
-        ctx.deps.runtime.compaction_skip_count += 1
-        return False
+        return (False, False)
     if count >= _COMPACTION_BREAKER_TRIP:
-        log.info("Compaction: circuit breaker probe (count=%d)", count)
-    return True
+        return (True, True)
+    return (True, False)
 
 
 async def summarize_dropped_messages(
@@ -183,8 +183,14 @@ async def _gated_summarize_or_none(
     fall-through-to-static-marker path when the summarizer raises or returns empty.
     Lets ``asyncio.CancelledError`` propagate.
     """
-    if not _summarization_gate_open(ctx):
+    gate_open, is_probe = _summarization_gate_open(ctx)
+    if not gate_open:
+        ctx.deps.runtime.compaction_skip_count += 1
         return None
+    if is_probe:
+        log.info(
+            "Compaction: circuit breaker probe (count=%d)", ctx.deps.runtime.compaction_skip_count
+        )
 
     if announce and (cb := ctx.deps.runtime.status_callback) is not None:
         cb("Compacting conversation...")

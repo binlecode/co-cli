@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.8.147]
+
+### Refactor
+- **`_summarization_gate_open` is now read-only.** Return type changed from `bool` to `tuple[bool, bool]` (`gate_open`, `is_probe`). The `compaction_skip_count += 1` increment on the circuit-breaker block path moved to `_gated_summarize_or_none`, which already owns all other write paths (failure increment, success reset). Probe log emission also moved to the caller. All five cadence tests updated to unpack the tuple.
+
 ## [0.8.146]
 
 ### Feature

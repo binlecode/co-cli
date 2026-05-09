@@ -302,7 +302,7 @@ is the original `messages`.
 
 ## Tier B — Anti-patterns and robustness
 
-### TASK 4: Restore CQS for `compaction_skip_count` state machine
+### TASK 4: Restore CQS for `compaction_skip_count` state machine ✓ DONE
 
 **Symptom.** Circuit-breaker state is mutated from two functions with
 read-mutate paths interleaved across the file. Auditing the cadence
