@@ -358,7 +358,7 @@ required.
 
 ---
 
-### TASK 5: Rename `current_request_tokens_after_spill`
+### TASK 5: Rename `current_request_tokens_after_spill` ✓ DONE
 
 **Symptom.** Field is set on every `enforce_request_size` invocation
 including the `below_threshold` and `no_candidates` fast paths where no
@@ -382,7 +382,7 @@ future consumer would draw the wrong inference.
 
 ---
 
-### TASK 6: Unify spill entry points (native `tool_output` + MCP)
+### TASK 6: Unify spill entry points (native `tool_output` + MCP) ✓ DONE
 
 **Symptom.** Two spill paths drift independently:
 
