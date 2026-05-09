@@ -20,6 +20,7 @@ from co_cli.context.history_processors import (
 )
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_io import spill_if_oversized
 
 _DEPS = CoDeps(shell=ShellBackend(), config=SETTINGS_NO_MCP, session=CoSessionState())
 
@@ -204,3 +205,25 @@ def test_evict_protects_tool_returns_in_last_turn():
         if isinstance(p, ToolReturnPart) and p.tool_call_id == "prot"
     )
     assert protected.content == protected_content
+
+
+# ---------------------------------------------------------------------------
+# Lone surrogate resilience
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_tolerates_lone_surrogate_content():
+    """dedup_tool_results must not raise UnicodeEncodeError on lone-surrogate content."""
+    surrogate_content = "\ud800prefix" * 100  # lone surrogate, well above 200-char floor
+    messages = [
+        *_file_read_exchange("call1", surrogate_content),
+        ModelResponse(parts=[TextPart(content="done")]),
+        *_file_read_exchange("call2", surrogate_content),
+    ]
+    dedup_tool_results(_ctx(), messages)  # must not raise
+
+
+def test_spill_tolerates_lone_surrogate_content(tmp_path):
+    """spill_if_oversized must not raise UnicodeEncodeError on lone-surrogate content."""
+    surrogate_content = "\ud800prefix" * 100  # lone surrogate, well above preview floor
+    spill_if_oversized(surrogate_content, tmp_path, "test_tool", force=True)  # must not raise

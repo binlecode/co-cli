@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.8.149]
+
+### Fixed
+- `/compact` now clears `previous_compaction_summary` when the summarizer falls back to a static marker, preventing the next proactive compaction from prepending a stale iterative summary that references history that no longer exists.
+
 ## [0.8.148]
 
 ### Refactor

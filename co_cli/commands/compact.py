@@ -51,6 +51,8 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         )
     )
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+    if summary is None:
+        ctx.deps.runtime.previous_compaction_summary = None
 
     post_tokens = estimate_message_tokens(new_history)
     budget = resolve_compaction_budget(ctx.deps)
