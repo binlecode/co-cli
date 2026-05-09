@@ -337,3 +337,84 @@ async def test_thrash_counter_not_incremented_for_reported_driven_compaction() -
     assert deps.runtime.consecutive_low_yield_proactive_compactions == 0, (
         "Reported-driven compaction must not increment the thrash counter"
     )
+
+
+# --- Closing status callback tests ---
+
+
+@pytest.mark.asyncio
+async def test_closing_callback_fires_compacted_on_success() -> None:
+    """Closing status callback must fire 'Compacted.' after a successful LLM summarization.
+
+    Deletion regression: would not detect a future change that silences the closing
+    callback, leaving 'Compacting conversation...' as the stale final status.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_TIGHT_MODEL,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        model_max_ctx=200,
+    )
+    captured: list[str] = []
+    deps.runtime.status_callback = captured.append
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
+    messages = _above_threshold_messages()
+
+    await ensure_ollama_warm(TEST_LLM.model)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        result = await proactive_window_processor(ctx, messages)
+
+    assert result is not messages
+    assert "Compacted." in captured
+
+
+@pytest.mark.asyncio
+async def test_closing_callback_fires_unavailable_when_no_model() -> None:
+    """Closing status callback must fire 'LLM compaction unavailable...' when model is absent.
+
+    Deletion regression: would not detect a future change that leaves the no-model
+    path silent, giving no feedback when a static marker is silently inserted.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=None,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        model_max_ctx=200,
+    )
+    captured: list[str] = []
+    deps.runtime.status_callback = captured.append
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    messages = _above_threshold_messages()
+
+    result = await proactive_window_processor(ctx, messages)
+
+    assert result is not messages
+    assert "LLM compaction unavailable — used static marker." in captured
+
+
+@pytest.mark.asyncio
+async def test_closing_callback_fires_failed_when_breaker_tripped() -> None:
+    """Closing status callback must fire 'Summarizer failed...' when the circuit breaker is tripped.
+
+    Deletion regression: would not detect a future change that silences the
+    callback on the breaker path, hiding that a static marker was used.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_TIGHT_MODEL,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        model_max_ctx=200,
+    )
+    deps.runtime.compaction_skip_count = _COMPACTION_BREAKER_TRIP
+    captured: list[str] = []
+    deps.runtime.status_callback = captured.append
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
+    messages = _above_threshold_messages()
+
+    result = await proactive_window_processor(ctx, messages)
+
+    assert result is not messages
+    assert "Summarizer failed — used static marker." in captured

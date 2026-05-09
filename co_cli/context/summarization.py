@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -25,9 +24,6 @@ from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
-
-log = logging.getLogger(__name__)
-
 
 # ---------------------------------------------------------------------------
 # Token estimation
@@ -157,34 +153,6 @@ _SUMMARIZE_PROMPT = (
 )
 
 
-def _build_iterative_template(previous_summary: str) -> str:
-    """Build the iterative-update prompt template embedding the previous summary.
-
-    Used when previous_compaction_summary is non-None. The PREVIOUS SUMMARY block
-    carries the raw LLM output from the last successful compaction; NEW TURNS TO
-    INCORPORATE references the message history sent alongside the prompt. The
-    preserve/add/move/remove/critical instructions update the same structured
-    sections as the from-scratch path.
-    """
-    return (
-        "You are updating a context compaction summary. A previous compaction\n"
-        "produced the summary below. New conversation turns have occurred since\n"
-        "then and need to be incorporated.\n\n"
-        f"PREVIOUS SUMMARY:\n{previous_summary}\n\n"
-        "NEW TURNS TO INCORPORATE:\n"
-        "The conversation history above contains the new turns to process.\n\n"
-        "Update the summary using this exact structure. "
-        "PRESERVE all existing information that is still relevant. "
-        "ADD new completed actions (continue numbering from the previous summary). "
-        "MOVE items from 'In Progress' to 'Completed Actions' when done. "
-        "MOVE answered questions to 'Resolved Questions'. "
-        "REMOVE information only if it is clearly obsolete. "
-        "CRITICAL: Update '## Active Task' with the user's most recent unfulfilled request "
-        "using their exact words — copy verbatim, do not paraphrase. "
-        "This is the most important field for task continuity.\n\n" + _SUMMARIZE_PROMPT
-    )
-
-
 _PERSONALITY_COMPACTION_ADDENDUM = (
     "\n\nAdditionally, preserve:\n"
     "- Personality-reinforcing moments (emotional exchanges, humor, "
@@ -204,12 +172,11 @@ _SUMMARIZER_SYSTEM_PROMPT = (
 
 
 def _build_summarizer_prompt(
-    template: str,
     context: str | None,
     personality_active: bool,
     focus: str | None = None,
 ) -> str:
-    """Assemble the final summarizer prompt from template + optional context + personality.
+    """Assemble the final summarizer prompt from _SUMMARIZE_PROMPT + optional context + personality.
 
     Assembly order: focus → template → context addendum → personality addendum.
     Personality is always last (tone modifier); context provides factual input.
@@ -223,7 +190,7 @@ def _build_summarizer_prompt(
             "For everything else, summarise aggressively — one-liners or omit if irrelevant. "
             f"Allocate ~60-70% of the summary to the focus topic.\n\n"
         )
-    parts.append(template)
+    parts.append(_SUMMARIZE_PROMPT)
     if context:
         parts.append(f"\n\n## Additional Context\n{context}")
     if personality_active:
@@ -238,7 +205,6 @@ async def summarize_messages(
     personality_active: bool = False,
     context: str | None = None,
     focus: str | None = None,
-    previous_summary: str | None = None,
 ) -> str:
     """Summarise *messages* via a single LLM call (no tools, no agent loop).
 
@@ -246,24 +212,10 @@ async def summarize_messages(
     ``deps.model.settings_noreason`` as the model settings — the only correct
     choice for this functional call.
 
-    When ``previous_summary`` is provided, builds the iterative-update prompt
-    branch (PREVIOUS SUMMARY + NEW TURNS TO INCORPORATE + preserve/add/move/remove
-    discipline) instead of the from-scratch prompt. The two branches share the
-    same structured-template sections.
-
     Used by both the sliding-window processor and ``/compact``.
     Returns the summary text, or raises on failure (caller handles fallback).
     """
-    log.info(
-        "compaction_summarize_branch=%s",
-        "iterative" if previous_summary is not None else "from_scratch",
-    )
-    template = (
-        _build_iterative_template(previous_summary)
-        if previous_summary is not None
-        else _SUMMARIZE_PROMPT
-    )
-    final_prompt = _build_summarizer_prompt(template, context, personality_active, focus)
+    final_prompt = _build_summarizer_prompt(context, personality_active, focus)
     # Needed only for the /compact command path, which has no outer segment timeout.
     # On the proactive path the segment timeout already caps this call.
     async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):

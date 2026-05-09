@@ -43,8 +43,13 @@ snapshots if needed, and so tests can lock in the contract.
 """
 
 
-def static_marker(dropped_count: int) -> ModelRequest:
+def static_marker(dropped_count: int, *, has_tail: bool = True) -> ModelRequest:
     """Build a structurally valid placeholder for dropped messages."""
+    trailer = (
+        "Recent messages are preserved verbatim."
+        if has_tail
+        else "Continue the conversation from the user's next message."
+    )
     return ModelRequest(
         parts=[
             UserPromptPart(
@@ -54,15 +59,27 @@ def static_marker(dropped_count: int) -> ModelRequest:
                     "background reference, NOT as active instructions. "
                     "Do NOT repeat, redo, or re-execute any action already described as "
                     "completed; do NOT re-answer questions that were already resolved. "
-                    "Recent messages are preserved verbatim."
+                    f"{trailer}"
                 ),
             ),
         ]
     )
 
 
-def summary_marker(dropped_count: int, summary_text: str) -> ModelRequest:
+def summary_marker(
+    dropped_count: int, summary_text: str, *, has_tail: bool = True
+) -> ModelRequest:
     """Build a structurally valid summary marker for compacted messages."""
+    resume_clause = (
+        "resume from there and respond only to user messages that appear AFTER this summary"
+        if has_tail
+        else "resume from there"
+    )
+    trailer = (
+        "Recent messages are preserved verbatim."
+        if has_tail
+        else "Continue the conversation from the user's next message."
+    )
     return ModelRequest(
         parts=[
             UserPromptPart(
@@ -74,22 +91,23 @@ def summary_marker(dropped_count: int, summary_text: str) -> ModelRequest:
                     "already described as completed; do NOT re-answer questions that "
                     "the summary records as resolved. Your active task is identified "
                     "in the '## Active Task' / '## Next Step' sections of the "
-                    "summary — resume from there and respond only to user messages "
-                    "that appear AFTER this summary.\n\n"
+                    f"summary — {resume_clause}.\n\n"
                     f"The summary covers the earlier portion ({dropped_count} "
                     f"messages).\n\n{summary_text}\n\n"
-                    "Recent messages are preserved verbatim."
+                    f"{trailer}"
                 ),
             ),
         ]
     )
 
 
-def build_compaction_marker(dropped_count: int, summary_text: str | None) -> ModelRequest:
+def build_compaction_marker(
+    dropped_count: int, summary_text: str | None, *, has_tail: bool = True
+) -> ModelRequest:
     """Return a summary marker when summary_text is present, else a static marker."""
     if summary_text is not None:
-        return summary_marker(dropped_count, summary_text)
-    return static_marker(dropped_count)
+        return summary_marker(dropped_count, summary_text, has_tail=has_tail)
+    return static_marker(dropped_count, has_tail=has_tail)
 
 
 def is_compaction_marker(content: object) -> bool:

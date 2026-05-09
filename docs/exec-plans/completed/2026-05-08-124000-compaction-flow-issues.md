@@ -36,7 +36,7 @@ change; verify via existing summarization tests.
 
 ---
 
-## TASK 1: Remove branch B
+## TASK 1: Remove branch B ✓ DONE
 
 **Surface to remove:**
 
@@ -75,7 +75,7 @@ change; verify via existing summarization tests.
 
 ---
 
-## TASK 2: Closing status callback after compaction
+## TASK 2: Closing status callback after compaction ✓ DONE
 
 **Fix.** Move closing-status emission into `compact_to_bounds` and
 `compact_under_budget` (post-`_gated_summarize_or_none`):
@@ -102,7 +102,7 @@ breaker-tripped / summarizer-raises) assert the expected closing message.
 
 ---
 
-## TASK 3: Marker text accuracy when no tail preserved
+## TASK 3: Marker text accuracy when no tail preserved ✓ DONE
 
 **Fix.** Parameterize markers with `has_tail: bool = True`.
 

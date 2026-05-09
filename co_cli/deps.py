@@ -145,7 +145,6 @@ class CoRuntimeState:
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions,
-      previous_compaction_summary,
       post_compaction_token_estimate, message_count_at_last_compaction
     """
 
@@ -174,10 +173,6 @@ class CoRuntimeState:
     # the configured minimum savings threshold.
     # Reset by compaction.py when overflow recovery or hygiene fires.
     consecutive_low_yield_proactive_compactions: int = 0
-    # Raw LLM-generated summary text from the most recent successful compaction —
-    # feeds the iterative-update prompt branch on the next compaction. None on session
-    # start; reset by /new and /clear; untouched by /compact failures and /resume.
-    previous_compaction_summary: str | None = None
     # Cross-turn stale-token suppression: set by apply_compaction / emergency_recover to
     # a local char-based estimate of the post-compaction message list. Used by
     # proactive_window_processor as the `reported` value until a fresh ModelResponse

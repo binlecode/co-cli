@@ -102,40 +102,38 @@ flowchart TD
         direction LR
         OV1["recover_overflow_history"] --> OV2["strip_all_tool_returns"]
         OV2 --> OV3{"fits budget?"}
-        OV3 -->|yes| OV4["retry"]
+        OV3 -->|yes| OV4["retry → re-enter pipeline"]
         OV3 -->|no| OV5["plan_compaction_boundaries"] --> OV6{"bounds valid?"}
         OV6 -->|yes| OV7["compact_to_bounds"] --> OV4
         OV6 -->|no| OV8["terminal error"]
     end
 
-    subgraph SUM["LLM summarization (called by C2 / OV7 / /compact)"]
+    COMPACT(["/compact"])
+
+    subgraph SUM["LLM summarization"]
         direction LR
         GC["gather_compaction_context"]
-        GC --> GC1["file paths\nfrom ToolCallPart.args\n(FILE_TOOLS, ≤20, ≤1.5K chars)"]
         GC --> GC2["active session todos\n(pending/in_progress, ≤10, ≤1.5K chars)"]
-        GC --> GC3["prior summaries\n(SUMMARY_MARKER_PREFIX,\nskipped if previous_compaction_summary set)\n(≤2K chars)"]
-        GC1 --> ENR["enrichment\n(joined ≤4K chars)"]
-        GC2 --> ENR
-        GC3 --> ENR
-        ENR --> SUMM["summarize_messages\n(LLM, no tools)"]
+        GC2 --> SUMM["summarize_messages\n(LLM, no tools)"]
     end
 
     UPN --> C0
     HTTP -->|"200 OK"| RTYPE
     HTTP -->|"400/413"| OV1
-    OV3 --> C0
+    OV4 --> C0
     RTYPE -->|ToolCallPart| TCALL
     RTYPE -->|TextPart| FINAL
     NEXT -.->|"re-enter MRN"| C0
     C2 -.->|"threshold trip"| GC
     OV7 -.->|"strip+summarize path"| GC
+    COMPACT -.->|"compact_to_bounds"| GC
 
     classDef hook fill:#ede0f5,stroke:#9c6fc7
     classDef term fill:#d4edda,stroke:#74c476
     classDef enr fill:#fff8dc,stroke:#cc9900
     class C0,C1,CE,C2,C3,M1 hook
-    class UPN,FINAL term
-    class GC,GC1,GC2,GC3,ENR,SUMM enr
+    class UPN,FINAL,COMPACT term
+    class GC,GC2,SUMM enr
 ```
 
 ### 1.4 Diagram: Message-list shape before, during, and after marker insertion
@@ -210,13 +208,12 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Five fields are p
 | `compaction_applied_this_turn` | `compact_to_bounds`, `compact_under_budget`, `recover_overflow_history` PATH 1 (each writes inline as its commit step) | `proactive_window_processor` (zeros `reported`); `_finalize_turn` (drives transcript rewrite) | `reset_for_turn` |
 | `current_request_tokens_estimate` | `enforce_request_size` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch) | `reset_for_turn` |
 | `tool_call_limit_run_step`, `tool_calls_in_model_turn` | `lifecycle.wrap_tool_execute` per call | L0 cap check + telemetry span | `lifecycle.wrap_tool_execute` on `ctx.run_step` change |
-| `previous_compaction_summary` | `compact_to_bounds`, `compact_under_budget` (only on summarizer success) | `_compose_compacted_history` reads it (iterative-update prompt branch); `gather_compaction_context` (skip flag) | `/new`, `/clear` |
 | `post_compaction_token_estimate` | `compact_to_bounds`, `compact_under_budget`, `recover_overflow_history` PATH 1 | `proactive_window_processor` (cross-turn stale guard) | `/new`, `/clear`; proactive on observed fresh `ModelResponse` |
 | `message_count_at_last_compaction` | `compact_to_bounds`, `compact_under_budget`, `recover_overflow_history` PATH 1 | `proactive_window_processor` (guard-clear test) | `/new`, `/clear`; proactive on observed fresh `ModelResponse` |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
-| `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; `_check_output_limits` (banner) | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact`, `/new`, `/clear` |
+| `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; anti-thrash banner | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact` |
 
-**Sole callback into the frontend.** `runtime.status_callback` is set by `run_turn` to `frontend.on_status` and is the only frontend hook the processor chain sees — used by `_gated_summarize_or_none` to print "Compacting conversation…". Tool progress goes through the separate `tool_progress_callback`.
+**Sole callback into the frontend.** `runtime.status_callback` is set by `run_turn` to `frontend.on_status` and is the only frontend hook the processor chain sees — used by `_gated_summarize_or_none` to print "Compacting conversation…" (opening, gate-open paths only) and by `compact_under_budget` to emit the closing status ("Compacted." / "LLM compaction unavailable — used static marker." / "Summarizer failed — used static marker."). Tool progress goes through the separate `tool_progress_callback`.
 
 **Cross-turn cleared on observed fresh response.** `post_compaction_token_estimate` and `message_count_at_last_compaction` are cleared inside `proactive_window_processor` only when a `ModelResponse` with `usage.input_tokens > 0` exists at index `>= message_count_at_last_compaction` — proving the LLM has actually seen the post-compaction context. Message-count delta alone is unreliable (post-compaction tool returns or user messages may be appended without a fresh LLM call).
 
@@ -441,8 +438,6 @@ proactive_window_processor — full path
     runtime.compaction_applied_this_turn      = True
     runtime.post_compaction_token_estimate    = tokens_after
     runtime.message_count_at_last_compaction  = len(result)
-    if summary is not None:
-        runtime.previous_compaction_summary   = summary
 ```
 
 STEPs 1–6 above are wholly inside `compact_under_budget` — proactive's atomic public function. The trigger gates (threshold + anti-thrash gate) and the trigger-check OTEL span live in `proactive_window_processor`, which calls `compact_under_budget` once. STEP 4 is the shared summarizer pipeline (`_compose_compacted_history`) — also called by `compact_to_bounds` for overflow recovery PATH 2 and `/compact`. See §2.6 for the assembly logic, enrichment helper, summarizer LLM call, and circuit breaker.
@@ -470,15 +465,15 @@ Shared LLM-summarization machinery invoked by both compaction public functions �
 
 Private util. Takes pre-sliced `head`, `dropped`, `tail` (caller decides slicing — `compact_to_bounds` slices by bounds; `compact_under_budget` slices by planner output). The util:
 
-1. Reads `runtime.previous_compaction_summary` and passes it to the summarizer (iterative branch when non-`None`).
-2. Calls `_gated_summarize_or_none(dropped, ...)` — returns `None` on gate-closed / failure / empty.
+1. Calls `_gated_summarize_or_none(dropped, ...)` — returns `None` on gate-closed / failure / empty.
+2. Computes `has_tail = len(tail) > 0`; builds marker via `build_compaction_marker(len(dropped), summary_text, has_tail=has_tail)`.
 3. Builds `result = head | marker | [todo_snapshot] | [search breadcrumbs] | tail`.
 4. Returns `(result, summary_text)`. **Does NOT write to runtime** — that's the public function's job (atomic commit step).
 
 The two atomic public functions handle the runtime commit themselves (each as the last step before return):
-- `compact_to_bounds` (recovery PATH 2 + `/compact`): writes `compaction_applied_this_turn`, `post_compaction_token_estimate`, `message_count_at_last_compaction`, and `previous_compaction_summary` (when summary succeeded). One-shot atomic.
-- `compact_under_budget` (proactive only): same writes, plus the savings-based thrash counter update — savings calc is squeezed *between* assembly and commit so a thrown exception there leaves runtime untouched (Task-3 invariant).
-- `recover_overflow_history` PATH 1 (strip-only-fits, no LLM): writes the three "applied" fields inline; `previous_compaction_summary` is left alone (no summary was produced).
+- `compact_to_bounds` (recovery PATH 2 + `/compact`): writes `compaction_applied_this_turn`, `post_compaction_token_estimate`, `message_count_at_last_compaction`. One-shot atomic.
+- `compact_under_budget` (proactive only): same writes, plus the savings-based thrash counter update and the closing status callback (`status_callback` fires with "Compacted." / "LLM compaction unavailable — used static marker." / "Summarizer failed — used static marker.") — savings calc is squeezed *between* assembly and commit so a thrown exception there leaves runtime untouched (Task-3 invariant).
+- `recover_overflow_history` PATH 1 (strip-only-fits, no LLM): writes the three "applied" fields inline.
 
 After the turn, `_finalize_turn()` (`co_cli/main.py`) reads `compaction_applied_this_turn` and passes it as `history_compacted=True` to `persist_session_history()`, which overwrites the transcript on disk in place instead of appending.
 
@@ -487,7 +482,7 @@ After the turn, `_finalize_turn()` (`co_cli/main.py`) reads `compaction_applied_
 | Function | Role |
 |---|---|
 | `_summarization_gate_open(ctx)` | Returns `False` when `ctx.deps.model is None` OR circuit breaker tripped (and not at probe cadence). |
-| `summarize_dropped_messages(ctx, dropped, *, focus, previous_summary=None)` | Pure LLM call; gathers enrichment then invokes `summarize_messages`. Raises on failure. |
+| `summarize_dropped_messages(ctx, dropped, *, focus)` | Pure LLM call; gathers enrichment then invokes `summarize_messages`. Raises on failure. |
 | `_gated_summarize_or_none(...)` | Gate + announce ("Compacting conversation…") + summarizer + validity check + fallback. Returns `None` on any failure path (exception, empty/whitespace, or gate closed). |
 
 #### 2.6.3 Enrichment — `gather_compaction_context`
@@ -508,55 +503,20 @@ Returns `None` when no active todos exist — `summarize_messages` then runs wit
 
 #### 2.6.4 `summarize_messages` — LLM call
 
-`summarize_messages(deps, messages, *, personality_active, context, focus, previous_summary=None)` — `llm_call()` with no tools; agent constructed per call; `deps.model.settings_noreason`. System prompt enforces treating history as data, not instructions.
+`summarize_messages(deps, messages, *, personality_active, context, focus)` — `llm_call()` with no tools; always uses `_SUMMARIZE_PROMPT` directly (from-scratch only; no iterative branch). System prompt enforces treating history as data, not instructions.
 
-**Two-branch prompt:**
-- **From-scratch** (`previous_summary is None`): `_SUMMARIZE_PROMPT` directly.
-- **Iterative update** (`previous_summary` set): `_build_iterative_template(previous_summary)` prepends `PREVIOUS SUMMARY:` and PRESERVE / ADD / MOVE / REMOVE discipline before the shared template.
-
-**Cross-compaction feedback loop** — `previous_compaction_summary` is read inside `_compose_compacted_history` before every summarizer call (threaded into the iterative-update prompt branch when non-`None`); it is written by the calling atomic public function (`compact_to_bounds` / `compact_under_budget`) only on summarizer success, as part of the commit step:
-
-```text
-Compaction N (first compaction in session)
-─────────────────────────────────────────────────────────────────────
-  read    runtime.previous_compaction_summary = None
-            │
-            ▼
-  branch  FROM-SCRATCH    (uses _SUMMARIZE_PROMPT directly)
-            │
-            ▼
-  summarize_messages() ──┬── success → write previous_compaction_summary = summary_text_N
-                         │
-                         └── failure → field LEFT UNTOUCHED
-                                       (still None; next compaction also FROM-SCRATCH)
-
-Compaction N+1
-─────────────────────────────────────────────────────────────────────
-  read    runtime.previous_compaction_summary = summary_text_N
-            │
-            ▼
-  branch  ITERATIVE-UPDATE
-            (prepends "PREVIOUS SUMMARY: …" + PRESERVE / ADD / MOVE / REMOVE
-             discipline, then the shared template)
-            │
-            ▼
-  summarize_messages() ──┬── success → write previous_compaction_summary = summary_text_N+1
-                         │
-                         └── failure → field LEFT UNTOUCHED
-                                       (next compaction reuses summary_text_N)
-
-Reset paths
-─────────────────────────────────────────────────────────────────────
-  /new                → previous_compaction_summary = None
-  /clear              → previous_compaction_summary = None
-  /compact failure    → field untouched (same fall-through as automatic compaction)
-```
+Prior summaries reach the LLM via `message_history` only — as `SUMMARY_MARKER_PREFIX` messages in the dropped range. The prompt's carry-forward rule ("If a prior summary exists in the conversation, integrate its content") handles PENDING→RESOLVED transitions and continuity across compaction cycles.
 
 **Template sections:** `## Active Task`, `## Goal`, `## Key Decisions`, `## User Corrections`†, `## Errors & Fixes`, `## Completed Actions`, `## In Progress`, `## Remaining Work`, `## Working Set`, `## Pending User Asks`†, `## Resolved Questions`†, `## Next Step` (verbatim drift anchor), `## Critical Context`†. (†omitted when empty)
 
 #### 2.6.5 Marker
 
-`ModelRequest` / `UserPromptPart` with a `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix, N-message count, `summary_text`, and a verbatim-tail trailer instructing the model to treat the summary as reference, not active instructions. Detection via `startswith(SUMMARY_MARKER_PREFIX)` — shared constant used by both builder and detector. The static-marker fallback uses `STATIC_MARKER_PREFIX` and the same shape minus `summary_text`.
+`ModelRequest` / `UserPromptPart` with a `[CONTEXT COMPACTION — REFERENCE ONLY]` prefix, N-message count, `summary_text`, and a trailer. Both `summary_marker` and `static_marker` accept a `has_tail` kwarg:
+
+- `has_tail=True` (proactive / overflow — tail is non-empty): trailer is "Recent messages are preserved verbatim."; `summary_marker` includes "respond only to user messages that appear AFTER this summary."
+- `has_tail=False` (`/compact` full-history bounds `(0, n, n)` — no tail): trailer is "Continue the conversation from the user's next message."; `summary_marker` drops the "AFTER this summary" clause.
+
+Detection via `startswith(SUMMARY_MARKER_PREFIX)` — shared constant used by both builder and detector. The static-marker fallback uses `STATIC_MARKER_PREFIX` and the same shape minus `summary_text`.
 
 #### 2.6.6 Breadcrumb preservation
 
@@ -581,7 +541,7 @@ Single-tier strip-then-summarize. Inlined in `run_turn`'s overflow branch (no se
 **Algorithm** (`recover_overflow_history`, cascade flow shown in Diagram 1's `OVF` subgraph):
 
 1. **Strip** every `ToolReturnPart` to a per-tool semantic marker via `strip_all_tool_returns`. No `COMPACTABLE_TOOLS` filter, no recency cap, no boundary protection — every tool return, including writes / approvals / memory ops, collapses to a one-line stub. Pairing is preserved (only `.content` is rewritten; `tool_name` and `tool_call_id` survive). Idempotent: returns whose content is already a marker (`is_cleared_marker(content)` true) pass through unchanged so re-running over an EVICT-stripped history does not degrade the size signal.
-2. **PATH 1 — Budget gate.** If `estimate_message_tokens(stripped) <= budget`, write the three "applied" runtime fields inline (`compaction_applied_this_turn`, `post_compaction_token_estimate`, `message_count_at_last_compaction`) and return the stripped history. No LLM call, no marker, no `previous_compaction_summary` write.
+2. **PATH 1 — Budget gate.** If `estimate_message_tokens(stripped) <= budget`, write the three "applied" runtime fields inline (`compaction_applied_this_turn`, `post_compaction_token_estimate`, `message_count_at_last_compaction`) and return the stripped history. No LLM call, no marker.
 3. **PATH 2 — Summarize.** Else run `plan_compaction_boundaries(stripped, budget, tail_fraction)`; if the planner returns `None` (`len(groups) < 2`, or `tail_start <= head_end`), terminal error. Otherwise call `compact_to_bounds(ctx, stripped, bounds, focus=None)` — which composes the marker + assembles the result + commits runtime atomically.
 4. **Reset thrash.** Both return paths call `_reset_thrash_state(ctx)` — recovery proves the system needed to compact, so the next proactive run is unblocked. The compaction public functions (`compact_to_bounds`, `compact_under_budget`) themselves do NOT reset thrash state (proactive callers must keep their own gate).
 
@@ -682,10 +642,7 @@ On a non-`None` result, `run_turn` sets `current_history = compacted`, clears pe
 
 | Constant | Source | Value | Purpose |
 |---|---|---|---|
-| `_FILE_PATHS_MAX_CHARS` | `co_cli/context/_compaction_markers.py` | `1,500` | Per-source truncation for the file-paths enrichment block |
-| `_TODOS_MAX_CHARS` | `co_cli/context/_compaction_markers.py` | `1,500` | Per-source truncation for the active-todos enrichment block |
-| `_PRIOR_SUMMARIES_MAX_CHARS` | `co_cli/context/_compaction_markers.py` | `2,000` | Per-source truncation for the prior-summaries enrichment block |
-| `_CONTEXT_MAX_CHARS` | `co_cli/context/_compaction_markers.py` | `4,000` | Final hard cap on the joined enrichment string fed to the summarizer |
+| `_TODOS_MAX_CHARS` | `co_cli/context/_compaction_markers.py` | `1,500` | Hard cap on the active-todos enrichment block |
 
 Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_threshold_chars=...)` in each tool's own file — see the table in §2.2.
 
@@ -745,11 +702,14 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `estimate_message_tokens` scales with content length; returns 0 for empty list | `tests/test_flow_compaction_summarization.py` |
 | `resolve_compaction_budget` returns `deps.model_max_ctx` | `tests/test_flow_compaction_summarization.py` |
 | Summarizer from-scratch branch: returns non-empty structured text | `tests/test_flow_compaction_summarization.py` |
-| Summarizer iterative branch: output incorporates prior summary and new turns | `tests/test_flow_compaction_summarization.py` |
+| Summarizer prompt template does not embed prior summary; carry-forward rule intact | `tests/test_flow_compaction_summarization.py` |
+| `static_marker` / `summary_marker` proactive shape (has_tail=True): "preserved verbatim" in marker text | `tests/test_flow_compaction_summarization.py` |
+| `static_marker` / `summary_marker` /compact shape (has_tail=False): "next message" in marker text, "preserved verbatim" absent | `tests/test_flow_compaction_summarization.py` |
+| Closing status callback: "Compacted." on success; "LLM compaction unavailable…" on no-model; "Summarizer failed…" on circuit-breaker-tripped | `tests/test_flow_compaction_proactive.py` |
 | Overflow recovery — strip-only-fits: oversized tool returns rewritten to per-tool markers; message count preserved; pending user turn preserved | `tests/test_flow_compaction_recovery.py` |
 | Overflow recovery — strip+summary path: emits static marker (model=None gate); recovered history shorter than input | `tests/test_flow_compaction_recovery.py` |
 | Overflow recovery — terminal: single-turn history returns `None` when planner cannot find bounds | `tests/test_flow_compaction_recovery.py` |
 | Overflow recovery — pairing: every `tool_call_id` in `ToolCallPart`s matches a `ToolReturnPart` (both paths) | `tests/test_flow_compaction_recovery.py` |
 | `strip_all_tool_returns` idempotent on already-marked content | `tests/test_flow_compaction_recovery.py` |
 | `is_context_overflow`: 413 is unconditional; 400 requires overflow evidence in body | `tests/test_flow_http_error_classifier.py` |
-| `/clear` resets all compaction runtime fields to initial state | `tests/test_flow_slash_commands.py` |
+| `/clear` resets compaction runtime fields (`post_compaction_token_estimate`, `message_count_at_last_compaction`) to initial state | `tests/test_flow_slash_commands.py` |

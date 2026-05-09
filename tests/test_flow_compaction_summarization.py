@@ -8,7 +8,9 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
+from co_cli.context._compaction_markers import static_marker, summary_marker
 from co_cli.context.summarization import (
+    _SUMMARIZE_PROMPT,
     estimate_message_tokens,
     resolve_compaction_budget,
     summarize_messages,
@@ -110,40 +112,49 @@ async def test_summarize_messages_from_scratch_returns_structured_text():
     assert "##" in result or "Active Task" in result or "Completed" in result
 
 
-@pytest.mark.asyncio
-async def test_summarize_messages_iterative_incorporates_new_turns():
-    """Iterative summarizer must produce output that incorporates both prior summary and new turns."""
-    prior_summary = (
-        "## Active Task\n"
-        "User asked: 'Write a function that reverses a string in Python.'\n\n"
-        "## Goal\n"
-        "Implement a string reversal utility in Python.\n\n"
-        "## Key Decisions\n"
-        "Used slice-based reversal (`[::-1]`) for simplicity over explicit loop.\n\n"
-        "## Errors & Fixes\n"
-        "None.\n\n"
-        "## Completed Actions\n"
-        "1. WRITE reverse_string.py — added reverse_string() with slice reversal [tool: file_write]\n\n"
-        "## In Progress\n"
-        "None.\n\n"
-        "## Remaining Work\n"
-        "Add tests for reverse_string().\n\n"
-        "## Working Set\n"
-        "reverse_string.py\n\n"
-        "## Next Step\n"
-        "Write unit tests. Verbatim: 'Write a function that reverses a string in Python.'\n\n"
-        "## Critical Context\n"
-        "None."
-    )
-    new_messages = [
-        ModelRequest(parts=[UserPromptPart(content="Now add a test for it.")]),
-        ModelResponse(
-            parts=[TextPart(content="Added test_reverse_string() with three assertions.")]
-        ),
-    ]
-    await ensure_ollama_warm(TEST_LLM.model)
-    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
-        result = await summarize_messages(_DEPS, new_messages, previous_summary=prior_summary)
-    assert isinstance(result, str)
-    assert result.strip()
-    assert "reverse" in result.lower()
+def test_summarize_prompt_template_does_not_embed_prior_summary():
+    """_SUMMARIZE_PROMPT must not contain iterative-branch markers.
+
+    Regression: with branch B removed, the prior summary can only reach the
+    LLM once — via message_history (as SUMMARY_MARKER in dropped messages).
+    The prompt template must never re-embed it. If 'PREVIOUS SUMMARY:' appears
+    in the template, the LLM would see the prior summary twice.
+    """
+    assert "PREVIOUS SUMMARY:" not in _SUMMARIZE_PROMPT
+    assert "NEW TURNS TO INCORPORATE" not in _SUMMARIZE_PROMPT
+    # Integration instruction must survive — carry-forward rule intact
+    assert "integrate its content" in _SUMMARIZE_PROMPT
+
+
+def test_static_marker_proactive_shape_contains_verbatim_phrase():
+    """static_marker with has_tail=True must say 'preserved verbatim'."""
+    marker = static_marker(5, has_tail=True)
+    content = marker.parts[0].content
+    assert "preserved verbatim" in content
+    assert "next message" not in content
+
+
+def test_static_marker_compact_shape_omits_verbatim_phrase():
+    """/compact-shape static_marker (has_tail=False) must say 'next message', not 'preserved verbatim'."""
+    marker = static_marker(5, has_tail=False)
+    content = marker.parts[0].content
+    assert "preserved verbatim" not in content
+    assert "next message" in content
+
+
+def test_summary_marker_proactive_shape_contains_verbatim_phrase():
+    """summary_marker with has_tail=True must say 'preserved verbatim'."""
+    marker = summary_marker(5, "## Active Task\nUser asked: 'foo'", has_tail=True)
+    content = marker.parts[0].content
+    assert "preserved verbatim" in content
+    assert "AFTER this summary" in content
+    assert "next message" not in content
+
+
+def test_summary_marker_compact_shape_omits_verbatim_phrase():
+    """/compact-shape summary_marker (has_tail=False) must say 'next message', not 'preserved verbatim'."""
+    marker = summary_marker(5, "## Active Task\nUser asked: 'foo'", has_tail=False)
+    content = marker.parts[0].content
+    assert "preserved verbatim" not in content
+    assert "next message" in content
+    assert "AFTER this summary" not in content

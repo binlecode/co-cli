@@ -142,7 +142,6 @@ async def summarize_dropped_messages(
     dropped: list[ModelMessage],
     *,
     focus: str | None = None,
-    previous_summary: str | None = None,
 ) -> str:
     """Pure summarizer call over ``dropped`` — no gate, no fallback.
 
@@ -157,7 +156,6 @@ async def summarize_dropped_messages(
         personality_active=bool(ctx.deps.config.personality),
         context=enrichment,
         focus=focus,
-        previous_summary=previous_summary,
     )
 
 
@@ -172,7 +170,6 @@ async def _gated_summarize_or_none(
     *,
     announce: bool,
     focus: str | None,
-    previous_summary: str | None = None,
 ) -> str | None:
     """Run the summarizer if the gate is open, else return None.
 
@@ -194,9 +191,7 @@ async def _gated_summarize_or_none(
         cb("Compacting conversation...")
 
     try:
-        summary_text = await summarize_dropped_messages(
-            ctx, dropped, focus=focus, previous_summary=previous_summary
-        )
+        summary_text = await summarize_dropped_messages(ctx, dropped, focus=focus)
     except Exception:
         log.warning(
             "Compaction summarization failed — falling back to static marker", exc_info=True
@@ -257,11 +252,9 @@ async def _compose_compacted_history(
     ``_gated_summarize_or_none`` (status callback fires after gate check, before
     LLM call).
     """
-    previous_summary = ctx.deps.runtime.previous_compaction_summary
-    summary_text = await _gated_summarize_or_none(
-        ctx, dropped, announce=announce, focus=focus, previous_summary=previous_summary
-    )
-    marker = build_compaction_marker(len(dropped), summary_text)
+    summary_text = await _gated_summarize_or_none(ctx, dropped, announce=announce, focus=focus)
+    has_tail = len(tail) > 0
+    marker = build_compaction_marker(len(dropped), summary_text, has_tail=has_tail)
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
     result = [
         *head,
@@ -306,8 +299,6 @@ async def compact_to_bounds(
     ctx.deps.runtime.compaction_applied_this_turn = True
     ctx.deps.runtime.post_compaction_token_estimate = post_token_estimate
     ctx.deps.runtime.message_count_at_last_compaction = len(result)
-    if summary_text is not None:
-        ctx.deps.runtime.previous_compaction_summary = summary_text
     return result, summary_text
 
 
@@ -418,6 +409,14 @@ async def compact_under_budget(
     if summary_text is not None:
         log.info("Sliding window: summarised %d messages inline", dropped_count)
 
+    if (cb := ctx.deps.runtime.status_callback) is not None:
+        if summary_text is not None:
+            cb("Compacted.")
+        elif ctx.deps.model is None:
+            cb("LLM compaction unavailable — used static marker.")
+        else:
+            cb("Summarizer failed — used static marker.")
+
     tokens_after = estimate_message_tokens(result)
     savings = (tokens_before - tokens_after) / tokens_before if tokens_before > 0 else 0.0
     log.debug(
@@ -442,8 +441,6 @@ async def compact_under_budget(
     ctx.deps.runtime.compaction_applied_this_turn = True
     ctx.deps.runtime.post_compaction_token_estimate = tokens_after
     ctx.deps.runtime.message_count_at_last_compaction = len(result)
-    if summary_text is not None:
-        ctx.deps.runtime.previous_compaction_summary = summary_text
 
     return result, summary_text
 
