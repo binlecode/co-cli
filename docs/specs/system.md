@@ -140,7 +140,7 @@ These settings most directly affect top-level system assembly.
 | --- | --- | --- | --- |
 | `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Default model provider used for the session runtime |
 | `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Ollama-compatible host used during model setup and runtime calls |
-| `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-think` | Primary model name used when building the foreground agent |
+| `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-q4_k_m-agentic` | Primary model name used when building the foreground agent |
 | `mcp_servers` | `CO_MCP_SERVERS` | bundled defaults | MCP server definitions attached during runtime assembly |
 | `personality` | `CO_PERSONALITY` | `tars` | Personality assets injected during prompt assembly |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |

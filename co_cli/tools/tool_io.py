@@ -93,13 +93,13 @@ def spill_if_oversized(
         return content
 
     try:
-        hash_prefix = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+        hash_prefix = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
         tool_results_dir.mkdir(parents=True, exist_ok=True)
         file_path = tool_results_dir / f"{hash_prefix}.txt"
 
         if not file_path.exists():
             tmp_path = file_path.with_suffix(f".txt.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
-            tmp_path.write_text(content, encoding="utf-8")
+            tmp_path.write_text(content, encoding="utf-8", errors="replace")
             os.replace(tmp_path, file_path)
 
         preview, has_more = _generate_preview(content, TOOL_RESULT_PREVIEW_CHARS)

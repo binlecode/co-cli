@@ -15,6 +15,31 @@ from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 logger = logging.getLogger(__name__)
 
 
+class _SanitizingMCPServer:
+    """Thin MCPServer proxy that sanitizes inputSchema on list_tools()."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    async def list_tools(self) -> list:
+        from co_cli.tools.mcp_schema import sanitize_mcp_schema
+
+        tools = await self._inner.list_tools()
+        for t in tools:
+            t.inputSchema = sanitize_mcp_schema(t.inputSchema or {})
+        return tools
+
+    async def __aenter__(self) -> "_SanitizingMCPServer":
+        await self._inner.__aenter__()
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self._inner.__aexit__(*args)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
 @dataclass
 class _SequentialMCPToolset(WrapperToolset):
     """Patches ToolDefinition.sequential from tool_index.is_concurrent_safe for MCP tools.
@@ -42,8 +67,9 @@ class _SequentialMCPToolset(WrapperToolset):
 class MCPToolsetEntry:
     """MCP toolset paired with its build-time policy and direct server reference.
 
-    ``server`` is the raw MCPServer (before approval_required() wrapping) so
-    ``list_tools()`` can be called directly without walking the wrapper chain.
+    ``server`` is a ``_SanitizingMCPServer`` wrapping the raw MCPServer (before
+    ``approval_required()`` wrapping) so ``list_tools()`` returns sanitized schemas
+    and can be called directly without walking the wrapper chain.
     ``approval``, ``prefix``, and ``timeout`` are recorded at build time; discovery
     reads them without inspecting wrapper topology.
     """
@@ -87,11 +113,12 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
                 tool_prefix=cfg.prefix or name,
             )
         approval = cfg.approval == "ask"
-        inner = mcp_server.approval_required() if approval else mcp_server
+        sanitizing_server = _SanitizingMCPServer(mcp_server)
+        inner = sanitizing_server.approval_required() if approval else sanitizing_server
         entries.append(
             MCPToolsetEntry(
                 toolset=DeferredLoadingToolset(inner),
-                server=mcp_server,
+                server=sanitizing_server,
                 approval=approval,
                 prefix=cfg.prefix or name,
                 timeout=cfg.timeout,

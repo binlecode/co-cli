@@ -37,7 +37,7 @@ def _content_hash(content: str) -> str:
     ``co_cli/tools/tool_io.py`` for disk-level content addressing, keeping
     hashing conventions consistent across the codebase.
     """
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
 def is_dedup_candidate(part: ToolReturnPart) -> bool:

@@ -97,7 +97,7 @@ the manual `ENV_MAP` pattern; its env vars are applied by `pydantic-settings` ma
 
 `_LLM_SETTINGS` is the central table of per-provider, per-model inference knobs —
 the canonical source of truth, not user-overridable. `model_key` is derived from
-`llm.model` by splitting on `:` (`"qwen3.5:35b-a3b"` → `"qwen3.5"`).
+`llm.model` by splitting on `:` (`"qwen3.5:35b-a3b-q4_k_m-agentic"` → `"qwen3.5"`).
 
 ```
 _inference(mode):
@@ -198,7 +198,7 @@ comma-separated strings from env vars. Blocked list takes precedence over allowe
 |---------|---------|---------|-------------|
 | `llm.provider` | `CO_LLM_PROVIDER` | `"ollama"` | Provider: `ollama` or `gemini` |
 | `llm.host` | `CO_LLM_HOST` | `"http://localhost:11434"` | Ollama server base URL |
-| `llm.model` | `CO_LLM_MODEL` | `"qwen3.5:35b-a3b"` (Ollama default) | Single model name for all tasks; falls back to `DEFAULT_LLM_MODELS[provider]` when unset |
+| `llm.model` | `CO_LLM_MODEL` | `"qwen3.5:35b-a3b-q4_k_m-agentic"` (Ollama default) | Single model name for all tasks; falls back to `DEFAULT_LLM_MODELS[provider]` when unset |
 | `llm.max_ctx` | — | `131072` | Ceiling on probed Ollama context window |
 | `llm.api_key` | `GEMINI_API_KEY` (gemini), else `CO_LLM_API_KEY` | `None` | Provider API key |
 

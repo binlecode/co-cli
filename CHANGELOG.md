@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.154]
+
+### Feature
+- **MCP schema sanitizer.** New `co_cli/tools/mcp_schema.py` — pure `sanitize_mcp_schema()` normalizes malformed MCP tool `inputSchema` dicts before they reach Ollama/Gemini backends. Handles six repair classes: bare-string type, type arrays, anyOf/oneOf nullable collapse, missing properties, missing type inference, and invalid required pruning. Recursive, idempotent, deep-copy (never mutates input).
+- **`_SanitizingMCPServer` proxy.** Every MCPServer built in `_build_mcp_toolsets()` is now wrapped in `_SanitizingMCPServer`, which sanitizes `inputSchema` on `list_tools()`. Cached-mutation pattern ensures the model-call-time schema path is also covered. Proxy correctly delegates `__aenter__`/`__aexit__` for context manager lifecycle.
+
+### Config
+- **Default model corrected** to `qwen3.5:35b-a3b-q4_k_m-agentic` (active Ollama modelfile). `DEFAULT_MAX_CTX` and per-call `num_ctx` raised from 32 768 → 65 536 to match modelfile `num_ctx 65536`.
+
 ## [0.8.152]
 
 ### Refactor

@@ -16,11 +16,11 @@ DEFAULT_LLM_PROVIDER = "ollama"
 DEFAULT_LLM_HOST = "http://localhost:11434"
 
 DEFAULT_LLM_MODELS: dict[str, str] = {
-    "ollama": "qwen3.5:35b-a3b",
+    "ollama": "qwen3.5:35b-a3b-q4_k_m-agentic",
     "gemini": "gemini-3-flash-preview",
 }
 
-DEFAULT_MAX_CTX = 32_768
+DEFAULT_MAX_CTX = 65_536
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ _LLM_SETTINGS: dict[str, Any] = {
             "reasoning": {
                 "max_tokens": 4096,
                 "extra_body": {
-                    "options": {"num_ctx": 32_768},
+                    "options": {"num_ctx": 65_536},
                 },
             },
             "noreason": {
@@ -44,7 +44,7 @@ _LLM_SETTINGS: dict[str, Any] = {
                 "extra_body": {
                     "think": False,
                     "reasoning_effort": "none",
-                    "options": {"num_ctx": 32_768},
+                    "options": {"num_ctx": 65_536},
                 },
             },
         },
