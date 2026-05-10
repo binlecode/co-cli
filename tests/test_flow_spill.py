@@ -99,6 +99,14 @@ def test_force_spill_above_preview_size_spills(tmp_path: Path):
     assert PERSISTED_OUTPUT_TAG in result
 
 
+def test_spill_tolerates_lone_surrogate_content(tmp_path: Path):
+    """spill_if_oversized must not raise UnicodeEncodeError on lone-surrogate content."""
+    surrogate_content = "\ud800prefix" * 100  # lone surrogate, well above preview floor
+    spill_if_oversized(
+        surrogate_content, tmp_path / "tool_results", "test_tool", force=True
+    )  # must not raise
+
+
 # ---------------------------------------------------------------------------
 # CoToolLifecycle.after_tool_execute — MCP spill enforcement
 # ---------------------------------------------------------------------------

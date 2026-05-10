@@ -2,7 +2,7 @@
 
 Production paths:
   - co_cli/bootstrap/core.py:restore_session — picks the most recent session at startup.
-  - co_cli/memory/transcript.py — append/load/in-place rewrite.
+  - co_cli/memory/transcript.py — append/load.
 
 No LLM needed — filesystem only.
 
@@ -10,10 +10,11 @@ Each test guards a specific regression:
 - test_restore_session_picks_most_recent: glob ordering bug → wrong session resumed.
 - test_normal_turn_appends_delta_to_existing_session: delta append miscounts
   cause messages to be written twice or skipped on reload.
-- test_compaction_rewrites_session_in_place: compaction must overwrite the
-  current transcript in place — not fork a child file.
 - test_load_transcript_rejects_oversized_file: files above MAX_TRANSCRIPT_READ_BYTES
   must be rejected to prevent OOM.
+
+The compaction → in-place rewrite contract is covered separately in
+test_flow_compaction_session_rewrite.py.
 """
 
 from datetime import UTC, datetime
@@ -122,60 +123,6 @@ def test_normal_turn_appends_delta_to_existing_session(tmp_path: Path) -> None:
     second_req_content = next(p.content for p in loaded[2].parts if isinstance(p, UserPromptPart))
     assert first_req_content == "first user message"
     assert second_req_content == "second user message"
-
-
-def test_compaction_rewrites_session_in_place(tmp_path: Path) -> None:
-    """Compaction must overwrite the current transcript in place, not fork a child.
-
-    Failure mode: pre-compaction history leaks into the reloaded transcript, or
-    the session path changes after compaction.
-    """
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    session_path = new_session_path(sessions_dir)
-
-    initial_msgs = [_req("pre-compaction user"), _resp("pre-compaction model")]
-    append_messages(session_path, initial_msgs)
-
-    compacted_msgs = [_req("compacted summary prompt"), _resp("compacted model reply")]
-
-    returned_path = persist_session_history(
-        session_path=session_path,
-        messages=compacted_msgs,
-        persisted_message_count=2,
-        history_compacted=True,
-    )
-
-    # In-place rewrite — same path returned.
-    assert returned_path == session_path, (
-        "persist_session_history must return the same path when history_compacted=True"
-    )
-    assert session_path.exists(), "Session file must still exist after in-place rewrite"
-
-    # No sibling files created.
-    session_files = list(sessions_dir.iterdir())
-    assert len(session_files) == 1, (
-        f"Expected exactly 1 session file after compaction, found {len(session_files)}"
-    )
-
-    # File contains only the compacted messages.
-    loaded = load_transcript(session_path)
-    assert len(loaded) == 2, (
-        f"Expected 2 compacted messages after in-place rewrite, got {len(loaded)}"
-    )
-    loaded_req_content = next(p.content for p in loaded[0].parts if isinstance(p, UserPromptPart))
-    assert loaded_req_content == "compacted summary prompt"
-
-    # Pre-compaction content must not be present.
-    all_contents = [
-        p.content
-        for msg in loaded
-        for p in (msg.parts if hasattr(msg, "parts") else [])
-        if isinstance(p, (UserPromptPart, TextPart))
-    ]
-    assert "pre-compaction user" not in all_contents, (
-        "Pre-compaction message must be gone after in-place rewrite"
-    )
 
 
 def test_load_transcript_rejects_oversized_file(tmp_path: Path) -> None:

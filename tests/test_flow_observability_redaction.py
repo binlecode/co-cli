@@ -6,6 +6,7 @@ import sqlite3
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
+from co_cli.config.observability import _DEFAULT_REDACT_PATTERNS, redact_text
 from co_cli.observability.telemetry import SQLiteSpanExporter
 
 
@@ -14,6 +15,20 @@ def _make_provider(db_path: str, patterns: list[str] | None = None) -> TracerPro
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     return provider
+
+
+def test_redact_text_removes_credential():
+    """A matching credential in free text is replaced with [REDACTED]."""
+    text = "summary: used sk-abc12345678901234567890 to call the API"
+    result = redact_text(text, _DEFAULT_REDACT_PATTERNS)
+    assert "[REDACTED]" in result
+    assert "sk-abc" not in result
+
+
+def test_redact_text_clean_text_unchanged():
+    """Text with no credentials passes through unmodified."""
+    text = "a clean summary with no credentials"
+    assert redact_text(text, _DEFAULT_REDACT_PATTERNS) == text
 
 
 def test_sk_api_key_attribute_redacted(tmp_path):

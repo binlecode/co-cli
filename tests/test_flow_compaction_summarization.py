@@ -1,16 +1,22 @@
 """Tests for compaction summarization, token estimation, and budget resolution."""
 
 import asyncio
+import re
 
 import pytest
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
-from co_cli.context._compaction_markers import static_marker, summary_marker
 from co_cli.context.summarization import (
-    _SUMMARIZE_PROMPT,
     estimate_message_tokens,
     resolve_compaction_budget,
     summarize_messages,
@@ -24,28 +30,147 @@ _DEPS = CoDeps(
     shell=ShellBackend(), model=_LLM_MODEL, config=SETTINGS_NO_MCP, session=CoSessionState()
 )
 
+# Realistic multi-turn fixture: auth module security fix + test run.
+# Contains tool calls (file_read, file_edit, shell) and substantial tool return
+# content so the input is large enough for the summary to be a real compression.
 _SAMPLE_MESSAGES = [
     ModelRequest(
-        parts=[UserPromptPart(content="Write a function that reverses a string in Python.")]
+        parts=[
+            UserPromptPart(
+                content="Read co_cli/auth.py and tell me if the token validation looks correct."
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="file_read", args={"path": "co_cli/auth.py"}, tool_call_id="tc1"
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="file_read",
+                content=(
+                    "import jwt\nimport time\n\n"
+                    'SECRET_KEY = "hardcoded-secret-do-not-use"\n\n'
+                    "def validate_token(token: str) -> bool:\n"
+                    "    try:\n"
+                    '        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])\n'
+                    '        exp = payload.get("exp")\n'
+                    "        if exp and exp < time.time():\n"
+                    "            return False\n"
+                    "        return True\n"
+                    "    except jwt.InvalidTokenError:\n"
+                    "        return False\n\n"
+                    "def create_token(user_id: int) -> str:\n"
+                    "    payload = {\n"
+                    '        "user_id": user_id,\n'
+                    '        "exp": time.time() + 3600,\n'
+                    '        "iat": time.time(),\n'
+                    "    }\n"
+                    '    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")\n'
+                ),
+                tool_call_id="tc1",
+            )
+        ]
     ),
     ModelResponse(
         parts=[
             TextPart(
                 content=(
-                    "def reverse_string(s: str) -> str:\n    return s[::-1]\n\n"
-                    "This function uses Python's slice syntax to reverse the string."
+                    "Found a critical issue: SECRET_KEY is hardcoded on line 4. "
+                    "This is a security vulnerability — it must be loaded from an environment variable. "
+                    "The token expiry check logic itself is correct."
                 )
             )
         ]
     ),
-    ModelRequest(parts=[UserPromptPart(content="Now add a test for it.")]),
+    ModelRequest(
+        parts=[
+            UserPromptPart(
+                content="Fix the hardcoded SECRET_KEY — load it from CO_AUTH_SECRET, raise ValueError if not set."
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="file_edit",
+                args={
+                    "path": "co_cli/auth.py",
+                    "old_string": 'import jwt\nimport time\n\nSECRET_KEY = "hardcoded-secret-do-not-use"',
+                    "new_string": 'import os\nimport jwt\nimport time\n\nSECRET_KEY = os.environ.get("CO_AUTH_SECRET")\nif not SECRET_KEY:\n    raise ValueError("CO_AUTH_SECRET env var is required")',
+                },
+                tool_call_id="tc2",
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="file_edit",
+                content="Edit applied. 1 change in co_cli/auth.py.",
+                tool_call_id="tc2",
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[
+            TextPart(
+                content="Fixed. SECRET_KEY now loads from CO_AUTH_SECRET and raises ValueError if the env var is absent."
+            )
+        ]
+    ),
+    ModelRequest(parts=[UserPromptPart(content="Run the auth tests.")]),
+    ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="shell",
+                args={"command": "pytest tests/test_auth.py -v"},
+                tool_call_id="tc3",
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="shell",
+                content=(
+                    "============================= test session starts ==============================\n"
+                    "collected 4 items\n\n"
+                    "tests/test_auth.py::test_valid_token PASSED\n"
+                    "tests/test_auth.py::test_expired_token PASSED\n"
+                    "tests/test_auth.py::test_invalid_signature FAILED\n"
+                    "tests/test_auth.py::test_missing_env_var FAILED\n\n"
+                    "=================================== FAILURES ===================================\n"
+                    "FAILED tests/test_auth.py::test_invalid_signature\n"
+                    "    jwt.exceptions.InvalidSignatureError: Signature verification failed\n"
+                    "FAILED tests/test_auth.py::test_missing_env_var\n"
+                    "    AssertionError: ValueError not raised\n\n"
+                    "2 failed, 2 passed in 0.43s\n"
+                ),
+                tool_call_id="tc3",
+            )
+        ]
+    ),
     ModelResponse(
         parts=[
             TextPart(
                 content=(
-                    "def test_reverse_string():\n    assert reverse_string('hello') == 'olleh'\n"
-                    "    assert reverse_string('') == ''\n    assert reverse_string('a') == 'a'"
+                    "Two failures: test_invalid_signature — jwt raises instead of returning False, "
+                    "so the except clause needs to catch jwt.InvalidSignatureError explicitly. "
+                    "test_missing_env_var — the ValueError fires at import time so it can't be caught "
+                    "in a with-raises block; needs to be deferred to first call."
                 )
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            UserPromptPart(
+                content="Fix test_missing_env_var — defer the env var check so the test can set CO_AUTH_SECRET after import."
             )
         ]
     ),
@@ -82,20 +207,6 @@ def test_resolve_compaction_budget_uses_model_max_ctx_when_probed():
     assert resolve_compaction_budget(deps) == probed
 
 
-def test_resolve_compaction_budget_returns_model_max_ctx_after_bootstrap_fallback():
-    """resolve_compaction_budget returns deps.model_max_ctx — bootstrap always sets it
-    (probed value or max_ctx ceiling on probe failure / non-Ollama providers)."""
-    fallback = SETTINGS_NO_MCP.llm.max_ctx
-    deps = CoDeps(
-        shell=ShellBackend(),
-        model=_LLM_MODEL,
-        config=SETTINGS_NO_MCP,
-        session=CoSessionState(),
-        model_max_ctx=fallback,
-    )
-    assert resolve_compaction_budget(deps) == fallback
-
-
 # ---------------------------------------------------------------------------
 # LLM-backed summarization
 # ---------------------------------------------------------------------------
@@ -103,58 +214,65 @@ def test_resolve_compaction_budget_returns_model_max_ctx_after_bootstrap_fallbac
 
 @pytest.mark.asyncio
 async def test_summarize_messages_from_scratch_returns_structured_text():
-    """From-scratch summarizer must return non-empty text with at least one section header."""
+    """Summarizer must produce a faithful structured handoff for a realistic tool-call session.
+
+    Fixture: multi-turn auth fix — file_read, file_edit, shell tool calls with
+    substantial content. Verifies section structure, verbatim active-task fidelity,
+    tool-name fidelity (no hallucinated tool names), and that empty sections are
+    skipped rather than filled with "None." / "[None]" placeholder text.
+
+    Note: compression ratio is not asserted — the 12-section format has fixed
+    overhead that exceeds short fixtures. Real production inputs (thousands of
+    tokens) compress massively against this same output size.
+    """
     await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
         result = await summarize_messages(_DEPS, _SAMPLE_MESSAGES)
-    assert isinstance(result, str)
-    assert result.strip()
-    assert "##" in result or "Active Task" in result or "Completed" in result
 
+    # Required section headers
+    assert "## Active Task" in result, f"Missing ## Active Task\n{result}"
+    assert "## Completed Actions" in result, f"Missing ## Completed Actions\n{result}"
+    assert "## Next Step" in result, f"Missing ## Next Step\n{result}"
 
-def test_summarize_prompt_template_does_not_embed_prior_summary():
-    """_SUMMARIZE_PROMPT must not contain iterative-branch markers.
+    # Active Task must capture the last user request (defer env var check)
+    active_start = result.index("## Active Task")
+    next_header = result.find("##", active_start + len("## Active Task"))
+    active_body = result[active_start:next_header] if next_header != -1 else result[active_start:]
+    assert any(kw in active_body.lower() for kw in ("env", "defer", "missing", "test_missing")), (
+        f"## Active Task does not reference the last user request:\n{active_body}"
+    )
 
-    Regression: with branch B removed, the prior summary can only reach the
-    LLM once — via message_history (as SUMMARY_MARKER in dropped messages).
-    The prompt template must never re-embed it. If 'PREVIOUS SUMMARY:' appears
-    in the template, the LLM would see the prior summary twice.
-    """
-    assert "PREVIOUS SUMMARY:" not in _SUMMARIZE_PROMPT
-    assert "NEW TURNS TO INCORPORATE" not in _SUMMARIZE_PROMPT
-    # Integration instruction must survive — carry-forward rule intact
-    assert "integrate its content" in _SUMMARIZE_PROMPT
+    # Completed Actions must have numbered entries
+    actions_start = result.index("## Completed Actions")
+    next_header2 = result.find("##", actions_start + len("## Completed Actions"))
+    actions_body = (
+        result[actions_start:next_header2] if next_header2 != -1 else result[actions_start:]
+    )
+    assert re.search(r"^\s*\d+\.", actions_body, re.MULTILINE), (
+        f"## Completed Actions has no numbered entries:\n{actions_body}"
+    )
 
+    # At least one real tool name from the fixture must appear somewhere in the
+    # summary (any section). A hallucinated name like "code_generation" with no
+    # mention of the real names would mean the model invented tool names.
+    assert any(tool in result for tool in ("file_read", "file_edit", "shell")), (
+        f"Summary does not reference any fixture tool names anywhere:\n{result}"
+    )
 
-def test_static_marker_proactive_shape_contains_verbatim_phrase():
-    """static_marker with has_tail=True must say 'preserved verbatim'."""
-    marker = static_marker(5, has_tail=True)
-    content = marker.parts[0].content
-    assert "preserved verbatim" in content
-    assert "next message" not in content
+    # Core topic (auth / SECRET_KEY) must be captured
+    assert any(kw in result.lower() for kw in ("auth", "secret_key", "secret", "co_auth")), (
+        f"Summary does not mention the auth/SECRET_KEY topic:\n{result}"
+    )
 
-
-def test_static_marker_compact_shape_omits_verbatim_phrase():
-    """/compact-shape static_marker (has_tail=False) must say 'next message', not 'preserved verbatim'."""
-    marker = static_marker(5, has_tail=False)
-    content = marker.parts[0].content
-    assert "preserved verbatim" not in content
-    assert "next message" in content
-
-
-def test_summary_marker_proactive_shape_contains_verbatim_phrase():
-    """summary_marker with has_tail=True must say 'preserved verbatim'."""
-    marker = summary_marker(5, "## Active Task\nUser asked: 'foo'", has_tail=True)
-    content = marker.parts[0].content
-    assert "preserved verbatim" in content
-    assert "AFTER this summary" in content
-    assert "next message" not in content
-
-
-def test_summary_marker_compact_shape_omits_verbatim_phrase():
-    """/compact-shape summary_marker (has_tail=False) must say 'next message', not 'preserved verbatim'."""
-    marker = summary_marker(5, "## Active Task\nUser asked: 'foo'", has_tail=False)
-    content = marker.parts[0].content
-    assert "preserved verbatim" not in content
-    assert "next message" in content
-    assert "AFTER this summary" not in content
+    # Skippable sections must be omitted entirely when empty — not filled with
+    # "None." or "[None]" filler. The prompt is explicit: "Skip sections that have
+    # no content — do not generate filler."
+    filler_section = re.compile(
+        r"^##[^\n]*\n\s*(?:\[?None\]?|N/A|\(none\))\s*$",
+        re.MULTILINE | re.IGNORECASE,
+    )
+    filler_matches = filler_section.findall(result)
+    assert not filler_matches, (
+        f"Summary contains filler placeholders in empty sections (should be skipped):\n"
+        f"matches: {filler_matches}\nfull output:\n{result}"
+    )

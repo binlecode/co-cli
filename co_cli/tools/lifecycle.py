@@ -276,6 +276,13 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         tool_def: ToolDefinition,
         args: ValidatedToolArgs,
     ) -> ValidatedToolArgs:
+        span = otel_trace.get_current_span()
+        if span.is_recording():
+            try:
+                args_chars = len(json.dumps(args, ensure_ascii=False, default=str))
+            except (TypeError, ValueError):
+                args_chars = 0
+            span.set_attribute("co.tool.args_chars", args_chars)
         if call.tool_name in PATH_NORMALIZATION_TOOLS and "path" in args:
             workspace_root = ctx.deps.workspace_root
             args["path"] = str((workspace_root / args["path"]).resolve())

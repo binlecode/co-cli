@@ -389,7 +389,7 @@ wheels = [
 
 [[package]]
 name = "co-cli"
-version = "0.8.154"
+version = "0.8.164"
 source = { editable = "." }
 dependencies = [
     { name = "google-api-python-client" },

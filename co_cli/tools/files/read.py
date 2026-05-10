@@ -9,6 +9,7 @@ import shlex
 import shutil
 from pathlib import Path
 
+from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
@@ -472,6 +473,15 @@ async def file_read(
         start_line: First line to include (1-indexed, inclusive). Optional.
         end_line: Last line to include (1-indexed, inclusive). Optional.
     """
+    span = otel_trace.get_current_span()
+    if span.is_recording():
+        try:
+            refetch_attempt = (
+                Path(path).resolve().is_relative_to(ctx.deps.tool_results_dir.resolve())
+            )
+        except (OSError, ValueError):
+            refetch_attempt = False
+        span.set_attribute("co.tool.spill_refetch_attempt", refetch_attempt)
     try:
         resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:

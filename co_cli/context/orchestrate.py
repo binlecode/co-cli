@@ -625,6 +625,7 @@ async def run_turn(
     )
 
     with _TRACER.start_as_current_span("co.turn") as span:
+        span.set_attribute("co.user_prompt.chars", len(user_input or ""))
         try:
             active_settings: ModelSettings | None = model_settings
             while True:

@@ -260,6 +260,38 @@ Spills any single tool result exceeding its per-tool threshold to `.co-cli/tool-
 
 Placeholder shape — multi-line `<persisted-output>` block carrying a size preamble, `tool:` / `file:` lines, a `file_read` retrieval hint, and a `preview:` of the first `TOOL_RESULT_PREVIEW_CHARS` (1,500) chars (newline-aware truncation past halfway point).
 
+**Why 4,000?** Derivation from context-budget arithmetic against the default Qwen3.5 model with `model_max_ctx = 65,536`.
+
+| Reservation | Tokens | Chars (~4/tok) |
+|---|---|---|
+| Total context | 65,536 | ~262,000 |
+| System prompt + tool schemas | ~8,000 | ~32,000 |
+| Generation budget (`max_tokens`) | 4,096 | ~16,000 |
+| Compaction marker headroom | ~2,000 | ~8,000 |
+| **Working budget** (history + tool calls + tool returns) | **~51,000** | **~204,000** |
+
+L2 spill fires at `spill_ratio × model_max_ctx = 0.5 × 65,536 ≈ 32,768 tokens ≈ 131,000 chars` of total request.
+
+Design target: **~30 tool calls per turn** before any management layer fires — enough headroom for an exploratory agent loop without compacting every few rounds.
+
+```
+spill_chars ≈ (working_budget × spill_ratio) / target_tool_calls_per_turn
+            ≈  204,000          × 0.5         / 32
+            ≈  3,188  →  rounded to 4,000
+```
+
+Sensitivity:
+- **16K** (4× larger): only ~8 tool calls fit before spill — forces compaction too aggressively.
+- **1K** (4× smaller): ~130 tool calls fit, but a 1K-char preview is too short for a useful gist (a single stack trace is often >1.5K).
+
+4,000 is the smallest preview that reliably retains a useful summary of typical shell output — test failure summary lines, directory listing heads, a few error frames — while affording the targeted ~30-call budget.
+
+**Scaling to other context sizes.** Apply the same formula:
+- 200K context (frontier model) → working budget ~600K chars → spill ≈ 9,500 chars. Close to opencode's 50K (which budgets fewer tool calls per turn).
+- 1M context → spill ≈ 16,000 chars. Close to hermes's 100K (which targets even larger per-call payloads).
+
+**Why `file_read` is exempted (`math.inf`).** File content is the work, not incidental output. The exemption keeps small-to-medium reads inline (~5K–50K chars typical); a few large reads saturate L3's `compaction_ratio` trigger quickly, but that's the right signal — it means the agent is loading enough source to need a checkpoint.
+
 ### 2.3 `dedup_tool_results` / `evict_old_tool_results` — Prepass recency clearing
 
 Two sync processors in order; no LLM calls. A third sync processor (`sanitize_surrogate_codepoints`) runs after `proactive_window_processor` — see end of this section.

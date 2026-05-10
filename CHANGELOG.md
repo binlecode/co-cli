@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.8.164]
+
+### Feature
+- **Compaction summarizer — structural fix for `## Active Task` capture.** `summarize_messages` no longer passes the dropped history as `message_history`; instead serialises it inline under a `TURNS TO SUMMARIZE:` block in the user prompt (hermes/opencode-aligned). Eliminates the "most recent user request" ambiguity that caused the model to capture the summariser prompt itself in `## Active Task` instead of the user's last conversation message. New helper `_serialize_messages` renders `UserPromptPart` / `TextPart` / `ToolCallPart` / `ToolReturnPart` into role-labelled lines, joined by blank lines per message.
+- **Per-message redaction at serialisation time.** `redact_text` (new public function in `co_cli/config/observability.py`) is applied to each message's content and tool args before they reach the summariser LLM. Removes the previous post-summary redaction (redundant with same patterns); single source of truth at serialisation.
+- **Summariser prompt hardening.** Strengthened the global SKIP RULE so empty sections are omitted entirely rather than filled with `None.` / `[None]` filler. Tightened `## Completed Actions` format spec to make `[tool: name]` mandatory and forbid invented tool names or hallucinated edits. Replaced `## Additional Context` heading with `=== ADDITIONAL CONTEXT ===` to avoid collision with the LLM's output section markers.
+- **Spill telemetry gap fills.** Three new span attributes for calibration: `co.tool.args_chars` (set by `lifecycle.before_tool_execute`), `co.user_prompt.chars` (set on `co.turn` span in `run_turn`), `co.tool.spill_refetch_attempt` (set by `file_read` when the path is under `tool_results_dir`).
+- **Calibration script — `scripts/calibrate_spill_size.py`.** Produces a markdown report with per-tool size distribution (p50/p90/p95/p99), L2 aggregate trigger statistics, gap-fill signal distributions, and on-disk artifact analysis. Defaults to production-only (`service.name = "co-cli"`); `--include-pytest` opt-in for diagnostic runs.
+
+### Docs
+- **`docs/specs/compaction.md` §2.2** — "Why 4,000?" budget-arithmetic derivation: working-budget table, spill-trigger formula, sensitivity at 1K/16K, scaling table for 200K and 1M context windows, rationale for `file_read` exemption.
+
+### Test
+- Removed 8 structural tests in compaction suite: 3 OTel span-attribute tests in `enforce_request_size` (replaced 2 with pure behavioural assertions), 5 string-literal marker/prompt tests in `summarization`.
+- Rewrote `test_summarize_messages_from_scratch_returns_structured_text` against a realistic multi-turn fixture with `file_read` / `file_edit` / `shell` tool calls. New assertions: required section presence, verbatim active-task fidelity, tool-name fidelity (no hallucination), no `None.` / `[None]` filler in skippable sections, core topic captured.
+- Added `test_redact_text_removes_credential` and `test_redact_text_clean_text_unchanged` in observability redaction.
+
 ## [0.8.158]
 
 ### Refactor

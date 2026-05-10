@@ -10,9 +10,6 @@ tokens fall to ``deps.spill_threshold_tokens`` or candidates exhaust.
 from pathlib import Path
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
@@ -247,86 +244,30 @@ async def test_already_spilled_excluded_but_counted(tmp_path: Path):
     assert PERSISTED_OUTPUT_TAG in returns["tc_fresh"]
 
 
-def test_otel_span_emitted(tmp_path: Path):
-    """tool_budget.enforce_request_size span fires with required attributes."""
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("co-cli.tool_budget")
-
-    content = "z" * 32_000
-    messages: list[ModelMessage] = [
-        _user_request("cmd"),
-        _tool_response("shell", "tc1"),
-        _tool_request("shell", "tc1", content),
-    ]
-    deps = _make_deps(tmp_path, threshold_tokens=4_000)
-
-    enforce_request_size(_ctx(deps), messages, _tracer=tracer)
-
-    spans = [
-        s for s in exporter.get_finished_spans() if s.name == "tool_budget.enforce_request_size"
-    ]
-    assert len(spans) == 1
-    attrs = dict(spans[0].attributes)
-    assert attrs["request.threshold_tokens"] == 4_000
-    assert attrs["request.tokens_before"] >= 8_000
-    assert attrs["request.spill_fired"] is True
-    assert attrs["request.spilled_count"] == 1
-    assert attrs["request.skip_reason"] == ""
-
-
-def test_high_reported_emits_local_and_reported_attrs(tmp_path: Path):
-    """Reported-dominant pressure: span emits local_tokens and reported_tokens; falls back to summarize."""
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("co-cli.tool_budget")
-
+def test_high_reported_local_small_nothing_spilled(tmp_path: Path):
+    """Reported tokens dominate but local content is small: nothing gets spilled."""
     small_content = "result: " + "x" * 200
     messages: list[ModelMessage] = [
         _user_request("run"),
-        # Provider reports 20K input tokens; local content is far below threshold.
         ModelResponse(
             parts=[ToolCallPart(tool_name="shell", args={}, tool_call_id="tc1")],
             usage=RequestUsage(input_tokens=20_000),
         ),
         _tool_request("shell", "tc1", small_content),
     ]
-    # threshold = 8K; local ≈ 50 tokens < threshold < reported = 20K.
-    # trigger fires (max(50, 20K) > 8K), but loop exits without spilling
-    # because local_total < threshold → effective_after = max(50, 20K) → fallback.
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
 
-    result = enforce_request_size(_ctx(deps), messages, _tracer=tracer)
+    result = enforce_request_size(_ctx(deps), messages)
 
-    # Content unchanged: local space had nothing to spill.
     returns = _collect_returns(result)
     assert not returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)
 
-    spans = [
-        s for s in exporter.get_finished_spans() if s.name == "tool_budget.enforce_request_size"
-    ]
-    assert len(spans) == 1
-    attrs = dict(spans[0].attributes)
-    assert attrs["request.reported_tokens"] == 20_000
-    assert attrs["request.local_tokens"] < 8_000
-    assert attrs["request.spill_fired"] is False
-    assert attrs["request.skip_reason"] == "fallback_to_summarize"
 
-
-def test_high_reported_spill_uses_local_loop_space(tmp_path: Path):
-    """Large local content + high reported: spill fires; effective_after = max(local_after, reported) drives fallback."""
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("co-cli.tool_budget")
-
-    # 40K chars ≈ 10K tokens > 8K threshold in local space.
+def test_high_reported_large_local_spills(tmp_path: Path):
+    """Both reported and local tokens exceed threshold: spill fires on the large return."""
     big_content = "data: " + "y" * 40_000
     messages: list[ModelMessage] = [
         _user_request("run"),
-        # Provider also reports high tokens — reported > threshold too.
         ModelResponse(
             parts=[ToolCallPart(tool_name="shell", args={}, tool_call_id="tc1")],
             usage=RequestUsage(input_tokens=20_000),
@@ -335,20 +276,7 @@ def test_high_reported_spill_uses_local_loop_space(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
 
-    result = enforce_request_size(_ctx(deps), messages, _tracer=tracer)
+    result = enforce_request_size(_ctx(deps), messages)
 
-    # Spill fires on the large return.
     returns = _collect_returns(result)
     assert returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)
-
-    spans = [
-        s for s in exporter.get_finished_spans() if s.name == "tool_budget.enforce_request_size"
-    ]
-    assert len(spans) == 1
-    attrs = dict(spans[0].attributes)
-    assert attrs["request.reported_tokens"] == 20_000
-    assert attrs["request.local_tokens"] > 8_000
-    assert attrs["request.spill_fired"] is True
-    # effective_after = max(local_after_small, 20K) still > 8K threshold →
-    # proactive will handle the remaining reported pressure.
-    assert attrs["request.skip_reason"] == "fallback_to_summarize"

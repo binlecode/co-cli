@@ -1,5 +1,7 @@
 """Observability configuration sub-model."""
 
+import re
+
 from pydantic import BaseModel, ConfigDict, Field
 
 OBSERVABILITY_ENV_MAP: dict[str, str] = {
@@ -17,6 +19,13 @@ _DEFAULT_REDACT_PATTERNS: list[str] = [
     r"AKIA[0-9A-Z]{16}",
     r"-----BEGIN [A-Z ]+PRIVATE KEY-----",
 ]
+
+
+def redact_text(text: str, patterns: list[str]) -> str:
+    """Replace credential-matching substrings with [REDACTED]."""
+    for pattern in patterns:
+        text = re.sub(pattern, "[REDACTED]", text)
+    return text
 
 
 class ObservabilitySettings(BaseModel):
