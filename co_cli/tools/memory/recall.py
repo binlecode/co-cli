@@ -1,4 +1,9 @@
-"""Memory tools — unified recall over knowledge artifacts (including canon), session transcripts."""
+"""Memory tools — unified recall over knowledge artifacts and session transcripts.
+
+Two channels: session (past transcripts) and knowledge (declarative artifacts).
+Skills are their own surface (skill_search). Canon is doctrine, auto-injected
+into the static prompt by the personality system — never returned by recall.
+"""
 
 import logging
 from pathlib import Path
@@ -14,15 +19,12 @@ from co_cli.memory.artifact import load_artifacts
 from co_cli.memory.session_browser import list_sessions
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.memory.read import grep_recall
-from co_cli.tools.tool_io import tool_output
+from co_cli.tools.tool_io import tool_error, tool_output
 
 logger = logging.getLogger(__name__)
 
 _SESSIONS_CHANNEL_CAP = 3
-"""Maximum number of unique sessions returned by the sessions channel."""
-
-_ARTIFACTS_CANON_CAP = 3
-"""Maximum canon hits per memory_search call."""
+"""Maximum number of unique sessions returned by the session channel."""
 
 _ARTIFACTS_USER_CAP = 3
 """Maximum user-kind chunk results per memory_search call."""
@@ -55,7 +57,7 @@ def _browse_recent(
     span.set_attribute("memory.summarizer.timed_out", False)
     return [
         {
-            "channel": "sessions",
+            "channel": "session",
             "session_id": s.session_id,
             "when": s.created_at.isoformat()[:10],
             "title": s.title,
@@ -82,7 +84,7 @@ def _list_artifacts(
     span.set_attribute("memory.artifacts.count", len(page))
     return [
         {
-            "channel": "artifacts",
+            "channel": "knowledge",
             "kind": a.artifact_kind,
             "title": a.title or a.path.stem,
             "snippet": a.content[:_SNIPPET_DISPLAY_CHARS],
@@ -108,7 +110,7 @@ def _user_priority_pass(store: Any, query: str) -> list[dict]:
         user_hits = []
     return [
         {
-            "channel": "artifacts",
+            "channel": "knowledge",
             "kind": r.kind,
             "title": r.title or (Path(r.path).stem if r.path else ""),
             "snippet": r.snippet,
@@ -126,50 +128,24 @@ def _search_artifacts(
     kinds: list[str] | None,
     limit: int,
 ) -> list[dict]:
-    """BM25 FTS / grep fallback over knowledge artifacts and canon. Returns channel='artifacts' dicts.
+    """BM25 FTS / grep fallback over knowledge artifacts. Returns channel='knowledge' dicts.
 
-    Three-pass structure (FTS path): (1) canon priority pass — full body inline, capped at
-    _ARTIFACTS_CANON_CAP; (2) user priority pass — capped at _ARTIFACTS_USER_CAP;
-    (3) waterfall pass (rule / article / note) — dual-capped by count
+    Two-pass structure (FTS path): (1) user priority pass — capped at _ARTIFACTS_USER_CAP;
+    (2) waterfall pass (rule / article / note) — dual-capped by count
     (_ARTIFACTS_WATERFALL_CHUNK_CAP) and full-chunk content chars (_ARTIFACTS_WATERFALL_SIZE_CAP).
-    Grep fallback (store=None): canon excluded — canon files are not in knowledge_dir.
+    Canon is doctrine, auto-injected via the personality system; never surfaced here.
     """
     store = ctx.deps.memory_store
     results: list[dict] = []
 
     if store is not None:
-        # Canon priority pass
-        if (kinds is None or "canon" in kinds) and ctx.deps.config.personality:
-            try:
-                canon_hits = store.search(query, sources=["canon"], limit=_ARTIFACTS_CANON_CAP)
-            except Exception as e:
-                logger.warning("Canon FTS search failed: %s", e)
-                canon_hits = []
-            for r in canon_hits:
-                # real tars humor file body is ~700 chars; FTS5 snippet() would cap at ~200
-                body = store.get_chunk_content("canon", r.path, 0)
-                if body is None:
-                    logger.warning("canon hit missing chunk content: %s", r.path)
-                    continue
-                results.append(
-                    {
-                        "channel": "artifacts",
-                        "kind": "canon",
-                        "title": r.title or (Path(r.path).stem if r.path else ""),
-                        "snippet": body,
-                        "score": r.score,
-                        "path": r.path,
-                        "filename_stem": Path(r.path).stem if r.path else "",
-                    }
-                )
-
         # User priority pass
         if kinds is None or "user" in kinds:
             results.extend(_user_priority_pass(store, query))
 
         # Waterfall pass (rule / article / note — or caller-specified non-priority kinds)
         # set subtraction avoids TypeError; empty guard prevents invalid SQL (kind IN ())
-        waterfall_kinds = list(set(kinds or ["rule", "article", "note"]) - {"canon", "user"})
+        waterfall_kinds = list(set(kinds or ["rule", "article", "note"]) - {"user"})
         if waterfall_kinds:
             try:
                 candidates = store.search(
@@ -188,7 +164,7 @@ def _search_artifacts(
                 full_content = store.get_chunk_content(r.source, r.path, r.chunk_index or 0) or ""
                 results.append(
                     {
-                        "channel": "artifacts",
+                        "channel": "knowledge",
                         "kind": r.kind,
                         "title": r.title or (Path(r.path).stem if r.path else ""),
                         "snippet": r.snippet,
@@ -201,7 +177,6 @@ def _search_artifacts(
 
         return results
 
-    # Grep fallback (store=None): canon excluded — canon files are not in knowledge_dir
     return _grep_artifacts_fallback(ctx, query, kinds, limit)
 
 
@@ -211,15 +186,15 @@ def _grep_artifacts_fallback(
     kinds: list[str] | None,
     limit: int,
 ) -> list[dict]:
-    """Grep-based artifact search used when MemoryStore is unavailable. Canon silently excluded."""
-    grep_kinds = [k for k in (kinds or ["user", "rule", "article", "note"]) if k != "canon"]
+    """Grep-based artifact search used when MemoryStore is unavailable."""
+    grep_kinds = list(kinds or ["user", "rule", "article", "note"])
     if not grep_kinds:
         return []
     artifacts = load_artifacts(ctx.deps.knowledge_dir, artifact_kinds=grep_kinds)
     matches = grep_recall(artifacts, query, limit)
     return [
         {
-            "channel": "artifacts",
+            "channel": "knowledge",
             "kind": m.artifact_kind,
             "title": m.title or m.path.stem,
             "snippet": m.content[:_SNIPPET_DISPLAY_CHARS],
@@ -280,7 +255,7 @@ def _search_sessions(
         when = r.created[:10] if r.created else ""
         results.append(
             {
-                "channel": "sessions",
+                "channel": "session",
                 "session_id": session_uuid8,
                 "when": when,
                 "source": r.source,
@@ -297,14 +272,12 @@ def _format_search_display(query: str, all_results: list[dict]) -> str:
     """Build the display string for a non-empty search result set."""
     lines: list[str] = [f"Found {len(all_results)} result(s) for '{query}':\n"]
 
-    artifact_results = [r for r in all_results if r["channel"] == "artifacts"]
-    session_results = [r for r in all_results if r["channel"] == "sessions"]
-    canon_artifact_results = [r for r in artifact_results if r.get("kind") == "canon"]
-    non_canon_artifact_results = [r for r in artifact_results if r.get("kind") != "canon"]
+    knowledge_results = [r for r in all_results if r["channel"] == "knowledge"]
+    session_results = [r for r in all_results if r["channel"] == "session"]
 
-    if non_canon_artifact_results:
+    if knowledge_results:
         lines.append("**Saved artifacts:**")
-        for r in non_canon_artifact_results:
+        for r in knowledge_results:
             kind_str = f" [{r['kind']}]" if r.get("kind") else ""
             path_str = f" @ {r['path']}" if r.get("path") else ""
             lines.append(
@@ -323,12 +296,126 @@ def _format_search_display(query: str, all_results: list[dict]) -> str:
             if preview:
                 lines.append(f"     {preview}")
 
-    if canon_artifact_results:
-        lines.append("\n**Character canon:**")
-        for r in canon_artifact_results:
-            lines.append(f"\n### {r['title']}\n{r['snippet']}")
-
     return "\n".join(lines)
+
+
+def _format_browse_display(
+    session_results: list[dict],
+    artifact_results: list[dict],
+) -> str:
+    """Build the display string for an empty-query browse across session + knowledge channels."""
+    lines: list[str] = []
+    if session_results:
+        lines.append(f"Recent {len(session_results)} session(s):\n")
+        for idx, s in enumerate(session_results, 1):
+            lines.append(f"{idx}. [{s['when']}] {s['session_id']} — {s['title']}")
+    if artifact_results:
+        lines.append("\n**Knowledge artifacts:**")
+        for r in artifact_results:
+            kind_str = f" [{r['kind']}]" if r.get("kind") else ""
+            path_str = f" @ {r['path']}" if r.get("path") else ""
+            lines.append(
+                f"  **{r['title']}**{kind_str}{path_str}: "
+                f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
+            )
+    return "\n".join(lines)
+
+
+def _dispatch_session_channel(
+    ctx: RunContext[CoDeps],
+    query: str,
+    limit: int,
+    span: Any,
+) -> ToolReturn:
+    """Handle memory_search when channel='session'."""
+    if not query:
+        session_results = _browse_recent(ctx, limit, span)
+        if not session_results:
+            return tool_output("No past sessions found.", ctx=ctx, count=0, results=[])
+        lines = [f"Recent {len(session_results)} session(s):\n"]
+        for idx, s in enumerate(session_results, 1):
+            lines.append(f"{idx}. [{s['when']}] {s['session_id']} — {s['title']}")
+        return tool_output(
+            "\n".join(lines), ctx=ctx, count=len(session_results), results=session_results
+        )
+    session_results_raw = _search_sessions(ctx, query, span)
+    if not session_results_raw:
+        return tool_output(
+            f"No session results found for '{query}'.", ctx=ctx, count=0, results=[]
+        )
+    return tool_output(
+        _format_search_display(query, session_results_raw),
+        ctx=ctx,
+        count=len(session_results_raw),
+        results=session_results_raw,
+    )
+
+
+def _dispatch_knowledge_channel(
+    ctx: RunContext[CoDeps],
+    query: str,
+    kinds: list[str] | None,
+    limit: int,
+    span: Any,
+) -> ToolReturn:
+    """Handle memory_search when channel='knowledge'."""
+    if not query:
+        artifact_results = _list_artifacts(ctx, kinds, limit, span)
+        if not artifact_results:
+            return tool_output("No artifacts found.", ctx=ctx, count=0, results=[])
+        lines: list[str] = ["\n**Knowledge artifacts:**"]
+        for r in artifact_results:
+            kind_str = f" [{r['kind']}]" if r.get("kind") else ""
+            path_str = f" @ {r['path']}" if r.get("path") else ""
+            lines.append(
+                f"  **{r['title']}**{kind_str}{path_str}: {(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
+            )
+        return tool_output(
+            "\n".join(lines), ctx=ctx, count=len(artifact_results), results=artifact_results
+        )
+    knowledge_results = _search_artifacts(ctx, query, kinds, limit)
+    if not knowledge_results:
+        return tool_output(f"No results found for '{query}'.", ctx=ctx, count=0, results=[])
+    return tool_output(
+        _format_search_display(query, knowledge_results),
+        ctx=ctx,
+        count=len(knowledge_results),
+        results=knowledge_results,
+    )
+
+
+def _dispatch_all_channels(
+    ctx: RunContext[CoDeps],
+    query: str,
+    kinds: list[str] | None,
+    limit: int,
+    span: Any,
+) -> ToolReturn:
+    """Handle memory_search when channel=None (session + knowledge)."""
+    if not query:
+        session_results = _browse_recent(ctx, limit, span)
+        artifact_results = _list_artifacts(ctx, kinds, limit, span)
+        all_results = session_results + artifact_results
+        if not all_results:
+            return tool_output("No past sessions found.", ctx=ctx, count=0, results=[])
+        return tool_output(
+            _format_browse_display(session_results, artifact_results),
+            ctx=ctx,
+            count=len(all_results),
+            results=all_results,
+        )
+
+    knowledge_results = _search_artifacts(ctx, query, kinds, limit)
+    session_results_raw = _search_sessions(ctx, query, span)
+    all_results: list[dict] = list(knowledge_results) + list(session_results_raw)
+    if not all_results:
+        return tool_output(f"No results found for '{query}'.", ctx=ctx, count=0, results=[])
+    return tool_output(
+        _format_search_display(query, all_results),
+        ctx=ctx,
+        count=len(all_results),
+        results=all_results,
+    )
 
 
 @agent_tool(
@@ -340,23 +427,24 @@ def _format_search_display(query: str, all_results: list[dict]) -> str:
 async def memory_search(
     ctx: RunContext[CoDeps],
     query: str = "",
+    channel: str | None = None,
     kinds: list[str] | None = None,
     limit: int = 10,
 ) -> ToolReturn:
-    """Search memory across saved artifacts (including canon) and past sessions in one call.
+    """Search memory across saved knowledge artifacts and past session transcripts.
 
-    Searches the artifacts channel (BM25 FTS5/grep) and the sessions channel
-    (chunk-level index, no LLM). Returns a flat list with a "channel" field per result
-    ("artifacts" or "sessions"). The sessions channel is capped at 3 unique sessions
-    regardless of limit.
+    Two channels: knowledge (BM25 FTS5/grep over declarative artifacts) and session
+    (chunk-level transcript index, no LLM). Returns a flat list with a "channel" field
+    per result ("knowledge" or "session"). The session channel is capped at 3 unique
+    sessions.
 
-    Canon flows through the artifacts channel as kind='canon'. Canon hits carry the full
-    body inline in the snippet field (no file_read follow-up needed).
+    Skills are a separate surface — use skill_search to discover them.
+    Canon is auto-injected via the personality system; not queryable here.
 
     IMPORTANT: scores in results are NOT cross-comparable across channels — use the
     "channel" field to interpret each result's provenance.
 
-    USE THIS for ALL recall tasks — saved preferences, past conversations, project
+    USE THIS for recall tasks — saved preferences, past conversations, project
     conventions, saved articles.
 
     Concrete examples:
@@ -365,14 +453,18 @@ async def memory_search(
     - "what was that auth bug we hit?" → memory_search (searches both)
     - "what's our convention for logging?" → memory_search kinds=["rule"]
 
-    KIND SELECTION — supply up to 3 kinds as a list for targeted recall:
+    CHANNEL SELECTION — narrow to a single channel when intent is clear:
+      "knowledge" — saved knowledge artifacts only (user, rule, article, note)
+      "session"   — past session transcripts only
+      None        — search both channels (default)
+
+    KIND SELECTION — supply up to 3 kinds as a list for targeted recall (knowledge channel only):
 
       TAXONOMY:
         "user"    — everything about the user: identity, preferences, corrections, feedback
         "rule"    — prescriptive guidance: mandates, decisions with rationale, conventions
         "article" — synthesized content: analysis, summaries, research notes, saved URLs
         "note"    — catch-all; rarely worth filtering to directly
-        "canon"   — read-only character scenes (full body inline)
 
       INTENT → KINDS:
         "what do I prefer / how do I like / who am I..."   → ["user"]
@@ -384,69 +476,43 @@ async def memory_search(
     Search syntax (FTS5): keywords joined with OR for broad recall (auth OR login OR session),
     phrases for exact match ("connection pool"), boolean (python NOT java), prefix (deploy*).
 
-    Artifact hits render as `**<title>** [<kind>] @ <path>: <snippet>` — call file_read
-    on the `@ <path>` value when you need the full body. Canon hits (kind='canon') render
-    the full body inline; no follow-up needed. Session hits render a chunk citation and
-    snippet inline; call memory_read_session_turn(session_id, start_line, end_line) for
-    the verbatim turns.
+    Knowledge hits render as `**<title>** [<kind>] @ <path>: <snippet>` — call file_read
+    on the `@ <path>` value when you need the full body. Session hits render a chunk
+    citation and snippet inline; call memory_read_session_turn(session_id, start_line,
+    end_line) for the verbatim turns.
 
-    Artifacts result fields: channel, kind, title, snippet, score, path, filename_stem
-    Sessions result fields:  channel, session_id, when, source, chunk_text, start_line, end_line, score
+    Knowledge result fields: channel, kind, title, snippet, score, path, filename_stem
+    Session result fields:   channel, session_id, when, source, chunk_text, start_line, end_line, score
 
     Args:
         query: FTS5 keyword query.
+        channel: Restrict results to one channel. None searches both channels.
         kinds: Up to 3 artifact kinds to filter results. None searches all kinds.
-        limit: Max artifacts results (default 10). Sessions channel is always capped at 3.
+        limit: Max results (default 10). Session channel is always capped at 3.
     """
     span = otel_trace.get_current_span()
-
     limit = max(1, int(limit))
+    query = query.strip() if query else ""
 
-    if not query or not query.strip():
-        session_results = _browse_recent(ctx, limit, span)
-        artifact_results = _list_artifacts(ctx, kinds, limit, span)
-        all_results = session_results + artifact_results
-        if not all_results:
-            return tool_output("No past sessions found.", ctx=ctx, count=0, results=[])
-        lines: list[str] = []
-        if session_results:
-            lines.append(f"Recent {len(session_results)} session(s):\n")
-            for idx, s in enumerate(session_results, 1):
-                lines.append(f"{idx}. [{s['when']}] {s['session_id']} — {s['title']}")
-        if artifact_results:
-            lines.append("\n**Knowledge artifacts:**")
-            for r in artifact_results:
-                kind_str = f" [{r['kind']}]" if r.get("kind") else ""
-                path_str = f" @ {r['path']}" if r.get("path") else ""
-                lines.append(
-                    f"  **{r['title']}**{kind_str}{path_str}: "
-                    f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
-                )
-        return tool_output(
-            "\n".join(lines),
+    # Removed channels: skills and canon. Skills moved to skill_search; canon is doctrine.
+    if channel == "skills":
+        return tool_error(
+            "channel='skills' is no longer supported — use skill_search instead.",
             ctx=ctx,
-            count=len(all_results),
-            results=all_results,
+        )
+    if channel == "canon":
+        return tool_error(
+            "Canon is identity, not memory — it is auto-injected via personality. Not queryable.",
+            ctx=ctx,
         )
 
-    query = query.strip()
-
-    knowledge_results = _search_artifacts(ctx, query, kinds, limit)
-    session_results_raw = _search_sessions(ctx, query, span)
-
-    all_results: list[dict] = list(knowledge_results) + list(session_results_raw)
-
-    if not all_results:
-        return tool_output(
-            f"No results found for '{query}'.",
-            ctx=ctx,
-            count=0,
-            results=[],
-        )
-
-    return tool_output(
-        _format_search_display(query, all_results),
+    if channel is None:
+        return _dispatch_all_channels(ctx, query, kinds, limit, span)
+    if channel == "session":
+        return _dispatch_session_channel(ctx, query, limit, span)
+    if channel == "knowledge":
+        return _dispatch_knowledge_channel(ctx, query, kinds, limit, span)
+    return tool_error(
+        f"Unknown channel {channel!r}. Valid values: 'session', 'knowledge', or None.",
         ctx=ctx,
-        count=len(all_results),
-        results=all_results,
     )

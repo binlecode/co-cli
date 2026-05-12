@@ -93,7 +93,7 @@ anything the user might reasonably expect you to already know.
 ### Explicit saves
 
 When the user explicitly asks to remember or save something — "remember I prefer X",
-"always do Y", "we decided Z", "save this URL", "remember this note" — call `memory_create`
+"always do Y", "we decided Z", "save this URL", "remember this note" — call `knowledge_manage(action='create', ...)`
 synchronously in the same turn. Do not defer to the dream cycle; dream handles implicit
 patterns only.
 
@@ -103,7 +103,7 @@ in later sessions and can override the user's current request.
 
 **Kind selection:**
 
-| User intent | artifact_kind |
+| User intent | kind |
 |---|---|
 | Stable personal preference | `preference` |
 | Behavioral correction / "always / never / stop" | `feedback` |

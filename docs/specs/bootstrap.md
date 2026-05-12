@@ -152,6 +152,10 @@ If a `MemoryStore` exists, bootstrap syncs every `.md` file under `knowledge_dir
 
 If a `MemoryStore` and a `config.personality` exist, bootstrap calls `_sync_canon_store()` to index the active role's character memory files (`souls/{role}/memories/*.md`) into the FTS pipeline under `source='canon'`. Each file is stored as a single unchunked chunk (full body) so recall can return complete scenes. Hash-skip prevents re-indexing unchanged files. This step no-ops when `store is None` or `config.personality` is empty.
 
+### Step 9c. Construct `SkillIndex` and index skills
+
+If a `MemoryStore` exists, bootstrap constructs a `SkillIndex` (its own connection to the same DB file) and calls `SkillIndex.upsert(name, description, path)` for each loaded skill, indexing name and description under `source='skill'`. No body text is indexed — only the name+description pair so `skill_search` can discover skills by keyword. This step runs after knowledge sync and canon sync so the full FTS pipeline is ready. The `SkillIndex` instance is stored on `deps.skill_index`.
+
 ### Step 10. Assemble `CoDeps`
 
 After model setup, MCP discovery, skill loading, backend resolution, and sync, bootstrap creates `CoDeps`.
@@ -159,7 +163,7 @@ After model setup, MCP discovery, skill loading, backend resolution, and sync, b
 `CoDeps` is the runtime object shared by tools and sub-agents. It holds:
 
 - `config`: the session `Settings` instance
-- `model`, `memory_store`, and `shell`: service handles
+- `model`, `memory_store`, `skill_index`, and `shell`: service handles
 - `tool_registry`, `tool_index`, and `skill_commands`: bootstrap-built registries
 - resolved workspace paths
 - `degradations`: runtime downgrade reasons
@@ -169,7 +173,7 @@ After bootstrap completes, `deps.config` is treated as read-only by convention e
 
 ### Step 11. Build the foreground agent
 
-Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, and calls `build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
+Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, renders the bundled skill manifest via `render_skill_manifest(deps.skill_commands, deps.skills_dir, deps.user_skills_dir)`, and calls `build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry, skill_manifest=...)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
 
 ### Step 12. Restore or create the session
 
@@ -196,7 +200,7 @@ deps.memory_store.sync_sessions(sessions_dir, exclude=current_session_path)
 
 on failure:
     log warning
-    print status  # memory_search returns empty for sessions channel
+    print status  # memory_search returns empty for session channel
 ```
 
 Session data is derived and rebuildable: restarting re-syncs from `*.jsonl` files. The unified DB at `~/.co-cli/co-cli-search.db` holds both knowledge artifacts and session transcripts under separate `source=` labels.

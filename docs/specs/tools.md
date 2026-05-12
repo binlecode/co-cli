@@ -1,7 +1,7 @@
 # Co CLI — Tools
 
 
-> For system overview and approval boundary: [system.md](system.md). For the agent loop, orchestration, and approval flow: [core-loop.md](core-loop.md). For skill loading and slash-command dispatch: [skills.md](skills.md).
+> For system overview and approval boundary: [system.md](system.md). For the agent loop, orchestration, and approval flow: [core-loop.md](core-loop.md). For skill loading and slash-command dispatch: [skill.md](skill.md).
 
 ## 1. Tool Infrastructure
 
@@ -30,7 +30,7 @@ co_cli/tools/files/read.py
 co_cli/tools/files/write.py
 co_cli/tools/memory/recall.py
 co_cli/tools/memory/read.py
-co_cli/tools/memory/write.py
+co_cli/tools/memory/manage.py
 ```
 
 ## 2. Tool Lifecycle, Approval, & Concurrency
@@ -131,12 +131,11 @@ The catalog below is the native tool list from `TOOL_REGISTRY` in `co_cli/tools/
 
 | Tool | V | Appr | Lock | Gate | Purpose |
 |------|---|------|------|------|---------|
-| `memory_search(query="", kinds=None, limit=10)` | A | — | — | — | Unified recall across saved artifacts (including `kind='canon'` scenes) and indexed past sessions; empty query browses recent sessions plus artifact inventory; keyword query returns chunk/snippet hits with no session summarizer LLM |
-| `memory_create(content, artifact_kind, title=None, description=None, source_url=None, decay_protected=False)` | A | ✓ | — | — | Persist a knowledge artifact; URL saves dedupe by `source_ref`; optional consolidation can skip, merge, or append near-duplicates |
-| `memory_modify(filename_stem, action, content, target="")` | A | ✓ | — | — | Append to or surgically replace text in an existing knowledge artifact, then reindex |
-| `skills_list(category=None)` | A | — | — | — | List model-callable skills (name + description); `category` accepted for hermes parity, pass-through today |
+| `memory_search(query="", channel=None, kinds=None, limit=10)` | A | — | — | — | Two-channel recall: session transcripts and knowledge artifacts. Empty query browses recent sessions + recent knowledge; `channel ∈ {'session', 'knowledge', None}`; deprecated `channel='skills'` / `channel='canon'` return structured `tool_error`. |
+| `knowledge_manage(action, name, ...)` | A | ✓ | — | — | Write surface for knowledge channel: `create`, `append`, `replace`, `delete`; replaces former `artifact_manage`, `memory_create`, `memory_modify`. Tool arg `kind` (the on-disk frontmatter field remains `artifact_kind`). |
+| `skill_search(query, limit=5)` | A | — | — | — | Ranked discovery over the skill index (name+description); approval-free; load body with `skill_view`. Bundled skills also appear in the static prompt manifest. |
 | `skill_view(name, file_path=None)` | A | — | — | — | Load a skill's full SKILL.md body; plugin-qualified `plugin:skill` names are accepted; spill-threshold disabled so body always lands inline; `file_path` returns error (flat-file model, no linked files today) |
-| `skill_manage(action, name, ...)` | A | ✓ | — | — | Lifecycle write surface for user-installed skills: `create`, `edit`, `patch`, `delete`; bundled skills are read-only; security scan + rollback on every write; `write_file`/`remove_file`/`patch` with `file_path` are parity stubs |
+| `skill_manage(action, name, ...)` | A | ✓ | — | — | Lifecycle write surface for user-installed skills: `create`, `edit`, `patch`, `delete`, `install`; bundled skills are read-only; security scan + rollback on every write; `write_file`/`remove_file`/`patch` with `file_path` are parity stubs |
 
 ### Web, Browser & Media
 
@@ -181,7 +180,7 @@ The catalog below is the native tool list from `TOOL_REGISTRY` in `co_cli/tools/
 | `google_calendar_search(query, days_back=0, days_ahead=30, max_results=25)` | D | — | — | ✓ | Search primary-calendar events by keyword |
 | `google_gmail_draft(to, subject, body)` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
 
-**Total: 36 native tools** (18 ALWAYS · 18 DEFERRED · 7 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically)
+**Total: 34 native tools** (16 ALWAYS · 18 DEFERRED · 6 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically)
 
 ## 4. Config
 

@@ -131,12 +131,12 @@ async def _subcmd_memory_forget(
 async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
     """Manually trigger a dream cycle; honour ``--dry`` for a non-destructive preview."""
     from co_cli.memory.dream import run_dream_cycle
-    from co_cli.tools.memory.write import memory_create
+    from co_cli.tools.memory.manage import knowledge_manage
 
     tokens = rest.split()
     dry_run = "--dry" in tokens
 
-    result = await run_dream_cycle(ctx.deps, dry_run=dry_run, miner_tool=memory_create)
+    result = await run_dream_cycle(ctx.deps, dry_run=dry_run, miner_tool=knowledge_manage)
 
     header = "Dream cycle — dry run — no changes written" if dry_run else "Dream cycle complete"
     console.print(f"[info]{header}[/info]")

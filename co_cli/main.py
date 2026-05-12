@@ -3,6 +3,7 @@ import logging
 import os
 import time
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 
 import typer
 from prompt_toolkit import PromptSession
@@ -150,6 +151,10 @@ async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None
             if task_state.log_path is not None:
                 task_state.log_path.unlink(missing_ok=True)
         deps.shell.cleanup()
+        if deps.memory_store is not None:
+            deps.memory_store.close()
+        if deps.skill_index is not None:
+            deps.skill_index.close()
     await stack.aclose()
 
 
@@ -172,11 +177,11 @@ async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
         return
 
     from co_cli.memory.dream import run_dream_cycle
-    from co_cli.tools.memory.write import memory_create
+    from co_cli.tools.memory.manage import knowledge_manage
 
     logger = logging.getLogger(__name__)
     try:
-        result = await run_dream_cycle(deps, miner_tool=memory_create)
+        result = await run_dream_cycle(deps, miner_tool=knowledge_manage)
         if result.any_changes:
             logger.info(
                 "Dream cycle: %d extracted, %d merged, %d archived",
@@ -225,6 +230,114 @@ def _apply_command_outcome(
     return True, message_history, "", {}
 
 
+@dataclass
+class _IterationState:
+    message_history: list[ModelMessage]
+    last_interrupt_time: float
+    should_exit: bool = False
+
+
+async def _handle_one_input(
+    user_input: str | None,
+    eof: bool,
+    state: _IterationState,
+    deps: CoDeps,
+    agent: Agent,
+    frontend: Frontend,
+    completer: SlashCommandCompleter,
+    now: float,
+) -> _IterationState:
+    """Process one iteration of the chat loop given pre-parsed input signals.
+
+    user_input=None signals KeyboardInterrupt; eof=True signals EOFError.
+    now is an injected clock value for deterministic double-press tests.
+    Returns a new _IterationState.
+    """
+    if eof:
+        return _IterationState(
+            message_history=state.message_history,
+            last_interrupt_time=state.last_interrupt_time,
+            should_exit=True,
+        )
+
+    if user_input is None:
+        # KeyboardInterrupt signal
+        if now - state.last_interrupt_time <= 2.0:
+            return _IterationState(
+                message_history=state.message_history,
+                last_interrupt_time=state.last_interrupt_time,
+                should_exit=True,
+            )
+        console.print("\n[dim]Press Ctrl+C again to exit[/dim]")
+        return _IterationState(
+            message_history=state.message_history,
+            last_interrupt_time=now,
+            should_exit=False,
+        )
+
+    if user_input.lower() in ("exit", "quit"):
+        return _IterationState(
+            message_history=state.message_history,
+            last_interrupt_time=0.0,
+            should_exit=True,
+        )
+
+    if not user_input.strip():
+        return _IterationState(
+            message_history=state.message_history,
+            last_interrupt_time=state.last_interrupt_time,
+            should_exit=False,
+        )
+
+    if user_input.startswith("/"):
+        cmd_ctx = CommandContext(
+            message_history=state.message_history,
+            deps=deps,
+            agent=agent,
+            frontend=frontend,
+            completer=completer,
+        )
+        outcome = await dispatch_command(user_input, cmd_ctx)
+        should_continue, new_history, new_input, saved_env = _apply_command_outcome(
+            outcome, state.message_history, deps, frontend
+        )
+        if should_continue:
+            return _IterationState(
+                message_history=new_history,
+                last_interrupt_time=0.0,
+                should_exit=False,
+            )
+        # Delegate to agent turn with skill env and delegated input
+        updated_history = await _run_foreground_turn(
+            message_history=new_history,
+            agent=agent,
+            user_input=new_input,
+            saved_env=saved_env,
+            deps=deps,
+            frontend=frontend,
+        )
+        return _IterationState(
+            message_history=updated_history,
+            last_interrupt_time=0.0,
+            should_exit=False,
+        )
+
+    # Plain text input — run foreground turn
+    updated_history = await _run_foreground_turn(
+        message_history=state.message_history,
+        agent=agent,
+        user_input=user_input,
+        saved_env={},
+        deps=deps,
+        frontend=frontend,
+    )
+    return _IterationState(
+        message_history=updated_history,
+        last_interrupt_time=0.0,
+        should_exit=False,
+    )
+
+
 _COMPLETION_STYLE = Style.from_dict(
     {
         "completion-menu": "bg:default",
@@ -262,7 +375,17 @@ async def _chat_loop(
         deps.session.reasoning_display = reasoning_display
 
         completer.update(build_completer_entries(deps.skill_commands))
-        agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
+        from co_cli.context.manifests.skill_manifest import render_skill_manifest
+
+        skill_manifest = render_skill_manifest(
+            deps.skill_commands, deps.skills_dir, deps.user_skills_dir
+        )
+        agent = build_agent(
+            config=deps.config,
+            model=deps.model,
+            tool_registry=deps.tool_registry,
+            skill_manifest=skill_manifest or None,
+        )
 
         current_session_path = restore_session(deps, frontend)
         init_session_index(deps, current_session_path, frontend)
@@ -280,57 +403,52 @@ async def _chat_loop(
         render_security_findings(check_security())
         frontend.clear_status()
 
-        message_history: list[ModelMessage] = []
-        last_interrupt_time = 0.0
+        state = _IterationState(message_history=[], last_interrupt_time=0.0)
 
         while True:
-            _saved_env: dict[str, str | None] = {}
             try:
                 frontend.set_input_active(True)
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
                 frontend.set_input_active(False)
-                last_interrupt_time = 0.0
-                if user_input.lower() in ["exit", "quit"]:
-                    break
-                if not user_input.strip():
-                    continue
-
-                if user_input.startswith("/"):
-                    cmd_ctx = CommandContext(
-                        message_history=message_history,
-                        deps=deps,
-                        agent=agent,
-                        frontend=frontend,
-                        completer=completer,
-                    )
-                    outcome = await dispatch_command(user_input, cmd_ctx)
-                    should_continue, message_history, user_input, _saved_env = (
-                        _apply_command_outcome(outcome, message_history, deps, frontend)
-                    )
-                    if should_continue:
-                        continue
-
-                message_history = await _run_foreground_turn(
-                    message_history=message_history,
-                    agent=agent,
+                state = await _handle_one_input(
                     user_input=user_input,
-                    saved_env=_saved_env,
+                    eof=False,
+                    state=state,
                     deps=deps,
+                    agent=agent,
                     frontend=frontend,
+                    completer=completer,
+                    now=time.monotonic(),
                 )
-
             except EOFError:
                 frontend.set_input_active(False)
-                break
+                state = await _handle_one_input(
+                    user_input=None,
+                    eof=True,
+                    state=state,
+                    deps=deps,
+                    agent=agent,
+                    frontend=frontend,
+                    completer=completer,
+                    now=time.monotonic(),
+                )
             except (KeyboardInterrupt, asyncio.CancelledError):
                 frontend.set_input_active(False)
-                now = time.monotonic()
-                if now - last_interrupt_time <= 2.0:
-                    break
-                last_interrupt_time = now
-                console.print("\n[dim]Press Ctrl+C again to exit[/dim]")
+                state = await _handle_one_input(
+                    user_input=None,
+                    eof=False,
+                    state=state,
+                    deps=deps,
+                    agent=agent,
+                    frontend=frontend,
+                    completer=completer,
+                    now=time.monotonic(),
+                )
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
+                continue
+            if state.should_exit:
+                break
     finally:
         await _drain_and_cleanup(deps, stack)
 

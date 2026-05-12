@@ -11,9 +11,7 @@ Three personalities ship: `finch` (preparation-first mentor), `jeff` (warm colla
 `tars` (direct operator — default). Each personality lives in its own subdirectory under
 `co_cli/personality/prompts/souls/{role}/`.
 
-Personality enters the agent via one path:
-
-1. **Static** — `build_agent()` assembles Block 0 at agent construction: `build_static_instructions()` (soul seed, mindsets, rules), toolset guidance, category hint, and critique (last, conditional on personality). This is set once as `Agent(instructions=...)` and does not change within a session.
+Personality enters the agent via the static prompt — set once at construction and immutable for the session. The model has no tool path to query personality content; canon is doctrine, not memory.
 
 ```
 Session start
@@ -21,13 +19,15 @@ Session start
 build_agent(config)
     ↓
     [1] build_static_instructions → soul seed, mindsets, behavioral rules, recency advisory
-    [2] build_toolset_guidance    — tool-specific guidance (conditional on tool presence)
+    [2] build_toolset_guidance         — tool-specific guidance (conditional on tool presence)
     [3] build_category_awareness_prompt — deferred tool category hint (conditional)
-    [4] load_soul_critique        — ## Review lens, last (conditional on personality + critique file)
+    [4] render_skill_manifest          — <available_skills> for bundled skills (conditional)
+    [5] load_soul_critique             — ## Review lens, last (conditional on personality + critique file)
     → joined and set as Agent.instructions (static, once per session)
 
-Character memories (souls/{role}/memories/*.md) are NOT injected here.
-They are surfaced on demand via `memory_search` as `kind='canon'` in the artifacts channel.
+Character canon (souls/{role}/memories/*.md) is indexed at bootstrap by `_sync_canon_store()`
+for personality-system consumption only — it is never returned by any model-callable tool.
+See §2 "Canon doctrine" below.
 ```
 
 ---
@@ -48,13 +48,12 @@ and package-shipped, but they differ in *what they are* and *how they should be 
 | Examples (`examples.md`) | **Pattern extraction from canon** — how the character speaks/responds | Few-shot |
 | Critique (`critique.md`) | **Interpretive lens** — evaluative frame, often more authorial than source | Reflective |
 
-**Why the distinction matters for retrieval:** distilled assets (mindsets, seed, examples,
-critique) prime behavior on every turn — they belong in static priming. Canon (memories) is
-discrete by nature: a scene either matches the moment or doesn't. Static injection of canon
-pays full token cost whether it lands or not, while leaving the model to extrapolate from
-unmatched scenes. Canon is therefore better served by on-demand recall — searched when the
-moment invokes it — while distilled assets stay always-on. See `memory.md` for the canon
-recall channel design.
+**Why the distinction matters:** distilled assets (mindsets, seed, examples, critique) prime
+behavior on every turn — they belong in static priming. Canon (memories) is discrete by
+nature: a scene either matches the moment or doesn't. Canon is therefore not statically
+injected; it is loaded into the personality system's FTS index at bootstrap for non-model-
+callable consumption (auto-injection mechanics live in this spec). The model never queries
+canon — it surfaces only through the personality system. See §2 "Canon doctrine" below.
 
 ### Soul File Layout
 
@@ -103,8 +102,9 @@ if config.personality:
     if crit: static_parts.append(...)
 ```
 
-Character memories (`memories/*.md`) are NOT included — they are served on demand via
-`memory_search` as `kind='canon'` in the artifacts channel.
+Character canon (`memories/*.md`) is NOT included in the static prompt. It is indexed at
+bootstrap into the shared FTS index under `source='canon'` for personality-system use
+only — there is no model-callable read path. See §2.5 below.
 
 **Placement rationale:** Soul seed is first because early context has the strongest influence
 on the model's operating space. Review lens is last so it frames all operational guidance
@@ -121,6 +121,31 @@ be numbered `01`–`05`, contiguous, and unique. Current rules: `01_identity.md`
 
 `validate_personality_files(role)` checks for the 6 required mindset files and returns
 non-blocking warning strings. Startup prints any warnings but does not abort.
+
+### 2.5 Canon doctrine
+
+Canon scenes (`souls/{role}/memories/*.md`) are the source-material grounding for the active
+character. They are read-only at runtime, package-shipped, and **not** part of the memory
+surface — there is no `memory_search(channel='canon')` and no `canon_manage` tool. Canon is
+identity; treating it as mutable would compromise the personality contract.
+
+**Indexing.** At bootstrap, `_sync_canon_store(store, config, frontend)` calls
+`MemoryStore.sync_dir(source='canon', directory=canon_dir, glob='*.md', no_chunk=True)` so
+each scene becomes a single chunk. The `'canon'` source coexists with `'knowledge'` and
+`'session'` in `chunks_fts` but is owned exclusively by the personality system. No
+model-callable tool returns canon hits.
+
+**Sourcing.** `canon_dir = souls_dir / config.personality / "memories"`. If `config.personality`
+is unset, no canon is indexed.
+
+**Body access.** Internal personality code reads canon bodies via
+`MemoryStore.get_chunk_content('canon', path, 0)`. Scenes are small (<1KB) and returned
+whole — chunking would fragment them.
+
+**Removal from memory surface.** The previous design surfaced canon as `kind='canon'` in
+the artifacts channel of `memory_search`. That was the wrong tier — canon is doctrine, not
+accumulated state. The canon priority pass was removed; `memory_search(channel='canon')`
+now returns a structured `tool_error` directing to this section.
 
 ---
 
@@ -141,7 +166,11 @@ for missing mindset files.
 | File | Purpose |
 |---|---|
 | `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (soul + mindsets + rules + recency advisory) |
+| `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — bundled skill `<available_skills>` block appended after tool guidance |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` |
+| `co_cli/personality/prompts/souls/{role}/memories/*.md` | Canon scene files (package-shipped) |
+| `co_cli/bootstrap/core.py:_sync_canon_store` | Bootstrap hook indexing canon under `source='canon'` (personality-load-only path) |
+| `co_cli/memory/memory_store.py:sync_dir(no_chunk=True)` | Single-chunk-per-file indexing path used by canon |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
 | `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |

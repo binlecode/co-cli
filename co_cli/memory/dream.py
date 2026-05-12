@@ -111,11 +111,11 @@ def save_dream_state(knowledge_dir: Path, state: DreamState) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_dream_miner_agent(memory_create: Any) -> Agent[CoDeps, str]:
+def build_dream_miner_agent(miner_tool: Any) -> Agent[CoDeps, str]:
     """Build a dream miner agent. Instantiated once per session; call .run() per chunk."""
     return Agent(
         instructions=_DREAM_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-        tools=[memory_create],
+        tools=[miner_tool],
         capabilities=[CoToolLifecycle()],
     )
 
@@ -143,7 +143,7 @@ def _chunk_dream_window(
     return chunks
 
 
-async def _mine_transcripts(deps: CoDeps, state: DreamState, memory_create: Any) -> int:
+async def _mine_transcripts(deps: CoDeps, state: DreamState, miner_tool: Any) -> int:
     """Mine recent unprocessed session transcripts for durable knowledge.
 
     Returns the number of new knowledge artifacts written to
@@ -193,7 +193,7 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState, memory_create: Any)
         before_count = _count_active_artifacts(deps.knowledge_dir)
         # defensive init — bound even if miner_agent raises on the first chunk
         saves_so_far = 0
-        miner_agent = build_dream_miner_agent(memory_create)
+        miner_agent = build_dream_miner_agent(miner_tool)
         try:
             for chunk in _chunk_dream_window(window):
                 with _TRACER.start_as_current_span(
@@ -445,7 +445,7 @@ async def run_dream_cycle(
     deps: CoDeps,
     dry_run: bool = False,
     *,
-    memory_create: Any,
+    miner_tool: Any,
     timeout_secs: float = _DREAM_CYCLE_TIMEOUT_SECS,
 ) -> DreamResult:
     """Execute a full dream cycle — mine transcripts, merge similar artifacts, decay stale.
@@ -483,7 +483,7 @@ async def run_dream_cycle(
                 else:
                     try:
                         with _TRACER.start_as_current_span("co.dream.mine") as mine_span:
-                            result.extracted = await _mine_transcripts(deps, state, memory_create)
+                            result.extracted = await _mine_transcripts(deps, state, miner_tool)
                             mine_span.set_attribute("dream.extracted", result.extracted)
                     except Exception as exc:
                         logger.warning("dream.cycle: mine failed", exc_info=True)

@@ -590,6 +590,35 @@ def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessag
     ]
 
 
+def _apply_400_reformulation(
+    turn_state: _TurnState,
+    error: ModelHTTPError,
+) -> bool:
+    """Append a reformulation reflection to turn_state.current_history and decrement budget.
+
+    Returns True if budget remained and the retry should proceed; False if budget exhausted.
+    """
+    if turn_state.tool_reformat_budget <= 0:
+        return False
+    turn_state.tool_reformat_budget -= 1
+    turn_state.current_history = [
+        *turn_state.current_history,
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=(
+                        "Your previous tool call was rejected by the "
+                        f"model provider: {error.body}. Please reformulate "
+                        "your tool call with valid JSON arguments."
+                    ),
+                )
+            ]
+        ),
+    ]
+    turn_state.current_input = None
+    return True
+
+
 # ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
@@ -692,25 +721,9 @@ async def run_turn(
                         return _build_error_turn_result(turn_state)
                     # HTTP 400: malformed tool call — reflect error to model for reformulation.
                     # This is app logic (not transport retry); budget is independent of SDK retries.
-                    if code == 400 and turn_state.tool_reformat_budget > 0:
-                        turn_state.tool_reformat_budget -= 1
+                    if code == 400 and _apply_400_reformulation(turn_state, e):
                         frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
                         await asyncio.sleep(0.5)
-                        turn_state.current_history = [
-                            *turn_state.current_history,
-                            ModelRequest(
-                                parts=[
-                                    UserPromptPart(
-                                        content=(
-                                            "Your previous tool call was rejected by the "
-                                            f"model provider: {e.body}. Please reformulate "
-                                            "your tool call with valid JSON arguments."
-                                        ),
-                                    )
-                                ]
-                            ),
-                        ]
-                        turn_state.current_input = None
                         continue
                     # All other HTTP errors (429/5xx already retried by SDK, terminal errors)
                     frontend.on_status(f"Provider error (HTTP {code}): {e.body}")

@@ -1,4 +1,4 @@
-"""Behavioural tests for skills_list and skill_view tools (hermes-parity read surface)."""
+"""Behavioural tests for skill_view tool (hermes-parity read surface)."""
 
 from pathlib import Path
 
@@ -12,7 +12,7 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.skills.loader import load_skills
 from co_cli.skills.skill_types import SkillConfig
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.system.skills import skill_view, skills_list
+from co_cli.tools.system.skills import skill_view
 
 _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
@@ -36,43 +36,6 @@ def _make_deps(tmp_path: Path, extra_skills: dict[str, SkillConfig] | None = Non
 
 def _make_ctx(deps: CoDeps, *, tool_name: str | None = None) -> RunContext[CoDeps]:
     return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name=tool_name)
-
-
-@pytest.mark.asyncio
-async def test_skills_list_includes_doctor(tmp_path: Path) -> None:
-    """Bundled doctor.md appears in skills_list result."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    result = await skills_list(ctx)
-    skill_names = {e["name"] for e in result.metadata["skills"]}
-    assert "doctor" in skill_names, (
-        "doctor skill missing — check disable-model-invocation flag or description in doctor.md"
-    )
-
-
-@pytest.mark.asyncio
-async def test_skills_list_filters_disable_model_invocation(tmp_path: Path) -> None:
-    """Skills with disable_model_invocation=True are excluded from skills_list."""
-    hidden = SkillConfig(
-        name="hidden",
-        description="should not appear",
-        disable_model_invocation=True,
-    )
-    deps = _make_deps(tmp_path, extra_skills={"hidden": hidden})
-    ctx = _make_ctx(deps)
-    result = await skills_list(ctx)
-    skill_names = {e["name"] for e in result.metadata["skills"]}
-    assert "hidden" not in skill_names
-
-
-@pytest.mark.asyncio
-async def test_skills_list_category_passthrough(tmp_path: Path) -> None:
-    """skills_list with unknown category returns empty result (Constraint 1 parity guard)."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    result = await skills_list(ctx, category="nonexistent-category-xyz")
-    assert result.return_value == "No skills available."
-    assert result.metadata["skills"] == []
 
 
 @pytest.mark.asyncio

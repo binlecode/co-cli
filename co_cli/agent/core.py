@@ -93,6 +93,7 @@ def build_agent(
     instructions: str | None = None,
     tool_fns: list[Callable] | None = None,
     output_type: type | None = None,
+    skill_manifest: str | None = None,
 ) -> Agent[CoDeps, Any]:
     """Build an agent for the orchestrator or a delegation tool.
 
@@ -105,6 +106,8 @@ def build_agent(
         instructions: Static instruction string for delegation tools.
         tool_fns: Tool functions to register on a delegation agent.
         output_type: Required for delegation path — the Pydantic output model type.
+        skill_manifest: Optional pre-rendered bundled-skill manifest string. Injected
+            after tool guidance in the orchestrator path; ignored for delegation agents.
 
     Orchestrator path: tool_registry is provided (or built internally from config).
     Delegation path: output_type is provided; builds a minimal agent.
@@ -151,6 +154,9 @@ def build_agent(
         category_hint = build_category_awareness_prompt(tool_registry.tool_index)
         if category_hint:
             static_parts.append(category_hint)
+
+        if skill_manifest:
+            static_parts.append(skill_manifest)
 
         if config.personality:
             from co_cli.personality.prompts.loader import load_soul_critique

@@ -21,7 +21,7 @@ TOOL_START_DISPLAY_ARG: dict[str, str] = {
     "file_patch": "path",
     "file_search": "pattern",
     "file_find": "path",
-    "memory_create": "content",
+    "knowledge_manage": "name",
     "memory_search": "query",
     "obsidian_search": "query",
     "obsidian_read": "filename",

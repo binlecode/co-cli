@@ -34,20 +34,22 @@ uv run pytest 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
 
 See `docs/specs/system.md` for architecture, `CoDeps`, capability surface, and security boundaries. See `docs/specs/core-loop.md` for agent loop internals, orchestration, and approval mechanics.
 
-### Knowledge System
+### Memory System
 
-Three-channel recall model: **artifacts** (persistent knowledge artifacts), **sessions** (past session transcripts), and **canon** (read-only character scenes). Static personality content (seed, mindsets, personality-context artifacts) is auto-injected into the system prompt; everything else is dynamic, loaded on-demand via tools, and never baked into the system prompt.
+Four operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability — `skill_search` / `skill_view` / `skill_manage`; bundled skills also appear in the static prompt manifest), and **memory** (declarative state the agent accumulates). Memory itself has two channels: **knowledge** (preferences, feedback, rules, decisions, references, articles, notes) and **session** (past transcripts; FTS5 chunk-cited on recall).
 
-Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store artifact entries (`kind: knowledge` with an `artifact_kind` subtype). FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (artifacts + Obsidian + sessions). Implementation lives in `co_cli/memory/` (sessions and artifacts as co-equal kinds) with the unified tool surface in `co_cli/tools/memory/`. See `docs/specs/memory.md` for the Memory model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
+The model-facing surface:
 
-Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browsing is `memory_search` with an empty or kind-filtered query; full-body artifact reads use the generic `file_read` tool against the path that `memory_search` surfaces.
+- `memory_search(channel=...)` — two-channel ranked recall (knowledge + session)
+- `knowledge_manage(action=...)` — write surface for knowledge (create / append / replace / delete)
+- `skill_search(query)` — ranked discovery over the skill index
+- `skill_view(name)` — load a skill's full body
+- `skill_manage(action=...)` — write surface for skills (create / edit / patch / delete / install)
+- `memory_read_session_turn(...)` — channel-specific reader for verbatim session turns (source-only; not registered)
 
-Three unified `memory_*` tools cover the active surface:
-- `memory_search` — recall across artifacts (BM25) + sessions (LLM-summarized) + canon in one call
-- `memory_create` — save a new artifact (all kinds: user | rule | article | note)
-- `memory_modify` — append or surgically replace a passage in an existing artifact
+Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge entries. FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (knowledge + session via `MemoryStore`; skills via `SkillIndex` — same DB, separate API; canon is also indexed there for personality auto-injection but never returned by any model-callable tool). Implementation lives in `co_cli/memory/`, `co_cli/tools/memory/`, and `co_cli/skills/`. See `docs/specs/memory.md`, `docs/specs/skill.md`, and `docs/specs/personality.md` for the full model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
 
-Canon hits ship full body inline; sessions ship LLM summaries inline. A `memory_read_session_turn` reader exists in source but is intentionally not registered — see `docs/specs/memory.md` for the rationale.
+Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browsing is `memory_search` with an empty or kind-filtered query; full-body knowledge reads use the generic `file_read` tool against the path that `memory_search` surfaces.
 
 ## Engineering Rules
 

@@ -1,6 +1,6 @@
 """Model-callable skill discovery, inspection, and lifecycle tools.
 
-Hermes-parity port: skills_list + skill_view (read surface) and skill_manage (write surface).
+Hermes-parity port: skill_view (read surface) and skill_manage (write surface).
 Read surface: hermes-agent/tools/skills_tool.py:1440-1512.
 Write surface: hermes-agent/tools/skill_manager_tool.py:647-720.
 
@@ -14,46 +14,20 @@ import re
 import uuid
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
 from co_cli.memory.frontmatter import parse_frontmatter
-from co_cli.skills.loader import load_skills, scan_skill_content
-from co_cli.skills.registry import get_skill_registry, set_skill_commands
+from co_cli.skills.loader import scan_skill_content
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output
 
 # ---------------------------------------------------------------------------
-# Read tools — skills_list + skill_view
+# Read tools — skill_view
 # ---------------------------------------------------------------------------
-
-
-@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def skills_list(
-    ctx: RunContext[CoDeps],
-    category: str | None = None,
-) -> ToolReturn:
-    """List available skills (name + description). Use skill_view(name) to load full content.
-
-    Skills with disable-model-invocation: true in frontmatter are excluded.
-
-    Args:
-        category: Optional category filter. Co-cli skills have no category field today;
-            this filter is accepted for hermes parity and is a pass-through.
-    """
-    entries = get_skill_registry(ctx.deps.skill_commands)
-    if category:
-        entries = [e for e in entries if e.get("category") == category]
-    if not entries:
-        return tool_output("No skills available.", ctx=ctx, skills=[])
-    lines = [f"- {e['name']}: {e['description']}" for e in entries]
-    return tool_output(
-        "Available skills:\n" + "\n".join(lines),
-        ctx=ctx,
-        skills=entries,
-    )
 
 
 @agent_tool(
@@ -87,6 +61,54 @@ async def skill_view(
     if file_path is not None:
         return tool_error(f"skill_view: skill {name!r} has no linked files.", ctx=ctx)
     return tool_output(skill.body, ctx=ctx, name=lookup, linked_files={})
+
+
+# ---------------------------------------------------------------------------
+# Read tools — skill_search
+# ---------------------------------------------------------------------------
+
+
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    is_read_only=True,
+    is_concurrent_safe=True,
+)
+async def skill_search(
+    ctx: RunContext[CoDeps],
+    query: str,
+    limit: int = 5,
+) -> ToolReturn:
+    """Search the skill index by name and description. Returns ranked hits.
+
+    Use when the bundled skill manifest in the system prompt doesn't cover what
+    you need — e.g. user-installed skills, or skills created in this session.
+
+    Args:
+        query: FTS5 keyword query — keywords joined OR, phrases quoted, prefix*.
+        limit: Maximum number of hits (default 5).
+
+    Returns: list of {name, description, score, path}. Load the body with skill_view.
+    """
+    if not query or not query.strip():
+        return tool_error("skill_search: query must be non-empty.", ctx=ctx)
+    limit = max(1, int(limit))
+    if ctx.deps.skill_index is None:
+        return tool_output("Skill index unavailable.", ctx=ctx, count=0, results=[])
+    hits = ctx.deps.skill_index.search(query, limit=limit)
+    skill_commands = ctx.deps.skill_commands or {}
+    results: list[dict] = []
+    for h in hits:
+        skill = skill_commands.get(h.name)
+        description = (skill.description if skill else None) or h.description or ""
+        results.append(
+            {"name": h.name, "description": description, "score": h.score, "path": h.path}
+        )
+    if not results:
+        return tool_output(f"No skills found for '{query}'.", ctx=ctx, count=0, results=[])
+    lines: list[str] = [f"Found {len(results)} skill(s) for '{query}':"]
+    for r in results:
+        lines.append(f"  - {r['name']}: {r['description']}")
+    return tool_output("\n".join(lines), ctx=ctx, count=len(results), results=results)
 
 
 # ---------------------------------------------------------------------------
@@ -152,18 +174,17 @@ def _scan_or_rollback(path: Path, content: str, original: str | None) -> str | N
 
 
 def _reload_skills(ctx: RunContext[CoDeps]) -> None:
-    """Reload skills from disk into deps.skill_commands."""
-    new_skills = load_skills(
-        ctx.deps.skills_dir,
-        ctx.deps.config,
-        user_skills_dir=ctx.deps.user_skills_dir,
-    )
-    set_skill_commands(new_skills, ctx.deps)
+    """Reload skills from disk and reindex into MemoryStore."""
+    from co_cli.skills.lifecycle import refresh_skills
+
+    refresh_skills(ctx.deps)
 
 
 def _skill_create(
-    ctx: RunContext[CoDeps], name: str, content: str, category: str | None
+    ctx: RunContext[CoDeps], name: str, content: str | None, category: str | None
 ) -> ToolReturn:
+    if not content:
+        return tool_error("content is required for 'create'.", ctx=ctx)
     err = _validate_skill_content(content)
     if err:
         return tool_error(err, ctx=ctx)
@@ -184,7 +205,9 @@ def _skill_create(
     return tool_output(json.dumps(result), ctx=ctx)
 
 
-def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str) -> ToolReturn:
+def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str | None) -> ToolReturn:
+    if not content:
+        return tool_error("content is required for 'edit'.", ctx=ctx)
     path = _find_user_skill(ctx.deps, name)
     if path is None:
         return tool_error(
@@ -210,10 +233,17 @@ def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str) -> ToolReturn:
 def _skill_patch(
     ctx: RunContext[CoDeps],
     name: str,
-    old_string: str,
-    new_string: str,
+    old_string: str | None,
+    new_string: str | None,
     replace_all: bool,
+    file_path: str | None = None,
 ) -> ToolReturn:
+    if not old_string:
+        return tool_error("old_string is required for 'patch'.", ctx=ctx)
+    if new_string is None:
+        return tool_error("new_string is required for 'patch'.", ctx=ctx)
+    if file_path:
+        return tool_error(_LINKED_FILE_ERROR, ctx=ctx)
     path = _find_user_skill(ctx.deps, name)
     if path is None:
         return tool_error(
@@ -284,13 +314,64 @@ def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
 
 def _skill_manage_approval_subject(args: dict) -> ApprovalSubject:
     action = args.get("action", "unknown")
-    name = args.get("name", "unknown")
+    name = args.get("name", "")
+    source = args.get("source") or ""
+    if action == "install":
+        if source.startswith("http://") or source.startswith("https://"):
+            host = urlparse(source).netloc or "unknown"
+            value = f"tool:skill_manage:install:url:{host}"
+        else:
+            value = "tool:skill_manage:install:localfile"
+        display = f"skill_manage(action='install', source={source!r})"
+    else:
+        value = f"tool:skill_manage:{action}:{name}"
+        display = f"skill_manage(action={action!r}, name={name!r})"
     return ApprovalSubject(
         tool_name="skill_manage",
         kind=ApprovalKindEnum.TOOL,
-        value=f"tool:skill_manage:{action}:{name}",
-        display=f"skill_manage(action={action!r}, name={name!r})",
+        value=value,
+        display=display,
         can_remember=True,
+    )
+
+
+def _skill_install(ctx: RunContext[CoDeps], source: str) -> ToolReturn:
+    """Fetch, scan, write, and index a new skill from a URL or local path."""
+    from co_cli.skills.installer import SkillFetchError, fetch_skill_content
+
+    try:
+        content, filename = fetch_skill_content(source)
+    except SkillFetchError as exc:
+        return tool_error(str(exc), ctx=ctx)
+
+    skill_name = Path(filename).stem
+    if not _NAME_RE.match(skill_name) or len(skill_name) > 64:
+        return tool_error(
+            f"Skill name derived from source {skill_name!r} is invalid. "
+            "Name must be lowercase letters, digits, hyphens, or underscores; max 64 chars.",
+            ctx=ctx,
+        )
+    if _find_user_skill(ctx.deps, skill_name) is not None:
+        return tool_error(
+            f"Skill {skill_name!r} already exists. Use action='edit' to update it.",
+            ctx=ctx,
+        )
+    err = _validate_skill_content(content)
+    if err:
+        return tool_error(err, ctx=ctx)
+
+    path = ctx.deps.user_skills_dir / filename
+    _atomic_write_skill(path, content)
+    scan_err = _scan_or_rollback(path, content, original=None)
+    if scan_err:
+        return tool_error(scan_err, ctx=ctx)
+
+    _reload_skills(ctx)
+    return tool_output(
+        json.dumps(
+            {"success": True, "message": f"Skill {skill_name!r} installed.", "path": str(path)}
+        ),
+        ctx=ctx,
     )
 
 
@@ -301,8 +382,8 @@ def _skill_manage_approval_subject(args: dict) -> ApprovalSubject:
 )
 async def skill_manage(
     ctx: RunContext[CoDeps],
-    action: Literal["create", "edit", "patch", "delete", "write_file", "remove_file"],
-    name: str,
+    action: Literal["create", "edit", "patch", "delete", "install", "write_file", "remove_file"],
+    name: str = "",
     content: str | None = None,
     category: str | None = None,
     file_path: str | None = None,
@@ -310,11 +391,12 @@ async def skill_manage(
     old_string: str | None = None,
     new_string: str | None = None,
     replace_all: bool = False,
+    source: str | None = None,
 ) -> ToolReturn:
-    """Create, edit, patch, or delete a user-installed skill.
+    """Create, edit, patch, delete, or install a user-installed skill.
 
-    Use skills_list() to browse the skill inventory and skill_view(name) to inspect
-    current content before editing. Bundled skills are read-only; copy to
+    Use memory_search(channel='skills') to browse the skill inventory and skill_view(name)
+    to inspect current content before editing. Bundled skills are read-only; copy to
     ~/.co-cli/skills/ first to modify them.
 
     Actions:
@@ -322,12 +404,14 @@ async def skill_manage(
       edit        Replace an existing user-installed skill's full content.
       patch       Surgical find-and-replace within a skill body.
       delete      Remove a user-installed skill.
+      install     Fetch a skill from a URL or local path, scan, and install it.
+                  Requires source; do not provide name (derived from the file).
       write_file  Not yet supported — returns error.
       remove_file Not yet supported — returns error.
 
     Args:
-        action:      One of the six actions above.
-        name:        Skill name (lowercase letters, digits, hyphens, underscores; max 64 chars).
+        action:      One of the seven actions above.
+        name:        Skill name for create/edit/patch/delete. Not used for install.
         content:     Full SKILL.md content for create/edit (frontmatter + body).
         category:    Category hint (accepted for hermes parity; silently ignored today).
         file_path:   Linked-file path within the skill (not yet supported).
@@ -335,7 +419,18 @@ async def skill_manage(
         old_string:  Text to find for patch.
         new_string:  Replacement text for patch.
         replace_all: When True replace all occurrences; otherwise require exactly one match.
+        source:      URL (http/https) or local file path for install action.
     """
+    if action == "install":
+        if not source:
+            return tool_error("source is required for 'install'.", ctx=ctx)
+        if name:
+            return tool_error(
+                "name must not be provided for 'install'; it is derived from the source.",
+                ctx=ctx,
+            )
+        return _skill_install(ctx, source)
+
     if not _NAME_RE.match(name) or len(name) > 64:
         return tool_error(
             f"Invalid skill name {name!r}. "
@@ -343,26 +438,16 @@ async def skill_manage(
             ctx=ctx,
         )
     if action == "create":
-        if not content:
-            return tool_error("content is required for 'create'.", ctx=ctx)
         return _skill_create(ctx, name, content, category)
     if action == "edit":
-        if not content:
-            return tool_error("content is required for 'edit'.", ctx=ctx)
         return _skill_edit(ctx, name, content)
     if action == "patch":
-        if not old_string:
-            return tool_error("old_string is required for 'patch'.", ctx=ctx)
-        if new_string is None:
-            return tool_error("new_string is required for 'patch'.", ctx=ctx)
-        if file_path:
-            return tool_error(_LINKED_FILE_ERROR, ctx=ctx)
-        return _skill_patch(ctx, name, old_string, new_string, replace_all)
+        return _skill_patch(ctx, name, old_string, new_string, replace_all, file_path)
     if action == "delete":
         return _skill_delete(ctx, name)
     if action in ("write_file", "remove_file"):
         return tool_error(_LINKED_FILE_ERROR, ctx=ctx)
     return tool_error(
-        f"Unknown action {action!r}. Valid actions: create, edit, patch, delete.",
+        f"Unknown action {action!r}. Valid actions: create, edit, patch, delete, install.",
         ctx=ctx,
     )

@@ -1,16 +1,25 @@
-"""Tests for canon recall via _search_artifacts() — FTS-based, channel='artifacts', kind='canon'."""
+"""Tests for canon decoupling — canon is doctrine, never returned by model-callable tools.
 
+After the four-tier decomposition:
+- Canon is indexed at bootstrap by `_sync_canon_store` for the personality system only.
+- No model-callable tool (`memory_search`, `_search_artifacts`) returns canon hits.
+- `memory_search(channel='canon')` raises a structured tool_error directing to personality.
+"""
+
+import asyncio
 from pathlib import Path
 
+import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
+from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.bootstrap.core import _sync_canon_store
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.core import TerminalFrontend
 from co_cli.memory.memory_store import MemoryStore
-from co_cli.tools.memory.recall import _ARTIFACTS_CANON_CAP, _search_artifacts
+from co_cli.tools.memory.recall import _search_artifacts, memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
 _FTS5_CONFIG = SETTINGS.knowledge.model_copy(
@@ -27,10 +36,10 @@ def _make_store(tmp_path: Path) -> MemoryStore:
     return MemoryStore(config=_STORE_CONFIG, memory_db_path=tmp_path / "search.db")
 
 
-def _make_ctx_with_store(tmp_path: Path, *, personality: str | None) -> RunContext[CoDeps]:
+def _make_ctx(tmp_path: Path, *, personality: str | None) -> RunContext[CoDeps]:
     """RunContext with a real MemoryStore; canon indexed from real tars soul files when personality set."""
     store = _make_store(tmp_path)
-    config = SETTINGS.model_copy(update={"personality": personality})
+    config = _STORE_CONFIG.model_copy(update={"personality": personality})
     if personality:
         _sync_canon_store(store, config, TerminalFrontend())
     deps = CoDeps(
@@ -44,89 +53,73 @@ def _make_ctx_with_store(tmp_path: Path, *, personality: str | None) -> RunConte
     return RunContext(deps=deps, model=None, usage=RunUsage())
 
 
-def _make_ctx_no_store(tmp_path: Path, *, personality: str | None) -> RunContext[CoDeps]:
-    """RunContext with memory_store=None — simulates the grep backend degradation path."""
-    config = SETTINGS.model_copy(update={"personality": personality})
-    deps = CoDeps(
-        shell=ShellBackend(),
-        config=config,
-        session=CoSessionState(),
-        memory_store=None,
-        sessions_dir=tmp_path / "sessions",
-        knowledge_dir=tmp_path / "knowledge",
-    )
-    return RunContext(deps=deps, model=None, usage=RunUsage())
+def test_canon_still_indexed_at_bootstrap_for_personality_system(tmp_path: Path) -> None:
+    """`_sync_canon_store` indexes canon under source='canon' so the personality system can read it.
+
+    This is the legitimate consumer path — bodies stay in the FTS DB and the personality
+    system reads them via MemoryStore.get_chunk_content('canon', path, 0).
+    """
+    store = _make_store(tmp_path)
+    config = _STORE_CONFIG.model_copy(update={"personality": "tars"})
+    try:
+        _sync_canon_store(store, config, TerminalFrontend())
+        names = store.list_titles_by_source("canon")
+        assert names, "expected canon docs indexed under source='canon' after _sync_canon_store"
+    finally:
+        store.close()
 
 
-def test_canon_hit_carries_artifacts_channel_and_canon_kind(tmp_path: Path) -> None:
-    """Canon results flow through the artifacts channel with kind='canon'."""
-    ctx = _make_ctx_with_store(tmp_path, personality="tars")
+def test_search_artifacts_does_not_return_canon_kind(tmp_path: Path) -> None:
+    """`_search_artifacts` never returns kind='canon' hits — canon is no longer a memory kind."""
+    ctx = _make_ctx(tmp_path, personality="tars")
     try:
         hits = _search_artifacts(ctx, "humor deadpan", kinds=None, limit=10)
         canon_hits = [h for h in hits if h.get("kind") == "canon"]
-        assert len(canon_hits) >= 1, "expected at least 1 canon hit for 'humor deadpan'"
-        top = canon_hits[0]
-        assert top["channel"] == "artifacts"
-        assert top["kind"] == "canon"
+        assert canon_hits == [], f"canon must not surface via _search_artifacts; got: {canon_hits}"
     finally:
         ctx.deps.memory_store.close()
 
 
-def test_canon_snippet_is_full_body_not_fts_snippet(tmp_path: Path) -> None:
-    """snippet field for canon carries the complete post-frontmatter file text, not a FTS5 snippet()."""
-    ctx = _make_ctx_with_store(tmp_path, personality="tars")
-    try:
-        hits = _search_artifacts(ctx, "humor deadpan", kinds=None, limit=10)
-        canon_hits = [h for h in hits if h.get("kind") == "canon"]
-        assert canon_hits, "expected at least 1 canon hit"
-        top = canon_hits[0]
-        # real tars humor file body is ~700 chars; FTS5 snippet() would cap at ~200
-        assert len(top["snippet"]) > 200, (
-            f"snippet length {len(top['snippet'])} is too short — expected full file text, not FTS5 snippet"
-        )
-    finally:
-        ctx.deps.memory_store.close()
-
-
-def test_canon_cap_honored(tmp_path: Path) -> None:
-    """Canon hits respect _ARTIFACTS_CANON_CAP."""
-    ctx = _make_ctx_with_store(tmp_path, personality="tars")
-    try:
-        hits = _search_artifacts(ctx, "humor deadpan", kinds=None, limit=100)
-        canon_hits = [h for h in hits if h.get("kind") == "canon"]
-        assert len(canon_hits) <= _ARTIFACTS_CANON_CAP, (
-            f"expected at most {_ARTIFACTS_CANON_CAP} canon hits, got {len(canon_hits)}"
-        )
-    finally:
-        ctx.deps.memory_store.close()
-
-
-def test_kinds_canon_filter_returns_only_canon(tmp_path: Path) -> None:
-    """kinds=['canon'] isolates canon-only results."""
-    ctx = _make_ctx_with_store(tmp_path, personality="tars")
+def test_search_artifacts_canon_kind_filter_returns_empty(tmp_path: Path) -> None:
+    """Even when callers request kinds=['canon'], _search_artifacts returns []."""
+    ctx = _make_ctx(tmp_path, personality="tars")
     try:
         hits = _search_artifacts(ctx, "humor deadpan", kinds=["canon"], limit=10)
-        assert len(hits) >= 1, "expected at least 1 hit with kinds=['canon']"
-        for h in hits:
-            assert h["kind"] == "canon", f"expected kind='canon', got {h['kind']!r}"
-            assert h["channel"] == "artifacts"
+        assert hits == [], f"kinds=['canon'] must return empty; got: {hits}"
     finally:
         ctx.deps.memory_store.close()
 
 
-def test_canon_returns_empty_when_store_is_none(tmp_path: Path) -> None:
-    """_search_artifacts returns [] for canon when memory_store is None (grep degradation)."""
-    ctx = _make_ctx_no_store(tmp_path, personality="tars")
-    hits = _search_artifacts(ctx, "humor", kinds=["canon"], limit=10)
-    assert hits == [], "expected [] when memory_store is None and kinds=['canon']"
+@pytest.mark.asyncio
+async def test_memory_search_channel_canon_returns_tool_error(tmp_path: Path) -> None:
+    """memory_search(channel='canon') returns structured tool_error.
 
-
-def test_canon_returns_empty_when_personality_none(tmp_path: Path) -> None:
-    """Canon pass yields no results when personality is None — canon is role-gated."""
-    ctx = _make_ctx_with_store(tmp_path, personality=None)
+    Failure mode: silent fallthrough would re-expose canon as a memory channel,
+    violating the four-tier decomposition.
+    """
+    ctx = _make_ctx(tmp_path, personality="tars")
     try:
-        hits = _search_artifacts(ctx, "humor", kinds=None, limit=10)
-        canon_hits = [h for h in hits if h.get("kind") == "canon"]
-        assert canon_hits == [], "expected no canon hits when personality=None"
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_search(ctx, query="humor", channel="canon")
+        assert result.metadata is not None, "tool_error must populate metadata"
+        assert result.metadata.get("error") is True, (
+            f"channel='canon' must return tool_error; got: {result.return_value!r}"
+        )
+    finally:
+        ctx.deps.memory_store.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_all_channels_excludes_canon_hits(tmp_path: Path) -> None:
+    """memory_search with no channel filter never returns canon kind in flat result list."""
+    ctx = _make_ctx(tmp_path, personality="tars")
+    try:
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_search(ctx, query="humor deadpan")
+        results = result.metadata.get("results") or []
+        canon_results = [r for r in results if r.get("kind") == "canon"]
+        assert canon_results == [], (
+            f"memory_search must not surface canon hits; got: {canon_results}"
+        )
     finally:
         ctx.deps.memory_store.close()

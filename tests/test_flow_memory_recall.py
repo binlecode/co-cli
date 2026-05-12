@@ -13,8 +13,9 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.memory.artifact import KnowledgeArtifact
 from co_cli.memory.memory_store import MemoryStore
 from co_cli.memory.service import reindex, save_artifact
+from co_cli.skills.skill_types import SkillConfig
 from co_cli.tools.memory.read import grep_recall, memory_read_session_turn
-from co_cli.tools.memory.recall import _list_artifacts
+from co_cli.tools.memory.recall import _list_artifacts, memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
 
@@ -242,4 +243,148 @@ def test_list_artifacts_disk_scan_fallback_when_no_store(tmp_path):
 
     assert len(results) == 3, f"Expected 3 from disk scan, got {len(results)}"
     for r in results:
-        assert r["channel"] == "artifacts"
+        assert r["channel"] == "knowledge"
+
+
+# ---------------------------------------------------------------------------
+# memory_search — channel rename + deprecated-channel error paths
+# ---------------------------------------------------------------------------
+
+
+def _make_deps_with_store_only(tmp_path, store: MemoryStore) -> CoDeps:
+    return CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS,
+        session=CoSessionState(),
+        knowledge_dir=tmp_path / "knowledge",
+        memory_store=store,
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_search_skills_channel_errors_with_skill_search_hint(tmp_path) -> None:
+    """memory_search(channel='skills') returns a structured tool_error directing to skill_search.
+
+    Failure mode: silent fallback to all-channels search lets the model believe skills
+    were searched when the dedicated skill_search tool is the real surface.
+    """
+    store = MemoryStore(config=SETTINGS, memory_db_path=tmp_path / "search.db")
+    try:
+        deps = _make_deps_with_store_only(tmp_path, store)
+        ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_search(ctx, query="test", channel="skills")
+
+        assert result.metadata is not None, "tool_error must populate metadata"
+        assert result.metadata.get("error") is True, (
+            f"channel='skills' must return tool_error, got: {result.return_value!r}"
+        )
+        assert "skill_search" in result.return_value, (
+            f"error message must direct to skill_search, got: {result.return_value!r}"
+        )
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_canon_channel_errors_with_personality_hint(tmp_path) -> None:
+    """memory_search(channel='canon') returns a structured tool_error directing to personality.
+
+    Failure mode: returning canon hits would re-introduce the tier conflation the
+    four-tier decomposition rejected — canon is doctrine, not memory.
+    """
+    store = MemoryStore(config=SETTINGS, memory_db_path=tmp_path / "search.db")
+    try:
+        deps = _make_deps_with_store_only(tmp_path, store)
+        ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_search(ctx, query="test", channel="canon")
+
+        assert result.metadata is not None, "tool_error must populate metadata"
+        assert result.metadata.get("error") is True, (
+            f"channel='canon' must return tool_error, got: {result.return_value!r}"
+        )
+        assert (
+            "personality" in result.return_value.lower()
+            or "doctrine" in result.return_value.lower()
+        ), f"error must reference personality/doctrine, got: {result.return_value!r}"
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_knowledge_channel_returns_knowledge_only(tmp_path) -> None:
+    """memory_search(channel='knowledge') returns knowledge-channel hits with correct discriminator.
+
+    Failure mode: a leak of session results into the knowledge channel would corrupt the
+    flat-result discriminator the agent relies on to route follow-up reads.
+    """
+    store = MemoryStore(config=SETTINGS, memory_db_path=tmp_path / "search.db")
+    try:
+        knowledge_dir = tmp_path / "knowledge"
+        r = save_artifact(
+            knowledge_dir,
+            content="artifact about widget_marker_test content",
+            artifact_kind="note",
+            title="widget notes",
+        )
+        reindex(
+            store,
+            r.path,
+            r.content,
+            r.markdown_content,
+            r.frontmatter_dict,
+            r.filename_stem,
+            chunk_tokens=600,
+            chunk_overlap_tokens=80,
+        )
+
+        deps = _make_deps_with_store_only(tmp_path, store)
+        ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_search(ctx, query="widget_marker_test", channel="knowledge")
+
+        results = result.metadata.get("results", [])
+        assert results, f"expected at least one knowledge hit, got: {results}"
+        assert all(r["channel"] == "knowledge" for r in results), (
+            f"all results must carry channel='knowledge', got: {results}"
+        )
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_empty_query_browse_excludes_skills_section(tmp_path) -> None:
+    """Empty-query browse returns sessions + knowledge only — no 'Available skills:' section.
+
+    Failure mode: a stale skills branch in the browse path would mix tiers and contradict
+    the new prompt-injection-based skill discovery.
+    """
+    store = MemoryStore(config=SETTINGS, memory_db_path=tmp_path / "search.db")
+    try:
+        deps = CoDeps(
+            shell=ShellBackend(),
+            config=SETTINGS,
+            session=CoSessionState(),
+            knowledge_dir=tmp_path / "knowledge",
+            memory_store=store,
+            skill_commands={
+                "my-skill": SkillConfig(name="my-skill", description="does something useful")
+            },
+        )
+        ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_search(ctx, query="")
+
+        assert "Available skills:" not in result.return_value, (
+            f"empty-query browse must NOT include skills section, got: {result.return_value!r}"
+        )
+        assert "my-skill" not in result.return_value, (
+            f"empty-query browse must NOT enumerate skill names, got: {result.return_value!r}"
+        )
+    finally:
+        store.close()

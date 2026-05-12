@@ -120,7 +120,7 @@ SELECT c.source, c.doc_path AS path,
        bm25(chunks_fts) AS rank,
        c.chunk_index, c.start_line, c.end_line,
        d.kind, d.title, d.category, d.created, d.updated,
-       d.source_ref, d.artifact_id
+       d.description, d.source_ref, d.artifact_id
   FROM chunks_fts
   JOIN chunks c ON c.rowid = chunks_fts.rowid
   JOIN docs d ON d.source = c.source AND d.path = c.doc_path
@@ -154,7 +154,7 @@ def _chunks_like_search(
         f" substr(c.content, 1, 300) AS snippet, {rank_expr} AS rank,"
         " c.chunk_index, c.start_line, c.end_line,"
         " d.kind, d.title, d.category, d.created, d.updated,"
-        " d.source_ref, d.artifact_id"
+        " d.description, d.source_ref, d.artifact_id"
         " FROM chunks c"
         " JOIN docs d ON d.source = c.source AND d.path = c.doc_path"
         f" WHERE ({like_conds})"
@@ -622,6 +622,7 @@ class MemoryStore:
             chunk_index=row["chunk_index"],
             start_line=row["start_line"],
             end_line=row["end_line"],
+            description=row["description"],
             source_ref=row["source_ref"],
             artifact_id=row["artifact_id"],
         )
@@ -1275,6 +1276,18 @@ class MemoryStore:
         self._conn.execute("DELETE FROM docs WHERE source = ?", (source,))
         self._conn.commit()
         return self.sync_dir(source, directory, glob)
+
+    def list_titles_by_source(self, source: str) -> set[str]:
+        """Return the set of doc titles currently indexed under the given source."""
+        rows = self._conn.execute("SELECT title FROM docs WHERE source=?", (source,)).fetchall()
+        return {row["title"] for row in rows if row["title"]}
+
+    def get_path_by_title(self, source: str, title: str) -> str | None:
+        """Return the indexed doc path for (source, title), or None if not present."""
+        row = self._conn.execute(
+            "SELECT path FROM docs WHERE source=? AND title=?", (source, title)
+        ).fetchone()
+        return row["path"] if row else None
 
     def probe(self) -> None:
         """Run a minimal health check; raise on the first error found.

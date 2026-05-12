@@ -23,7 +23,7 @@ flowchart TD
     end
 
     subgraph Cycle["Dream Cycle — mine → merge → decay"]
-        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ memory_create via miner Agent\n→ new knowledge/*.md artifacts"]
+        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ knowledge_manage via miner Agent\n→ new knowledge/*.md artifacts"]
         Merge["Phase 2: Merge\nactive same-kind similar clusters\n→ llm_call() for consolidated body\n→ write consolidated artifact, archive originals"]
         Decay["Phase 3: Decay\nold, unrecalled, non-protected artifacts\n→ archive to knowledge/_archive/"]
         State["Persist DreamState\n(processed_sessions, last_dream_at, cumulative stats)"]
@@ -122,7 +122,7 @@ for each unprocessed session:
 
 Mining uses the shared transcript-window builder (`_window.py`). It keeps user and assistant text plus selected tool calls/results, skips file-read style output, and drops large non-prose tool returns. Dream mining uses wider caps than agent-explicit knowledge saves because its purpose is cross-turn pattern discovery.
 
-The dream miner is a **tool-using pydantic-ai Agent** equipped with the `memory_create` tool. It is instructed to save only durable artifacts, especially:
+The dream miner is a **tool-using pydantic-ai Agent** equipped with the `knowledge_manage` tool. It is instructed to save only durable artifacts, especially:
 
 - cross-turn patterns
 - implicit preferences
@@ -169,7 +169,7 @@ Merge invariants:
 - If archiving fails after the consolidated artifact is written, the consolidated artifact remains; the failure is logged and the cycle continues.
 - The merge prompt may combine and deduplicate existing facts, but must not invent new facts.
 
-The merge call is a **direct `llm_call`** (no tool access, body text only) — in contrast with the mining phase which uses a tool-equipped Agent that calls `memory_create` to write artifacts.
+The merge call is a **direct `llm_call`** (no tool access, body text only) — in contrast with the mining phase which uses a tool-equipped Agent that calls `knowledge_manage` to write artifacts.
 
 The consolidated artifact uses `source_type: consolidated` and inherits the union of tags from the originals. The active index is updated for the consolidated artifact, and archived originals are removed from the index.
 
@@ -302,7 +302,7 @@ Internal caps:
 | `co_cli/memory/artifact.py` | Knowledge artifact schema and active top-level artifact loading |
 | `co_cli/memory/frontmatter.py` | Knowledge markdown rendering and frontmatter validation |
 | `co_cli/memory/memory_store.py` | Derived index updates for consolidated and archived artifacts |
-| `co_cli/tools/memory/write.py` | `memory_create` tool used by dream mining |
+| `co_cli/tools/memory/manage.py` | `knowledge_manage` tool used by dream mining |
 | `co_cli/main.py` | Session-end dream trigger (`_maybe_run_dream_cycle`) |
 | `co_cli/commands/knowledge.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, and `/memory stats` |
 

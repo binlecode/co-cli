@@ -27,13 +27,13 @@ from co_cli.tools.google.gmail import (  # noqa: F401
     google_gmail_list,
     google_gmail_search,
 )
+from co_cli.tools.memory.manage import knowledge_manage  # noqa: F401
 from co_cli.tools.memory.read import memory_read_session_turn  # noqa: F401
 from co_cli.tools.memory.recall import memory_search  # noqa: F401
-from co_cli.tools.memory.write import memory_create, memory_modify  # noqa: F401
 from co_cli.tools.obsidian.tools import obsidian_list, obsidian_read, obsidian_search  # noqa: F401
 from co_cli.tools.shell.execute import shell  # noqa: F401
 from co_cli.tools.system.capabilities import capabilities_check  # noqa: F401
-from co_cli.tools.system.skills import skill_manage, skill_view, skills_list  # noqa: F401
+from co_cli.tools.system.skills import skill_manage, skill_search, skill_view  # noqa: F401
 from co_cli.tools.system.user_input import clarify  # noqa: F401
 from co_cli.tools.tasks.control import (  # noqa: F401
     task_cancel,

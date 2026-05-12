@@ -12,7 +12,7 @@ from co_cli.agent.core import build_tool_registry
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.skills.loader import load_skills
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.system.skills import skill_manage
+from co_cli.tools.system.skills import _skill_manage_approval_subject, skill_manage
 
 _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
@@ -361,3 +361,243 @@ async def test_invalid_name_rejected_before_dispatch(tmp_path: Path, bad_name: s
     ctx = _make_ctx(deps)
     result = await skill_manage(ctx, action="create", name=bad_name, content=_VALID_CONTENT)
     assert _is_error(result)
+
+
+# ---------------------------------------------------------------------------
+# TASK-2: skill loader hook — index integration tests
+# ---------------------------------------------------------------------------
+
+
+def _make_deps_with_index(tmp_path: Path) -> CoDeps:
+    """Like _make_deps but with a real SkillIndex for index hook tests."""
+    from tests._settings import SETTINGS
+
+    from co_cli.skills.index import SkillIndex
+
+    index = SkillIndex(
+        config=SETTINGS,
+        memory_db_path=tmp_path / "search.db",
+    )
+    skill_commands = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    tool_registry = build_tool_registry(SETTINGS)
+    return CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS,
+        tool_index=dict(tool_registry.tool_index),
+        session=CoSessionState(),
+        skill_commands=skill_commands,
+        skills_dir=_BUNDLED_SKILLS_DIR,
+        user_skills_dir=tmp_path,
+        tool_results_dir=tmp_path / "tool-results",
+        skill_index=index,
+    )
+
+
+def test_refresh_skills_indexes_bundled_doctor_skill(tmp_path: Path) -> None:
+    """refresh_skills populates SkillIndex so doctor skill is discoverable via .search()."""
+    from co_cli.skills.lifecycle import refresh_skills
+
+    deps = _make_deps_with_index(tmp_path)
+    try:
+        refresh_skills(deps)
+        hits = deps.skill_index.search("doctor", limit=5)
+        assert any(h.name == "doctor" for h in hits), (
+            f"Expected 'doctor' in SkillIndex hits, got: {[h.name for h in hits]}"
+        )
+    finally:
+        deps.skill_index.close()
+
+
+@pytest.mark.asyncio
+async def test_skill_create_then_searchable_via_index(tmp_path: Path) -> None:
+    """After skill_manage(action='create'), the new skill appears in SkillIndex.search()."""
+    deps = _make_deps_with_index(tmp_path)
+    ctx = _make_ctx(deps)
+    try:
+        result = await skill_manage(
+            ctx,
+            action="create",
+            name="my-index-test-skill",
+            content="---\ndescription: A unique skill for index verification\n---\nDo the index thing.\n",
+        )
+        assert not _is_error(result), f"create failed: {result.return_value}"
+
+        hits = deps.skill_index.search("unique skill index verification", limit=5)
+        assert any(h.name == "my-index-test-skill" for h in hits), (
+            f"Newly created skill must be in index; got: {[h.name for h in hits]}"
+        )
+    finally:
+        deps.skill_index.close()
+
+
+@pytest.mark.asyncio
+async def test_skill_delete_then_not_searchable_via_index(tmp_path: Path) -> None:
+    """After skill_manage(action='delete'), the skill is removed from SkillIndex.search()."""
+    deps = _make_deps_with_index(tmp_path)
+    ctx = _make_ctx(deps)
+    try:
+        await skill_manage(
+            ctx,
+            action="create",
+            name="to-be-deleted-skill",
+            content="---\ndescription: Skill that will be deleted from index\n---\nDo work.\n",
+        )
+        before = deps.skill_index.search("deleted from index", limit=5)
+        assert any(h.name == "to-be-deleted-skill" for h in before), (
+            "Skill must be indexed before delete"
+        )
+
+        result = await skill_manage(ctx, action="delete", name="to-be-deleted-skill")
+        assert not _is_error(result), f"delete failed: {result.return_value}"
+
+        after = deps.skill_index.search("deleted from index", limit=5)
+        assert not any(h.name == "to-be-deleted-skill" for h in after), (
+            "Deleted skill must be absent from index"
+        )
+    finally:
+        deps.skill_index.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-5: skill_manage(action='install') — error cases and approval subject
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_install_from_local_path_writes_file(tmp_path: Path) -> None:
+    """install from a local .md path writes the file to user_skills_dir and reloads.
+
+    Regression guard: if install doesn't call _atomic_write_skill or _reload_skills,
+    the file will be missing or the new skill will not appear in skill_commands.
+    """
+    source = tmp_path / "source-dir" / "new-install.md"
+    source.parent.mkdir()
+    source.write_text(
+        "---\ndescription: Skill installed from a local file\n---\nDo the installed thing.\n",
+        encoding="utf-8",
+    )
+    install_dir = tmp_path / "user-skills"
+    install_dir.mkdir()
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS,
+        session=CoSessionState(),
+        skill_commands=load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=install_dir),
+        skills_dir=_BUNDLED_SKILLS_DIR,
+        user_skills_dir=install_dir,
+    )
+    ctx = _make_ctx(deps)
+
+    result = await skill_manage(ctx, action="install", source=str(source))
+
+    assert not _is_error(result), f"install failed: {result.return_value}"
+    assert (install_dir / "new-install.md").exists(), "installed file must be in user_skills_dir"
+    assert "new-install" in deps.skill_commands, (
+        "new skill must appear in skill_commands after reload"
+    )
+
+
+@pytest.mark.asyncio
+async def test_install_non_md_source_errors(tmp_path: Path) -> None:
+    """install with a non-.md local file returns tool_error.
+
+    Regression guard: if the .md extension check is absent, arbitrary files are
+    written into the skills directory and treated as runnable skills.
+    """
+    source = tmp_path / "not-a-skill.txt"
+    source.write_text("just text", encoding="utf-8")
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+
+    result = await skill_manage(ctx, action="install", source=str(source))
+
+    assert _is_error(result), "non-.md source must return tool_error"
+    assert ".md" in result.return_value.lower() or "md" in result.return_value.lower(), (
+        "error message must mention the .md requirement"
+    )
+
+
+@pytest.mark.asyncio
+async def test_install_collision_errors_with_edit_hint(tmp_path: Path) -> None:
+    """install of a skill whose name already exists in user_skills_dir returns tool_error.
+
+    The error must direct the caller to use action='edit' instead of silently overwriting.
+    Regression guard: if the collision check is absent, installs silently overwrite user edits.
+    """
+    existing = tmp_path / "existing-skill.md"
+    existing.write_text(
+        "---\ndescription: Already installed\n---\nExisting body.\n", encoding="utf-8"
+    )
+    source = tmp_path / "source" / "existing-skill.md"
+    source.parent.mkdir()
+    source.write_text("---\ndescription: Replacement attempt\n---\nNew body.\n", encoding="utf-8")
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+
+    result = await skill_manage(ctx, action="install", source=str(source))
+
+    assert _is_error(result), "collision must return tool_error"
+    assert "edit" in result.return_value.lower(), (
+        "error message must direct caller to use action='edit'"
+    )
+    assert existing.read_text(encoding="utf-8").startswith(
+        "---\ndescription: Already installed"
+    ), "existing file must not be overwritten on collision"
+
+
+@pytest.mark.asyncio
+async def test_install_destructive_content_errors_and_removes_file(tmp_path: Path) -> None:
+    """install with security-flagged content returns tool_error and removes the written file.
+
+    Regression guard: if _scan_or_rollback is not called after write, a destructive skill
+    is left on disk and will be loaded into skill_commands on next reload.
+    """
+    source = tmp_path / "source-dir" / "danger-skill.md"
+    source.parent.mkdir()
+    source.write_text(_DESTRUCTIVE_CONTENT, encoding="utf-8")
+    install_dir = tmp_path / "user-skills"
+    install_dir.mkdir()
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS,
+        session=CoSessionState(),
+        skill_commands=load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=install_dir),
+        skills_dir=_BUNDLED_SKILLS_DIR,
+        user_skills_dir=install_dir,
+    )
+    ctx = _make_ctx(deps)
+
+    result = await skill_manage(ctx, action="install", source=str(source))
+
+    assert _is_error(result), "security-flagged install must return tool_error"
+    assert not (install_dir / "danger-skill.md").exists(), (
+        "security-flagged skill file must be removed after rollback"
+    )
+
+
+def test_install_approval_subject_url_host() -> None:
+    """Approval subject for install from URL must encode the host as tool:skill_manage:install:url:<host>.
+
+    Regression guard: wrong key format breaks session-level approval rules —
+    a remembered 'allow github.com skills' approval would not match future installs.
+    """
+    subject = _skill_manage_approval_subject(
+        {"action": "install", "source": "https://github.com/user/skill.md"}
+    )
+
+    assert subject.tool_name == "skill_manage"
+    assert subject.value == "tool:skill_manage:install:url:github.com"
+    assert subject.can_remember is True
+
+
+def test_install_approval_subject_localfile() -> None:
+    """Approval subject for install from local path must use tool:skill_manage:install:localfile.
+
+    Regression guard: URL vs. localfile distinction allows different approval policies
+    for network sources vs local filesystem sources.
+    """
+    subject = _skill_manage_approval_subject(
+        {"action": "install", "source": "/home/user/skills/my-skill.md"}
+    )
+
+    assert subject.value == "tool:skill_manage:install:localfile"
