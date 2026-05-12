@@ -38,6 +38,7 @@ LOGS_DIR = USER_DIR / "logs"
 KNOWLEDGE_DIR = USER_DIR / "knowledge"
 SESSIONS_DIR = USER_DIR / "sessions"
 TOOL_RESULTS_DIR = USER_DIR / "tool-results"
+WORKSPACE_DIR = USER_DIR / "workspace"
 
 # Flat defaults (Settings-level, not grouped)
 DEFAULT_THEME = "light"
@@ -65,6 +66,7 @@ def _ensure_dirs() -> None:
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _validate_personality(personality: str) -> list[str]:
@@ -91,6 +93,7 @@ class Settings(BaseModel):
     brave_search_api_key: str | None = Field(default=None)
     google_credentials_path: str | None = Field(default=None)
     knowledge_path: str | None = Field(default=None)
+    workspace_path: str | None = Field(default=None)
 
     # Flat — behavior
     theme: str = Field(default=DEFAULT_THEME)
@@ -133,6 +136,7 @@ class Settings(BaseModel):
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
             "knowledge_path": "CO_KNOWLEDGE_PATH",
+            "workspace_path": "CO_WORKSPACE_PATH",
             "theme": "CO_THEME",
             "reasoning_display": "CO_REASONING_DISPLAY",
             "personality": "CO_PERSONALITY",

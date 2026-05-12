@@ -129,9 +129,9 @@ async def test_length_retry_completes_truncated_noreason_response() -> None:
 
     Ollama ignores max_completion_tokens (pydantic-ai's mapping of max_tokens) but honors
     max_tokens injected via extra_body (the openai client merges extra_body at the request
-    root). Constrain output to 300 tokens this way, request a ~500-token response. The first
-    segment is truncated; _length_retry_settings doubles max_tokens (and extra_body.max_tokens)
-    to 600, and the continuation segment completes the remaining ~200 tokens.
+    root). Constrain output to 80 tokens — well below any reasonable essay response —
+    so the first segment is reliably truncated regardless of model verbosity. The retry
+    doubles max_tokens each pass (80→160→320→…) until the model completes.
 
     Asserts the turn succeeds and history shows ≥2 ModelResponse entries.
     """
@@ -141,8 +141,9 @@ async def test_length_retry_completes_truncated_noreason_response() -> None:
     # the HTTP body, so Ollama sees and honors the max_tokens field there.
     # max_tokens in the scalar settings must match so _length_retry_settings detects
     # current_max > 0 and fires the boost.
-    extra_body = {**noreason.get("extra_body", {}), "max_tokens": 300}
-    constrained_settings = {**noreason, "max_tokens": 300, "extra_body": extra_body}
+    # 80 tokens is tight enough to force truncation on any concise model response.
+    extra_body = {**noreason.get("extra_body", {}), "max_tokens": 80}
+    constrained_settings = {**noreason, "max_tokens": 80, "extra_body": extra_body}
 
     deps = _make_deps()
     await ensure_ollama_warm(TEST_LLM.model)

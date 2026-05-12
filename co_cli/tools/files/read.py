@@ -72,7 +72,7 @@ def _has_command(cmd: str) -> bool:
 
 
 async def _glob_python(
-    resolved: Path, workspace_root: Path, pattern: str, max_entries: int
+    resolved: Path, workspace_dir: Path, pattern: str, max_entries: int
 ) -> tuple[list[dict[str, str]], bool]:
     entries = []
     truncated = False
@@ -81,7 +81,7 @@ async def _glob_python(
         for entry in raw:
             kind = "dir" if entry.is_dir() else "file"
             try:
-                rel = str(entry.relative_to(workspace_root))
+                rel = str(entry.relative_to(workspace_dir))
             except ValueError:
                 rel = str(entry)
             entries.append({"name": rel, "type": kind})
@@ -101,7 +101,7 @@ async def _glob_python(
 
 
 async def _glob_ripgrep(
-    resolved: Path, workspace_root: Path, pattern: str, max_entries: int
+    resolved: Path, workspace_dir: Path, pattern: str, max_entries: int
 ) -> tuple[list[dict[str, str]], bool] | None:
     # Run rg from `resolved` with no dir arg: path-prefix globs like src/**/*.py only work
     # correctly when rg resolves paths relative to its cwd, not against an absolute dir arg.
@@ -137,22 +137,22 @@ async def _glob_ripgrep(
     entries = []
     for path in raw_paths[:max_entries]:
         try:
-            rel = str(path.relative_to(workspace_root))
+            rel = str(path.relative_to(workspace_dir))
         except ValueError:
             rel = str(path)
         entries.append({"name": rel, "type": "file"})
     return entries, truncated
 
 
-def _relativize_output_path(path_str: str, workspace_root: Path) -> str:
+def _relativize_output_path(path_str: str, workspace_dir: Path) -> str:
     """Return a workspace-relative path when possible."""
     try:
-        return str(Path(path_str).relative_to(workspace_root))
+        return str(Path(path_str).relative_to(workspace_dir))
     except ValueError:
         return path_str
 
 
-def _parse_grep_count_output(lines: list[str], workspace_root: Path) -> tuple[list[str], int]:
+def _parse_grep_count_output(lines: list[str], workspace_dir: Path) -> tuple[list[str], int]:
     """Parse ripgrep count-mode output into display lines and total match count."""
     total_match_count = 0
     all_output: list[str] = []
@@ -165,12 +165,12 @@ def _parse_grep_count_output(lines: list[str], workspace_root: Path) -> tuple[li
         except ValueError:
             continue
         total_match_count += count
-        rel_path = _relativize_output_path(path_str, workspace_root)
+        rel_path = _relativize_output_path(path_str, workspace_dir)
         all_output.append(f"{rel_path}: {count}")
     return all_output, total_match_count
 
 
-def _parse_grep_content_output(lines: list[str], workspace_root: Path) -> tuple[list[str], int]:
+def _parse_grep_content_output(lines: list[str], workspace_dir: Path) -> tuple[list[str], int]:
     """Parse ripgrep content-mode output into the tool's legacy display format."""
     match_re = re.compile(r"^([A-Za-z]:)?(.*?):(\d+):(.*)$")
     context_re = re.compile(r"^([A-Za-z]:)?(.*?)-(\d+)-(.*)$")
@@ -183,14 +183,14 @@ def _parse_grep_content_output(lines: list[str], workspace_root: Path) -> tuple[
         match = match_re.match(line)
         if match:
             path_str = (match.group(1) or "") + match.group(2)
-            rel_path = _relativize_output_path(path_str, workspace_root)
+            rel_path = _relativize_output_path(path_str, workspace_dir)
             all_output.append(f"{rel_path}:{match.group(3)}: {match.group(4)}")
             total_match_count += 1
             continue
         context_match = context_re.match(line)
         if context_match:
             path_str = (context_match.group(1) or "") + context_match.group(2)
-            rel_path = _relativize_output_path(path_str, workspace_root)
+            rel_path = _relativize_output_path(path_str, workspace_dir)
             all_output.append(f"{rel_path}:{context_match.group(3)}- {context_match.group(4)}")
 
     filtered_output: list[str] = []
@@ -236,20 +236,20 @@ def _build_grep_shell_command(
 
 
 def _parse_grep_shell_output(
-    lines: list[str], workspace_root: Path, output_mode: str
+    lines: list[str], workspace_dir: Path, output_mode: str
 ) -> tuple[list[str], int]:
     """Parse shell grep output according to the requested display mode."""
     if output_mode == "files_with_matches":
-        all_output = [_relativize_output_path(line, workspace_root) for line in lines if line]
+        all_output = [_relativize_output_path(line, workspace_dir) for line in lines if line]
         return all_output, len(all_output)
     if output_mode == "count":
-        return _parse_grep_count_output(lines, workspace_root)
-    return _parse_grep_content_output(lines, workspace_root)
+        return _parse_grep_count_output(lines, workspace_dir)
+    return _parse_grep_content_output(lines, workspace_dir)
 
 
 async def _grep_shell(
     resolved: Path,
-    workspace_root: Path,
+    workspace_dir: Path,
     pattern: str,
     glob_pat: str,
     case_insensitive: bool,
@@ -274,9 +274,7 @@ async def _grep_shell(
         lines = stdout.decode().strip().split("\n")
         if not lines or not lines[0]:
             return [], 0, False
-        all_output, total_match_count = _parse_grep_shell_output(
-            lines, workspace_root, output_mode
-        )
+        all_output, total_match_count = _parse_grep_shell_output(lines, workspace_dir, output_mode)
 
         paginated = (
             all_output[offset : offset + head_limit] if head_limit > 0 else all_output[offset:]
@@ -289,7 +287,7 @@ async def _grep_shell(
 
 async def _grep_python(
     search_root: Path,
-    workspace_root: Path,
+    workspace_dir: Path,
     pattern: str,
     glob_pat: str,
     case_insensitive: bool,
@@ -312,7 +310,7 @@ async def _grep_python(
             text = file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        rel_path = str(file_path.relative_to(workspace_root))
+        rel_path = str(file_path.relative_to(workspace_dir))
         file_lines = text.splitlines()
         match_indices = [idx for idx, line in enumerate(file_lines) if compiled.search(line)]
         if not match_indices:
@@ -404,7 +402,7 @@ async def file_find(
         max_entries: Maximum entries returned (default: 200).
     """
     try:
-        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
+        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_dir)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -414,19 +412,19 @@ async def file_find(
     if not resolved.is_dir():
         return tool_error(f"Not a directory: {path}", ctx=ctx)
 
-    workspace_root = ctx.deps.workspace_root
+    workspace_dir = ctx.deps.workspace_dir
 
     entries: list[dict[str, str]] = []
     truncated = False
 
     if is_recursive_pattern(pattern) and _has_command("rg"):
-        rg_result = await _glob_ripgrep(resolved, workspace_root, pattern, max_entries)
+        rg_result = await _glob_ripgrep(resolved, workspace_dir, pattern, max_entries)
         if rg_result is not None:
             entries, truncated = rg_result
         else:
-            entries, truncated = await _glob_python(resolved, workspace_root, pattern, max_entries)
+            entries, truncated = await _glob_python(resolved, workspace_dir, pattern, max_entries)
     else:
-        entries, truncated = await _glob_python(resolved, workspace_root, pattern, max_entries)
+        entries, truncated = await _glob_python(resolved, workspace_dir, pattern, max_entries)
 
     lines = [f"[{e['type']}] {e['name']}" for e in entries]
     if truncated:
@@ -483,7 +481,7 @@ async def file_read(
             refetch_attempt = False
         span.set_attribute("co.tool.spill_refetch_attempt", refetch_attempt)
     try:
-        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
+        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_dir)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -592,9 +590,9 @@ async def file_search(
     except re.error:
         return tool_error(f"Invalid regex: {pattern}", ctx=ctx)
 
-    workspace_root = ctx.deps.workspace_root
+    workspace_dir = ctx.deps.workspace_dir
     try:
-        search_root = enforce_workspace_boundary(Path(path), workspace_root)
+        search_root = enforce_workspace_boundary(Path(path), workspace_dir)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
     if not search_root.is_dir():
@@ -604,7 +602,7 @@ async def file_search(
     if _has_command("rg"):
         result = await _grep_shell(
             search_root,
-            workspace_root,
+            workspace_dir,
             pattern,
             glob,
             case_insensitive,
@@ -617,7 +615,7 @@ async def file_search(
     if result is None:
         result = await _grep_python(
             search_root,
-            workspace_root,
+            workspace_dir,
             pattern,
             glob,
             case_insensitive,

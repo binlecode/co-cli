@@ -296,8 +296,7 @@ async def create_deps(
     config = copy.deepcopy(get_settings())
     if theme_override:
         config.theme = theme_override
-    cwd = Path.cwd()
-    paths = resolve_workspace_paths(config, cwd)
+    paths = resolve_workspace_paths(config)
 
     # Step 2: fail-fast gate (config shape only — no IO)
     error = config.llm.validate_config()

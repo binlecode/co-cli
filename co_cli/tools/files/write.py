@@ -393,12 +393,12 @@ async def _apply_v4a_patch(
     ctx: "RunContext[CoDeps]",
 ) -> "tuple[str, list[str], list[str], list[str]] | str":
     """Compute all V4A operations in memory, then write. Returns error string or result tuple."""
-    workspace_root = ctx.deps.workspace_root
+    workspace_dir = ctx.deps.workspace_dir
     pending: list[_PendingWrite] = []
 
     for op in ops:
         try:
-            resolved = enforce_workspace_boundary(Path(op.file_path), workspace_root)
+            resolved = enforce_workspace_boundary(Path(op.file_path), workspace_dir)
         except ValueError as e:
             return str(e)
 
@@ -435,7 +435,7 @@ async def _file_patch_replace(
         return tool_error("new_string is required in replace mode", ctx=ctx)
 
     try:
-        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
+        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_dir)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -499,7 +499,7 @@ async def file_write(
         content: Text content to write.
     """
     try:
-        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
+        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_dir)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 

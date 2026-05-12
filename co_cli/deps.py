@@ -15,6 +15,7 @@ from co_cli.config.core import (
     SESSIONS_DIR,
     TOOL_RESULTS_DIR,
     USER_DIR,
+    WORKSPACE_DIR,
     Settings,
 )
 
@@ -232,8 +233,8 @@ class CoDeps:
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
 
-    # Workspace paths — resolved from cwd at bootstrap, not from config
-    workspace_root: Path = field(default_factory=Path.cwd)
+    # Workspace paths — resolved from config at bootstrap, not from cwd
+    workspace_dir: Path = field(default_factory=lambda: WORKSPACE_DIR)
     obsidian_vault_path: Path | None = None
     knowledge_dir: Path = field(default_factory=lambda: _DEFAULT_KNOWLEDGE_DIR)
     skills_dir: Path = field(default_factory=lambda: _DEFAULT_SKILLS_DIR)
@@ -262,10 +263,12 @@ class CoDeps:
             self.resource_locks = ResourceLockStore()
 
 
-def resolve_workspace_paths(config: Settings, cwd: Path) -> dict[str, Any]:
-    """Resolve cwd-relative workspace paths from Settings. Used by create_deps()."""
+def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
+    """Resolve workspace paths from Settings. Used by create_deps()."""
     return {
-        "workspace_root": cwd,
+        "workspace_dir": Path(config.workspace_path).resolve()
+        if config.workspace_path
+        else WORKSPACE_DIR,
         "obsidian_vault_path": Path(config.obsidian_vault_path)
         if config.obsidian_vault_path
         else None,
@@ -310,7 +313,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         skill_commands=base.skill_commands,
         session=inherited_session,
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
-        workspace_root=base.workspace_root,
+        workspace_dir=base.workspace_dir,
         obsidian_vault_path=base.obsidian_vault_path,
         knowledge_dir=base.knowledge_dir,
         skills_dir=base.skills_dir,

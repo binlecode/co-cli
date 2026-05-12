@@ -1,6 +1,5 @@
 """Welcome banner display for the Co CLI chat startup sequence."""
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.bootstrap.project_info import project_info
@@ -69,7 +68,8 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         f"    Model: [accent]{llm_provider}[/accent]",
         knowledge_line,
         f"    Tools: {tool_count}  Skills: {skill_count}  MCP: {mcp_count}  Commands: {cmd_count}",
-        f"    Dir: {Path.cwd().name}" + (f"  ({info.git_branch})" if info.git_branch else ""),
+        f"    Dir: {str(deps.workspace_dir) if deps.config.workspace_path else deps.workspace_dir.name}"
+        + (f"  ({info.git_branch})" if info.git_branch else ""),
         "",
         f"    [success]✓ Ready{'  (degraded)' if deps.degradations else ''}[/success]",
         "    [dim]Type /help for commands, 'exit' to quit[/dim]",

@@ -284,6 +284,6 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
                 args_chars = 0
             span.set_attribute("co.tool.args_chars", args_chars)
         if call.tool_name in PATH_NORMALIZATION_TOOLS and "path" in args:
-            workspace_root = ctx.deps.workspace_root
-            args["path"] = str((workspace_root / args["path"]).resolve())
+            workspace_dir = ctx.deps.workspace_dir
+            args["path"] = str((workspace_dir / args["path"]).resolve())
         return args

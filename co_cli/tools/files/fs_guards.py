@@ -3,8 +3,8 @@
 from pathlib import Path
 
 
-def enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
-    """Resolve path against workspace_root and verify it stays within.
+def enforce_workspace_boundary(path: Path, workspace_dir: Path) -> Path:
+    """Resolve path against workspace_dir and verify it stays within.
 
     Defense in depth: CoToolLifecycle.before_tool_execute pre-resolves paths,
     but this function handles both pre-resolved (absolute) and raw (relative)
@@ -12,8 +12,8 @@ def enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
 
     Raises ValueError if path escapes workspace.
     """
-    resolved = (workspace_root / path).resolve()
-    if not resolved.is_relative_to(workspace_root.resolve()):
+    resolved = (workspace_dir / path).resolve()
+    if not resolved.is_relative_to(workspace_dir.resolve()):
         raise ValueError(f"Path escapes workspace: {path}")
     return resolved
 
