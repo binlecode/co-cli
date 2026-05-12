@@ -2,8 +2,7 @@
 
 After the four-tier decomposition:
 - Canon is indexed at bootstrap by `_sync_canon_store` for the personality system only.
-- No model-callable tool (`memory_search`, `_search_artifacts`) returns canon hits.
-- `memory_search(channel='canon')` raises a structured tool_error directing to personality.
+- No model-callable tool (`knowledge_search`, `_search_artifacts`) returns canon hits.
 """
 
 import asyncio
@@ -19,7 +18,7 @@ from co_cli.bootstrap.core import _sync_canon_store
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.core import TerminalFrontend
 from co_cli.memory.memory_store import MemoryStore
-from co_cli.tools.memory.recall import _search_artifacts, memory_search
+from co_cli.tools.memory.recall import _search_artifacts, knowledge_search
 from co_cli.tools.shell_backend import ShellBackend
 
 _FTS5_CONFIG = SETTINGS.knowledge.model_copy(
@@ -91,35 +90,16 @@ def test_search_artifacts_canon_kind_filter_returns_empty(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_memory_search_channel_canon_returns_tool_error(tmp_path: Path) -> None:
-    """memory_search(channel='canon') returns structured tool_error.
-
-    Failure mode: silent fallthrough would re-expose canon as a memory channel,
-    violating the four-tier decomposition.
-    """
+async def test_knowledge_search_all_channels_excludes_canon_hits(tmp_path: Path) -> None:
+    """knowledge_search never returns canon kind in flat result list."""
     ctx = _make_ctx(tmp_path, personality="tars")
     try:
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await memory_search(ctx, query="humor", channel="canon")
-        assert result.metadata is not None, "tool_error must populate metadata"
-        assert result.metadata.get("error") is True, (
-            f"channel='canon' must return tool_error; got: {result.return_value!r}"
-        )
-    finally:
-        ctx.deps.memory_store.close()
-
-
-@pytest.mark.asyncio
-async def test_memory_search_all_channels_excludes_canon_hits(tmp_path: Path) -> None:
-    """memory_search with no channel filter never returns canon kind in flat result list."""
-    ctx = _make_ctx(tmp_path, personality="tars")
-    try:
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await memory_search(ctx, query="humor deadpan")
+            result = await knowledge_search(ctx, query="humor deadpan")
         results = result.metadata.get("results") or []
         canon_results = [r for r in results if r.get("kind") == "canon"]
         assert canon_results == [], (
-            f"memory_search must not surface canon hits; got: {canon_results}"
+            f"knowledge_search must not surface canon hits; got: {canon_results}"
         )
     finally:
         ctx.deps.memory_store.close()

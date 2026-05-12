@@ -8,7 +8,7 @@ from co_cli.commands._utils import _confirm
 from co_cli.commands.types import CommandContext
 from co_cli.display.core import console
 from co_cli.memory.artifact import filter_artifacts, format_artifact_row, load_artifacts
-from co_cli.tools.memory.read import grep_recall
+from co_cli.tools.memory.recall import _grep_recall as grep_recall
 
 _MEMORY_USAGE = (
     "[bold]Usage:[/bold] /memory list|count|forget|dream|restore|decay-review|stats "

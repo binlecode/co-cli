@@ -1,9 +1,12 @@
 """Behavioural tests for _handle_one_input — the extracted chat loop iteration helper."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
-from tests._settings import SETTINGS_NO_MCP
+from tests._ollama import ensure_ollama_warm
+from tests._settings import SETTINGS_NO_MCP, TEST_LLM
+from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent.core import build_agent, build_tool_registry
 from co_cli.commands.completer import SlashCommandCompleter
@@ -29,6 +32,7 @@ def _make_deps(tmp_path: Path) -> CoDeps:
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
+        model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
     )
 
 
@@ -167,6 +171,7 @@ async def test_ctrl_c_double_press_within_window_exits() -> None:
         user_input=None,
         eof=False,
         state=state,
+        # deps/agent are never reached when user_input is None (interrupt path exits early)
         deps=None,  # type: ignore[arg-type]
         agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
@@ -181,6 +186,7 @@ async def test_ctrl_c_double_press_within_window_exits() -> None:
         user_input=None,
         eof=False,
         state=first,
+        # deps/agent are never reached when user_input is None (interrupt path exits early)
         deps=None,  # type: ignore[arg-type]
         agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
@@ -209,6 +215,7 @@ async def test_ctrl_c_outside_window_resets_timer() -> None:
         user_input=None,
         eof=False,
         state=state,
+        # deps/agent are never reached when user_input is None (interrupt path exits early)
         deps=None,  # type: ignore[arg-type]
         agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
@@ -223,6 +230,7 @@ async def test_ctrl_c_outside_window_resets_timer() -> None:
         user_input=None,
         eof=False,
         state=first,
+        # deps/agent are never reached when user_input is None (interrupt path exits early)
         deps=None,  # type: ignore[arg-type]
         agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
@@ -251,6 +259,7 @@ async def test_eof_exits() -> None:
         user_input=None,
         eof=True,
         state=state,
+        # deps/agent are never reached when eof=True (EOF path returns before any agent call)
         deps=None,  # type: ignore[arg-type]
         agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
@@ -338,3 +347,38 @@ async def test_slash_command_routes_to_dispatch(tmp_path: Path) -> None:
     )
 
     assert result.should_exit is False
+
+
+# ---------------------------------------------------------------------------
+# Test 9: plain text routing — non-slash input reaches _run_foreground_turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_plain_text_routes_to_foreground_turn(tmp_path: Path) -> None:
+    """Plain text input is forwarded to _run_foreground_turn, extending message history.
+
+    Regression guard: if plain text bypasses the agent, user messages are silently
+    swallowed with no response — the session appears to hang.
+    """
+    deps = _make_deps(tmp_path)
+    agent = _make_agent(deps)
+    frontend = HeadlessFrontend()
+    completer = SlashCommandCompleter()
+    state = _fresh_state()
+
+    await ensure_ollama_warm(TEST_LLM.model)
+    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
+        result = await _handle_one_input(
+            user_input="Say OK",
+            eof=False,
+            state=state,
+            deps=deps,
+            agent=agent,
+            frontend=frontend,
+            completer=completer,
+            now=0.0,
+        )
+
+    assert result.should_exit is False
+    assert len(result.message_history) > len(state.message_history)

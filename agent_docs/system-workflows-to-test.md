@@ -977,18 +977,17 @@ Each integration is gated on a config setting; absence skips registration.
   unchanged.
 - **Spec**: memory.md §3.1
 
-### 12.9 `memory_search(channel='skills')`
+### 12.9 `memory_search(channel='skills')` — removed channel guard
 
-- **Entry**: `co_cli/tools/memory/recall.py: memory_search` (channel='skills' branch)
-- **Behavior**: Skills-only recall path. FTS5 search over `source='skill'` capped at
-  `_SKILLS_CHANNEL_CAP=5` unique skill names. Empty-query path bypasses FTS and returns
-  loaded skill commands as an "Available skills:" section.
-- **Primary failure modes**: non-skill sources included in results; cap exceeded;
-  empty-query path includes FTS results instead of direct listing; "Available skills:"
-  header absent on empty query.
-- **Required test depth**: real skill index + real query; assert skills-only filter and
-  cap; assert empty-query browse output shape.
-- **Spec**: memory.md §4
+- **Entry**: `co_cli/tools/memory/recall.py: memory_search` (channel='skills' early-return)
+- **Behavior**: Channel='skills' was removed and now returns a `tool_error` immediately:
+  "channel='skills' is no longer supported — use skill_search instead." Skills are their
+  own surface accessible via `skill_search` / `skill_view`.
+- **Primary failure modes**: guard bypassed and request reaches FTS; error message absent
+  or misleading; non-error return type returned for this channel.
+- **Required test depth**: call `memory_search(channel='skills', query='anything')`; assert
+  result is a tool error containing "skill_search"; assert no FTS rows returned.
+- **Spec**: skill.md §2 (skills are a separate surface from memory)
 
 ---
 
