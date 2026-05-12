@@ -188,7 +188,7 @@ def obsidian_search(
     query is broad.
 
     This tool searches the user's Obsidian note vault (local markdown files).
-    For stored preferences and decisions, use memory_search instead. For cloud
+    For stored preferences and decisions, use knowledge_search instead. For cloud
     documents, use google_drive_search.
 
     Returns a dict with:

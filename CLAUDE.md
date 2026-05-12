@@ -40,16 +40,18 @@ Four operational tiers: **doctrine** (canon, soul seed, mindsets — auto-inject
 
 The model-facing surface:
 
-- `memory_search(channel=...)` — two-channel ranked recall (knowledge + session)
+- `knowledge_search(query, kinds?, limit)` — ranked recall over knowledge artifacts (preferences, feedback, rules, decisions, references, articles, notes)
+- `session_search(query, limit?)` — ranked recall over past session transcripts
+- `knowledge_view(name)` — load a knowledge artifact's full body by filename_stem
+- `session_view(session_id, start_line, end_line)` — verbatim session turn reader
 - `knowledge_manage(action=...)` — write surface for knowledge (create / append / replace / delete)
 - `skill_search(query)` — ranked discovery over the skill index
 - `skill_view(name)` — load a skill's full body
 - `skill_manage(action=...)` — write surface for skills (create / edit / patch / delete / install)
-- `memory_read_session_turn(...)` — channel-specific reader for verbatim session turns (source-only; not registered)
 
 Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge entries. FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (knowledge + session via `MemoryStore`; skills via `SkillIndex` — same DB, separate API; canon is also indexed there for personality auto-injection but never returned by any model-callable tool). Implementation lives in `co_cli/memory/`, `co_cli/tools/memory/`, and `co_cli/skills/`. See `docs/specs/memory.md`, `docs/specs/skill.md`, and `docs/specs/personality.md` for the full model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
 
-Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browsing is `memory_search` with an empty or kind-filtered query; full-body knowledge reads use the generic `file_read` tool against the path that `memory_search` surfaces.
+Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browsing is `knowledge_search` or `session_search` with an empty query; full-body knowledge reads use `knowledge_view(name)` with the `filename_stem` from a `knowledge_search` hit.
 
 ## Engineering Rules
 

@@ -65,10 +65,10 @@ class CheckResult:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-def probe_ollama_model(host: str, model: str) -> tuple[int | None, list[str]]:
-    """Probe Ollama /api/show for the loaded model's context size and capabilities.
+def probe_ollama_model(host: str, model: str) -> int | None:
+    """Probe Ollama /api/show for the loaded model's context size.
 
-    Returns (num_ctx, capabilities); num_ctx is None on any error or if unparseable.
+    Returns num_ctx, or None on any error or if unparseable.
     """
     try:
         import httpx
@@ -81,7 +81,7 @@ def probe_ollama_model(host: str, model: str) -> tuple[int | None, list[str]]:
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        return None, []
+        return None
 
     num_ctx: int | None = None
     raw_params = data.get("parameters", "")
@@ -95,7 +95,7 @@ def probe_ollama_model(host: str, model: str) -> tuple[int | None, list[str]]:
                     pass
                 break
 
-    return num_ctx, data.get("capabilities") or []
+    return num_ctx
 
 
 def validate_ollama_num_ctx(config: "Settings") -> None:

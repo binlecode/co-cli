@@ -126,7 +126,7 @@ non-blocking warning strings. Startup prints any warnings but does not abort.
 
 Canon scenes (`souls/{role}/memories/*.md`) are the source-material grounding for the active
 character. They are read-only at runtime, package-shipped, and **not** part of the memory
-surface — there is no `memory_search(channel='canon')` and no `canon_manage` tool. Canon is
+surface — there is no canon search tool and no `canon_manage` tool. Canon is
 identity; treating it as mutable would compromise the personality contract.
 
 **Indexing.** At bootstrap, `_sync_canon_store(store, config, frontend)` calls
@@ -143,9 +143,9 @@ is unset, no canon is indexed.
 whole — chunking would fragment them.
 
 **Removal from memory surface.** The previous design surfaced canon as `kind='canon'` in
-the artifacts channel of `memory_search`. That was the wrong tier — canon is doctrine, not
-accumulated state. The canon priority pass was removed; `memory_search(channel='canon')`
-now returns a structured `tool_error` directing to this section.
+the artifacts channel of the unified recall tool. That was the wrong tier — canon is doctrine, not
+accumulated state. The canon priority pass was removed; canon is not queryable via any
+model-callable tool — it is auto-injected by the personality system at agent construction.
 
 ---
 

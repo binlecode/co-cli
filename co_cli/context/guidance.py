@@ -11,12 +11,13 @@ from co_cli.deps import ToolInfo
 
 MEMORY_GUIDANCE = """\
 ## Memory
-Call memory_search before answering when:
+Call `knowledge_search` or `session_search` before answering when:
 - The user references past work, a past conversation, preferences, or a prior decision
 - You recognize the topic but don't have context for this user's specific setup or preferences
 - The user asks "what did we do about X?", "what's my convention for Y?", "remember when…"
 
-It searches knowledge artifacts and past session transcripts in one call.
+Use `knowledge_search` for saved preferences, rules, articles, and notes.
+Use `session_search` for past conversation transcripts.
 If no results, make at most one broader retry; then surface the miss rather than continuing."""
 
 CAPABILITIES_GUIDANCE = """\
@@ -33,7 +34,7 @@ def build_toolset_guidance(tool_index: dict[str, ToolInfo]) -> str:
     parts: list[str] = []
     tool_names = set(tool_index.keys())
 
-    if "memory_search" in tool_names:
+    if "knowledge_search" in tool_names or "session_search" in tool_names:
         parts.append(MEMORY_GUIDANCE)
     if "capabilities_check" in tool_names:
         parts.append(CAPABILITIES_GUIDANCE)

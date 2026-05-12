@@ -93,7 +93,7 @@ def build_static_instructions(config: Settings) -> str:
        placeholders that appear after ``evict_old_tool_results`` runs)
 
     Canon and critique are NOT injected here — canon is surfaced on demand via
-    ``memory_search``; critique is appended in ``core.py`` after operational guidance.
+    ``knowledge_search``; critique is appended in ``core.py`` after operational guidance.
 
     Returns the fully assembled static instructions string.
     """

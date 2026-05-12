@@ -36,13 +36,37 @@ Reads `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`. Runs a deep, self-co
 
 ## Phase 2 — Evidence Collection
 
-**For each `✓ DONE` task**, cold-read the implementation. No relying on what was written earlier in this session — approach the code fresh.
+### Pre-step — Scope-creep scan and lint
 
-### A — Read files
+Run before spawning subagents:
+
+```bash
+git diff --name-only HEAD
+```
+
+Compare against the union of all `files:` across every `✓ DONE` task. For each file in the diff that is **not** in any task's `files:`, immediately record:
+```
+⚠ Extra file: <path> — not declared in any task's files:
+```
+Carry these into the findings list. Do not block here.
+
+Also run the global lint check:
+```bash
+scripts/quality-gate.sh lint
+```
+Any violation is a blocking finding. Carry into findings list.
+
+### Per-task evidence (parallel subagents)
+
+Spawn **one subagent per `✓ DONE` task** in parallel. Declare tools: `Read, Bash, Grep`. Each subagent receives the task description, `done_when`, `files:` list, and the Engineering Rules section from CLAUDE.md.
+
+Each subagent runs:
+
+#### A — Read files
 
 Read every file listed in `files:`. If a file does not exist: immediate blocking finding.
 
-### B — Spec fidelity with evidence
+#### B — Spec fidelity with evidence
 
 For every requirement in the task description and `done_when`:
 
@@ -53,43 +77,49 @@ For every requirement in the task description and `done_when`:
 
 Record for each requirement: file:line evidence, or a finding if absent.
 
-### C — Quality gate (lint)
+#### C — Convention checklist
 
-```bash
-scripts/quality-gate.sh lint
-```
-Any violation is a blocking finding. Auto-fix ruff with `scripts/quality-gate.sh lint --fix` in Phase 4.
-
-### D — Convention checklist
-
-Check every changed file against CLAUDE.md's Engineering Rules section. Each violation is a potential blocking finding. Key areas:
+Check every file listed in `files:` against CLAUDE.md's Engineering Rules. Each violation is a potential blocking finding. Key areas:
 
 - **Tool conventions**: correct registration pattern, structured return type, deps from `ctx.deps`, no global state
 - **Test policy**: no mocks, fakes, or patching — real services only
-- **Code hygiene**: dead code, stale imports, misplaced lazy imports, scope creep (files outside `files:` not announced as `⚠ Extra file:`)
+- **Code hygiene**: dead code, stale imports, misplaced lazy imports
 - **Over-engineering**: abstractions or helpers not required by the spec
 - **Display**: terminal output via the project's shared `console` — not `print()` or hardcoded color names
 - **Security**: command injection, path traversal, SQL injection, missing input validation at system boundaries
 
+Each subagent returns a structured findings list: task ID, requirement or rule, verdict (pass/fail), file:line evidence for every entry.
+
+### Aggregation
+
+After all subagents return:
+1. Merge all findings lists into a single table keyed by task.
+2. Run cross-task integration check: stale imports or API inconsistencies visible only when task boundaries are viewed together.
+3. Carry forward scope-creep extra files and lint violations from the pre-step.
+
 ---
 
-## Phase 3 — Adversarial Self-Review
+## Phase 3 — Adversarial Review
 
-Before proceeding to fixes, challenge every finding from Phase 2:
+Spawn one **adversarial subagent** with declared tools `Read, Grep`. Pass it:
+- The merged findings table (task, requirement/rule, verdict, file:line citation) — no analysis narrative, just the structured list.
+- The Engineering Rules from CLAUDE.md.
+
+The adversarial subagent re-reads every cited file:line cold with no prior context:
 
 **For each PASS:**
-- Did I actually read the code at that file:line, or did I pattern-match on the function name?
-- If I cannot cite the specific line, it is not a confirmed pass — re-read.
+- Confirm the cited line actually implements what was claimed. If it does not: downgrade to FAIL.
 
 **For each FAIL:**
-- Is this actually wrong, or is it working-as-intended and I missed context?
-- Would the fix I have in mind count as over-engineering?
-- Does this violate a hard Engineering Rule, or is it a style preference?
+- Confirm the issue is real and not working-as-intended.
+- Ask: would the fix count as over-engineering? Is it a hard Engineering Rule violation or a style preference?
+- If false positive: downgrade to minor or remove. If real: confirm as blocking or minor.
 
-Downgrade false positives to minor or remove them. Upgrade under-detected issues. Only blocking findings that survive this challenge proceed to Phase 4.
+**Classification:**
+- **Blocking** = spec requirement missing, `done_when` fails, hard Engineering Rule violated (mock/stub in test, wrong tool pattern, global state), security issue.
+- **Minor** = style, non-required improvement, partial convention drift with no functional impact.
 
-**Blocking** = spec requirement missing, `done_when` fails, hard Engineering Rule violated (unit test, wrong tool pattern, global state), security issue.
-**Minor** = style, non-required improvement, partial convention drift with no functional impact.
+The adversarial subagent returns: the reconciled findings list with each entry marked confirmed-blocking, confirmed-minor, or false-positive (removed). Main agent applies this list. Only confirmed-blocking findings proceed to Phase 4.
 
 ---
 
@@ -240,7 +270,7 @@ _(or: "No user-facing changes — skipped.")_
 ## Rules
 
 - **Evidence or it didn't happen**: every pass and every fail requires a file:line citation. Pattern-matching on names is not evidence.
-- **Adversarial default**: do not look for reasons to pass. Look for reasons to fail — and verify each one survives the self-review challenge.
+- **Adversarial default**: do not look for reasons to pass. Look for reasons to fail — and verify each one survives the adversarial subagent's cold challenge.
 - **Auto-fix, don't report**: blocking findings are fixed here, not handed back to the TL as a to-do list. The verdict is clean or escalated — never "here are issues for you to fix."
 - **Architectural decisions escalate**: if fixing correctly requires a decision beyond "change this line," stop and surface it. Never apply a workaround to avoid escalation.
 - **No mocks or fakes under any circumstances**: if a fix tempts you to mock a dependency, the production API is wrong — fix the API.

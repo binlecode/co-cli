@@ -53,12 +53,12 @@ async def knowledge_manage(
                        - name treated as title; source_url dedup not supported here.
                        - consolidation_enabled in config → Jaccard dedup.
     action='append'  — Add content at the end of an existing artifact body.
-                       name must be the filename_stem (from memory_search).
+                       name must be the filename_stem (from knowledge_search).
     action='replace' — Surgically replace a passage in an existing artifact.
                        name must be the filename_stem; section is the exact passage
                        to replace (must appear exactly once); content is the replacement.
     action='delete'  — Remove the artifact file and its index entries.
-                       name must be the filename_stem (from memory_search).
+                       name must be the filename_stem (from knowledge_search).
 
     Returns a dict with:
     - display: confirmation message — show directly to the user
@@ -66,7 +66,7 @@ async def knowledge_manage(
 
     Args:
         action: One of create | append | replace | delete.
-        name: For create — the artifact title. For append/replace/delete — the filename_stem.
+        name: For create — the artifact title. For append/replace/delete — the filename_stem (from knowledge_search).
         content: Text body for create/append, or replacement text for replace.
         kind: Required for create. One of user | rule | article | note.
         section: For replace — the exact passage to replace (must appear exactly once).
@@ -222,7 +222,7 @@ async def _handle_delete(
 
     if not artifact_path.exists():
         return tool_error(
-            f"Artifact '{filename_stem}' not found — verify the filename_stem via memory_search",
+            f"Artifact '{filename_stem}' not found — verify the filename_stem via knowledge_search",
             ctx=ctx,
         )
 

@@ -229,6 +229,7 @@ def _load_skill_file(
             disable_model_invocation=meta.get("disable-model-invocation", False),
             requires=requires,
             skill_env=skill_env,
+            path=path,
         )
     except Exception as e:
         msg = f"Skill {path.name!r} skipped: {e}"

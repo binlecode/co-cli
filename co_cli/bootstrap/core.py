@@ -227,8 +227,8 @@ def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
         )
 
 
-def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
-    """Resolve model_max_ctx and model_capabilities from config + Ollama probe.
+def _probe_model_ctx(config: Settings) -> int:
+    """Resolve model_max_ctx from config + Ollama probe.
 
     Ollama: probe loaded Modelfile; raise if num_ctx < max_ctx (floor contract).
     Non-Ollama or probe failure: fall back to configured max_ctx.
@@ -240,11 +240,11 @@ def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
             config.llm.provider,
             config.llm.max_ctx,
         )
-        return config.llm.max_ctx, []
+        return config.llm.max_ctx
 
     from co_cli.bootstrap.check import probe_ollama_model, validate_ollama_num_ctx
 
-    num_ctx, capabilities = probe_ollama_model(config.llm.host, config.llm.model)
+    num_ctx = probe_ollama_model(config.llm.host, config.llm.model)
     if num_ctx is not None:
         _check_ollama_num_ctx_floor(num_ctx, config.llm.model, config.llm.max_ctx)
     else:
@@ -253,7 +253,7 @@ def _probe_model_ctx(config: Settings) -> tuple[int, list[str]]:
             config.llm.max_ctx,
         )
     validate_ollama_num_ctx(config)
-    return config.llm.max_ctx, capabilities
+    return config.llm.max_ctx
 
 
 def _emit_tool_budget_span(
@@ -304,7 +304,7 @@ async def create_deps(
         raise ValueError(error)
 
     # Step 2b: resolve runtime context budget (Ollama probe or configured ceiling).
-    model_max_ctx, model_capabilities = _probe_model_ctx(config)
+    model_max_ctx = _probe_model_ctx(config)
 
     # Cache spill threshold for the enforce_request_size history processor.
     from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
@@ -412,7 +412,6 @@ async def create_deps(
         skill_commands=skill_commands,
         runtime=runtime,
         model_max_ctx=model_max_ctx,
-        model_capabilities=model_capabilities,
         spill_threshold_tokens=spill_threshold_tokens,
         degradations=degradations,
         **paths,

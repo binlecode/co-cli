@@ -99,7 +99,7 @@ async def test_artifact_manage_delete_missing_artifact_returns_error(tmp_path: P
 async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None:
     """knowledge_manage(action='delete') must remove the artifact from the FTS5 index.
 
-    Regression guard: if the index entry is not removed, memory_search would
+    Regression guard: if the index entry is not removed, knowledge_search would
     continue returning a result whose file no longer exists.
     """
     knowledge_dir = tmp_path / "knowledge"

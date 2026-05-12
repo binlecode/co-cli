@@ -43,7 +43,7 @@ flowchart TD
 `build_agent()` assembles `static_instructions` from up to four ordered parts, all evaluated once at agent construction:
 
 1. **`build_static_instructions(config)`** — soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. Character memories and critique are NOT included here.
-2. **`build_toolset_guidance(tool_registry.tool_index)`** — tool-specific guidance blocks, each gated on the tool being present. Currently gated: `memory_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
+2. **`build_toolset_guidance(tool_registry.tool_index)`** — tool-specific guidance blocks, each gated on the tool being present. Currently gated: `knowledge_search` / `session_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
 3. **`build_category_awareness_prompt(tool_registry.tool_index)`** — single-sentence category-level hint listing deferred tool categories reachable via `search_tools`. Derived from `VisibilityPolicyEnum.DEFERRED` entries. Empty when no deferred tools exist.
 4. **`load_soul_critique(config.personality)`** — self-assessment lens (`## Review lens`), appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
 

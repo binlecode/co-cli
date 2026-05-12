@@ -8,7 +8,7 @@ Personality is assembled from these sources in this order:
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by build_static_instructions)
 
 Character memories (``souls/{role}/memories/*.md``) are NOT loaded here. They are
-surfaced on demand via the canon channel in ``memory_search`` (see
+surfaced on demand via the canon channel in ``knowledge_search`` (see
 ``co_cli/tools/memory/recall.py``).
 
 Each role is fully self-contained under ``souls/{role}/``. Adding a role requires

@@ -43,6 +43,9 @@ async def skill_view(
 ) -> ToolReturn:
     """Load a skill's full content. Returns SKILL.md body plus a 'linked_files' dict.
 
+    Call before skill_manage(action='edit') or skill_manage(action='patch')
+    to read current content. Don't edit blind.
+
     First call (no file_path) returns the skill body and an empty linked_files dict.
     Co-cli's flat-file skill model has no linked files today; any non-None file_path
     returns a tool_error.
@@ -80,8 +83,12 @@ async def skill_search(
 ) -> ToolReturn:
     """Search the skill index by name and description. Returns ranked hits.
 
-    Use when the bundled skill manifest in the system prompt doesn't cover what
-    you need — e.g. user-installed skills, or skills created in this session.
+    Call before skill_manage(action='create') to confirm no skill for this
+    task type already exists — avoids duplicates.
+
+    Also use when: the bundled <available_skills> manifest doesn't cover
+    what you need (user-installed skills, or skills created this session
+    live in the search index, not in the manifest).
 
     Args:
         query: FTS5 keyword query — keywords joined OR, phrases quoted, prefix*.
@@ -395,9 +402,29 @@ async def skill_manage(
 ) -> ToolReturn:
     """Create, edit, patch, delete, or install a user-installed skill.
 
-    Use memory_search(channel='skills') to browse the skill inventory and skill_view(name)
-    to inspect current content before editing. Bundled skills are read-only; copy to
-    ~/.co-cli/skills/ first to modify them.
+    Behavioral guidance:
+
+    Create when: a multi-step procedure (3+ coherent steps) succeeded and
+    is likely to recur for the same kind of task — or the user explicitly
+    asks to save a workflow. Name by task type, not the specific instance.
+    Content must conform to skill.md §6 (description, H1, **Invocation:**
+    line, at least one ## Phase N — <name> section).
+
+    Read first: call skill_view(name) before edit or patch to inspect
+    current content.
+
+    patch immediately when: you loaded and executed a skill and hit an
+    issue not covered by it — wrong command, missing step, stale output.
+    Fix the skill before finishing the task; don't leave it degraded.
+
+    offer-to-save: after difficult or iterative work, briefly offer the
+    user a save — "Want me to save this as a /<task-type> skill?" Confirm
+    before invoking create on their behalf.
+
+    Search before creating: call skill_search(query) to confirm no skill
+    for this task type already exists.
+
+    Bundled skills are read-only; copy to ~/.co-cli/skills/ first to modify them.
 
     Actions:
       create      Write a new skill (requires content with valid frontmatter + description).

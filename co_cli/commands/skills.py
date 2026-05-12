@@ -11,6 +11,7 @@ from co_cli.commands.registry import (
 from co_cli.commands.types import CommandContext
 from co_cli.config.core import settings
 from co_cli.display.core import console, make_table
+from co_cli.skills._lint import lint_skill
 from co_cli.skills.installer import (
     SkillFetchError,
     discover_skill_files,
@@ -108,6 +109,54 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
     console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_commands)} skill(s)[/success]")
 
 
+def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
+    """Lint one or all loaded skills against R1-R10."""
+    args = args.strip()
+
+    if args == "--all":
+        skills_to_lint = list(ctx.deps.skill_commands.keys())
+    elif args:
+        name = args
+        if name not in ctx.deps.skill_commands:
+            console.print(f"[bold red]Unknown skill:[/bold red] {name!r}")
+            return
+        skills_to_lint = [name]
+    else:
+        console.print("[bold red]Usage:[/bold red] /skills lint <name> | --all")
+        return
+
+    total = len(skills_to_lint)
+    clean_count = 0
+    any_findings = False
+
+    for name in skills_to_lint:
+        skill = ctx.deps.skill_commands[name]
+        path = skill.path
+        if path is None:
+            console.print(f"[bold red]Skill file path unknown for:[/bold red] {name!r}")
+            continue
+
+        content = path.read_text(encoding="utf-8")
+        findings = lint_skill(content, path)
+
+        console.print(f"{name} ({path}):")
+        if findings:
+            any_findings = True
+            for finding in findings:
+                console.print(f"  {finding.rule} at line {finding.line}: {finding.message}")
+        else:
+            clean_count += 1
+            console.print("  (clean)")
+
+    if total > 1:
+        console.print(
+            f"\n{clean_count} of {total} skills clean. Exit code {'0' if not any_findings else '1'}."
+        )
+
+    if any_findings:
+        raise SystemExit(1)
+
+
 async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     """List and inspect loaded skills, or install a new one."""
     sub = args.strip().split(maxsplit=1)
@@ -120,6 +169,8 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         _cmd_skills_check(ctx)
     elif subcmd == "install":
         await _install_skill(ctx, subargs)
+    elif subcmd == "lint":
+        _cmd_skills_lint(ctx, subargs)
     elif subcmd == "reload":
         _cmd_skills_reload(ctx)
     elif subcmd == "upgrade":
@@ -127,7 +178,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
         console.print(
-            "[dim]Usage: /skills [list|check|install <path|url>|reload|upgrade <name>][/dim]"
+            "[dim]Usage: /skills [list|check|install <path|url>|lint [<name>|--all]|reload|upgrade <name>][/dim]"
         )
 
     return None

@@ -175,7 +175,7 @@ async def web_research(
     self-contained research question.
 
     When NOT to use: a single URL fetch or a factual question you can answer
-    from memory or the knowledge base — use web_fetch or memory_search
+    from memory or the knowledge base — use web_fetch or knowledge_search
     directly instead.
 
     Returns the agent's findings as a text result. Automatically retries once
@@ -281,7 +281,7 @@ async def knowledge_analyze(
     context via inputs when the agent needs prior results to reason over.
 
     When NOT to use: a single keyword search against the knowledge base —
-    use memory_search directly instead.
+    use knowledge_search directly instead.
 
     Returns the agent's findings as a text result.
 

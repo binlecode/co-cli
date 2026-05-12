@@ -1,21 +1,22 @@
-"""Memory read tools — session turn reader.
+"""Memory view tools — full-body readers for knowledge artifacts and session turns.
 
-Full-body reads route through the generic `file_read` tool using the path that
-`memory_search` surfaces in its rendered output. Artifact listing is folded into
-`memory_search`'s empty-query path.
+Two registered readers: knowledge_view (artifact body by filename_stem) and
+session_view (verbatim session turn slice by session_id + line range).
 """
 
 import logging
+import math
 from typing import Any
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.memory.artifact import KnowledgeArtifact
+from co_cli.memory.artifact import ArtifactKindEnum
+from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.memory.indexer import extract_messages
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.tool_io import tool_output
+from co_cli.tools.tool_io import tool_error, tool_output
 
 logger = logging.getLogger(__name__)
 
@@ -23,32 +24,51 @@ _SESSION_TURN_MAX_LINES = 200
 _SESSION_TURN_MAX_BYTES = 16 * 1024
 
 
-def grep_recall(
-    artifacts: list[KnowledgeArtifact],
-    query: str,
-    max_results: int,
-) -> list[KnowledgeArtifact]:
-    """Case-insensitive substring search across title and content.
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    is_read_only=True,
+    is_concurrent_safe=True,
+    spill_threshold_chars=math.inf,
+)
+async def knowledge_view(
+    ctx: RunContext[CoDeps],
+    name: str,
+) -> ToolReturn:
+    """Load the full body of a knowledge artifact by its filename_stem.
 
-    Sorts by recency (updated or created, newest first).
+    Use after knowledge_search returns a hit when you need the complete artifact
+    content — not just the snippet. The `name` is the `filename_stem` field from
+    search results.
+
+    Returns: artifact body (post-frontmatter), plus kind, name, and path metadata.
+    Returns tool_error when the artifact does not exist.
+
+    Args:
+        name: The artifact filename_stem (no directory, no .md extension).
     """
-    query_lower = query.lower()
-    matches = [
-        m
-        for m in artifacts
-        if query_lower in m.content.lower() or query_lower in (m.title or "").lower()
-    ]
-    matches.sort(key=lambda m: m.updated or m.created, reverse=True)
-    return matches[:max_results]
+    path = ctx.deps.knowledge_dir / f"{name}.md"
+    if not path.exists():
+        return tool_error(f"knowledge_view: unknown artifact {name!r}.", ctx=ctx)
+
+    raw = path.read_text(encoding="utf-8")
+    frontmatter, body = parse_frontmatter(raw)
+    kind = frontmatter.get("artifact_kind", ArtifactKindEnum.NOTE.value)
+    return tool_output(
+        body.strip(),
+        ctx=ctx,
+        name=name,
+        kind=kind,
+        path=str(path),
+    )
 
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
     is_read_only=True,
     is_concurrent_safe=True,
-    register=False,
+    spill_threshold_chars=math.inf,
 )
-async def memory_read_session_turn(
+async def session_view(
     ctx: RunContext[CoDeps],
     session_id: str,
     start_line: int,
@@ -56,15 +76,20 @@ async def memory_read_session_turn(
 ) -> ToolReturn:
     """Read verbatim turns from a past session by JSONL line range.
 
-    Use after memory_search returns a session chunk hit when you need the
-    exact turn content — commands, file paths, error messages, tool args —
-    rather than the chunk-level snippet. Line numbers are 1-indexed JSONL
-    lines as reported in the search hit's start_line/end_line.
+    Use after session_search returns a chunk hit when you need the exact turn
+    content — commands, file paths, error messages, tool args — rather than the
+    chunk-level snippet. Line numbers are 1-indexed JSONL lines as reported in
+    the search hit's start_line/end_line.
 
     Refuses ranges over 200 lines or content over 16KB to keep context tight.
 
     Returns: {session_id, lines: [...], truncated: bool}
         lines[i] = {line, role, content_preview, tool_name|None}
+
+    Args:
+        session_id: 8-char session UUID suffix.
+        start_line: First JSONL line to read (1-indexed).
+        end_line: Last JSONL line to read (1-indexed, inclusive).
     """
     if start_line < 1 or end_line < start_line:
         return tool_output(
@@ -79,7 +104,7 @@ async def memory_read_session_turn(
     jsonl_path = candidates[0] if candidates else None
 
     if jsonl_path is None:
-        return tool_output(
+        return tool_error(
             f"Unknown session_id '{session_id}': no matching session file found.",
             ctx=ctx,
         )

@@ -32,7 +32,7 @@ def _make_store(tmp_path, name="test-search.db") -> MemoryStore:
 def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
     """save_artifact (straight path) must write a file AND index it in FTS5.
 
-    Failure mode: file written but not indexed → memory_search misses newly
+    Failure mode: file written but not indexed → knowledge_search misses newly
     created artifacts on the next turn.
     """
     knowledge_dir = tmp_path / "knowledge"

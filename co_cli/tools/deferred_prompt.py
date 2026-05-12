@@ -28,7 +28,13 @@ _NATIVE_CATEGORIES: dict[str, str] = {
 _NATIVE_CATEGORY_REPS: dict[str, list[str]] = {
     "file editing": ["file_write", "file_patch"],
     "background tasks": ["task_start"],
-    "memory management": ["knowledge_manage"],
+    "memory management": [
+        "knowledge_manage",
+        "knowledge_search",
+        "knowledge_view",
+        "session_search",
+        "session_view",
+    ],
     "code execution": ["code_execute"],
     "sub-agents": [
         "web_research",

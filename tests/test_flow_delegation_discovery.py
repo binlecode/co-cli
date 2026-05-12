@@ -3,7 +3,7 @@
 from tests._settings import make_settings
 
 from co_cli.agent.core import discover_delegation_tools
-from co_cli.tools.memory.recall import memory_search
+from co_cli.tools.memory.recall import knowledge_search
 from co_cli.tools.web.fetch import web_fetch
 from co_cli.tools.web.search import web_search
 
@@ -20,14 +20,14 @@ def test_web_research_profile_excludes_knowledge_tools():
     """web_research profile must not include knowledge tools."""
     config = make_settings(obsidian_vault_path=None, google_credentials_path=None)
     tools = discover_delegation_tools("web_research", config)
-    assert memory_search not in tools
+    assert knowledge_search not in tools
 
 
 def test_knowledge_analyze_base_tools_no_optional_config():
-    """knowledge_analyze profile returns memory_search when no optional integrations configured."""
+    """knowledge_analyze profile returns knowledge_search when no optional integrations configured."""
     config = make_settings(obsidian_vault_path=None, google_credentials_path=None)
     tools = discover_delegation_tools("knowledge_analyze", config)
-    assert memory_search in tools
+    assert knowledge_search in tools
 
 
 def test_knowledge_analyze_excludes_web_tools():

@@ -11,11 +11,9 @@ from pydantic_ai.usage import RunUsage
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
     KNOWLEDGE_DIR,
-    SEARCH_DB,
     SESSIONS_DIR,
     TOOL_RESULTS_DIR,
     USER_DIR,
-    WORKSPACE_DIR,
     Settings,
 )
 
@@ -234,12 +232,11 @@ class CoDeps:
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
 
     # Workspace paths — resolved from config at bootstrap, not from cwd
-    workspace_dir: Path = field(default_factory=lambda: WORKSPACE_DIR)
+    workspace_dir: Path = field(default_factory=Path.cwd)
     obsidian_vault_path: Path | None = None
     knowledge_dir: Path = field(default_factory=lambda: _DEFAULT_KNOWLEDGE_DIR)
     skills_dir: Path = field(default_factory=lambda: _DEFAULT_SKILLS_DIR)
     user_skills_dir: Path = field(default_factory=lambda: _DEFAULT_USER_SKILLS_DIR)
-    memory_db_path: Path = field(default_factory=lambda: SEARCH_DB)
     sessions_dir: Path = field(default_factory=lambda: _DEFAULT_SESSIONS_DIR)
     tool_results_dir: Path = field(default_factory=lambda: _DEFAULT_TOOL_RESULTS_DIR)
 
@@ -247,8 +244,6 @@ class CoDeps:
     # Ollama: read from the loaded Modelfile via /api/show, capped by max_ctx (probe-failure
     # fallback: max_ctx). Other providers: max_ctx ceiling.
     model_max_ctx: int = 0
-    # Model capability strings probed at bootstrap (e.g. ["completion", "tools", "thinking"]).
-    model_capabilities: list[str] = field(default_factory=list)
     # Bootstrap-cached: int(spill_ratio x model_max_ctx). Immutable after bootstrap.
     # Read by enforce_request_size; never recomputed at read sites.
     spill_threshold_tokens: int = 0
@@ -268,7 +263,7 @@ def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
     return {
         "workspace_dir": Path(config.workspace_path).resolve()
         if config.workspace_path
-        else WORKSPACE_DIR,
+        else Path.cwd(),
         "obsidian_vault_path": Path(config.obsidian_vault_path)
         if config.obsidian_vault_path
         else None,
@@ -318,11 +313,9 @@ def fork_deps(base: CoDeps) -> CoDeps:
         knowledge_dir=base.knowledge_dir,
         skills_dir=base.skills_dir,
         user_skills_dir=base.user_skills_dir,
-        memory_db_path=base.memory_db_path,
         sessions_dir=base.sessions_dir,
         tool_results_dir=base.tool_results_dir,
         model_max_ctx=base.model_max_ctx,
-        model_capabilities=base.model_capabilities,
         spill_threshold_tokens=base.spill_threshold_tokens,
         degradations=base.degradations,
     )

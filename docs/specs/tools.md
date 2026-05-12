@@ -1,188 +1,220 @@
 # Co CLI — Tools
 
-
 > For system overview and approval boundary: [system.md](system.md). For the agent loop, orchestration, and approval flow: [core-loop.md](core-loop.md). For skill loading and slash-command dispatch: [skill.md](skill.md).
 
-## 1. Tool Infrastructure
+## 1. Functional Architecture
 
-Section 2 owns the execution flow. This section only names the files that own the tool system.
-
-```text
-co_cli/agent/core.py
-  -> build_tool_registry(), build_agent()
-co_cli/agent/_native_toolset.py
-  -> _build_native_toolset(), _approval_resume_filter()
-co_cli/agent/mcp.py
-  -> _build_mcp_toolsets(), discover_mcp_tools()
-co_cli/tools/lifecycle.py
-  -> before_node_run(), before_tool_validate(), before_tool_execute(), after_tool_execute()
-co_cli/tools/deferred_prompt.py
-  -> category awareness prompt for DEFERRED tools
-co_cli/tools/approvals.py
-  -> approval subject resolution and remembered session rules
-co_cli/tools/agent_tool.py
-  -> @agent_tool metadata attachment, TOOL_REGISTRY (self-populating; each @agent_tool registers at import time)
-co_cli/tools/tool_io.py
-  -> tool_output(), tool_output_raw(), tool_error()
-co_cli/tools/_shell_policy.py
-  -> shell/code_execute approval policy
-co_cli/tools/files/read.py
-co_cli/tools/files/write.py
-co_cli/tools/memory/recall.py
-co_cli/tools/memory/read.py
-co_cli/tools/memory/manage.py
+```mermaid
+graph LR
+    subgraph Registration
+        A["@agent_tool\n(module import)"] -->|"self-registers"| B["TOOL_REGISTRY"]
+    end
+    subgraph Assembly
+        B --> C["build_tool_registry(config)"]
+        C --> D["ToolRegistry\ntoolset · mcp_toolsets · tool_index"]
+    end
+    subgraph Orchestrator
+        D -->|"toolset"| E["Orchestrator Agent"]
+        E --> F["CoToolLifecycle\nbefore_node_run\nbefore_tool_validate\nbefore_tool_execute\nafter_tool_execute"]
+        F -->|"DeferredToolRequests"| G["Approval Loop\n_collect_deferred_tool_approvals\n+ resume segment"]
+    end
+    subgraph Delegation["Delegation (task agent path)"]
+        F -->|"delegation tool invoked"| H["fork_deps\ntool_index forwarded\ntool_registry excluded"]
+        H --> I["Task Agent\nbuild_agent(tool_fns=\ndiscover_delegation_tools(profile))"]
+        I --> J["_delegate_agent\n_run_agent_attempt"]
+    end
 ```
 
-## 2. Tool Lifecycle, Approval, & Concurrency
+### Tool Groups
 
-### Lifecycle Hooks & Execution Flow
+| Group | Tools | Notes |
+|-------|-------|-------|
+| Interaction & Session | `clarify`, `capabilities_check`, `todo_write`, `todo_read` | All ALWAYS |
+| Workspace & Files | `file_find`, `file_read`, `file_search`, `file_write`, `file_patch` | `file_write`/`file_patch` approval + lock |
+| Knowledge, Memory & Skills | `session_search`, `session_view`, `knowledge_search`, `knowledge_view`, `knowledge_manage`, `skill_search`, `skill_view`, `skill_manage` | `knowledge_manage`/`skill_manage` approval |
+| Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
+| Execution & Jobs | `shell`, `task_start`, `task_status`, `task_cancel`, `task_list`, `code_execute` | `shell`/`code_execute` hybrid approval |
+| Delegation | `web_research`, `knowledge_analyze`, `reason` | All DEFERRED; spawn task agents |
+| Obsidian | `obsidian_list`, `obsidian_search`, `obsidian_read` | Gate: `obsidian_vault_path` |
+| Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | Gate: `google_credentials_path`; `google_gmail_draft` approval |
 
-```text
-run_turn()
-  -> _execute_stream_segment(initial)
-     -> agent.run_stream_events(...)
-     -> turn_state.latest_result = SessionRunResult
-  -> latest_result.output
-     -> str
-        -> turn complete
-     -> DeferredToolRequests
-        -> _run_approval_loop()
-           -> deps.runtime.resume_tool_names =
-              frozenset(call.tool_name for call in output.approvals)
-           -> _collect_deferred_tool_approvals(latest_result, deps, frontend)
-              -> for call in output.approvals
-                 -> meta = output.metadata[tool_call_id]
-                 -> if "questions" in meta
-                    -> for q in meta["questions"]
-                       -> frontend.prompt_question(...)
-                    -> approvals[id] =
-                       ToolApproved(override_args={"user_answers": answers})
-                 -> else
-                    -> decode_tool_args(call.args)
-                    -> resolve_approval_subject(...)
-                    -> is_auto_approved(subject, deps)
-                       -> yes: approvals[id] = True
-                       -> no
-                          -> frontend.prompt_approval(subject)
-                          -> record_approval_choice(...)
-                             -> approved: approvals[id] = True
-                             -> denied: approvals[id] = ToolDenied(...)
-                             -> choice == "a": remember session rule
-           -> turn_state.current_input = None
-           -> turn_state.current_history = latest_result.all_messages()
-           -> turn_state.tool_approval_decisions = approvals
-           -> _execute_stream_segment(resume, deferred_tool_results=approvals)
-           -> latest_result.output
-              -> DeferredToolRequests: loop again
-              -> anything else
-                 -> deps.runtime.resume_tool_names = None
-                 -> exit approval loop
+**Total: 38 native tools** (20 ALWAYS · 18 DEFERRED · 6 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically based on the command path)
+
+### Shared Entry Points
+
+`CoToolLifecycle` (`co_cli/tools/lifecycle.py`) is the pydantic-ai capability registered on the orchestrator agent. It fires four hooks per tool call: `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute`. All tool instrumentation and safety guards run through these hooks — no inline per-tool branching.
+
+`fork_deps(base)` (`co_cli/deps.py`) creates an isolated `CoDeps` for a task agent. It forwards `tool_index` (needed for approval checks and OTel enrichment) but explicitly excludes `tool_registry` — the orchestrator's combined toolset and MCP lifecycle handles must not propagate to task agents. `runtime.agent_depth` is incremented on each fork.
+
+`_delegate_agent` / `_run_agent_attempt` (`co_cli/tools/agents/delegation.py`) are shared helpers used by all three delegation tools. They handle OTel span creation, `fork_deps`, `UsageLimits` enforcement, child usage merge into the parent turn's `turn_usage`, and `ModelRetry` wrapping on failure.
+
+## 2. Core Logic
+
+### Lifecycle Hooks
+
+```
+tool call received
+      │
+      ▼
+before_node_run  [CallToolsNode only]
+  ┌──────────────────────────────────────┐
+  │  for each part in model response:    │
+  │    ToolCallPart?                     │
+  │      (name, args) seen before?       │
+  │        yes ──► DROP                  │
+  │        no  ──► keep, mark seen       │
+  │    TextPart / ThinkingPart           │
+  │        ──► pass through unchanged    │
+  └──────────────────────────────────────┘
+      │
+      ▼
+before_tool_validate
+  ┌──────────────────────────────────────┐
+  │  args is str?                        │
+  │    yes ──► repair_json               │
+  │            trailing comma            │
+  │            unclosed brace            │
+  │            control chars             │
+  │            bare None                 │
+  │    no (dict) ──► pass through        │
+  └──────────────────────────────────────┘
+      │
+      ▼
+before_tool_execute
+  ┌──────────────────────────────────────┐
+  │  for each path-type arg:             │
+  │    relative ──► absolute system path │
+  └──────────────────────────────────────┘
+      │
+      ▼
+  [ tool executes ]
+      │
+      ▼
+after_tool_execute
+  ┌────────────────────────────────────────────┐
+  │  span ← co.tool.result_size (all tools)    │
+  │  tool_name in tool_index? (native only)    │
+  │    yes ──► span ← co.tool.source           │
+  │            span ← co.tool.requires_approval│
+  └────────────────────────────────────────────┘
 ```
 
-Resume segments execute on the main agent with `deferred_tool_results=...`; on that path the SDK skips `ModelRequestNode`, so the approval-resume loop does not send a new model prompt just to execute approved tools.
+### Approval Loop
 
-**Execution Pipeline via CoToolLifecycle:**
-1. **`before_node_run`:** On `CallToolsNode`, drops later `ToolCallPart`s whose `(tool_name, args)` matches an earlier one in the same `ModelResponse`. Runs before approval prompts and parallel dispatch, so duplicate emissions from smaller Qwen / GLM variants do not trigger double approval, double side effects, or wasted tool execution. Order is preserved; non-`ToolCallPart` parts (`TextPart`, `ThinkingPart`) pass through unchanged.
-2. **`before_tool_validate`:** Applies syntactic JSON repair to malformed tool-call argument strings from quantized models (trailing commas, unclosed braces, control chars, bare `None`) before pydantic validates the args. Dict args pass through unchanged.
-3. **`before_tool_execute`:** Intercepts invocations to resolve relative paths to absolute system paths.
-4. **`after_tool_execute`:** Enriches OpenTelemetry traces: `co.tool.result_size` (all tool spans, including delegation); `co.tool.source` and `co.tool.requires_approval` set for native tools only (present in `tool_index`).
+```
+                          ┌─────────────────────────────┐
+                    ┌────►│  output = latest_result      │
+                    │     └──────────────┬──────────────┘
+                    │                    │
+                    │        DeferredToolRequests?
+                    │           │ no ──► turn complete
+                    │           │ yes
+                    │           ▼
+                    │     for each deferred call:
+                    │       │
+                    │       ├─ "questions" in meta?
+                    │       │     yes ──► prompt each question
+                    │       │             ToolApproved(user_answers=[...])
+                    │       │
+                    │       └─ no ──► resolve_approval_subject
+                    │                     │
+                    │                     ├─ auto_approved?
+                    │                     │     yes ──► True
+                    │                     │
+                    │                     └─ prompt user
+                    │                           ├─ approved ──► True
+                    │                           ├─ denied   ──► ToolDenied
+                    │                           └─ always   ──► session rule
+                    │           │
+                    │           ▼
+                    │     resume segment(deferred_tool_results=approvals)
+                    │     [skips ModelRequestNode — no new model prompt]
+                    └─────────────────────────────────────────────────────
+```
 
-**Approval & Errors:**
-- **Auto-Approve:** `_collect_deferred_tool_approvals()` writes `True` into `DeferredToolResults`; the actual tool call runs only after the resumed segment starts.
-- **Requires-Approval:** Deferred calls are collected first, then resumed with `deferred_tool_results=...`. If denied, the resume payload carries `ToolDenied(...)` rather than crashing the turn.
-- **Clarify:** `clarify` uses the same deferred-resume mechanism, but iterates `meta["questions"]`, prompts each one, and stores `ToolApproved(override_args={"user_answers": [...]})` — a list aligned to the input questions.
-- **Failures:** Hard failures trigger `tool_error(msg)` (no retry), while bad parameters return `ModelRetry(msg)` to let the model self-correct.
+Resume segments skip `ModelRequestNode` — no new model prompt is sent just to execute approved tools.
 
 ### Concurrency Safety
 
-Approval controls human permission; locks ensure structural correctness.
+```
+tool call dispatched
+      │
+      ├─ is_concurrent_safe=False?  (file_write, file_patch, code_execute)
+      │       yes ──► force sequential order in multi-tool batch
+      │
+      ├─ path locked by another agent?  (resource_locks)
+      │       yes ──► tool_error  [fail-fast, no retry]
+      │
+      ├─ file_patch: file only partially read?  (file_partial_reads)
+      │       yes ──► tool_error("read the full file first")
+      │
+      └─ file_write/patch: disk mtime changed since last read?  (file_read_mtimes)
+              yes ──► tool_error("file changed on disk")
+```
 
-- **Sequential Forced Flow:** Mutating actions (`file_write`, `file_patch`, `code_execute`) are registered with `is_concurrent_safe=False`. If they're in a multi-tool batch, the agent forces sequential execution.
-- **Cross-agent Path Locking:** Using `CoDeps.resource_locks`, attempts to write to a path locked by another background agent result in an immediate fail-fast `tool_error()`.
-- **Read-before-Write:** `file_patch` enforces that a file has been read in full prior to replacement. `CoDeps.file_partial_reads` prevents patching if the model only read a snippet.
-- **Staleness Tracking:** `CoDeps.file_read_mtimes` snapshots disk modification times at read. `file_write` and `file_patch` fail if the file on disk was modified before the write was committed.
+### Delegation Agents
 
-## 3. Tool Catalog
+A tool may create a task agent to carry out focused work. The tool that needs the agent owns the agent's definition — its instructions, tool surface, output type, and request budget. The orchestrator's full tool surface never propagates to a task agent.
 
-Legend: **Tool** shows the callable signature · **V** = Visibility (A=ALWAYS, D=DEFERRED) · **Appr** = requires user approval · **Lock** = sequential (non-concurrent-safe) · **Gate** = config field required
+**Tool surface scoping.** Tools opt into a delegation profile via `@agent_tool(delegation={"profile_name"})`. `discover_delegation_tools(profile, config)` returns only functions tagged for that profile, filtered by `requires_config`. Membership is declared at the tool's definition site, not in the delegation tool.
 
-The catalog below is the native tool list from `TOOL_REGISTRY` in `co_cli/tools/agent_tool.py`, populated by `@agent_tool` at import time. MCP tools are discovered at runtime via `co_cli/agent/mcp.py`, are always DEFERRED, and are not included in the native total. `shell` and `code_execute` are the two runtime-approval special cases: neither is decorator-marked `approval=True`, but both can raise `ApprovalRequired` during execution based on the command path. After the naming refactor, the public surface uses domain-prefix names everywhere ambiguity exists; older suffix-style names are no longer part of the runtime tool surface. The grouping below is capability-oriented so it can be compared directly with peer inventories such as Hermes without changing the underlying visibility or approval semantics.
+**Lifecycle decision.** Task agents are built fresh on each invocation. Instructions are generated from live `deps` state at construction time, so a singleton would carry stale instructions. Construction is pure Python object assembly (no IO), making per-call construction correct. Rule: if construction requires IO (e.g., starting an MCP server), consider a singleton; if it is pure config assembly, build fresh per call.
 
-### Interaction & Session Control
+```
+delegation tool invoked
+      │
+      ▼
+agent_depth >= MAX_AGENT_DEPTH (2)?
+      yes ──► ModelRetry("handle this task directly")
+      │ no
+      ▼
+build task agent  [fresh per call — instructions read live deps state]
+  ┌─────────────────────────────────────────────────────────┐
+  │  instructions = _<role>_instructions(deps)              │
+  │  tool_fns     = discover_delegation_tools(profile)      │
+  │                   └─ tools tagged @agent_tool(          │
+  │                        delegation={"profile"})          │
+  │                      filtered by requires_config        │
+  │  agent = build_agent(instructions, tool_fns,            │
+  │                       output_type=AgentOutput)          │
+  └─────────────────────────────────────────────────────────┘
+      │
+      ▼
+_delegate_agent
+  ┌─────────────────────────────────────────────────────────┐
+  │  child_deps = fork_deps(ctx.deps)                       │
+  │    tool_index   ──► forwarded  (approval + OTel)        │
+  │    tool_registry ──► excluded  (orchestrator path only) │
+  │    agent_depth  ──► incremented                         │
+  └─────────────────────────────────────────────────────────┘
+      │
+      ▼
+  otel_span(role_key)
+      │
+      ▼
+  _run_agent_attempt
+      agent.run(task, deps=child_deps,
+                usage_limits=UsageLimits(budget))
+        │ success ──► merge child usage → parent turn_usage
+        │ failure ──► ModelRetry
+      │
+      ▼
+  tool_output(result, role, requests_used, run_id)
+```
 
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `clarify(questions, user_answers=None)` | A | — | — | — | Pause mid-execution to ask a batch of questions; each question dict has `{question, options?, multiple?}`; returns JSON list[str] positionally aligned to questions |
-| `capabilities_check()` | A | — | — | — | Canonical self-check surface: grouped tool visibility, approval-gating, unavailable or limited integrations, bootstrap-recorded fallbacks |
-| `todo_write(todos)` | A | — | — | — | Replace in-session multi-turn checklist |
-| `todo_read()` | A | — | — | — | Fetch current checklist |
+**Task agents:**
 
-### Workspace & File Operations
+| Agent | Delegation tool | Profile | Tool surface | Default budget |
+|-------|-----------------|---------|--------------|----------------|
+| Researcher | `web_research` | `web_research` | `web_search`, `web_fetch` | 10 requests |
+| Analyst | `knowledge_analyze` | `knowledge_analyze` | `knowledge_search`; `google_drive_read`*, `obsidian_search`*, `obsidian_read`* | 8 requests |
+| Reasoner | `reason` | — | none (pure reasoning, no tools) | 3 requests |
 
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `file_find(path=".", pattern="*", max_entries=200)` | A | — | — | — | List directory or find files by path/name pattern |
-| `file_read(path, start_line=None, end_line=None)` | A | — | — | — | Read workspace file; 500-line default cap with continuation hint; 500 KB full-read gate; 2000-char per-line truncation; fuzzy name suggestions on not-found |
-| `file_search(pattern, path=".", glob="**/*", case_insensitive=False, output_mode="content", context_lines=0, head_limit=250, offset=0)` | A | — | — | — | Regex content search across workspace; use `glob` to limit the searched file set |
-| `file_write(path, content)` | A | ✓ | ✓ | — | Create or overwrite a file |
-| `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` | A | ✓ | ✓ | — | Targeted replacement with fuzzy fallback; `show_diff` for verification; auto-lints `.py` files |
+\* Included only when the corresponding integration is configured (`google_credentials_path`, `obsidian_vault_path`).
 
-### Knowledge, Memory & Skills
+`web_research` retries once on an empty result using a rephrased query within the remaining budget, managing its own OTel span to cover both attempts.
 
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `memory_search(query="", channel=None, kinds=None, limit=10)` | A | — | — | — | Two-channel recall: session transcripts and knowledge artifacts. Empty query browses recent sessions + recent knowledge; `channel ∈ {'session', 'knowledge', None}`; deprecated `channel='skills'` / `channel='canon'` return structured `tool_error`. |
-| `knowledge_manage(action, name, ...)` | A | ✓ | — | — | Write surface for knowledge channel: `create`, `append`, `replace`, `delete`; replaces former `artifact_manage`, `memory_create`, `memory_modify`. Tool arg `kind` (the on-disk frontmatter field remains `artifact_kind`). |
-| `skill_search(query, limit=5)` | A | — | — | — | Ranked discovery over the skill index (name+description); approval-free; load body with `skill_view`. Bundled skills also appear in the static prompt manifest. |
-| `skill_view(name, file_path=None)` | A | — | — | — | Load a skill's full SKILL.md body; plugin-qualified `plugin:skill` names are accepted; spill-threshold disabled so body always lands inline; `file_path` returns error (flat-file model, no linked files today) |
-| `skill_manage(action, name, ...)` | A | ✓ | — | — | Lifecycle write surface for user-installed skills: `create`, `edit`, `patch`, `delete`, `install`; bundled skills are read-only; security scan + rollback on every write; `write_file`/`remove_file`/`patch` with `file_path` are parity stubs |
-
-### Web, Browser & Media
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `web_search(query, max_results=5, domains=None)` | A | — | — | — | Brave API search with optional domain filter |
-| `web_fetch(url, format="markdown", timeout=15)` | A | — | — | — | Fetch URL; `format` controls output (`markdown`, `html`, `text`); `timeout` overrides the default 15 s limit |
-
-### Execution, Jobs & Delegation
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `shell(cmd, timeout=120, workdir=None)` | A | hybrid | — | — | Run blocking shell command; `workdir` executes in a workspace-relative subdirectory (traversal blocked); safe-prefix auto-approves, mutations prompt, destructive denied |
-| `task_start(command, description, working_directory=None)` | D | ✓ | — | — | Spawn unblocked process group; returns `task_id` |
-| `task_status(task_id, tail_lines=20)` | D | — | — | — | Poll stdout/stderr and completion state of a task |
-| `task_cancel(task_id)` | D | — | — | — | SIGTERM → SIGKILL a background task |
-| `task_list(status_filter=None)` | D | — | — | — | Enumerate active/completed tasks |
-| `code_execute(cmd, timeout=60)` | D | hybrid | ✓ | — | Run an interpreter command; command policy denies unsafe forms and otherwise prompts before execution |
-| `web_research(query, domains=None, max_requests=0)` | D | — | — | — | Deep web retrieval subagent |
-| `knowledge_analyze(question, inputs=None, max_requests=0)` | D | — | — | — | Cross-index deduction on internal + Drive knowledge |
-| `reason(problem, max_requests=0)` | D | — | — | — | Pure inference subagent; no external access |
-
-### External Service Integrations
-
-#### Obsidian *(gate: `obsidian_vault_path`)*
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `obsidian_list(tag=None, offset=0, limit=20)` | D | — | — | ✓ | Paginate Obsidian note paths |
-| `obsidian_search(query, limit=10, folder=None, tag=None)` | D | — | — | ✓ | Search note content by keyword, optionally narrowed by folder or tag |
-| `obsidian_read(filename)` | D | — | — | ✓ | Read raw Obsidian markdown note |
-
-#### Google *(gate: `google_credentials_path`)*
-
-| Tool | V | Appr | Lock | Gate | Purpose |
-|------|---|------|------|------|---------|
-| `google_drive_search(query, page=1)` | D | — | — | ✓ | Search Google Drive by filename or indexed text |
-| `google_drive_read(file_id)` | D | — | — | ✓ | Read a Google Drive file as text |
-| `google_gmail_list(max_results=5)` | D | — | — | ✓ | Fetch recent inbox messages |
-| `google_gmail_search(query, max_results=5)` | D | — | — | ✓ | Search Gmail with advanced operators |
-| `google_calendar_list(days_back=0, days_ahead=1, max_results=25)` | D | — | — | ✓ | List primary-calendar events in a bounded window around today |
-| `google_calendar_search(query, days_back=0, days_ahead=30, max_results=25)` | D | — | — | ✓ | Search primary-calendar events by keyword |
-| `google_gmail_draft(to, subject, body)` | D | ✓ | — | ✓ | Draft an outgoing message (does not send) |
-
-**Total: 34 native tools** (16 ALWAYS · 18 DEFERRED · 6 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically)
-
-## 4. Config
+## 3. Config
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
@@ -191,9 +223,57 @@ The catalog below is the native tool list from `TOOL_REGISTRY` in `co_cli/tools/
 | `web.fetch_allowed_domains` | `CO_WEB_FETCH_ALLOWED_DOMAINS` | `[]` | Domain allowlist (optional) |
 | `web.fetch_blocked_domains` | `CO_WEB_FETCH_BLOCKED_DOMAINS` | `[]` | Domain blocklist |
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Required for `web_search` |
-| `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Registration gate for Obsidian |
-| `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google |
+| `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Registration gate for Obsidian tools |
+| `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google tools |
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | Unified knowledge artifact directory |
 | `mcp_servers` | `CO_MCP_SERVERS` | 2 defaults | MCP server definitions |
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Default agent retry budget |
-| `max_requests` tool arg | — | 10 / 8 / 3 | Per-call override for delegation request caps (research / analysis / thinking); defaults are function-local |
+| `max_requests` tool arg | — | 10 / 8 / 3 | Per-call delegation request cap (research / analysis / reasoning); defaults are function-local |
+
+## 4. Files
+
+| File | Role |
+|------|------|
+| `co_cli/agent/core.py` | `build_tool_registry()`, `build_agent()`, `discover_delegation_tools()` |
+| `co_cli/agent/_native_toolset.py` | `_build_native_toolset()`, `_approval_resume_filter()` |
+| `co_cli/agent/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |
+| `co_cli/tools/lifecycle.py` | `CoToolLifecycle` — all four per-call hooks |
+| `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
+| `co_cli/tools/deferred_prompt.py` | category-awareness prompt for DEFERRED tools |
+| `co_cli/tools/agent_tool.py` | `@agent_tool` decorator, `TOOL_REGISTRY` self-populating list |
+| `co_cli/tools/tool_io.py` | `tool_output()`, `tool_output_raw()`, `tool_error()` |
+| `co_cli/tools/_shell_policy.py` | `shell` and `code_execute` approval policy |
+| `co_cli/tools/agents/delegation.py` | `web_research`, `knowledge_analyze`, `reason` tools; `_delegate_agent()`, `_run_agent_attempt()` |
+| `co_cli/tools/files/read.py` | `file_read`, `file_find`, `file_search` |
+| `co_cli/tools/files/write.py` | `file_write`, `file_patch` |
+| `co_cli/tools/memory/recall.py` | `knowledge_search`, `session_search` |
+| `co_cli/tools/memory/view.py` | `knowledge_view`, `session_view` |
+| `co_cli/tools/memory/manage.py` | `knowledge_manage` |
+| `co_cli/tools/skills/tools.py` | `skill_search`, `skill_view`, `skill_manage` |
+| `co_cli/tools/web/search.py` | `web_search` |
+| `co_cli/tools/web/fetch.py` | `web_fetch` |
+| `co_cli/tools/obsidian/tools.py` | `obsidian_list`, `obsidian_search`, `obsidian_read` |
+| `co_cli/tools/google/drive.py` | `google_drive_search`, `google_drive_read` |
+| `co_cli/tools/google/gmail.py` | `google_gmail_list`, `google_gmail_search`, `google_gmail_draft` |
+| `co_cli/tools/google/calendar.py` | `google_calendar_list`, `google_calendar_search` |
+
+## 5. Test Gates
+
+| Property | Test file |
+|----------|-----------|
+| Duplicate tool calls in one model response are collapsed to the first | `tests/test_flow_tool_call_dedup.py` |
+| Same tool with distinct args: both preserved | `tests/test_flow_tool_call_dedup.py` |
+| TextPart / ThinkingPart pass through dedup unchanged | `tests/test_flow_tool_call_dedup.py` |
+| String args dedup by byte identity | `tests/test_flow_tool_call_dedup.py` |
+| Malformed JSON args (trailing comma, unclosed brace, control chars, bare None) repaired before validation | `tests/test_flow_tool_call_repair.py` |
+| Dict args pass through repair unchanged | `tests/test_flow_tool_call_repair.py` |
+| Denied tool call does not execute | `tests/test_flow_tool_call_functional.py` |
+| Auto-approval skips prompt for remembered session rule | `tests/test_flow_tool_call_functional.py` |
+| `web_research` profile returns only web tools | `tests/test_flow_delegation_discovery.py` |
+| `web_research` profile excludes knowledge tools | `tests/test_flow_delegation_discovery.py` |
+| `knowledge_analyze` base tools present without optional config | `tests/test_flow_delegation_discovery.py` |
+| `knowledge_analyze` includes Obsidian tools when configured | `tests/test_flow_delegation_discovery.py` |
+| `knowledge_analyze` excludes Obsidian tools when not configured | `tests/test_flow_delegation_discovery.py` |
+| `knowledge_analyze` excludes web tools | `tests/test_flow_delegation_discovery.py` |
+| Unknown profile returns empty list | `tests/test_flow_delegation_discovery.py` |
+| TOOL_REGISTRY populated without explicit tool imports | `tests/test_flow_delegation_discovery.py` |

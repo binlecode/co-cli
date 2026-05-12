@@ -37,7 +37,7 @@ flowchart TD
 | `run_turn` / approval loop / retries | [core-loop.md](core-loop.md) |
 | Instruction parts + history processors | [prompt-assembly.md](prompt-assembly.md) |
 | Compaction trigger (processor #3) | [compaction.md](compaction.md) |
-| On-demand recall (`memory_search` tool) | [memory.md](memory.md) |
+| On-demand recall (`knowledge_search` / `session_search` tools) | [memory.md](memory.md) |
 | Transcript append / child-session branching | [memory.md](memory.md) |
 
 Detailed foreground turn flow:
@@ -292,7 +292,7 @@ Knowledge recall is on-demand, not injected per-turn:
 
 - the session-start date is frozen into the static instructions in `build_agent()` — stable for the entire session
 - personality memories live in the static system prompt (injected once at agent construction)
-- the agent calls `memory_search()` proactively when past context is relevant
+- the agent calls `knowledge_search()` or `session_search()` proactively when past context is relevant
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 

@@ -200,7 +200,7 @@ deps.memory_store.sync_sessions(sessions_dir, exclude=current_session_path)
 
 on failure:
     log warning
-    print status  # memory_search returns empty for session channel
+    print status  # session_search returns empty for session channel
 ```
 
 Session data is derived and rebuildable: restarting re-syncs from `*.jsonl` files. The unified DB at `~/.co-cli/co-cli-search.db` holds both knowledge artifacts and session transcripts under separate `source=` labels.

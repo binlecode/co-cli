@@ -16,7 +16,8 @@ Memory is never injected wholesale into the system prompt. Static personality co
 flowchart TD
     Knowledge["knowledge\n(knowledge/*.md)"] -->|"source='knowledge'"| SearchDB["co-cli-search.db\n(chunks + FTS5 + optional vec)"]
     Sessions["sessions\n(sessions/*.jsonl)"] -->|"source='session'"| SearchDB
-    SearchDB --> MemSearch["memory_search()"]
+    SearchDB --> KnowSearch["knowledge_search()"]
+    SearchDB --> SessSearch["session_search()"]
     KnowManage["knowledge_manage()"] --> Knowledge
 ```
 
@@ -29,32 +30,53 @@ flowchart TD
 
 Skills and canon are intentionally absent from this table — they live on their own tiers (see [skill.md](skill.md) and [personality.md](personality.md)). Canon is doctrine, auto-injected by the personality system; skills are procedural capability with their own search/view/manage surface.
 
-## 3. Cross-Channel Primitive
+## 3. Per-Surface Primitives
 
-### `memory_search(query, channel=None, kinds=None, limit=None)`
+### §3.1 Session Surface
 
-Single entry point for ranked recall across both memory channels. Dispatched in `co_cli/tools/memory/recall.py`.
+#### `session_search(query, limit=3)`
 
-**Browse mode** (empty query): returns recent-session metadata + recent knowledge artifacts (each capped). No FTS, no LLM. The current session is excluded.
+Ranked search over session transcripts. Dispatched in `co_cli/tools/memory/recall.py`.
 
-**Search mode** (non-empty query): runs the relevant channel passes and merges results. The `channel` arg restricts to one channel (`'session'` or `'knowledge'`); `None` searches both.
+**Browse mode** (empty query): returns recent-session metadata (id, date, title, file size). No FTS. The current session is excluded.
 
-Result format — flat list, each item carries a `channel` discriminator field:
+**Search mode** (non-empty query): runs BM25-ranked chunk recall over past sessions, deduped to `_SESSIONS_CHANNEL_CAP=3` unique sessions. No LLM call on the recall path — hits are chunk snippets with line citations.
 
-| Channel | Result fields |
-| --- | --- |
-| `knowledge` | `{channel: "knowledge", kind, title, snippet, score, path, filename_stem}` |
-| `session` | `{channel: "session", session_id, when, source, chunk_text, start_line, end_line, score}` |
+Result fields: `{session_id, when, source, chunk_text, start_line, end_line, score}`.
 
-Scores are not cross-comparable across channels. Channel caps: knowledge user priority `_ARTIFACTS_USER_CAP=3`, knowledge waterfall `_ARTIFACTS_WATERFALL_CHUNK_CAP=5` count / `_ARTIFACTS_WATERFALL_SIZE_CAP=2000` chars, sessions `_SESSIONS_CHANNEL_CAP=3`.
+#### `session_view(session_id, start_line, end_line)`
 
-**Removed channels.** `channel='skills'` and `channel='canon'` raise `tool_error` directing to `skill_search` and the personality system respectively. There are no aliases.
+Verbatim turn reader. Given a `session_id` (uuid8) and a JSONL line range from a `session_search` hit, returns the raw lines from disk. Lives at `co_cli/tools/memory/view.py`. See [memory-sessions.md](memory-sessions.md) for registration status.
+
+### §3.2 Knowledge Surface
+
+#### `knowledge_search(query, kinds=None, limit=10)`
+
+Ranked search over knowledge artifacts. Dispatched in `co_cli/tools/memory/recall.py`.
+
+**Browse mode** (empty query): returns recent knowledge artifacts (capped). No FTS, no LLM.
+
+**Search mode** (non-empty query): runs a two-pass structure — user-priority pass then waterfall pass. The `kinds` arg restricts to specific artifact kinds; `None` searches all.
+
+Result fields: `{kind, title, snippet, score, path, filename_stem}`.
+
+Channel caps: knowledge user priority `_ARTIFACTS_USER_CAP=3`, knowledge waterfall `_ARTIFACTS_WATERFALL_CHUNK_CAP=5` count / `_ARTIFACTS_WATERFALL_SIZE_CAP=2000` chars.
+
+#### `knowledge_view(name)`
+
+Full body reader for knowledge artifacts by `filename_stem`. Returns the complete artifact markdown. Lives at `co_cli/tools/memory/view.py`.
+
+#### `knowledge_manage(action, ...)`
+
+Write surface for the knowledge channel — see §4 and [memory-knowledge.md](memory-knowledge.md).
 
 Recall pipeline overview:
 
 ```
-memory_search(ctx, query, channel, kinds, limit)        # tools/memory/recall.py
+knowledge_search(ctx, query, kinds, limit)              # tools/memory/recall.py
   ├─ _search_artifacts → user + waterfall passes          # see memory-knowledge.md
+
+session_search(ctx, query, limit)                       # tools/memory/recall.py
   └─ _search_sessions  → chunk-cited BM25                 # see memory-sessions.md
 ```
 
@@ -70,14 +92,14 @@ Detailed semantics, validation, and approval flow: [memory-knowledge.md §4](mem
 
 ## 5. Channel-Specific Readers
 
-`memory_search` is the cross-channel discovery surface; full-content reads happen through channel-specific readers.
+`knowledge_search` and `session_search` are the discovery surfaces; full-content reads happen through channel-specific readers.
 
 | Tool | Channel | Status | Source |
 | --- | --- | --- | --- |
-| `memory_read_session_turn(session_id, start_line, end_line)` | session | source-only (not registered) | [memory-sessions.md §4](memory-sessions.md) |
-| `file_read(path)` | knowledge | generic file tool | `co_cli/tools/files/read.py` |
+| `session_view(session_id, start_line, end_line)` | session | model-callable | `co_cli/tools/memory/view.py` |
+| `knowledge_view(name)` | knowledge | model-callable | `co_cli/tools/memory/view.py` |
 
-Knowledge hits carry a snippet; `file_read` on `path` returns the full body.
+`knowledge_search` hits carry a snippet; `knowledge_view(name)` loads the full artifact body by `filename_stem`. `session_search` hits carry chunk snippets with line bounds; `session_view` returns the verbatim lines from disk.
 
 ## 6. Indexer
 
@@ -110,7 +132,19 @@ Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross
 
 ## 7. Backward-Compat Notes
 
-Removed (no aliases): `memory_create` / `memory_modify` → `knowledge_manage(...)`. `artifact_manage` renamed to `knowledge_manage` (tool arg `artifact_kind` → `kind`). `skills_list` and `memory_search(channel='skills')` → `skill_search`. `memory_search(channel='canon')` → not queryable; canon is auto-injected via personality. Channel renames: `artifacts` → `knowledge`, `sessions` → `session`.
+| Removed / renamed | Replacement |
+| --- | --- |
+| `memory_create` / `memory_modify` | `knowledge_manage(...)` |
+| `artifact_manage` | `knowledge_manage` (tool arg `artifact_kind` → `kind`) |
+| `skills_list` and unified recall with `channel='skills'` | `skill_search` |
+| Unified recall with `channel='canon'` | Not queryable; canon is auto-injected via the personality system |
+| Channel names `artifacts` / `sessions` | `knowledge` / `session` |
+| Unified recall with `channel='knowledge'` | `knowledge_search(query, kinds, limit)` |
+| Unified recall with `channel='session'` | `session_search(query, limit)` |
+| Unified recall (no channel arg) | Use `knowledge_search` or `session_search` depending on intent |
+| Verbatim session reader (former name `memory_read_*_turn`) | `session_view(session_id, start_line, end_line)` |
+
+All renames are hard — there are no aliases.
 
 ## 8. Files
 
@@ -127,9 +161,9 @@ Removed (no aliases): `memory_create` / `memory_modify` → `knowledge_manage(..
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/tools/memory/recall.py` | `memory_search()` — cross-channel recall tool |
+| `co_cli/tools/memory/recall.py` | `knowledge_search()` — knowledge ranked recall; `session_search()` — session ranked recall; `_grep_recall()` — knowledge disk-scan fallback (no store) |
 | `co_cli/tools/memory/manage.py` | `knowledge_manage()` — knowledge write surface |
-| `co_cli/tools/memory/read.py` | `grep_recall()` — knowledge fallback; `memory_read_session_turn()` — verbatim turn reader (source-only, not registered) |
+| `co_cli/tools/memory/view.py` | `knowledge_view()` — full artifact body reader; `session_view()` — verbatim session turn reader |
 | `co_cli/agent/_native_toolset.py` | foreground toolset registration |
 
 ### Bootstrap and runtime

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -20,3 +21,4 @@ class SkillConfig:
     disable_model_invocation: bool = False
     requires: dict = field(default_factory=dict)
     skill_env: dict[str, str] = field(default_factory=dict)
+    path: Path | None = None

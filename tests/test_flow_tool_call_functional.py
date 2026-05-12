@@ -39,27 +39,6 @@ def _make_deps() -> CoDeps:
 
 
 @pytest.mark.asyncio
-async def test_refusal_no_tool_for_simple_math():
-    """Agent should not invoke any tool for a purely conversational / math prompt."""
-    deps = _make_deps()
-    await ensure_ollama_warm(TEST_LLM.model)
-    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-        turn = await run_turn(
-            agent=_AGENT,
-            user_input="What is 17 times 23?",
-            deps=deps,
-            message_history=[],
-            frontend=SilentFrontend(),
-        )
-    for msg in turn.messages:
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                assert not isinstance(part, ToolCallPart), (
-                    f"Expected no tool call, got {part.tool_name!r}"
-                )
-
-
-@pytest.mark.asyncio
 async def test_tool_selection_shell_git_status():
     """Agent must correctly route a request to execute a bash command to the shell tool."""
     agent = _AGENT

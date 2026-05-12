@@ -30,9 +30,11 @@ Sessions are chunked at write time and stored under `source='session'` in the un
 
 `init_session_index(deps, current_session_path)` runs after `create_deps()`. It calls `sync_sessions(sessions_dir, exclude=current_session_path)` so the in-progress transcript is never indexed mid-session. On first run after migration it deletes the obsolete `session-index.db` (the chunks pipeline supersedes it).
 
-## 3. Recall
+## 3. Model-Callable Surface
 
-`memory_search` with a non-empty query routes through `_search_sessions(ctx, query, span)`:
+### `session_search(query, limit=3)`
+
+Ranked search over session transcripts. Routes through `_search_sessions(ctx, query, span)`:
 
 ```
 _search_sessions(query) → MemoryStore.search(query, sources=['session'], limit=15)
@@ -46,7 +48,6 @@ Result shape:
 
 ```python
 {
-    "channel": "sessions",
     "session_id": <uuid8>,
     "when": <ISO date prefix>,
     "source": "session",
@@ -57,15 +58,15 @@ Result shape:
 }
 ```
 
-Browse mode (`memory_search(query='')`) skips the FTS path and returns recent-session metadata (id, date, title, file size) via `_browse_recent()`. The current session is excluded in both modes.
+Browse mode (`session_search(query='')`) skips the FTS path and returns recent-session metadata (id, date, title, file size) via `_browse_recent()`. The current session is excluded in both modes.
+
+### `session_view(session_id, start_line, end_line)`
+
+Verbatim turn reader. Given a `session_id` (uuid8) and a JSONL line range from a `session_search` hit, returns the raw lines from disk. Lives at `co_cli/tools/memory/view.py`. Model-callable; registered in `_native_toolset.py`.
 
 ## 4. Verbatim Reader
 
-`memory_read_session_turn(session_id, start_line, end_line)` lives at `co_cli/tools/memory/read.py`. Given a `session_id` (uuid8) and a JSONL line range, it returns the verbatim lines from disk.
-
-The tool is **not currently registered** in the foreground native toolset. Rationale: `memory_search` already surfaces session chunks with line bounds; a follow-up `memory_read_session_turn` call would expand one chunk to verbatim JSONL — useful for citations but expensive if called speculatively. Registering it is a one-line addition to `_native_toolset.py`; intentionally withheld until there is evidence that chunk snippets alone are insufficient.
-
-The source-only state is deliberate, not an accident — see the foundation spec's note on channel-specific readers ([memory.md §5](memory.md)).
+`session_view(session_id, start_line, end_line)` lives at `co_cli/tools/memory/view.py`. Given a `session_id` (uuid8) and a JSONL line range from a `session_search` hit, it returns the verbatim lines from disk. Returns `tool_error` for an unknown `session_id`.
 
 ## 5. Compaction Interplay
 
@@ -87,8 +88,8 @@ The chunks pipeline is the only persistence layer that needs to react to compact
 | `co_cli/memory/session_chunker.py` | chunking pipeline: `flatten_session()`, `chunk_flattened()`, `chunk_session()` |
 | `co_cli/memory/indexer.py` | JSONL line parser: `ExtractedMessage`, `extract_messages()` |
 | `co_cli/memory/memory_store.py:index_session,sync_sessions` | write-time indexing into `chunks_fts` under `source='session'` |
-| `co_cli/tools/memory/recall.py:_search_sessions,_browse_recent` | recall and browse modes for the sessions channel |
-| `co_cli/tools/memory/read.py:memory_read_session_turn` | verbatim line-range reader (source-only; not registered) |
+| `co_cli/tools/memory/recall.py:_search_sessions,_browse_recent` | `session_search` — recall and browse modes for the sessions channel |
+| `co_cli/tools/memory/view.py:session_view` | verbatim line-range reader |
 | `co_cli/bootstrap/core.py:init_session_index,restore_session` | bootstrap-side session sync and most-recent-session restore |
 
 ## 7. Config
@@ -105,6 +106,6 @@ Session-wide retrieval settings (backend selection, reranker URL, embedding prov
 | Property | Test file |
 | --- | --- |
 | Session restore picks the most recent transcript | `tests/test_flow_session_persistence.py` |
-| Session chunk indexing and recall surface line bounds | `tests/test_flow_memory_recall.py` |
+| Session chunk indexing and recall surface line bounds | `tests/test_flow_session_search.py` |
 | Compaction rewrites session in place; re-chunked on next sync | `tests/test_flow_compaction_session_rewrite.py` |
-| `memory_read_session_turn` targeted glob locates correct file by UUID suffix | `tests/test_flow_memory_recall.py` |
+| `session_view` targeted glob locates correct file by UUID suffix | `tests/test_flow_session_view.py` |

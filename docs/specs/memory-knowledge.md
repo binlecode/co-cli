@@ -23,7 +23,7 @@ Every artifact carries a `kind` (stored on disk as `artifact_kind` in the frontm
 | `article` | Synthesized content | Analysis, summaries, research notes, saved URLs |
 | `note` | Catch-all | Free-form notes that don't fit a sharper kind |
 
-The recall pipeline prioritizes `user` in the first pass; `rule`, `article`, and `note` flow through the waterfall pass. See the recall path in [memory.md §3](memory.md).
+The recall pipeline prioritizes `user` in the first pass; `rule`, `article`, and `note` flow through the waterfall pass. See the recall path in [memory.md §3.2](memory.md).
 
 Canon is intentionally absent — canon is doctrine, auto-injected into the static prompt by the personality system; it is not a memory kind.
 
@@ -48,7 +48,17 @@ Every artifact's YAML frontmatter contains:
 
 `description` and `id` are required for indexing; the rest are optional but stable.
 
-## 4. `knowledge_manage(action, ...)`
+## 4. Model-Callable Surface
+
+### `knowledge_search(query, kinds=None, limit=10)`
+
+Ranked search over knowledge artifacts. Discovery surface — returns snippets and `filename_stem` for each hit. Use `knowledge_view(name)` to load a full artifact body. See [memory.md §3.2](memory.md) for the full recall pipeline.
+
+### `knowledge_view(name)`
+
+Full body reader for knowledge artifacts. `name` is the `filename_stem` (from a `knowledge_search` hit). Returns the post-frontmatter body only (frontmatter is stripped; use `knowledge_search` hit fields for kind/title metadata).
+
+### `knowledge_manage(action, ...)`
 
 Single write surface for the knowledge channel. Replaces the former `memory_create` and `memory_modify` tools. The tool lives at `co_cli/tools/memory/manage.py`.
 
@@ -61,13 +71,13 @@ Tool args: `action`, `name`, `content`, `kind`, `section`. The `kind` arg is the
 | `replace` | Surgically replace a passage in an existing artifact body. Target must appear exactly once. |
 | `delete` | Remove an artifact file and its `chunks_fts` rows; returns confirmation. Hard-delete; archival is a separate future feature. |
 
-Writes use `atomic_write()` (temp-file + `os.replace`). `reindex()` is called at the tool layer with config-sourced `chunk_size`/`chunk_overlap` so the next `memory_search` reflects the change.
+Writes use `atomic_write()` (temp-file + `os.replace`). `reindex()` is called at the tool layer with config-sourced `chunk_tokens`/`chunk_overlap_tokens` so the next `knowledge_search` reflects the change.
 
 **Approval.** `knowledge_manage` is `approval=True`. The approval subject is scoped per-action and per-name (`tool:knowledge_manage:<action>:<name>`).
 
 ### Passage edits
 
-`append` and `replace` operate on `filename_stem` (the artifact's filename without `.md`), not the title. Use `memory_search` to find a hit, then take the `filename_stem` field from the result for follow-up edits.
+`append` and `replace` operate on `filename_stem` (the artifact's filename without `.md`), not the title. Use `knowledge_search` to find a hit, then take the `filename_stem` field from the result for follow-up edits.
 
 `replace` requires the target string to appear exactly once in the body — fewer matches return an error directing to refine the target; multiple matches return an error directing to narrow it.
 
@@ -97,7 +107,6 @@ Result shape:
 
 ```python
 {
-    "channel": "knowledge",
     "kind": <user|rule|article|note>,
     "title": <frontmatter title or filename stem>,
     "snippet": <FTS5 snippet>,
@@ -132,19 +141,19 @@ There are no aliases — the renames are hard. Internal callers were updated in 
 | `co_cli/memory/decay.py` | artifact decay scoring and eligibility |
 | `co_cli/memory/dream.py` | dream-cycle orchestration (see [dream.md](dream.md)) |
 | `co_cli/tools/memory/manage.py` | `knowledge_manage()` — knowledge write surface |
-| `co_cli/tools/memory/read.py:grep_recall` | grep fallback when `memory_store` is `None` |
+| `co_cli/tools/memory/recall.py:_grep_recall` | grep fallback when `memory_store` is `None` |
 
 ## 8. Config
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | artifact chunk size in chars during indexing |
-| `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | artifact chunk overlap in chars |
+| `knowledge.chunk_tokens` | `CO_KNOWLEDGE_CHUNK_TOKENS` | `600` | artifact chunk size in tokens during indexing |
+| `knowledge.chunk_overlap_tokens` | `CO_KNOWLEDGE_CHUNK_OVERLAP_TOKENS` | `80` | artifact chunk overlap in tokens |
 | `knowledge.consolidation_enabled` | `CO_KNOWLEDGE_CONSOLIDATION_ENABLED` | `false` | enable Jaccard dedup on artifact writes |
-| `knowledge.consolidation_trigger` | *(no env var)* | `session_end` | when consolidation runs: `session_end` or `manual` |
-| `knowledge.consolidation_lookback_sessions` | *(no env var)* | `5` | past sessions to mine during consolidation |
-| `knowledge.consolidation_similarity_threshold` | *(no env var)* | `0.75` | Jaccard score threshold for artifact dedup/merge |
-| `knowledge.max_artifact_count` | *(no env var)* | `300` | soft cap on total artifact count |
+| `knowledge.consolidation_trigger` | `CO_KNOWLEDGE_CONSOLIDATION_TRIGGER` | `session_end` | when consolidation runs: `session_end` or `manual` |
+| `knowledge.consolidation_lookback_sessions` | `CO_KNOWLEDGE_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | past sessions to mine during consolidation |
+| `knowledge.consolidation_similarity_threshold` | `CO_KNOWLEDGE_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Jaccard score threshold for artifact dedup/merge |
+| `knowledge.max_artifact_count` | `CO_KNOWLEDGE_MAX_ARTIFACT_COUNT` | `300` | soft cap on total artifact count |
 | `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | days before decay eligibility |
 
 Backend, embedding, and retrieval settings (shared with other channels) live in [memory.md §6](memory.md).
@@ -163,7 +172,7 @@ Backend, embedding, and retrieval settings (shared with other channels) live in 
 | `knowledge_manage` replace preserves frontmatter | `tests/test_flow_memory_write.py` |
 | `knowledge_manage` append adds to body | `tests/test_flow_memory_write.py` |
 | `knowledge_manage` delete removes file and `chunks_fts` row | `tests/test_flow_artifact_manage.py` |
-| `grep_recall` returns artifact matched by title only | `tests/test_flow_memory_recall.py` |
-| `_list_artifacts` delegates to index when store is available | `tests/test_flow_memory_recall.py` |
+| `_grep_recall` returns artifact matched by title only | `tests/test_flow_knowledge_search.py` |
+| `_list_artifacts` delegates to index when store is available | `tests/test_flow_knowledge_search.py` |
 | `save_artifact` URL dedup uses O(1) index when `memory_store` set | `tests/test_flow_memory_write.py` |
 | Waterfall pass count cap stops at `_ARTIFACTS_WATERFALL_CHUNK_CAP`; size cap stops before count cap when chunks are large | `tests/test_flow_artifacts_waterfall_cap.py` |

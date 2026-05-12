@@ -37,6 +37,7 @@ The in-memory shape is `SkillConfig` in `co_cli/skills/skill_types.py`.
 | `disable_model_invocation` | hide from model-facing skill search results |
 | `requires` | environment/platform/settings gates |
 | `skill_env` | env vars injected only for the duration of the dispatched turn |
+| `path` | absolute path to the skill `.md` file on disk; `None` only for programmatically-constructed configs |
 
 ### File Format
 
@@ -177,6 +178,7 @@ The built-in `/skills` command family is implemented in `_cmd_skills()` and rela
 | `/skills list` | show loaded skills |
 | `/skills check` | compare available files vs actually loaded skills across both tiers and report skip reasons |
 | `/skills install <path|url>` | copy skill into user skills dir and reload (CLI parity with `skill_manage(action='install')`; see §3 above) |
+| `/skills lint [<name>|--all]` | run R1–R10 lint rules against one skill or all loaded skills; exit 1 on any finding |
 | `/skills reload` | rescan the user-global skill directory and reload into the live session |
 | `/skills upgrade <name>` | reinstall from stored `source-url` |
 
@@ -283,13 +285,14 @@ There is no separate skills config object today.
 | --- | --- |
 | `co_cli/skills/skill_types.py` | `SkillConfig` frozen dataclass |
 | `co_cli/skills/index.py` | `SkillIndex` — FTS5 index over name+description (same DB as MemoryStore, separate API); `SkillHit` dataclass |
+| `co_cli/skills/_lint.py` | `lint_skill(content, path)` — R1–R10 lint validator; `LintFinding` dataclass |
 | `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content`, `_check_requires` |
 | `co_cli/skills/installer.py` | `fetch_skill_content`, `write_skill_file`, `discover_skill_files`, `find_skill_source_url`, `read_skill_meta` |
 | `co_cli/skills/registry.py` | `set_skill_commands()` — replaces `deps.skill_commands`; `get_skill_registry()` — derives model-facing list |
 | `co_cli/skills/lifecycle.py` | skill load, install, upgrade, reload orchestration |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — renders the `<available_skills>` block injected into the static system prompt |
 | `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/reload/upgrade) |
+| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/lint/reload/upgrade) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, `_build_completer_words` |
 | `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, SkillIndex construction, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection at agent construction |
@@ -306,8 +309,150 @@ There is no separate skills config object today.
 
 ## 6. Authoring Contract
 
-*Placeholder — to be added in Plan 2.*
+Every skill body (the content after frontmatter) must follow this structure. The `/skills lint` validator enforces the rules mechanically; this section documents the full contract including style guidance that lint does not enforce.
+
+### 6.1 Required Structure
+
+```markdown
+---
+description: <single sentence: when to use this skill, max 1024 chars>
+argument-hint: <optional, max 80 chars>
+user-invocable: true
+---
+
+# <Skill name>
+
+**Invocation:** `/<name> [optional args]`
+
+<one paragraph: what the skill does and when to use it>
+
+---
+
+## Phase 1 — <Accomplishment name>
+
+<step-by-step instructions>
+
+## Phase 2 — <Accomplishment name>
+
+<step-by-step instructions>
+
+...
+
+## Rules
+
+- <terminal invariant 1>
+- <terminal invariant 2>
+```
+
+### 6.2 Section Requirements
+
+| Section | Required | Notes |
+|---------|----------|-------|
+| Frontmatter `description` | Yes | ≤1024 chars; drives manifest injection and `skill_search` |
+| Frontmatter `argument-hint` | No | ≤80 chars; shown in `/skills list` |
+| H1 title | Yes | First non-frontmatter heading |
+| `**Invocation:**` line | Yes | Bold-formatted; appears in the first ~10 lines of the body |
+| Opening summary paragraph | Yes | One paragraph immediately after the invocation line |
+| At least one `## Phase N — <name>` section | Yes | N is 1-indexed integer; name describes what the phase accomplishes |
+| `## Rules` section | No | Optional; terminal invariants only (things that must always be true) |
+
+### 6.3 Length Budget
+
+| Scope | Limit | Enforcement |
+|-------|-------|-------------|
+| Frontmatter `description` | ≤1024 chars | Hard (validated at load time) |
+| Body total (excluding frontmatter) | ≤8000 chars | Soft (R8 lint warning) |
+| Each phase section | ≤2000 chars | Soft (R9 lint warning) |
+
+Soft caps generate lint findings but do not block load. Skills that exceed them signal the skill is too broad and should be split.
+
+### 6.4 Phase Header Format
+
+Phase headers use this exact format:
+
+```
+## Phase N — <Name>
+```
+
+Rules:
+- `##` (H2), not `###` (H3) or `#` (H1).
+- Integer N starting from 1.
+- Em-dash separator ` — ` (space, em-dash, space) between number and name.
+- Name describes what the phase **accomplishes**, not procedure (e.g. `Phase 1 — Load` not `Phase 1 — First steps`).
+
+### 6.5 Style Rules (informative, not lint-enforced)
+
+- Imperative voice for step instructions: "Run X", "Check Y", "Call Z".
+- Cite concrete tools and commands verbatim in backticks.
+- Avoid filler ("In this phase we will..."); start instructions on the first line.
+- `## Rules` entries are short invariants, not steps ("Never call X without Y first").
+
+### 6.6 Worked Example
+
+A complete §6-conformant skill body:
+
+```markdown
+---
+description: Structured log inspection — find the root cause of a runtime error from logs and stack traces
+argument-hint: <log path or paste>
+user-invocable: true
+---
+
+# Log Inspector
+
+**Invocation:** `/log-inspector [log path or paste]`
+
+Analyzes runtime logs and stack traces to identify root cause. Works from a file path or pasted content. Produces a structured diagnosis with evidence citations.
+
+---
+
+## Phase 1 — Load
+
+If an argument was provided, read it with `file_read`. If no argument, ask the user to paste the relevant log excerpt and proceed once received. Extract: error message, stack trace (if any), timestamp range, and any repeated patterns.
+
+## Phase 2 — Isolate
+
+Identify the innermost failure point in the stack trace. Cross-reference with any config or source files relevant to that call path using `file_read` or `grep_search`. Look for: null/missing values, permission errors, timeout signals, or mismatched types.
+
+## Phase 3 — Diagnose
+
+State the root cause in one sentence. Cite evidence as `file:line` references or quoted log fragments. If ambiguous, list the top two candidates with the evidence for each.
+
+## Phase 4 — Recommend
+
+Provide one concrete remediation step. If the fix requires a code change, identify the target file and what to change. If config-only, state the exact key and value.
+
+## Rules
+
+- Never guess a root cause without citing log evidence.
+- If the log is truncated, say so before diagnosing.
+- Do not propose more than one remediation step unless the root cause is genuinely ambiguous.
+```
 
 ## 7. Lint Rules
 
-*Placeholder — to be added in Plan 2.*
+Ten mechanical rules, each with a check description and a *why*. The `/skills lint` validator emits findings as `R<n>: <message>` with a line number. Rules are checked in order; each rule emits at most one finding per file.
+
+| Rule | Check | Why |
+|------|-------|-----|
+| **R1** | Frontmatter present — file opens with `---` | Without frontmatter the loader rejects the skill at runtime; the check catches authoring errors before install |
+| **R2** | Frontmatter `description` field present and non-empty | Manifest injection and `skill_search` rely on description; absent = invisible in the model surface |
+| **R3** | `description` ≤ 1024 chars | Descriptions longer than 1024 chars bloat the manifest and degrade prompt cache hit rates |
+| **R4** | H1 title present after frontmatter | Body without an H1 reads as raw instructions; the H1 anchors skill identity in `skill_view` output |
+| **R5** | `**Invocation:**` line present in the first 10 lines of body | Tells both the user and the model the slash-command name; absent = invocation discovery requires reading the whole body |
+| **R6** | At least one `## Phase N — <name>` section | Phaseless skills are stream-of-consciousness; the model needs structural anchors to navigate long bodies |
+| **R7** | All phase headers follow `## Phase N — <name>` format exactly (H2, integer N, em-dash) | Inconsistent heading shape (e.g. `### Phase 1`, `## Phase 1 Loading`) breaks the model's reading reflex built on the bundled examples |
+| **R8** | Body total ≤ 8000 chars | Long bodies signal the skill is too broad; splitting into focused skills keeps manifest descriptions useful |
+| **R9** | Each phase section ≤ 2000 chars | Within-phase length cap; overly long phases are themselves too broad and should be split into separate phases |
+| **R10** | No `TODO`, `FIXME`, or `XXX` markers in the body | Bundled skills are reference-quality artifacts; markers signal in-progress work unsuitable for the library |
+
+### 7.1 Rule Anchors
+
+Each finding emitted by the validator references the rule by its anchor: `R1` through `R10`. When filing an issue or explaining a lint violation, cite the rule anchor (e.g. "R7 violation — phase header is missing the em-dash separator").
+
+### 7.2 Lint vs. Security Scan
+
+Lint (R1–R10) is **collaborative** — it catches well-meaning skills that won't perform well. The security scan (`scan_skill_content` in `co_cli/skills/loader.py`) is **adversarial** — it catches actively malicious content. They run in different lifecycles:
+
+- Security scan: runs at install time and on `/skills reload`. Blocks the write on findings.
+- Lint: runs on `/skills lint [name|--all]`. Never blocks; exits 1 on findings, file unchanged.

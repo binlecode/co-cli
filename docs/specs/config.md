@@ -30,8 +30,8 @@ graph TD
 | `fill_from_env` | `core.py` | `model_validator(mode="before")` — maps env vars into nested dict before validation |
 | `load_config()` | `core.py` | Loads `settings.json`, merges `.env`, applies env; returns `Settings` |
 | `get_settings()` | `core.py` | Lazy module-level singleton — calls `load_config()` on first access |
-| `LlmSettings` | `llm.py` | Provider, model, inference defaults, context settings |
-| `_LLM_SETTINGS` | `llm.py` | Provider→model→mode canonical inference knobs used by `build_model()` |
+| `LlmSettings` | `llm.py` | Provider, model, inference defaults; `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` as instance methods |
+| `_LLM_SETTINGS` | `llm.py` | Provider→model→mode canonical inference knobs used by `LlmSettings._inference()` |
 | `DEFAULT_LLM_MODELS` | `llm.py` | Per-provider default model id (full id with variant tag) — used when `llm.model` is unset |
 | `KnowledgeSettings` | `knowledge.py` | Search backend, embedding, chunking, and lifecycle settings |
 | `CompactionSettings` | `compaction.py` | Context compaction trigger ratios and anti-thrash knobs |
@@ -60,6 +60,7 @@ load_config(path?, env?)
        → fill_from_env runs as model_validator(mode="before"):
            flat env vars injected directly into data dict
            nested env vars injected into data["llm"], data["web"], etc.
+           each sub-model owns its ENV_MAP (LLM_ENV_MAP, KNOWLEDGE_ENV_MAP, etc.)
            provider-aware API key resolved via resolve_api_key_from_env()
            CO_MCP_SERVERS JSON decoded into data["mcp_servers"]
   6. _validate_personality(resolved.personality) — prints warnings, does not raise
@@ -72,26 +73,19 @@ Precedence: `_env` (explicit/test) > `os.environ` (shell) > `.env` file > `setti
 All user-global paths resolve from `USER_DIR`, which is read once at module import time:
 
 ```
-USER_DIR     = CO_HOME env var | ~/.co-cli
-SETTINGS_FILE = USER_DIR / settings.json
-SEARCH_DB    = USER_DIR / co-cli-search.db
-LOGS_DB      = USER_DIR / co-cli-logs.db
-LOGS_DIR     = USER_DIR / logs
-KNOWLEDGE_DIR = USER_DIR / knowledge
-SESSIONS_DIR = USER_DIR / sessions
-TOOL_RESULTS_DIR = USER_DIR / tool-results
+USER_DIR          = CO_HOME env var | ~/.co-cli
+SETTINGS_FILE     = USER_DIR / settings.json
+SEARCH_DB         = USER_DIR / co-cli-search.db
+LOGS_DB           = USER_DIR / co-cli-logs.db
+LOGS_DIR          = USER_DIR / logs
+KNOWLEDGE_DIR     = USER_DIR / knowledge
+SESSIONS_DIR      = USER_DIR / sessions
+TOOL_RESULTS_DIR  = USER_DIR / tool-results
+GOOGLE_TOKEN_PATH = USER_DIR / google_token.json
+ADC_PATH          = ~/.config/gcloud/application_default_credentials.json
 ```
 
 `_ensure_dirs()` creates these on first call to `get_settings()`.
-
-### Env var mapping
-
-Each sub-model owns its env-var map (e.g. `LLM_ENV_MAP`, `SHELL_ENV_MAP`). `fill_from_env`
-iterates `nested_env_map` and injects matching env values into the corresponding group dict
-before Pydantic validation. Flat fields have their own inline map in `fill_from_env`.
-
-`KnowledgeSettings` uses `pydantic-settings` with `env_prefix="CO_KNOWLEDGE_"` rather than
-the manual `ENV_MAP` pattern; its env vars are applied by `pydantic-settings` machinery.
 
 ### LLM inference model settings
 
@@ -100,7 +94,7 @@ the canonical source of truth, not user-overridable. `model_key` is derived from
 `llm.model` by splitting on `:` (`"qwen3.5:35b-a3b-q4_k_m-agentic"` → `"qwen3.5"`).
 
 ```
-_inference(mode):
+LlmSettings._inference(mode):
   return _LLM_SETTINGS[provider][model_key][mode]   # or {} if absent
 ```
 
@@ -117,15 +111,14 @@ Defined entries:
 | `gemini` | `gemini-2.5-flash` | noreason only | `thinking_config: {thinking_budget: 0}` |
 | `gemini` | `gemini-2.5-flash-lite` | noreason only | `thinking_config: {thinking_budget: 0}` |
 
-`validate_config()` (no IO) enforces: Gemini API key present when provider is gemini, model
-key in `_LLM_SETTINGS`, and model key has a `reasoning` entry (noreason-only
-models cannot be the main agent model). Empty `llm.model` is auto-resolved to
-`DEFAULT_LLM_MODELS[provider]` by a pydantic `model_validator`, so the no-model case is
-handled before validation runs.
+`LlmSettings.validate_config()` (no IO) enforces: Gemini API key present when provider is gemini,
+model key in `_LLM_SETTINGS`, and model key has a `reasoning` entry (noreason-only models cannot
+be the main agent model). Empty `llm.model` is auto-resolved to `DEFAULT_LLM_MODELS[provider]`
+by a pydantic `model_validator`, so the no-model case is handled before validation runs.
 
-`reasoning_model_settings()` → `ModelSettings` for the main agent.
-`noreason_model_settings()` → `ModelSettings` (Ollama) or `GoogleModelSettings` (Gemini) for
-functional calls (compaction, memory extraction, dream merge) via `llm_call()`.
+`LlmSettings.reasoning_model_settings()` → `ModelSettings` for the main agent.
+`LlmSettings.noreason_model_settings()` → `ModelSettings` (Ollama) or `GoogleModelSettings` (Gemini)
+for functional calls (compaction, memory extraction, dream merge) via `llm_call()`.
 
 ### Ollama context window probe
 
@@ -141,38 +134,6 @@ The two checks use `max_ctx` as the shared reference and do not compare against 
 floor validation, not as a dynamic injection value.
 
 Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is).
-
-`resolve_compaction_budget(deps)` (`context/summarization.py`):
-```
-deps.model_max_ctx
-```
-
-### MCP servers
-
-`MCPServerSettings` supports two transports:
-- **stdio**: `command` required; subprocess launched per session.
-- **HTTP**: `url` required; connects to a running server. Mutually exclusive with `command`.
-
-`DEFAULT_MCP_SERVERS` ships `context7` (npx stdio). `CO_MCP_SERVERS` env var accepts a full
-JSON blob that replaces the default dict.
-
-### CompactionSettings shape invariant
-
-`tail_fraction < compaction_ratio` is enforced by a `model_validator`. Inversion causes
-immediate re-trigger after every compaction pass (post-compact state would already exceed
-the trigger threshold).
-
-### ShellSettings safe commands
-
-`safe_commands` is a prefix-match allowlist for auto-approving shell tool calls. When
-`CO_SHELL_SAFE_COMMANDS` is set, it replaces the default list (comma-separated string
-parsed by `_parse_safe_commands`).
-
-### WebSettings domain policy
-
-`fetch_allowed_domains` and `fetch_blocked_domains` filter web fetch requests. Both accept
-comma-separated strings from env vars. Blocked list takes precedence over allowed list.
-`http_backoff_base_seconds` must be ≤ `http_backoff_max_seconds` (validated).
 
 
 ## 3. Config
@@ -199,7 +160,7 @@ comma-separated strings from env vars. Blocked list takes precedence over allowe
 | `llm.provider` | `CO_LLM_PROVIDER` | `"ollama"` | Provider: `ollama` or `gemini` |
 | `llm.host` | `CO_LLM_HOST` | `"http://localhost:11434"` | Ollama server base URL |
 | `llm.model` | `CO_LLM_MODEL` | `"qwen3.5:35b-a3b-q4_k_m-agentic"` (Ollama default) | Single model name for all tasks; falls back to `DEFAULT_LLM_MODELS[provider]` when unset |
-| `llm.max_ctx` | — | `131072` | Ceiling on probed Ollama context window |
+| `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window |
 | `llm.api_key` | `GEMINI_API_KEY` (gemini), else `CO_LLM_API_KEY` | `None` | Provider API key |
 
 Inference knobs (temperature, top_p, max_tokens, extra_body, thinking_config) are not
@@ -216,25 +177,27 @@ user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 | `knowledge.embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `"http://127.0.0.1:8283"` | TEI embedding server URL |
 | `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `"http://127.0.0.1:8282"` | TEI cross-encoder reranker URL; `null` to disable |
 | `knowledge.tei_rerank_batch_size` | `CO_KNOWLEDGE_TEI_RERANK_BATCH_SIZE` | `50` | Reranker batch size (overridden by TEI `/info` response) |
-| `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | Token size per knowledge chunk |
-| `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Token overlap between chunks |
+| `knowledge.chunk_tokens` | `CO_KNOWLEDGE_CHUNK_TOKENS` | `600` | Token size per knowledge chunk |
+| `knowledge.chunk_overlap_tokens` | `CO_KNOWLEDGE_CHUNK_OVERLAP_TOKENS` | `80` | Token overlap between chunks |
 | `knowledge.session_chunk_tokens` | `CO_KNOWLEDGE_SESSION_CHUNK_TOKENS` | `400` | Token size per session chunk |
 | `knowledge.session_chunk_overlap` | `CO_KNOWLEDGE_SESSION_CHUNK_OVERLAP` | `80` | Token overlap between session chunks |
 | `knowledge.max_artifact_count` | `CO_KNOWLEDGE_MAX_ARTIFACT_COUNT` | `300` | Max artifacts before decay |
 | `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | Artifact inactivity days before decay |
 | `knowledge.consolidation_enabled` | `CO_KNOWLEDGE_CONSOLIDATION_ENABLED` | `false` | Enable periodic artifact consolidation |
 | `knowledge.consolidation_trigger` | `CO_KNOWLEDGE_CONSOLIDATION_TRIGGER` | `"session_end"` | When to consolidate: `session_end` or `manual` |
-| `knowledge.consolidation_lookback_sessions` | — | `5` | Sessions to look back during consolidation |
-| `knowledge.consolidation_similarity_threshold` | — | `0.75` | Cosine similarity threshold for consolidation |
+| `knowledge.consolidation_lookback_sessions` | `CO_KNOWLEDGE_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Sessions to look back during consolidation |
+| `knowledge.consolidation_similarity_threshold` | `CO_KNOWLEDGE_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Cosine similarity threshold for consolidation |
 
 ### Compaction (`compaction.*`)
 
 All ratios apply to the token budget returned by `resolve_compaction_budget()`.
+Shape invariant: `tail_fraction < compaction_ratio` and `spill_ratio <= compaction_ratio` (both enforced by validator).
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `compaction.compaction_ratio` | `CO_COMPACTION_RATIO` | `0.50` | Proactive trigger fraction; fires when context ≥ this fraction of budget |
 | `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.20` | Fraction of budget preserved as tail in compaction; must be < compaction_ratio |
+| `compaction.spill_ratio` | `CO_COMPACTION_SPILL_RATIO` | `0.50` | Fraction above which tool returns spill to disk; must be ≤ compaction_ratio |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum savings fraction to count a proactive compaction as effective |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Consecutive low-yield compactions before anti-thrash gate activates |
 
@@ -296,9 +259,9 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | File | Purpose |
 |------|---------|
 | `co_cli/config/core.py` | `Settings`, `load_config()`, `get_settings()`, `fill_from_env`; path constants (`USER_DIR`, `SETTINGS_FILE`, `SEARCH_DB`, etc.) |
-| `co_cli/config/llm.py` | `LlmSettings`, `_LLM_SETTINGS`, `DEFAULT_LLM_MODELS`; `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` |
+| `co_cli/config/llm.py` | `LlmSettings` with `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` methods; `_LLM_SETTINGS`, `DEFAULT_LLM_MODELS` |
 | `co_cli/config/knowledge.py` | `KnowledgeSettings` — search backend, embedding, chunking, lifecycle |
-| `co_cli/config/compaction.py` | `CompactionSettings` — trigger ratio, tail fraction, anti-thrash window |
+| `co_cli/config/compaction.py` | `CompactionSettings` — trigger ratio, spill ratio, tail fraction, anti-thrash window |
 | `co_cli/config/web.py` | `WebSettings` — domain policy, HTTP retry and backoff |
 | `co_cli/config/shell.py` | `ShellSettings` — timeout, safe command list |
 | `co_cli/config/memory.py` | `MemorySettings` — recall half-life |

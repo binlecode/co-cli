@@ -1,11 +1,8 @@
 # Co CLI System Design
 
+This doc is the architectural map of `co-cli`: subsystems, core workflows, and the contracts between them. Component internals are owned by their per-subsystem specs listed in §2.
 
-This doc defines the runtime architecture of `co-cli`: subsystems, boundaries, and cross-subsystem contracts. Component internals are owned by their component specs; see section 2.4 for the full cross-reference map.
-
-## 1. What & How
-
-`co-cli` is a local-first, approval-first terminal agent. A Typer CLI starts a REPL, startup assembles a `CoDeps` runtime and a single foreground `Agent`, and each user turn runs through one orchestration entrypoint that can call native tools, MCP tools, and persistent context stores. Durable state lives outside the model: session transcripts, knowledge artifacts, the knowledge index, tool-result spill files, and telemetry are all stored on disk and reloaded or queried when needed.
+## 1. Functional Architecture
 
 ```
                     User
@@ -45,112 +42,171 @@ This doc defines the runtime architecture of `co-cli`: subsystems, boundaries, a
    LLM Provider         Workspace Files        MCP Servers
 ```
 
-## 2. Core Logic
+| Subsystem | Spec | Role |
+|-----------|------|------|
+| Bootstrap | [bootstrap.md](bootstrap.md) | Startup sequencing, degradation policy, `CoDeps` assembly |
+| REPL / TUI | [tui.md](tui.md) | Prompt session, slash-command dispatch, completer |
+| Agent loop | [core-loop.md](core-loop.md) | Turn orchestration, approval mechanics, retries |
+| Prompt assembly | [prompt-assembly.md](prompt-assembly.md) | Instruction layers, history processors, recall injection |
+| Compaction | [compaction.md](compaction.md) | Spill, proactive summarization, session JSONL rewrite |
+| Memory | [memory.md](memory.md) | Knowledge + session channels, search index, write surface |
+| Knowledge channel | [memory-knowledge.md](memory-knowledge.md) | Artifact storage, kind taxonomy, `knowledge_manage` |
+| Sessions channel | [memory-sessions.md](memory-sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
+| Dream cycle | [dream.md](dream.md) | Session-end mining, knowledge merge, decay, archive |
+| Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
+| Skills | [skill.md](skill.md) | Skill index, search/view/manage surface, dispatch |
+| Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
+| Config | [config.md](config.md) | Settings model, env vars, load pipeline |
+| Observability | [observability.md](observability.md) | OTel spans, JSONL logs, trace viewer |
 
-### 2.1 Runtime Shape
 
-The runtime is split into a small set of top-level owners:
+## 2. Core Workflows
 
-| Owner | Responsibility |
-| --- | --- |
-| `co_cli/main.py` | CLI entrypoints, REPL loop, top-level lifecycle, and teardown |
-| `co_cli/bootstrap/` | session startup, runtime assembly, and capability discovery |
-| `co_cli/agent/` | agent construction, instruction layers, and toolset assembly |
-| `co_cli/commands/` | slash-command dispatch and skill delegation entrypoints |
-| `co_cli/context/` | foreground-turn orchestration, history management, sessions, and transcripts |
-| `co_cli/display/` | terminal rendering, prompt UX, and approval interaction |
-| `co_cli/observability/` | telemetry export and trace storage plumbing |
+### Startup
 
-This keeps the architecture intentionally simple:
+`create_deps` is the one-shot assembly entrypoint — it validates config, probes the LLM, builds the model, wires MCP toolsets, loads skills, discovers the memory backend, and syncs both the knowledge index and canon store. On return, `CoDeps` is immutable except for mutable state buckets. The agent is built once and reused across turns. Degradation replaces hard failures: missing integrations narrow capability without aborting startup.
 
-- startup prepares the runtime once per session
-- the agent is built once and reused across turns
-- orchestration owns one-turn execution and approval resumes
-- tools and storage are accessed through `CoDeps`, not through global mutable state
+```
+settings load → validate_config → [Ollama probe] → build_model
+  → build_tool_registry → MCP connect + discover
+  → load_skills
+  → memory backend discovery → knowledge sync → canon sync
+  → CoDeps sealed
+  → build_agent
+  → restore_session → init_session_index
+  → REPL ready
+```
 
-### 2.2 Session Lifecycle
+→ [bootstrap.md](bootstrap.md)
 
-The system has three phases:
+---
 
-1. **Startup**: load settings, resolve workspace paths, construct `CoDeps`, connect optional MCP servers, load skills, resolve the knowledge backend, build the agent, and restore or create the current session.
-2. **Interactive session**: run the REPL, dispatch slash commands locally when possible, and send agent turns through `run_turn()` when model work is needed.
-3. **Teardown**: drain background work, clean up the shell backend, and close async resources such as MCP connections.
+### Turn Execution
 
-Startup sequencing detail is in [bootstrap.md](bootstrap.md); turn execution in [core-loop.md](core-loop.md).
+Each user turn runs `run_turn()` → pydantic-ai agent run → tool loop → post-turn writes. The key cross-subsystem steps within a turn:
 
-### 2.3 Runtime Contract
+```
+run_turn(user_input)
+  → prompt assembly  (personality + recall injection + history)
+  → agent run        (LLM + tool loop with approval gates)
+  → compaction check (spill → proactive → emit-time)
+  → session persist  (append to JSONL)
+  → dream trigger    (session-end: mines + merges knowledge)
+```
 
-`CoDeps` is the shared runtime contract passed into tools and agent-side helpers. It carries:
+Approval gates run per-tool-call; retries wrap individual tool failures. The agent is not re-instantiated between turns.
 
-- **Config & Services** (read-only or long-lived after bootstrap)
-  - `config`: `Settings` object
-  - `shell`: `ShellBackend` handle
-  - `model`: `LlmModel` handle
-  - `memory_store`: Optional `MemoryStore` integration
-  - `resource_locks`: Shared `ResourceLockStore`
-  - `file_read_mtimes`: Staleness detection registry
-- **Registries** (bootstrap-built tool definitions)
-  - `tool_index`: Flat dict of all `ToolInfo` metadata
-  - `tool_registry`: Live `pydantic-ai` ToolRegistry
-  - `skill_commands`: Discovered `SkillConfig` instances
-- **Mutable State** (split by lifecycle)
-  - `session`: `CoSessionState` (persists across turns: `session_todos`, `background_tasks`, `session_approval_rules`, etc.)
-  - `runtime`: `CoRuntimeState` (managed by orchestration: `turn_usage`, `compaction_skip_count`, `compaction_applied_this_turn`, `consecutive_low_yield_proactive_compactions`, `post_compaction_token_estimate`, `message_count_at_last_compaction`)
-- **Paths** (resolved workspace and user-global paths)
-  - `workspace_root`, `knowledge_dir`, `sessions_dir`, etc.
-- **Degradations**
-  - `degradations`: Dict of startup-detected capability drops
+→ [core-loop.md](core-loop.md) · [prompt-assembly.md](prompt-assembly.md) · [compaction.md](compaction.md)
 
-The important architectural rule is that `co-cli` does not hide these concerns behind multiple config or service facades. Bootstrap assembles one runtime object, and the rest of the system consumes that object directly.
+---
 
-### 2.4 System Boundaries
+### Prompt Assembly
 
-The system is deliberately local-first:
+Every turn's system prompt is assembled from three layers injected before the agent run:
 
-- the primary control loop, persistent stores, and telemetry are local
-- external systems are reached either during startup capability setup or through explicit tool boundaries at turn time
-- write-capable agent actions go through the approval model
-- missing or unhealthy optional integrations degrade capability rather than redefining the core loop
+1. **Static** — soul seed + mindsets + bundled skill manifest (injected at agent construction, not per-turn)
+2. **Dynamic** — personality-context artifacts from the knowledge index (canon, not user-queryable)
+3. **Recall** — `knowledge_search` + `session_search` results injected into the turn context window
 
-Persistent state is also intentionally small in surface area:
+Recall is search-driven and on-demand — nothing is wholesale injected into every turn. History processors (compaction, spill placeholders) apply in the pre-run pass.
 
-- all user/session state lives under `~/.co-cli/` (knowledge, sessions, skills, settings)
-- model context is rebuilt from files, settings, and history instead of being treated as hidden process state
+→ [prompt-assembly.md](prompt-assembly.md) · [personality.md](personality.md)
 
-The specialized DESIGN docs own the detailed behavior inside each boundary:
+---
 
-- bootstrap order and degradation policy: [bootstrap.md](bootstrap.md)
-- turn execution, approvals, and retries: [core-loop.md](core-loop.md)
-- prompt assembly, instruction layers, and history processors: [prompt-assembly.md](prompt-assembly.md)
-- compaction mechanisms (emit-time, prepass, window, overflow): [compaction.md](compaction.md)
-- session transcripts and knowledge artifacts: [memory.md](memory.md)
-- dream-cycle mining, merge, decay, archive, and state: [dream.md](dream.md)
-- REPL loop, completer, and slash commands: [tui.md](tui.md)
-- tool registration and approval behavior: [tools.md](tools.md)
-- skill surface (search/view/manage tools, lifecycle, dispatch): [skill.md](skill.md)
-- personality configuration, character assets, and soul files: [personality.md](personality.md)
-- provider, model, and configuration: [config.md](config.md)
-- tracing and log viewers: [observability.md](observability.md)
+### Memory Channels
+
+Two channels share one index (`co-cli-search.db`, FTS5 + optional vec):
+
+- **Knowledge** (`~/.co-cli/knowledge/*.md`) — declarative facts, rules, articles, notes. Model-writable via `knowledge_manage`. Mined and decayed by the dream cycle.
+- **Sessions** (`~/.co-cli/sessions/*.jsonl`) — past turn transcripts. Append-only; chunked at write time. Recalled via BM25 chunk snippets with line citations; full turns fetched via `session_view`.
+
+Recall is always search-driven. No channel is bulk-injected. Browse mode (empty query) returns recent-item metadata.
+
+```
+knowledge_search / session_search
+  → MemoryStore.search (FTS5 BM25 [+ vec cosine + cross-encoder rerank])
+  → snippet hits with line/path citations
+
+knowledge_view / session_view
+  → full artifact body / verbatim JSONL lines from disk
+```
+
+→ [memory.md](memory.md) · [memory-knowledge.md](memory-knowledge.md) · [memory-sessions.md](memory-sessions.md)
+
+---
+
+### Compaction
+
+Compaction is context pressure management — keeps token use within the model's window across long sessions. Three mechanisms run in priority order:
+
+1. **Spill** — oversized tool results written to disk; placeholder injected in place (`spill_ratio` threshold).
+2. **Proactive** — mid-turn LLM summarization of the oldest history segment (`compaction_ratio` threshold); anti-thrash gate limits consecutive low-yield passes.
+3. **Emit-time** — last-resort truncation at `tail_fraction` before a request would exceed the window.
+
+Compaction rewrites the live session JSONL in place. The session UUID is unchanged.
+
+→ [compaction.md](compaction.md)
+
+---
+
+### Dream Cycle
+
+Triggered at session end. Runs offline (no user interaction):
+
+1. **Mining** — extracts candidate knowledge from recent session transcripts via `llm_call`.
+2. **Merge** — deduplicates against existing artifacts (Jaccard similarity); near-identical skipped, overlapping merged.
+3. **Decay / archive** — scores artifacts by recency and recall frequency; eligible artifacts archived.
+
+Dream runs are idempotent. The trigger is `session_end` by default; `manual` trigger also available.
+
+→ [dream.md](dream.md)
+
+---
+
+### Skills
+
+Skills are procedural capability units — YAML-fronted markdown files in `~/.co-cli/skills/`. They are discovered at startup, indexed under `source='skill'` in the same DB as memory, and surfaced through three model-callable tools: `skill_search`, `skill_view`, `skill_manage`. Slash commands in the REPL dispatch to installed skills via the `skill_commands` registry on `CoDeps`.
+
+→ [skill.md](skill.md) · [tui.md](tui.md)
+
+---
+
+### CoDeps Contract
+
+`CoDeps` is the single shared runtime object. Everything that needs cross-subsystem access receives it by injection — there is no global mutable state.
+
+| Group | Contents |
+|-------|----------|
+| Config & services | `config`, `model`, `shell`, `memory_store`, `resource_locks`, `file_read_mtimes` |
+| Registries | `tool_index`, `tool_registry`, `skill_commands` |
+| Mutable state | `session` (`CoSessionState` — todos, background tasks, approval rules); `runtime` (`CoRuntimeState` — compaction counters, turn usage) |
+| Paths | `workspace_root`, `knowledge_dir`, `sessions_dir`, `tool_results_dir`, … |
+| Degradations | `degradations` dict — startup-detected capability drops |
+
 
 ## 3. Config
 
-These settings most directly affect top-level system assembly.
+Settings most relevant to system assembly:
 
 | Setting | Env Var | Default | Description |
-| --- | --- | --- | --- |
-| `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Default model provider used for the session runtime |
-| `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Ollama-compatible host used during model setup and runtime calls |
-| `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-q4_k_m-agentic` | Primary model name used when building the foreground agent |
+|---------|---------|---------|-------------|
+| `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Model provider for the session runtime |
+| `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Ollama-compatible host |
+| `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-q4_k_m-agentic` | Primary model for the foreground agent |
 | `mcp_servers` | `CO_MCP_SERVERS` | bundled defaults | MCP server definitions attached during runtime assembly |
 | `personality` | `CO_PERSONALITY` | `tars` | Personality assets injected during prompt assembly |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | User-global knowledge artifact store |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Terminal reasoning display mode for interactive turns |
 
+Full settings reference: [config.md](config.md).
+
+
 ## 4. Files
 
 | File | Purpose |
-| --- | --- |
+|------|---------|
 | `co_cli/main.py` | Top-level CLI lifecycle, REPL loop, and teardown |
 | `co_cli/bootstrap/core.py` | Runtime assembly and startup flow |
 | `co_cli/agent/core.py` | Foreground agent factory (`build_agent()`) |
@@ -158,5 +214,16 @@ These settings most directly affect top-level system assembly.
 | `co_cli/agent/mcp.py` | MCP toolset wiring and discovery |
 | `co_cli/agent/_instructions.py` | Dynamic instruction callbacks and prompt assembly |
 | `co_cli/commands/core.py` | Slash-command dispatch and skill handoff into the REPL loop |
-| `co_cli/deps.py` | Shared runtime contract and workspace path resolution |
+| `co_cli/deps.py` | `CoDeps` runtime contract and workspace path resolution |
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
+
+
+## 5. Test Gates
+
+| Property | Test file |
+|----------|-----------|
+| Bootstrap assembles `CoDeps` and agent without errors | `tests/test_flow_chat_loop.py` |
+| Degraded startup (missing memory backend) does not abort | `tests/test_flow_capability_checks.py` |
+| Turn produces a non-empty model response | `tests/test_flow_chat_loop.py` |
+| Tool call executes within a turn | `tests/test_flow_chat_loop.py` |
+| Delegation agents share `model` handle | `tests/test_flow_delegation_discovery.py` |
