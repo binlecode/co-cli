@@ -254,11 +254,11 @@ def _check_patch_preconditions(
     resolved: "Path", path: str, path_key: str, ctx: "RunContext[CoDeps]"
 ) -> str | None:
     """Return an error message if patch write preconditions fail, else None."""
-    if path_key not in ctx.deps.file_read_mtimes:
+    if not ctx.deps.file_tracker.is_read(path_key):
         return f"Read the file with file_read before patching: {path}"
-    if path_key in ctx.deps.file_partial_reads:
+    if ctx.deps.file_tracker.is_partial(path_key):
         return f"Only part of this file was read — call file_read without start_line/end_line before patching: {path}"
-    if safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]:
+    if ctx.deps.file_tracker.is_stale(path_key, safe_mtime(resolved)):
         return "File changed since last read — re-read before writing"
     return None
 
@@ -371,7 +371,7 @@ async def _write_v4a_pending(
                 else:
                     resolved.parent.mkdir(parents=True, exist_ok=True)
                     resolved.write_text(content, encoding=enc)
-                    ctx.deps.file_read_mtimes[str(resolved)] = safe_mtime(resolved)
+                    ctx.deps.file_tracker.update_mtime(str(resolved), safe_mtime(resolved))
         except ResourceBusyError:
             return f"{rel_path} is being modified by another tool call — retry next turn"
 
@@ -464,7 +464,7 @@ async def _file_patch_replace(
                 return tool_error(resolution, ctx=ctx)
             updated, display, count, strategy = resolution
             resolved.write_text(updated, encoding=enc)
-            ctx.deps.file_read_mtimes[path_key] = safe_mtime(resolved)
+            ctx.deps.file_tracker.update_mtime(path_key, safe_mtime(resolved))
     except ResourceBusyError:
         return tool_error(
             f"File {path} is being modified by another tool call — retry next turn", ctx=ctx
@@ -508,15 +508,12 @@ async def file_write(
     try:
         async with ctx.deps.resource_locks.try_acquire(str(resolved)):
             path_key = str(resolved)
-            if (
-                path_key in ctx.deps.file_read_mtimes
-                and safe_mtime(resolved) != ctx.deps.file_read_mtimes[path_key]
-            ):
+            if ctx.deps.file_tracker.is_read_and_stale(path_key, safe_mtime(resolved)):
                 return tool_error("File changed since last read — re-read before writing", ctx=ctx)
             resolved.parent.mkdir(parents=True, exist_ok=True)
             resolved.write_text(content, encoding="utf-8")
             byte_count = len(content.encode("utf-8"))
-            ctx.deps.file_read_mtimes[path_key] = safe_mtime(resolved)
+            ctx.deps.file_tracker.update_mtime(path_key, safe_mtime(resolved))
             return tool_output(
                 f"Written: {path} ({byte_count} bytes)",
                 ctx=ctx,

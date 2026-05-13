@@ -178,10 +178,10 @@ Skills are procedural capability units — YAML-fronted markdown files in `~/.co
 
 | Group | Contents |
 |-------|----------|
-| Config & services | `config`, `model`, `shell`, `memory_store`, `resource_locks`, `file_read_mtimes` |
+| Config & services | `config`, `model`, `shell`, `memory_store`, `resource_locks`, `file_tracker` |
 | Registries | `tool_index`, `tool_registry`, `skill_commands` |
-| Mutable state | `session` (`CoSessionState` — todos, background tasks, approval rules); `runtime` (`CoRuntimeState` — compaction counters, turn usage) |
-| Paths | `workspace_root`, `knowledge_dir`, `sessions_dir`, `tool_results_dir`, … |
+| Mutable state | `session` (`CoSessionState` — todos, background tasks, approval rules); `runtime` (`CoRuntimeState` — compaction counters, turn usage, persisted message count) |
+| Paths | `workspace_dir`, `knowledge_dir`, `sessions_dir`, `tool_results_dir`, … |
 | Degradations | `degradations` dict — startup-detected capability drops |
 
 

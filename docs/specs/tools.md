@@ -145,10 +145,10 @@ tool call dispatched
       ├─ path locked by another agent?  (resource_locks)
       │       yes ──► tool_error  [fail-fast, no retry]
       │
-      ├─ file_patch: file only partially read?  (file_partial_reads)
+      ├─ file_patch: file only partially read?  (file_tracker.is_partial)
       │       yes ──► tool_error("read the full file first")
       │
-      └─ file_write/patch: disk mtime changed since last read?  (file_read_mtimes)
+      └─ file_write/patch: disk mtime changed since last read?  (file_tracker.is_stale / is_read_and_stale)
               yes ──► tool_error("file changed on disk")
 ```
 

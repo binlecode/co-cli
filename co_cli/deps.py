@@ -16,6 +16,7 @@ from co_cli.config.core import (
     USER_DIR,
     Settings,
 )
+from co_cli.tools.file_read_tracker import FileReadTracker
 
 if TYPE_CHECKING:
     from co_cli.agent.core import ToolRegistry
@@ -116,6 +117,11 @@ class CoSessionState:
 
     State here is readable and writable by tools and slash commands during the
     session. Delegation agents receive a partially-inherited instance — see fork_deps.
+
+    session_path is the session identity handle, not just a persistence path. Tools
+    derive the short session ID from session_path.stem[-8:] and use it for recall
+    self-exclusion (e.g. recall.py) and delegation identity (e.g. delegation.py,
+    capabilities.py).
     """
 
     google_creds: Any | None = field(default=None, repr=False)
@@ -127,8 +133,6 @@ class CoSessionState:
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
-    # Count of messages durably persisted to session_path.
-    persisted_message_count: int = 0
 
 
 @dataclass
@@ -145,7 +149,8 @@ class CoRuntimeState:
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions,
-      post_compaction_token_estimate, message_count_at_last_compaction
+      post_compaction_token_estimate, message_count_at_last_compaction,
+      persisted_message_count
     """
 
     # Per-model-turn brake counter; resets implicitly on ctx.run_step transition.
@@ -180,6 +185,9 @@ class CoRuntimeState:
     # proving the LLM has seen the post-compaction context. Cleared by /new and /clear.
     post_compaction_token_estimate: int | None = None
     message_count_at_last_compaction: int | None = None
+    # Count of messages durably persisted to session_path; accumulates across the session.
+    # Not reset per-turn — append-only persistence requires this to grow monotonically.
+    persisted_message_count: int = 0
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""
@@ -215,10 +223,8 @@ class CoDeps:
     config: Settings
     # Resource lock store (shared across parent and delegation agents)
     resource_locks: ResourceLockStore = field(default=None, repr=False)  # type: ignore[assignment]  # __post_init__ always initializes from None
-    # File mtime registry — shared across parent and delegation agents by reference for staleness detection
-    file_read_mtimes: dict[str, float] = field(default_factory=dict, repr=False)
-    # Paths for which only a partial read (start_line/end_line) was performed — cleared on full read
-    file_partial_reads: set[str] = field(default_factory=set, repr=False)
+    # File read tracker — shared across parent and delegation agents by reference for staleness detection
+    file_tracker: FileReadTracker = field(default_factory=FileReadTracker, repr=False)
     # Service handles (optional, set during bootstrap)
     memory_store: MemoryStore | None = field(default=None, repr=False)
     skill_index: SkillIndex | None = field(default=None, repr=False)
@@ -283,11 +289,13 @@ def fork_deps(base: CoDeps) -> CoDeps:
     Runtime: reset to clean defaults.
 
     Intentionally shared fields (by reference, not copied):
-      file_read_mtimes    — cross-agent staleness detection
-      file_partial_reads  — cross-agent partial-read tracking
+      file_tracker        — cross-agent staleness detection (mtime + partial-read state)
       resource_locks      — cross-agent lock coordination
       degradations        — read-only after bootstrap
     These are safe to share because per-turn mutable state (CoRuntimeState) is always fresh.
+
+    tool_registry is intentionally excluded — delegation agents construct their own via
+    build_tool_registry() with a filtered tool set appropriate for their depth.
     """
     inherited_session = CoSessionState(
         google_creds=base.session.google_creds,
@@ -299,8 +307,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         shell=base.shell,
         config=base.config,
         resource_locks=base.resource_locks,
-        file_read_mtimes=base.file_read_mtimes,
-        file_partial_reads=base.file_partial_reads,
+        file_tracker=base.file_tracker,
         memory_store=base.memory_store,
         skill_index=base.skill_index,
         model=base.model,

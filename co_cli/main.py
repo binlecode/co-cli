@@ -92,10 +92,10 @@ async def _finalize_turn(
         deps.session.session_path = persist_session_history(
             session_path=deps.session.session_path,
             messages=turn_result.messages,
-            persisted_message_count=deps.session.persisted_message_count,
+            persisted_message_count=deps.runtime.persisted_message_count,
             history_compacted=deps.runtime.compaction_applied_this_turn,
         )
-        deps.session.persisted_message_count = len(turn_result.messages)
+        deps.runtime.persisted_message_count = len(turn_result.messages)
     except OSError as e:
         frontend.on_status(
             f"Session write failed — conversation may not be saved. Check disk space. ({e})"
@@ -210,16 +210,16 @@ def _apply_command_outcome(
                 deps.session.session_path = persist_session_history(
                     session_path=deps.session.session_path,
                     messages=outcome.history,
-                    persisted_message_count=deps.session.persisted_message_count,
+                    persisted_message_count=deps.runtime.persisted_message_count,
                     history_compacted=True,
                 )
-                deps.session.persisted_message_count = len(outcome.history)
+                deps.runtime.persisted_message_count = len(outcome.history)
             except OSError as e:
                 frontend.on_status(
                     f"Session write failed — conversation may not be saved. Check disk space. ({e})"
                 )
         else:
-            deps.session.persisted_message_count = len(outcome.history)
+            deps.runtime.persisted_message_count = len(outcome.history)
         return True, outcome.history, "", {}
     if isinstance(outcome, DelegateToAgent):
         saved_env: dict[str, str | None] = {k: os.environ.get(k) for k in outcome.skill_env}

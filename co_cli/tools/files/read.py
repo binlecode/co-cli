@@ -514,18 +514,13 @@ async def file_read(
         return tool_error(f"Binary file — cannot display as text: {path}", ctx=ctx)
 
     path_key = str(resolved)
-    ctx.deps.file_read_mtimes[path_key] = st.st_mtime
-
     all_lines = content.splitlines(keepends=True)
     total_line_count = len(all_lines)
 
     lo, hi, is_partial = _compute_read_slice(start_line, end_line, total_line_count)
     sliced = all_lines[lo:hi]
 
-    if is_partial:
-        ctx.deps.file_partial_reads.add(path_key)
-    else:
-        ctx.deps.file_partial_reads.discard(path_key)
+    ctx.deps.file_tracker.record_read(path_key, st.st_mtime, partial=is_partial)
 
     base = start_line if start_line is not None else 1
     display = _build_read_display(sliced, base, total_line_count, hi)

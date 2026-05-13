@@ -415,10 +415,10 @@ async def step_proactive_compaction() -> bool:
             persist_session_history(
                 session_path=deps.session.session_path,
                 messages=message_history,
-                persisted_message_count=deps.session.persisted_message_count,
+                persisted_message_count=deps.runtime.persisted_message_count,
                 history_compacted=deps.runtime.compaction_applied_this_turn,
             )
-            deps.session.persisted_message_count = len(message_history)
+            deps.runtime.persisted_message_count = len(message_history)
 
             for m in message_history:
                 if isinstance(m, ModelRequest):
