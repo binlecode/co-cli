@@ -8,7 +8,7 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS, make_settings
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
-from co_cli.agent.core import build_tool_registry
+from co_cli.agents.core import build_tool_registry
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.system.capabilities import capabilities_check

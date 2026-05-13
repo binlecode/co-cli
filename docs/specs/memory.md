@@ -12,6 +12,8 @@ Memory contributes two channels — session and knowledge — both genuinely dyn
 
 Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, personality-context artifacts, bundled skill manifest) is injected once at agent construction. Everything else is loaded on-demand through the memory tool surface, keeping context bounded and recall purposeful.
 
+Memory and skill surfaces sit at different operational tiers. Memory holds facts you recall to inform reasoning during a task; skills hold procedures that define how to structure the task itself. The skill surface is documented in [skill.md](skill.md) and governed by [06_skill_protocol.md](../../co_cli/context/rules/06_skill_protocol.md).
+
 ```mermaid
 flowchart TD
     Knowledge["knowledge\n(knowledge/*.md)"] -->|"source='knowledge'"| SearchDB["co-cli-search.db\n(chunks + FTS5 + optional vec)"]
@@ -164,7 +166,7 @@ All renames are hard — there are no aliases.
 | `co_cli/tools/memory/recall.py` | `knowledge_search()` — knowledge ranked recall; `session_search()` — session ranked recall; `_grep_recall()` — knowledge disk-scan fallback (no store) |
 | `co_cli/tools/memory/manage.py` | `knowledge_manage()` — knowledge write surface |
 | `co_cli/tools/memory/view.py` | `knowledge_view()` — full artifact body reader; `session_view()` — verbatim session turn reader |
-| `co_cli/agent/_native_toolset.py` | foreground toolset registration |
+| `co_cli/agents/_native_toolset.py` | foreground toolset registration |
 
 ### Bootstrap and runtime
 

@@ -21,7 +21,7 @@ from pydantic_ai.capabilities import (
 from pydantic_ai.messages import ModelResponsePart, ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 
-from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
+from co_cli.agents.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
 from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
 from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS, spill_with_span

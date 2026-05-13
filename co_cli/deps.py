@@ -19,7 +19,7 @@ from co_cli.config.core import (
 from co_cli.tools.file_read_tracker import FileReadTracker
 
 if TYPE_CHECKING:
-    from co_cli.agent.core import ToolRegistry
+    from co_cli.agents.core import ToolRegistry
     from co_cli.llm.factory import LlmModel
     from co_cli.memory.memory_store import MemoryStore
     from co_cli.skills.index import SkillIndex

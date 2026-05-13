@@ -156,7 +156,7 @@ prerequisites: []
 
 ## TASK-2: Implement `request_user_input` and same-call resume injection
 
-files: `co_cli/tools/user_input.py`, `co_cli/agent.py`, `co_cli/context/orchestrate.py`, `tests/test_tool_registry.py`, `tests/test_tool_calling_functional.py`
+files: `co_cli/tools/user_input.py`, `co_cli/agents/core.py`, `co_cli/context/orchestrate.py`, `tests/test_tool_registry.py`, `tests/test_tool_calling_functional.py`
 
 Implementation:
 - Add a native `request_user_input` tool with the narrow v1 shape:

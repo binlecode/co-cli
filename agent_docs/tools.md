@@ -38,7 +38,7 @@ Use `settings.json` or env vars.
 
 ## Adding a Tool
 
-- Tool file in `co_cli/tools/`; import and register in `_build_native_toolset()` in `co_cli/agent.py`.
+- Tool file in `co_cli/tools/`; import and register in `_build_native_toolset()` in `co_cli/agents/_native_toolset.py`.
 - Return `tool_output()` / `tool_error()` — never a raw `str`, `dict`, or `list`.
 - First docstring line is the tool schema description — make it count.
 - `approval=True` for any tool that writes files, spawns processes, or calls external write APIs.

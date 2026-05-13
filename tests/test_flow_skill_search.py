@@ -9,7 +9,7 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
-from co_cli.agent.core import build_tool_registry
+from co_cli.agents.core import build_tool_registry
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.memory.memory_store import MemoryStore
 from co_cli.skills.index import SkillIndex

@@ -10,7 +10,7 @@ from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agent.core import build_agent, build_tool_registry
+from co_cli.agents.core import build_agent, build_tool_registry
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend

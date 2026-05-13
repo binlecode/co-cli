@@ -247,7 +247,7 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-The main agent is built with four registered history processors (pure transformers) in this exact order (see `co_cli/agent/core.py` `history_processors=[...]`):
+The main agent is built with four registered history processors (pure transformers) in this exact order (see `co_cli/agents/core.py` `history_processors=[...]`):
 
 1. `dedup_tool_results`
 2. `evict_old_tool_results`
@@ -384,8 +384,8 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/context/history_processors.py` | registered history processors (`dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`, `sanitize_surrogate_codepoints`) and the `strip_all_tool_returns` recovery helper |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
-| `co_cli/agent/core.py` | main agent factory |
-| `co_cli/agent/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
+| `co_cli/agents/core.py` | main agent factory |
+| `co_cli/agents/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
 | `co_cli/tools/shell/execute.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |

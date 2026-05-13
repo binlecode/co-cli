@@ -23,7 +23,7 @@ Current-state validation against the latest code:
   - `gen_ai.tool.call.result`
 - `co tail` and `co traces` already read and render those attributes directly from SQLite in [co_cli/observability/_tail.py](/Users/binle/workspace_genai/co-cli/co_cli/observability/_tail.py) and [co_cli/observability/_viewer.py](/Users/binle/workspace_genai/co-cli/co_cli/observability/_viewer.py).
 - `co` already has a proven oversized-content pattern for tool results:
-  - per-tool `max_result_size` metadata in [co_cli/agent.py](/Users/binle/workspace_genai/co-cli/co_cli/agent.py)
+  - per-tool `max_result_size` metadata in [co_cli/agents/_native_toolset.py](/Users/binle/workspace_genai/co-cli/co_cli/agents/_native_toolset.py)
   - `tool_output()` spill enforcement in [co_cli/tools/tool_output.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_output.py)
   - content-addressed persistence in [co_cli/tools/tool_result_storage.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_result_storage.py)
 - There is currently no telemetry-specific test file covering export-time payload limiting.

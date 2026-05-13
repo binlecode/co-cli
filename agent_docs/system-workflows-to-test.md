@@ -109,7 +109,7 @@ Severity calibration for `/test-hygiene` Phase 4.5:
 
 ### 1.7 MCP server discovery
 
-- **Entry**: `co_cli/agent/mcp.py: _build_mcp_toolsets` + `discover_mcp_tools`
+- **Entry**: `co_cli/agents/mcp.py: _build_mcp_toolsets` + `discover_mcp_tools`
 - **Behavior**: Each configured MCP server is entered on `AsyncExitStack`. Per-server
   failure isolation: a bad server records `mcp.<prefix>` in `degradations` and is
   skipped; successful servers contribute to merged `tool_index`.
@@ -461,7 +461,7 @@ Severity calibration for `/test-hygiene` Phase 4.5:
 
 ### 3.12 Doom-loop and reflection-cap injection
 
-- **Entry**: `co_cli/agent/_instructions.py: safety_prompt`
+- **Entry**: `co_cli/agents/_instructions.py: safety_prompt`
 - **Behavior**: Detects identical-tool-call streak (`doom_loop_threshold`) or
   shell-error streak (`max_reflections`); injects warning text into instructions
   context.
@@ -511,7 +511,7 @@ Severity calibration for `/test-hygiene` Phase 4.5:
 
 ### 4.4 Dynamic instruction layers (`safety_prompt`, `current_time_prompt`)
 
-- **Entry**: `co_cli/agent/_instructions.py`
+- **Entry**: `co_cli/agents/_instructions.py`
 - **Behavior**: Two `@agent.instructions` callbacks evaluated per request.
   `current_time_prompt` is always-on (Block 1, tail position). `safety_prompt`
   conditionally returns warning text. Neither is persisted into history.
@@ -592,7 +592,7 @@ Severity calibration for `/test-hygiene` Phase 4.5:
 
 ### 6.1 L0 admission cap (tool calls per ModelResponse)
 
-- **Entry**: `co_cli/tools/lifecycle.py: wrap_tool_execute` + `co_cli/agent/tool_call_limit.py`
+- **Entry**: `co_cli/tools/lifecycle.py: wrap_tool_execute` + `co_cli/agents/tool_call_limit.py`
 - **Behavior**: Counts tool calls per `ctx.run_step`; first 6 execute, calls 7+
   rejected with structured `max_tool_calls_per_turn_exceeded` payload returned as
   the tool's "result". Span emitted on `after_node_run`.
@@ -689,7 +689,7 @@ Severity calibration for `/test-hygiene` Phase 4.5:
 
 ### 7.2 MCP tool discovery
 
-- **Entry**: `co_cli/agent/mcp.py: discover_mcp_tools`
+- **Entry**: `co_cli/agents/mcp.py: discover_mcp_tools`
 - **Behavior**: Runtime discovery from connected MCP servers. All discovered tools
   are DEFERRED. Merged into `tool_index`.
 - **Primary failure modes**: merge clobbers native tool name; visibility wrong;

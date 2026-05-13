@@ -17,7 +17,7 @@ only a new directory with the required files — no Python changes.
 Callers:
   co_cli.context.assembly — uses load_soul_seed, load_soul_mindsets
                             inside build_static_instructions(), invoked by build_agent()
-  co_cli.agent.core       — uses load_soul_critique to append critique after toolset guidance
+  co_cli.agents.core       — uses load_soul_critique to append critique after toolset guidance
 """
 
 from pathlib import Path

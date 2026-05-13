@@ -176,5 +176,5 @@ for missing mindset files.
 | `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
 | `co_cli/personality/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
-| `co_cli/agent/core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
-| `co_cli/agent/_instructions.py` | `current_time_prompt()` — dynamic instruction returning current date/time; `safety_prompt()` — doom-loop and shell-error warnings |
+| `co_cli/agents/core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
+| `co_cli/agents/_instructions.py` | `current_time_prompt()` — dynamic instruction returning current date/time; `safety_prompt()` — doom-loop and shell-error warnings |

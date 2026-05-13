@@ -209,10 +209,10 @@ Full settings reference: [config.md](config.md).
 |------|---------|
 | `co_cli/main.py` | Top-level CLI lifecycle, REPL loop, and teardown |
 | `co_cli/bootstrap/core.py` | Runtime assembly and startup flow |
-| `co_cli/agent/core.py` | Foreground agent factory (`build_agent()`) |
-| `co_cli/agent/_native_toolset.py` | Native toolset construction and tool registry |
-| `co_cli/agent/mcp.py` | MCP toolset wiring and discovery |
-| `co_cli/agent/_instructions.py` | Dynamic instruction callbacks and prompt assembly |
+| `co_cli/agents/core.py` | Foreground agent factory (`build_agent()`) |
+| `co_cli/agents/_native_toolset.py` | Native toolset construction and tool registry |
+| `co_cli/agents/mcp.py` | MCP toolset wiring and discovery |
+| `co_cli/agents/_instructions.py` | Dynamic instruction callbacks and prompt assembly |
 | `co_cli/commands/core.py` | Slash-command dispatch and skill handoff into the REPL loop |
 | `co_cli/deps.py` | `CoDeps` runtime contract and workspace path resolution |
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |

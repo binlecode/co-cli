@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from co_cli.agent.mcp import _SanitizingMCPServer
+from co_cli.agents.mcp import _SanitizingMCPServer
 from co_cli.tools.mcp_schema import sanitize_mcp_schema
 
 # ---------------------------------------------------------------------------

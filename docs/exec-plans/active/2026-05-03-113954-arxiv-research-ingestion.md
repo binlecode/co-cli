@@ -11,7 +11,7 @@ Gap 4 from `docs/reference/RESEARCH-memory-peer-for-co-second-brain.md` — rese
 Current-state validation:
 - `co_cli/memory/artifact.py:24-28` — `ArtifactKindEnum` defines `USER`, `RULE`, `ARTICLE`, `NOTE`. ARTICLE kind is present and functional.
 - `co_cli/tools/memory/write.py:28-124` — `memory_create` accepts `artifact_kind`, `title`, `content`, `source_url`, `description`. URL-keyed dedup is live. `source_url` requires `artifact_kind="article"`.
-- `co_cli/agent/_native_toolset.py` — `NATIVE_TOOLS` tuple is the registration list; `requires_config` gates optional tools.
+- `co_cli/agents/_native_toolset.py` — `NATIVE_TOOLS` tuple is the registration list; `requires_config` gates optional tools.
 - No existing `arxiv_search` or research ingestion code anywhere in `co_cli/tools/`.
 - No existing `research-import` or `arxiv` skill in `co_cli/skills/`.
 - No stale TODO files for this scope.
@@ -76,7 +76,7 @@ Return schema per result:
 
 XML parsing uses `xml.etree.ElementTree` (stdlib, no new dep). Atom namespace prefix: `{http://www.w3.org/2005/Atom}`. arXiv `id` field is a URL like `http://arxiv.org/abs/2304.12345v2`; strip to bare `arxiv_id` by splitting on `/abs/` and dropping the version suffix.
 
-Wire into `NATIVE_TOOLS` in `co_cli/agent/_native_toolset.py`.
+Wire into `NATIVE_TOOLS` in `co_cli/agents/_native_toolset.py`.
 
 ### TASK-2: `research-import` skill
 
@@ -96,9 +96,9 @@ Content field format: `# {title}\n\n**Authors:** {authors joined}\n**Published:*
   - `co_cli/tools/web/_http.py` (new — extract `parse_retry_after`, `compute_backoff_delay`, `classify_web_http_error`, `_http_get_with_retries`, `RETRYABLE_STATUS_CODES`, `TERMINAL_STATUS_CODES`, `WebRetryResult` from `search.py`)
   - `co_cli/tools/web/search.py` (update — replace inline definitions with imports from `_http.py`)
   - `co_cli/tools/web/arxiv.py` (new — `arxiv_search` tool importing HTTP helpers from `_http.py`)
-  - `co_cli/agent/_native_toolset.py` (add import + add `arxiv_search` to `NATIVE_TOOLS`)
+  - `co_cli/agents/_native_toolset.py` (add import + add `arxiv_search` to `NATIVE_TOOLS`)
   - `tests/test_flow_arxiv_search.py` (new)
-- **done_when:** `uv run pytest tests/test_flow_arxiv_search.py -x` passes all tests; AND `uv run python -c "from co_cli.agent.core import build_tool_registry; from co_cli.config.core import Settings; r = build_tool_registry(Settings()); assert 'arxiv_search' in r.tool_index, 'arxiv_search not registered'"` exits 0.
+- **done_when:** `uv run pytest tests/test_flow_arxiv_search.py -x` passes all tests; AND `uv run python -c "from co_cli.agents.core import build_tool_registry; from co_cli.config.core import Settings; r = build_tool_registry(Settings()); assert 'arxiv_search' in r.tool_index, 'arxiv_search not registered'"` exits 0.
 - **success_signal:** Agent calls `arxiv_search("attention is all you need")` and returns a list of papers with titles, authors, abstracts, and arXiv URLs.
 - **Red-Green-Refactor:** Write test stubs first (empty tool → tests fail), implement → tests pass, clean up.
 

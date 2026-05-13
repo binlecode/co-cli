@@ -2,7 +2,7 @@
 
 from tests._settings import make_settings
 
-from co_cli.agent.core import discover_delegation_tools
+from co_cli.agents.core import discover_delegation_tools
 from co_cli.tools.memory.recall import knowledge_search
 from co_cli.tools.web.fetch import web_fetch
 from co_cli.tools.web.search import web_search

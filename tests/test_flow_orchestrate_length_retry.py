@@ -13,7 +13,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
-from co_cli.agent.core import build_agent, build_tool_registry
+from co_cli.agents.core import build_agent, build_tool_registry
 from co_cli.context.orchestrate import _length_retry_settings, run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend

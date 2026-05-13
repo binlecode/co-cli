@@ -43,8 +43,8 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
     Combines native and MCP toolsets under a single approval-resume filter.
     MCP tool_index entries are added later by discover_mcp_tools().
     """
-    from co_cli.agent._native_toolset import _approval_resume_filter, _build_native_toolset
-    from co_cli.agent.mcp import _build_mcp_toolsets, _SequentialMCPToolset
+    from co_cli.agents._native_toolset import _approval_resume_filter, _build_native_toolset
+    from co_cli.agents.mcp import _build_mcp_toolsets, _SequentialMCPToolset
 
     native_toolset, native_index = _build_native_toolset(config)
     mcp_entries = _build_mcp_toolsets(config)
@@ -71,7 +71,7 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
 
 def discover_delegation_tools(profile: str, config: Settings) -> list[Callable]:
     """Return tool functions tagged for the given delegation profile, filtered by config."""
-    import co_cli.agent._native_toolset  # noqa: F401  -- side effect: ensure TOOL_REGISTRY is fully populated
+    import co_cli.agents._native_toolset  # noqa: F401  -- side effect: ensure TOOL_REGISTRY is fully populated
     from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
 
     result = []
@@ -140,7 +140,7 @@ def build_agent(
         if tool_registry is None:
             tool_registry = build_tool_registry(config)
 
-        from co_cli.agent._instructions import current_time_prompt, safety_prompt
+        from co_cli.agents._instructions import current_time_prompt, safety_prompt
         from co_cli.context.assembly import build_static_instructions
         from co_cli.context.guidance import build_toolset_guidance
         from co_cli.tools.deferred_prompt import build_category_awareness_prompt

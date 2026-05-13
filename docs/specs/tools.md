@@ -234,9 +234,9 @@ _delegate_agent
 
 | File | Role |
 |------|------|
-| `co_cli/agent/core.py` | `build_tool_registry()`, `build_agent()`, `discover_delegation_tools()` |
-| `co_cli/agent/_native_toolset.py` | `_build_native_toolset()`, `_approval_resume_filter()` |
-| `co_cli/agent/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |
+| `co_cli/agents/core.py` | `build_tool_registry()`, `build_agent()`, `discover_delegation_tools()` |
+| `co_cli/agents/_native_toolset.py` | `_build_native_toolset()`, `_approval_resume_filter()` |
+| `co_cli/agents/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |
 | `co_cli/tools/lifecycle.py` | `CoToolLifecycle` — all four per-call hooks |
 | `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
 | `co_cli/tools/deferred_prompt.py` | category-awareness prompt for DEFERRED tools |

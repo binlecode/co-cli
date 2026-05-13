@@ -193,7 +193,7 @@ async def web_research(
     if not ctx.deps.model:
         raise ModelRetry("Research agent is unavailable — handle this task directly.")
 
-    from co_cli.agent.core import build_agent, discover_delegation_tools
+    from co_cli.agents.core import build_agent, discover_delegation_tools
 
     _default_max_requests = 10
     budget = max_requests or _default_max_requests
@@ -297,7 +297,7 @@ async def knowledge_analyze(
     if not ctx.deps.model:
         raise ModelRetry("Analysis agent is unavailable — handle this task directly.")
 
-    from co_cli.agent.core import build_agent, discover_delegation_tools
+    from co_cli.agents.core import build_agent, discover_delegation_tools
 
     _default_max_requests = 8
     budget = max_requests or _default_max_requests
@@ -348,7 +348,7 @@ async def reason(
     if not ctx.deps.model:
         raise ModelRetry("Reasoning agent is unavailable — handle this task directly.")
 
-    from co_cli.agent.core import build_agent
+    from co_cli.agents.core import build_agent
 
     _default_max_requests = 3
     budget = max_requests or _default_max_requests

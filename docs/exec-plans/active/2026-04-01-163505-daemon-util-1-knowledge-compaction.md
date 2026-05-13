@@ -14,7 +14,7 @@ To minimize LLM costs for background housekeeping, the daemon must bypass the st
 - **File:** `co_cli/daemon/jobs/knowledge_compaction.py`
 - **Agent Init:** 
   ```python
-  from co_cli.agent import build_agent
+  from co_cli.agents.core import build_agent
   from co_cli.config import CoConfig
 
   # Force reasoning_effort to none for simple summarization/compaction tasks

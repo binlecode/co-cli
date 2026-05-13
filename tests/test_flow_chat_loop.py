@@ -8,7 +8,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agent.core import build_agent, build_tool_registry
+from co_cli.agents.core import build_agent, build_tool_registry
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend

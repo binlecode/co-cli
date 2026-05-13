@@ -177,7 +177,7 @@ overlay constant is defined. If no overlay ships, do not add the call site.
 - Hermes assembler: `~/workspace_genai/hermes-agent/run_agent.py:3396–3470`
 - co-cli static assembly: `co_cli/context/assembly.py:build_static_instructions`
 - co-cli toolset guidance: `co_cli/context/guidance.py`
-- co-cli agent core: `co_cli/agent/core.py`
+- co-cli agent core: `co_cli/agents/core.py`
 - Audit report (old, misattributed): `docs/REPORT-llm-audit-eval-20260420-162700.md §6`
 - Latest full-suite audit: `docs/REPORT-test-suite-llm-audit-20260428-161324.md`
 - Existing partial fix: `co_cli/tools/user_input.py` (clarify CRITICAL block)

@@ -263,7 +263,7 @@ def _emit_tool_budget_span(
     *,
     _tracer: trace.Tracer | None = None,
 ) -> None:
-    from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+    from co_cli.agents.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     if _tracer is None:
@@ -289,8 +289,8 @@ async def create_deps(
 
     Raises ValueError on provider/model hard errors.
     """
-    from co_cli.agent.core import build_tool_registry
-    from co_cli.agent.mcp import discover_mcp_tools
+    from co_cli.agents.core import build_tool_registry
+    from co_cli.agents.mcp import discover_mcp_tools
     from co_cli.llm.factory import build_model
 
     config = copy.deepcopy(get_settings())
@@ -307,7 +307,7 @@ async def create_deps(
     model_max_ctx = _probe_model_ctx(config)
 
     # Cache spill threshold for the enforce_request_size history processor.
-    from co_cli.agent.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+    from co_cli.agents.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     spill_ratio = config.compaction.spill_ratio
@@ -334,7 +334,7 @@ async def create_deps(
     # Step 4: MCP connect + discovery
     degradations: dict[str, str] = {}
     if tool_registry.mcp_toolsets:
-        from co_cli.agent.mcp import MCPToolsetEntry
+        from co_cli.agents.mcp import MCPToolsetEntry
 
         connected: list[MCPToolsetEntry] = []
         for entry in tool_registry.mcp_toolsets:

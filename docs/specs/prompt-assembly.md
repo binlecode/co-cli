@@ -53,7 +53,7 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 
 ### 2.2 Dynamic Instruction Layers
 
-Registered in `build_agent()` (`co_cli/agent/core.py`), evaluated fresh per request:
+Registered in `build_agent()` (`co_cli/agents/core.py`), evaluated fresh per request:
 
 | Layer | Condition | Content |
 | --- | --- | --- |
@@ -113,11 +113,11 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/agent/core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
-| `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `current_time_prompt`, `safety_prompt` |
+| `co_cli/agents/core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
+| `co_cli/agents/_instructions.py` | per-turn instruction callbacks: `current_time_prompt`, `safety_prompt` |
 | `co_cli/context/assembly.py` | `build_static_instructions()` — soul + mindsets + rules + recency advisory; rule-file validation |
 | `co_cli/context/guidance.py` | `MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE` constants; `build_toolset_guidance()` — gated on tool presence |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |
-| `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `agent/_instructions.py` |
+| `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `agents/_instructions.py` |
 | `co_cli/tools/deferred_prompt.py` | `build_category_awareness_prompt()` — category-level hint for deferred tool categories; called at build time |
