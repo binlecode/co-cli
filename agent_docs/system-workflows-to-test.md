@@ -3,7 +3,7 @@
 Canonical enumeration of co-cli's core functional workflows. This is the shared
 reference for any audience that needs to reason about coverage:
 
-- `/test-hygiene` — coverage gap audit
+- `/clean-tests` — coverage gap audit
 - `/orchestrate-plan` — scope check before drafting
 - `/review-impl` — behavioral verification anchor
 - onboarding / new-contributor explanation
@@ -23,7 +23,7 @@ Each workflow lists:
 - **Required test depth** — what kind of test legitimately defends this flow
 - **Spec** — owning spec file in `docs/specs/`
 
-Severity calibration for `/test-hygiene` Phase 4.5:
+Severity calibration for `/clean-tests` Phase 4.5:
 
 - **User-facing**: chat loop, slash commands, tool execution, memory recall, approval
   prompts, REPL — uncovered = **Blocking**
@@ -1331,7 +1331,7 @@ Each integration is gated on a config setting; absence skips registration.
 
 ---
 
-## Coverage Audit Procedure (used by `/test-hygiene`)
+## Coverage Audit Procedure (used by `/clean-tests`)
 
 For each registered workflow:
 

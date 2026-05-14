@@ -123,9 +123,9 @@ TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full
 - `/orchestrate-dev <slug>`: execute from plan, mark completed tasks `✓ DONE` (never delete mid-delivery), append delivery summary, auto-invoke sync-doc.
 - `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification. Appends pass/fail verdict. **PASS means ship.**
 - `/sync-doc [doc...]`: fix spec inaccuracies in `docs/specs/` in-place. No args means all specs. Auto-invoked by `orchestrate-dev`.
-- `/deliver [slug]`: lightweight solo delivery — implement directly, test-gate, self-review, ship. No subagent orchestration. Use instead of `/orchestrate-dev` when the task is simple enough for a single-dev pass, or without a slug for ad-hoc work described inline.
 - `/ship [slug]`: post-Gate-2 ship — full test safety net, version bump, plan archive (`git mv` to `completed/`), commit.
-- `/test-hygiene [path]`: standalone test quality gate — enforce `agent_docs/testing.md` rules, purge structural/redundant tests, verify behavioral depth, run full suite. Default path: `tests/`. Call any time, not just pre-ship.
+- `/clean-tests [path]`: standalone test quality gate — enforce `agent_docs/testing.md` rules, purge structural/redundant tests, verify behavioral depth, run full suite. Default path: `tests/`. Call any time, not just pre-ship.
+- For atomic/single-file changes, use Claude Code's built-in plan flow directly — no skill needed.
 - **Staged-file hygiene**: before shipping, verify only related files are staged — never include unrelated changes. Ask the user before staging any file that seems tangential to the task.
 
 ## Docs

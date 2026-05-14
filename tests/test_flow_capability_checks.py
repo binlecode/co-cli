@@ -1,6 +1,7 @@
 """Consolidated E2E tests for test_flow_capability_checks."""
 
 import asyncio
+from types import MappingProxyType
 
 import pytest
 from pydantic_ai import RunContext
@@ -46,12 +47,10 @@ async def test_capabilities_display_contains_self_check_sections() -> None:
 async def test_capabilities_surfaces_deps_degradations() -> None:
     """Bootstrap-recorded degradations must surface in display and metadata."""
     deps = _make_deps()
-    deps.degradations["knowledge"] = "sqlite-fts → grep (embedder unavailable)"
+    deps.degradations = MappingProxyType({"knowledge": "hybrid → fts5 (embedder unavailable)"})
     ctx = _make_ctx(deps)
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         result = await capabilities_check(ctx)
     display = result.return_value
-    assert "knowledge: sqlite-fts → grep (embedder unavailable)" in display
-    assert (
-        result.metadata["degradations"]["knowledge"] == "sqlite-fts → grep (embedder unavailable)"
-    )
+    assert "knowledge: hybrid → fts5 (embedder unavailable)" in display
+    assert result.metadata["degradations"]["knowledge"] == "hybrid → fts5 (embedder unavailable)"

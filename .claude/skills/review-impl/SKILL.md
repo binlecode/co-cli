@@ -87,6 +87,11 @@ Check every file listed in `files:` against CLAUDE.md's Engineering Rules. Each 
 - **Over-engineering**: abstractions or helpers not required by the spec
 - **Display**: terminal output via the project's shared `console` — not `print()` or hardcoded color names
 - **Security**: command injection, path traversal, SQL injection, missing input validation at system boundaries
+- **Naming**: class naming suffixes, variable naming, shared display primitives — per `agent_docs/code-conventions.md`
+- **Visibility**: `_prefix` convention — leading-underscore modules must not be imported outside the package
+- **API shape**: parameter order, return types, signature width — consistent with existing callers and peer public APIs
+- **Modular structure**: logic placed in the wrong module or layer; cohesion/coupling violations
+- **Anti-patterns**: module-level mutable state (global state); speculative abstractions (helpers or wrappers with a single caller)
 
 Each subagent returns a structured findings list: task ID, requirement or rule, verdict (pass/fail), file:line evidence for every entry.
 
@@ -170,17 +175,7 @@ Only proceed to Phase 6 with a fully green suite.
 
 ---
 
-## Phase 6 — Doc Sync
-
-Determine scope (same rule as orchestrate-dev Phase 3 Step 3):
-- **Full** (`/sync-doc`): any task touches shared modules, renames a public API, or changes a schema.
-- **Narrow** (`/sync-doc <doc>`): all tasks are self-contained within a single module with no API changes.
-
-Run sync-doc. Record: clean / fixed (what was fixed).
-
----
-
-## Phase 7 — Final Re-scan
+## Phase 6 — Final Re-scan
 
 After all fixes and tests are green, run the quality gate one final time:
 ```bash
@@ -193,12 +188,17 @@ Then re-scan every changed file one more time:
 - Misplaced lazy imports
 - Any test using mocks or fakes introduced during fix (blocking — remove it)
 - Doc-code mismatches in changed file docstrings or inline comments
+- Naming violations from `agent_docs/code-conventions.md` introduced during fixes
+- `_prefix` visibility leaks — private helpers exposed outside their package by fix edits
+- API shape regressions — parameter order or return type inconsistencies introduced by fixes
+- Modular structure violations — new logic placed in wrong module during fixes
+- Anti-patterns introduced by fixes: new global state or speculative abstraction with a single caller
 
 Fix anything found. This catches what sub-agents and fix loops leave behind.
 
 ---
 
-## Phase 8 — Behavioral Verification
+## Phase 7 — Behavioral Verification
 
 **Required for any task that modifies user-facing surface** (CLI commands, tools visible in chat, output formatting, config loading, bootstrap, status).
 
@@ -223,9 +223,9 @@ If no user-facing surface was changed: skip and note "no user-facing changes —
 
 ---
 
-## Phase 9 — Verdict
+## Phase 8 — Verdict
 
-Only append after: all blocking findings resolved, test suite green, doc sync complete, final re-scan clean, behavioral verification passed or skipped with justification.
+Only append after: all blocking findings resolved, test suite green, final re-scan clean, behavioral verification passed or skipped with justification.
 
 Append to `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`:
 
@@ -251,10 +251,6 @@ _(If no issues found: "No issues found.")_
 - Command: `uv run pytest -v`
 - Result: N passed, 0 failed
 - Log: `.pytest-logs/<timestamp>-review-impl.log`
-
-### Doc Sync
-- Scope: full / narrow — <rationale>
-- Result: clean / fixed: <what>
 
 ### Behavioral Verification
 - `uv run co status`: ✓ healthy

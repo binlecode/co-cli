@@ -11,11 +11,19 @@ from co_cli.skills._lint import lint_skill
 from co_cli.skills.loader import load_skills
 
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "co_cli" / "skills"
-_BUNDLED_NAMES = {"doctor", "review", "plan", "triage", "refactor"}
+_BUNDLED_NAMES = {
+    "doctor",
+    "review",
+    "plan",
+    "triage",
+    "refactor",
+    "skill-creator",
+    "skill-installer",
+}
 
 
 def test_all_bundled_skills_load() -> None:
-    """Assertion 1: all 5 bundled skills load successfully."""
+    """Assertion 1: all 7 bundled skills load successfully."""
     skills = load_skills(_SKILLS_DIR)
     loaded_names = set(skills.keys())
     missing = _BUNDLED_NAMES - loaded_names
@@ -48,14 +56,14 @@ def test_bundled_skill_has_phase_section(name: str) -> None:
     assert "## Phase " in content, f"Skill '{name}' has no Phase section"
 
 
-def test_manifest_renders_five_bundled_entries(tmp_path: Path) -> None:
-    """Assertion 5: manifest renders 5 <skill> entries for the full bundled set."""
+def test_manifest_renders_seven_bundled_entries(tmp_path: Path) -> None:
+    """Assertion 5: manifest renders 7 <skill> entries for the full bundled set."""
     user_skills_dir = tmp_path / "user_skills"
     user_skills_dir.mkdir()
     skills = load_skills(_SKILLS_DIR)
     manifest = render_skill_manifest(skills, _SKILLS_DIR, user_skills_dir)
     entries = [line for line in manifest.splitlines() if "<skill name=" in line]
     bundled_entries = [e for e in entries if any(name in e for name in _BUNDLED_NAMES)]
-    assert len(bundled_entries) == 5, (
-        f"Expected 5 bundled skill entries in manifest, got {len(bundled_entries)}:\n{manifest}"
+    assert len(bundled_entries) == 7, (
+        f"Expected 7 bundled skill entries in manifest, got {len(bundled_entries)}:\n{manifest}"
     )

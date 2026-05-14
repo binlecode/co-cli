@@ -456,3 +456,7 @@ Lint (R1–R10) is **collaborative** — it catches well-meaning skills that won
 
 - Security scan: runs at install time and on `/skills reload`. Blocks the write on findings.
 - Lint: runs on `/skills lint [name|--all]`. Never blocks; exits 1 on findings, file unchanged.
+
+## 8. Protocol
+
+Prompt-side discipline governing when to engage with the skill surface lives in [`co_cli/context/rules/06_skill_protocol.md`](../../co_cli/context/rules/06_skill_protocol.md). Five reflexes: discovery, use, drift, create, offer-to-save. The protocol file is loaded into the system prompt at agent construction.

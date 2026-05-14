@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.8.178]
+
+### Skills
+- **orchestrate-dev Step 4**: trim self-review to lint-fix only (`scripts/quality-gate.sh lint --fix`) — convention checklist moves to review-impl.
+- **review-impl Phase 2C**: add naming, visibility (`_prefix`), API shape, modular structure, and anti-pattern checks to the convention checklist. Same 5 items added to Phase 6 final re-scan. Phase 6 (doc sync) removed — doc sync is owned by orchestrate-dev. Phases renumbered (7→6, 8→7, 9→8).
+- **deliver**: skill deleted — atomic/single-file changes use Claude Code's built-in plan flow directly.
+- **test-hygiene → clean-tests**: skill renamed to an action verb. All internal references, CLAUDE.md, and `agent_docs/system-workflows-to-test.md` updated.
+
 ## [0.8.164]
 
 ### Feature

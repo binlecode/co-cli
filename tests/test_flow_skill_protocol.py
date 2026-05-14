@@ -61,3 +61,17 @@ def test_skill_search_docstring_has_dedup_guard() -> None:
 
     doc = inspect.getdoc(skill_search) or ""
     assert "skill_manage(action='create')" in doc
+
+
+def test_manifest_includes_skill_creator_and_installer(tmp_path: Path) -> None:
+    """<available_skills> manifest must include skill-creator and skill-installer."""
+    from co_cli.context.manifests.skill_manifest import render_skill_manifest
+    from co_cli.skills.loader import load_skills
+
+    skills_dir = Path(__file__).parent.parent / "co_cli" / "skills"
+    user_skills_dir = tmp_path / "user_skills"
+    user_skills_dir.mkdir()
+    skills = load_skills(skills_dir, SETTINGS, user_skills_dir=user_skills_dir)
+    manifest = render_skill_manifest(skills, skills_dir, user_skills_dir)
+    assert 'name="skill-creator"' in manifest, "skill-creator missing from manifest"
+    assert 'name="skill-installer"' in manifest, "skill-installer missing from manifest"

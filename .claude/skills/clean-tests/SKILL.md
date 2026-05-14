@@ -1,11 +1,11 @@
 ---
-name: test-hygiene
+name: clean-tests
 description: Keep the suite focused on functional logic verification and aggressive issue finding. Purge dead/structural tests, dedup overlaps, trim subsumed units, audit workflow coverage, consolidate by workflow. Active test quality gate.
 ---
 
-# test-hygiene
+# clean-tests
 
-**Invocation:** `/test-hygiene [path]`
+**Invocation:** `/clean-tests [path]`
 
 **Mission:** keep `[path]` focused on **functional logic verification and aggressive issue finding**. The skill does five things, in order:
 
@@ -18,7 +18,7 @@ description: Keep the suite focused on functional logic verification and aggress
 **Default stance: violations exist. CLEAN is earned, not assumed.**
 
 **Consumes:** every `test_*.py` / `*_test.py` under `[path]`, `agent_docs/testing.md`, `agent_docs/system-workflows-to-test.md`, and `tests/_*.py` foundational support files (conftest, settings, timeouts, ollama, etc.) — enumerated in Phase 1.  
-**Produces:** `docs/REPORT-test-hygiene-<YYYYMMDD-HHMMSS>.md` (persistent tracking log + final report) + `.pytest-logs/<timestamp>-test-hygiene.log`.
+**Produces:** `docs/REPORT-clean-tests-<YYYYMMDD-HHMMSS>.md` (persistent tracking log + final report) + `.pytest-logs/<timestamp>-clean-tests.log`.
 
 ---
 
@@ -26,12 +26,12 @@ description: Keep the suite focused on functional logic verification and aggress
 
 **Create the tracking log at the very start of Phase 1** and update it continuously throughout the run. This is the authoritative record of progress — it survives context compaction and lets you resume exactly where you left off.
 
-Path: `docs/REPORT-test-hygiene-<YYYYMMDD-HHMMSS>.md` (timestamp fixed at invocation).
+Path: `docs/REPORT-clean-tests-<YYYYMMDD-HHMMSS>.md` (timestamp fixed at invocation).
 
 Structure:
 
 ```markdown
-# REPORT-test-hygiene-<timestamp>
+# REPORT-clean-tests-<timestamp>
 
 ## Meta
 - Scan path: tests/
@@ -88,7 +88,7 @@ Trim candidates:
 
 ## Phase 6 — Test Run
 - Command: uv run pytest -x -v
-- Log: .pytest-logs/<timestamp>-test-hygiene.log
+- Log: .pytest-logs/<timestamp>-clean-tests.log
 - Result: PENDING | N passed, 0 failed | FAILED: <test>
 
 ## Phase 7 — Final Verdict
@@ -119,12 +119,12 @@ This log is permanent (`REPORT-*.md` files are never deleted). It doubles as the
    - `tests/_settings.py` — establish the ground truth for `SETTINGS`, `SETTINGS_NO_MCP`, and `make_settings()` semantics
    - `tests/_timeouts.py` — establish the sanctioned timeout constants; needed to evaluate every IO-bound timeout rule
    - `tests/_ollama.py` — understand the `ensure_ollama_warm` contract: it must be called **before** any `asyncio.timeout` block, never inside one
-6. **Create the tracking log** at `docs/REPORT-test-hygiene-<YYYYMMDD-HHMMSS>.md` with the Phase 1 section and the full file list pre-populated as `[ ]` pending entries.
+6. **Create the tracking log** at `docs/REPORT-clean-tests-<YYYYMMDD-HHMMSS>.md` with the Phase 1 section and the full file list pre-populated as `[ ]` pending entries.
 7. Announce scope:
    ```
    Scanning: tests/  (N files)
    Workflows in registry: M
-   Tracking log: docs/REPORT-test-hygiene-<timestamp>.md
+   Tracking log: docs/REPORT-clean-tests-<timestamp>.md
    Stance: violations exist — CLEAN is earned
    ```
 
@@ -341,7 +341,7 @@ For each finding/trim/move, in order:
 
 ```bash
 mkdir -p .pytest-logs
-uv run pytest -x -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-test-hygiene.log
+uv run pytest -x -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-clean-tests.log
 ```
 
 **Any failure = stop immediately. Do RCA:**
@@ -366,7 +366,7 @@ Update the tracking log: set `Status: DONE`, fill in Phase 6 result, write the f
 Then print a terminal summary pointing to the log:
 
 ```
-## test-hygiene — <date>
+## clean-tests — <date>
 
 Files scanned: N
 Violations fixed: N
@@ -376,8 +376,8 @@ Workflows: N covered, M stub, K uncovered (J blocking)
 Scope drift: P tests with no workflow mapping
 Escalations: N
 Tests: N passed, 0 failed
-Log: .pytest-logs/<timestamp>-test-hygiene.log
-Report: docs/REPORT-test-hygiene-<timestamp>.md
+Log: .pytest-logs/<timestamp>-clean-tests.log
+Report: docs/REPORT-clean-tests-<timestamp>.md
 
 Verdict: CLEAN / ESCALATIONS PENDING — <one sentence>
 ```
