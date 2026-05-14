@@ -1,13 +1,13 @@
 ---
 name: review-impl
-description: Deep self-correcting implementation review. Evidence-first scan, auto-fix loop, full test suite with RCA, behavioral verification. Replaces the G2→fix→G3 manual cycle — after PASS, ship directly.
+description: Deep self-correcting implementation review. Evidence-first scan, auto-fix loop, full test suite with RCA, doc sync, behavioral verification. Replaces the G2→fix→G3 manual cycle — after PASS, TL reads verdict at Gate 2 and ships.
 ---
 
 # review-impl
 
 **Invocation:** `/review-impl <slug>`
 
-Reads `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`. Runs a deep, self-correcting review of every `✓ DONE` task: evidence-first spec check, quality scan, auto-fix of blocking issues, full test suite with mandatory RCA, doc sync, and behavioral verification. Appends verdict to plan. After PASS, no further gate needed — ship directly.
+Reads `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`. Runs a deep, self-correcting review of every `✓ DONE` task: evidence-first spec check, quality scan, auto-fix of blocking issues, full test suite with mandatory RCA, doc sync, and behavioral verification. Appends verdict to plan. After PASS, TL reads the verdict at Gate 2 and runs `/ship` — no further automated review is required.
 
 **Default stance: issues exist. PASS is earned, not assumed.**
 
@@ -198,7 +198,13 @@ Fix anything found. This catches what sub-agents and fix loops leave behind.
 
 ---
 
-## Phase 7 — Behavioral Verification
+## Phase 7 — Doc Sync
+
+Run `/sync-doc` to fix any spec inaccuracies introduced or exposed by this delivery. Use full scope if any task touched shared modules, renamed a public API, or changed a schema; narrow (`/sync-doc <doc>`) otherwise. State scope decision before running.
+
+---
+
+## Phase 8 — Behavioral Verification
 
 **Required for any task that modifies user-facing surface** (CLI commands, tools visible in chat, output formatting, config loading, bootstrap, status).
 
@@ -223,7 +229,7 @@ If no user-facing surface was changed: skip and note "no user-facing changes —
 
 ---
 
-## Phase 8 — Verdict
+## Phase 9 — Verdict
 
 Only append after: all blocking findings resolved, test suite green, final re-scan clean, behavioral verification passed or skipped with justification.
 
@@ -271,4 +277,4 @@ _(or: "No user-facing changes — skipped.")_
 - **Architectural decisions escalate**: if fixing correctly requires a decision beyond "change this line," stop and surface it. Never apply a workaround to avoid escalation.
 - **No mocks or fakes under any circumstances**: if a fix tempts you to mock a dependency, the production API is wrong — fix the API.
 - **RCA is not optional**: a failing test that is "probably flaky" is a failing test. Stop, investigate, fix root cause.
-- **PASS means ship-ready**: after PASS, the TL can commit and ship. No further review gate is required.
+- **PASS means ship-ready**: after PASS, the automated quality bar is met. TL reads the verdict at Gate 2 and runs `/ship` — no further automated review is required.

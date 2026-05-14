@@ -41,7 +41,7 @@ Show `git status`. Confirm only files related to this delivery are staged. Ask t
 
 ---
 
-## Step 4 — Version bump
+## Step 4 — Version bump + CHANGELOG
 
 Read current version from `pyproject.toml`. Bump the **patch digit only** to the nearest number with the correct parity:
 - Feature / refactor → next **even** patch number
@@ -53,13 +53,15 @@ The increment (+1 or +2) depends on the current parity. Examples:
 - `0.8.114` (even) + feature → `0.8.116` (+2, next even)
 - `0.8.114` (even) + bugfix  → `0.8.115` (+1, next odd)
 
-Stage `pyproject.toml`.
+Update `CHANGELOG.md` — add a new `## [x.y.z]` section with a short description of what changed.
+
+Stage both `pyproject.toml` and `CHANGELOG.md`.
 
 ---
 
-## Step 5 — Mark and archive plan (if a slug was given)
+## Step 5 — Archive plan (if a slug was given)
 
-1. Mark all completed tasks `✓ DONE` in `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`.
+1. Verify all delivered tasks are already marked `✓ DONE` (orchestrate-dev marks them during delivery). Mark any unmarked ones only in an ad-hoc ship where orchestrate-dev was not run.
 2. Archive:
 ```bash
 git mv docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md docs/exec-plans/completed/
