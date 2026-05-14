@@ -1,7 +1,7 @@
 # Co CLI Core Loop Design
 
 
-For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); session persistence and recall live in [memory-sessions.md](memory-sessions.md); knowledge artifacts and recall live in [memory-knowledge.md](memory-knowledge.md); compaction mechanics in [compaction.md](compaction.md).
+For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); session persistence and recall live in [sessions.md](sessions.md); knowledge artifacts and recall live in [knowledge.md](knowledge.md); compaction mechanics in [compaction.md](compaction.md).
 
 ## 1. Foreground Turn Flow
 
@@ -20,7 +20,7 @@ flowchart TD
 
     E --> F["agent.run_stream_events"]
     F --> G["SDK appends ModelRequest + resolves instruction parts<br/>(static + @agent.instructions)"]
-    G --> H["history processors 1..4<br/>(dedup → evict → proactive_window → sanitize_surrogates)"]
+    G --> H["history processors 1..5<br/>(dedup → evict → enforce_request_size → proactive_window → sanitize_surrogates)"]
     H --> I["provider HTTP"]
     I --> J{"tool approvals needed?"}
     J -->|yes| K["_run_approval_loop → deferred_tool_results"]
@@ -37,8 +37,8 @@ flowchart TD
 | `run_turn` / approval loop / retries | [core-loop.md](core-loop.md) |
 | Instruction parts + history processors | [prompt-assembly.md](prompt-assembly.md) |
 | Compaction trigger (processor #3) | [compaction.md](compaction.md) |
-| On-demand recall (`knowledge_search` / `session_search` tools) | [memory-knowledge.md](memory-knowledge.md) · [memory-sessions.md](memory-sessions.md) |
-| Transcript append / child-session branching | [memory-sessions.md](memory-sessions.md) |
+| On-demand recall (`knowledge_search` / `session_search` tools) | [knowledge.md](knowledge.md) · [sessions.md](sessions.md) |
+| Transcript append / child-session branching | [sessions.md](sessions.md) |
 
 Detailed foreground turn flow:
 
@@ -247,12 +247,13 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-The main agent is built with four registered history processors (pure transformers) in this exact order (see `co_cli/agents/core.py` `history_processors=[...]`):
+The main agent is built with five registered history processors (pure transformers) in this exact order (see `co_cli/agents/core.py` `history_processors=[...]`):
 
 1. `dedup_tool_results`
 2. `evict_old_tool_results`
-3. `proactive_window_processor`
-4. `sanitize_surrogate_codepoints`
+3. `enforce_request_size`
+4. `proactive_window_processor`
+5. `sanitize_surrogate_codepoints`
 
 Two functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
 
@@ -273,14 +274,14 @@ Preflight is called before every model-bound segment but not on approval-resume 
 
 Ordering rationale:
 
-- **#1–2 before #3**: dedup and eviction run before summarization. The summarizer sees a smaller, deduped history and receives rich side-channel context (file working set from `ToolCallPart.args`, session todos) to compensate.
-- **#4 last**: surrogate sanitization runs after `proactive_window_processor` so the summary text it produces is also swept.
+- **#1–2 before #3–4**: dedup and eviction run before size enforcement and summarization. The summarizer sees a smaller, deduped history; size enforcement fires after cheap reductions but before the LLM call.
+- **#5 last**: surrogate sanitization runs after `proactive_window_processor` so the summary text it produces is also swept.
 - **Dynamic instructions before model request**: `safety_prompt` and `current_time_prompt` run via the SDK's `agent.instructions()` mechanism before every model-bound request. Their output is ephemeral context — not stored back to `turn_state.current_history`.
 
 Compaction behavior:
 
-- `proactive_window_processor()` gathers side-channel context via `gather_compaction_context()` (file working set, todos, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
-- it compacts when token count exceeds `cfg.compaction_ratio` (0.65) of the budget
+- `proactive_window_processor()` gathers side-channel context via `gather_compaction_context()` (active session todos only — ≤10 items, capped at 1,500 chars; file paths and prior summaries are recoverable LLM-side and intentionally omitted), then calls `summarize_messages()` inline with a structured template when compaction triggers
+- it compacts when token count exceeds `cfg.compaction_ratio` (0.50) of the budget
 - token count is `max(estimate, reported)` — the local char-based estimate from `estimate_message_tokens()` (which counts `ToolCallPart.args` and `(dict, list)` content) floored against the provider-reported `input_tokens` from the latest `ModelResponse`; the max-floor ensures a stale or missing provider report cannot suppress the trigger
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: returns `deps.model_max_ctx` directly (Ollama probe result capped by `llm.max_ctx`, set at bootstrap)
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
@@ -363,7 +364,7 @@ The intentional simplification remains:
 
 ## 3. Config
 
-These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); knowledge and session recall settings live in [memory-knowledge.md](memory-knowledge.md) and [memory-sessions.md](memory-sessions.md).
+These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); knowledge and session recall settings live in [knowledge.md](knowledge.md) and [sessions.md](sessions.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |

@@ -182,11 +182,16 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         _cmd_skills_pin(ctx, subargs, pinned=True)
     elif subcmd == "unpin":
         _cmd_skills_pin(ctx, subargs, pinned=False)
+    elif subcmd == "curator":
+        await _cmd_skills_curator(ctx, subargs)
+    elif subcmd == "review":
+        await _cmd_skills_review(ctx, subargs)
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
         console.print(
             "[dim]Usage: /skills [list|check|install <path|url>|lint [<name>|--all]|reload|"
-            "upgrade <name>|usage [<name>]|pin <name>|unpin <name>][/dim]"
+            "upgrade <name>|usage [<name>]|pin <name>|unpin <name>|"
+            "curator [status|run|pause|resume|restore <name>]|review run][/dim]"
         )
 
     return None
@@ -276,6 +281,135 @@ def _cmd_skills_pin(ctx: CommandContext, args: str, *, pinned: bool) -> None:
     skill_usage.set_pinned(ctx.deps, name, pinned)
     state = "pinned" if pinned else "unpinned"
     console.print(f"[success]✓ Skill '{name}' {state}.[/success]")
+
+
+async def _cmd_skills_curator(ctx: CommandContext, args: str) -> None:
+    """Curator control surface: status | run | pause | resume | restore <name>."""
+    from co_cli.agents.skill_curator import maybe_run_curator
+    from co_cli.config.skills import CURATOR_MIN_IDLE_HOURS
+    from co_cli.skills.curator import (
+        _idle_seconds,
+        apply_state_transitions,
+        read_curator_state,
+        restore_skill,
+        write_curator_state,
+    )
+
+    sub = args.strip().split(maxsplit=1)
+    action = sub[0].lower() if sub else "status"
+    rest = sub[1] if len(sub) > 1 else ""
+
+    state = read_curator_state(ctx.deps)
+
+    if action in ("", "status"):
+        from datetime import UTC, datetime, timedelta
+
+        from co_cli.skills.usage import read_records
+
+        now = datetime.now(UTC)
+        idle_secs = _idle_seconds(ctx.deps.session, now)
+        idle_str = f"{idle_secs / 3600:.1f}h" if idle_secs != float("inf") else "∞ (startup)"
+        last_run = state.get("last_run_at") or "never"
+        run_count = state.get("run_count", 0)
+        paused = state.get("paused", False)
+        interval_h = ctx.deps.config.skills.curator_interval_hours
+        last_run_summary = state.get("last_run_summary") or ""
+
+        if state.get("last_run_at"):
+            from co_cli.skills.curator import _parse_iso
+
+            last_dt = _parse_iso(state["last_run_at"])
+            next_dt = last_dt + timedelta(hours=interval_h)
+            next_str = next_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            next_str = "eligible now"
+
+        sidecar = read_records(ctx.deps)
+        transitions = apply_state_transitions(sidecar, ctx.deps.config.skills, now)
+        pending = len(transitions)
+
+        table = make_table("Field", "Value")
+        table.add_row("enabled", str(ctx.deps.config.skills.curator_enabled))
+        table.add_row("paused", str(paused))
+        table.add_row("last_run_at", last_run)
+        table.add_row("run_count", str(run_count))
+        table.add_row("next_eligible_at", next_str)
+        table.add_row("idle_current", idle_str)
+        table.add_row("idle_required", f"{CURATOR_MIN_IDLE_HOURS}h")
+        table.add_row("pending_transitions", str(pending))
+        if last_run_summary:
+            table.add_row("last_summary", last_run_summary)
+        console.print(table)
+
+    elif action == "run":
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
+        idle_secs = _idle_seconds(ctx.deps.session, now)
+        if idle_secs < CURATOR_MIN_IDLE_HOURS * 3600:
+            idle_h = idle_secs / 3600
+            console.print(
+                f"[bold red]Curator blocked:[/bold red] idle {idle_h:.1f}h < "
+                f"required {CURATOR_MIN_IDLE_HOURS}h. Use /skills curator status to inspect."
+            )
+            return
+        if state.get("paused"):
+            console.print(
+                "[bold red]Curator is paused.[/bold red] Use /skills curator resume first."
+            )
+            return
+        console.print("[dim]Running curator (bypass_time_gate=True)…[/dim]")
+        await maybe_run_curator(ctx.deps, bypass_time_gate=True)
+        updated = read_curator_state(ctx.deps)
+        summary = updated.get("last_run_summary") or "(no changes)"
+        console.print(f"[success]✓ Curator done:[/success] {summary}")
+
+    elif action == "pause":
+        state["paused"] = True
+        write_curator_state(ctx.deps, state)
+        console.print("[success]✓ Curator paused.[/success]")
+
+    elif action == "resume":
+        state["paused"] = False
+        write_curator_state(ctx.deps, state)
+        console.print("[success]✓ Curator resumed.[/success]")
+
+    elif action == "restore":
+        name = rest.strip()
+        if not name:
+            console.print("[bold red]Usage:[/bold red] /skills curator restore <name>")
+            return
+        try:
+            restore_skill(ctx.deps, name)
+            console.print(f"[success]✓ Skill '{name}' restored from archive.[/success]")
+        except FileNotFoundError as exc:
+            console.print(f"[bold red]Restore failed:[/bold red] {exc}")
+
+    else:
+        console.print(f"[bold red]Unknown curator subcommand:[/bold red] {action}")
+        console.print("[dim]Usage: /skills curator [status|run|pause|resume|restore <name>][/dim]")
+
+
+async def _cmd_skills_review(ctx: CommandContext, args: str) -> None:
+    """Trigger a session review run manually."""
+    sub = args.strip().lower()
+    if sub not in ("run", ""):
+        console.print("[bold red]Usage:[/bold red] /skills review run")
+        return
+
+    if ctx.deps.model is None:
+        console.print("[bold red]No model configured — cannot run session review.[/bold red]")
+        return
+
+    from co_cli.agents.session_review import run_session_review
+
+    console.print("[dim]Running session review…[/dim]")
+    try:
+        result = await run_session_review(ctx.deps, ctx.message_history)
+        summary = result.summary or "(no changes)"
+        console.print(f"[success]✓ Review done:[/success] {summary}")
+    except Exception as exc:
+        console.print(f"[bold red]Review failed:[/bold red] {exc}")
 
 
 async def _install_skill(ctx: CommandContext, target: str, force: bool = False) -> None:

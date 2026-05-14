@@ -66,7 +66,7 @@ Tool args: `action`, `name`, `content`, `kind`, `section`. The `kind` arg is the
 
 | Action | Behaviour |
 | --- | --- |
-| `create` | Dispatched through `save_artifact()`. `source_url` set → URL-keyed dedup (web articles), `decay_protected` forced True. `consolidation_enabled` → Jaccard dedup; >0.9 near-identical skipped, overlapping merged. Else → straight create. Rejects `kind='canon'`. |
+| `create` | Dispatched through `save_artifact()`. `consolidation_enabled` → Jaccard dedup; >0.9 near-identical skipped, overlapping merged. Else → straight create. Rejects `kind='canon'`. (`source_url` dedup not supported at tool layer.) |
 | `append` | Append content to an existing artifact body. Guards: rejects Read-tool line-number prefixes. |
 | `replace` | Surgically replace a passage in an existing artifact body. Target must appear exactly once. |
 | `delete` | Remove an artifact file and its `chunks_fts` rows; returns confirmation. Hard-delete; archival is a separate future feature. |
@@ -175,4 +175,4 @@ Backend, embedding, and retrieval settings (shared with other channels) live in 
 | `_grep_recall` returns artifact matched by title only | `tests/test_flow_knowledge_search.py` |
 | `_list_artifacts` delegates to index when store is available | `tests/test_flow_knowledge_search.py` |
 | `save_artifact` URL dedup uses O(1) index when `memory_store` set | `tests/test_flow_memory_write.py` |
-| Waterfall pass count cap stops at `_ARTIFACTS_WATERFALL_CHUNK_CAP`; size cap stops before count cap when chunks are large | `tests/test_flow_artifacts_waterfall_cap.py` |
+| Waterfall pass count cap stops at `_ARTIFACTS_WATERFALL_CHUNK_CAP`; size cap stops before count cap when chunks are large | `tests/test_flow_memory_artifacts_waterfall_cap.py` |

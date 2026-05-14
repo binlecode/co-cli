@@ -29,6 +29,7 @@ _SESSION_TURN_MAX_BYTES = 16 * 1024
     is_read_only=True,
     is_concurrent_safe=True,
     spill_threshold_chars=math.inf,
+    delegation=frozenset({"session_reviewer"}),
 )
 async def knowledge_view(
     ctx: RunContext[CoDeps],

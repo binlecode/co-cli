@@ -185,16 +185,23 @@ _SUMMARIZER_SYSTEM_PROMPT = (
 )
 
 
-def _serialize_messages(messages: list[ModelMessage], patterns: list[str]) -> str:
-    """Render a message list as a flat text block for inline embedding in the summarizer prompt.
+def serialize_messages(
+    messages: list[ModelMessage],
+    patterns: list[str],
+    *,
+    include_tool_results: bool = True,
+) -> str:
+    """Render a message list as a flat text block for inline embedding in LLM prompts.
 
     Keeps the history as opaque data rather than live chat turns, so the model
-    acts as an observer (summarizer) rather than a participant (responder).
+    acts as an observer (summarizer/reviewer) rather than a participant (responder).
 
     Applies ``redact_text`` to each part's content and tool args (defense-in-depth
-    for credentials before they reach the summarizer LLM and persist in the
-    compaction marker). Parts of the same message are joined with single newlines;
+    for credentials). Parts of the same message are joined with single newlines;
     distinct messages are separated by blank lines for boundary clarity.
+
+    include_tool_results: when False, ToolReturnPart entries are dropped. Tool calls
+    are kept (high signal for the session reviewer); their verbatim returns are noise.
     """
     blocks: list[str] = []
     for msg in messages:
@@ -210,7 +217,7 @@ def _serialize_messages(messages: list[ModelMessage], patterns: list[str]) -> st
                 lines.append(
                     f"assistant [tool_call {part.tool_name}]: {redact_text(args, patterns)}"
                 )
-            elif isinstance(part, ToolReturnPart):
+            elif isinstance(part, ToolReturnPart) and include_tool_results:
                 content = (
                     part.content
                     if isinstance(part.content, str)
@@ -267,7 +274,7 @@ async def summarize_messages(
     Returns the summary text, or raises on failure (caller handles fallback).
     """
     task_prompt = _build_summarizer_prompt(context, personality_active, focus)
-    serialized = _serialize_messages(messages, deps.config.observability.redact_patterns)
+    serialized = serialize_messages(messages, deps.config.observability.redact_patterns)
     # Needed only for the /compact command path, which has no outer segment timeout.
     # On the proactive path the segment timeout already caps this call.
     async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):

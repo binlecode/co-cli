@@ -34,7 +34,7 @@ def _merge_turn_usage(ctx: RunContext[CoDeps], usage: RunUsage) -> None:
         ctx.deps.runtime.turn_usage.incr(usage)
 
 
-async def _run_agent_attempt(
+async def _run_agent_in_turn(
     agent: Any,
     prompt: str,
     ctx: RunContext[CoDeps],
@@ -90,7 +90,7 @@ async def _delegate_agent(
             span.set_attribute("agent.role", role_key)
             span.set_attribute("agent.model", model_name)
             span.set_attribute("agent.request_limit", budget)
-            output, usage, run_id = await _run_agent_attempt(
+            output, usage, run_id = await _run_agent_in_turn(
                 agent,
                 task,
                 ctx,
@@ -221,7 +221,7 @@ async def web_research(
         span.set_attribute("agent.role", "researcher")
         span.set_attribute("agent.model", str(model_obj))
         span.set_attribute("agent.request_limit", budget)
-        output, usage_1, run_id = await _run_agent_attempt(
+        output, usage_1, run_id = await _run_agent_in_turn(
             agent,
             scoped_prompt,
             ctx,
@@ -239,7 +239,7 @@ async def web_research(
                 f"The previous search returned no results. "
                 f"Try with different keywords: {query} (alternative framing)."
             )
-            output_2, usage_2, _ = await _run_agent_attempt(
+            output_2, usage_2, _ = await _run_agent_in_turn(
                 agent,
                 retry_query,
                 ctx,

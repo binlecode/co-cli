@@ -4,6 +4,7 @@ import os
 import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import typer
 from prompt_toolkit import PromptSession
@@ -135,9 +136,26 @@ async def _run_foreground_turn(
     return await _finalize_turn(turn_result, message_history, deps, frontend)
 
 
-async def _drain_and_cleanup(deps: CoDeps | None, stack: AsyncExitStack) -> None:
-    """Run the dream cycle if enabled, release resources."""
+async def _drain_and_cleanup(
+    deps: CoDeps | None,
+    stack: AsyncExitStack,
+    message_history: list[ModelMessage] | None = None,
+) -> None:
+    """Run session review and dream cycle if enabled, release resources."""
     if deps is not None:
+        # 1. Drain background curator task (5s) so its writes settle before review reads.
+        if deps.session.background_curator_task is not None:
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(deps.session.background_curator_task), timeout=5.0
+                )
+            except (TimeoutError, asyncio.CancelledError, Exception):
+                deps.session.background_curator_task.cancel()
+
+        # 2. Session review — must precede dream cycle (review may write knowledge artifacts).
+        await _maybe_run_session_review(deps, message_history or [])
+
+        # 3. Dream cycle — consolidates all knowledge artifacts, including review output.
         await _maybe_run_dream_cycle(deps)
 
         from co_cli.tools.background import kill_task
@@ -162,6 +180,39 @@ def _sweep_tool_results(deps: CoDeps) -> None:
     swept = sweep_tool_result_orphans(deps.tool_results_dir)
     if swept:
         logging.getLogger(__name__).debug("Swept %d stale tool-result tmp file(s)", swept)
+
+
+async def _run_curator_background(deps: CoDeps) -> None:
+    """Thin wrapper — yields to the event loop then delegates to the curator module."""
+    await asyncio.sleep(0)
+    from co_cli.agents.skill_curator import maybe_run_curator
+
+    await maybe_run_curator(deps)
+
+
+async def _maybe_run_session_review(deps: CoDeps, message_history: list[ModelMessage]) -> None:
+    """Run the combined skill+knowledge session review on session end when enabled."""
+    if not deps.config.skills.review_enabled:
+        return
+    if not deps.model:
+        return
+
+    from co_cli.agents.session_review import run_session_review
+    from co_cli.config.skills import REVIEW_TIMEOUT_SECONDS
+
+    logger = logging.getLogger(__name__)
+    try:
+        result = await asyncio.wait_for(
+            run_session_review(deps, message_history),
+            timeout=REVIEW_TIMEOUT_SECONDS,
+        )
+        cb = deps.runtime.background_status_callback
+        if result.summary and cb is not None:
+            cb(f"\U0001f4be {result.summary}")
+    except TimeoutError:
+        logger.warning("Session review timed out")
+    except Exception:
+        logger.warning("Session review failed", exc_info=True)
 
 
 async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
@@ -366,6 +417,7 @@ async def _chat_loop(
     )
     stack = AsyncExitStack()
     deps: CoDeps | None = None
+    _final_message_history: list[ModelMessage] = []
     try:
         try:
             deps = await create_deps(frontend, stack, theme_override=theme)
@@ -403,6 +455,11 @@ async def _chat_loop(
         render_security_findings(check_security())
         frontend.clear_status()
 
+        if deps.config.skills.curator_enabled:
+            deps.session.background_curator_task = asyncio.create_task(
+                _run_curator_background(deps)
+            )
+
         state = _IterationState(message_history=[], last_interrupt_time=0.0)
 
         while True:
@@ -410,6 +467,12 @@ async def _chat_loop(
                 frontend.set_input_active(True)
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
                 frontend.set_input_active(False)
+                if (
+                    user_input
+                    and user_input.strip()
+                    and user_input.lower() not in ("exit", "quit")
+                ):
+                    deps.session.last_user_input_at = datetime.now(UTC)
                 state = await _handle_one_input(
                     user_input=user_input,
                     eof=False,
@@ -447,10 +510,11 @@ async def _chat_loop(
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
                 continue
+            _final_message_history = state.message_history
             if state.should_exit:
                 break
     finally:
-        await _drain_and_cleanup(deps, stack)
+        await _drain_and_cleanup(deps, stack, message_history=_final_message_history)
 
 
 def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None) -> None:

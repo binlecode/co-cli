@@ -49,8 +49,9 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Agent loop | [core-loop.md](core-loop.md) | Turn orchestration, approval mechanics, retries |
 | Prompt assembly | [prompt-assembly.md](prompt-assembly.md) | Instruction layers, history processors, recall injection |
 | Compaction | [compaction.md](compaction.md) | Spill, proactive summarization, session JSONL rewrite |
-| Knowledge | [memory-knowledge.md](memory-knowledge.md) | Artifact storage, kind taxonomy, `knowledge_manage` |
-| Sessions | [memory-sessions.md](memory-sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
+| Memory | [memory.md](memory.md) | Memory tier overview: knowledge + session channels, search surface |
+| Knowledge | [knowledge.md](knowledge.md) | Artifact storage, kind taxonomy, `knowledge_manage` |
+| Sessions | [sessions.md](sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
 | Dream cycle | [dream.md](dream.md) | Session-end mining, knowledge merge, decay, archive |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
 | Skills | [skill.md](skill.md) | Skill index, search/view/manage surface, dispatch |
@@ -131,7 +132,7 @@ knowledge_view / session_view
   → full artifact body / verbatim JSONL lines from disk
 ```
 
-→ [memory-knowledge.md](memory-knowledge.md) · [memory-sessions.md](memory-sessions.md)
+→ [knowledge.md](knowledge.md) · [sessions.md](sessions.md)
 
 ---
 

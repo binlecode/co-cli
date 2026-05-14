@@ -36,6 +36,7 @@ from co_cli.tools.tool_io import tool_error, tool_output
     is_read_only=True,
     is_concurrent_safe=True,
     spill_threshold_chars=math.inf,
+    delegation=frozenset({"session_reviewer", "skill_curator"}),
 )
 async def skill_view(
     ctx: RunContext[CoDeps],
@@ -77,6 +78,7 @@ async def skill_view(
     visibility=VisibilityPolicyEnum.ALWAYS,
     is_read_only=True,
     is_concurrent_safe=True,
+    delegation=frozenset({"session_reviewer", "skill_curator"}),
 )
 async def skill_search(
     ctx: RunContext[CoDeps],
@@ -393,6 +395,7 @@ def _skill_install(ctx: RunContext[CoDeps], source: str) -> ToolReturn:
     visibility=VisibilityPolicyEnum.ALWAYS,
     approval=True,
     approval_subject_fn=_skill_manage_approval_subject,
+    delegation=frozenset({"session_reviewer", "skill_curator"}),
 )
 async def skill_manage(
     ctx: RunContext[CoDeps],

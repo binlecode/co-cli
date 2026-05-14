@@ -402,7 +402,7 @@ async def create_deps(
 
     # Step 8: assemble deps
     runtime = CoRuntimeState()
-    return CoDeps(
+    deps = CoDeps(
         shell=ShellBackend(),
         config=config,
         model=llm_model,
@@ -417,6 +417,8 @@ async def create_deps(
         degradations=MappingProxyType(degradations),
         **paths,
     )
+    deps.runtime.background_status_callback = frontend.on_status
+    return deps
 
 
 def init_session_index(

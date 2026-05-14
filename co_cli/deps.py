@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -115,6 +117,7 @@ class ToolInfo:
 class TodoItem(TypedDict):
     """Shape of a single todo entry in CoSessionState.session_todos."""
 
+    id: str
     content: str
     status: Literal["pending", "in_progress", "completed", "cancelled"]
     priority: Literal["high", "medium", "low"]
@@ -149,6 +152,10 @@ class CoSessionState:
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
+    # Timestamp of last user input — used by curator idle gate.
+    last_user_input_at: datetime | None = None
+    # Background curator task handle — spawned once at REPL startup.
+    background_curator_task: asyncio.Task | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -204,6 +211,13 @@ class CoRuntimeState:
     # Count of messages durably persisted to session_path; accumulates across the session.
     # Not reset per-turn — append-only persistence requires this to grow monotonically.
     persisted_message_count: int = 0
+    # Approval bypass flags for background sub-agents (session_reviewer, skill_curator).
+    # Set True only inside fork_deps_for_reviewer / fork_deps_for_curator factories.
+    # NOT cleared by reset_for_turn — they live for the lifetime of the forked deps.
+    auto_approve_skill_ops: bool = False
+    auto_approve_knowledge_ops: bool = False
+    # Wired in bootstrap/core.py:create_deps to frontend.on_status. Not cleared per-turn.
+    background_status_callback: Callable[[str], None] | None = field(default=None, repr=False)
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""
@@ -280,6 +294,21 @@ class CoDeps:
 
     # Runtime degradation state — mutated during bootstrap, read-only after
     degradations: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
+
+
+def fork_deps_for_reviewer(parent: CoDeps) -> CoDeps:
+    """Fork deps for the session_reviewer agent — grants both skill and knowledge write access."""
+    child = fork_deps(parent)
+    child.runtime.auto_approve_skill_ops = True
+    child.runtime.auto_approve_knowledge_ops = True
+    return child
+
+
+def fork_deps_for_curator(parent: CoDeps) -> CoDeps:
+    """Fork deps for the skill_curator agent — grants skill write access only."""
+    child = fork_deps(parent)
+    child.runtime.auto_approve_skill_ops = True
+    return child
 
 
 def resolve_workspace_paths(config: Settings) -> dict[str, Any]:

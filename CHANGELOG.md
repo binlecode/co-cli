@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.8.186]
+
+### Skills — Self-evolution v1 (Plan 3.5b)
+- **Session-end combined review** — when `skills.review_enabled=True`, `_drain_and_cleanup` forks a `session_reviewer` agent at REPL exit (`co_cli/agents/session_review.py`). The fork has both skill and knowledge toolsets, scans the just-finished transcript, and autonomously patches/creates skills + knowledge artifacts. Bounded by `REVIEW_MAX_ITERATIONS=8` + `REVIEW_TIMEOUT_SECONDS=120` outer cap. Reports `💾 <summary>` via `background_status_callback`. JSON + markdown per-run reports under `~/.co-cli/session-reviews/<timestamp>/`.
+- **Skill curator** — when `skills.curator_enabled=True`, `_chat_loop` spawns `maybe_run_curator` as an `asyncio.create_task` at REPL startup. Pure state machine (`co_cli/skills/curator.py`): `active → stale` at `>CURATOR_STALE_AFTER_DAYS=30`, `stale → archived` at `>CURATOR_ARCHIVE_AFTER_DAYS=90`, `stale → active` on recent use; pinned skills opt out. After transitions, a `skill_curator` agent (skill-tools-only, `CURATOR_MAX_ITERATIONS=100` + `CURATOR_TIMEOUT_SECONDS=600`) consolidates prefix-clustered narrow skills into class-level umbrellas. Idle-gated (`CURATOR_MIN_IDLE_HOURS=2`) + interval-gated (default 7d). Archive moves files to `~/.co-cli/skills/.archive/` — never deletes. Optimistic-concurrency abort on cross-REPL collision.
+- **Approval-bypass contract** — `auto_approve_skill_ops` / `auto_approve_knowledge_ops` flags on `CoRuntimeState` + `fork_deps_for_reviewer` / `fork_deps_for_curator` factories make the bypass scope explicit and testable. Actual bypass: `requires_approval=False` at delegation-agent tool registration (`agents/core.py:202`). Foreground tool calls unaffected.
+- **Config** — `SkillsSettings` gains `review_enabled: bool = False`, `curator_enabled: bool = False`, `curator_interval_hours: int = 168`. Module-level constants for all iteration/timeout/day thresholds. Both features opt-in by default.
+- **CLI** — `/skills curator status | run | pause | resume | restore <name>` and `/skills review run`. Status table surfaces `enabled / paused / last_run_at / run_count / next_eligible_at / idle_current / idle_required / pending_transitions / last_summary`. `run` enforces idle gate with explanatory error when blocked.
+- **Tool surface tagging** — `skill_search` / `skill_view` / `skill_manage` carry `delegation=frozenset({"session_reviewer", "skill_curator"})`; `knowledge_search` / `knowledge_view` / `knowledge_manage` carry `delegation=frozenset({"session_reviewer"})`. `discover_delegation_tools` consumes these.
+- **Background plumbing** — `CoRuntimeState.background_status_callback` (wired in `bootstrap/core.py` to `frontend.on_status`, never cleared by `reset_for_turn`); `CoSessionState.last_user_input_at` (updated per user input in `_chat_loop`) and `background_curator_task`. New shared standalone-agent runner `co_cli/agents/_runner.py:_run_agent_standalone` for background forks (no usage merge, no `ModelRetry`). `_run_agent_attempt` → `_run_agent_in_turn` rename (3 call sites). `_serialize_messages` → `serialize_messages` with new `include_tool_results: bool = True` keyword-only param.
+- **Protocol acknowledgment** — `## Background review` section appended to `co_cli/context/rules/06_skill_protocol.md` so the foreground agent knows the review + curator exist and that `/skills pin` is the opt-out.
+
+### Docs
+- **Spec rename** — `docs/specs/memory-knowledge.md` → `docs/specs/knowledge.md`; `docs/specs/memory-sessions.md` → `docs/specs/sessions.md`. Cross-references updated in `bootstrap.md`, `compaction.md`, `core-loop.md`, `memory.md`, `system.md`, and `co_cli/memory/artifact.py` (which also had a stale `memory-session.md` singular typo — now `sessions.md`).
+
+### Cleanup
+- `docs/REPORT-test-hygiene-*.md` (10 files) removed — superseded by current `docs/REPORT-clean-tests-*.md` reports.
+- Withdrawn `2026-05-03-113954-arxiv-research-ingestion.md` exec-plan deleted (per "withdrawn plans are deleted, not archived" convention).
+
 ## [0.8.184]
 
 ### Skills

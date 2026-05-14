@@ -1,6 +1,6 @@
 # Co CLI — Memory
 
-> Channel sub-specs: [memory-knowledge.md](memory-knowledge.md) · [memory-sessions.md](memory-sessions.md). Sibling surface (own tier): [skill.md](skill.md). Doctrine (auto-injected into static prompt; never queried as memory): [personality.md](personality.md). Tool registration and approval: [tools.md](tools.md). Dream-cycle mining, merge, decay, archive: [dream.md](dream.md). Prompt assembly: [prompt-assembly.md](prompt-assembly.md). Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md). Compaction mechanics: [compaction.md](compaction.md).
+> Channel sub-specs: [knowledge.md](knowledge.md) · [sessions.md](sessions.md). Sibling surface (own tier): [skill.md](skill.md). Doctrine (auto-injected into static prompt; never queried as memory): [personality.md](personality.md). Tool registration and approval: [tools.md](tools.md). Dream-cycle mining, merge, decay, archive: [dream.md](dream.md). Prompt assembly: [prompt-assembly.md](prompt-assembly.md). Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md). Compaction mechanics: [compaction.md](compaction.md).
 
 Foundation spec for the memory surface — dynamic, declarative state accumulated by the agent through operation. Channel-specific lifecycle (storage, mutation, validation, indexing details, channel-specific test gates) lives in the two sub-specs.
 
@@ -27,8 +27,8 @@ flowchart TD
 
 | Channel | Sub-spec | Storage | Mutation | Indexing |
 | --- | --- | --- | --- | --- |
-| **knowledge** | [memory-knowledge.md](memory-knowledge.md) | `~/.co-cli/knowledge/*.md` | `knowledge_manage(action=...)` | FTS5 BM25 + optional hybrid; chunks body text |
-| **sessions** | [memory-sessions.md](memory-sessions.md) | `~/.co-cli/sessions/*.jsonl` | append-only via `persist_session_history` | sliding-window token chunks |
+| **knowledge** | [knowledge.md](knowledge.md) | `~/.co-cli/knowledge/*.md` | `knowledge_manage(action=...)` | FTS5 BM25 + optional hybrid; chunks body text |
+| **sessions** | [sessions.md](sessions.md) | `~/.co-cli/sessions/*.jsonl` | append-only via `persist_session_history` | sliding-window token chunks |
 
 Skills and canon are intentionally absent from this table — they live on their own tiers (see [skill.md](skill.md) and [personality.md](personality.md)). Canon is doctrine, auto-injected by the personality system; skills are procedural capability with their own search/view/manage surface.
 
@@ -48,7 +48,7 @@ Result fields: `{session_id, when, source, chunk_text, start_line, end_line, sco
 
 #### `session_view(session_id, start_line, end_line)`
 
-Verbatim turn reader. Given a `session_id` (uuid8) and a JSONL line range from a `session_search` hit, returns the raw lines from disk. Lives at `co_cli/tools/memory/view.py`. See [memory-sessions.md](memory-sessions.md) for registration status.
+Verbatim turn reader. Given a `session_id` (uuid8) and a JSONL line range from a `session_search` hit, returns the raw lines from disk. Lives at `co_cli/tools/memory/view.py`. See [sessions.md](sessions.md) for registration status.
 
 ### §3.2 Knowledge Surface
 
@@ -70,16 +70,16 @@ Full body reader for knowledge artifacts by `filename_stem`. Returns the complet
 
 #### `knowledge_manage(action, ...)`
 
-Write surface for the knowledge channel — see §4 and [memory-knowledge.md](memory-knowledge.md).
+Write surface for the knowledge channel — see §4 and [knowledge.md](knowledge.md).
 
 Recall pipeline overview:
 
 ```
 knowledge_search(ctx, query, kinds, limit)              # tools/memory/recall.py
-  ├─ _search_artifacts → user + waterfall passes          # see memory-knowledge.md
+  ├─ _search_artifacts → user + waterfall passes          # see knowledge.md
 
 session_search(ctx, query, limit)                       # tools/memory/recall.py
-  └─ _search_sessions  → chunk-cited BM25                 # see memory-sessions.md
+  └─ _search_sessions  → chunk-cited BM25                 # see sessions.md
 ```
 
 ## 4. Write Surface
@@ -90,7 +90,7 @@ One model-callable write surface for the knowledge channel. Sessions are append-
 | --- | --- | --- | --- |
 | `knowledge_manage` | knowledge | `create`, `append`, `replace`, `delete` | `tool:knowledge_manage:<action>:<name>` |
 
-Detailed semantics, validation, and approval flow: [memory-knowledge.md §4](memory-knowledge.md).
+Detailed semantics, validation, and approval flow: [knowledge.md §4](knowledge.md).
 
 ## 5. Channel-Specific Readers
 

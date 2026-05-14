@@ -39,6 +39,8 @@ LOGS_DIR = USER_DIR / "logs"
 KNOWLEDGE_DIR = USER_DIR / "knowledge"
 SESSIONS_DIR = USER_DIR / "sessions"
 TOOL_RESULTS_DIR = USER_DIR / "tool-results"
+SESSION_REVIEWS_DIR = USER_DIR / "session-reviews"
+CURATOR_RUNS_DIR = USER_DIR / "curator-runs"
 # Flat defaults (Settings-level, not grouped)
 DEFAULT_THEME = "light"
 DEFAULT_PERSONALITY = "tars"
@@ -65,6 +67,8 @@ def _ensure_dirs() -> None:
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    SESSION_REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+    CURATOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _validate_personality(personality: str) -> list[str]:
