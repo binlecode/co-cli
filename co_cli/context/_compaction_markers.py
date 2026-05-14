@@ -126,7 +126,10 @@ def _active_todos(todos: list) -> list:
 
 def _format_active_todos(active: list) -> list[str]:
     """Format active todo items as bullet lines."""
-    return [f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in active[:10]]
+    return [
+        f"- [{t.get('status', 'pending')}] {t.get('id', '?')}. {t.get('content', '?')}"
+        for t in active[:10]
+    ]
 
 
 def _gather_session_todos(todos: list) -> str | None:

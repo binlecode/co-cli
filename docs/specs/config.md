@@ -39,6 +39,7 @@ graph TD
 | `ShellSettings` | `shell.py` | Shell timeout limit and auto-approval safe command list |
 | `MemorySettings` | `memory.py` | Memory recall half-life |
 | `ObservabilitySettings` | `observability.py` | Log level, rotation, OTel span redaction patterns |
+| `SkillsSettings` | `skills.py` | Skill usage tracking, review, and curator automation knobs |
 | `MCPServerSettings` | `mcp.py` | Per-server transport config (stdio or HTTP) |
 
 `Settings` is constructed once per session by `create_deps()` via `get_settings()`, then
@@ -152,6 +153,7 @@ Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is)
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `None` | Brave Search API key |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` | Path to Google OAuth credentials JSON |
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge` | Override for the knowledge artifacts directory |
+| `workspace_path` | `CO_WORKSPACE_PATH` | `None` | Path to the workspace root (used for workspace-relative resolution) |
 
 ### LLM (`llm.*`)
 
@@ -238,6 +240,15 @@ Default safe commands: `ls`, `tree`, `find`, `fd`, `cat`, `head`, `tail`, `grep`
 
 Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub tokens, generic `API_KEY:` patterns, AWS `AKIA*` keys, PEM private key headers.
 
+### Skills (`skills.*`)
+
+| Setting | Env Var | Default | Description |
+|---------|---------|---------|-------------|
+| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Track skill invocation counts in the skill index |
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable automatic skill review after use |
+| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable the background skill curator agent |
+| `skills.curator_interval_hours` | `CO_SKILLS_CURATOR_INTERVAL_HOURS` | `168` | Hours between curator runs (minimum 1) |
+
 ### MCP servers (`mcp_servers.*`)
 
 | Field | Default | Description |
@@ -266,6 +277,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `co_cli/config/shell.py` | `ShellSettings` — timeout, safe command list |
 | `co_cli/config/memory.py` | `MemorySettings` — recall half-life |
 | `co_cli/config/observability.py` | `ObservabilitySettings` — log level, rotation, redaction patterns |
+| `co_cli/config/skills.py` | `SkillsSettings` — usage tracking, review, and curator automation settings |
 | `co_cli/config/mcp.py` | `MCPServerSettings`, `DEFAULT_MCP_SERVERS`, `parse_mcp_servers_from_env()` |
 | `co_cli/llm/factory.py` | `LlmModel` dataclass; `build_model()` — constructs pydantic-ai model + both `ModelSettings` from `LlmSettings` |
 | `co_cli/llm/call.py` | `llm_call()` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |

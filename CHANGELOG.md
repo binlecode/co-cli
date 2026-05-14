@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.8.188]
+
+### Todo — Continuity (Plan todo-continuity)
+- **`id` field on `TodoItem`** — every item now carries a model-assigned `id: str`; required, unique within session, no `.` or whitespace in the value.
+- **`merge` mode on `todo_write`** — `merge=True` updates only the fields present on each payload item (matched by `id`); unknown ids are appended as new items; existing items not in the payload are preserved in order. Default `merge=False` replaces the full list.
+- **All-or-nothing validation** — any validation error in either mode leaves `session.session_todos` unchanged.
+- **`todos` in tool_output metadata** — `todo_write` success response carries `todos=list(session.session_todos)` for transcript-based rehydration.
+- **Compaction snapshot format** — active todos now render as `- [{status}] {id}. {content}` so the model can reference items by id after compression.
+- **`/resume` rehydrates `session_todos`** — scans loaded messages backwards; primary path reads `metadata['todos']` from the most recent `todo_write` `ToolReturnPart`; fallback path parses the most recent `TODO_SNAPSHOT_PREFIX` `UserPromptPart` (compacted sessions); defensive filter drops items without a non-empty `id`.
+
 ## [0.8.186]
 
 ### Skills — Self-evolution v1 (Plan 3.5b)

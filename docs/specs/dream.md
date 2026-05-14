@@ -269,8 +269,8 @@ The session-end wrapper logs completion counts when changes occurred and logs ti
 | `knowledge.consolidation_similarity_threshold` | n/a | `0.75` | Token-Jaccard threshold for dedup and merge clusters |
 | `knowledge.max_artifact_count` | n/a | `300` | Soft corpus-size setting; not directly enforced by the current dream cycle |
 | `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | Age and last-recall cutoff for decay candidacy |
-| `knowledge.chunk_size` | `CO_KNOWLEDGE_CHUNK_SIZE` | `600` | Chunk size used when indexing consolidated artifacts |
-| `knowledge.chunk_overlap` | `CO_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Chunk overlap used when indexing consolidated artifacts |
+| `knowledge.chunk_tokens` | `CO_KNOWLEDGE_CHUNK_TOKENS` | `600` | Chunk size used when indexing consolidated artifacts |
+| `knowledge.chunk_overlap_tokens` | `CO_KNOWLEDGE_CHUNK_OVERLAP_TOKENS` | `80` | Chunk overlap used when indexing consolidated artifacts |
 
 Internal caps:
 

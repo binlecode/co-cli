@@ -85,7 +85,7 @@ for human reference — they are not loaded into the agent.
 ```
 section_1 = load_soul_seed(role)               # Required — placed first; identity anchor
 section_2 = load_soul_mindsets(role)            # Optional — ## Mindsets block, all 6 files
-section_3 = _collect_rule_files()               # Rules from context/rules/NN_rule_id.md (01–05)
+section_3 = _collect_rule_files()               # Rules from context/rules/NN_rule_id.md (01–06)
 section_4 = RECENCY_CLEARING_ADVISORY           # Static advisory for tool-result eviction
 
 return "\n\n".join(non_empty_sections)
@@ -111,8 +111,8 @@ on the model's operating space. Review lens is last so it frames all operational
 as subject to self-review.
 
 **Rule files** (`context/rules/`) are personality-independent universal policies. Files must
-be numbered `01`–`05`, contiguous, and unique. Current rules: `01_identity.md`,
-`02_safety.md`, `03_reasoning.md`, `04_tool_protocol.md`, `05_workflow.md`.
+be numbered `01`–`06`, contiguous, and unique. Current rules: `01_identity.md`,
+`02_safety.md`, `03_reasoning.md`, `04_tool_protocol.md`, `05_workflow.md`, `06_skill_protocol.md`.
 
 ### Personality Discovery and Validation
 
@@ -173,7 +173,7 @@ for missing mindset files.
 | `co_cli/memory/memory_store.py:sync_dir(no_chunk=True)` | Single-chunk-per-file indexing path used by canon |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
-| `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `05_workflow.md` |
+| `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `06_skill_protocol.md` |
 | `co_cli/personality/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agents/core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |

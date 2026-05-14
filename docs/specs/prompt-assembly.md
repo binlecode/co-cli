@@ -21,7 +21,7 @@ flowchart TD
 
     subgraph PerRequest["per model request"]
         Dynamic["@agent.instructions callbacks"]
-        Processors["history processors 1..4"]
+        Processors["history processors 1..5"]
         Model[model request]
         Dynamic --> Processors --> Model
     end
@@ -90,8 +90,8 @@ Two dynamic instruction functions are registered via `agent.instructions()` and 
 | `current_time_prompt` | returns current date/time string at tail position — ephemeral grounding just before the model sees the user turn; keeps Block 0 cache-stable |
 
 **Ordering rationale:**
-- **#1–2 before #3**: dedup and eviction run before summarization. The summarizer sees a smaller, deduped history and receives rich side-channel context (file working set, todos) to compensate.
-- **#4 last**: surrogate sanitization runs after `proactive_window_processor` so the summary text it produces is also swept.
+- **#1–2 before #3–4**: dedup and eviction run before size enforcement and summarization. The summarizer sees a smaller, deduped history; size enforcement fires after cheap reductions but before the LLM call.
+- **#5 last**: surrogate sanitization runs after `proactive_window_processor` so the summary text it produces is also swept.
 - **`safety_prompt` before `current_time_prompt`**: structural behavioral guidance sits above ephemeral grounding. `current_time_prompt` is at the tail — the last thing the model sees before the user turn — because ephemeral grounding is most effective close to the user message.
 - **Dynamic instructions before model request**: these functions run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
 

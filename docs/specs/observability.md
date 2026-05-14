@@ -322,7 +322,7 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/observability/tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
 | `co_cli/main.py` | `@app.command()` wrappers for `traces` and `tail`; module-level OTel + file logging bootstrap |
 | `co_cli/config/core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
-| `co_cli/config/_observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) and span redaction (`redact_patterns`) |
+| `co_cli/config/observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) and span redaction (`redact_patterns`) |
 | `~/.co-cli/co-cli-logs.db` | SQLite span storage |
 | `~/.co-cli/logs/co-cli.jsonl` | Master rotating JSONL log — INFO+ Python logging records (`"kind": "log"`) and OTel span records (`"kind": "span"`) |
 | `~/.co-cli/logs/errors.jsonl` | Dedicated rotating JSONL log — WARNING+ only; 2 MB / 2 backups; for fast error triage without parsing span JSON |
