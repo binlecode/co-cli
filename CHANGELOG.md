@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.8.180]
+
+### Refactor
+- **`deps.py` cleanup**: `GoogleSessionState` sub-struct groups `google_creds`, `google_creds_resolved`, `drive_page_tokens` off `CoSessionState`; `fork_deps` inheritance made explicit. `TodoItem` TypedDict replaces `list[dict]` for `session_todos`. `MappingProxyType` enforces "read-only after bootstrap" contract on `degradations`. `resource_locks` factory replaces `__post_init__` + `# type: ignore`. `reset_for_turn` docstring corrected (6 per-turn fields, was 5); CI test added as contract enforcement.
+- **Test fixture fix**: phantom `"sqlite-fts → grep"` degradation string removed — that path raises `RuntimeError` in current bootstrap; replaced with the real `"hybrid → fts5"` degradation.
+
 ## [0.8.178]
 
 ### Skills

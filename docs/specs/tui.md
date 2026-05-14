@@ -115,7 +115,7 @@ session state (e.g. `/reasoning`, `/approvals`) write directly to `deps.session.
 - `session_approval_rules` — managed by `/approvals`
 - `session_todos` — managed by task-related commands
 - `reasoning_display` — managed by `/reasoning`
-- `background_tasks`, `drive_page_tokens` — managed by tool layer
+- `background_tasks`, `google.drive_page_tokens` — managed by tool layer
 
 `CoRuntimeState` fields are owned by the orchestration layer. Slash commands must not write
 to `CoRuntimeState` — use `CoSessionState` for user-preference and cross-turn session state.

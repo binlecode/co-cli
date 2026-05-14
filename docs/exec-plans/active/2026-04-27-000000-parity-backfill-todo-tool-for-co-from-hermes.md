@@ -18,7 +18,7 @@ However, the `co-cli` implementation lacks the "update by id" (`merge=True`) fun
 
 ## Scope
 - Refactor `co_cli/tools/todo.py` to support `id` tracking and `merge` logic.
-- Update `CoDeps.session.session_todos` structure if necessary (it is already a `list[dict]`, but now those dicts will enforce `id`).
+- Update `CoDeps.session.session_todos` structure if necessary (it is now `list[TodoItem]` — a TypedDict with `content`, `status`, `priority`; adding `id` will require extending `TodoItem` in `co_cli/deps.py`).
 - Update `co_cli/context/_compaction_markers.py` to ensure the new task shape (with IDs) is serialized properly during compaction.
 - Add unit tests for the merge behavior in `tests/tools/test_todo.py`.
 

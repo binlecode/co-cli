@@ -182,7 +182,7 @@ Skills are procedural capability units — YAML-fronted markdown files in `~/.co
 | Registries | `tool_index`, `tool_registry`, `skill_commands` |
 | Mutable state | `session` (`CoSessionState` — todos, background tasks, approval rules); `runtime` (`CoRuntimeState` — compaction counters, turn usage, persisted message count) |
 | Paths | `workspace_dir`, `knowledge_dir`, `sessions_dir`, `tool_results_dir`, … |
-| Degradations | `degradations` dict — startup-detected capability drops |
+| Degradations | `degradations` (`MappingProxyType`) — startup-detected capability drops; read-only after bootstrap |
 
 
 ## 3. Config

@@ -19,7 +19,7 @@ _DRIVE_NOT_CONFIGURED = (
 
 def _resolve_page_token(ctx: RunContext[CoDeps], query: str, page: int) -> str:
     """Return the stored page token for the given page, or raise ModelRetry."""
-    tokens = ctx.deps.session.drive_page_tokens.get(query, [])
+    tokens = ctx.deps.session.google.drive_page_tokens.get(query, [])
     token_index = page - 2  # page 2 -> index 0, page 3 -> index 1
     if token_index >= len(tokens):
         raise ModelRetry(
@@ -31,9 +31,9 @@ def _resolve_page_token(ctx: RunContext[CoDeps], query: str, page: int) -> str:
 
 def _store_page_token(ctx: RunContext[CoDeps], query: str, page: int, next_token: str) -> None:
     """Persist next_token so future pages can be requested."""
-    if query not in ctx.deps.session.drive_page_tokens:
-        ctx.deps.session.drive_page_tokens[query] = []
-    tokens = ctx.deps.session.drive_page_tokens[query]
+    if query not in ctx.deps.session.google.drive_page_tokens:
+        ctx.deps.session.google.drive_page_tokens[query] = []
+    tokens = ctx.deps.session.google.drive_page_tokens[query]
     target_index = page - 1  # page 1 result -> index 0 stores token for page 2
     if len(tokens) <= target_index:
         tokens.append(next_token)

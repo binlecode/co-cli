@@ -79,9 +79,9 @@ def _google_available(deps: Any) -> bool:
     Expired-but-refreshable tokens (refresh_token present) are still shown —
     googleapiclient auto-refreshes on the first API call.
     """
-    if not deps.session.google_creds_resolved:
+    if not deps.session.google.creds_resolved:
         return True
-    creds = deps.session.google_creds
+    creds = deps.session.google.creds
     if creds is None:
         return False
     return not (creds.expired and not creds.refresh_token)
@@ -96,13 +96,13 @@ def get_cached_google_creds(deps: Any) -> Any | None:
     Args:
         deps: CoDeps instance (typed Any to avoid circular import).
     """
-    if not deps.session.google_creds_resolved:
-        deps.session.google_creds = ensure_google_credentials(
+    if not deps.session.google.creds_resolved:
+        deps.session.google.creds = ensure_google_credentials(
             deps.config.google_credentials_path,
             ALL_GOOGLE_SCOPES,
         )
-        deps.session.google_creds_resolved = True
-    return deps.session.google_creds
+        deps.session.google.creds_resolved = True
+    return deps.session.google.creds
 
 
 def _get_google_service(

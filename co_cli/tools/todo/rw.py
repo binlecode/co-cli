@@ -14,7 +14,7 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.deps import CoDeps, TodoItem, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
@@ -54,7 +54,7 @@ def todo_write(
     Args:
         todos: Full task list to store. Replaces any existing session todos.
     """
-    validated: list[dict[str, Any]] = []
+    validated: list[TodoItem] = []
     errors: list[str] = []
 
     for i, item in enumerate(todos):
@@ -82,7 +82,7 @@ def todo_write(
             )
             continue
 
-        validated.append({"content": content, "status": status, "priority": priority})
+        validated.append(TodoItem(content=content, status=status, priority=priority))
 
     if errors:
         return tool_output(

@@ -21,6 +21,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
 from co_cli.memory.frontmatter import parse_frontmatter
+from co_cli.skills import usage as skill_usage
 from co_cli.skills.loader import scan_skill_content
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output
@@ -63,6 +64,7 @@ async def skill_view(
         return tool_error(f"skill_view: skill {name!r} is not model-invocable.", ctx=ctx)
     if file_path is not None:
         return tool_error(f"skill_view: skill {name!r} has no linked files.", ctx=ctx)
+    skill_usage.bump_view(ctx.deps, lookup)
     return tool_output(skill.body, ctx=ctx, name=lookup, linked_files={})
 
 
@@ -206,6 +208,7 @@ def _skill_create(
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
+    skill_usage.record_create(ctx.deps, name)
     result: dict = {"success": True, "message": f"Skill {name!r} created.", "path": str(path)}
     if category:
         result["category_ignored"] = True
@@ -231,6 +234,7 @@ def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str | None) -> Tool
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
+    skill_usage.bump_patch(ctx.deps, name)
     return tool_output(
         json.dumps({"success": True, "message": f"Skill {name!r} updated.", "path": str(path)}),
         ctx=ctx,
@@ -281,6 +285,7 @@ def _skill_patch(
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
+    skill_usage.bump_patch(ctx.deps, name)
     replaced_count = count if replace_all else 1
     return tool_output(
         json.dumps(
@@ -306,6 +311,7 @@ def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
         return tool_error(f"Skill {name!r} not found in user skills dir.", ctx=ctx)
     path.unlink()
     _reload_skills(ctx)
+    skill_usage.forget(ctx.deps, name)
     shadowed_bundled = (ctx.deps.skills_dir / f"{name}.md").exists()
     return tool_output(
         json.dumps(
@@ -374,6 +380,7 @@ def _skill_install(ctx: RunContext[CoDeps], source: str) -> ToolReturn:
         return tool_error(scan_err, ctx=ctx)
 
     _reload_skills(ctx)
+    skill_usage.record_create(ctx.deps, skill_name)
     return tool_output(
         json.dumps(
             {"success": True, "message": f"Skill {skill_name!r} installed.", "path": str(path)}

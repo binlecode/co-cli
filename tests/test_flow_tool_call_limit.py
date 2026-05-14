@@ -55,6 +55,30 @@ def otel_lifecycle() -> tuple[CoToolLifecycle, InMemorySpanExporter]:
 # ---------------------------------------------------------------------------
 
 
+def test_reset_for_turn_resets_all_per_turn_fields():
+    """Every per-turn field in CoRuntimeState must be cleared by reset_for_turn().
+
+    This test is the structural enforcement for the per-turn contract. Add new
+    per-turn fields here when you add them to CoRuntimeState.reset_for_turn().
+    """
+    rt = CoRuntimeState()
+    rt.turn_usage = RunUsage(requests=1, input_tokens=10, output_tokens=10)
+    rt.tool_progress_callback = lambda msg: None
+    rt.status_callback = lambda msg: None
+    rt.resume_tool_names = frozenset(["some_tool"])
+    rt.compaction_applied_this_turn = True
+    rt.current_request_tokens_estimate = 42
+
+    rt.reset_for_turn()
+
+    assert rt.turn_usage is None
+    assert rt.tool_progress_callback is None
+    assert rt.status_callback is None
+    assert rt.resume_tool_names is None
+    assert rt.compaction_applied_this_turn is False
+    assert rt.current_request_tokens_estimate is None
+
+
 @pytest.mark.asyncio
 async def test_brake_allows_up_to_cap():
     """All 6 calls within the cap must reach the handler and return 'ok'."""

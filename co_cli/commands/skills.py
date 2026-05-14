@@ -11,6 +11,7 @@ from co_cli.commands.registry import (
 from co_cli.commands.types import CommandContext
 from co_cli.config.core import settings
 from co_cli.display.core import console, make_table
+from co_cli.skills import usage as skill_usage
 from co_cli.skills._lint import lint_skill
 from co_cli.skills.installer import (
     SkillFetchError,
@@ -175,13 +176,106 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         _cmd_skills_reload(ctx)
     elif subcmd == "upgrade":
         await _upgrade_skill(ctx, subargs)
+    elif subcmd == "usage":
+        _cmd_skills_usage(ctx, subargs)
+    elif subcmd == "pin":
+        _cmd_skills_pin(ctx, subargs, pinned=True)
+    elif subcmd == "unpin":
+        _cmd_skills_pin(ctx, subargs, pinned=False)
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
         console.print(
-            "[dim]Usage: /skills [list|check|install <path|url>|lint [<name>|--all]|reload|upgrade <name>][/dim]"
+            "[dim]Usage: /skills [list|check|install <path|url>|lint [<name>|--all]|reload|"
+            "upgrade <name>|usage [<name>]|pin <name>|unpin <name>][/dim]"
         )
 
     return None
+
+
+def _classify_skill(ctx: CommandContext, name: str) -> str:
+    """Return one of: 'agent-created', 'url-installed', 'bundled', 'unknown'."""
+    user_path = ctx.deps.user_skills_dir / f"{name}.md"
+    bundled_path = ctx.deps.skills_dir / f"{name}.md"
+    if user_path.exists():
+        if find_skill_source_url(user_path) is not None:
+            return "url-installed"
+        return "agent-created"
+    if bundled_path.exists():
+        return "bundled"
+    return "unknown"
+
+
+def _cmd_skills_usage(ctx: CommandContext, args: str) -> None:
+    """Print the usage sidecar — table for all skills, full record for one."""
+    name = args.strip()
+    records = skill_usage.read_records(ctx.deps).get("skills", {})
+
+    if name:
+        record = records.get(name)
+        if record is None:
+            console.print(f"[dim]No usage record for skill '{name}'.[/dim]")
+            return
+        table = make_table("Field", "Value")
+        for key in (
+            "use_count",
+            "view_count",
+            "patch_count",
+            "created_at",
+            "last_used_at",
+            "last_viewed_at",
+            "last_patched_at",
+            "state",
+            "pinned",
+        ):
+            table.add_row(key, str(record.get(key)))
+        console.print(table)
+        return
+
+    if not records:
+        console.print("[dim]No skill usage records yet.[/dim]")
+        return
+
+    table = make_table("Name", "use", "view", "patch", "last_used_at", "state", "pinned")
+    for skill_name in sorted(records.keys()):
+        rec = records[skill_name]
+        table.add_row(
+            skill_name,
+            str(rec.get("use_count", 0)),
+            str(rec.get("view_count", 0)),
+            str(rec.get("patch_count", 0)),
+            str(rec.get("last_used_at") or "-"),
+            str(rec.get("state", "active")),
+            "✓" if rec.get("pinned") else "",
+        )
+    console.print(table)
+
+
+def _cmd_skills_pin(ctx: CommandContext, args: str, *, pinned: bool) -> None:
+    """Toggle the pinned flag on an agent-created skill."""
+    verb = "pin" if pinned else "unpin"
+    name = args.strip()
+    if not name:
+        console.print(f"[bold red]Usage:[/bold red] /skills {verb} <name>")
+        return
+
+    classification = _classify_skill(ctx, name)
+    if classification == "bundled":
+        console.print(
+            f"[bold red]Cannot {verb} '{name}': bundled skill (upstream-managed).[/bold red]"
+        )
+        return
+    if classification == "url-installed":
+        console.print(
+            f"[bold red]Cannot {verb} '{name}': URL-installed skill (upstream-managed).[/bold red]"
+        )
+        return
+    if classification == "unknown":
+        console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
+        return
+
+    skill_usage.set_pinned(ctx.deps, name, pinned)
+    state = "pinned" if pinned else "unpinned"
+    console.print(f"[success]✓ Skill '{name}' {state}.[/success]")
 
 
 async def _install_skill(ctx: CommandContext, target: str, force: bool = False) -> None:

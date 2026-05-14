@@ -4,7 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from pydantic_ai.usage import RunUsage
 
@@ -111,6 +112,23 @@ class ToolInfo:
     delegation: frozenset[str] | None = None
 
 
+class TodoItem(TypedDict):
+    """Shape of a single todo entry in CoSessionState.session_todos."""
+
+    content: str
+    status: Literal["pending", "in_progress", "completed", "cancelled"]
+    priority: Literal["high", "medium", "low"]
+
+
+@dataclass
+class GoogleSessionState:
+    """Google integration session state — lazy-resolved credentials and Drive pagination."""
+
+    creds: Any | None = field(default=None, repr=False)
+    creds_resolved: bool = False
+    drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
+
+
 @dataclass
 class CoSessionState:
     """Mutable tool-visible session state.
@@ -124,11 +142,9 @@ class CoSessionState:
     capabilities.py).
     """
 
-    google_creds: Any | None = field(default=None, repr=False)
-    google_creds_resolved: bool = False
+    google: GoogleSessionState = field(default_factory=GoogleSessionState)
     session_approval_rules: list[SessionApprovalRule] = field(default_factory=list)
-    drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
-    session_todos: list[dict] = field(default_factory=list)
+    session_todos: list[TodoItem] = field(default_factory=list)
     session_path: Path = field(default_factory=Path)
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
@@ -145,7 +161,7 @@ class CoRuntimeState:
 
     Per-turn (reset by reset_for_turn() at run_turn() entry):
       turn_usage, tool_progress_callback, status_callback, resume_tool_names,
-      compaction_applied_this_turn
+      compaction_applied_this_turn, current_request_tokens_estimate
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions,
@@ -199,6 +215,12 @@ class CoRuntimeState:
         self.current_request_tokens_estimate = None
 
 
+def _resource_lock_store_factory() -> ResourceLockStore:
+    from co_cli.tools.resource_lock import ResourceLockStore
+
+    return ResourceLockStore()
+
+
 # Path defaults — all user-global; resolved from USER_DIR constants at runtime
 # skills_dir: co-bundled skills shipped with the package
 _DEFAULT_SKILLS_DIR = Path(__file__).parent / "skills"
@@ -222,7 +244,9 @@ class CoDeps:
     # Config — the Settings instance, read-only after bootstrap
     config: Settings
     # Resource lock store (shared across parent and delegation agents)
-    resource_locks: ResourceLockStore = field(default=None, repr=False)  # type: ignore[assignment]  # __post_init__ always initializes from None
+    resource_locks: ResourceLockStore = field(
+        default_factory=_resource_lock_store_factory, repr=False
+    )
     # File read tracker — shared across parent and delegation agents by reference for staleness detection
     file_tracker: FileReadTracker = field(default_factory=FileReadTracker, repr=False)
     # Service handles (optional, set during bootstrap)
@@ -255,13 +279,7 @@ class CoDeps:
     spill_threshold_tokens: int = 0
 
     # Runtime degradation state — mutated during bootstrap, read-only after
-    degradations: dict[str, str] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.resource_locks is None:
-            from co_cli.tools.resource_lock import ResourceLockStore
-
-            self.resource_locks = ResourceLockStore()
+    degradations: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
@@ -298,8 +316,11 @@ def fork_deps(base: CoDeps) -> CoDeps:
     build_tool_registry() with a filtered tool set appropriate for their depth.
     """
     inherited_session = CoSessionState(
-        google_creds=base.session.google_creds,
-        google_creds_resolved=base.session.google_creds_resolved,
+        google=GoogleSessionState(
+            creds=base.session.google.creds,
+            creds_resolved=base.session.google.creds_resolved,
+            # drive_page_tokens not inherited — fresh pagination per delegation agent
+        ),
         session_approval_rules=list(base.session.session_approval_rules),
         reasoning_display=base.session.reasoning_display,
     )

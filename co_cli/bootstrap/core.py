@@ -5,6 +5,7 @@ import copy
 import logging
 from contextlib import AsyncExitStack
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 from opentelemetry import trace
@@ -413,7 +414,7 @@ async def create_deps(
         runtime=runtime,
         model_max_ctx=model_max_ctx,
         spill_threshold_tokens=spill_threshold_tokens,
-        degradations=degradations,
+        degradations=MappingProxyType(degradations),
         **paths,
     )
 
