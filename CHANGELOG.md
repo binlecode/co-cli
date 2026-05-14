@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.8.184]
+
+### Skills
+- **`/clean-tests` skill trimmed**: 403 → 211 lines. Tracking log template dropped (was 90-line inline code block); per-violation fix catalog collapsed to a single fix principle + escalation block; Phase 2.5 folded into Phase 2; Phase 4 adversarial check merged into Phase 3; Phase 4.5/4.7 merged into new Phase 4 (coverage + registry); Phase 4.6 became Phase 5; Rules section dropped. Phase cross-references renumbered throughout.
+
 ## [0.8.182]
 
 ### Skills
