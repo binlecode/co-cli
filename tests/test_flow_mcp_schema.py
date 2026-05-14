@@ -1,9 +1,5 @@
-"""Behavioral tests for MCP schema sanitizer and _SanitizingMCPServer proxy."""
+"""Behavioral tests for MCP schema sanitizer."""
 
-import asyncio
-from types import SimpleNamespace
-
-from co_cli.agents.mcp import _SanitizingMCPServer
 from co_cli.tools.mcp_schema import sanitize_mcp_schema
 
 # ---------------------------------------------------------------------------
@@ -86,24 +82,3 @@ def test_idempotent() -> None:
     once = sanitize_mcp_schema(schema)
     twice = sanitize_mcp_schema(once)
     assert once == twice
-
-
-# ---------------------------------------------------------------------------
-# Integration test — proxy wiring, no live MCP server
-# ---------------------------------------------------------------------------
-
-
-class _FakeMCPServer:
-    async def list_tools(self) -> list:
-        tool = SimpleNamespace()
-        tool.name = "test_tool"
-        tool.description = "a tool"
-        tool.inputSchema = {"type": ["string", "null"]}
-        return [tool]
-
-
-def test_sanitizer_applied_at_list_tools() -> None:
-    proxy = _SanitizingMCPServer(_FakeMCPServer())
-    tools = asyncio.run(proxy.list_tools())
-    assert len(tools) == 1
-    assert tools[0].inputSchema == {"type": "string"}

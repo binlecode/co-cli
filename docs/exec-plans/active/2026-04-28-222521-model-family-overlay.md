@@ -1,53 +1,50 @@
-# Exec Plan: Model-Family Overlay Evidence + Targeted Overlay
+# Exec Plan: Model-Family Overlay — Gemini + Ollama Eval
 
 _Created: 2026-04-28_
 _Slug: model-family-overlay_
 _Predecessor: `docs/exec-plans/active/2026-04-28-081359-main-flow-prompt-parity.md` (Phase 3 split out)_
 
-## Problem
+## Scope
 
-co-cli has no model-family-specific prompt overlays. Hermes selects guidance by
-model name: `GOOGLE_MODEL_OPERATIONAL_GUIDANCE` for Gemini/Gemma,
-`OPENAI_MODEL_EXECUTION_GUIDANCE` for GPT/Codex. The prior audit evidence
-(`REPORT-llm-audit-eval-20260420-162700.md`) was misattributed — the retry spiral
-came from the Ollama tool-calling path, not Gemini. An overlay must not ship
-without family-specific evidence.
+Two independent workstreams:
+
+1. **Gemini overlay** — port hermes's `GOOGLE_MODEL_OPERATIONAL_GUIDANCE` delta
+   (bullets not already in co-cli rule files). Ships from hermes production evidence;
+   no new eval required.
+
+2. **Ollama eval** — write `eval_tool_retry_behavior.py` targeting the configured
+   Ollama model (detected by model name, not provider). Records evidence for any
+   future model-specific overlay. No overlay ships from this eval unless evidence
+   warrants it.
 
 ## Design
 
-**P1 — First establish model-family-specific evidence.**
+### Gemini overlay
 
-The prior plan treated `test_clarify_handled_by_run_turn` as Gemini evidence,
-but current test and report evidence show that failure came from the Ollama
-tool-calling path. Before adding a Gemini overlay, run or add a model-specific
-main-agent/tool-calling eval that exercises the same failure mode against Gemini.
+hermes `GOOGLE_MODEL_OPERATIONAL_GUIDANCE` has 7 bullets. The following are
+already covered by co-cli's static rule files and must not be duplicated:
 
-Evidence targets:
+| hermes bullet | co-cli coverage |
+|---|---|
+| Keep going / don't stop at plan | `05_workflow.md § Execution` |
+| Non-interactive flags (-y/--yes) | `04_tool_protocol.md § Shell` |
+| Parallel tool calls | `04_tool_protocol.md` |
+| Verify first / read before edit | `03_reasoning.md` |
+| Dependency checks | `03_reasoning.md § Verification` |
 
-- For Gemini/Gemma: malformed tool schema retries, repeated identical tool calls,
-  or premature plan-only stops in a Gemini main-agent/tool-calling run.
-- For Ollama/Qwen: repeated clarify/tool calls or over-searching empty memory,
-  if current audits keep showing that family-specific pressure helps.
-- GPT/Codex: not applicable — co-cli's provider is `Literal["ollama", "gemini"]`;
-  no OpenAI path exists.
+Remaining delta (not in co-cli rule files) — these become `GEMINI_OVERLAY`:
 
-Hermes reference: tool-use enforcement is configurable and auto-applies only
-for model-name substrings in `TOOL_USE_ENFORCEMENT_MODELS`
-(`prompt_builder.py:188-190`; `run_agent.py:3439-3461`). The model-specific
-overlays then branch to Google or OpenAI text (`run_agent.py:3462-3470`). co-cli
-should preserve that discipline: family overlays are corrective pressure for
-observed model behavior, not a new always-on rule layer.
+- **Absolute paths:** always construct absolute file paths for all file system
+  operations; combine project root with relative paths.
+- **Conciseness:** keep explanatory text brief — a few sentences, not paragraphs;
+  focus on actions and results over narration.
 
-**P2 — Introduce `build_model_family_guidance(config)` only for a proven family.**
+`GEMINI_OVERLAY` is defined in `co_cli/context/guidance.py`.
 
-Mirrors hermes `_build_system_prompt()` lines 3461–3470. Inspects
-`config.llm.provider` and/or model name to select a family overlay. It should
-run at agent construction and append to static instructions, not as a
-per-request callback.
+### Function and wire-in
 
-The evidence gate is a ship decision, not a runtime flag: if evidence confirms
-an overlay for a family, define the constant and return it from this function;
-if not, leave the branch absent entirely — no dead constants, no stub returns.
+`build_model_family_guidance(config: Settings) -> str` in `co_cli/context/guidance.py`.
+Returns `GEMINI_OVERLAY` for Gemini/Gemma; `""` for all other providers.
 
 ```python
 def build_model_family_guidance(config: Settings) -> str:
@@ -56,128 +53,74 @@ def build_model_family_guidance(config: Settings) -> str:
     provider = (config.llm.provider or "").lower()
 
     if provider == "gemini" or "gemini" in model_name or "gemma" in model_name:
-        return GEMINI_OVERLAY   # define only after evidence confirms
-    if provider == "ollama":
-        return OLLAMA_OVERLAY   # define only after evidence confirms
+        return GEMINI_OVERLAY
 
     return ""
 ```
 
-Only the branches with confirmed evidence are included at ship time. If only
-Gemini evidence exists, the Ollama branch is absent (and vice versa). Do not
-stub empty-string returns for unconfirmed families.
-
-**P3 — Phased rollout — start with only audit-confirmed content.**
-
-Initial PR ships no overlay unless the evidence task confirms a family-specific
-issue. GPT branches should not be stubbed unless they return empty with no dead
-constants. Avoid speculative prompt bloat.
-
-If Gemini evidence is confirmed, write a `GEMINI_OVERLAY` covering only the
-observed failure mode. Do not mirror hermes `GOOGLE_MODEL_OPERATIONAL_GUIDANCE`
-bullet-for-bullet — most of its content is already in co-cli's Phase 1 rule
-files:
-
-| Hermes GOOGLE_MODEL_OPERATIONAL_GUIDANCE bullet | co-cli coverage |
-|---|---|
-| Keep going / don't stop at plan | `05_workflow.md § Execution` (Phase 1) |
-| Non-interactive flags (-y/--yes) | `04_tool_protocol.md § Shell` (Phase 1) |
-| Parallel tool calls | `04_tool_protocol.md` (existing) |
-| Verify first / read before edit | `03_reasoning.md` (existing) |
-| Dependency checks | `03_reasoning.md § Verification` (Phase 1) |
-| Tool-call schema: don't retry same args | `04_tool_protocol.md § Error recovery` (existing) |
-
-The overlay only adds value if Gemini is specifically ignoring rules that Ollama
-follows — meaning the eval must show the failure, and the overlay text must be
-*differently framed* (more forceful or restructured for Gemini's attention
-pattern), not a copy of existing rule text. Duplicating what is already in the
-static prefix is noise, not pressure.
-
-Bullets absent from co-cli rule files (and therefore overlay candidates if
-confirmed by eval): absolute paths emphasis, conciseness directive.
-
-If the evidence points to Ollama/Qwen instead, write an `OLLAMA_OVERLAY` with
-only the observed corrective pressure. The current Ollama signal (memory_search
-iterating 5× on cold store, escalating to `memory_list`) is partially addressed
-by `MEMORY_GUIDANCE`'s bounded retry rule — an Ollama overlay is only warranted
-if the eval shows failure modes that `MEMORY_GUIDANCE` does not reach (e.g.,
-tool-call schema retries or plan-only stops in the tool-calling path).
-
-Prompt-reference menu for overlays (co-cli-relevant only):
-
-- Gemini/Gemma: Hermes `GOOGLE_MODEL_OPERATIONAL_GUIDANCE`
-  (`prompt_builder.py:256-276`) — use only confirmed deltas not already in
-  co-cli Phase 1 rule files (see table above).
-- Ollama/Qwen: no hermes equivalent; derive from co-cli eval evidence directly.
-
-**P4 — Wire in `core.py`.**
-
-Injection position: after `build_toolset_guidance`, before the `Agent(...)`
-constructor call. This mirrors hermes's assembly order — model overlay sits
-adjacent to tool-behavior guidance, before memory/context layers. Do not move
-it to the end of `static_parts`.
+Wire-in position: `co_cli/agents/core.py` static assembly, after
+`build_toolset_guidance`, before `build_category_awareness_prompt`.
 
 ```python
-# core.py — orchestrator path, Block 0 static assembly
-static_parts = [build_static_instructions(config)]
-
 tool_guidance = build_toolset_guidance(tool_registry.tool_index)
 if tool_guidance:
     static_parts.append(tool_guidance)
 
-model_guidance = build_model_family_guidance(config)  # new — after tool guidance
+model_guidance = build_model_family_guidance(config)  # new
 if model_guidance:
     static_parts.append(model_guidance)
 
 category_hint = build_category_awareness_prompt(tool_registry.tool_index)
-if category_hint:
-    static_parts.append(category_hint)
-
-static_instructions = "\n\n".join(static_parts)
-agent = Agent(..., instructions=static_instructions, ...)
-
-# Block 1: per-turn callbacks — real-time, not cached
-agent.instructions(current_time_prompt)  # before safety_prompt (matches current core.py)
-agent.instructions(safety_prompt)
 ```
 
-`build_model_family_guidance` is only imported and called when at least one
-overlay constant is defined. If no overlay ships, do not add the call site.
+### Ollama eval
+
+`evals/eval_tool_retry_behavior.py` — targets the configured Ollama model (name
+from `settings.llm.model`). Gives the agent a task where one tool always returns
+an error. Inspects `result.messages` for repeated `(tool_name, args)` pairs across
+all `ToolCallPart` entries. Records: model name, provider, retry count per
+`(tool_name, args)` pair, verdict.
+
+Threshold: retry count > 1 for the same `(tool_name, args)` = FAIL. A FAIL result
+is evidence for a model-name-specific overlay (e.g., `QWEN_OVERLAY`), not a
+provider-level `OLLAMA_OVERLAY`. No overlay constant is written from this eval
+unless the results clearly warrant one — that decision is deferred to a follow-on
+plan.
+
+Writes: `docs/REPORT-eval-tool-retry-behavior.md`.
 
 ## Tasks
 
-- [ ] Add or run a model-specific main-agent/tool-calling eval for Gemini before adding any Gemini overlay
-- [ ] Record the evidence: model/provider, prompt, tool-call sequence, failure mode, and whether it is family-specific
-- [ ] If evidence confirms Gemini/Gemma needs an overlay, define `GEMINI_OVERLAY` in `co_cli/context/guidance.py` with only confirmed corrective pressure
-- [ ] If evidence instead confirms Ollama/Qwen needs an overlay, define `OLLAMA_OVERLAY` with only confirmed corrective pressure
-- [ ] Implement `build_model_family_guidance(config)` only for families with evidence; return empty for all others
-- [ ] Wire `build_model_family_guidance` into `core.py` static instruction assembly only if at least one overlay ships
-- [ ] Add unit tests for each shipped overlay and a non-matching model returning empty string
-- [ ] Add a build-agent/static assembly test proving model guidance is static, not registered as an `agent.instructions` callback
-- [ ] Re-run the relevant audit eval and record before/after call-count or retry-pattern delta
+- [ ] Define `GEMINI_OVERLAY` in `co_cli/context/guidance.py` — absolute paths +
+      conciseness bullets only (see delta table above)
+- [ ] Implement `build_model_family_guidance(config)` — Gemini branch only;
+      returns `""` for all other providers
+- [ ] Wire `build_model_family_guidance` into `co_cli/agents/core.py` static
+      assembly block
+- [ ] Add unit tests: Gemini provider returns non-empty; Ollama provider returns
+      `""`; model name containing "gemma" returns non-empty
+- [ ] Add static assembly test: model guidance appears in `static_instructions`,
+      not registered via `agent.instructions()`
+- [ ] Write `evals/eval_tool_retry_behavior.py` targeting the configured Ollama
+      model — instrument `(tool_name, args)` repeat count, write verdict and trace
+      to `docs/REPORT-eval-tool-retry-behavior.md`
 - [ ] Run `scripts/quality-gate.sh full`
 
 ## Done When
 
-- A model-family overlay is shipped only when backed by model-specific evidence
-- `build_model_family_guidance` returns overlay text only for the proven family; empty otherwise
-- Model-family guidance is static for the session, not a per-request callback
-- Relevant audit eval no longer shows the targeted retry/stop failure, or shows
-  a recorded reduction with a clear explanation of residual risk
-- Existing prompt-assembly tests still pass
-- The `clarify` docstring CRITICAL block in `co_cli/tools/user_input.py` is left
-  in place — model-family overlay and tool-description patch are complementary,
-  not redundant
+- `GEMINI_OVERLAY` contains only the 2 delta bullets not covered by existing rule
+  files; no duplication of base rules
+- `build_model_family_guidance` returns overlay text for Gemini/Gemma, `""` for
+  Ollama and everything else
+- Model guidance is in static instructions, not a per-turn callback
+- Ollama eval report exists with retry-count evidence for the configured model
+- The `clarify` CRITICAL block in `co_cli/tools/user_input.py` is left in place
 
 ## References
 
-- Predecessor plan: `docs/exec-plans/active/2026-04-28-081359-main-flow-prompt-parity.md`
-- Hermes prompt builder: `~/workspace_genai/hermes-agent/agent/prompt_builder.py`
-  L173–276 (overlays), L144–171 (tool-aware guidance constants)
-- Hermes assembler: `~/workspace_genai/hermes-agent/run_agent.py:3396–3470`
-- co-cli static assembly: `co_cli/context/assembly.py:build_static_instructions`
+- hermes overlay source: `~/workspace_genai/hermes-agent/agent/prompt_builder.py:270-288`
+  (`GOOGLE_MODEL_OPERATIONAL_GUIDANCE`) and `run_agent.py:4794-4805` (injection logic)
+- co-cli static assembly: `co_cli/agents/core.py:148-168`
 - co-cli toolset guidance: `co_cli/context/guidance.py`
-- co-cli agent core: `co_cli/agents/core.py`
-- Audit report (old, misattributed): `docs/REPORT-llm-audit-eval-20260420-162700.md §6`
-- Latest full-suite audit: `docs/REPORT-test-suite-llm-audit-20260428-161324.md`
+- Predecessor plan: `docs/exec-plans/active/2026-04-28-081359-main-flow-prompt-parity.md`
 - Existing partial fix: `co_cli/tools/user_input.py` (clarify CRITICAL block)
