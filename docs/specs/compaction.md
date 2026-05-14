@@ -1,7 +1,7 @@
 # Co CLI — Compaction System
 
 
-Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (in-place rewrite on compaction) lives in [sessions.md](sessions.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md).
+Covers how co-cli keeps context bounded under pressure. Prompt assembly and history processors live in [prompt-assembly.md](prompt-assembly.md); transcript persistence (in-place rewrite on compaction) lives in [sessions.md](sessions.md); one-turn orchestration and overflow detection in [core-loop.md](core-loop.md); tool emission contracts in [tools.md](tools.md); self-planning capability (todo items, snapshot format, rehydration) in [self-planning.md](self-planning.md).
 
 ## 1. Functional Architecture
 
