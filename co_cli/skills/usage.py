@@ -5,8 +5,8 @@ Tracks counters and timestamps only for agent-created skills. Bundled skills
 are upstream-managed and excluded.
 
 Sidecar I/O is best-effort: exceptions are logged and swallowed so usage
-tracking never blocks the underlying skill operation. Atomic writes via
-tempfile + os.replace.
+tracking never blocks the underlying skill operation. Writes go through the
+canonical atomic_write_text helper.
 
 Schema:
     {
@@ -31,12 +31,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from co_cli.memory.mutator import atomic_write_text
 from co_cli.skills.installer import find_skill_source_url
 
 if TYPE_CHECKING:
@@ -93,13 +92,7 @@ def write_records(deps: CoDeps, data: dict[str, Any]) -> None:
     """Atomically write the full sidecar."""
     path = _sidecar_path(deps)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f".json.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
-    try:
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    atomic_write_text(path, json.dumps(data, indent=2))
 
 
 def _new_record(now: str) -> dict[str, Any]:

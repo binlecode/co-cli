@@ -25,6 +25,8 @@ import hashlib
 import logging
 import re
 import struct
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
@@ -285,6 +287,10 @@ class MemoryStore:
         self._conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
+        # Tracks whether a caller has opened a multi-write transaction via
+        # transaction(); when True, individual write methods skip their inner
+        # commit() so the outer context manager controls atomicity.
+        self._in_transaction = False
 
         if self._backend == "hybrid":
             try:
@@ -319,6 +325,30 @@ class MemoryStore:
             return None
         m = re.search(r"float\[(\d+)\]", row[0] or "")
         return int(m.group(1)) if m else None
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Group multiple index/remove calls into one SQLite transaction.
+
+        While the context is active, individual write methods (``index``,
+        ``index_chunks``, ``remove``, ``remove_chunks``) skip their internal
+        ``commit()`` so the outer context manager owns transaction boundaries.
+        Commits on clean exit; rolls back on any exception raised inside the
+        block. Required by callers outside ``co_cli/memory/`` (e.g.
+        ``SkillIndex.upsert``) that compose multiple write methods into one
+        atomic unit — reaching into ``self._conn`` directly violates the
+        package-private ``_prefix`` rule for cross-package access.
+
+        Nested calls are not supported and will raise.
+        """
+        if self._in_transaction:
+            raise RuntimeError("MemoryStore.transaction() does not support nesting")
+        self._in_transaction = True
+        try:
+            with self._conn:
+                yield
+        finally:
+            self._in_transaction = False
 
     def _index_no_commit(
         self,
@@ -400,7 +430,8 @@ class MemoryStore:
             source_ref=source_ref,
             artifact_id=artifact_id,
         )
-        self._conn.commit()
+        if not self._in_transaction:
+            self._conn.commit()
 
     def _index_chunks_no_commit(
         self,
@@ -460,7 +491,8 @@ class MemoryStore:
             chunks: List of Chunk objects from _chunker.chunk_text().
         """
         self._index_chunks_no_commit(source, doc_path, chunks)
-        self._conn.commit()
+        if not self._in_transaction:
+            self._conn.commit()
 
     def remove_chunks(self, source: str, path: str) -> None:
         """Remove all chunk rows for (source, path), including FTS and vec entries."""

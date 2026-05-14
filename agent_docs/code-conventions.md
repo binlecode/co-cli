@@ -49,6 +49,8 @@ Preserve existing suffix conventions (e.g. `*Registry`, `*Info`) unless explicit
 
 For cross-cutting concerns, use the existing project primitive before adding another path. Config loading, console output, filesystem roots, tool outputs, approval flow, tracing, and test harnesses should each have one obvious implementation route.
 
+Full-overwrite file mutation uses `co_cli.memory.mutator.atomic_write_text`. Local `tempfile.NamedTemporaryFile` + `os.replace` blocks in mutation paths are forbidden.
+
 ## Display
 
 Use the project's shared `console` object for all terminal output. Use semantic style names; never hardcode color names at callsites.

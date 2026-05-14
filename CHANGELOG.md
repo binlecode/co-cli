@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.8.190]
+
+### Atomic Write Hygiene — System-wide (Plan 3.5c-pre)
+- **Canonical helper** — `co_cli/memory/_mutator.py` promoted to `co_cli/memory/mutator.py`; `atomic_write` renamed to `atomic_write_text(path, content)`; exception-cleanup bug fixed (temp file now unlinked on any failure, not just `os.replace` failure).
+- **FTS5 upsert transaction** — `MemoryStore.transaction()` public context manager added; `SkillIndex.upsert` wraps both `index` + `index_chunks` writes in a single SQLite transaction — a mid-step failure no longer leaves a ghost row.
+- **All non-atomic call sites migrated** — `skills/installer.py`, `tools/system/skills.py`, `skills/curator.py`, `skills/usage.py`, `memory/dream.py`, `agents/session_review.py`, `agents/skill_curator.py` all route through `atomic_write_text`; pid+uuid temp suffix dropped (tempfile already collision-safe).
+- **Code convention rule added** — `agent_docs/code-conventions.md` documents that full-overwrite mutation must use `atomic_write_text`; local `tempfile.NamedTemporaryFile` blocks in mutation paths are forbidden.
+
 ## [0.8.188]
 
 ### Todo — Continuity (Plan todo-continuity)

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +14,7 @@ from co_cli.config.skills import (
     CURATOR_STALE_AFTER_DAYS,
     SkillsSettings,
 )
+from co_cli.memory.mutator import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps, CoSessionState
@@ -167,16 +166,10 @@ def read_curator_state(deps: CoDeps) -> dict[str, Any]:
 
 
 def write_curator_state(deps: CoDeps, state: dict[str, Any]) -> None:
-    """Atomically write the curator state file via tempfile + os.replace."""
+    """Atomically write the curator state file."""
     path = _curator_state_path(deps)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f".json.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
-    try:
-        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    atomic_write_text(path, json.dumps(state, indent=2))
 
 
 def should_run_now(

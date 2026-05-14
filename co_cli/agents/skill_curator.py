@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from co_cli.memory.mutator import atomic_write_text
+
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
 
@@ -87,9 +89,7 @@ def _write_curator_report(run_id: str, output: CuratorOutput, usage: Any) -> Non
             "output_tokens": usage.output_tokens,
         }
 
-    (run_dir / "run.json").write_text(  # type: ignore[union-attr]
-        json.dumps(report, indent=2), encoding="utf-8"
-    )
+    atomic_write_text(run_dir / "run.json", json.dumps(report, indent=2))  # type: ignore[union-attr]
 
     md_lines = [
         "# Curator Run Report",
@@ -105,7 +105,7 @@ def _write_curator_report(run_id: str, output: CuratorOutput, usage: Any) -> Non
     if output.skills_updated:
         md_lines += ["**skills_updated:**"] + [f"- {s}" for s in output.skills_updated] + [""]
 
-    (run_dir / "run.md").write_text("\n".join(md_lines), encoding="utf-8")  # type: ignore[union-attr]
+    atomic_write_text(run_dir / "run.md", "\n".join(md_lines))  # type: ignore[union-attr]
 
 
 async def maybe_run_curator(deps: CoDeps, *, bypass_time_gate: bool = False) -> None:

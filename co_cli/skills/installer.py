@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 from co_cli.memory.frontmatter import parse_frontmatter
+from co_cli.memory.mutator import atomic_write_text
 from co_cli.skills.loader import _inject_source_url
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ def write_skill_file(content: str, filename: str, dest_dir: Path) -> Path:
     """Create dest_dir if needed; write content to dest_dir/filename. Returns dest path."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / filename
-    dest_path.write_text(content, encoding="utf-8")
+    atomic_write_text(dest_path, content)
     return dest_path
 
 

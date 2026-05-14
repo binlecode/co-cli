@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
-from co_cli.memory._mutator import atomic_write
 from co_cli.memory.artifact import (
     ArtifactKindEnum,
     IndexSourceEnum,
@@ -29,6 +28,7 @@ from co_cli.memory.frontmatter import (
     render_artifact_file,
     render_frontmatter,
 )
+from co_cli.memory.mutator import atomic_write_text
 from co_cli.memory.similarity import find_similar_artifacts, is_content_superset
 from co_cli.memory.text_chunker import chunk_text
 
@@ -181,7 +181,7 @@ def save_artifact(
                 decay_protected=True,
             )
             markdown_content = render_artifact_file(artifact)
-            atomic_write(existing_path, markdown_content)
+            atomic_write_text(existing_path, markdown_content)
             return SaveResult(
                 path=existing_path,
                 artifact_id=existing.id,
@@ -208,7 +208,7 @@ def save_artifact(
             decay_protected=True,
         )
         markdown_content = render_artifact_file(artifact)
-        atomic_write(file_path, markdown_content)
+        atomic_write_text(file_path, markdown_content)
         return SaveResult(
             path=file_path,
             artifact_id=artifact_id,
@@ -248,7 +248,7 @@ def save_artifact(
             frontmatter, _ = parse_frontmatter(raw)
             frontmatter["updated"] = datetime.now(UTC).isoformat()
             markdown_content = render_frontmatter(frontmatter, merged_body)
-            atomic_write(best_artifact.path, markdown_content)
+            atomic_write_text(best_artifact.path, markdown_content)
             return SaveResult(
                 path=best_artifact.path,
                 artifact_id=best_artifact.id,
@@ -276,7 +276,7 @@ def save_artifact(
         decay_protected=decay_protected,
     )
     markdown_content = render_artifact_file(artifact)
-    atomic_write(file_path, markdown_content)
+    atomic_write_text(file_path, markdown_content)
     return SaveResult(
         path=file_path,
         artifact_id=artifact_id,
@@ -342,7 +342,7 @@ def mutate_artifact(
 
     frontmatter["updated"] = datetime.now(UTC).isoformat()
     markdown_content = render_frontmatter(frontmatter, updated_body)
-    atomic_write(match_path, markdown_content)
+    atomic_write_text(match_path, markdown_content)
 
     return MutateResult(
         path=match_path,

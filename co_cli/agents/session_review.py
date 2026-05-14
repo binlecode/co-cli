@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelMessage
 
+from co_cli.memory.mutator import atomic_write_text
+
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
 
@@ -77,9 +79,7 @@ def _write_review_report(
             "output_tokens": usage.output_tokens,
         }
 
-    (run_dir / "run.json").write_text(  # type: ignore[union-attr]
-        json.dumps(report, indent=2), encoding="utf-8"
-    )
+    atomic_write_text(run_dir / "run.json", json.dumps(report, indent=2))  # type: ignore[union-attr]
 
     md_lines = [
         "# Session Review Report",
@@ -101,7 +101,7 @@ def _write_review_report(
             ["**knowledge_updated:**"] + [f"- {s}" for s in output.knowledge_updated] + [""]
         )
 
-    (run_dir / "run.md").write_text("\n".join(md_lines), encoding="utf-8")  # type: ignore[union-attr]
+    atomic_write_text(run_dir / "run.md", "\n".join(md_lines))  # type: ignore[union-attr]
 
 
 async def run_session_review(

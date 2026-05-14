@@ -39,15 +39,22 @@ class SkillIndex:
         self._store = MemoryStore(config=config, memory_db_path=memory_db_path)
 
     def upsert(self, name: str, description: str, path: str) -> None:
-        """Index or replace a skill row under source='skill'."""
+        """Index or replace a skill row under source='skill'.
+
+        Atomic across the two-step write: ``index`` (docs row) and
+        ``index_chunks`` (chunks + FTS5) run inside one SQLite transaction.
+        An exception in either step rolls back the other, so FTS5 never
+        carries a ghost row without its chunk content.
+        """
         from co_cli.memory.text_chunker import Chunk
 
-        self._store.index(source="skill", path=path, title=name, description=description)
-        self._store.index_chunks(
-            "skill",
-            path,
-            [Chunk(index=0, content=f"{name}: {description}", start_line=0, end_line=0)],
-        )
+        with self._store.transaction():
+            self._store.index(source="skill", path=path, title=name, description=description)
+            self._store.index_chunks(
+                "skill",
+                path,
+                [Chunk(index=0, content=f"{name}: {description}", start_line=0, end_line=0)],
+            )
 
     def remove(self, name: str) -> None:
         """Remove a skill from the index by name. No-op if not indexed."""

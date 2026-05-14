@@ -9,9 +9,7 @@ Co-cli's flat-file skill model degenerates file_path and linked_files to stubs f
 
 import json
 import math
-import os
 import re
-import uuid
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -21,6 +19,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
 from co_cli.memory.frontmatter import parse_frontmatter
+from co_cli.memory.mutator import atomic_write_text
 from co_cli.skills import usage as skill_usage
 from co_cli.skills.loader import scan_skill_content
 from co_cli.tools.agent_tool import agent_tool
@@ -160,15 +159,9 @@ def _validate_skill_content(content: str) -> str | None:
 
 
 def _atomic_write_skill(path: Path, content: str) -> None:
-    """Write content to path atomically via a temp-file rename."""
+    """Ensure parent dir exists, then write content atomically."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f".md.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
-    try:
-        tmp.write_text(content, encoding="utf-8")
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    atomic_write_text(path, content)
 
 
 def _scan_or_rollback(path: Path, content: str, original: str | None) -> str | None:
