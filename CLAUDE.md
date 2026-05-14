@@ -112,7 +112,7 @@ TL:  /orchestrate-plan <slug>  → docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slu
     ↓
 Dev: /orchestrate-dev <slug>              (implement + self-review + lint + scoped tests + sync-doc → delivery summary appended to plan)
     ↓
-TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full tests + doc sync + behavioral verification → verdict appended to plan)
+TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full tests + behavioral verification → verdict appended to plan)
     ↓
 👤  Gate 2: TL reads plan                 (plan + ✓ DONE marks + delivery summary + review-impl verdict — PASS means ship)
     ↓
@@ -121,7 +121,7 @@ TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full
 
 - `/orchestrate-plan <slug>`: create or refine `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
 - `/orchestrate-dev <slug>`: execute from plan, mark completed tasks `✓ DONE` (never delete mid-delivery), append delivery summary, auto-invoke sync-doc.
-- `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, doc sync, behavioral verification. Appends pass/fail verdict. **PASS means TL reads verdict at Gate 2 and ships.**
+- `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification. Appends pass/fail verdict. **PASS means TL reads verdict at Gate 2 and ships.**
 - `/sync-doc [doc...]`: fix spec inaccuracies in `docs/specs/` in-place. No args means all specs. Auto-invoked by `orchestrate-dev`.
 - `/ship [slug]`: post-Gate-2 ship — full test safety net, version bump, plan archive (`git mv` to `completed/`), commit.
 - `/clean-tests [path]`: standalone test quality gate — enforce `agent_docs/testing.md` rules, purge structural/redundant tests, verify behavioral depth, run full suite. Default path: `tests/`. Call any time, not just pre-ship.

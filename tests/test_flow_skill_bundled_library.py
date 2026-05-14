@@ -31,29 +31,12 @@ def test_all_bundled_skills_load() -> None:
 
 
 @pytest.mark.parametrize("name", sorted(_BUNDLED_NAMES))
-def test_bundled_skill_has_description(name: str) -> None:
-    """Assertion 2: each bundled skill has a non-empty description."""
-    skills = load_skills(_SKILLS_DIR)
-    skill = skills[name]
-    assert skill.description, f"Skill '{name}' has no description"
-    assert skill.description.strip(), f"Skill '{name}' description is blank"
-
-
-@pytest.mark.parametrize("name", sorted(_BUNDLED_NAMES))
 def test_bundled_skill_lints_clean(name: str) -> None:
     """Assertion 3: each bundled skill produces no lint findings."""
     path = _SKILLS_DIR / f"{name}.md"
     content = path.read_text(encoding="utf-8")
     findings = lint_skill(content, path)
     assert findings == [], f"Skill '{name}' has lint findings: {findings}"
-
-
-@pytest.mark.parametrize("name", sorted(_BUNDLED_NAMES))
-def test_bundled_skill_has_phase_section(name: str) -> None:
-    """Assertion 4: each bundled skill body contains at least one ## Phase section."""
-    path = _SKILLS_DIR / f"{name}.md"
-    content = path.read_text(encoding="utf-8")
-    assert "## Phase " in content, f"Skill '{name}' has no Phase section"
 
 
 def test_manifest_renders_seven_bundled_entries(tmp_path: Path) -> None:

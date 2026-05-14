@@ -54,7 +54,7 @@ TL collects all Dev results before Phase 3. Scan Dev outputs for `⚠ Extra file
 ```
 
 ### Step 2 — Read before writing
-Read every file in `files:`. Note missing files (new). Understand existing code before touching anything.
+Read every file in `files:`. Note missing files (new).
 
 ### Step 3 — Implement
 Write or edit only the files in `files:`. Announce any extra file touched.
@@ -102,7 +102,7 @@ Run after all tasks complete (or at first blocked task).
 
 ## Phase 4 — Delivery Summary
 
-Fix any remaining lint or test failures before appending. Summary reflects final state.
+Fix any remaining failures before appending.
 
 Append to the plan:
 
@@ -124,3 +124,5 @@ Append to the plan:
 
 **DELIVERED** = all tasks passed, lint clean, scoped tests green, doc sync clean or fixed.
 **BLOCKED** = any task failed `done_when`, or tests still failing after fix attempts.
+
+**Next step:** `/review-impl <slug>` — full suite + evidence scan + auto-fix → verdict appended to plan.

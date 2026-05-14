@@ -20,7 +20,7 @@ argument-hint: "<slug>"
 1. Read relevant source, tests, and `docs/reference/RESEARCH-<scope>.md` if it exists. Glob `docs/exec-plans/active/*-<slug>.md` — if found, read it and skip already-implemented work.
 2. **Current-state check:** scan source and specs for accuracy against the planned scope. If too inconsistent to plan safely: `✗ Current state inconsistent — run /sync-doc first.`
 3. **For doc tasks** (restructure or doc+code): run a Code Accuracy Verification pass — read each source file referenced by the target docs and confirm every factual claim. List inaccuracies in Context before proposing changes.
-4. For each open question you intend to list, try to answer it from the codebase first. An open question answerable by inspection will be flagged by Core Dev.
+4. For each open question you intend to list, try to answer it from the codebase first.
 5. **For AI behavioral features** (new agents, personality changes, tool-chain modifications affecting model output): run representative inputs through the current system and annotate observed failure modes. List findings in `## Failure Modes` before writing `## High-Level Design`. Do not write criteria against imagined failure space.
 
 **Write `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`** with sections:
