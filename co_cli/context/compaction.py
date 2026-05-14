@@ -25,6 +25,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 
 from co_cli.context._compaction_boundaries import (
@@ -395,6 +396,21 @@ async def recover_overflow_history(
     return result
 
 
+def _resolve_proactive_focus(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> str | None:
+    for todo in ctx.deps.session.session_todos:
+        if todo["status"] == "in_progress":
+            return todo["content"][:200]
+    for msg in reversed(messages):
+        if isinstance(msg, ModelRequest):
+            for part in msg.parts:
+                if isinstance(part, UserPromptPart):
+                    return part.content[-200:]
+    return None
+
+
 async def proactive_window_processor(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -553,7 +569,8 @@ async def proactive_window_processor(
                 len(messages) - tail_start,
             )
 
-            result, summary_text = await compact_messages(ctx, messages, bounds, focus=None)
+            focus = _resolve_proactive_focus(ctx, messages)
+            result, summary_text = await compact_messages(ctx, messages, bounds, focus=focus)
             if summary_text is not None:
                 log.info("Sliding window: summarised %d messages inline", dropped_count)
 

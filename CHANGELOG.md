@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.8.192]
+
+### Proactive compaction focus inference
+- **`_resolve_proactive_focus`** — private pure function in `co_cli/context/compaction.py`; derives a focus string from session state with no LLM call: in-progress todo content (head-capped at 200 chars) → most-recent user message tail (tail-capped at 200 chars) → `None`.
+- **Wired into `proactive_window_processor`** — replaces the hardcoded `focus=None` at the `compact_messages` call site; the summarizer's existing `FOCUS TOPIC` block now preserves ~60-70% of the summary for on-task signal during auto-compaction.
+- **Three unit tests** added to `tests/test_flow_compaction_proactive.py` covering all three resolution branches (in-progress todo, last user message, neither).
+
 ## [0.8.190]
 
 ### Atomic Write Hygiene — System-wide (Plan 3.5c-pre)

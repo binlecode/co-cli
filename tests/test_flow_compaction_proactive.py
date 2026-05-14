@@ -21,6 +21,7 @@ from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 from co_cli.context.compaction import (
     _COMPACTION_BREAKER_PROBE_EVERY,
     _COMPACTION_BREAKER_TRIP,
+    _resolve_proactive_focus,
     _summarization_gate_open,
     is_compaction_marker,
     proactive_window_processor,
@@ -418,3 +419,70 @@ async def test_closing_callback_fires_failed_when_breaker_tripped() -> None:
 
     assert result is not messages
     assert "Summarizer failed — used static marker." in captured
+
+
+def test_focus_from_in_progress_todo() -> None:
+    """_resolve_proactive_focus returns in-progress todo content head-capped at 200 chars.
+
+    Failure mode: focus resolver ignores todos → proactive compaction never uses the
+    active task as the summarization anchor, losing on-task signal on every fire.
+    """
+    long_content = "X" * 300
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(
+            session_todos=[
+                {"id": "1", "content": long_content, "status": "in_progress", "priority": "high"}
+            ]
+        ),
+    )
+    ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+
+    result = _resolve_proactive_focus(ctx, [])
+
+    assert result == long_content[:200]
+
+
+def test_focus_from_last_user_message() -> None:
+    """_resolve_proactive_focus returns most-recent UserPromptPart content tail-capped at 200 chars.
+
+    Failure mode: resolver scans the wrong direction or skips the wrapping ModelRequest,
+    returning None when a user message is present — focus is silently lost.
+    """
+    long_content = "Y" * 300
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="first message")]),
+        ModelRequest(parts=[UserPromptPart(content=long_content)]),
+    ]
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+    )
+    ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+
+    result = _resolve_proactive_focus(ctx, messages)
+
+    assert result == long_content[-200:]
+
+
+def test_focus_none_when_no_todo_and_no_messages() -> None:
+    """_resolve_proactive_focus returns None when there are no todos and no messages.
+
+    Failure mode: returns an empty string or raises — both would corrupt the
+    focus=None fallthrough path that today's behavior depends on.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+    )
+    ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+
+    result = _resolve_proactive_focus(ctx, [])
+
+    assert result is None
