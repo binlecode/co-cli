@@ -1,7 +1,7 @@
 # Co CLI Core Loop Design
 
 
-For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); session persistence, knowledge artifacts, and recall live in [memory.md](memory.md); compaction mechanics in [compaction.md](compaction.md).
+For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); session persistence and recall live in [memory-sessions.md](memory-sessions.md); knowledge artifacts and recall live in [memory-knowledge.md](memory-knowledge.md); compaction mechanics in [compaction.md](compaction.md).
 
 ## 1. Foreground Turn Flow
 
@@ -37,8 +37,8 @@ flowchart TD
 | `run_turn` / approval loop / retries | [core-loop.md](core-loop.md) |
 | Instruction parts + history processors | [prompt-assembly.md](prompt-assembly.md) |
 | Compaction trigger (processor #3) | [compaction.md](compaction.md) |
-| On-demand recall (`knowledge_search` / `session_search` tools) | [memory.md](memory.md) |
-| Transcript append / child-session branching | [memory.md](memory.md) |
+| On-demand recall (`knowledge_search` / `session_search` tools) | [memory-knowledge.md](memory-knowledge.md) · [memory-sessions.md](memory-sessions.md) |
+| Transcript append / child-session branching | [memory-sessions.md](memory-sessions.md) |
 
 Detailed foreground turn flow:
 
@@ -363,7 +363,7 @@ The intentional simplification remains:
 
 ## 3. Config
 
-These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); memory and recall settings live in [memory.md](memory.md).
+These settings most directly shape one-turn orchestration behavior. Instruction and recall settings live in [prompt-assembly.md](prompt-assembly.md); knowledge and session recall settings live in [memory-knowledge.md](memory-knowledge.md) and [memory-sessions.md](memory-sessions.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
