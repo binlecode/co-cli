@@ -181,10 +181,33 @@ The built-in `/skills` command family is implemented in `_cmd_skills()` and rela
 | `/skills lint [<name>|--all]` | run R1–R10 lint rules against one skill or all loaded skills; exit 1 on any finding |
 | `/skills reload` | rescan the user-global skill directory and reload into the live session |
 | `/skills upgrade <name>` | reinstall from stored `source-url` |
+| `/skills usage [<name>]` | print the usage sidecar — table for all agent-created skills, or full record for one |
+| `/skills pin <name>` | mark an agent-created skill as pinned in the usage sidecar (rejects bundled and URL-installed) |
+| `/skills unpin <name>` | clear the pinned flag on an agent-created skill |
 
 `/skills reload` rescans only the user-global directory; bundled skills are version-controlled and not rescanned at runtime. `/skills check` covers both tiers (bundled and user-global).
 
 Installed skills are written to `~/.co-cli/skills/`.
+
+### Usage Tracking Sidecar
+
+Per-skill counters and timestamps live in `~/.co-cli/skills/.usage.json` (out-of-frontmatter so bundled skill files stay untouched by user-state writes). Tracked fields:
+
+| Field | Meaning |
+| --- | --- |
+| `use_count` | reserved — dispatch invocations (no separate use-vs-view path in co-cli today) |
+| `view_count` | bumped by every successful `skill_view` call |
+| `patch_count` | bumped by `skill_manage(action='edit')` and `skill_manage(action='patch')` |
+| `created_at` | first time the skill entered the sidecar (initialised by `create`/`install` for local sources) |
+| `last_used_at` / `last_viewed_at` / `last_patched_at` | ISO 8601 timestamps |
+| `state` | reserved for future curator transitions; always `"active"` today |
+| `pinned` | user opt-out marker from future autonomous library mutation; toggled via `/skills pin` / `/skills unpin` |
+
+**Agent-created filter.** Sidecar writes apply only to skills that exist in `user_skills_dir` AND have no `source-url` frontmatter. Bundled skills (in `co_cli/skills/`) and URL-installed skills are upstream-managed and excluded from tracking.
+
+**Best-effort writes.** Hook failures (`bump_view`, `bump_use`, `bump_patch`, `record_create`, `forget`) are logged via `logger.debug` and swallowed — usage tracking never blocks the underlying skill operation. Writes use `tempfile + os.replace` for atomicity; the sidecar can be deleted at any time and rebuilds from zero counts.
+
+**Disable.** `SkillsSettings.usage_tracking_enabled` (env `CO_SKILLS_USAGE_TRACKING_ENABLED`) short-circuits every hook when set to `False`.
 
 ## 3. Model-Callable Surface
 
@@ -269,15 +292,16 @@ It is invoked on every `skill_manage(action=...)` write, on `/skills reload`, an
 
 ## 4. Config
 
-The skill system is lightly configured. The main runtime dependencies are the resolved skill paths on `CoDeps`.
+Resolved skill paths live on `CoDeps`; behaviour knobs live on `SkillsSettings`.
 
 | Setting | Source | Purpose |
 | --- | --- | --- |
 | `deps.skills_dir` | package directory `co_cli/skills/` | bundled skills directory (lowest priority) |
 | `deps.user_skills_dir` | `~/.co-cli/skills/` | user-global skill directory (overrides bundled) |
+| `settings.skills.usage_tracking_enabled` | `co_cli/config/skills.py` (env `CO_SKILLS_USAGE_TRACKING_ENABLED`) | enable per-skill usage sidecar writes; default `True` |
 | `settings` values referenced by `requires.settings` | `co_cli/config/` | load gating only |
 
-There is no separate skills config object today.
+`SkillsSettings` is wired into `Settings` as `skills:`. The config root is reserved for the broader 3.5b/3.5c hygiene + review knobs.
 
 ## 5. Files
 
@@ -288,19 +312,22 @@ There is no separate skills config object today.
 | `co_cli/skills/_lint.py` | `lint_skill(content, path)` — R1–R10 lint validator; `LintFinding` dataclass |
 | `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content`, `_check_requires` |
 | `co_cli/skills/installer.py` | `fetch_skill_content`, `write_skill_file`, `discover_skill_files`, `find_skill_source_url`, `read_skill_meta` |
+| `co_cli/skills/usage.py` | usage sidecar I/O — `bump_view`/`bump_use`/`bump_patch`/`record_create`/`forget`/`set_pinned`/`is_agent_created`/`read_records`/`write_records` |
+| `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model; current dynamic knob: `usage_tracking_enabled` |
 | `co_cli/skills/registry.py` | `set_skill_commands()` — replaces `deps.skill_commands`; `get_skill_registry()` — derives model-facing list |
 | `co_cli/skills/lifecycle.py` | skill load, install, upgrade, reload orchestration |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — renders the `<available_skills>` block injected into the static system prompt |
 | `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/lint/reload/upgrade) |
+| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/lint/reload/upgrade/usage/pin/unpin) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, `_build_completer_words` |
 | `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, SkillIndex construction, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection at agent construction |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` and `skill_index` (top-level); `active_skill_name` (runtime) |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
-| `co_cli/tools/system/skills.py` | `skill_search`, `skill_view`, `skill_manage` — model-callable surface for the skill tier |
+| `co_cli/tools/system/skills.py` | `skill_search`, `skill_view`, `skill_manage` — model-callable surface for the skill tier; calls usage hooks on success paths |
 | `co_cli/skills/` | package-default shipped skills |
 | `~/.co-cli/skills/` | user-global skill files; override bundled skills on name collision |
+| `~/.co-cli/skills/.usage.json` | per-skill usage sidecar (counters, timestamps, `pinned`); written by usage hooks; agent-created skills only |
 | `docs/specs/memory.md` | sibling surface — declarative memory (session + knowledge) |
 | `docs/specs/personality.md` | sibling surface — doctrine (canon, soul seed, mindsets) |
 | `docs/specs/bootstrap.md` | when skills load during startup |

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.8.182]
+
+### Skills
+- **Usage tracking sidecar** (`~/.co-cli/skills/.usage.json`) — per-skill counters (`use_count` / `view_count` / `patch_count`) and timestamps (`created_at`, `last_used_at`/`last_viewed_at`/`last_patched_at`), plus `state` and `pinned` flags. Hooks fire on `skill_view`, `skill_manage(action='create'/'edit'/'patch'/'delete'/'install')` success paths in `co_cli/tools/system/skills.py`. Best-effort writes — exceptions are `logger.debug`-logged and swallowed. Atomic via sibling-temp + `os.replace`.
+- **Agent-created filter** — sidecar writes apply only to skills under `user_skills_dir` AND without `source-url`. Bundled skills (under `co_cli/skills/`) and URL-installed skills are upstream-managed and excluded.
+- **CLI** — `/skills usage [<name>]` prints the per-skill table or a single record; `/skills pin <name>` / `/skills unpin <name>` toggle the `pinned` flag (rejects bundled and URL-installed with explanatory error).
+- **Config** — `SkillsSettings` (new `co_cli/config/skills.py`) wired into `Settings.skills`. One knob: `usage_tracking_enabled` (env `CO_SKILLS_USAGE_TRACKING_ENABLED`, default `True`). Disabling short-circuits every hook.
+- **Spec** — `docs/specs/skill.md` §2 gains the Usage Tracking Sidecar section; §3 management table gains the three new `/skills` subcommands; §4 Config and §5 Files updated.
+
+### Forward-compat
+- `bump_use` and `last_used_at` are reserved API surface for the 3.5b curator state machine (no production caller in 3.5a; "view IS use" in today's flat-file model).
+
 ## [0.8.180]
 
 ### Refactor
