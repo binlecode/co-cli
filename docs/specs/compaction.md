@@ -683,7 +683,50 @@ On a non-`None` result, `run_turn` sets `current_history = compacted`, clears pe
 
 Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_threshold_chars=...)` in each tool's own file — see the table in §2.2.
 
-## 4. Files
+## 4. Public Interface
+
+### Shared assembly primitive
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `compact_messages(ctx, messages, bounds, focus) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer, assembles `head \| marker \| [todo_snapshot] \| [search breadcrumbs] \| tail`; does NOT write runtime |
+| `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn`, `post_compaction_token_estimate`, `message_count_at_last_compaction` |
+
+### Compaction entry points
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `proactive_window_processor(ctx, messages) -> list[ModelMessage]` | `co_cli/context/compaction.py` | History processor — L3 LLM compaction at compaction_ratio with anti-thrash + circuit-breaker policy |
+| `recover_overflow_history(ctx, messages) -> list[ModelMessage] \| None` | `co_cli/context/compaction.py` | Async — HTTP 400/413 strip-then-summarize recovery; returns `None` if planner cannot find bounds |
+| `summarize_messages(deps, messages, focus=None, prior_summary=None) -> str` | `co_cli/context/summarization.py` | Async — LLM summarizer (no tools); structured `_SUMMARIZE_PROMPT` template |
+| `resolve_compaction_budget(deps) -> int` | `co_cli/context/summarization.py` | Returns `deps.model_max_ctx` (Ollama-probe-capped at bootstrap) |
+| `estimate_message_tokens(messages) -> int` | `co_cli/context/summarization.py` | `total_chars // CHARS_PER_TOKEN` over text parts and JSON-serialized `ToolCallPart.args` |
+
+### Registered history processors
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `dedup_tool_results(ctx, messages)` | `co_cli/context/history_processors.py` | Collapses identical `(tool_name, content-hash)` returns in pre-tail to back-references |
+| `evict_old_tool_results(ctx, messages)` | `co_cli/context/history_processors.py` | Clears `COMPACTABLE_TOOLS` returns older than `COMPACTABLE_KEEP_RECENT` per tool |
+| `enforce_request_size(ctx, messages)` | `co_cli/context/history_processors.py` | Force-spills largest unspilled `ToolReturnPart`s when total tokens exceed `deps.spill_threshold_tokens` |
+| `sanitize_surrogate_codepoints(ctx, messages)` | `co_cli/context/history_processors.py` | Sweeps lone Unicode surrogates (U+D800–U+DFFF) → U+FFFD |
+| `strip_all_tool_returns(messages) -> list[ModelMessage]` | `co_cli/context/history_processors.py` | Recovery helper: replaces every `ToolReturnPart` content with a per-tool marker; idempotent |
+
+### Spill emission
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `spill_if_oversized(content, tool_results_dir, tool_name, force=False, threshold=SPILL_THRESHOLD_CHARS) -> str` | `co_cli/tools/tool_io.py` | Persist oversized content to `tool-results/<sha16>.txt`; returns inline `<persisted-output>` placeholder |
+| `SPILL_THRESHOLD_CHARS = 4_000`, `TOOL_RESULT_PREVIEW_CHARS = 1_500` | `co_cli/tools/tool_io.py` | Module constants (non-configurable) |
+| `MAX_TOOL_CALLS_PER_MODEL_TURN = 6` | `co_cli/agents/tool_call_limit.py` | L0 admission cap; non-configurable |
+
+### Error classification
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `is_context_overflow(exc) -> bool` | `co_cli/context/_http_error_classifier.py` | Detects context-overflow on HTTP 400/413 across OpenAI / Ollama / Gemini / vLLM / Bedrock providers |
+
+## 5. Files
 
 | File | Role |
 |---|---|
@@ -710,7 +753,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `evals/eval_compaction_proactive.py` | Proactive compaction end-to-end eval. |
 | `evals/eval_compaction_multi_cycle.py` | Multi-cycle compaction fidelity eval. |
 
-## 5. Test Gates
+## 6. Test Gates
 
 | Property | Test file |
 |---|---|

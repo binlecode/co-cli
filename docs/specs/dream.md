@@ -288,7 +288,39 @@ Internal caps:
 | max decay archives per cycle | `20` | Per-cycle decay archive cap |
 | default cycle timeout | `60` seconds | Timeout used by `run_dream_cycle()` |
 
-## 4. Files
+## 4. Public Interface
+
+### Cycle entry
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `run_dream_cycle(deps, dry_run=False, *, miner_tool, timeout_secs=60) -> DreamResult` | `co_cli/memory/dream.py` | Async — orchestrates mining → merge → decay phases under `asyncio.timeout(timeout_secs)`; isolates phase failures |
+| `DreamResult` | `co_cli/memory/dream.py` | Frozen dataclass — `extracted`, `merged`, `decayed`, `errors: list[str]`, `timed_out: bool` |
+
+### State persistence
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `DreamState` | `co_cli/memory/dream.py` | Pydantic model — `last_dream_at`, `processed_sessions`, `stats` |
+| `DreamStats` | `co_cli/memory/dream.py` | Pydantic model — `total_cycles`, `total_extracted`, `total_merged`, `total_decayed` |
+| `load_dream_state(knowledge_dir) -> DreamState` | `co_cli/memory/dream.py` | Forgiving loader — returns fresh state on missing/corrupt JSON |
+| `save_dream_state(knowledge_dir, state) -> None` | `co_cli/memory/dream.py` | Writes `_dream_state.json` with `mkdir -p` |
+| `dream_state_path(knowledge_dir) -> Path` | `co_cli/memory/dream.py` | Returns `<knowledge_dir>/_dream_state.json` |
+
+### Dream miner agent
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `build_dream_miner_agent(miner_tool) -> Agent[CoDeps, str]` | `co_cli/memory/dream.py` | Constructs the tool-using sub-agent equipped with `knowledge_manage` used during mining |
+
+### Archive and decay helpers (used by `/memory` commands)
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `archive_artifacts(paths, knowledge_dir) -> int` | `co_cli/memory/archive.py` | Moves artifacts into `knowledge/_archive/`; resolves filename collisions by suffix |
+| `restore_artifact(slug, knowledge_dir, store=None) -> bool` | `co_cli/memory/archive.py` | Restores an archived artifact by unambiguous filename prefix; reindexes if `store` provided |
+
+## 5. Files
 
 | File | Purpose |
 | --- | --- |
@@ -306,7 +338,7 @@ Internal caps:
 | `co_cli/main.py` | Session-end dream trigger (`_maybe_run_dream_cycle`) |
 | `co_cli/commands/knowledge.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, and `/memory stats` |
 
-## 5. Test Gates
+## 6. Test Gates
 
 | Property | Test file |
 | --- | --- |

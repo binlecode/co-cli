@@ -232,7 +232,46 @@ _delegate_agent
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Default agent retry budget |
 | `max_requests` tool arg | — | 10 / 8 / 3 | Per-call delegation request cap (research / analysis / reasoning); defaults are function-local |
 
-## 4. Files
+## 4. Public Interface
+
+### Tool registration
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `@agent_tool(name=..., description=..., approval=..., spill_threshold_chars=..., delegation=...)` | `co_cli/tools/agent_tool.py` | Decorator — self-registers a function into `TOOL_REGISTRY` with metadata |
+| `TOOL_REGISTRY` | `co_cli/tools/agent_tool.py` | Module-level list populated at import time; read by `build_tool_registry()` |
+| `ToolRegistry` | `co_cli/agents/core.py` | Bundle of `toolset`, `mcp_toolsets`, `tool_index` produced by `build_tool_registry()` |
+| `build_tool_registry(config) -> ToolRegistry` | `co_cli/agents/core.py` | Builds the foreground agent's combined toolset from `TOOL_REGISTRY` + MCP servers |
+| `discover_delegation_tools(profile, config) -> list[Callable]` | `co_cli/agents/core.py` | Returns tools tagged for a delegation profile, filtered by `requires_config` |
+| `build_agent(config, model, tool_registry, ...) -> Agent[CoDeps, Any]` | `co_cli/agents/core.py` | Constructs the pydantic-ai agent with instructions, history processors, and capabilities |
+
+### Tool output / errors
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `tool_output(content, *, deps, tool_name, spill_threshold_chars=SPILL_THRESHOLD_CHARS) -> ToolReturn` | `co_cli/tools/tool_io.py` | Standard tool result emit; runs `spill_if_oversized` first |
+| `tool_output_raw(content) -> ToolReturn` | `co_cli/tools/tool_io.py` | Bypass spill (for prebuilt structured output) |
+| `tool_error(message, *, tool_name=None) -> ToolReturn` | `co_cli/tools/tool_io.py` | Standard tool error payload |
+| `spill_if_oversized(content, tool_results_dir, tool_name, force=False, threshold=...) -> str` | `co_cli/tools/tool_io.py` | Persist oversized content; returns inline placeholder block |
+| `check_tool_results_size(tool_results_dir) -> str | None` | `co_cli/tools/tool_io.py` | Returns warning text when `tool-results/` exceeds 100 MB |
+
+### Tool lifecycle and approval
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `CoToolLifecycle(AbstractCapability[CoDeps])` | `co_cli/tools/lifecycle.py` | pydantic-ai capability — fires `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute` on every tool call |
+| `resolve_approval_subject(tool_name, args) -> ApprovalSubject` | `co_cli/tools/approvals.py` | Maps a tool call to its approval-subject kind (`shell`, `path`, `domain`, `tool`) |
+| `ApprovalSubject`, `SessionApprovalRule`, `ApprovalKindEnum` | `co_cli/deps.py` | Approval-subject record types and remembered-rule shape |
+| `build_category_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Static system-prompt hint listing deferred-tool categories |
+
+### Delegation
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds an isolated `CoDeps` for a delegation agent; forwards `tool_index`, excludes `tool_registry`, increments `agent_depth` |
+| `_delegate_agent(...)` / `_run_agent_attempt(...)` | `co_cli/tools/agents/delegation.py` | Shared OTel + `UsageLimits` wrappers used by `web_research`, `knowledge_analyze`, `reason` |
+
+## 5. Files
 
 | File | Role |
 |------|------|
@@ -259,7 +298,7 @@ _delegate_agent
 | `co_cli/tools/google/gmail.py` | `google_gmail_list`, `google_gmail_search`, `google_gmail_draft` |
 | `co_cli/tools/google/calendar.py` | `google_calendar_list`, `google_calendar_search` |
 
-## 5. Test Gates
+## 6. Test Gates
 
 | Property | Test file |
 |----------|-----------|

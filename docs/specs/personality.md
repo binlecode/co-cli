@@ -161,7 +161,38 @@ for missing mindset files.
 
 ---
 
-## 4. Files
+## 4. Public Interface
+
+### Static prompt assembly
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules + `RECENCY_CLEARING_ADVISORY` joined with `\n\n`; called once per session at agent construction |
+
+### Soul asset loaders
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `load_soul_seed(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns the role's `seed.md` body; required for every personality |
+| `load_soul_mindsets(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns joined `## Mindsets` block from `mindsets/*.md`; empty string when no mindsets |
+| `load_soul_critique(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns optional `## Review lens` body; empty string when no `critique.md` |
+
+### Personality discovery and validation
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `VALID_PERSONALITIES` | `co_cli/personality/prompts/validator.py` | Tuple of personality role names discovered from `souls/` (subdirs containing `seed.md`) |
+| `validate_personality_files(role) -> list[str]` | `co_cli/personality/prompts/validator.py` | Returns non-blocking warning strings for missing mindset files |
+
+### Canon indexing (bootstrap-only path)
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `_sync_canon_store(store, config, frontend)` | `co_cli/bootstrap/core.py` | Indexes `souls/{role}/memories/*.md` into `chunks_fts` under `source='canon'`; package-private — no model-callable read path |
+
+---
+
+## 5. Files
 
 | File | Purpose |
 |---|---|

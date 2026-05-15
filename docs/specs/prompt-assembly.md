@@ -109,7 +109,34 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | identical-tool-call streak for warning injection |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | shell-error streak for reflection-cap injection |
 
-## 4. Files
+## 4. Public Interface
+
+### Static instruction assembly
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules + `RECENCY_CLEARING_ADVISORY`, joined with `\n\n`; called once at agent construction |
+| `RECENCY_CLEARING_ADVISORY` | `co_cli/context/assembly.py` | Module-level constant — "## Tool result recency" paragraph appended last to the static prompt |
+| `build_toolset_guidance(tool_index) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE`) |
+| `build_category_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a single-sentence category-level hint for `DEFERRED` tools; empty when no deferred tools exist |
+| `render_skill_manifest(skill_commands, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block injected after tool guidance |
+
+### Personality asset loaders
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `load_soul_seed(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns the role's `seed.md` body |
+| `load_soul_mindsets(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns the joined `## Mindsets` block from `mindsets/*.md` |
+| `load_soul_critique(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns the optional `## Review lens` body |
+
+### Dynamic per-request instructions
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `safety_prompt(ctx) -> str` | `co_cli/agents/_instructions.py` | `@agent.instructions` — doom-loop / shell-error warning; output is ephemeral, not persisted to history |
+| `current_time_prompt(ctx) -> str` | `co_cli/agents/_instructions.py` | `@agent.instructions` — current date/time string at tail position; ephemeral grounding |
+
+## 5. Files
 
 | File | Purpose |
 | --- | --- |

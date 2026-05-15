@@ -312,7 +312,30 @@ All data stays local. Tool responses and full conversation history are captured 
 | `--last` | `-l` | `20` | Number of recent spans shown on startup |
 | `--verbose` | `-v` | `False` | Show LLM output content for model spans |
 
-## 4. Files
+## 4. Public Interface
+
+### Bootstrap setup
+
+| Symbol | Source | Contract |
+|--------|--------|---------|
+| `setup_tracer_provider(service_name, service_version, redact_patterns) -> TracerProvider` | `co_cli/observability/telemetry.py` | Builds the OTel `TracerProvider` with `SQLiteSpanExporter` + `JsonSpanExporter` `SimpleSpanProcessor`s |
+| `setup_file_logging(logs_dir, log_level, log_max_size_mb, log_backup_count) -> None` | `co_cli/observability/file_logging.py` | Attaches two `RotatingFileHandler`s to root logger (`co-cli.jsonl` INFO+, `errors.jsonl` WARNING+); idempotent |
+
+### Span exporters
+
+| Symbol | Source | Contract |
+|--------|--------|---------|
+| `SQLiteSpanExporter(SpanExporter)` | `co_cli/observability/telemetry.py` | Two-phase export to `~/.co-cli/co-cli-logs.db`; WAL journal, 5s busy timeout, 3× retry with backoff |
+| `JsonSpanExporter(SpanExporter)` | `co_cli/observability/telemetry.py` | Writes every completed span as one JSON line via the `co_cli.observability.spans` propagating logger |
+
+### Viewers (CLI entrypoints)
+
+| Symbol | Source | Contract |
+|--------|--------|---------|
+| `co traces` | `co_cli/main.py` → `co_cli/observability/viewer.py` | Generates `~/.co-cli/traces.html` from the last 20 traces and auto-opens it |
+| `co tail` | `co_cli/main.py` → `co_cli/observability/tail.py:run_tail` | Polls the spans DB and prints completed spans in real time |
+
+## 5. Files
 
 | File | Purpose |
 |------|---------|

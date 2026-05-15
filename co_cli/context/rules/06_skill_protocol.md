@@ -70,15 +70,11 @@ collaborative creation.
 
 ## Background review
 
-A separate review agent runs at the end of each session (when enabled).
-It scans the conversation for drift you missed in-flight, patterns
-worth saving as new skills, and user-correction signals worth
-memorializing as knowledge artifacts. Don't double up: focus the
-`## Drift` and `## Create` reflexes on the obvious, in-the-moment
-cases; trust the session-end review to catch the rest.
-
-A curator agent runs at startup, less often (default weekly, gated by
-2-hour REPL idle). It archives unused skills and consolidates narrow
-siblings into broader umbrellas. Skills marked pinned via
-`/skills pin <name>` opt out. The curator never deletes — archived
-skills are recoverable via `/skills curator restore <name>`.
+A separate review agent runs in the background
+after every ~5 tool calls (when enabled). It scans the conversation
+for drift you missed in-flight, patterns worth saving as new skills,
+and user-correction signals worth memorializing as knowledge
+artifacts. Don't double up: focus the `## Drift` and `## Create`
+reflexes on the obvious, in-the-moment cases; trust the background
+review to catch the rest. The review runs as a background task — it
+doesn't block your next turn.

@@ -237,7 +237,19 @@ These settings most directly affect bootstrap behavior.
 | `personality` | `CO_PERSONALITY` | `tars` | Personality selected before agent instruction assembly |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Default reasoning-display mode at startup; CLI flags can override it before REPL entry |
 
-## 4. Files
+## 4. Public Interface
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `create_deps(frontend, stack) -> CoDeps` | `co_cli/bootstrap/core.py` | Async — assembles the runtime context from settings (validates config, probes model, builds tool registry, connects MCP, loads skills, builds memory store) |
+| `restore_session(deps, frontend) -> Path` | `co_cli/bootstrap/core.py` | Picks the most recent `*.jsonl` under `sessions_dir` and writes it to `deps.session.session_path`; mints a new path when none exists |
+| `init_session_index(deps, current_session_path, frontend) -> None` | `co_cli/bootstrap/core.py` | Syncs past transcripts into `MemoryStore` under `source='session'`; excludes the in-progress transcript |
+| `probe_ollama_model(host, model) -> ProbeResult` | `co_cli/bootstrap/check.py` | Posts to `/api/show`; returns `num_ctx` and capabilities for floor validation |
+| `check_security() -> list[SecurityFinding]` | `co_cli/bootstrap/security.py` | Runs the once-per-session security posture checks consumed by `render_security_findings()` |
+| `render_security_findings(findings) -> None` | `co_cli/bootstrap/security.py` | Prints any findings to the console at REPL handoff |
+| `display_welcome_banner(deps) -> None` | `co_cli/bootstrap/banner.py` | Renders the boundary banner between bootstrap and the interactive loop |
+
+## 5. Files
 
 | File | Purpose |
 | --- | --- |

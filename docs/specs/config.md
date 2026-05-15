@@ -39,7 +39,7 @@ graph TD
 | `ShellSettings` | `shell.py` | Shell timeout limit and auto-approval safe command list |
 | `MemorySettings` | `memory.py` | Memory recall half-life |
 | `ObservabilitySettings` | `observability.py` | Log level, rotation, OTel span redaction patterns |
-| `SkillsSettings` | `skills.py` | Skill usage tracking, review, and curator automation knobs |
+| `SkillsSettings` | `skills.py` | Skill review automation knobs (enable + per-N-tool-call nudge interval) |
 | `MCPServerSettings` | `mcp.py` | Per-server transport config (stdio or HTTP) |
 
 `Settings` is constructed once per session by `create_deps()` via `get_settings()`, then
@@ -244,7 +244,8 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable automatic skill review after use |
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable background session-review firing on the turn-boundary cadence |
+| `skills.review_nudge_interval` | `CO_SKILLS_REVIEW_NUDGE_INTERVAL` | `5` | Tool-iteration count that triggers a background review fire (min `1`) |
 
 ### MCP servers (`mcp_servers.*`)
 
@@ -262,7 +263,57 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 `CO_MCP_SERVERS` env var accepts a JSON blob that replaces the entire `mcp_servers` dict.
 
 
-## 4. Files
+## 4. Public Interface
+
+### Config loading
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `Settings` | `co_cli/config/core.py` | Top-level Pydantic model; immutable session config |
+| `load_config(path=None, env=None) -> Settings` | `co_cli/config/core.py` | Loads `settings.json` + `.env` + env vars, validates, returns `Settings` |
+| `get_settings() -> Settings` | `co_cli/config/core.py` | Lazy module-level singleton; calls `load_config()` on first access; `deepcopy`-ed by `create_deps()` |
+
+### Sub-model settings
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `LlmSettings` | `co_cli/config/llm.py` | LLM provider + model + inference knobs; exposes `validate_config()`, `reasoning_model_settings()`, `noreason_model_settings()` |
+| `KnowledgeSettings` | `co_cli/config/knowledge.py` | Search backend, embedding, chunking, lifecycle knobs |
+| `CompactionSettings` | `co_cli/config/compaction.py` | Compaction trigger ratios; `_validate_shape` enforces `tail_fraction < compaction_ratio` and `spill_ratio ≤ compaction_ratio` |
+| `WebSettings` | `co_cli/config/web.py` | Web fetch domain policy and HTTP retry knobs |
+| `ShellSettings` | `co_cli/config/shell.py` | Shell timeout and safe-command allowlist |
+| `MemorySettings` | `co_cli/config/memory.py` | Memory recall half-life |
+| `ObservabilitySettings` | `co_cli/config/observability.py` | Log level, rotation, span redaction patterns |
+| `SkillsSettings` | `co_cli/config/skills.py` | Skill review automation knobs |
+| `MCPServerSettings` | `co_cli/config/mcp.py` | Per-server transport config |
+
+### Path constants
+
+| Symbol | Source | Value |
+|--------|--------|-------|
+| `USER_DIR` | `co_cli/config/core.py` | `CO_HOME` env var or `~/.co-cli/` |
+| `SETTINGS_FILE` | `co_cli/config/core.py` | `USER_DIR / settings.json` |
+| `SEARCH_DB` | `co_cli/config/core.py` | `USER_DIR / co-cli-search.db` |
+| `LOGS_DB` | `co_cli/config/core.py` | `USER_DIR / co-cli-logs.db` |
+| `LOGS_DIR` | `co_cli/config/core.py` | `USER_DIR / logs` |
+| `KNOWLEDGE_DIR` | `co_cli/config/core.py` | `USER_DIR / knowledge` |
+| `SESSIONS_DIR` | `co_cli/config/core.py` | `USER_DIR / sessions` |
+| `TOOL_RESULTS_DIR` | `co_cli/config/core.py` | `USER_DIR / tool-results` |
+| `GOOGLE_TOKEN_PATH` | `co_cli/config/core.py` | `USER_DIR / google_token.json` |
+| `ADC_PATH` | `co_cli/config/core.py` | `~/.config/gcloud/application_default_credentials.json` |
+
+### LLM constants and model factory
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `DEFAULT_LLM_MODELS` | `co_cli/config/llm.py` | Per-provider default full model id (used when `llm.model` is unset) |
+| `_LLM_SETTINGS` | `co_cli/config/llm.py` | Provider→model→mode canonical inference knobs (module-private, not user-overridable) |
+| `LlmModel` | `co_cli/llm/factory.py` | Frozen dataclass holding pydantic-ai model + both `ModelSettings` |
+| `build_model(llm) -> LlmModel` | `co_cli/llm/factory.py` | Constructs the pydantic-ai model from `LlmSettings` |
+| `llm_call(deps, system, user, ...) -> str` | `co_cli/llm/call.py` | Async — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
+
+
+## 5. Files
 
 | File | Purpose |
 |------|---------|
@@ -274,7 +325,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `co_cli/config/shell.py` | `ShellSettings` — timeout, safe command list |
 | `co_cli/config/memory.py` | `MemorySettings` — recall half-life |
 | `co_cli/config/observability.py` | `ObservabilitySettings` — log level, rotation, redaction patterns |
-| `co_cli/config/skills.py` | `SkillsSettings` — usage tracking, review, and curator automation settings |
+| `co_cli/config/skills.py` | `SkillsSettings` — background review enable flag and turn-boundary nudge interval |
 | `co_cli/config/mcp.py` | `MCPServerSettings`, `DEFAULT_MCP_SERVERS`, `parse_mcp_servers_from_env()` |
 | `co_cli/llm/factory.py` | `LlmModel` dataclass; `build_model()` — constructs pydantic-ai model + both `ModelSettings` from `LlmSettings` |
 | `co_cli/llm/call.py` | `llm_call()` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
@@ -283,7 +334,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `co_cli/context/summarization.py` | `resolve_compaction_budget(deps)` — returns `deps.model_max_ctx` directly |
 
 
-## 5. Test Gates
+## 6. Test Gates
 
 | Property | Test file |
 |----------|-----------|

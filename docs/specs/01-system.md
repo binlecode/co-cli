@@ -58,6 +58,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
 | Config | [config.md](config.md) | Settings model, env vars, load pipeline |
 | Observability | [observability.md](observability.md) | OTel spans, JSONL logs, trace viewer |
+| Self-planning | [self-planning.md](self-planning.md) | `todo_write` / `todo_read` plan state, compaction snapshot, rehydration on `/resume` |
 
 ### Package Dependency Direction (one-way rule)
 
@@ -217,7 +218,21 @@ Settings most relevant to system assembly:
 Full settings reference: [config.md](config.md).
 
 
-## 4. Files
+## 4. Public Interface
+
+System-level contracts crossing every subsystem. Per-subsystem APIs are documented in their own specs.
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `CoDeps` | `co_cli/deps.py` | Frozen runtime context passed via `RunContext[CoDeps]` to all tools; bundles config, model, registries, paths, and mutable `session` / `runtime` state |
+| `create_deps(frontend, stack) -> CoDeps` | `co_cli/bootstrap/core.py` | Async one-shot startup assembly: validates config, probes the model, wires MCP, loads skills, builds the memory store, and seals `CoDeps` |
+| `build_agent(config, model, tool_registry, skill_manifest) -> Agent[CoDeps, Any]` | `co_cli/agents/core.py` | Constructs the foreground pydantic-ai agent with static instructions, history processors, and tool surface |
+| `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async single-turn entrypoint: assembly → segment stream → approval loop → output checks |
+| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_index`, excludes `tool_registry`, increments `agent_depth` |
+| `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async slash-command router; returns `LocalOnly`, `ReplaceTranscript`, or `DelegateToAgent` |
+
+
+## 5. Files
 
 | File | Purpose |
 |------|---------|
@@ -232,7 +247,7 @@ Full settings reference: [config.md](config.md).
 | `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
 
 
-## 5. Test Gates
+## 6. Test Gates
 
 | Property | Test file |
 |----------|-----------|

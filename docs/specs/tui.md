@@ -120,9 +120,41 @@ session state (e.g. `/reasoning`, `/approvals`) write directly to `deps.session.
 `CoRuntimeState` fields are owned by the orchestration layer. Slash commands must not write
 to `CoRuntimeState` — use `CoSessionState` for user-preference and cross-turn session state.
 
-## 3. Slash Command Reference
+## 3. Config
 
-All built-in commands are registered in `BUILTIN_COMMANDS: dict[str, SlashCommand]`.
+| Setting | Env Var | Default | Description |
+|---|---|---|---|
+| `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Initial reasoning display mode; overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
+
+The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
+
+## 4. Public Interface
+
+### Dispatch API
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async — parses `/<name> <args>`, routes to `BUILTIN_COMMANDS` or skill; falls back to unknown-command hint |
+| `BUILTIN_COMMANDS: dict[str, SlashCommand]` | `co_cli/commands/registry.py` | Module-level registry of built-in slash commands |
+| `SlashCommand` | `co_cli/commands/registry.py` | Dataclass — `name`, `handler`, `description`, `argument_hint`, `category` |
+| `CommandContext` | `co_cli/commands/types.py` | Input bag passed to every handler — `message_history`, `deps`, `agent`, `completer`, `frontend` |
+| `SlashOutcome`, `LocalOnly`, `ReplaceTranscript(history)`, `DelegateToAgent(delegated_input, skill_env, skill_name)` | `co_cli/commands/types.py` | Handler return types signalling REPL action |
+| `filter_namespace_conflicts(skill_commands) -> dict` | `co_cli/commands/registry.py` | Drops skills whose names collide with `BUILTIN_COMMANDS` |
+| `_build_completer_words(skill_commands) -> list[str]` | `co_cli/commands/registry.py` | Returns `["/cmd" for cmd in BUILTIN_COMMANDS] + ["/name" for user-invocable skills]` |
+
+### Frontend surface
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `Frontend` (Protocol) | `co_cli/display/core.py` | Display contract — `on_status`, `clear_status`, `prompt_question`, `cleanup`, etc. |
+| `TerminalFrontend` | `co_cli/display/core.py` | Default terminal implementation using `rich.console` |
+| `console`, `set_theme(name)`, `PROMPT_CHAR` | `co_cli/display/core.py` | Shared console instance, theme switcher, prompt glyph |
+| `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-segment text/thinking buffering and flush policy |
+| `QuestionPrompt(question, options, multiple)` | `co_cli/display/core.py` | Clarify-path approval prompt for tool-issued questions |
+
+### Slash command reference
+
+All built-in commands registered in `BUILTIN_COMMANDS`:
 
 | Command | Args | What it does | Returns |
 |---|---|---|---|
@@ -142,7 +174,7 @@ All built-in commands are registered in `BUILTIN_COMMANDS: dict[str, SlashComman
 | `/cancel` | `<task-id>` | Cancel a running background task | `None` |
 | `/reasoning` | `[off\|summary\|full\|next]` | Show or set reasoning display mode | `None` |
 
-### `/reasoning` detail
+#### `/reasoning` detail
 
 `/reasoning` controls how model thinking/reasoning is surfaced in the terminal:
 
@@ -164,14 +196,6 @@ effect on the next turn; any in-flight stream uses the mode it started with.
 
 Delegation agent turns inherit the mode via `fork_deps()`, which copies
 `base.session.reasoning_display` into the child agent's `CoSessionState`.
-
-## 4. Config
-
-| Setting | Env Var | Default | Description |
-|---|---|---|---|
-| `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Initial reasoning display mode; overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
-
-The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 
 ## 5. Files
 

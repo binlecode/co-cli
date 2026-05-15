@@ -154,7 +154,37 @@ Fields **not** inherited by delegation agents (reset to defaults on fork): `sess
 
 No user-configurable settings. Both limits are hard-coded internal caps.
 
-## 4. Files
+## 4. Public Interface
+
+### Plan state schema
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `TodoItem` | `co_cli/deps.py` | `TypedDict` — `id: str`, `content: str`, `status: "pending"\|"in_progress"\|"completed"\|"cancelled"`, `priority: "high"\|"medium"\|"low"` |
+| `CoSessionState.session_todos: list[TodoItem]` | `co_cli/deps.py` | In-memory list; runtime source of truth; reset to `[]` by `fork_deps` |
+
+### Tool surface
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `todo_write(ctx, todos, merge=False)` | `co_cli/tools/todo/rw.py` | Async tool — fresh replace (default) or merge-by-id; all-or-nothing validation; returns `ToolReturn` with `metadata['todos']` carrying the full list |
+| `todo_read(ctx)` | `co_cli/tools/todo/rw.py` | Async tool — returns `deps.session.session_todos` verbatim |
+
+### Compaction integration
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `_gather_session_todos(deps) -> str \| None` | `co_cli/context/_compaction_markers.py` | Returns the active-todo enrichment block (≤10 items, ≤1,500 chars) fed to the compaction LLM; `None` when no active items |
+| `build_todo_snapshot(deps) -> str \| None` | `co_cli/context/_compaction_markers.py` | Returns the post-compaction `UserPromptPart` content carrying active items into the compacted history; `None` when no active items |
+| `TODO_SNAPSHOT_PREFIX` | `co_cli/context/_compaction_markers.py` | Constant prefix used to identify the snapshot marker in compacted history |
+
+### Rehydration
+
+| Symbol | Source | Contract |
+|--------|--------|----------|
+| `_rehydrate_todos(messages) -> list[TodoItem]` | `co_cli/commands/resume.py` | Reverse-scans messages for the latest `todo_write` tool-return metadata; falls back to snapshot parsing |
+
+## 5. Files
 
 | File | Purpose |
 |------|---------|
@@ -163,7 +193,7 @@ No user-configurable settings. Both limits are hard-coded internal caps.
 | `co_cli/context/_compaction_markers.py` | `_gather_session_todos`, `build_todo_snapshot`, `_active_todos`, `_format_active_todos`, `TODO_SNAPSHOT_PREFIX` |
 | `co_cli/commands/resume.py` | `_rehydrate_todos`; `/resume` command integration |
 
-## 5. Test Gates
+## 6. Test Gates
 
 | Property | Test File | Coverage |
 |----------|-----------|----------|

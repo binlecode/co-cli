@@ -173,12 +173,54 @@ The built-in `/skills` command family is implemented in `_cmd_skills()` and rela
 | `/skills check` | compare available files vs actually loaded skills across both tiers and report skip reasons |
 | `/skills lint [<name>|--all]` | run R1–R10 lint rules against one skill or all loaded skills; exit 1 on any finding |
 | `/skills reload` | rescan the user-global skill directory and reload into the live session |
+| `/skills review run` | manually trigger one session-review pass against the current transcript |
 
 `/skills reload` rescans only the user-global directory; bundled skills are version-controlled and not rescanned at runtime. `/skills check` covers both tiers (bundled and user-global).
 
-## 3. Model-Callable Surface
+## 3. Config
 
-The skill tier has two model-callable tools: a name-addressable reader (`skill_view`) and a write surface (`skill_manage`). All discoverable skills — bundled and user-installed — are declared in the static system prompt via the manifest (see §3.5).
+Resolved skill paths live on `CoDeps`; behaviour knobs live on `SkillsSettings`.
+
+| Setting | Source | Purpose |
+| --- | --- | --- |
+| `deps.skills_dir` | package directory `co_cli/skills/` | bundled skills directory (lowest priority) |
+| `deps.user_skills_dir` | `~/.co-cli/skills/` | user-global skill directory (overrides bundled) |
+| `settings` values referenced by `requires.settings` | `co_cli/config/` | load gating only |
+
+`SkillsSettings` is wired into `Settings` as `skills:`. It carries the background-review knobs (`review_enabled`, `review_nudge_interval`); see [config.md §Skills](config.md) for the full table.
+
+## 4. Public Interface
+
+The skill tier has two model-callable tools: a name-addressable reader (`skill_view`) and a write surface (`skill_manage`). All discoverable skills — bundled and user-installed — are declared in the static system prompt via the manifest (see §4.3). The non-tool loader / registry / manifest helpers are listed below.
+
+### Loader, registry, and lifecycle
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `load_skills(skills_dir, settings, user_skills_dir) -> dict[str, SkillConfig]` | `co_cli/skills/loader.py` | Two-pass loader (bundled then user-global); user-global overrides on name collision; applies security scan to user-global only |
+| `scan_skill_content(content) -> list[str]` | `co_cli/skills/loader.py` | Static regex scan — returns names of matched warning classes (credential exfil, pipe-to-shell, destructive shell, prompt injection) |
+| `diagnose_requires_failures(requires, settings=None) -> list[str]` | `co_cli/skills/loader.py` | Human-readable diagnostics for `requires` gating failures |
+| `lint_skill(content, path) -> list[LintFinding]` | `co_cli/skills/_lint.py` | R1–R10 lint validator; returns findings with line numbers |
+| `set_skill_commands(new_skills, deps) -> None` | `co_cli/skills/registry.py` | Replaces `deps.skill_commands` atomically |
+| `get_skill_registry(skill_commands) -> list[dict]` | `co_cli/skills/registry.py` | Returns model-facing list (name + description); excludes hidden skills |
+| `refresh_skills(deps) -> None` | `co_cli/skills/lifecycle.py` | Re-loads from bundled + user-global; replaces `deps.skill_commands`; called by `skill_manage` and `/skills reload` |
+| `discover_skill_files(bundled_dir, user_dir) -> list[Path]` | `co_cli/skills/lifecycle.py` | Returns all skill file paths from both tiers |
+| `cleanup_skill_run_state(saved_env, deps) -> None` | `co_cli/skills/lifecycle.py` | Restores env after a dispatched skill turn; clears `active_skill_name` |
+
+### Manifest injection
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `render_skill_manifest(skill_commands, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block injected into the static system prompt by `build_agent()` |
+
+### Schema
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `SkillConfig` | `co_cli/skills/skill_types.py` | Frozen dataclass — `name`, `description`, `body`, `argument_hint`, `user_invocable`, `disable_model_invocation`, `requires`, `skill_env`, `path` |
+| `LintFinding` | `co_cli/skills/_lint.py` | Frozen dataclass — `rule`, `line`, `message` |
+
+### Model-callable tools
 
 ### `skill_manage(action, name, ...)`
 
@@ -230,18 +272,6 @@ Rendered by `co_cli/context/manifests/skill_manifest.py:render_skill_manifest(sk
 2. Replaces `deps.skill_commands`.
 
 It is invoked on every `skill_manage(action=...)` write and on `/skills reload`.
-
-## 4. Config
-
-Resolved skill paths live on `CoDeps`; behaviour knobs live on `SkillsSettings`.
-
-| Setting | Source | Purpose |
-| --- | --- | --- |
-| `deps.skills_dir` | package directory `co_cli/skills/` | bundled skills directory (lowest priority) |
-| `deps.user_skills_dir` | `~/.co-cli/skills/` | user-global skill directory (overrides bundled) |
-| `settings` values referenced by `requires.settings` | `co_cli/config/` | load gating only |
-
-`SkillsSettings` is wired into `Settings` as `skills:`. The config root is reserved for the broader 3.5b/3.5c hygiene + review knobs.
 
 ## 5. Files
 

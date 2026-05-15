@@ -375,7 +375,33 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `ctx_overflow_threshold` | `CO_LLM_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |
 
-## 4. Files
+## 4. Public Interface
+
+### Turn execution
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async — single foreground-turn entrypoint; owns stream segments, approval resumes, retries, and interrupt handling |
+| `TurnResult` | `co_cli/context/orchestrate.py` | Frozen dataclass — `outcome` (`"continue"` / `"error"`), `interrupted`, `messages`, `output`, `usage`, `streamed_text` |
+| `_TurnState` | `co_cli/context/orchestrate.py` | Module-private mutable turn state; not exported |
+
+### Compaction and recovery
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `proactive_window_processor(ctx, messages)` | `co_cli/context/compaction.py` | History processor — L3 LLM compaction with anti-thrash gate |
+| `recover_overflow_history(ctx, messages, budget, tail_fraction)` | `co_cli/context/compaction.py` | Async — strip-then-summarize overflow recovery on HTTP 400/413 |
+| `dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`, `sanitize_surrogate_codepoints` | `co_cli/context/history_processors.py` | Registered history processors run in order before every model request |
+| `strip_all_tool_returns(messages)` | `co_cli/context/history_processors.py` | Replaces every `ToolReturnPart` content with a per-tool semantic marker; idempotent |
+| `safety_prompt(ctx)`, `current_time_prompt(ctx)` | `co_cli/agents/_instructions.py` | Dynamic `@agent.instructions` callbacks evaluated per request |
+
+### Approval flow
+
+| Symbol | Source | Contract |
+| --- | --- | --- |
+| `_collect_deferred_tool_approvals(ctx, output, frontend)` | `co_cli/context/orchestrate.py` | Async — turns `DeferredToolRequests` into `DeferredToolResults` via prompt or rule lookup |
+
+## 5. Files
 
 | File | Purpose |
 | --- | --- |
