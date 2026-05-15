@@ -60,7 +60,11 @@ def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     if tool_def.name in resume:
         return True
     entry = ctx.deps.tool_index.get(tool_def.name)
-    return entry is not None and entry.visibility == VisibilityPolicyEnum.ALWAYS
+    return entry is None or entry.visibility == VisibilityPolicyEnum.ALWAYS
+
+
+def _config_requirement_met(info: ToolInfo, config: Settings) -> bool:
+    return info.requires_config is None or bool(getattr(config, info.requires_config, None))
 
 
 def _make_prepare(fn: Callable[[CoDeps], bool]):
@@ -91,7 +95,7 @@ def _build_native_toolset(
 
     for fn in TOOL_REGISTRY:
         info: ToolInfo = getattr(fn, AGENT_TOOL_ATTR)
-        if info.requires_config is not None and not getattr(config, info.requires_config, None):
+        if not _config_requirement_met(info, config):
             continue
         kwargs: dict[str, Any] = {
             "requires_approval": info.approval,

@@ -45,7 +45,7 @@ def build_mcp_entries(config: Settings, tool_index: dict[str, ToolInfo]) -> list
     """Build MCP toolset entries wrapped for sequential-flag propagation.
 
     Not yet connected. Each entry's toolset is wrapped with _SequentialMCPToolset
-    so that ToolDefinition.sequential is patched from tool_index.is_concurrent_safe
+    so that ToolDefinition.sequential is patched from tool_index[name].is_concurrent_safe
     at step time. tool_index is held by reference — discover_mcp_tools() populates
     MCP entries into it after connection, before the first get_tools() call.
     """
@@ -71,7 +71,8 @@ def assemble_routing_toolset(
 
 def discover_delegation_tools(profile: str, config: Settings) -> list[Callable]:
     """Return tool functions tagged for the given delegation profile, filtered by config."""
-    import co_cli.agents._native_toolset  # noqa: F401  -- side effect: ensure TOOL_REGISTRY is fully populated
+    # importing _native_toolset triggers all tool-module imports → TOOL_REGISTRY is fully populated
+    from co_cli.agents._native_toolset import _config_requirement_met
     from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
 
     result = []
@@ -79,7 +80,7 @@ def discover_delegation_tools(profile: str, config: Settings) -> list[Callable]:
         info: ToolInfo = getattr(fn, AGENT_TOOL_ATTR)
         if info.delegation is None or profile not in info.delegation:
             continue
-        if info.requires_config is not None and not getattr(config, info.requires_config, None):
+        if not _config_requirement_met(info, config):
             continue
         result.append(fn)
     return result
@@ -121,10 +122,7 @@ def build_agent(
     is_delegation = output_type is not None or instructions is not None or bool(tool_fns)
 
     if is_delegation and output_type is None:
-        raise ValueError(
-            "Delegation path requires output_type. "
-            "Pass toolset and tool_index for the orchestrator path."
-        )
+        raise ValueError("output_type is required when instructions or tool_fns is passed.")
 
     if not is_delegation and (toolset is None or tool_index is None):
         raise ValueError(

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.201]
+
+### Fix four bugs in agent toolset construction
+
+- **Misleading error message** — `build_agent` delegation-path error no longer advises "Pass toolset and tool_index" when `instructions`/`tool_fns` is set without `output_type`; message now says `"output_type is required when instructions or tool_fns is passed."`
+- **Silent MCP tool loss on resume** — `_approval_resume_filter` now passes tools with no `tool_index` entry through on resume turns (`entry is None or …ALWAYS`) instead of silently dropping them
+- **Duplicate `requires_config` predicate** — extracted `_config_requirement_met(info, config)` in `_native_toolset.py`; used by both `_build_native_toolset` and `discover_delegation_tools`
+- **Stale docstring** — `build_mcp_entries` docstring corrected from `tool_index.is_concurrent_safe` to `tool_index[name].is_concurrent_safe`
+
 ## [0.8.200]
 
 ### Turn-boundary session review + public surface cleanup
