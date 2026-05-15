@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.8.198]
+
+### Collapse skill discovery to manifest-only; remove SkillIndex, skill_search, URL-install, and curator
+- **`skill_search` + `SkillIndex` retired** — FTS5-backed skill discovery removed; all skills (bundled + user-dir) now appear in the static `<available_skills>` manifest injected at prompt assembly. Zero DB construction cost per startup; no two-surface spec.
+- **Manifest all-discoverable** — `render_skill_manifest()` walks both bundled and `~/.co-cli/skills/`; user-dir skill shadows bundled by same name; size guardrail warns (not blocks) when total count ≥ 30 after create.
+- **Subagent skill discovery** — `run_session_review()` and `maybe_run_curator()` prepend the rendered manifest to their instructions; `skill_search` delegation removed from both.
+- **URL-based install + upgrade removed** — `skill_manage install` (URL source), `skill-installer.md`, `/skills install`, `/skills upgrade`, and `SkillFetcher` deleted; skills are created by the agent or written by the user directly.
+- **Usage sidecar + curator removed** — `.usage.json`, state machine (active/stale/archived), background `skill_curator` agent, and all associated plumbing deleted; skills are managed manually.
+- **Test cleanup** — `test_flow_skill_search.py`, `test_flow_skill_index.py`, `test_flow_skill_installer_dispatch.py`, `test_flow_skill_curator.py`, `test_flow_skill_usage.py`, `test_flow_skills_pin.py`, `test_flow_skills_usage.py` deleted.
+
 ## [0.8.197]
 
 ### Test coverage: per-item/aggregate short-circuit ordering
