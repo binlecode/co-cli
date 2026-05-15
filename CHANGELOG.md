@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.8.197]
+
+### Test coverage: per-item/aggregate short-circuit ordering
+- Add `test_per_item_error_short_circuits_aggregate_check` — verifies that per-item validation errors suppress the aggregate `in_progress` check, per the spec-stated ordering. Guards against pipeline restructuring regressions.
+
 ## [0.8.195]
 
 ### Enforce one-in-progress invariant in todo_write
