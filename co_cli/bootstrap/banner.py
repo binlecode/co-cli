@@ -39,10 +39,10 @@ def display_welcome_banner(deps: "CoDeps") -> None:
     from co_cli.skills.registry import get_skill_registry
 
     tool_count = len(deps.tool_index)
-    skill_count = len(get_skill_registry(deps.skill_commands))
+    skill_count = len(get_skill_registry(deps.skill_registry))
     mcp_count = len(deps.config.mcp_servers or {})
     cmd_count = len(BUILTIN_COMMANDS) + sum(
-        1 for s in deps.skill_commands.values() if s.user_invocable
+        1 for s in deps.skill_registry.values() if s.user_invocable
     )
 
     backend = deps.config.knowledge.search_backend

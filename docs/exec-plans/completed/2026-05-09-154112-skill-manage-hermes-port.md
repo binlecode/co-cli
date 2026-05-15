@@ -59,7 +59,7 @@ plan's stubs.
 
 - ✓ `co_cli/skills/loader.py:scan_skill_content(content) -> list[str]` — returns flagged-pattern names; reuse on create/edit/patch result for security scan.
 - ✓ `co_cli/skills/loader.py:_SKILL_SCAN_PATTERNS` — credential exfil, pipe-to-shell, destructive shell, prompt injection. Same patterns hermes runs.
-- ✓ `co_cli/skills/loader.py:load_skills(...)` — full reload; `co_cli/skills/registry.py:set_skill_commands` — atomic replace. Together they're the reload path on success.
+- ✓ `co_cli/skills/loader.py:load_skills(...)` — full reload; `co_cli/skills/registry.py:set_skill_registry` — atomic replace. Together they're the reload path on success.
 - ✓ `co_cli/skills/installer.py:write_skill_file(...)` — atomic write to user skills dir; reuse for `create`/`edit`/`write_file`. `discover_skill_files(...)` and `read_skill_meta(...)` — locate and parse skills; reuse for `_find_skill`-equivalent.
 - ✓ `co_cli/memory/frontmatter.py:parse_frontmatter` — already used by loader and installer; reuse for content validation.
 - ✓ `co_cli/skills/skill_types.py:SkillConfig` — frozen dataclass; `name`, `description`, `body`, `requires`, `disable_model_invocation`, `user_invocable`. No `category` field today — hermes-parity `category` arg becomes a no-op (mirrors `skills_list`'s `category` filter pattern in the read-tools plan).
@@ -101,7 +101,7 @@ Bundled skills are read-only via this tool. `write_file`/`remove_file` and
 
 - New function `skill_manage` in `co_cli/tools/system/skills.py` (the file the read-tools plan creates).
 - Six action handlers: `_skill_create`, `_skill_edit`, `_skill_patch`, `_skill_delete`, `_skill_write_file` (stub), `_skill_remove_file` (stub).
-- Internal helpers: `_find_user_skill(name) -> Path | None`, `_validate_skill_content(content) -> str | None` (frontmatter + size), `_atomic_write_skill(path, content)`, `_run_security_scan_or_rollback(path, original) -> str | None`, `_reload_skills(deps)` (calls existing `load_skills` + `set_skill_commands`).
+- Internal helpers: `_find_user_skill(name) -> Path | None`, `_validate_skill_content(content) -> str | None` (frontmatter + size), `_atomic_write_skill(path, content)`, `_run_security_scan_or_rollback(path, original) -> str | None`, `_reload_skills(deps)` (calls existing `load_skills` + `set_skill_registry`).
 - Tool registration in `NATIVE_TOOLS` in `co_cli/agent/_native_toolset.py`.
 - Behavioural tests in `tests/test_flow_skills_manage.py` (separate file from read-tools tests; both files target the same `co_cli/tools/system/skills.py` module).
 - Spec edits via `/sync-doc` post-delivery (`docs/specs/skills.md` "Model-callable surface" section gains `skill_manage` row; `docs/specs/tools.md` Lifecycle group gains row).
@@ -251,7 +251,7 @@ def _scan_or_rollback(
     if original is None) and return formatted error string. Else None."""
 
 def _reload_skills(ctx: RunContext[CoDeps]) -> None:
-    """Reload via existing load_skills + set_skill_commands path so the
+    """Reload via existing load_skills + set_skill_registry path so the
     new state is dispatchable on the next slash command. No prompt-snapshot
     cache to clear (Step 4 deferred)."""
 ```
@@ -347,7 +347,7 @@ Test surface (≥10 behavioural assertions, no structural-only tests):
 | # | Assertion |
 |---|---|
 | 1 | `create` writes file at expected path, content matches input. |
-| 2 | `create` reload: skill is in `deps.skill_commands` after success. |
+| 2 | `create` reload: skill is in `deps.skill_registry` after success. |
 | 3 | `create` rejects empty description (frontmatter validation). |
 | 4 | `create` rolls back (file removed) on destructive-shell pattern. |
 | 5 | `create` of existing user-dir name returns error (no overwrite). |

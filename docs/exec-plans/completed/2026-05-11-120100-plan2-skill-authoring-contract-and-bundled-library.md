@@ -206,7 +206,7 @@ Findings are emitted in rule order. Sorting by line number is the formatter's co
 
 Sub-command of `/skills`. Two modes:
 
-- `/skills lint <name>` — lint a single skill by name (lookup in `deps.skill_commands`).
+- `/skills lint <name>` — lint a single skill by name (lookup in `deps.skill_registry`).
 - `/skills lint --all` — lint every loaded skill (bundled + user-installed).
 
 Output format:
@@ -289,7 +289,7 @@ Files:
 - `co_cli/commands/skills.py` — add `lint` subcommand.
 
 Acceptance:
-- `/skills lint <name>` lints one skill from `deps.skill_commands`.
+- `/skills lint <name>` lints one skill from `deps.skill_registry`.
 - `/skills lint --all` lints all loaded skills.
 - Output format: `<name> (<path>): <findings or '(clean)'>`.
 - Exit code 1 on any finding (across all skills lint'd).

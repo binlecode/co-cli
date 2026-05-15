@@ -18,7 +18,7 @@ the repo for dev workflow but live outside co-cli's own skill loader and are
 out of scope for this comparison).
 
 **Sources (code-grounded scan basis for each peer):**
-- **hermes**: repo `skills/` + `optional-skills/`; `tools/skills_sync.py`, `tools/skills_hub.py`, `tools/skills_tool.py`, `agent/prompt_builder.py`, `agent/skill_utils.py`, `agent/skill_commands.py`
+- **hermes**: repo `skills/` + `optional-skills/`; `tools/skills_sync.py`, `tools/skills_hub.py`, `tools/skills_tool.py`, `agent/prompt_builder.py`, `agent/skill_utils.py`, `agent/skill_registry.py`
 - **openclaw** (HEAD `bafe49f062`, local pulled fresh from `origin/main`): repo `skills/` + `.agents/skills/`; `src/agents/skills.ts`, `src/agents/skills/{workspace,skill-contract,refresh,source,plugin-skills,frontmatter}.ts`, `src/agents/skills-clawhub.ts`, `extensions/{skill-workshop,migrate-claude,migrate-hermes}/`
 - **codex**: `codex-rs/skills/src/lib.rs`, `codex-rs/skills/src/assets/samples/*/SKILL.md`
 - **co-cli gap analysis**: `RESEARCH-skills-prompt-gaps.md` (sibling doc — authoring/discovery gaps vs hermes)
@@ -36,7 +36,7 @@ how many of the three peers ship at least one bundled skill in that domain.
 
 Source: repo `skills/` + `optional-skills/`; `tools/skills_sync.py`,
 `tools/skills_hub.py`, `tools/skills_tool.py`, `agent/prompt_builder.py`,
-`agent/skill_utils.py`, `agent/skill_commands.py`.
+`agent/skill_utils.py`, `agent/skill_registry.py`.
 
 **Built-in shipped: 70 skills under `skills/` (sync-installed to `~/.hermes/skills/`).**
 **Optional shipped: 57 skills under `optional-skills/` (hub-fetch on demand, not auto-installed).**
@@ -633,7 +633,7 @@ immediately"* (`agent/prompt_builder.py:164-171`); openclaw
 **Implementation plan.**
 - T1-1 — bundled skill `co_cli/skills/skill-creator.md` that walks the user through domain → template → validate-via-lint → save. Body steers toward existing tools (`file_write`, `file_read`); no new tool needed because the user is in the loop.
 - T1-2 — bundled skill `co_cli/skills/skill-installer.md` whose body invokes the existing `/skills install <url>` CLI under the hood (model produces the slash invocation; user confirms). For full model-invocable form, add a thin `skill_install(url)` tool in `co_cli/tools/skills/` that wraps the existing installer in `co_cli/skills/installer.py` and runs the new lint validator before writing.
-- T1-3 — new tool `co_cli/tools/skills/skill_patch.py`: takes `name`, `old_string`, `new_string`, `reason` — locates the skill file via `deps.skill_commands` registry, applies patch via existing `file_patch` mechanics (`co_cli/tools/file/file_patch.py`), re-runs lint, reloads via `co_cli/skills/lifecycle.py`. Deferred-approval (writes to bundled skills require explicit confirmation; user-installed are session-approvable). Pair with prompt rule in `co_cli/prompts/rules/04_tool_protocol.md`: *"when invoking a skill and finding its steps outdated, note the drift and propose a patch."*
+- T1-3 — new tool `co_cli/tools/skills/skill_patch.py`: takes `name`, `old_string`, `new_string`, `reason` — locates the skill file via `deps.skill_registry` registry, applies patch via existing `file_patch` mechanics (`co_cli/tools/file/file_patch.py`), re-runs lint, reloads via `co_cli/skills/lifecycle.py`. Deferred-approval (writes to bundled skills require explicit confirmation; user-installed are session-approvable). Pair with prompt rule in `co_cli/prompts/rules/04_tool_protocol.md`: *"when invoking a skill and finding its steps outdated, note the drift and propose a patch."*
 
 **Effort.** 3–5 days total. T1-1 and T1-2 skill bodies: ~half a day each. T1-3 tool + lint integration: 2–3 days. Skill-form `skill_install` upgrade adds ~1 day.
 
@@ -680,12 +680,12 @@ dispatch path.
 **Gap detail.**
 - `co_cli/prompts/_assembly.py:87-160` builds the static system prompt with no skill index.
 - `co_cli/agent/_instructions.py` has no `add_skill_awareness_prompt` equivalent (compare `add_category_awareness_prompt` at lines 21-24 — same shape, different domain).
-- `deps.skill_commands` and `get_skill_registry()` exist but the agent never sees them through any prompt channel.
+- `deps.skill_registry` and `get_skill_registry()` exist but the agent never sees them through any prompt channel.
 - Peer baselines: hermes `<available_skills>` block via `agent/prompt_builder.build_skills_system_prompt()` (mandatory-scan); openclaw `formatSkillsForPrompt()` at `src/agents/skills/skill-contract.ts:46` with **compact-mode fallback** at `formatSkillsCompact()` (drops descriptions before count-truncating). Codex relies on skill-tool listing.
 - co-cli explicitly should not adopt hermes's mandatory-scan framing — the prompt-gaps doc is direct: *"do not adopt hermes's mandatory-scan skill index. The 'you MUST load any even partially relevant skill' framing is too aggressive and would nullify co-cli's prompt-mass advantage."*
 
 **Implementation plan.**
-- New runtime instructions callback in `co_cli/agent/_instructions.py` (`add_skill_awareness_prompt`). Iterates `deps.skill_commands`, filters `disable_model_invocation=True`, emits compact `name — description` lines under an aspirational header: *"The following skills are available — invoke them with `skill_run(name)` when directly relevant."* Not mandatory-scan.
+- New runtime instructions callback in `co_cli/agent/_instructions.py` (`add_skill_awareness_prompt`). Iterates `deps.skill_registry`, filters `disable_model_invocation=True`, emits compact `name — description` lines under an aspirational header: *"The following skills are available — invoke them with `skill_run(name)` when directly relevant."* Not mandatory-scan.
 - New tool `co_cli/tools/skills/skill_run.py`: takes `name` and optional `args`, dispatches via existing `commands/_commands.py:dispatch()` path (the same one slash commands use). Returns a sentinel that triggers `delegated_input` in `main.py` — preserves the one-shot-prompt architecture instead of loading skill body into context.
 - **Compact-mode fallback (port openclaw's pattern):** in the awareness callback, measure rendered length. If above budget (configurable, default ~2KB), drop the description column and emit `name` + one-line summary only. If still above budget, count-truncate with a footer noting the count. Code lives in `co_cli/skills/_index_format.py`; tests mirror openclaw's `compact-format.test.ts`.
 - Cache the rendered index; invalidate on `lifecycle.refresh()`.

@@ -55,7 +55,7 @@ async def skill_view(
         file_path: Linked file path within the skill. Not supported in co-cli today.
     """
     lookup = name.split(":", 1)[1] if ":" in name else name
-    skill = ctx.deps.skill_commands.get(lookup)
+    skill = ctx.deps.skill_registry.get(lookup)
     if skill is None:
         return tool_error(f"skill_view: unknown skill {name!r}.", ctx=ctx)
     if skill.disable_model_invocation:
@@ -144,9 +144,9 @@ def _skill_create(
     result: dict = {"success": True, "message": f"Skill {name!r} created.", "path": str(path)}
     if category:
         result["category_ignored"] = True
-    if len(ctx.deps.skill_commands) >= 30:
+    if len(ctx.deps.skill_registry) >= 30:
         result["size_warning"] = (
-            f"Skill count is now {len(ctx.deps.skill_commands)}; "
+            f"Skill count is now {len(ctx.deps.skill_registry)}; "
             "consider reviewing and pruning unused skills."
         )
     return tool_output(json.dumps(result), ctx=ctx)

@@ -26,7 +26,7 @@ Peer files reviewed:
 - `hermes-agent/skills/software-development/subagent-driven-development/SKILL.md` (example structured skill)
 - `hermes-agent/agent/prompt_builder.py:583-808` (`build_skills_system_prompt` — skill index assembly)
 - `hermes-agent/agent/skill_utils.py` (frontmatter parsing, platform gating, condition filtering)
-- `hermes-agent/agent/skill_commands.py` (dispatch, lifecycle)
+- `hermes-agent/agent/skill_registry.py` (dispatch, lifecycle)
 
 Fork-cc and codex have no comparable user-installable skill system, so hermes is the only real peer here.
 
@@ -42,7 +42,7 @@ From `docs/specs/skills.md:24-38`:
 
 Dispatch flow:
 1. user types `/doctor`
-2. `dispatch()` matches the skill in `ctx.deps.skill_commands`
+2. `dispatch()` matches the skill in `ctx.deps.skill_registry`
 3. skill body is copied into `delegated_input`
 4. `main.py` runs `run_turn()` with `delegated_input` as the user message
 5. normal agent loop executes
@@ -79,7 +79,7 @@ Evidence:
 
 - `co_cli/prompts/_assembly.py:87-160` assembles the static prompt without any skill index
 - `co_cli/agent/_instructions.py` has no `add_skill_awareness_prompt` equivalent
-- `deps.skill_commands` and `get_skill_registry()` (from `docs/specs/skills.md:131-138`) exist but the agent never sees them through a prompt channel
+- `deps.skill_registry` and `get_skill_registry()` (from `docs/specs/skills.md:131-138`) exist but the agent never sees them through a prompt channel
 - The `disable_model_invocation` frontmatter flag implies model-invocation was considered, but no path to the model exists today
 
 Why it matters:

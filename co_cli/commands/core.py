@@ -104,7 +104,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
         return LocalOnly()
 
     # Check skill registry after built-in commands (skills cannot shadow builtins)
-    skill = ctx.deps.skill_commands.get(name)
+    skill = ctx.deps.skill_registry.get(name)
     if skill is not None:
         body = skill.body
         if args and "$ARGUMENTS" in body:

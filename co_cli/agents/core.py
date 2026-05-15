@@ -1,10 +1,10 @@
-"""Agent construction core — ToolRegistry, build_tool_registry(), build_agent()."""
+"""Agent construction core — toolset composition helpers + build_agent()."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
-from typing import Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
 from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.toolsets import AbstractToolset
@@ -21,52 +21,52 @@ from co_cli.context.history_processors import (
 from co_cli.deps import CoDeps, ToolInfo
 from co_cli.tools.lifecycle import CoToolLifecycle
 
+if TYPE_CHECKING:
+    from co_cli.agents.mcp import MCPToolsetEntry
 
-@dataclass(frozen=True)
-class ToolRegistry:
-    """Immutable return value of build_tool_registry().
 
-    Holds the combined filtered toolset (native + MCP, approval-resume filter applied),
-    the raw MCP toolsets (for bootstrap lifecycle management), and the tool_index
-    (native entries; MCP entries added later by discover_mcp_tools()).
+def build_native_toolset(
+    config: Settings,
+) -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]:
+    """Build the unfiltered native toolset and its tool_index.
+
+    Pure config — no IO. Returns the native FunctionToolset and a fresh
+    dict copy of the native tool metadata. Caller is responsible for
+    combining with MCP toolsets (if any) and applying the approval-resume
+    filter via assemble_routing_toolset().
     """
-
-    toolset: AbstractToolset[CoDeps]
-    mcp_toolsets: list  # list[MCPToolsetEntry] — pydantic_ai.mcp type; avoid circular import
-    tool_index: dict[str, ToolInfo]
-
-
-def build_tool_registry(config: Settings) -> ToolRegistry:
-    """Build the tool registry from config.
-
-    Pure config — no IO. Called once in create_deps().
-    Combines native and MCP toolsets under a single approval-resume filter.
-    MCP tool_index entries are added later by discover_mcp_tools().
-    """
-    from co_cli.agents._native_toolset import _approval_resume_filter, _build_native_toolset
-    from co_cli.agents.mcp import _build_mcp_toolsets, _SequentialMCPToolset
+    from co_cli.agents._native_toolset import _build_native_toolset
 
     native_toolset, native_index = _build_native_toolset(config)
-    mcp_entries = _build_mcp_toolsets(config)
+    return native_toolset, dict(native_index)
 
-    tool_index: dict[str, ToolInfo] = dict(native_index)
 
-    # Wrap each MCP toolset so is_concurrent_safe propagates to ToolDefinition.sequential,
-    # matching native tool behavior. tool_index is a mutable ref — discover_mcp_tools()
-    # populates it before the first get_tools() call at agent step time.
-    mcp_entries = [
+def build_mcp_entries(config: Settings, tool_index: dict[str, ToolInfo]) -> list[MCPToolsetEntry]:
+    """Build MCP toolset entries wrapped for sequential-flag propagation.
+
+    Not yet connected. Each entry's toolset is wrapped with _SequentialMCPToolset
+    so that ToolDefinition.sequential is patched from tool_index.is_concurrent_safe
+    at step time. tool_index is held by reference — discover_mcp_tools() populates
+    MCP entries into it after connection, before the first get_tools() call.
+    """
+    from co_cli.agents.mcp import _build_mcp_toolsets, _SequentialMCPToolset
+
+    entries = _build_mcp_toolsets(config)
+    return [
         replace(entry, toolset=_SequentialMCPToolset(entry.toolset, tool_index))
-        for entry in mcp_entries
+        for entry in entries
     ]
 
-    combined = CombinedToolset([native_toolset, *(e.toolset for e in mcp_entries)])
-    filtered = combined.filtered(_approval_resume_filter)
 
-    return ToolRegistry(
-        toolset=filtered,
-        mcp_toolsets=mcp_entries,
-        tool_index=tool_index,
-    )
+def assemble_routing_toolset(
+    native_toolset: AbstractToolset[CoDeps],
+    mcp_toolsets: list[AbstractToolset[CoDeps]],
+) -> AbstractToolset[CoDeps]:
+    """Combine native + connected MCP toolsets and apply the approval-resume filter."""
+    from co_cli.agents._native_toolset import _approval_resume_filter
+
+    combined = CombinedToolset([native_toolset, *mcp_toolsets])
+    return combined.filtered(_approval_resume_filter)
 
 
 def discover_delegation_tools(profile: str, config: Settings) -> list[Callable]:
@@ -89,7 +89,8 @@ def build_agent(
     *,
     config: Settings,
     model: Any = None,
-    tool_registry: ToolRegistry | None = None,
+    toolset: AbstractToolset[CoDeps] | None = None,
+    tool_index: dict[str, ToolInfo] | None = None,
     instructions: str | None = None,
     tool_fns: list[Callable] | None = None,
     output_type: type | None = None,
@@ -101,24 +102,34 @@ def build_agent(
         config: Session config — static instructions, tool policy, MCP servers.
         model: Pre-built LlmModel or raw pydantic-ai model. When omitted,
             built from config internally.
-        tool_registry: Pre-built tool registry. Provide for the orchestrator path.
-            When omitted and no delegation params given, built from config internally.
+        toolset: Routing toolset for the orchestrator path. Required (with tool_index)
+            for the orchestrator path; ignored on the delegation path.
+        tool_index: Tool metadata for guidance prompts and category hints. Required
+            (with toolset) for the orchestrator path; ignored on the delegation path.
         instructions: Static instruction string for delegation tools.
         tool_fns: Tool functions to register on a delegation agent.
         output_type: Required for delegation path — the Pydantic output model type.
         skill_manifest: Optional pre-rendered bundled-skill manifest string. Injected
             after tool guidance in the orchestrator path; ignored for delegation agents.
 
-    Orchestrator path: tool_registry is provided (or built internally from config).
+    Orchestrator path: caller passes toolset + tool_index (constructed via
+    build_native_toolset() + optional MCP composition).
     Delegation path: output_type is provided; builds a minimal agent.
-    Raises ValueError if delegation path intent detected but output_type is None.
+    Raises ValueError if delegation path intent detected but output_type is None,
+    or if orchestrator path is missing toolset/tool_index.
     """
     is_delegation = output_type is not None or instructions is not None or bool(tool_fns)
 
     if is_delegation and output_type is None:
         raise ValueError(
             "Delegation path requires output_type. "
-            "Pass tool_registry instead for the orchestrator path."
+            "Pass toolset and tool_index for the orchestrator path."
+        )
+
+    if not is_delegation and (toolset is None or tool_index is None):
+        raise ValueError(
+            "Orchestrator path requires both toolset and tool_index. "
+            "Use build_native_toolset(config) (or bootstrap.create_deps) to construct them."
         )
 
     from co_cli.llm.factory import LlmModel as _LlmModel
@@ -137,9 +148,6 @@ def build_agent(
         raw_model = model
 
     if not is_delegation:
-        if tool_registry is None:
-            tool_registry = build_tool_registry(config)
-
         from co_cli.agents._instructions import current_time_prompt, safety_prompt
         from co_cli.context.assembly import build_static_instructions
         from co_cli.context.guidance import build_toolset_guidance
@@ -147,11 +155,11 @@ def build_agent(
 
         static_parts = [build_static_instructions(config)]
 
-        tool_guidance = build_toolset_guidance(tool_registry.tool_index)
+        tool_guidance = build_toolset_guidance(tool_index)
         if tool_guidance:
             static_parts.append(tool_guidance)
 
-        category_hint = build_category_awareness_prompt(tool_registry.tool_index)
+        category_hint = build_category_awareness_prompt(tool_index)
         if category_hint:
             static_parts.append(category_hint)
 
@@ -181,7 +189,7 @@ def build_agent(
                 proactive_window_processor,
                 sanitize_surrogate_codepoints,
             ],
-            toolsets=[tool_registry.toolset],
+            toolsets=[toolset],
             capabilities=[CoToolLifecycle()],
         )
 

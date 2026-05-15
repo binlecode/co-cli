@@ -47,7 +47,7 @@ This posture supersedes earlier drafts that took `load_skills(reserved: set[str]
 
 - `SkillConfig` lives at `co_cli/commands/_skill_types.py` (wrong package — it's a skills domain type)
 - 9 skill-loading functions/constants live in `_commands.py`: `_SKILL_ENV_BLOCKED`, `_SKILL_SCAN_PATTERNS`, `_scan_skill_content`, `_inject_source_url`, `_check_requires`, `_diagnose_requires_failures`, `_is_safe_skill_path`, `_load_skill_file`, `load_skills`
-- 2 skill-registry helpers live in `_commands.py`: `set_skill_commands` (lifecycle — mutates `deps.skill_commands`), `get_skill_registry` (presentation — produces `list[dict]` for display)
+- 2 skill-registry helpers live in `_commands.py`: `set_skill_registry` (lifecycle — mutates `deps.skill_registry`), `get_skill_registry` (presentation — produces `list[dict]` for display)
 - `_install_skill` (`_commands.py:414-495`) inlines URL fetch (httpx + content-type validation), file write, source-url injection
 - `_upgrade_skill` (`_commands.py:498-519`) inlines frontmatter parsing to extract `source-url`
 - `_cmd_skills_check` (`_commands.py:307-347`) inlines bundled+user skill directory globbing
@@ -90,7 +90,7 @@ Tests/evals that import other moved symbols (`load_skills`, `get_skill_registry`
 **In scope:**
 - Move `SkillConfig` from `commands/_skill_types.py` to `skills/_skill_types.py`
 - Extract skill-loading internals + `load_skills` to `skills/loader.py`. **Loader signature does not change.** It does not gain a `reserved` parameter; reserved-name policy lives in the CLI relay.
-- Extract `set_skill_commands` (lifecycle helper) to `skills/registry.py`. `get_skill_registry` stays in `_commands.py` for now — it's a presentation helper consumed by `/skills list`, banner, and status check, and moves to `commands/skills.py` in Plan 2.
+- Extract `set_skill_registry` (lifecycle helper) to `skills/registry.py`. `get_skill_registry` stays in `_commands.py` for now — it's a presentation helper consumed by `/skills list`, banner, and status check, and moves to `commands/skills.py` in Plan 2.
 - Extract command-registry primitives (`SlashCommand` type, empty `BUILTIN_COMMANDS = {}`, `_build_completer_words`, `_refresh_completer`) to leaf `commands/_registry.py`; `_commands.py` populates the dict via assignments
 - Add `filter_namespace_conflicts(loaded, reserved, errors)` helper to `commands/_registry.py` — pure data-in/data-out; no side effects beyond appending to `errors`
 - Extract skill operation business logic (URL/path fetch, file write, source-url discovery, file enumeration) to `skills/installer.py`
@@ -153,7 +153,7 @@ co_cli/
                               #   _scan_skill_content, _inject_source_url,
                               #   _SKILL_ENV_BLOCKED, _SKILL_SCAN_PATTERNS.
                               #   Imports nothing from co_cli.commands.
-    registry.py         NEW   # set_skill_commands  (lifecycle — mutates deps.skill_commands)
+    registry.py         NEW   # set_skill_registry  (lifecycle — mutates deps.skill_registry)
                               #   get_skill_registry STAYS in commands/_commands.py for Plan 1;
                               #   moves to commands/skills.py in Plan 2.
     installer.py        NEW   # fetch_skill_content(target) -> (content, filename),
@@ -170,8 +170,8 @@ co_cli/
 
 2. **`co_cli/skills/loader.py` knows nothing about commands** — no `reserved` parameter, no import of `BUILTIN_COMMANDS`, no concept of slash-command namespaces. The loader returns every parseable skill that passes skill-internal validation (requires, env, .md, security scan). The CLI relay filters loaded skills against the slash-command namespace at the call site via `filter_namespace_conflicts`. This is the cleanest possible expression of the corrected architecture: skills is a namespace-agnostic domain library; commands is the relay that decides what's reserved.
 
-3. **`co_cli/skills/registry.py`** — `set_skill_commands(new_skills, deps) -> None` is a lifecycle helper that mutates `deps.skill_commands`. Skills domain. Bootstrap and the `/skills reload` handler call it.
-   `get_skill_registry(skill_commands) -> list[dict]` is a **presentation helper** that prepares skill data for display in `/skills list`, the bootstrap banner, and the bootstrap status check. Display is a relay-layer concern, so `get_skill_registry` does **not** move to `skills/registry.py` — it stays in `_commands.py` during Plan 1 and moves to `commands/skills.py` in Plan 2 alongside the `/skills` handler.
+3. **`co_cli/skills/registry.py`** — `set_skill_registry(new_skills, deps) -> None` is a lifecycle helper that mutates `deps.skill_registry`. Skills domain. Bootstrap and the `/skills reload` handler call it.
+   `get_skill_registry(skill_registry) -> list[dict]` is a **presentation helper** that prepares skill data for display in `/skills list`, the bootstrap banner, and the bootstrap status check. Display is a relay-layer concern, so `get_skill_registry` does **not** move to `skills/registry.py` — it stays in `_commands.py` during Plan 1 and moves to `commands/skills.py` in Plan 2 alongside the `/skills` handler.
 
 4. **`co_cli/commands/_registry.py` (leaf)** — `SlashCommand` + empty `BUILTIN_COMMANDS = {}` + `_build_completer_words` + `_refresh_completer` + `filter_namespace_conflicts`. Population (handler registrations) stays in `_commands.py` after handler imports complete. The filter helper consumes `BUILTIN_COMMANDS.keys()` (or any reserved set) to drop name-conflicting skills, recording errors. This module is the home of slash-command-namespace policy. Combined with the loader's namespace-agnostic signature, it kills all three lazy-import workarounds flagged in the prior Gate-1 review (B3) structurally.
 
@@ -181,7 +181,7 @@ co_cli/
 
 7. **In-place handler refactor** — Plan 1 refactors handler bodies *without* moving them out. Plan 2's mechanical move then carries thin orchestrators (not 80-line monsters) into `commands/skills.py`. Two-step makes each step reviewable.
 
-8. **DRY** — the `prompt_confirm`/`console.input` branch collapses into `_confirm` (#6). The `load_skills → filter_namespace_conflicts → set_skill_commands → _refresh_completer` 4-line composition stays inline at both call sites (`_install_skill` and `_cmd_skills_reload`) — four lines at two sites doesn't justify abstraction.
+8. **DRY** — the `prompt_confirm`/`console.input` branch collapses into `_confirm` (#6). The `load_skills → filter_namespace_conflicts → set_skill_registry → _refresh_completer` 4-line composition stays inline at both call sites (`_install_skill` and `_cmd_skills_reload`) — four lines at two sites doesn't justify abstraction.
 
 ---
 
@@ -262,16 +262,16 @@ done_when:
 
 ---
 
-### ✓ DONE — TASK-3: Extract `set_skill_commands` to `co_cli/skills/registry.py`
+### ✓ DONE — TASK-3: Extract `set_skill_registry` to `co_cli/skills/registry.py`
 
 **What moves:**
-- `set_skill_commands(new_skills: dict[str, SkillConfig], deps: CoDeps) -> None`
+- `set_skill_registry(new_skills: dict[str, SkillConfig], deps: CoDeps) -> None`
 
 **What stays in `_commands.py` for now:**
-- `get_skill_registry(skill_commands: dict[str, SkillConfig]) -> list[dict]` — presentation helper consumed by `/skills list`, `bootstrap/banner.py`, `bootstrap/check.py`, `main.py`. Moves to `commands/skills.py` in Plan 2 TASK-2 along with the rest of the `/skills` UI.
+- `get_skill_registry(skill_registry: dict[str, SkillConfig]) -> list[dict]` — presentation helper consumed by `/skills list`, `bootstrap/banner.py`, `bootstrap/check.py`, `main.py`. Moves to `commands/skills.py` in Plan 2 TASK-2 along with the rest of the `/skills` UI.
 
 **Import sites updated in this task:**
-- `_commands.py` — `from co_cli.skills.registry import set_skill_commands`. The local `def set_skill_commands(...)` is deleted; `def get_skill_registry(...)` stays.
+- `_commands.py` — `from co_cli.skills.registry import set_skill_registry`. The local `def set_skill_registry(...)` is deleted; `def get_skill_registry(...)` stays.
 
 **Import sites NOT updated in this task:**
 - `co_cli/bootstrap/check.py:484` — still imports `get_skill_registry` from `_commands.py`. Updated in Plan 2 TASK-2.
@@ -282,15 +282,15 @@ done_when:
 
 ```
 files:
-  - co_cli/skills/registry.py        (create — only set_skill_commands)
-  - co_cli/commands/_commands.py     (remove set_skill_commands; add import; keep get_skill_registry locally)
+  - co_cli/skills/registry.py        (create — only set_skill_registry)
+  - co_cli/commands/_commands.py     (remove set_skill_registry; add import; keep get_skill_registry locally)
 
 done_when:
-  python -c "from co_cli.skills.registry import set_skill_commands" exits 0
+  python -c "from co_cli.skills.registry import set_skill_registry" exits 0
   python -c "from co_cli.skills.registry import get_skill_registry" exits NONZERO   # not moved in this plan
-  grep -E "^def set_skill_commands\b" co_cli/commands/_commands.py returns empty
+  grep -E "^def set_skill_registry\b" co_cli/commands/_commands.py returns empty
   grep -E "^def get_skill_registry\b" co_cli/commands/_commands.py returns 1 match   # still here for Plan 2 to move
-  grep -rn "from co_cli.commands._commands import.*set_skill_commands" . --include="*.py" returns empty
+  grep -rn "from co_cli.commands._commands import.*set_skill_registry" . --include="*.py" returns empty
   uv run pytest tests/bootstrap/ -x passes
 ```
 
@@ -301,7 +301,7 @@ done_when:
 **What moves from `_commands.py` → `co_cli/commands/_registry.py`:**
 - `SlashCommand` dataclass
 - `BUILTIN_COMMANDS: dict[str, SlashCommand] = {}` (the **empty** dict — population stays in `_commands.py`)
-- `_build_completer_words(skill_commands: dict[str, SkillConfig]) -> list[str]`
+- `_build_completer_words(skill_registry: dict[str, SkillConfig]) -> list[str]`
 - `_refresh_completer(ctx: CommandContext) -> None`
 
 **What's added to `_registry.py` (NEW helper, replaces the inline reserved filter from TASK-2):**
@@ -339,7 +339,7 @@ BUILTIN_COMMANDS["help"] = SlashCommand("help", "List available slash commands",
   ```python
   loaded = load_skills(ctx.deps.skills_dir, settings, user_skills_dir=ctx.deps.user_skills_dir, errors=errors)
   skills = filter_namespace_conflicts(loaded, set(BUILTIN_COMMANDS.keys()), errors)
-  set_skill_commands(skills, ctx.deps)
+  set_skill_registry(skills, ctx.deps)
   ```
 - `co_cli/main.py:25,32` — `BUILTIN_COMMANDS`, `_build_completer_words` → `co_cli.commands._registry`
 - `co_cli/bootstrap/banner.py:39` — `BUILTIN_COMMANDS` → `co_cli.commands._registry` (`get_skill_registry` import unchanged — Plan 2 moves it)
@@ -458,7 +458,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
     skills = filter_namespace_conflicts(loaded, set(BUILTIN_COMMANDS.keys()), errors)
     for msg in errors:
         console.print(f"[warning]{msg}[/warning]")
-    set_skill_commands(skills, ctx.deps)
+    set_skill_registry(skills, ctx.deps)
     _refresh_completer(ctx)
     console.print(f"[success]✓ Installed skill: {filename.removesuffix('.md')}[/success]")
 ```
@@ -467,7 +467,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
 
 **Refactored `_cmd_skills_check`:** `paths = discover_skill_files(ctx.deps.skills_dir, ctx.deps.user_skills_dir)` → for each path, render table row using `_diagnose_requires_failures`. Discovery glob no longer in the handler.
 
-**Refactored `_cmd_skills_reload`:** the same composition as `_install_skill` end-block: `load_skills` → `filter_namespace_conflicts` → `set_skill_commands` → `_refresh_completer`. Four lines at two call sites; **no helper introduced** — too small to abstract.
+**Refactored `_cmd_skills_reload`:** the same composition as `_install_skill` end-block: `load_skills` → `filter_namespace_conflicts` → `set_skill_registry` → `_refresh_completer`. Four lines at two call sites; **no helper introduced** — too small to abstract.
 
 **Prerequisites:** TASK-2, TASK-3, TASK-4, TASK-5.
 
@@ -508,7 +508,7 @@ If a test breaks, stop and diagnose — a regression means the refactor was wron
 
 | Issue ID | Decision | Applies to Plan 1 |
 |----------|----------|-------------------|
-| C2-1 | `set_skill_commands` is skills lifecycle → `skills/registry.py`. `get_skill_registry` is presentation → stays in `_commands.py` until Plan 2 moves it to `commands/skills.py` | TASK-3 |
+| C2-1 | `set_skill_registry` is skills lifecycle → `skills/registry.py`. `get_skill_registry` is presentation → stays in `_commands.py` until Plan 2 moves it to `commands/skills.py` | TASK-3 |
 | C2-5 | `SkillConfig` is skills domain, not commands | TASK-1 |
 | C2-7 | No backward-compatibility re-exports | All tasks |
 | C2-8 | All skills non-handler logic in `skills/` | TASK-2, TASK-3, TASK-5, TASK-6 |
@@ -534,7 +534,7 @@ Plan 1 ready for Gate 1.
 |------|-----------|--------|
 | TASK-1 | `from co_cli.skills._skill_types import SkillConfig` exits 0; `_skill_types.py` absent from `commands/` | ✓ pass |
 | TASK-2 | `from co_cli.skills.loader import load_skills, _scan_skill_content, _diagnose_requires_failures` exits 0; `loader.py` imports nothing from `co_cli.commands` | ✓ pass |
-| TASK-3 | `from co_cli.skills.registry import set_skill_commands` exits 0; `set_skill_commands` not defined in `_commands.py`; `get_skill_registry` still defined there | ✓ pass |
+| TASK-3 | `from co_cli.skills.registry import set_skill_registry` exits 0; `set_skill_registry` not defined in `_commands.py`; `get_skill_registry` still defined there | ✓ pass |
 | TASK-4 | `from co_cli.commands._registry import BUILTIN_COMMANDS, SlashCommand, filter_namespace_conflicts`; `len(BUILTIN_COMMANDS) == 17`; `filter_namespace_conflicts` call present in `bootstrap/core.py` | ✓ pass |
 | TASK-5 | `from co_cli.skills.installer import fetch_skill_content, write_skill_file, find_skill_source_url, discover_skill_files, SkillFetchError` exits 0; installer imports nothing from `co_cli.commands` | ✓ pass |
 | TASK-6 | `from co_cli.commands._types import _confirm` exits 0; `httpx`/`urllib`/`parse_frontmatter`/`.glob("*.md")` absent from `_commands.py`; `filter_namespace_conflicts` at install + reload sites; 17 commands | ✓ pass |
@@ -560,7 +560,7 @@ All 6 tasks passed. Skills domain logic fully extracted to `co_cli/skills/` pack
 |------|-----------|---------------|-------------|
 | TASK-1 | `from co_cli.skills._skill_types import SkillConfig` exits 0; `_skill_types.py` absent from `commands/` | ✓ pass | `co_cli/skills/_skill_types.py:9` — `SkillConfig` frozen dataclass; `co_cli/commands/_skill_types.py` deleted; all import sites updated |
 | TASK-2 | `load_skills` importable from `skills.loader`; loader imports nothing from `co_cli.commands`; no `reserved` param | ✓ pass | `co_cli/skills/loader.py:240` — `load_skills` signature; grep `co_cli.commands` in loader imports returns empty |
-| TASK-3 | `set_skill_commands` in `skills.registry`; `get_skill_registry` still in `_commands.py` | ✓ pass | `co_cli/skills/registry.py:12` — `set_skill_commands`; `co_cli/commands/_commands.py:57` — `get_skill_registry` |
+| TASK-3 | `set_skill_registry` in `skills.registry`; `get_skill_registry` still in `_commands.py` | ✓ pass | `co_cli/skills/registry.py:12` — `set_skill_registry`; `co_cli/commands/_commands.py:57` — `get_skill_registry` |
 | TASK-4 | 17 commands; `filter_namespace_conflicts` composition in `bootstrap/core.py` | ✓ pass | `BUILTIN_COMMANDS` len==17 verified; `core.py:273-275` — `filter_namespace_conflicts` call confirmed |
 | TASK-5 | installer symbols importable; installer imports nothing from `co_cli.commands` | ✓ pass | `co_cli/skills/installer.py` — all 5 public symbols present; grep `co_cli.commands` returns empty |
 | TASK-6 | `_confirm` importable; no httpx/urllib/parse_frontmatter/glob in `_commands.py` (skill handlers); filter_namespace_conflicts at install + reload | ✓ pass (after auto-fix) | `_types.py:52` — `_confirm`; glob removed from `_cmd_skills_reload:267` (auto-fixed); `_commands.py:264,359` — filter at both call sites |
@@ -572,7 +572,7 @@ All 6 tasks passed. Skills domain logic fully extracted to `co_cli/skills/` pack
 | `if TYPE_CHECKING: pass` dead block | `_registry.py:16-17` | minor | Removed dead block + unused `TYPE_CHECKING` import |
 | Stale model name `"gemini-3.1-flash-preview"` in test (renamed to `"gemini-3-flash-preview"` in commit `3b7e8b9`) | `tests/bootstrap/test_config.py:299` | blocking (suite failure) | Updated model name to match current `_INFERENCE_DEFAULTS` |
 | `tui.md` Files table: `_commands.py` claimed `BUILTIN_COMMANDS` and `CommandContext/outcome types` (now in `_registry.py` and `_types.py`) | `docs/specs/tui.md` | minor | Updated `_commands.py` entry; added `_registry.py` and `_types.py` rows |
-| `skills.md` flowchart node and table cells used `session.skill_commands`/`session.skill_registry` (wrong — `deps.skill_commands`/`get_skill_registry()`) | `docs/specs/skills.md:32,48,67` | minor | Updated three references |
+| `skills.md` flowchart node and table cells used `session.skill_registry`/`session.skill_registry` (wrong — `deps.skill_registry`/`get_skill_registry()`) | `docs/specs/skills.md:32,48,67` | minor | Updated three references |
 
 ### Tests
 - Command: `uv run pytest -v`

@@ -1,6 +1,6 @@
 # Co CLI — Tools
 
-> For system overview and approval boundary: [01-system.md](01-system.md). For the agent loop, orchestration, and approval flow: [core-loop.md](core-loop.md). For skill loading and slash-command dispatch: [skill.md](skill.md).
+> For system overview and approval boundary: [01-system.md](01-system.md). For the agent loop, orchestration, and approval flow: [core-loop.md](core-loop.md). For skill loading, dispatch, and curation: [skills.md](skills.md).
 
 ## 1. Functional Architecture
 
@@ -10,8 +10,11 @@ graph LR
         A["@agent_tool\n(module import)"] -->|"self-registers"| B["TOOL_REGISTRY"]
     end
     subgraph Assembly
-        B --> C["build_tool_registry(config)"]
-        C --> D["ToolRegistry\ntoolset · mcp_toolsets · tool_index"]
+        B --> C1["build_native_toolset(config)\n→ (native_toolset, tool_index)"]
+        C1 --> C2["build_mcp_entries(config, tool_index)"]
+        C2 --> C3["MCP connect + discover\n(per-entry timeout / isolation)"]
+        C3 --> C4["assemble_routing_toolset\nCombinedToolset.filtered"]
+        C4 --> D["deps.toolset + deps.tool_index"]
     end
     subgraph Orchestrator
         D -->|"toolset"| E["Orchestrator Agent"]
@@ -19,7 +22,7 @@ graph LR
         F -->|"DeferredToolRequests"| G["Approval Loop\n_collect_deferred_tool_approvals\n+ resume segment"]
     end
     subgraph Delegation["Delegation (task agent path)"]
-        F -->|"delegation tool invoked"| H["fork_deps\ntool_index forwarded\ntool_registry excluded"]
+        F -->|"delegation tool invoked"| H["fork_deps\ntool_index forwarded\ntoolset excluded"]
         H --> I["Task Agent\nbuild_agent(tool_fns=\ndiscover_delegation_tools(profile))"]
         I --> J["_delegate_agent\n_run_agent_attempt"]
     end
@@ -46,7 +49,7 @@ graph LR
 
 `CoToolLifecycle` (`co_cli/tools/lifecycle.py`) is the pydantic-ai capability registered on the orchestrator agent. It fires four hooks per tool call: `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute`. All tool instrumentation and safety guards run through these hooks — no inline per-tool branching.
 
-`fork_deps(base)` (`co_cli/deps.py`) creates an isolated `CoDeps` for a task agent. It forwards `tool_index` (needed for approval checks and OTel enrichment) but explicitly excludes `tool_registry` — the orchestrator's combined toolset and MCP lifecycle handles must not propagate to task agents. `runtime.agent_depth` is incremented on each fork.
+`fork_deps(base)` (`co_cli/deps.py`) creates an isolated `CoDeps` for a task agent. It forwards `tool_index` (needed for approval checks and OTel enrichment) but explicitly excludes `toolset` — the orchestrator's combined routing surface must not propagate to task agents, which wire their own minimal tool set via `build_agent(tool_fns=..., output_type=...)`. `runtime.agent_depth` is incremented on each fork.
 
 `_delegate_agent` / `_run_agent_attempt` (`co_cli/tools/agents/delegation.py`) are shared helpers used by all three delegation tools. They handle OTel span creation, `fork_deps`, `UsageLimits` enforcement, child usage merge into the parent turn's `turn_usage`, and `ModelRetry` wrapping on failure.
 
@@ -185,9 +188,9 @@ build task agent  [fresh per call — instructions read live deps state]
 _delegate_agent
   ┌─────────────────────────────────────────────────────────┐
   │  child_deps = fork_deps(ctx.deps)                       │
-  │    tool_index   ──► forwarded  (approval + OTel)        │
-  │    tool_registry ──► excluded  (orchestrator path only) │
-  │    agent_depth  ──► incremented                         │
+  │    tool_index ──► forwarded  (approval + OTel)          │
+  │    toolset    ──► excluded   (orchestrator path only)   │
+  │    agent_depth ──► incremented                          │
   └─────────────────────────────────────────────────────────┘
       │
       ▼
@@ -239,11 +242,12 @@ _delegate_agent
 | Symbol | Source | Contract |
 |--------|--------|----------|
 | `@agent_tool(name=..., description=..., approval=..., spill_threshold_chars=..., delegation=...)` | `co_cli/tools/agent_tool.py` | Decorator — self-registers a function into `TOOL_REGISTRY` with metadata |
-| `TOOL_REGISTRY` | `co_cli/tools/agent_tool.py` | Module-level list populated at import time; read by `build_tool_registry()` |
-| `ToolRegistry` | `co_cli/agents/core.py` | Bundle of `toolset`, `mcp_toolsets`, `tool_index` produced by `build_tool_registry()` |
-| `build_tool_registry(config) -> ToolRegistry` | `co_cli/agents/core.py` | Builds the foreground agent's combined toolset from `TOOL_REGISTRY` + MCP servers |
+| `TOOL_REGISTRY` | `co_cli/tools/agent_tool.py` | Module-level list populated at import time; read by `build_native_toolset()` |
+| `build_native_toolset(config) -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | `co_cli/agents/core.py` | Pure-config helper. Returns the unfiltered native toolset and a fresh `tool_index` |
+| `build_mcp_entries(config, tool_index) -> list[MCPToolsetEntry]` | `co_cli/agents/core.py` | Builds MCP entries wrapped with sequential-flag propagation; not yet connected |
+| `assemble_routing_toolset(native, mcp_toolsets) -> AbstractToolset[CoDeps]` | `co_cli/agents/core.py` | Combines native + connected MCP toolsets, applies `_approval_resume_filter` |
 | `discover_delegation_tools(profile, config) -> list[Callable]` | `co_cli/agents/core.py` | Returns tools tagged for a delegation profile, filtered by `requires_config` |
-| `build_agent(config, model, tool_registry, ...) -> Agent[CoDeps, Any]` | `co_cli/agents/core.py` | Constructs the pydantic-ai agent with instructions, history processors, and capabilities |
+| `build_agent(config, model, toolset, tool_index, ...) -> Agent[CoDeps, Any]` | `co_cli/agents/core.py` | Constructs the pydantic-ai agent. Orchestrator path requires `toolset` + `tool_index`; delegation path requires `output_type` + `tool_fns` |
 
 ### Tool output / errors
 
@@ -268,14 +272,14 @@ _delegate_agent
 
 | Symbol | Source | Contract |
 |--------|--------|----------|
-| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds an isolated `CoDeps` for a delegation agent; forwards `tool_index`, excludes `tool_registry`, increments `agent_depth` |
+| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds an isolated `CoDeps` for a delegation agent; forwards `tool_index`, excludes `toolset`, increments `agent_depth` |
 | `_delegate_agent(...)` / `_run_agent_attempt(...)` | `co_cli/tools/agents/delegation.py` | Shared OTel + `UsageLimits` wrappers used by `web_research`, `knowledge_analyze`, `reason` |
 
 ## 5. Files
 
 | File | Role |
 |------|------|
-| `co_cli/agents/core.py` | `build_tool_registry()`, `build_agent()`, `discover_delegation_tools()` |
+| `co_cli/agents/core.py` | `build_native_toolset()`, `build_mcp_entries()`, `assemble_routing_toolset()`, `build_agent()`, `discover_delegation_tools()` |
 | `co_cli/agents/_native_toolset.py` | `_build_native_toolset()`, `_approval_resume_filter()` |
 | `co_cli/agents/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |
 | `co_cli/tools/lifecycle.py` | `CoToolLifecycle` — all four per-call hooks |

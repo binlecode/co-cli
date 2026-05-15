@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from tests._settings import SETTINGS
 
-from co_cli.agents.core import build_tool_registry
+from co_cli.agents.core import build_native_toolset
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent, LocalOnly
 from co_cli.deps import CoDeps, CoSessionState
@@ -33,14 +33,14 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_deps(tmp_path: Path) -> CoDeps:
-    skill_commands = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
-    tool_registry = build_tool_registry(SETTINGS)
+    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    _, tool_index = build_native_toolset(SETTINGS)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
-        tool_index=dict(tool_registry.tool_index),
+        tool_index=tool_index,
         session=CoSessionState(),
-        skill_commands=skill_commands,
+        skill_registry=skill_registry,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
@@ -320,9 +320,9 @@ def test_blocked_skill_env_key_filtered_at_load(tmp_path: Path) -> None:
         "Do something",
         "skill-env:\n  PATH: /badpath\n  SAFE_KEY: safevalue\n",
     )
-    skill_commands = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
-    assert "envskill" in skill_commands
-    skill = skill_commands["envskill"]
+    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    assert "envskill" in skill_registry
+    skill = skill_registry["envskill"]
     assert "PATH" not in skill.skill_env, "PATH must be filtered out of skill_env at load time"
     assert skill.skill_env.get("SAFE_KEY") == "safevalue", (
         "safe keys must be preserved in skill_env"

@@ -40,8 +40,11 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ config.llm.validate_config()
 │  ├─ [if ollama] probe_ollama_model() → model_max_ctx = min(probe.num_ctx, llm.max_ctx)
 │  ├─ build_model(config.llm)
-│  ├─ build_tool_registry(config)
-│  ├─ enter MCP toolsets on stack; discover_mcp_tools(); merge MCP tool_index
+│  ├─ build_native_toolset(config) → (native_toolset, tool_index)
+│  ├─ build_mcp_entries(config, tool_index)
+│  ├─ enter MCP toolsets on stack (per-entry timeout + failure isolation)
+│  ├─ discover_mcp_tools(connected); merge MCP entries into tool_index
+│  ├─ assemble_routing_toolset(native_toolset, [connected].toolset) → toolset
 │  ├─ load_skills(skills_dir, settings=config, user_skills_dir=...) → filter_namespace_conflicts()
 │  ├─ _discover_memory_backend(config, frontend, degradations)
 │  ├─ _sync_memory_store(store, config, frontend, knowledge_dir)
@@ -51,8 +54,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  └─ return CoDeps(...)
 │
 ├─ deps.session.reasoning_display = CLI-selected mode
-├─ completer.words = _build_completer_words(deps.skill_commands)
-├─ build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
+├─ completer.words = _build_completer_words(deps.skill_registry)
+├─ build_agent(config=deps.config, model=deps.model, toolset=deps.toolset, tool_index=deps.tool_index)
 │
 ├─ restore_session(deps, frontend) → current_session_path
 ├─ init_session_index(deps, current_session_path, frontend)
@@ -84,7 +87,7 @@ Config precedence is (lowest → highest):
 
 ### Step 2. Enter `chat_loop()` and construct shell-local UI objects
 
-`_chat_loop()` creates the terminal frontend, the prompt session, and the async exit stack. The completer starts with built-in slash commands only; skill commands are added later after bootstrap has loaded them.
+`_chat_loop()` creates the terminal frontend, the prompt session, and the async exit stack. The completer starts with built-in slash commands only; skill slash commands are added after bootstrap has loaded them.
 
 ### Step 3. Start `create_deps()` and resolve paths
 
@@ -117,7 +120,7 @@ Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it st
 
 ### Step 7. Load skills with two-pass precedence
 
-Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_commands` map can be stored directly on the runtime object.
+Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_registry` map can be stored directly on the runtime object.
 
 ```text
 pass 1: bundled skills (co_cli/skills/)
@@ -160,7 +163,7 @@ After model setup, MCP discovery, skill loading, backend resolution, and sync, b
 
 - `config`: the session `Settings` instance
 - `model`, `memory_store`, and `shell`: service handles
-- `tool_registry`, `tool_index`, and `skill_commands`: bootstrap-built registries
+- `toolset`, `tool_index`, and `skill_registry`: bootstrap-built registries
 - resolved workspace paths
 - `degradations`: runtime downgrade reasons
 - mutable `session` and `runtime` state groups
@@ -169,7 +172,7 @@ After bootstrap completes, `deps.config` is treated as read-only by convention e
 
 ### Step 11. Build the foreground agent
 
-Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, renders the bundled skill manifest via `render_skill_manifest(deps.skill_commands, deps.skills_dir, deps.user_skills_dir)`, and calls `build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry, skill_manifest=...)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
+Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, renders the bundled skill manifest via `render_skill_manifest(deps.skill_registry, deps.skills_dir, deps.user_skills_dir)`, and calls `build_agent(config=deps.config, model=deps.model, toolset=deps.toolset, tool_index=deps.tool_index, skill_manifest=...)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
 
 ### Step 12. Restore or create the session
 
@@ -262,7 +265,7 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/config/core.py` | Defines `Settings`, layered config loading, and env override mapping |
 | `co_cli/skills/loader.py` | `load_skills` — two-tier skill file loading used during bootstrap and `/skills reload` |
 | `co_cli/commands/core.py` | Slash-command `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` REPL command family and `get_skill_registry` |
+| `co_cli/commands/skills.py` | `/skills` REPL command family (list/check/lint/reload/review) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
 | `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/memory/memory_store.py` | Implements the `MemoryStore` used when bootstrap enables indexed retrieval |

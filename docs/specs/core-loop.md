@@ -33,7 +33,7 @@ flowchart TD
 
 | Stage | Owned by |
 | --- | --- |
-| Slash-command dispatch, skill expansion | [tui.md](tui.md), [skill.md](skill.md) |
+| Slash-command dispatch, skill expansion | [tui.md](tui.md), [skills.md](skills.md) |
 | `run_turn` / approval loop / retries | [core-loop.md](core-loop.md) |
 | Instruction parts + history processors | [prompt-assembly.md](prompt-assembly.md) |
 | Compaction trigger (processor #3) | [compaction.md](compaction.md) |

@@ -245,7 +245,7 @@ def test_session_review_instructions_include_skills_manifest(tmp_path: Path) -> 
     from co_cli.skills.session_review_prompts import SESSION_REVIEW_INSTRUCTIONS
     from co_cli.skills.skill_types import SkillConfig
 
-    skill_commands: dict[str, SkillConfig] = {
+    skill_registry: dict[str, SkillConfig] = {
         "git-workflows": SkillConfig(
             name="git-workflows",
             description="Git branching and merge workflows",
@@ -257,7 +257,7 @@ def test_session_review_instructions_include_skills_manifest(tmp_path: Path) -> 
             path=tmp_path / "python-testing.md",
         ),
     }
-    manifest = render_skill_manifest(skill_commands, tmp_path, tmp_path)
+    manifest = render_skill_manifest(skill_registry, tmp_path, tmp_path)
     combined = (
         f"{manifest}\n\n{SESSION_REVIEW_INSTRUCTIONS}" if manifest else SESSION_REVIEW_INSTRUCTIONS
     )

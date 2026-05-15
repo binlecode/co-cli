@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from tests._settings import SETTINGS
 
-from co_cli.agents.core import build_tool_registry
+from co_cli.agents.core import build_native_toolset
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent
 from co_cli.deps import CoDeps, CoSessionState
@@ -18,19 +18,19 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_ctx(tmp_path: Path) -> CommandContext:
-    skill_commands = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
-    tool_registry = build_tool_registry(SETTINGS)
+    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    _, tool_index = build_native_toolset(SETTINGS)
     deps = CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
-        tool_index=dict(tool_registry.tool_index),
+        tool_index=tool_index,
         session=CoSessionState(),
-        skill_commands=skill_commands,
+        skill_registry=skill_registry,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
     )
-    # agent is not accessed during skill dispatch — only deps.skill_commands is used
+    # agent is not accessed during skill dispatch — only deps.skill_registry is used
     return CommandContext(message_history=[], deps=deps, agent=None)  # type: ignore[arg-type]
 
 

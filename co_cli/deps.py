@@ -21,7 +21,8 @@ from co_cli.config.core import (
 from co_cli.tools.file_read_tracker import FileReadTracker
 
 if TYPE_CHECKING:
-    from co_cli.agents.core import ToolRegistry
+    from pydantic_ai.toolsets import AbstractToolset
+
     from co_cli.llm.factory import LlmModel
     from co_cli.memory.memory_store import MemoryStore
     from co_cli.skills.skill_types import SkillConfig
@@ -270,8 +271,8 @@ class CoDeps:
     model: LlmModel | None = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, ToolInfo] = field(default_factory=dict)
-    tool_registry: ToolRegistry | None = field(default=None, repr=False)
-    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
+    toolset: AbstractToolset[CoDeps] | None = field(default=None, repr=False)
+    skill_registry: dict[str, SkillConfig] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
@@ -305,6 +306,13 @@ def fork_deps_for_reviewer(parent: CoDeps) -> CoDeps:
     return child
 
 
+def fork_deps_for_curator(parent: CoDeps) -> CoDeps:
+    """Fork deps for the skill_curator consolidation agent — grants skill write access only."""
+    child = fork_deps(parent)
+    child.runtime.auto_approve_skill_ops = True
+    return child
+
+
 def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
     """Resolve workspace paths from Settings. Used by create_deps()."""
     return {
@@ -335,8 +343,8 @@ def fork_deps(base: CoDeps) -> CoDeps:
       degradations        — read-only after bootstrap
     These are safe to share because per-turn mutable state (CoRuntimeState) is always fresh.
 
-    tool_registry is intentionally excluded — delegation agents construct their own via
-    build_tool_registry() with a filtered tool set appropriate for their depth.
+    toolset is intentionally excluded — delegation agents wire their own minimal
+    tool surface via build_agent(tool_fns=..., output_type=...).
     """
     inherited_session = CoSessionState(
         google=GoogleSessionState(
@@ -355,7 +363,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         memory_store=base.memory_store,
         model=base.model,
         tool_index=base.tool_index,
-        skill_commands=base.skill_commands,
+        skill_registry=base.skill_registry,
         session=inherited_session,
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
         workspace_dir=base.workspace_dir,

@@ -34,19 +34,19 @@ def read_skill_meta(skill_path: Path) -> dict:
 
 
 def refresh_skills(deps: CoDeps) -> None:
-    """Reload skills from disk, update deps.skill_commands, and sync the skill index.
+    """Reload skills from disk, update deps.skill_registry, and sync the skill index.
 
     Idempotent — safe to call on every write that changes the skill catalog.
     """
     from co_cli.skills.loader import load_skills
-    from co_cli.skills.registry import set_skill_commands
+    from co_cli.skills.registry import set_skill_registry
 
     new_skills = load_skills(
         deps.skills_dir,
         deps.config,
         user_skills_dir=deps.user_skills_dir,
     )
-    set_skill_commands(new_skills, deps)
+    set_skill_registry(new_skills, deps)
 
 
 def cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> None:

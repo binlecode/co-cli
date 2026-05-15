@@ -15,7 +15,7 @@ AGENT_TOOL_ATTR = "__co_tool_info__"
 
 # Self-populating registry — every @agent_tool(register=True) decorated function is appended
 # at module import time. _native_toolset imports all tool modules as a side effect to ensure
-# full population before build_tool_registry() runs.
+# full population before build_native_toolset() runs.
 TOOL_REGISTRY: list[Callable] = []
 
 

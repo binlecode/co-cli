@@ -9,7 +9,7 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS, make_settings
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
-from co_cli.agents.core import build_tool_registry
+from co_cli.agents.core import build_native_toolset
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.system.capabilities import capabilities_check
@@ -17,11 +17,11 @@ from co_cli.tools.system.capabilities import capabilities_check
 
 def _make_deps(**settings_overrides) -> CoDeps:
     config = make_settings(**settings_overrides) if settings_overrides else SETTINGS
-    tool_registry = build_tool_registry(config)
+    _, tool_index = build_native_toolset(config)
     return CoDeps(
         shell=ShellBackend(),
         config=config,
-        tool_index=dict(tool_registry.tool_index),
+        tool_index=tool_index,
         session=CoSessionState(),
     )
 

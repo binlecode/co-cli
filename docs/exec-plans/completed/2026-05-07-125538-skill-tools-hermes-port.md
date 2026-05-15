@@ -55,7 +55,7 @@ extension.
   `category` field today — the `skills_list(category=…)` filter will
   be a pass-through for now (matches hermes signature; degenerate
   semantics).
-- ✓ `CoDeps.skill_commands: dict[str, SkillConfig]` is populated at
+- ✓ `CoDeps.skill_registry: dict[str, SkillConfig]` is populated at
   bootstrap and propagated through deps clones (`co_cli/deps.py:231,310`).
 - ✓ Bundled skills directory currently contains one `.md`
   (`co_cli/skills/doctor.md`). User skills load from `~/.co-cli/skills/`.
@@ -215,7 +215,7 @@ async def skills_list(
             do not currently expose a category field; the filter is a
             pass-through unless future frontmatter adds one.
     """
-    entries = get_skill_registry(ctx.deps.skill_commands)
+    entries = get_skill_registry(ctx.deps.skill_registry)
     if category:
         entries = [e for e in entries if e.get("category") == category]
     if not entries:
@@ -254,7 +254,7 @@ async def skill_view(
             supported by co-cli's flat-file skills today.
     """
     lookup = name.split(":", 1)[1] if ":" in name else name
-    skill = ctx.deps.skill_commands.get(lookup)
+    skill = ctx.deps.skill_registry.get(lookup)
     if skill is None:
         return tool_error(f"skill_view: unknown skill {name!r}.", ctx=ctx)
     if skill.disable_model_invocation:

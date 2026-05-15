@@ -116,7 +116,7 @@ Doing this plan first costs ~1 day; doing it after Plans 2–4 costs a re-port o
   - Approval subject rename: `tool:artifact_manage:<action>:<name>` → `tool:knowledge_manage:<action>:<name>`.
   - Update all callers: `_native_toolset.py`, `04_tool_protocol.md`, `dream.py` (if it references the tool), tests.
   - Internal class names (`KnowledgeArtifact`, `ArtifactKindEnum`, file `artifact.py`) and on-disk frontmatter field (`artifact_kind`) **stay** — not model-visible.
-- Add **bundled skill manifest injection** — `co_cli/context/manifests/skill_manifest.py` (or appropriate location) — renders `<available_skills>` block from `deps.skill_commands`, filtered to bundled-only (skills sourced from `co_cli/skills/`, not from `user_skills_dir`). Injected into static system prompt at agent construction.
+- Add **bundled skill manifest injection** — `co_cli/context/manifests/skill_manifest.py` (or appropriate location) — renders `<available_skills>` block from `deps.skill_registry`, filtered to bundled-only (skills sourced from `co_cli/skills/`, not from `user_skills_dir`). Injected into static system prompt at agent construction.
 - Modify `co_cli/context/rules/04_tool_protocol.md` — remove the skills-channel note from the Memory subsection.
 - Specs:
   - `docs/specs/memory.md` — trim to two-channel foundation + cross-link to `skill.md`; update channel ontology and result-shape tables.
@@ -231,7 +231,7 @@ A new module renders the bundled skill manifest as an XML-like block injected in
 </available_skills>
 ```
 
-Location: `co_cli/context/manifests/skill_manifest.py` (new module) with `render_skill_manifest(skill_commands, skills_dir) -> str`. Called by prompt assembly at agent construction time (which already injects static personality content).
+Location: `co_cli/context/manifests/skill_manifest.py` (new module) with `render_skill_manifest(skill_registry, skills_dir) -> str`. Called by prompt assembly at agent construction time (which already injects static personality content).
 
 Filter: bundled-only (i.e. `skill.path` starts with `skills_dir` and not `user_skills_dir`). This keeps the manifest small and stable across user-installed skill changes.
 
@@ -295,7 +295,7 @@ Acceptance:
 - `skill_search(query='review', limit=5)` returns ranked list (empty if no hits).
 - Empty/whitespace query → `tool_error`.
 - `is_read_only=True`, `is_concurrent_safe=True`, no approval.
-- Description (read from skill_commands lookup, fix-aware) populated correctly.
+- Description (read from skill_registry lookup, fix-aware) populated correctly.
 
 ### ✓ DONE — TASK-3 — `memory_search` shrink
 
@@ -311,7 +311,7 @@ Acceptance:
 ### ✓ DONE — TASK-4 — Bundled skill manifest injection
 
 Files:
-- `co_cli/context/manifests/skill_manifest.py` (new) — `render_skill_manifest(skill_commands, skills_dir) -> str`.
+- `co_cli/context/manifests/skill_manifest.py` (new) — `render_skill_manifest(skill_registry, skills_dir) -> str`.
 - Prompt-assembly integration point (TBD — likely `co_cli/context/assembly.py` or wherever static personality content is composed).
 
 Acceptance:
@@ -500,7 +500,7 @@ After this plan ships, update `docs/reference/RESEARCH-skills-peers-tiers.md` (i
 | Task | done_when | Status |
 |------|-----------|--------|
 | TASK-1 | `SkillIndex` extraction; MemoryStore has no skill methods; `refresh_skills` retargeted; bootstrap constructs both stores; `SkillHit` dataclass | ✓ pass |
-| TASK-2 | `skill_search(query, limit=5)` returns ranked list; empty query → `tool_error`; `is_read_only`/`is_concurrent_safe`; description populated via skill_commands fallback | ✓ pass |
+| TASK-2 | `skill_search(query, limit=5)` returns ranked list; empty query → `tool_error`; `is_read_only`/`is_concurrent_safe`; description populated via skill_registry fallback | ✓ pass |
 | TASK-3 | `memory_search(channel='skills'\|'canon')` returns structured `tool_error`; browse mode returns sessions+knowledge only; session+knowledge tests pass | ✓ pass |
 | TASK-4 | `<available_skills>` block renders from `co_cli/context/manifests/skill_manifest.py`; bundled-only; user-shadowed bundled skills excluded; empty bundled set → no block | ✓ pass |
 | TASK-5 | `memory.md` trimmed to 171 lines; `memory-skills.md` → `skill.md`; `memory-artifacts.md` → `memory-knowledge.md`; `memory-canon.md` deleted (content into `personality.md` §2.5); cross-refs updated | ✓ pass |
@@ -517,7 +517,7 @@ After this plan ships, update `docs/reference/RESEARCH-skills-peers-tiers.md` (i
 **Notable design decisions during delivery:**
 - `SkillIndex` composes an internal `MemoryStore` (same DB, own connection) rather than duplicating FTS5 plumbing — keeps the API boundary clean while reusing the search engine.
 - Added two generic helpers to `MemoryStore`: `list_titles_by_source(source)` and `get_path_by_title(source, title)`. These are source-agnostic primitives, not skill-specific — `SkillIndex` consumes them, but they can serve any future source.
-- Propagated `description` through the FTS5 search path (`_CHUNKS_FTS_SQL`, `_chunks_like_search`, `_chunk_row_to_result`) — fixes a long-standing gap where `SearchResult.description` was always `None`, and is the foundation for `SkillIndex.search()` returning descriptions without a skill_commands round-trip.
+- Propagated `description` through the FTS5 search path (`_CHUNKS_FTS_SQL`, `_chunks_like_search`, `_chunk_row_to_result`) — fixes a long-standing gap where `SearchResult.description` was always `None`, and is the foundation for `SkillIndex.search()` returning descriptions without a skill_registry round-trip.
 - `memory_search` `channel` argument loosened from `Literal[...]` to `str | None` so deprecated channels (`'skills'`, `'canon'`) can return explicit `tool_error` text instead of pydantic validation errors.
 
 **Overall: DELIVERED**

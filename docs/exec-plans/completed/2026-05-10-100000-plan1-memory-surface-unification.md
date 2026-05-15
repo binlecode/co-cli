@@ -148,7 +148,7 @@ async def memory_search(
 - `channel` filters to a single channel. None → all channels.
 - `kinds` retained for artifact-channel filtering; ignored for non-artifact channels.
 - New private helper `_search_skills(ctx, query, span)` — calls `MemoryStore.search(query, sources=["skill"], limit=_SKILLS_CHANNEL_CAP * 5)`, dedupes by skill name, caps at `_SKILLS_CHANNEL_CAP=5`.
-- Empty-query browse extended to include `_browse_skills(ctx, limit_skills)` — reads from `deps.skill_commands` directly (no FTS lookup; same shape as `_browse_recent` for sessions).
+- Empty-query browse extended to include `_browse_skills(ctx, limit_skills)` — reads from `deps.skill_registry` directly (no FTS lookup; same shape as `_browse_recent` for sessions).
 - Result format adds skills section: `**Available skills:**` followed by `  - <name>: <description>`.
 - Scoring isolated per channel; `score` field still included per result.
 
@@ -219,7 +219,7 @@ class MemoryStore:
 def refresh_skills(deps: CoDeps) -> None:
     """Reload skills from disk + reindex into MemoryStore."""
     new_skills = load_skills(deps.skills_dir, deps.config, user_skills_dir=deps.user_skills_dir)
-    set_skill_commands(new_skills, deps)
+    set_skill_registry(new_skills, deps)
     if deps.memory_store is not None:
         for name, skill in new_skills.items():
             deps.memory_store.upsert_skill(name, skill.description, str(_resolve_path(skill)))
@@ -563,7 +563,7 @@ The model-facing surface is five tools:
 ### Issues Found & Fixed
 | Finding | File:Line | Severity | Resolution |
 |---------|-----------|----------|------------|
-| `r.description` always `None` in `_search_skills` FTS path — `_CHUNKS_FTS_SQL` doesn't select `d.description`; `_chunk_row_to_result` doesn't set it; all skill hit descriptions render as empty string | recall.py:321–334 | blocking | Fixed: look up description from `ctx.deps.skill_commands` — the in-memory skill catalog is always current and avoids a SQL schema change |
+| `r.description` always `None` in `_search_skills` FTS path — `_CHUNKS_FTS_SQL` doesn't select `d.description`; `_chunk_row_to_result` doesn't set it; all skill hit descriptions render as empty string | recall.py:321–334 | blocking | Fixed: look up description from `ctx.deps.skill_registry` — the in-memory skill catalog is always current and avoids a SQL schema change |
 | Missing install tests for TASK-5/TASK-10: non-`.md` source error (test 3), collision error (test 4), security flag removal (test 5), approval subject shape (test 6) were absent from `test_flow_skills_manage.py` despite explicit 7-assertion acceptance criteria | tests/test_flow_skills_manage.py | blocking | Fixed: added 6 install tests (`test_install_from_local_path_writes_file`, `test_install_non_md_source_errors`, `test_install_collision_errors_with_edit_hint`, `test_install_destructive_content_errors_and_removes_file`, `test_install_approval_subject_url_host`, `test_install_approval_subject_localfile`) |
 | Ruff formatting violation in test_flow_skills_manage.py (after edits) | tests/test_flow_skills_manage.py | blocking | Fixed: `scripts/quality-gate.sh lint --fix` |
 
@@ -578,7 +578,7 @@ The model-facing surface is five tools:
 
 ### Behavioral Verification
 - `uv run co status`: command does not exist in this project; `co` exposes `chat`, `traces`, `tail`
-- Test suite behavioral coverage: `test_flow_memory_unified.py`, `test_flow_memory_recall.py`, `test_flow_skills_manage.py` all exercise `memory_search` skills channel end-to-end with real FTS5 — confirms skills are searchable, descriptions are populated from `skill_commands`, and install → search integration works.
+- Test suite behavioral coverage: `test_flow_memory_unified.py`, `test_flow_memory_recall.py`, `test_flow_skills_manage.py` all exercise `memory_search` skills channel end-to-end with real FTS5 — confirms skills are searchable, descriptions are populated from `skill_registry`, and install → search integration works.
 
 ### Overall: PASS
 All blocking findings resolved: description lookup fixed in `_search_skills`, missing install tests added, lint clean. 273 tests pass.

@@ -290,7 +290,11 @@ async def create_deps(
 
     Raises ValueError on provider/model hard errors.
     """
-    from co_cli.agents.core import build_tool_registry
+    from co_cli.agents.core import (
+        assemble_routing_toolset,
+        build_mcp_entries,
+        build_native_toolset,
+    )
     from co_cli.agents.mcp import discover_mcp_tools
     from co_cli.llm.factory import build_model
 
@@ -330,29 +334,31 @@ async def create_deps(
 
     # Step 3: build registries
     llm_model = build_model(config.llm)
-    tool_registry = build_tool_registry(config)
+    native_toolset, tool_index = build_native_toolset(config)
+    mcp_entries = build_mcp_entries(config, tool_index)
 
-    # Step 4: MCP connect + discovery
+    # Step 4: MCP connect + discovery — per-entry timeout, per-entry failure isolation
     degradations: dict[str, str] = {}
-    if tool_registry.mcp_toolsets:
-        from co_cli.agents.mcp import MCPToolsetEntry
+    from co_cli.agents.mcp import MCPToolsetEntry
 
-        connected: list[MCPToolsetEntry] = []
-        for entry in tool_registry.mcp_toolsets:
-            try:
-                async with asyncio.timeout(entry.timeout):
-                    await stack.enter_async_context(entry.toolset)
-                connected.append(entry)
-            except Exception as e:
-                frontend.on_status(f"MCP server failed to connect: {e}")
-        if connected:
-            _, discovery_errors, mcp_index = await discover_mcp_tools(
-                connected, exclude=set(tool_registry.tool_index.keys())
-            )
-            for prefix, err in discovery_errors.items():
-                frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err}")
-                degradations[f"mcp.{prefix}"] = err[:120]
-            tool_registry.tool_index.update(mcp_index)
+    connected: list[MCPToolsetEntry] = []
+    for entry in mcp_entries:
+        try:
+            async with asyncio.timeout(entry.timeout):
+                await stack.enter_async_context(entry.toolset)
+            connected.append(entry)
+        except Exception as e:
+            frontend.on_status(f"MCP server failed to connect: {e}")
+    if connected:
+        _, discovery_errors, mcp_index = await discover_mcp_tools(
+            connected, exclude=set(tool_index.keys())
+        )
+        for prefix, err in discovery_errors.items():
+            frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err}")
+            degradations[f"mcp.{prefix}"] = err[:120]
+        tool_index.update(mcp_index)
+
+    toolset = assemble_routing_toolset(native_toolset, [entry.toolset for entry in connected])
 
     # Step 5: load skills (filesystem reads — three-pass precedence merge)
     from co_cli.commands.registry import BUILTIN_COMMANDS, filter_namespace_conflicts
@@ -365,7 +371,7 @@ async def create_deps(
         user_skills_dir=paths["user_skills_dir"],
         errors=skill_errors,
     )
-    skill_commands = filter_namespace_conflicts(
+    skill_registry = filter_namespace_conflicts(
         loaded_skills, set(BUILTIN_COMMANDS.keys()), skill_errors
     )
     for msg in skill_errors:
@@ -392,9 +398,9 @@ async def create_deps(
         config=config,
         model=llm_model,
         memory_store=memory_store,
-        tool_index=tool_registry.tool_index,
-        tool_registry=tool_registry,
-        skill_commands=skill_commands,
+        tool_index=tool_index,
+        toolset=toolset,
+        skill_registry=skill_registry,
         runtime=runtime,
         model_max_ctx=model_max_ctx,
         spill_threshold_tokens=spill_threshold_tokens,

@@ -33,13 +33,12 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from evals._deps import make_eval_deps
+from evals._deps import make_eval_agent, make_eval_deps
 from evals._judge import run_judge
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 
-from co_cli.agent.core import build_agent
 from co_cli.config.core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.display.headless import HeadlessFrontend
@@ -51,7 +50,7 @@ _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-web-research
 _EXAMPLE_URL = "https://example.com"
 _IANA_URL = "https://www.iana.org/domains/reserved"
 
-_AGENT = build_agent(config=settings)
+_AGENT = make_eval_agent(settings)
 
 
 # ---------------------------------------------------------------------------

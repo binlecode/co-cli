@@ -32,7 +32,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agent.core import build_agent
+from co_cli.agents.core import build_agent
 from co_cli.bootstrap.core import create_deps
 from co_cli.context.compaction import SUMMARY_MARKER_PREFIX
 from co_cli.context.orchestrate import run_turn
@@ -234,7 +234,8 @@ async def step_multi_cycle_compaction() -> bool:
         agent = build_agent(
             config=deps.config,
             model=deps.model,
-            tool_registry=deps.tool_registry,
+            toolset=deps.toolset,
+            tool_index=deps.tool_index,
         )
 
         phase = 1

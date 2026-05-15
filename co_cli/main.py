@@ -458,16 +458,17 @@ async def _chat_loop(
             raise SystemExit(1) from e
         deps.session.reasoning_display = reasoning_display
 
-        completer.update(build_completer_entries(deps.skill_commands))
+        completer.update(build_completer_entries(deps.skill_registry))
         from co_cli.context.manifests.skill_manifest import render_skill_manifest
 
         skill_manifest = render_skill_manifest(
-            deps.skill_commands, deps.skills_dir, deps.user_skills_dir
+            deps.skill_registry, deps.skills_dir, deps.user_skills_dir
         )
         agent = build_agent(
             config=deps.config,
             model=deps.model,
-            tool_registry=deps.tool_registry,
+            toolset=deps.toolset,
+            tool_index=deps.tool_index,
             skill_manifest=skill_manifest or None,
         )
 
@@ -476,7 +477,7 @@ async def _chat_loop(
         _sweep_tool_results(deps)
         from co_cli.skills.registry import get_skill_registry
 
-        frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
+        frontend.on_status(f"  {len(get_skill_registry(deps.skill_registry))} skill(s) loaded")
 
         if deps.session.session_path.exists():
             console.print("[dim]Previous session available — /resume to continue[/dim]")

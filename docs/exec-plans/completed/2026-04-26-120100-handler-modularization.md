@@ -123,7 +123,7 @@ co_cli/
 
 2. **`commands/help.py` imports `BUILTIN_COMMANDS` from `_registry`** — no lazy import. Plan 1's leaf `_registry.py` is what makes this possible.
 
-3. **`commands/skills.py` is a mechanical move** — `_install_skill`, `_upgrade_skill`, `_cmd_skills_check`, `_cmd_skills_reload`, `_cmd_skills_list`, `_cmd_skills` were refactored in Plan 1 to thin orchestrators that compose `load_skills(...) → filter_namespace_conflicts(...) → set_skill_commands(...) → _refresh_completer(...)` at the call site. This plan moves them as-is. `get_skill_registry` (presentation helper for `/skills list`, banner, status check) also moves here — Plan 1 left it in `_commands.py` pending this move. `_confirm` already lives in `commands/_types.py` from Plan 1; nothing relocates here.
+3. **`commands/skills.py` is a mechanical move** — `_install_skill`, `_upgrade_skill`, `_cmd_skills_check`, `_cmd_skills_reload`, `_cmd_skills_list`, `_cmd_skills` were refactored in Plan 1 to thin orchestrators that compose `load_skills(...) → filter_namespace_conflicts(...) → set_skill_registry(...) → _refresh_completer(...)` at the call site. This plan moves them as-is. `get_skill_registry` (presentation helper for `/skills list`, banner, status check) also moves here — Plan 1 left it in `_commands.py` pending this move. `_confirm` already lives in `commands/_types.py` from Plan 1; nothing relocates here.
 
 4. **`commands/knowledge.py` owns `_parse_memory_args`** — CLI-specific flag parsing (`--older-than N`, `--kind X`); not knowledge domain. Subcommand handlers (`_subcmd_memory_list`, `_subcmd_memory_count`, `_subcmd_memory_forget`, `_subcmd_knowledge_dream`, `_subcmd_knowledge_restore`, `_subcmd_knowledge_decay_review`, `_subcmd_knowledge_stats`) move into `commands/knowledge.py`. Knowledge domain operations (`_apply_memory_filters`, `_format_memory_row`) move to `knowledge/_query.py` instead.
 
@@ -165,11 +165,11 @@ done_when:
 **What moves (mechanical move — Plan 1 already refactored these):**
 - `_cmd_skills_list(ctx)`
 - `_cmd_skills_check(ctx)` (already uses `discover_skill_files` per Plan 1)
-- `_cmd_skills_reload(ctx)` (already composes `load_skills(...) → filter_namespace_conflicts(...) → set_skill_commands(...) → _refresh_completer(...)` per Plan 1)
+- `_cmd_skills_reload(ctx)` (already composes `load_skills(...) → filter_namespace_conflicts(...) → set_skill_registry(...) → _refresh_completer(...)` per Plan 1)
 - `_cmd_skills(ctx, args)` (router)
 - `_install_skill(ctx, target, force=False)` (already thin per Plan 1; same end-block composition as reload)
 - `_upgrade_skill(ctx, args)` (already uses `find_skill_source_url` per Plan 1)
-- `get_skill_registry(skill_commands)` — presentation helper consumed by `/skills list`, banner, status check; moves here from `_commands.py` (Plan 1 left it in place pending this move)
+- `get_skill_registry(skill_registry)` — presentation helper consumed by `/skills list`, banner, status check; moves here from `_commands.py` (Plan 1 left it in place pending this move)
 
 `_confirm` is NOT moved here — it already lives in `commands/_types.py` (per Plan 1 TASK-6 ownership decision) so both `skills.py` and `knowledge.py` can import it from the same shared location. No relocation needed in this plan.
 
@@ -177,7 +177,7 @@ done_when:
 - `co_cli.commands._registry` for `BUILTIN_COMMANDS` (to compute `reserved`), `_refresh_completer`, `filter_namespace_conflicts`
 - `co_cli.commands._types` for `CommandContext`, `_confirm`
 - `co_cli.skills.loader` for `load_skills`, `_diagnose_requires_failures`, `_scan_skill_content`
-- `co_cli.skills.registry` for `set_skill_commands`
+- `co_cli.skills.registry` for `set_skill_registry`
 - `co_cli.skills.installer` for `fetch_skill_content`, `write_skill_file`, `find_skill_source_url`, `discover_skill_files`, `SkillFetchError`
 - `co_cli.display._core` for `console`
 - `co_cli.config._core` for `settings`

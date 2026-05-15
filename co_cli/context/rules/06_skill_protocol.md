@@ -49,7 +49,7 @@ whether the procedure is reusable. If yes — same steps you'd run for
 similar tasks — promote it to a skill with
 `skill_manage(action='create', name=<task-type>, content=<§6-body>)`.
 Name by task type, not the specific instance. Content must conform to
-`skill.md` §6: description, H1, `**Invocation:**` line, at least one
+`skills.md` §6: description, H1, `**Invocation:**` line, at least one
 `## Phase N — <name>` section.
 
 Search first: scan the `<available_skills>` manifest to confirm no

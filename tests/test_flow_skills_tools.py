@@ -7,7 +7,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
 
-from co_cli.agents.core import build_tool_registry
+from co_cli.agents.core import build_native_toolset
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.skills.loader import load_skills
 from co_cli.skills.skill_types import SkillConfig
@@ -18,16 +18,16 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_deps(tmp_path: Path, extra_skills: dict[str, SkillConfig] | None = None) -> CoDeps:
-    skill_commands = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
     if extra_skills:
-        skill_commands = {**skill_commands, **extra_skills}
-    tool_registry = build_tool_registry(SETTINGS)
+        skill_registry = {**skill_registry, **extra_skills}
+    _, tool_index = build_native_toolset(SETTINGS)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
-        tool_index=dict(tool_registry.tool_index),
+        tool_index=tool_index,
         session=CoSessionState(),
-        skill_commands=skill_commands,
+        skill_registry=skill_registry,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",

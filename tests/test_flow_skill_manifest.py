@@ -16,8 +16,8 @@ def test_manifest_renders_bundled_skills(tmp_path: Path) -> None:
     user_skills_dir = tmp_path / "user"
     user_skills_dir.mkdir()
 
-    skill_commands = {"doctor": SkillConfig(name="doctor", description="Diagnose problems")}
-    out = render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
+    skill_registry = {"doctor": SkillConfig(name="doctor", description="Diagnose problems")}
+    out = render_skill_manifest(skill_registry, skills_dir, user_skills_dir)
 
     assert "<available_skills>" in out
     assert "</available_skills>" in out
@@ -35,8 +35,8 @@ def test_manifest_includes_user_installed_skills(tmp_path: Path) -> None:
         "---\ndescription: A user skill\n---\nBody.\n", encoding="utf-8"
     )
 
-    skill_commands = {"user-skill": SkillConfig(name="user-skill", description="A user skill")}
-    out = render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
+    skill_registry = {"user-skill": SkillConfig(name="user-skill", description="A user skill")}
+    out = render_skill_manifest(skill_registry, skills_dir, user_skills_dir)
 
     assert "<available_skills>" in out
     assert 'name="user-skill"' in out
@@ -56,9 +56,9 @@ def test_manifest_shadow_override_uses_user_description(tmp_path: Path) -> None:
         "---\ndescription: User-shadowed doctor\n---\nBody.\n", encoding="utf-8"
     )
 
-    # Loader already applied shadow: skill_commands carries user description
-    skill_commands = {"doctor": SkillConfig(name="doctor", description="User-shadowed doctor")}
-    out = render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
+    # Loader already applied shadow: skill_registry carries user description
+    skill_registry = {"doctor": SkillConfig(name="doctor", description="User-shadowed doctor")}
+    out = render_skill_manifest(skill_registry, skills_dir, user_skills_dir)
 
     assert "<available_skills>" in out
     assert 'name="doctor"' in out
@@ -79,11 +79,11 @@ def test_manifest_includes_bundled_and_user_skills_together(tmp_path: Path) -> N
         "---\ndescription: Custom user skill\n---\nBody.\n", encoding="utf-8"
     )
 
-    skill_commands = {
+    skill_registry = {
         "builtin": SkillConfig(name="builtin", description="Built-in skill"),
         "custom": SkillConfig(name="custom", description="Custom user skill"),
     }
-    out = render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
+    out = render_skill_manifest(skill_registry, skills_dir, user_skills_dir)
 
     assert 'name="builtin"' in out
     assert 'name="custom"' in out
@@ -110,10 +110,10 @@ def test_manifest_escapes_special_chars(tmp_path: Path) -> None:
     user_skills_dir = tmp_path / "user"
     user_skills_dir.mkdir()
 
-    skill_commands = {
+    skill_registry = {
         "special": SkillConfig(name="special", description='Quotes "inside" & <angle> brackets')
     }
-    out = render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
+    out = render_skill_manifest(skill_registry, skills_dir, user_skills_dir)
 
     assert "&quot;inside&quot;" in out
     assert "&amp;" in out

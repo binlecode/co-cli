@@ -5,7 +5,7 @@ Real CoDeps, real asyncio, no monkeypatching. Three coverage areas:
 1. Pass-A-then-pass-B manifest visibility (B3 fix) — verifies that
    refresh_skills(child_deps) followed by render_skill_manifest against the
    child's registry surfaces disk-current skills, even when the parent's
-   skill_commands is stale. This is the contract run_session_review now
+   skill_registry is stale. This is the contract run_session_review now
    relies on after the reorder.
 2. Cancellation atomicity — the spawned background task cancels cleanly
    via the explicit `except asyncio.CancelledError` block.
@@ -79,7 +79,7 @@ def test_child_deps_refresh_surfaces_disk_skill_when_parent_registry_stale(
     tmp_path: Path,
 ) -> None:
     """The reorder in run_session_review depends on this contract:
-    fork → refresh_skills(child_deps) → render_skill_manifest(child_deps.skill_commands)
+    fork → refresh_skills(child_deps) → render_skill_manifest(child_deps.skill_registry)
     surfaces skills written to disk after parent's registry was last loaded.
     """
     from co_cli.context.manifests.skill_manifest import render_skill_manifest
@@ -87,25 +87,25 @@ def test_child_deps_refresh_surfaces_disk_skill_when_parent_registry_stale(
     from co_cli.skills.lifecycle import refresh_skills
 
     deps = _make_deps(tmp_path)
-    assert deps.skill_commands == {}, "parent starts with empty registry (stale)"
+    assert deps.skill_registry == {}, "parent starts with empty registry (stale)"
 
     _write_skill_to_disk(deps.user_skills_dir, "pass-a-skill", "Created by a prior review pass")
 
     child = fork_deps_for_reviewer(deps)
     # Before refresh: child shares parent's stale (empty) reference by value.
-    assert "pass-a-skill" not in child.skill_commands
+    assert "pass-a-skill" not in child.skill_registry
 
     refresh_skills(child)
 
-    assert "pass-a-skill" in child.skill_commands
-    manifest = render_skill_manifest(child.skill_commands, child.skills_dir, child.user_skills_dir)
+    assert "pass-a-skill" in child.skill_registry
+    manifest = render_skill_manifest(child.skill_registry, child.skills_dir, child.user_skills_dir)
     assert 'name="pass-a-skill"' in manifest
 
 
 def test_child_refresh_does_not_mutate_parent_registry(tmp_path: Path) -> None:
     """refresh_skills(child) must not retroactively populate the parent's registry.
 
-    Verifies set_skill_commands rebinds only the receiving deps — the parent
+    Verifies set_skill_registry rebinds only the receiving deps — the parent
     keeps its original (stale) snapshot, which is the failure mode the reorder
     is defending against.
     """
@@ -113,18 +113,18 @@ def test_child_refresh_does_not_mutate_parent_registry(tmp_path: Path) -> None:
     from co_cli.skills.lifecycle import refresh_skills
 
     deps = _make_deps(tmp_path)
-    parent_initial_registry = deps.skill_commands
+    parent_initial_registry = deps.skill_registry
     _write_skill_to_disk(deps.user_skills_dir, "pass-a-skill", "x")
 
     child = fork_deps_for_reviewer(deps)
     refresh_skills(child)
 
     # Parent registry remains the same object and stays empty.
-    assert deps.skill_commands is parent_initial_registry
-    assert deps.skill_commands == {}
+    assert deps.skill_registry is parent_initial_registry
+    assert deps.skill_registry == {}
     # Child got a fresh dict.
-    assert child.skill_commands is not parent_initial_registry
-    assert "pass-a-skill" in child.skill_commands
+    assert child.skill_registry is not parent_initial_registry
+    assert "pass-a-skill" in child.skill_registry
 
 
 # ---------------------------------------------------------------------------

@@ -39,8 +39,8 @@ co-cli splits skill discovery into a bundled manifest (7 skills, always-visible)
 ## High-Level Design
 
 ```
-render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
-  → walks ALL skill_commands entries (bundled + user-dir)
+render_skill_manifest(skill_registry, skills_dir, user_skills_dir)
+  → walks ALL skill_registry entries (bundled + user-dir)
   → user-dir file present for name → emit user description (shadows bundled)
   → no user-dir file → emit bundled description
   → injects into main agent prompt AND both subagent instructions
@@ -48,7 +48,7 @@ render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
 
 **SkillIndex removal path**: delete `co_cli/skills/index.py`; remove `skill_index` field from `CoDeps` and `fork_deps`; strip step 7c from bootstrap; strip index sync from `lifecycle.refresh_skills`; remove `skill_index.close()` from main cleanup.
 
-**Subagent manifest injection (D5)**: at the start of `run_session_review()` and `maybe_run_curator()`, call `render_skill_manifest(deps.skill_commands, deps.skills_dir, deps.user_skills_dir)`. Prepend the rendered string to the `instructions` argument passed to `build_agent()`.
+**Subagent manifest injection (D5)**: at the start of `run_session_review()` and `maybe_run_curator()`, call `render_skill_manifest(deps.skill_registry, deps.skills_dir, deps.user_skills_dir)`. Prepend the rendered string to the `instructions` argument passed to `build_agent()`.
 
 ## Tasks
 
@@ -60,8 +60,8 @@ render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
 
 ### ✓ DONE TASK-2 — Remove skill_search; add size guardrail
 **files**: `co_cli/tools/system/skills.py`, `co_cli/agents/_native_toolset.py`
-**done_when**: `skill_search` function and its `@agent_tool` registration deleted from `skills.py`; `skill_search` removed from the import in `_native_toolset.py:36`; `skill_manage` behavioral docstring no longer references `skill_search`; `_skill_create` and `_skill_install` append `size_warning` to the JSON result when `len(ctx.deps.skill_commands) >= 30` after write.
-**success_signal**: A test calls `_skill_create` with a `deps` whose `skill_commands` is pre-populated with ≥ 30 entries and asserts `size_warning` appears in the parsed JSON result.
+**done_when**: `skill_search` function and its `@agent_tool` registration deleted from `skills.py`; `skill_search` removed from the import in `_native_toolset.py:36`; `skill_manage` behavioral docstring no longer references `skill_search`; `_skill_create` and `_skill_install` append `size_warning` to the JSON result when `len(ctx.deps.skill_registry) >= 30` after write.
+**success_signal**: A test calls `_skill_create` with a `deps` whose `skill_registry` is pre-populated with ≥ 30 entries and asserts `size_warning` appears in the parsed JSON result.
 **prerequisites**: none
 
 ### ✓ DONE TASK-3 — Delete SkillIndex
@@ -72,8 +72,8 @@ render_skill_manifest(skill_commands, skills_dir, user_skills_dir)
 
 ### ✓ DONE TASK-4 — Subagent skill discovery via manifest
 **files**: `co_cli/skills/curator_prompts.py`, `co_cli/agents/session_review.py`, `co_cli/agents/skill_curator.py`
-**done_when**: `SESSION_REVIEW_INSTRUCTIONS` and `CURATOR_INSTRUCTIONS` each prepend a `{skills_manifest}` block (or the callers inject the manifest string before the static instruction text); `run_session_review()` and `maybe_run_curator()` call `render_skill_manifest(deps.skill_commands, deps.skills_dir, deps.user_skills_dir)` and pass the result into the subagent instructions; `06_skill_protocol.md` reference to `skill_search` for dedup removed from curator prompt text.
-**success_signal**: A test in `tests/test_flow_session_review.py` constructs the combined instructions string (manifest + `SESSION_REVIEW_INSTRUCTIONS`) using a real `render_skill_manifest()` call against a populated `skill_commands` dict and asserts `<available_skills>` appears in the result.
+**done_when**: `SESSION_REVIEW_INSTRUCTIONS` and `CURATOR_INSTRUCTIONS` each prepend a `{skills_manifest}` block (or the callers inject the manifest string before the static instruction text); `run_session_review()` and `maybe_run_curator()` call `render_skill_manifest(deps.skill_registry, deps.skills_dir, deps.user_skills_dir)` and pass the result into the subagent instructions; `06_skill_protocol.md` reference to `skill_search` for dedup removed from curator prompt text.
+**success_signal**: A test in `tests/test_flow_session_review.py` constructs the combined instructions string (manifest + `SESSION_REVIEW_INSTRUCTIONS`) using a real `render_skill_manifest()` call against a populated `skill_registry` dict and asserts `<available_skills>` appears in the result.
 **prerequisites**: TASK-1 (manifest renderer returns all-discoverable output before injection)
 
 ### ✓ DONE TASK-5 — Rule files and inline doc cleanup
@@ -106,7 +106,7 @@ None. All 13 decisions resolved pre-plan (D1–D13).
 |----------|----------|-----------|--------|
 | CD-M-1   | adopt    | The TYPE_CHECKING import is a real broken-import risk. | TASK-3 `done_when` updated to include "remove `SkillIndex` TYPE_CHECKING import from `co_cli/deps.py:29`". |
 | CD-M-2   | adopt    | An unverifiable `done_when` is a real gap — the manifest injection can silently be absent. | TASK-4 `success_signal` updated from N/A to a concrete test: constructs combined instructions with real `render_skill_manifest()` call and asserts `<available_skills>` is present. |
-| CD-m-1   | adopt    | The guardrail is user-facing JSON output; a test covering it is worth having. | TASK-2 `success_signal` updated from N/A to a test asserting `size_warning` appears when `skill_commands` ≥ 30. |
+| CD-m-1   | adopt    | The guardrail is user-facing JSON output; a test covering it is worth having. | TASK-2 `success_signal` updated from N/A to a test asserting `size_warning` appears when `skill_registry` ≥ 30. |
 | CD-m-2   | adopt    | Off-by-one confuses execution. | TASK-6 `done_when` corrected from "lines 129, 146" to "lines 129, 145". |
 | PO-m-1   | adopt    | The magic number warrants a brief inline note. | Behavioral Constraints updated to add "(Threshold 30 ≈ prompt-budget ceiling for skill listing; tunable.)" |
 

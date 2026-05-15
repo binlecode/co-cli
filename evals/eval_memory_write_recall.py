@@ -31,11 +31,10 @@ from typing import Any
 from uuid import uuid4
 
 import anyio
-from evals._deps import make_eval_deps
+from evals._deps import make_eval_agent, make_eval_deps
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 from pydantic_ai.messages import ModelResponse, TextPart
 
-from co_cli.agent.core import build_agent
 from co_cli.config.core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.display.headless import HeadlessFrontend
@@ -43,7 +42,7 @@ from co_cli.memory.memory_store import MemoryStore
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-memory-write-recall.md"
 
-_AGENT = build_agent(config=settings)
+_AGENT = make_eval_agent(settings)
 
 
 def _response_text(result: Any) -> str:

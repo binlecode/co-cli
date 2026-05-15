@@ -30,12 +30,11 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from evals._deps import make_eval_deps
+from evals._deps import make_eval_agent, make_eval_deps
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelResponse, TextPart
 
-from co_cli.agent.core import build_agent
 from co_cli.config.core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import (
@@ -52,10 +51,10 @@ from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-approval-flow.md"
 
-_AGENT = build_agent(config=settings)
+_AGENT = make_eval_agent(settings)
 
 # A9-specific agent with synthetic approval-required tool for domain-scope eval.
-_A9_AGENT = build_agent(config=settings)
+_A9_AGENT = make_eval_agent(settings)
 
 
 async def domain_fetch_test(ctx: RunContext[CoDeps], url: str) -> str:

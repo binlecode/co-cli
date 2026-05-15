@@ -8,7 +8,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agents.core import build_agent, build_tool_registry
+from co_cli.agents.core import build_agent, build_native_toolset
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
@@ -21,14 +21,14 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_deps(tmp_path: Path) -> CoDeps:
-    skill_commands = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS_NO_MCP, user_skills_dir=tmp_path)
-    tool_registry = build_tool_registry(SETTINGS_NO_MCP)
+    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS_NO_MCP, user_skills_dir=tmp_path)
+    _, tool_index = build_native_toolset(SETTINGS_NO_MCP)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS_NO_MCP,
-        tool_index=dict(tool_registry.tool_index),
+        tool_index=tool_index,
         session=CoSessionState(),
-        skill_commands=skill_commands,
+        skill_registry=skill_registry,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
@@ -41,9 +41,9 @@ def _make_agent(deps: CoDeps):
 
     Uses build_model so provider/model come from the user's real settings.
     """
-    tool_registry = build_tool_registry(deps.config)
+    toolset, tool_index = build_native_toolset(deps.config)
     model = build_model(deps.config.llm)
-    return build_agent(config=deps.config, model=model, tool_registry=tool_registry)
+    return build_agent(config=deps.config, model=model, toolset=toolset, tool_index=tool_index)
 
 
 def _fresh_state() -> _IterationState:

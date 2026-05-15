@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from co_cli.config.core import get_settings, settings
+from pydantic_ai import Agent
+
+from co_cli.config.core import Settings, get_settings, settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
@@ -60,3 +62,16 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     if knowledge_dir is not None:
         deps.knowledge_dir = knowledge_dir
     return deps
+
+
+def make_eval_agent(config: Settings, **kwargs: Any) -> Agent[CoDeps, Any]:
+    """Native-only orchestrator agent for eval scripts.
+
+    Skips MCP and full bootstrap — wires native toolset + tool_index and hands
+    them to build_agent(). Eval scripts that need MCP must go through the full
+    bootstrap path instead.
+    """
+    from co_cli.agents.core import build_agent, build_native_toolset
+
+    toolset, tool_index = build_native_toolset(config)
+    return build_agent(config=config, toolset=toolset, tool_index=tool_index, **kwargs)

@@ -128,8 +128,8 @@ def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     )
     (skills_dir / "test-bootstrap-skill.md").write_text(skill_content, encoding="utf-8")
 
-    skill_commands = load_skills(skills_dir, settings=SETTINGS)
+    skill_registry = load_skills(skills_dir, settings=SETTINGS)
 
-    assert "test-bootstrap-skill" in skill_commands, (
-        "Project skill must appear in skill_commands after load_skills"
+    assert "test-bootstrap-skill" in skill_registry, (
+        "Project skill must appear in skill_registry after load_skills"
     )

@@ -43,8 +43,8 @@ flowchart TD
 `build_agent()` assembles `static_instructions` from up to four ordered parts, all evaluated once at agent construction:
 
 1. **`build_static_instructions(config)`** — soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. Character memories and critique are NOT included here.
-2. **`build_toolset_guidance(tool_registry.tool_index)`** — tool-specific guidance blocks, each gated on the tool being present. Currently gated: `knowledge_search` / `session_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
-3. **`build_category_awareness_prompt(tool_registry.tool_index)`** — single-sentence category-level hint listing deferred tool categories reachable via `search_tools`. Derived from `VisibilityPolicyEnum.DEFERRED` entries. Empty when no deferred tools exist.
+2. **`build_toolset_guidance(tool_index)`** — tool-specific guidance blocks, each gated on the tool being present. Currently gated: `knowledge_search` / `session_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
+3. **`build_category_awareness_prompt(tool_index)`** — single-sentence category-level hint listing deferred tool categories reachable via `search_tools`. Derived from `VisibilityPolicyEnum.DEFERRED` entries. Empty when no deferred tools exist.
 4. **`load_soul_critique(config.personality)`** — self-assessment lens (`## Review lens`), appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
 
 The parts are joined with `"\n\n"` and passed as the `instructions=` string to `Agent(...)`. The string is stable for the entire session — it never changes between turns.
@@ -119,7 +119,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `RECENCY_CLEARING_ADVISORY` | `co_cli/context/assembly.py` | Module-level constant — "## Tool result recency" paragraph appended last to the static prompt |
 | `build_toolset_guidance(tool_index) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE`) |
 | `build_category_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a single-sentence category-level hint for `DEFERRED` tools; empty when no deferred tools exist |
-| `render_skill_manifest(skill_commands, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block injected after tool guidance |
+| `render_skill_manifest(skill_registry, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block injected after tool guidance |
 
 ### Personality asset loaders
 

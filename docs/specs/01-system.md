@@ -13,7 +13,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 │  ┌────────────┐   ┌─────────────────────────────────────────┐  │
 │  │ Bootstrap  │──▶│  CoDeps                                 │  │
 │  │ startup    │   │  config · model · shell · state         │  │
-│  │ capability │   │  tool registry · skill commands         │  │
+│  │ capability │   │  tool registry · skill registry         │  │
 │  │ discovery  │   │  paths · degradations                   │  │
 │  └────────────┘   └─────────────────┬───────────────────────┘  │
 │                                     │ injected into all         │
@@ -54,7 +54,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Sessions | [sessions.md](sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
 | Dream cycle | [dream.md](dream.md) | Session-end mining, knowledge merge, decay, archive |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
-| Skills | [skill.md](skill.md) | Skill manifest, view/manage surface, dispatch |
+| Skills | [skills.md](skills.md) | Skill manifest, view/manage surface, dispatch |
 | Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
 | Config | [config.md](config.md) | Settings model, env vars, load pipeline |
 | Observability | [observability.md](observability.md) | OTel spans, JSONL logs, trace viewer |
@@ -83,7 +83,8 @@ Importing upward (e.g. a tool importing from `agent`) is a design error — fix 
 
 ```
 settings load → validate_config → [Ollama probe] → build_model
-  → build_tool_registry → MCP connect + discover
+  → build_native_toolset → build_mcp_entries → MCP connect + discover
+  → assemble_routing_toolset
   → load_skills
   → memory backend discovery → knowledge sync → canon sync
   → CoDeps sealed
@@ -181,9 +182,9 @@ Dream runs are idempotent. The trigger is `session_end` by default; `manual` tri
 
 ### Skills
 
-Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest. Slash commands in the REPL dispatch to installed skills via the `skill_commands` registry on `CoDeps`.
+Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest. Slash commands in the REPL dispatch to installed skills via the `skill_registry` registry on `CoDeps`.
 
-→ [skill.md](skill.md) · [tui.md](tui.md)
+→ [skills.md](skills.md) · [tui.md](tui.md)
 
 ---
 
@@ -191,13 +192,36 @@ Skills are procedural capability units — YAML-fronted markdown files in `co_cl
 
 `CoDeps` is the single shared runtime object. Everything that needs cross-subsystem access receives it by injection — there is no global mutable state.
 
-| Group | Contents |
-|-------|----------|
-| Config & services | `config`, `model`, `shell`, `memory_store`, `resource_locks`, `file_tracker` |
-| Registries | `tool_index`, `tool_registry`, `skill_commands` |
-| Mutable state | `session` (`CoSessionState` — todos, background tasks, approval rules); `runtime` (`CoRuntimeState` — compaction counters, turn usage, persisted message count) |
-| Paths | `workspace_dir`, `knowledge_dir`, `sessions_dir`, `tool_results_dir`, … |
-| Degradations | `degradations` (`MappingProxyType`) — startup-detected capability drops; read-only after bootstrap |
+```
+CoDeps
+├── config & services
+│   ├── config            Settings singleton
+│   ├── model             LlmModel handle
+│   ├── shell             shell backend
+│   ├── memory_store      MemoryStore (None when degraded to grep)
+│   ├── resource_locks    ResourceLockStore — shared across forks
+│   └── file_tracker      FileReadTracker — shared across forks
+├── registries
+│   ├── tool_index        dict[name, ToolInfo] — approval + OTel; forwarded to forks
+│   ├── toolset           AbstractToolset[CoDeps] — orchestrator routing surface; excluded from forks
+│   └── skill_registry    dict[name, SkillConfig] — slash-command dispatch; forwarded to forks
+├── mutable state
+│   ├── session (CoSessionState)
+│   │   ├── todos                 runtime self-plan
+│   │   ├── background_tasks      active background coroutines
+│   │   └── approval_rules        remembered session approval decisions
+│   └── runtime (CoRuntimeState)
+│       ├── compaction counters   proactive pass tracking
+│       ├── turn_usage            token usage for current turn
+│       └── persisted_msg_count   JSONL write cursor
+├── paths
+│   ├── workspace_dir
+│   ├── knowledge_dir
+│   ├── sessions_dir
+│   ├── tool_results_dir
+│   └── …
+└── degradations          MappingProxyType — startup capability drops; read-only after bootstrap
+```
 
 
 ## 3. Config
@@ -226,9 +250,9 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 |--------|--------|----------|
 | `CoDeps` | `co_cli/deps.py` | Frozen runtime context passed via `RunContext[CoDeps]` to all tools; bundles config, model, registries, paths, and mutable `session` / `runtime` state |
 | `create_deps(frontend, stack) -> CoDeps` | `co_cli/bootstrap/core.py` | Async one-shot startup assembly: validates config, probes the model, wires MCP, loads skills, builds the memory store, and seals `CoDeps` |
-| `build_agent(config, model, tool_registry, skill_manifest) -> Agent[CoDeps, Any]` | `co_cli/agents/core.py` | Constructs the foreground pydantic-ai agent with static instructions, history processors, and tool surface |
+| `build_agent(config, model, toolset, tool_index, skill_manifest, ...) -> Agent[CoDeps, Any]` | `co_cli/agents/core.py` | Constructs the foreground pydantic-ai agent with static instructions, history processors, and tool surface |
 | `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async single-turn entrypoint: assembly → segment stream → approval loop → output checks |
-| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_index`, excludes `tool_registry`, increments `agent_depth` |
+| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_index`, excludes `toolset`, increments `agent_depth` |
 | `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async slash-command router; returns `LocalOnly`, `ReplaceTranscript`, or `DelegateToAgent` |
 
 

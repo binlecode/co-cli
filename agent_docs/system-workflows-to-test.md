@@ -105,7 +105,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
   bad file aborts the whole load.
 - **Required test depth**: real `load_skills()` over a bundled + user dir mix with
   collision; assert user version wins; assert continuation past a malformed file.
-- **Spec**: skill.md §2
+- **Spec**: skills.md §2
 
 ### 1.7 MCP server discovery
 
@@ -177,7 +177,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
   not converted to `ReplaceTranscript`; wrong handler invoked.
 - **Required test depth**: dispatch real built-ins (`/help`, `/clear`, `/new`); assert
   return type and side effects on `deps.session`.
-- **Spec**: tui.md §2, skill.md §2 (Dispatch order)
+- **Spec**: tui.md §2, skills.md §2 (Dispatch order)
 
 ### 2.3 Slash command dispatch (skill → DelegateToAgent)
 
@@ -189,7 +189,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
   passed; skill_env blocked keys leak through; built-in name shadowed.
 - **Required test depth**: dispatch a real skill with args; assert expanded body and
   blocked-key filtering.
-- **Spec**: skill.md §2 (Argument Expansion)
+- **Spec**: skills.md §2 (Argument Expansion)
 
 ### 2.4 Skill env injection + cleanup
 
@@ -200,7 +200,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
   exception/interrupt; system path keys not blocked.
 - **Required test depth**: dispatch a skill with `skill_env`; assert env restored
   after turn (including in error/interrupt paths).
-- **Spec**: skill.md §2 (Skill Env Lifecycle)
+- **Spec**: skills.md §2 (Skill Env Lifecycle)
 
 ### 2.5 `/resume` (load past session)
 
@@ -257,7 +257,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
   escapes user dir.
 - **Required test depth**: real `/skills install` of a skill file; assert security
   scan ran, file copied, registry reloaded.
-- **Spec**: skill.md §2 (Skill Management Commands)
+- **Spec**: skills.md §2 (Skill Management Commands)
 
 ### 2.10 `/memory` family
 
@@ -330,7 +330,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
   user-invocable skill omitted; non-user-invocable skill surfaced; argument
   hint dropped.
 - **Required test depth**: real `BUILTIN_COMMANDS` registry + real
-  `skill_commands` dict mixing user-invocable and internal-only entries;
+  `skill_registry` dict mixing user-invocable and internal-only entries;
   assert listing contents and hint formatting.
 - **Spec**: tui.md §3
 
@@ -1016,7 +1016,7 @@ Each integration is gated on a config setting; absence skips registration.
   or misleading; non-error return type returned for this channel.
 - **Required test depth**: call `memory_search(channel='skills', query='anything')`; assert
   result is a tool error; assert no FTS rows returned.
-- **Spec**: skill.md §2 (skills are a separate surface from memory)
+- **Spec**: skills.md §2 (skills are a separate surface from memory)
 
 ---
 
@@ -1213,7 +1213,7 @@ Each integration is gated on a config setting; absence skips registration.
 - **Primary failure modes**: symlink to `/etc/passwd` loaded; bundled pass
   incorrectly applies check; resolution fails on circular symlink.
 - **Required test depth**: real symlinks in/out of root; assert behavior.
-- **Spec**: skill.md §2 (Containment Check)
+- **Spec**: skills.md §2 (Containment Check)
 
 ### 15.2 Skill security scan
 
@@ -1225,7 +1225,7 @@ Each integration is gated on a config setting; absence skips registration.
   fails to delete.
 - **Required test depth**: real skill content per pattern + per path; assert
   detection and policy.
-- **Spec**: skill.md §2 (Security Scan)
+- **Spec**: skills.md §2 (Security Scan)
 
 ### 15.3 Skill manifest coverage (bundled + user-global)
 
@@ -1237,7 +1237,7 @@ Each integration is gated on a config setting; absence skips registration.
   (`disable-model-invocation`) surfaced in manifest; bundled skill omitted.
 - **Required test depth**: real `load_skills()` with bundled + user skills; assert
   manifest contains expected entries and excludes hidden ones.
-- **Spec**: skill.md §2, §3
+- **Spec**: skills.md §2, §3
 
 ### 15.4 `skill_view` (full body load)
 
@@ -1249,7 +1249,7 @@ Each integration is gated on a config setting; absence skips registration.
   `file_path` silently accepted.
 - **Required test depth**: real skill view including plugin prefix; assert inline
   body and `file_path` error.
-- **Spec**: skill.md §3
+- **Spec**: skills.md §3
 
 ### 15.5 `skill_manage` write operations
 
@@ -1263,7 +1263,7 @@ Each integration is gated on a config setting; absence skips registration.
   of erroring.
 - **Required test depth**: real skill_manage per action incl. bundled-protection
   + scan-rollback; assert filesystem and registry state.
-- **Spec**: skill.md §3 (Write tool)
+- **Spec**: skills.md §3 (Write tool)
 
 ### 15.6 `skill-env` blocked-key filter
 
@@ -1273,7 +1273,7 @@ Each integration is gated on a config setting; absence skips registration.
 - **Primary failure modes**: blocked key leaks through; non-blocked key dropped.
 - **Required test depth**: real skill with blocked + allowed keys; assert filtered
   set in `outcome.skill_env`.
-- **Spec**: skill.md §2 (Security Scan)
+- **Spec**: skills.md §2 (Security Scan)
 
 ---
 

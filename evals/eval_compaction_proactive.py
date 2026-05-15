@@ -38,7 +38,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agent.core import build_agent
+from co_cli.agents.core import build_agent
 from co_cli.bootstrap.core import create_deps
 from co_cli.config.core import KNOWLEDGE_DIR, TOOL_RESULTS_DIR
 from co_cli.context.compaction import SUMMARY_MARKER_PREFIX
@@ -318,7 +318,8 @@ async def step_proactive_compaction() -> bool:
         agent = build_agent(
             config=deps.config,
             model=deps.model,
-            tool_registry=deps.tool_registry,
+            toolset=deps.toolset,
+            tool_index=deps.tool_index,
         )
 
         initial_prompt = (

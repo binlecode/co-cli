@@ -195,7 +195,7 @@ The compiler should pull from existing stores rather than introducing a parallel
 Primary sources:
 
 - user ask
-- `deps.skill_commands` and visible skill registry
+- `deps.skill_registry` and visible skill registry
 - top relevant memory search results
 - top relevant knowledge search results
 - recent session search hits when the current task is continuation-heavy

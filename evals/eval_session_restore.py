@@ -29,11 +29,10 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from evals._deps import make_eval_deps
+from evals._deps import make_eval_agent, make_eval_deps
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-from co_cli.agent.core import build_agent
 from co_cli.bootstrap.core import restore_session
 from co_cli.config.core import settings
 from co_cli.context.orchestrate import run_turn
@@ -43,7 +42,7 @@ from co_cli.memory.transcript import append_messages, load_transcript
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-session-restore.md"
 
-_AGENT = build_agent(config=settings)
+_AGENT = make_eval_agent(settings)
 
 
 def _response_text(result: Any) -> str:

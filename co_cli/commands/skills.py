@@ -17,15 +17,15 @@ from co_cli.skills.loader import (
     load_skills,
     scan_skill_content,
 )
-from co_cli.skills.registry import set_skill_commands
+from co_cli.skills.registry import set_skill_registry
 
 
 def _cmd_skills_list(ctx: CommandContext) -> None:
-    if not ctx.deps.skill_commands:
+    if not ctx.deps.skill_registry:
         console.print("[dim]No skills loaded.[/dim]")
         return
     table = make_table("Name", "Description", "Requires", "User-Invocable")
-    for skill in ctx.deps.skill_commands.values():
+    for skill in ctx.deps.skill_registry.values():
         req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
         table.add_row(
             skill.name,
@@ -47,7 +47,7 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
 
     for path in all_paths:
         name = path.stem
-        if name in ctx.deps.skill_commands:
+        if name in ctx.deps.skill_registry:
             table.add_row(path.name, "[success]✓ Loaded[/success]", "")
         else:
             try:
@@ -81,8 +81,8 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
                     console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
             except Exception:
                 pass
-    old_names = set(ctx.deps.skill_commands.keys())
-    set_skill_commands(new_skills, ctx.deps)
+    old_names = set(ctx.deps.skill_registry.keys())
+    set_skill_registry(new_skills, ctx.deps)
     refresh_completer(ctx)
     added = set(new_skills.keys()) - old_names
     removed = old_names - set(new_skills.keys())
@@ -98,7 +98,7 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
             console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
     if not added and not removed:
         console.print("[dim]No skill changes.[/dim]")
-    console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_commands)} skill(s)[/success]")
+    console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_registry)} skill(s)[/success]")
 
 
 def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
@@ -106,10 +106,10 @@ def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
     args = args.strip()
 
     if args == "--all":
-        skills_to_lint = list(ctx.deps.skill_commands.keys())
+        skills_to_lint = list(ctx.deps.skill_registry.keys())
     elif args:
         name = args
-        if name not in ctx.deps.skill_commands:
+        if name not in ctx.deps.skill_registry:
             console.print(f"[bold red]Unknown skill:[/bold red] {name!r}")
             return
         skills_to_lint = [name]
@@ -122,7 +122,7 @@ def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
     any_findings = False
 
     for name in skills_to_lint:
-        skill = ctx.deps.skill_commands[name]
+        skill = ctx.deps.skill_registry[name]
         path = skill.path
         if path is None:
             console.print(f"[bold red]Skill file path unknown for:[/bold red] {name!r}")

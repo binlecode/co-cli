@@ -12,8 +12,8 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
     table = make_table("Command", "Description")
     for cmd in BUILTIN_COMMANDS.values():
         table.add_row(f"/{cmd.name}", cmd.description)
-    if ctx.deps.skill_commands:
-        for skill in ctx.deps.skill_commands.values():
+    if ctx.deps.skill_registry:
+        for skill in ctx.deps.skill_registry.values():
             if skill.user_invocable:
                 hint = f"  [{skill.argument_hint}]" if skill.argument_hint else ""
                 table.add_row(f"/{skill.name}{hint}", skill.description or "(skill)")
