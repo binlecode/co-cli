@@ -555,6 +555,36 @@ def test_merge_legacy_two_in_progress_rejects(tmp_path: Path) -> None:
     assert all(t["status"] == "in_progress" for t in deps.session.session_todos)
 
 
+def test_per_item_error_short_circuits_aggregate_check(tmp_path: Path) -> None:
+    """Per-item validation failure suppresses the aggregate check entirely.
+
+    Regression guard: if the aggregate check ran before the per-item guard,
+    a payload with both an invalid field and multiple in_progress items would
+    return two error categories instead of one, confusing the model about which
+    to fix first. The spec-stated ordering (per-item → aggregate) must hold.
+    """
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+
+    result = todo_write(
+        ctx,
+        [
+            {"id": "a", "content": "Task A", "status": "in_progress"},
+            {"id": "b", "content": "Task B", "status": "in_progress"},
+            {"id": "c", "content": "Task C", "status": "running"},  # invalid status
+        ],
+    )
+
+    assert result.metadata is not None
+    errors = result.metadata.get("errors") or []
+    assert errors, "expected per-item error"
+    # only per-item error — no aggregate error about multiple in_progress
+    assert not any("Multiple items marked" in e for e in errors)
+    assert any("running" in e for e in errors)
+    # state unchanged
+    assert deps.session.session_todos == []
+
+
 def test_aggregate_rejection_is_all_or_nothing(tmp_path: Path) -> None:
     """Aggregate rejection on fresh write: errors reported; session_todos unchanged in full.
 
