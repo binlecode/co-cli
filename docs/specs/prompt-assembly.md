@@ -119,7 +119,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `RECENCY_CLEARING_ADVISORY` | `co_cli/context/assembly.py` | Module-level constant — "## Tool result recency" paragraph appended last to the static prompt |
 | `build_toolset_guidance(tool_index) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE`) |
 | `build_category_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a single-sentence category-level hint for `DEFERRED` tools; empty when no deferred tools exist |
-| `render_skill_manifest(skill_registry, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block injected after tool guidance |
+| `render_skill_manifest(skill_index, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block injected after tool guidance |
 
 ### Personality asset loaders
 

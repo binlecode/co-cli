@@ -9,7 +9,7 @@ Skills are procedural capability — name-addressable workflows injected as prom
 ```mermaid
 flowchart LR
     SkillFile["skill .md file"] --> Loader["load_skills"]
-    Loader --> Registry["deps.skill_registry\n+ get_skill_registry()"]
+    Loader --> Registry["deps.skill_index\n+ get_skill_index()"]
     Registry --> Dispatch["name args"]
     Dispatch --> AgentBody["expanded skill body"]
     AgentBody --> MainLoop["main.py"]
@@ -22,11 +22,11 @@ flowchart LR
 | Component | Role |
 |-----------|------|
 | `load_skills` | Two-pass loader — bundled then user-global; security scan applied to user-global only |
-| `deps.skill_registry` | Full skill registry (`dict[str, SkillConfig]`); used by slash-command dispatch |
-| `get_skill_registry()` | Model-facing subset — excludes hidden skills; source for `<available_skills>` manifest |
+| `deps.skill_index` | Full skill registry (`dict[str, SkillInfo]`); used by slash-command dispatch |
+| `get_skill_index()` | Model-facing subset — excludes hidden skills; source for `<available_skills>` manifest |
 | `render_skill_manifest()` | Renders `<available_skills>` XML block injected into the static system prompt |
-| `dispatch(raw_input, ctx)` | Routes slash commands — built-ins first, then `skill_registry`, then error |
-| `refresh_skills(deps)` | Hot-reload: re-loads both tiers, replaces `deps.skill_registry`; called by `skill_manage` and `/skills reload` |
+| `dispatch(raw_input, ctx)` | Routes slash commands — built-ins first, then `skill_index`, then error |
+| `refresh_skills(deps)` | Hot-reload: re-loads both tiers, replaces `deps.skill_index`; called by `skill_manage` and `/skills reload` |
 | `skill_manage` | Single model-callable write entry point — create, edit, patch, delete |
 | `skill_view` | Model-callable reader — returns full skill body inline |
 
@@ -40,16 +40,16 @@ Per-turn: `main.py` saves current env for keys in `skill_env`, calls `os.environ
 
 ### Skill Model
 
-`SkillConfig` in `co_cli/skills/skill_types.py`:
+`SkillInfo` in `co_cli/skills/skill_types.py`:
 
 | Field | Purpose |
 |-------|---------|
 | `name` | slash-command name derived from file stem |
-| `description` | listing text shown in `/skills` and exposed via `get_skill_registry()` |
+| `description` | listing text shown in `/skills` and exposed via `get_skill_index()` |
 | `body` | prompt body injected into the main agent on dispatch |
 | `argument_hint` | UI hint for `/help` and `/skills` |
 | `user_invocable` | whether the skill appears as a slash command |
-| `disable_model_invocation` | hide from `get_skill_registry()` results and manifest |
+| `disable_model_invocation` | hide from `get_skill_index()` results and manifest |
 | `requires` | environment/platform/settings gates |
 | `skill_env` | env vars injected for the duration of the dispatched turn |
 | `path` | absolute path to the `.md` file on disk; `None` for programmatic configs |
@@ -63,7 +63,7 @@ Markdown files parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter
 | `description` | human-readable summary (required) |
 | `argument-hint` | argument usage hint |
 | `user-invocable` | include in slash-command completer and `/help` |
-| `disable-model-invocation` | hide from `get_skill_registry()` and manifest |
+| `disable-model-invocation` | hide from `get_skill_index()` and manifest |
 | `requires` | gate loading on bins, anyBins, env, os, or settings |
 | `skill-env` | turn-scoped env injection, filtered through `_SKILL_ENV_BLOCKED` |
 
@@ -103,7 +103,7 @@ create_deps()
 ```
 dispatch(raw_input, ctx)
   ├─ built-in in BUILTIN_COMMANDS?   → execute built-in
-  ├─ name in ctx.deps.skill_registry?
+  ├─ name in ctx.deps.skill_index?
   │    yes → copy body → delegated_input
   │           expand arguments ($ARGUMENTS, $0, $1, ...)
   │           set deps.runtime.active_skill_name
@@ -143,6 +143,12 @@ main.py — per-turn
 | `/skills lint [<name>\|--all]` | run R1–R10 lint rules; exit 1 on any finding |
 | `/skills reload` | rescan user-global directory and reload into live session |
 | `/skills review run` | manually trigger one session-review pass against current transcript |
+| `/skills usage [<name>]` | print the per-skill usage sidecar (table for all; full record for one) |
+| `/skills pin <name>` | pin an agent-created skill — exempt from curator lifecycle transitions |
+| `/skills unpin <name>` | clear the pinned flag |
+| `/skills curator status` | show curator gate state — `enabled`, `last_run_at`, `next_eligible_at`, `interval_hours`, `pending_transitions`, `run_count` |
+| `/skills curator run` | run the curator immediately (skips the interval gate; still respects `curator_enabled`) |
+| `/skills curator restore <name>` | move an archived skill back from `.archive/` into the active library |
 
 `/skills reload` rescans only the user-global directory. `/skills check` covers both tiers.
 
@@ -231,20 +237,40 @@ Three in-session reflexes govern skill quality during a task:
 **Background session reviewer.** After approximately every `review_nudge_interval` tool calls, a `session_reviewer` agent runs in the background with the serialized session transcript and applies improvements the in-flight reflexes may have missed.
 
 ```
-session_reviewer
+session_reviewer (pass 1 — every nudge)
   ├─ scan for drift in skills loaded during session → patch or edit
   ├─ create new class-level skills for reusable procedures not in library
   ├─ create or update knowledge artifacts for user preferences and corrections
   └─ never deletes skills or creates session-specific skills
+
+skill_curator (pass 2 — runs when curator_enabled and interval elapsed)
+  ├─ Phase 1: apply lifecycle transitions (active → stale → archived)
+  ├─ Phase 2: consolidate prefix-clustered narrow skills into class-level umbrellas
+  └─ Phase 3: write per-run report + persist curator state
 ```
 
-Output per run at `~/.co-cli/session-reviews/<timestamp>-<run_id_suffix>/`:
+Output per session-reviewer run at `~/.co-cli/session-reviews/<timestamp>-<run_id_suffix>/`:
 - `run.json` — structured: `run_id`, `summary`, `skills_patched`, `skills_created`, `knowledge_created`, `knowledge_updated`, `transcript_length`, `usage`
 - `run.md` — human-readable summary
 
-The reviewer runs in a forked `CoDeps` via `fork_deps_for_reviewer` and reloads skills from disk before its pass so successive reviewer runs within the same session see prior passes' writes.
+Output per curator run at `~/.co-cli/curator-runs/<timestamp>-<run_id_suffix>/`:
+- `run.json` — structured: `run_id`, `summary`, `skills_merged`, `skills_created`, `skills_updated`, `usage`
+- `run.md` — human-readable summary
+
+The reviewer runs in a forked `CoDeps` via `fork_deps_for_reviewer`; the curator uses `fork_deps_for_curator` (skill writes only, no knowledge writes). Both reload skills from disk before their pass so successive passes within the same session see prior writes.
 
 Curation preference order: update a skill loaded in the current session → update an existing umbrella skill → create a new class-level skill only if nothing applicable exists.
+
+**Curator gate.** The curator pass runs after the session reviewer completes. It is suppressed unless `skills.curator_enabled=True` AND either `last_run_at` is absent OR the elapsed time since `last_run_at` exceeds `curator_interval_hours` (default 168h = 7 days). Manual `/skills curator run` skips the time gate.
+
+**Lifecycle states.** Each agent-created skill carries a `state` field in the usage sidecar (`~/.co-cli/skills/.usage.json`):
+- `active` — default; eligible for dispatch and consolidation.
+- `stale` — `last_used_at` exceeded `CURATOR_STALE_AFTER_DAYS` (30 days). Skill remains in `user_skills_dir`; consolidation candidate.
+- `archived` — `last_used_at` exceeded `CURATOR_ARCHIVE_AFTER_DAYS` (90 days). File moves to `user_skills_dir/.archive/`; excluded from the manifest. Restored manually via `/skills curator restore <name>`.
+
+Pinned skills (`/skills pin <name>`) are exempt from all state transitions.
+
+**Usage sidecar.** `~/.co-cli/skills/.usage.json` tracks per-skill counters (`use_count`, `view_count`, `patch_count`) and timestamps (`created_at`, `last_used_at`, `last_viewed_at`, `last_patched_at`). Counters update on every `skill_view` and `skill_manage` call. Sidecar I/O is best-effort: failures are logged and swallowed so usage tracking never blocks the underlying tool. Counters are populated only for skills in `user_skills_dir` — bundled skills are excluded.
 
 ## 3. Config
 
@@ -252,7 +278,15 @@ Curation preference order: update a skill loaded in the current session → upda
 |---------|---------|---------|-------------|
 | `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable background session reviewer |
 | `skills.review_nudge_interval` | `CO_SKILLS_REVIEW_NUDGE_INTERVAL` | `5` | Tool-call count between review triggers |
+| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill counters/timestamps to `.usage.json` |
+| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable curator second-pass after the session reviewer |
+| `skills.curator_interval_hours` | `CO_SKILLS_CURATOR_INTERVAL_HOURS` | `168` | Minimum hours between curator runs (7 days) |
 | `REVIEW_MAX_ITERATIONS` | — | `8` | Max LLM request budget per reviewer pass (code constant in `co_cli/config/skills.py`) |
+| `REVIEW_TIMEOUT_SECONDS` | — | `120` | Wall-clock timeout for the reviewer pass |
+| `CURATOR_MAX_ITERATIONS` | — | `100` | Max LLM request budget per curator consolidation pass |
+| `CURATOR_TIMEOUT_SECONDS` | — | `600` | Wall-clock timeout for the curator pass |
+| `CURATOR_STALE_AFTER_DAYS` | — | `30` | Idle days before `active → stale` |
+| `CURATOR_ARCHIVE_AFTER_DAYS` | — | `90` | Idle days before `stale → archived` |
 
 ### Paths
 
@@ -286,44 +320,48 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `load_skills(skills_dir, settings, user_skills_dir) -> dict[str, SkillConfig]` | `co_cli/skills/loader.py` | Two-pass loader; security scan on user-global only |
-| `refresh_skills(deps) -> None` | `co_cli/skills/lifecycle.py` | Re-loads both tiers; replaces `deps.skill_registry` |
-| `get_skill_registry(skill_registry) -> list[dict]` | `co_cli/skills/registry.py` | Model-facing list; excludes `disable_model_invocation=True` and blank-description skills |
+| `load_skills(skills_dir, settings, user_skills_dir) -> dict[str, SkillInfo]` | `co_cli/skills/loader.py` | Two-pass loader; security scan on user-global only |
+| `refresh_skills(deps) -> None` | `co_cli/skills/lifecycle.py` | Re-loads both tiers; replaces `deps.skill_index` |
+| `get_skill_index(skill_index) -> list[dict]` | `co_cli/skills/index.py` | Model-facing list; excludes `disable_model_invocation=True` and blank-description skills |
 
 ### Manifest injection
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `render_skill_manifest(skill_registry, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders `<available_skills>` XML block for the static system prompt |
+| `render_skill_manifest(skill_index, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders `<available_skills>` XML block for the static system prompt |
 
 ### Schema
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `SkillConfig` | `co_cli/skills/skill_types.py` | Frozen dataclass — `name`, `description`, `body`, `argument_hint`, `user_invocable`, `disable_model_invocation`, `requires`, `skill_env`, `path` |
+| `SkillInfo` | `co_cli/skills/skill_types.py` | Frozen dataclass — `name`, `description`, `body`, `argument_hint`, `user_invocable`, `disable_model_invocation`, `requires`, `skill_env`, `path` |
 | `LintFinding` | `co_cli/skills/_lint.py` | Frozen dataclass — `rule`, `line`, `message` |
 
 ## 5. Files
 
 | File | Purpose |
 |------|---------|
-| `co_cli/skills/skill_types.py` | `SkillConfig` frozen dataclass |
+| `co_cli/skills/skill_types.py` | `SkillInfo` frozen dataclass |
 | `co_cli/skills/_lint.py` | `lint_skill(content, path)` — R1–R10 validator; `LintFinding` dataclass |
 | `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content`, `_check_requires` |
-| `co_cli/skills/registry.py` | `set_skill_registry()`, `get_skill_registry()` |
+| `co_cli/skills/index.py` | `set_skill_index()`, `get_skill_index()` |
 | `co_cli/skills/lifecycle.py` | `refresh_skills`, `discover_skill_files`, `read_skill_meta`, `cleanup_skill_run_state` |
 | `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` |
 | `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` command family (list/check/lint/reload/review) |
+| `co_cli/commands/skills.py` | `/skills` command family (list/check/lint/reload/review/usage/pin/unpin/curator) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass |
 | `co_cli/bootstrap/core.py` | `create_deps()` — skill loading at startup |
-| `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection |
-| `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_registry`, `active_skill_name` on `CoDeps` |
+| `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection; `_maybe_run_session_review` (pass 1), `_maybe_run_curator` and `_curator_gate_passes` (pass 2) |
+| `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_index`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer`, `fork_deps_for_curator` |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
-| `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` |
-| `co_cli/agents/session_review.py` | `run_session_review()` — background skill+knowledge reviewer |
+| `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` — both call into `co_cli/skills/usage.py` on success |
+| `co_cli/agents/session_review.py` | `run_session_review()` — pass 1 (skill+knowledge reviewer) |
+| `co_cli/agents/skill_curator.py` | `run_curator()` — pass 2 (state transitions + consolidation + report) |
+| `co_cli/skills/curator.py` | state machine (`apply_state_transitions`, `archive_skill`, `restore_skill`, `read_curator_state`, `write_curator_state`) |
+| `co_cli/skills/usage.py` | usage sidecar I/O (`bump_view`, `bump_use`, `bump_patch`, `record_create`, `forget`, `set_pinned`) |
 | `co_cli/skills/session_review_prompts.py` | reviewer agent instructions and prompt template |
+| `co_cli/skills/curator_prompts.py` | curator agent instructions and prompt template |
 | `co_cli/context/rules/06_skill_protocol.md` | dispatch discipline injected into the static system prompt |
 | `co_cli/skills/` | package-default shipped skills |
 
@@ -355,7 +393,7 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | 06_skill_protocol.md appears in assembled static instructions | `tests/test_flow_skill_protocol.py` |
 | skill-creator present in `<available_skills>` manifest | `tests/test_flow_skill_protocol.py` |
 | Background review section present in 06_skill_protocol.md | `tests/test_flow_skill_protocol.py` |
-| create writes file and skill appears in deps.skill_registry | `tests/test_flow_skills_manage.py` |
+| create writes file and skill appears in deps.skill_index | `tests/test_flow_skills_manage.py` |
 | create rejects missing description and existing skill | `tests/test_flow_skills_manage.py` |
 | create rolls back on destructive shell pattern | `tests/test_flow_skills_manage.py` |
 | edit rewrites user skill; rejects bundled-only | `tests/test_flow_skills_manage.py` |

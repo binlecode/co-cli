@@ -54,7 +54,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  └─ return CoDeps(...)
 │
 ├─ deps.session.reasoning_display = CLI-selected mode
-├─ completer.words = _build_completer_words(deps.skill_registry)
+├─ completer.words = _build_completer_words(deps.skill_index)
 ├─ build_agent(config=deps.config, model=deps.model, toolset=deps.toolset, tool_index=deps.tool_index)
 │
 ├─ restore_session(deps, frontend) → current_session_path
@@ -120,7 +120,7 @@ Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it st
 
 ### Step 7. Load skills with two-pass precedence
 
-Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_registry` map can be stored directly on the runtime object.
+Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_index` map can be stored directly on the runtime object.
 
 ```text
 pass 1: bundled skills (co_cli/skills/)
@@ -163,7 +163,7 @@ After model setup, MCP discovery, skill loading, backend resolution, and sync, b
 
 - `config`: the session `Settings` instance
 - `model`, `memory_store`, and `shell`: service handles
-- `toolset`, `tool_index`, and `skill_registry`: bootstrap-built registries
+- `toolset`, `tool_index`, and `skill_index`: bootstrap-built registries
 - resolved workspace paths
 - `degradations`: runtime downgrade reasons
 - mutable `session` and `runtime` state groups
@@ -172,7 +172,7 @@ After bootstrap completes, `deps.config` is treated as read-only by convention e
 
 ### Step 11. Build the foreground agent
 
-Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, renders the bundled skill manifest via `render_skill_manifest(deps.skill_registry, deps.skills_dir, deps.user_skills_dir)`, and calls `build_agent(config=deps.config, model=deps.model, toolset=deps.toolset, tool_index=deps.tool_index, skill_manifest=...)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
+Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, renders the bundled skill manifest via `render_skill_manifest(deps.skill_index, deps.skills_dir, deps.user_skills_dir)`, and calls `build_agent(config=deps.config, model=deps.model, toolset=deps.toolset, tool_index=deps.tool_index, skill_manifest=...)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
 
 ### Step 12. Restore or create the session
 

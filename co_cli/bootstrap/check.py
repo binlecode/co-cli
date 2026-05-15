@@ -292,8 +292,8 @@ def _check_memory_store(memory_store: Any, backend: str) -> CheckResult:
     return CheckResult(ok=True, status="ok", detail=f"{backend} active")
 
 
-def _check_skills(skill_registry: list[dict]) -> CheckResult:
-    skill_count = len(skill_registry)
+def _check_skills(model_facing_skills: list[dict]) -> CheckResult:
+    skill_count = len(model_facing_skills)
     return CheckResult(
         ok=True,
         status="ok" if skill_count > 0 else "skipped",
@@ -338,9 +338,9 @@ def check_runtime(
     knowledge_result = _check_memory_store(deps.memory_store, deps.config.knowledge.search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
-    from co_cli.skills.registry import get_skill_registry
+    from co_cli.skills.index import get_skill_index
 
-    skills_result = _check_skills(get_skill_registry(deps.skill_registry))
+    skills_result = _check_skills(get_skill_index(deps.skill_index))
 
     # Probe each configured MCP server via binary PATH/URL check
     mcp_probes: list[tuple[str, CheckResult]] = []
@@ -392,7 +392,7 @@ def check_runtime(
         "tool_names": list(tool_index.keys()),
         "tool_approvals": {name: tc.approval for name, tc in tool_index.items()},
         "tool_count": len(tool_index),
-        "skill_count": len(get_skill_registry(deps.skill_registry)),
+        "skill_count": len(get_skill_index(deps.skill_index)),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
         "knowledge_mode": deps.config.knowledge.search_backend,
         "source_counts": source_counts,

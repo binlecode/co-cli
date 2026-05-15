@@ -10,24 +10,24 @@ from tests._settings import SETTINGS
 from co_cli.agents.core import build_native_toolset
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.skills.loader import load_skills
-from co_cli.skills.skill_types import SkillConfig
+from co_cli.skills.skill_types import SkillInfo
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.system.skills import skill_view
 
 _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
-def _make_deps(tmp_path: Path, extra_skills: dict[str, SkillConfig] | None = None) -> CoDeps:
-    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+def _make_deps(tmp_path: Path, extra_skills: dict[str, SkillInfo] | None = None) -> CoDeps:
+    skill_index = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
     if extra_skills:
-        skill_registry = {**skill_registry, **extra_skills}
+        skill_index = {**skill_index, **extra_skills}
     _, tool_index = build_native_toolset(SETTINGS)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
         tool_index=tool_index,
         session=CoSessionState(),
-        skill_registry=skill_registry,
+        skill_index=skill_index,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
@@ -58,7 +58,7 @@ async def test_skill_view_returns_body_inline(tmp_path: Path) -> None:
 async def test_skill_view_body_not_spilled_when_large(tmp_path: Path) -> None:
     """skill_view with spill_threshold_chars=inf never produces a <persisted-output> tag."""
     large_body = "x" * 8000
-    big_skill = SkillConfig(name="big-skill", description="large body skill", body=large_body)
+    big_skill = SkillInfo(name="big-skill", description="large body skill", body=large_body)
     deps = _make_deps(tmp_path, extra_skills={"big-skill": big_skill})
     ctx = _make_ctx(deps, tool_name="skill_view")
     result = await skill_view(ctx, name="big-skill")
@@ -89,7 +89,7 @@ async def test_skill_view_unknown_name(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_skill_view_blocked_skill(tmp_path: Path) -> None:
     """skill_view for a disable_model_invocation=True skill returns tool_error."""
-    blocked = SkillConfig(
+    blocked = SkillInfo(
         name="blocked",
         description="internal skill",
         body="secret content",

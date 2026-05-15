@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from co_cli.memory.frontmatter import parse_frontmatter
-from co_cli.skills.skill_types import SkillConfig
+from co_cli.skills.skill_types import SkillInfo
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,7 @@ def _is_safe_skill_path(path: Path, root: Path) -> bool:
 
 def _load_skill_file(
     path: Path,
-    result: dict[str, SkillConfig],
+    result: dict[str, SkillInfo],
     settings: Any = None,
     *,
     root: Path,
@@ -194,7 +194,7 @@ def _load_skill_file(
                 if isinstance(k, str) and isinstance(v, str) and k not in _SKILL_ENV_BLOCKED:
                     skill_env[k] = v
 
-        result[name] = SkillConfig(
+        result[name] = SkillInfo(
             name=name,
             description=meta.get("description", ""),
             body=body.strip(),
@@ -218,8 +218,8 @@ def load_skills(
     *,
     user_skills_dir: Path | None = None,
     errors: list[str] | None = None,
-) -> dict[str, SkillConfig]:
-    """Scan skills directories and return a dict of SkillConfig objects.
+) -> dict[str, SkillInfo]:
+    """Scan skills directories and return a dict of SkillInfo objects.
 
     Load order (lowest to highest precedence):
       1. Co-bundled skills (skills_dir = co_cli/skills/) — version-controlled, not user-editable
@@ -229,7 +229,7 @@ def load_skills(
     security scan). Reserved-name filtering is the caller's responsibility — apply
     filter_namespace_conflicts() from co_cli.commands.registry after this call.
     """
-    result: dict[str, SkillConfig] = {}
+    result: dict[str, SkillInfo] = {}
 
     if skills_dir.exists():
         for path in sorted(skills_dir.glob("*.md")):

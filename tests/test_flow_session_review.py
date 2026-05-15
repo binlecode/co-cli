@@ -243,21 +243,21 @@ def test_session_review_instructions_include_skills_manifest(tmp_path: Path) -> 
     """Combined instructions string prepends <available_skills> before SESSION_REVIEW_INSTRUCTIONS."""
     from co_cli.context.manifests.skill_manifest import render_skill_manifest
     from co_cli.skills.session_review_prompts import SESSION_REVIEW_INSTRUCTIONS
-    from co_cli.skills.skill_types import SkillConfig
+    from co_cli.skills.skill_types import SkillInfo
 
-    skill_registry: dict[str, SkillConfig] = {
-        "git-workflows": SkillConfig(
+    skill_index: dict[str, SkillInfo] = {
+        "git-workflows": SkillInfo(
             name="git-workflows",
             description="Git branching and merge workflows",
             path=tmp_path / "git-workflows.md",
         ),
-        "python-testing": SkillConfig(
+        "python-testing": SkillInfo(
             name="python-testing",
             description="Python pytest patterns",
             path=tmp_path / "python-testing.md",
         ),
     }
-    manifest = render_skill_manifest(skill_registry, tmp_path, tmp_path)
+    manifest = render_skill_manifest(skill_index, tmp_path, tmp_path)
     combined = (
         f"{manifest}\n\n{SESSION_REVIEW_INSTRUCTIONS}" if manifest else SESSION_REVIEW_INSTRUCTIONS
     )

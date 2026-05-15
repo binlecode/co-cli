@@ -426,7 +426,7 @@ Test surface (CLI):
 | 1 | `co-cli skills import claude --source <fixture-dir> --dry-run` returns exit 0 and reports correct counts. |
 | 2 | Without `--dry-run`, the same command writes to a tmp target dir. |
 | 3 | Unknown peer name returns exit code != 0 with a clear error message. |
-| 4 | After successful import, `refresh_skills` is invoked (verified via `deps.skill_registry` containing imported names). |
+| 4 | After successful import, `refresh_skills` is invoked (verified via `deps.skill_index` containing imported names). |
 
 ### TODO — TASK-8 — Cross-plan integration check
 

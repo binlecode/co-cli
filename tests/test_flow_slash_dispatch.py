@@ -33,14 +33,14 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_deps(tmp_path: Path) -> CoDeps:
-    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    skill_index = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
     _, tool_index = build_native_toolset(SETTINGS)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
         tool_index=tool_index,
         session=CoSessionState(),
-        skill_registry=skill_registry,
+        skill_index=skill_index,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
@@ -320,9 +320,9 @@ def test_blocked_skill_env_key_filtered_at_load(tmp_path: Path) -> None:
         "Do something",
         "skill-env:\n  PATH: /badpath\n  SAFE_KEY: safevalue\n",
     )
-    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
-    assert "envskill" in skill_registry
-    skill = skill_registry["envskill"]
+    skill_index = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    assert "envskill" in skill_index
+    skill = skill_index["envskill"]
     assert "PATH" not in skill.skill_env, "PATH must be filtered out of skill_env at load time"
     assert skill.skill_env.get("SAFE_KEY") == "safevalue", (
         "safe keys must be preserved in skill_env"

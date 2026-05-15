@@ -51,7 +51,7 @@ Out of scope: production code changes, new `tests/` unit tests, structural evals
 - Write a minimal skill `.md` file to `skills_dir` under temp `CO_HOME`:
   - `skill_env: {CO_EVAL_SKILL_TOKEN: "SKLTOKEN12345"}`
   - instruction body: "The user asked: '{{user_input}}'. The value of CO_EVAL_SKILL_TOKEN is: SKLTOKEN12345. Include it in your reply."
-- Load skills: `loaded = load_skills(skills_dir, settings=deps.config); deps.skill_registry = filter_namespace_conflicts(loaded, set(BUILTIN_COMMANDS.keys()), [])`.
+- Load skills: `loaded = load_skills(skills_dir, settings=deps.config); deps.skill_index = filter_namespace_conflicts(loaded, set(BUILTIN_COMMANDS.keys()), [])`.
 - Build agent: `agent = build_agent(config=deps.config)`.
 - Construct `CommandContext(agent=agent, deps=deps, message_history=[], frontend=frontend)`.
 - Call `outcome = await dispatch("/eval_skill", ctx)` — assert `isinstance(outcome, DelegateToAgent)`.

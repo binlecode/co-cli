@@ -36,13 +36,13 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         llm_provider = config.llm.provider
 
     from co_cli.commands.registry import BUILTIN_COMMANDS
-    from co_cli.skills.registry import get_skill_registry
+    from co_cli.skills.index import get_skill_index
 
     tool_count = len(deps.tool_index)
-    skill_count = len(get_skill_registry(deps.skill_registry))
+    skill_count = len(get_skill_index(deps.skill_index))
     mcp_count = len(deps.config.mcp_servers or {})
     cmd_count = len(BUILTIN_COMMANDS) + sum(
-        1 for s in deps.skill_registry.values() if s.user_invocable
+        1 for s in deps.skill_index.values() if s.user_invocable
     )
 
     backend = deps.config.knowledge.search_backend

@@ -371,7 +371,7 @@ async def create_deps(
         user_skills_dir=paths["user_skills_dir"],
         errors=skill_errors,
     )
-    skill_registry = filter_namespace_conflicts(
+    skill_index = filter_namespace_conflicts(
         loaded_skills, set(BUILTIN_COMMANDS.keys()), skill_errors
     )
     for msg in skill_errors:
@@ -400,7 +400,7 @@ async def create_deps(
         memory_store=memory_store,
         tool_index=tool_index,
         toolset=toolset,
-        skill_registry=skill_registry,
+        skill_index=skill_index,
         runtime=runtime,
         model_max_ctx=model_max_ctx,
         spill_threshold_tokens=spill_threshold_tokens,

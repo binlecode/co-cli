@@ -33,7 +33,7 @@ from co_cli.tools.tool_io import tool_error, tool_output
     is_read_only=True,
     is_concurrent_safe=True,
     spill_threshold_chars=math.inf,
-    delegation=frozenset({"session_reviewer"}),
+    delegation=frozenset({"session_reviewer", "skill_curator"}),
 )
 async def skill_view(
     ctx: RunContext[CoDeps],
@@ -55,13 +55,17 @@ async def skill_view(
         file_path: Linked file path within the skill. Not supported in co-cli today.
     """
     lookup = name.split(":", 1)[1] if ":" in name else name
-    skill = ctx.deps.skill_registry.get(lookup)
+    skill = ctx.deps.skill_index.get(lookup)
     if skill is None:
         return tool_error(f"skill_view: unknown skill {name!r}.", ctx=ctx)
     if skill.disable_model_invocation:
         return tool_error(f"skill_view: skill {name!r} is not model-invocable.", ctx=ctx)
     if file_path is not None:
         return tool_error(f"skill_view: skill {name!r} has no linked files.", ctx=ctx)
+    from co_cli.skills.usage import bump_use, bump_view
+
+    bump_view(ctx.deps, lookup)
+    bump_use(ctx.deps, lookup)
     return tool_output(skill.body, ctx=ctx, name=lookup, linked_files={})
 
 
@@ -141,12 +145,15 @@ def _skill_create(
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
+    from co_cli.skills.usage import record_create
+
+    record_create(ctx.deps, name)
     result: dict = {"success": True, "message": f"Skill {name!r} created.", "path": str(path)}
     if category:
         result["category_ignored"] = True
-    if len(ctx.deps.skill_registry) >= 30:
+    if len(ctx.deps.skill_index) >= 30:
         result["size_warning"] = (
-            f"Skill count is now {len(ctx.deps.skill_registry)}; "
+            f"Skill count is now {len(ctx.deps.skill_index)}; "
             "consider reviewing and pruning unused skills."
         )
     return tool_output(json.dumps(result), ctx=ctx)
@@ -171,6 +178,9 @@ def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str | None) -> Tool
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
+    from co_cli.skills.usage import bump_patch
+
+    bump_patch(ctx.deps, name)
     return tool_output(
         json.dumps({"success": True, "message": f"Skill {name!r} updated.", "path": str(path)}),
         ctx=ctx,
@@ -221,6 +231,9 @@ def _skill_patch(
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
+    from co_cli.skills.usage import bump_patch
+
+    bump_patch(ctx.deps, name)
     replaced_count = count if replace_all else 1
     return tool_output(
         json.dumps(
@@ -246,6 +259,9 @@ def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
         return tool_error(f"Skill {name!r} not found in user skills dir.", ctx=ctx)
     path.unlink()
     _reload_skills(ctx)
+    from co_cli.skills.usage import forget
+
+    forget(ctx.deps, name)
     shadowed_bundled = (ctx.deps.skills_dir / f"{name}.md").exists()
     return tool_output(
         json.dumps(
@@ -275,7 +291,7 @@ def _skill_manage_approval_subject(args: dict) -> ApprovalSubject:
     visibility=VisibilityPolicyEnum.ALWAYS,
     approval=True,
     approval_subject_fn=_skill_manage_approval_subject,
-    delegation=frozenset({"session_reviewer"}),
+    delegation=frozenset({"session_reviewer", "skill_curator"}),
 )
 async def skill_manage(
     ctx: RunContext[CoDeps],

@@ -10,6 +10,8 @@ from co_cli.commands.registry import (
 from co_cli.commands.types import CommandContext
 from co_cli.config.core import settings
 from co_cli.display.core import console, make_table
+from co_cli.skills import usage as skill_usage
+from co_cli.skills.index import set_skill_index
 from co_cli.skills.lifecycle import discover_skill_files, read_skill_meta
 from co_cli.skills.lint import lint_skill
 from co_cli.skills.loader import (
@@ -17,15 +19,14 @@ from co_cli.skills.loader import (
     load_skills,
     scan_skill_content,
 )
-from co_cli.skills.registry import set_skill_registry
 
 
 def _cmd_skills_list(ctx: CommandContext) -> None:
-    if not ctx.deps.skill_registry:
+    if not ctx.deps.skill_index:
         console.print("[dim]No skills loaded.[/dim]")
         return
     table = make_table("Name", "Description", "Requires", "User-Invocable")
-    for skill in ctx.deps.skill_registry.values():
+    for skill in ctx.deps.skill_index.values():
         req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
         table.add_row(
             skill.name,
@@ -47,7 +48,7 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
 
     for path in all_paths:
         name = path.stem
-        if name in ctx.deps.skill_registry:
+        if name in ctx.deps.skill_index:
             table.add_row(path.name, "[success]✓ Loaded[/success]", "")
         else:
             try:
@@ -81,8 +82,8 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
                     console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
             except Exception:
                 pass
-    old_names = set(ctx.deps.skill_registry.keys())
-    set_skill_registry(new_skills, ctx.deps)
+    old_names = set(ctx.deps.skill_index.keys())
+    set_skill_index(new_skills, ctx.deps)
     refresh_completer(ctx)
     added = set(new_skills.keys()) - old_names
     removed = old_names - set(new_skills.keys())
@@ -98,7 +99,7 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
             console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
     if not added and not removed:
         console.print("[dim]No skill changes.[/dim]")
-    console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_registry)} skill(s)[/success]")
+    console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_index)} skill(s)[/success]")
 
 
 def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
@@ -106,10 +107,10 @@ def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
     args = args.strip()
 
     if args == "--all":
-        skills_to_lint = list(ctx.deps.skill_registry.keys())
+        skills_to_lint = list(ctx.deps.skill_index.keys())
     elif args:
         name = args
-        if name not in ctx.deps.skill_registry:
+        if name not in ctx.deps.skill_index:
             console.print(f"[bold red]Unknown skill:[/bold red] {name!r}")
             return
         skills_to_lint = [name]
@@ -122,7 +123,7 @@ def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
     any_findings = False
 
     for name in skills_to_lint:
-        skill = ctx.deps.skill_registry[name]
+        skill = ctx.deps.skill_index[name]
         path = skill.path
         if path is None:
             console.print(f"[bold red]Skill file path unknown for:[/bold red] {name!r}")
@@ -163,15 +164,178 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         _cmd_skills_lint(ctx, subargs)
     elif subcmd == "reload":
         _cmd_skills_reload(ctx)
+    elif subcmd == "usage":
+        _cmd_skills_usage(ctx, subargs)
+    elif subcmd == "pin":
+        _cmd_skills_pin(ctx, subargs, pinned=True)
+    elif subcmd == "unpin":
+        _cmd_skills_pin(ctx, subargs, pinned=False)
+    elif subcmd == "curator":
+        await _cmd_skills_curator(ctx, subargs)
     elif subcmd == "review":
         await _cmd_skills_review(ctx, subargs)
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
         console.print(
-            "[dim]Usage: /skills [list|check|lint [<name>|--all]|reload|review run][/dim]"
+            "[dim]Usage: /skills [list|check|lint [<name>|--all]|reload|"
+            "usage [<name>]|pin <name>|unpin <name>|"
+            "curator [status|run|restore <name>]|review run][/dim]"
         )
 
     return None
+
+
+def _cmd_skills_usage(ctx: CommandContext, args: str) -> None:
+    """Print the usage sidecar — table for all skills, full record for one."""
+    name = args.strip()
+    records = skill_usage.read_records(ctx.deps).get("skills", {})
+
+    if name:
+        record = records.get(name)
+        if record is None:
+            console.print(f"[dim]No usage record for skill '{name}'.[/dim]")
+            return
+        table = make_table("Field", "Value")
+        for key in (
+            "use_count",
+            "view_count",
+            "patch_count",
+            "created_at",
+            "last_used_at",
+            "last_viewed_at",
+            "last_patched_at",
+            "state",
+            "pinned",
+        ):
+            table.add_row(key, str(record.get(key)))
+        console.print(table)
+        return
+
+    if not records:
+        console.print("[dim]No skill usage records yet.[/dim]")
+        return
+
+    table = make_table("Name", "use", "view", "patch", "last_used_at", "state", "pinned")
+    for skill_name in sorted(records.keys()):
+        rec = records[skill_name]
+        table.add_row(
+            skill_name,
+            str(rec.get("use_count", 0)),
+            str(rec.get("view_count", 0)),
+            str(rec.get("patch_count", 0)),
+            str(rec.get("last_used_at") or "-"),
+            str(rec.get("state", "active")),
+            "✓" if rec.get("pinned") else "",
+        )
+    console.print(table)
+
+
+def _classify_skill(ctx: CommandContext, name: str) -> str:
+    """Return one of: 'agent-created', 'bundled', 'unknown'."""
+    user_path = ctx.deps.user_skills_dir / f"{name}.md"
+    bundled_path = ctx.deps.skills_dir / f"{name}.md"
+    if user_path.exists():
+        return "agent-created"
+    if bundled_path.exists():
+        return "bundled"
+    return "unknown"
+
+
+def _cmd_skills_pin(ctx: CommandContext, args: str, *, pinned: bool) -> None:
+    """Toggle the pinned flag on an agent-created skill."""
+    verb = "pin" if pinned else "unpin"
+    name = args.strip()
+    if not name:
+        console.print(f"[bold red]Usage:[/bold red] /skills {verb} <name>")
+        return
+
+    classification = _classify_skill(ctx, name)
+    if classification == "bundled":
+        console.print(
+            f"[bold red]Cannot {verb} '{name}': bundled skill (upstream-managed).[/bold red]"
+        )
+        return
+    if classification == "unknown":
+        console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
+        return
+
+    skill_usage.set_pinned(ctx.deps, name, pinned)
+    state = "pinned" if pinned else "unpinned"
+    console.print(f"[success]✓ Skill '{name}' {state}.[/success]")
+
+
+async def _cmd_skills_curator(ctx: CommandContext, args: str) -> None:
+    """Curator control surface: status | run | restore <name>."""
+    from datetime import UTC, datetime, timedelta
+
+    from co_cli.agents.skill_curator import run_curator
+    from co_cli.skills.curator import (
+        _parse_iso,
+        apply_state_transitions,
+        read_curator_state,
+        restore_skill,
+    )
+    from co_cli.skills.usage import read_records
+
+    sub = args.strip().split(maxsplit=1)
+    action = sub[0].lower() if sub else "status"
+    rest = sub[1] if len(sub) > 1 else ""
+
+    state = read_curator_state(ctx.deps)
+
+    if action in ("", "status"):
+        now = datetime.now(UTC)
+        last_run = state.get("last_run_at") or "never"
+        run_count = state.get("run_count", 0)
+        interval_h = ctx.deps.config.skills.curator_interval_hours
+        last_run_summary = state.get("last_run_summary") or ""
+
+        if state.get("last_run_at"):
+            last_dt = _parse_iso(state["last_run_at"])
+            next_dt = last_dt + timedelta(hours=interval_h)
+            next_str = next_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            next_str = "eligible now"
+
+        sidecar = read_records(ctx.deps)
+        transitions = apply_state_transitions(sidecar, ctx.deps.config.skills, now)
+        pending = len(transitions)
+
+        table = make_table("Field", "Value")
+        table.add_row("enabled", str(ctx.deps.config.skills.curator_enabled))
+        table.add_row("last_run_at", last_run)
+        table.add_row("run_count", str(run_count))
+        table.add_row("next_eligible_at", next_str)
+        table.add_row("interval_hours", str(interval_h))
+        table.add_row("pending_transitions", str(pending))
+        if last_run_summary:
+            table.add_row("last_summary", last_run_summary)
+        console.print(table)
+
+    elif action == "run":
+        if ctx.deps.model is None:
+            console.print("[bold red]No model configured — cannot run curator.[/bold red]")
+            return
+        console.print("[dim]Running curator…[/dim]")
+        await run_curator(ctx.deps)
+        updated = read_curator_state(ctx.deps)
+        summary = updated.get("last_run_summary") or "(no changes)"
+        console.print(f"[success]✓ Curator done:[/success] {summary}")
+
+    elif action == "restore":
+        name = rest.strip()
+        if not name:
+            console.print("[bold red]Usage:[/bold red] /skills curator restore <name>")
+            return
+        try:
+            restore_skill(ctx.deps, name)
+            console.print(f"[success]✓ Skill '{name}' restored from archive.[/success]")
+        except FileNotFoundError as exc:
+            console.print(f"[bold red]Restore failed:[/bold red] {exc}")
+
+    else:
+        console.print(f"[bold red]Unknown curator subcommand:[/bold red] {action}")
+        console.print("[dim]Usage: /skills curator [status|run|restore <name>][/dim]")
 
 
 async def _cmd_skills_review(ctx: CommandContext, args: str) -> None:

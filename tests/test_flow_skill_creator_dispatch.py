@@ -18,19 +18,19 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_ctx(tmp_path: Path) -> CommandContext:
-    skill_registry = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    skill_index = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
     _, tool_index = build_native_toolset(SETTINGS)
     deps = CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
         tool_index=tool_index,
         session=CoSessionState(),
-        skill_registry=skill_registry,
+        skill_index=skill_index,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
     )
-    # agent is not accessed during skill dispatch — only deps.skill_registry is used
+    # agent is not accessed during skill dispatch — only deps.skill_index is used
     return CommandContext(message_history=[], deps=deps, agent=None)  # type: ignore[arg-type]
 
 

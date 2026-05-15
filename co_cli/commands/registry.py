@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from co_cli.commands.types import CommandContext, ReplaceTranscript
-from co_cli.skills.skill_types import SkillConfig
+from co_cli.skills.skill_types import SkillInfo
 
 
 @dataclass(frozen=True)
@@ -26,30 +26,30 @@ class SlashCommand:
 BUILTIN_COMMANDS: dict[str, SlashCommand] = {}
 
 
-def build_completer_entries(skill_registry: dict) -> list[tuple[str, str]]:
+def build_completer_entries(skill_index: dict) -> list[tuple[str, str]]:
     """Single source of truth for the REPL completer: (name, description) pairs."""
     builtin = [(name, cmd.description) for name, cmd in BUILTIN_COMMANDS.items()]
-    skills = [(name, s.description) for name, s in skill_registry.items() if s.user_invocable]
+    skills = [(name, s.description) for name, s in skill_index.items() if s.user_invocable]
     return builtin + skills
 
 
 def refresh_completer(ctx: CommandContext) -> None:
-    """Refresh the REPL completer after a skill_registry mutation."""
+    """Refresh the REPL completer after a skill_index mutation."""
     if ctx.completer is None:
         return
-    ctx.completer.update(build_completer_entries(ctx.deps.skill_registry))
+    ctx.completer.update(build_completer_entries(ctx.deps.skill_index))
 
 
 def filter_namespace_conflicts(
-    loaded: dict[str, SkillConfig],
+    loaded: dict[str, SkillInfo],
     reserved: set[str],
     errors: list[str] | None = None,
-) -> dict[str, SkillConfig]:
+) -> dict[str, SkillInfo]:
     """Drop skills whose name shadows a reserved slash-command name.
 
     Records dropped names to errors. Pure data-in/data-out.
     """
-    accepted: dict[str, SkillConfig] = {}
+    accepted: dict[str, SkillInfo] = {}
     for name, skill in loaded.items():
         if name in reserved:
             if errors is not None:

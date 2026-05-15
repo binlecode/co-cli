@@ -10,7 +10,7 @@ Names must reveal the class's role. Prefer these suffixes where they fit. Self-e
 | `*Result` | Immutable pass/fail outcome |
 | `*Output` | Agent/pipeline payload |
 | `*Settings` | Persisted configuration — top-level `Settings` and any nested submodel; maps to `settings.json` |
-| `*Config` | Runtime configuration — in-memory, not persisted (e.g. `SkillConfig` loaded from `.md`); **confirm with the user before introducing a new `*Config` name** |
+| `*Config` | Runtime configuration — in-memory, not persisted; **confirm with the user before introducing a new `*Config` name** |
 | `*Info` | Read-only descriptor |
 | `*Registry` | Registration lookup table |
 | `*Store` | Persistent storage layer |

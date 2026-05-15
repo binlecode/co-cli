@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from co_cli.llm.factory import LlmModel
     from co_cli.memory.memory_store import MemoryStore
-    from co_cli.skills.skill_types import SkillConfig
+    from co_cli.skills.skill_types import SkillInfo
     from co_cli.tools.background import BackgroundTaskState
     from co_cli.tools.resource_lock import ResourceLockStore
     from co_cli.tools.shell_backend import ShellBackend
@@ -272,7 +272,7 @@ class CoDeps:
     # Bootstrap-set registries
     tool_index: dict[str, ToolInfo] = field(default_factory=dict)
     toolset: AbstractToolset[CoDeps] | None = field(default=None, repr=False)
-    skill_registry: dict[str, SkillConfig] = field(default_factory=dict)
+    skill_index: dict[str, SkillInfo] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
@@ -363,7 +363,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         memory_store=base.memory_store,
         model=base.model,
         tool_index=base.tool_index,
-        skill_registry=base.skill_registry,
+        skill_index=base.skill_index,
         session=inherited_session,
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
         workspace_dir=base.workspace_dir,

@@ -182,7 +182,7 @@ Dream runs are idempotent. The trigger is `session_end` by default; `manual` tri
 
 ### Skills
 
-Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest. Slash commands in the REPL dispatch to installed skills via the `skill_registry` registry on `CoDeps`.
+Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest. Slash commands in the REPL dispatch to installed skills via the `skill_index` map on `CoDeps`.
 
 → [skills.md](skills.md) · [tui.md](tui.md)
 
@@ -204,7 +204,7 @@ CoDeps
 ├── registries
 │   ├── tool_index        dict[name, ToolInfo] — approval + OTel; forwarded to forks
 │   ├── toolset           AbstractToolset[CoDeps] — orchestrator routing surface; excluded from forks
-│   └── skill_registry    dict[name, SkillConfig] — slash-command dispatch; forwarded to forks
+│   └── skill_index       dict[name, SkillInfo] — slash-command dispatch; forwarded to forks
 ├── mutable state
 │   ├── session (CoSessionState)
 │   │   ├── todos                 runtime self-plan

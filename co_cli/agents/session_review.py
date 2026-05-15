@@ -121,13 +121,13 @@ async def run_session_review(
     )
 
     child_deps = fork_deps_for_reviewer(deps)
-    # Reload skills from disk into the child registry so successive review passes
-    # see prior passes' writes. fork_deps shares parent.skill_registry by reference,
-    # and set_skill_registry rebinds only the receiving deps — without this refresh,
+    # Reload skills from disk into the child index so successive review passes
+    # see prior passes' writes. fork_deps shares parent.skill_index by reference,
+    # and set_skill_index rebinds only the receiving deps — without this refresh,
     # pass-B would render its manifest against pass-A's pre-write snapshot.
     refresh_skills(child_deps)
     skills_manifest = render_skill_manifest(
-        child_deps.skill_registry, child_deps.skills_dir, child_deps.user_skills_dir
+        child_deps.skill_index, child_deps.skills_dir, child_deps.user_skills_dir
     )
     instructions = (
         f"{skills_manifest}\n\n{SESSION_REVIEW_INSTRUCTIONS}"

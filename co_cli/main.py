@@ -5,6 +5,7 @@ import os
 import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import typer
 from prompt_toolkit import PromptSession
@@ -212,6 +213,51 @@ async def _maybe_run_session_review(deps: CoDeps, message_history: list[ModelMes
         raise
     except Exception:
         logger.warning("Session review failed", exc_info=True)
+
+    await _maybe_run_curator(deps)
+
+
+def _curator_gate_passes(curator_state: dict, interval_hours: int, now: datetime) -> bool:
+    """Curator runs if it has never run, or interval_hours elapsed since last_run_at."""
+    last_run_str = curator_state.get("last_run_at")
+    if last_run_str is None:
+        return True
+    if curator_state.get("paused"):
+        return False
+    from co_cli.skills.curator import _parse_iso
+
+    try:
+        last_run = _parse_iso(last_run_str)
+    except (ValueError, TypeError):
+        return True
+    return (now - last_run) > timedelta(hours=interval_hours)
+
+
+async def _maybe_run_curator(deps: CoDeps) -> None:
+    """Run the skill curator second pass if enabled and time-gate passed."""
+    if not deps.config.skills.curator_enabled:
+        return
+    if not deps.model:
+        return
+
+    from co_cli.agents.skill_curator import run_curator
+    from co_cli.config.skills import CURATOR_TIMEOUT_SECONDS
+    from co_cli.skills.curator import read_curator_state
+
+    logger = logging.getLogger(__name__)
+    now = datetime.now(UTC)
+    state = read_curator_state(deps)
+    if not _curator_gate_passes(state, deps.config.skills.curator_interval_hours, now):
+        return
+    try:
+        await asyncio.wait_for(run_curator(deps), timeout=CURATOR_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.warning("Curator pass timed out")
+    except asyncio.CancelledError:
+        logger.info("Curator pass cancelled")
+        raise
+    except Exception:
+        logger.warning("Curator pass failed", exc_info=True)
 
 
 def _post_turn_hook(
@@ -458,11 +504,11 @@ async def _chat_loop(
             raise SystemExit(1) from e
         deps.session.reasoning_display = reasoning_display
 
-        completer.update(build_completer_entries(deps.skill_registry))
+        completer.update(build_completer_entries(deps.skill_index))
         from co_cli.context.manifests.skill_manifest import render_skill_manifest
 
         skill_manifest = render_skill_manifest(
-            deps.skill_registry, deps.skills_dir, deps.user_skills_dir
+            deps.skill_index, deps.skills_dir, deps.user_skills_dir
         )
         agent = build_agent(
             config=deps.config,
@@ -475,9 +521,9 @@ async def _chat_loop(
         current_session_path = restore_session(deps, frontend)
         init_session_index(deps, current_session_path, frontend)
         _sweep_tool_results(deps)
-        from co_cli.skills.registry import get_skill_registry
+        from co_cli.skills.index import get_skill_index
 
-        frontend.on_status(f"  {len(get_skill_registry(deps.skill_registry))} skill(s) loaded")
+        frontend.on_status(f"  {len(get_skill_index(deps.skill_index))} skill(s) loaded")
 
         if deps.session.session_path.exists():
             console.print("[dim]Previous session available — /resume to continue[/dim]")
