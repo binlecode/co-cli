@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.195]
+
+### Enforce one-in-progress invariant in todo_write
+- **`_check_one_in_progress` helper** — added to `co_cli/tools/todo/rw.py`; counts `in_progress` items in the final list and returns an error if count > 1.
+- **Wired into both paths** — `_run_fresh` and `_run_merge` call the helper after per-item validation passes; aggregate failure is all-or-nothing (`session.session_todos` preserved unchanged).
+- **Error message** — names all offending ids and instructs the model to resolve by setting all but one to `pending`, `completed`, or `cancelled`.
+- **Docstring updated** — promoted from advisory to enforced: "only ONE item may be `in_progress` at a time — writes that produce more than one are rejected."
+- **Tests** — 8 new cases in `tests/test_flow_todo.py` covering fresh (0/1/2 in_progress), merge (unrelated update, add second, atomic swap, legacy cleanup), and all-or-nothing preservation.
+
 ## [0.8.194]
 
 ### Persistence primitives + MemoryTransaction object redesign

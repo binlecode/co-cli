@@ -378,3 +378,206 @@ def test_fresh_write_rejects_id_with_whitespace(tmp_path: Path) -> None:
     assert result.metadata is not None
     assert result.metadata.get("errors")
     assert deps.session.session_todos == []
+
+
+# ---------------------------------------------------------------------------
+# One-in-progress invariant (aggregate constraint)
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_write_zero_in_progress_accepts(tmp_path: Path) -> None:
+    """Fresh write with no in_progress items is accepted — 0 is within the limit of 1."""
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+
+    result = todo_write(
+        ctx,
+        [
+            {"id": "a", "content": "Alpha", "status": "pending"},
+            {"id": "b", "content": "Beta", "status": "completed"},
+        ],
+    )
+
+    assert result.metadata is not None
+    assert not result.metadata.get("errors")
+    assert len(deps.session.session_todos) == 2
+
+
+def test_fresh_write_one_in_progress_accepts(tmp_path: Path) -> None:
+    """Fresh write with exactly one in_progress item is accepted."""
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+
+    result = todo_write(
+        ctx,
+        [
+            {"id": "a", "content": "Alpha", "status": "in_progress"},
+            {"id": "b", "content": "Beta", "status": "pending"},
+        ],
+    )
+
+    assert result.metadata is not None
+    assert not result.metadata.get("errors")
+    assert len(deps.session.session_todos) == 2
+
+
+def test_fresh_write_two_in_progress_rejects_and_names_both_ids(tmp_path: Path) -> None:
+    """Fresh write with 2 in_progress items is rejected all-or-nothing; error names both ids.
+
+    Regression guard: if the aggregate check is missing, the model can claim parallel
+    work in progress, corrupting the TUI status and compaction snapshot.
+    """
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+    deps.session.session_todos = [  # type: ignore[list-item]
+        {"id": "pre", "content": "pre-existing", "status": "pending", "priority": "medium"}
+    ]
+
+    result = todo_write(
+        ctx,
+        [
+            {"id": "x", "content": "Task X", "status": "in_progress"},
+            {"id": "y", "content": "Task Y", "status": "in_progress"},
+        ],
+    )
+
+    assert result.metadata is not None
+    errors = result.metadata.get("errors") or []
+    assert errors, "expected rejection"
+    error_text = " ".join(errors)
+    assert "x" in error_text
+    assert "y" in error_text
+    # state unchanged — still the pre-existing item
+    assert len(deps.session.session_todos) == 1
+    assert deps.session.session_todos[0]["id"] == "pre"
+
+
+def test_merge_existing_one_in_progress_unrelated_update_accepts(tmp_path: Path) -> None:
+    """Merge that doesn't touch status of the in_progress item → accepted (count stays 1)."""
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+
+    todo_write(
+        ctx,
+        [
+            {"id": "a", "content": "Active task", "status": "in_progress"},
+            {"id": "b", "content": "Other task", "status": "pending"},
+        ],
+    )
+
+    result = todo_write(ctx, [{"id": "b", "priority": "high"}], merge=True)
+
+    assert result.metadata is not None
+    assert not result.metadata.get("errors")
+    assert deps.session.session_todos[0]["status"] == "in_progress"
+    assert deps.session.session_todos[1]["priority"] == "high"
+
+
+def test_merge_adds_second_in_progress_rejects(tmp_path: Path) -> None:
+    """Merge: existing has A=in_progress; payload sets B=in_progress → rejected; state unchanged.
+
+    Regression guard: without the final-state aggregate check in merge mode, the
+    model can silently accumulate multiple in_progress items across calls.
+    """
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+
+    todo_write(
+        ctx,
+        [
+            {"id": "a", "content": "Active", "status": "in_progress"},
+            {"id": "b", "content": "Next", "status": "pending"},
+        ],
+    )
+    original = list(deps.session.session_todos)
+
+    result = todo_write(ctx, [{"id": "b", "status": "in_progress"}], merge=True)
+
+    assert result.metadata is not None
+    assert result.metadata.get("errors")
+    assert deps.session.session_todos == original
+
+
+def test_merge_swaps_in_progress_in_same_call_accepts(tmp_path: Path) -> None:
+    """Merge: A=completed AND B=in_progress in one call when A was in_progress → accepted (final count=1).
+
+    Regression guard: if the check runs on the payload rather than the final merged
+    state, this valid swap would be rejected because both statuses appear in the diff.
+    """
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+
+    todo_write(
+        ctx,
+        [
+            {"id": "a", "content": "Done now", "status": "in_progress"},
+            {"id": "b", "content": "Up next", "status": "pending"},
+        ],
+    )
+
+    result = todo_write(
+        ctx,
+        [{"id": "a", "status": "completed"}, {"id": "b", "status": "in_progress"}],
+        merge=True,
+    )
+
+    assert result.metadata is not None
+    assert not result.metadata.get("errors")
+    todos = deps.session.session_todos
+    assert todos[0]["status"] == "completed"
+    assert todos[1]["status"] == "in_progress"
+
+
+def test_merge_legacy_two_in_progress_rejects(tmp_path: Path) -> None:
+    """Merge on legacy state with 2 in_progress items (accepted under old contract) → rejected.
+
+    The model must clean up legacy state before any further mutation will succeed.
+    This is the expected recovery path: rejection message names the offending ids.
+    """
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+    # simulate pre-enforcement state accepted under the old contract
+    deps.session.session_todos = [  # type: ignore[list-item]
+        {"id": "a", "content": "Task A", "status": "in_progress", "priority": "medium"},
+        {"id": "b", "content": "Task B", "status": "in_progress", "priority": "medium"},
+    ]
+
+    result = todo_write(ctx, [{"id": "a", "priority": "high"}], merge=True)
+
+    assert result.metadata is not None
+    errors = result.metadata.get("errors") or []
+    assert errors, "expected rejection on legacy 2-in-progress state"
+    error_text = " ".join(errors)
+    assert "a" in error_text
+    assert "b" in error_text
+    # state preserved
+    assert len(deps.session.session_todos) == 2
+    assert all(t["status"] == "in_progress" for t in deps.session.session_todos)
+
+
+def test_aggregate_rejection_is_all_or_nothing(tmp_path: Path) -> None:
+    """Aggregate rejection on fresh write: errors reported; session_todos unchanged in full.
+
+    Verifies no partial application — the entire write is discarded, not just the
+    offending items.
+    """
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+    deps.session.session_todos = [  # type: ignore[list-item]
+        {"id": "keep", "content": "Keep me", "status": "pending", "priority": "medium"}
+    ]
+    before = list(deps.session.session_todos)
+
+    result = todo_write(
+        ctx,
+        [
+            {"id": "p", "content": "Passes validation", "status": "in_progress"},
+            {"id": "q", "content": "Also in_progress", "status": "in_progress"},
+            {"id": "r", "content": "Pending one", "status": "pending"},
+        ],
+    )
+
+    assert result.metadata is not None
+    assert result.metadata.get("errors"), "expected aggregate error"
+    # none of the payload items were applied
+    assert deps.session.session_todos == before

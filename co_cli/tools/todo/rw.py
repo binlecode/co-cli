@@ -103,6 +103,18 @@ def _validate_merge_update(item: dict, i: int) -> tuple[dict, list[str]]:
     return update, errors
 
 
+def _check_one_in_progress(items: list[TodoItem]) -> list[str]:
+    """Return error list if more than one item is in_progress; empty list otherwise."""
+    in_progress_ids = [t["id"] for t in items if t["status"] == "in_progress"]
+    if len(in_progress_ids) > 1:
+        return [
+            f"Multiple items marked 'in_progress' — only ONE allowed at a time. "
+            f"Offending ids: {', '.join(in_progress_ids)}. "
+            f"Resolve by setting all but one to 'pending', 'completed', or 'cancelled'."
+        ]
+    return []
+
+
 def _run_fresh(todos: list[dict[str, Any]]) -> tuple[list[TodoItem] | None, list[str]]:
     """Validate and build a full replacement list. Returns (validated, errors)."""
     errors: list[str] = []
@@ -120,6 +132,11 @@ def _run_fresh(todos: list[dict[str, Any]]) -> tuple[list[TodoItem] | None, list
 
     if errors:
         return None, errors
+
+    aggregate_errors = _check_one_in_progress(validated)
+    if aggregate_errors:
+        return None, aggregate_errors
+
     return validated, []
 
 
@@ -165,14 +182,17 @@ def _run_merge(
     if errors:
         return None, errors
 
-    merged: list[TodoItem] = []
-    for t in existing:
-        if t["id"] in updates:
-            # mypy cannot prove {**TodoItem, **dict} satisfies TodoItem; spread is correct by construction
-            merged.append({**t, **updates[t["id"]]})  # type: ignore[misc]
-        else:
-            merged.append(t)
+    # mypy cannot prove {**TodoItem, **dict} satisfies TodoItem; spread is correct by construction
+    merged: list[TodoItem] = [
+        {**t, **updates[t["id"]]} if t["id"] in updates else t  # type: ignore[misc]
+        for t in existing
+    ]
     merged.extend(new_items)
+
+    aggregate_errors = _check_one_in_progress(merged)
+    if aggregate_errors:
+        return None, aggregate_errors
+
     return merged, []
 
 
@@ -186,7 +206,7 @@ def todo_write(
 
     When to use: proactively for any directive requiring 3+ steps or non-trivial
     planning. Create the list before starting work, update status as each
-    sub-goal completes, and keep at most ONE item "in_progress" at a time.
+    sub-goal completes, and only ONE item may be "in_progress" at a time — writes that produce more than one are rejected.
 
     When NOT to use: trivial single-step tasks where tracking adds no value.
 
