@@ -33,7 +33,7 @@ A review of the `RESEARCH-peer-approval-policy.md` against the current `co-cli` 
 
 ## Implementation Plan
 
-### TASK-1: Fix SSRF Vulnerability in `web_fetch`
+### ✓ DONE TASK-1: Fix SSRF Vulnerability in `web_fetch`
 Modify `co_cli/tools/web.py` to prevent DNS rebinding.
 - Modify `is_url_safe` to return a `tuple[bool, str | None]` (is_safe, resolved_ip).
 - In `web_fetch`, call `is_url_safe`. If safe, construct a new URL using the `resolved_ip` but preserve the original `Host` header for the request.
@@ -44,7 +44,7 @@ Modify `co_cli/tools/web.py` to prevent DNS rebinding.
 - **done_when:** `uv run pytest tests/test_web.py` passes, and a test explicitly verifies that a URL resolving to `169.254.169.254` is blocked.
 - **success_signal:** N/A (Security fix)
 
-### TASK-2: Add Shell Policy to `start_background_task`
+### ✓ DONE TASK-2: Add Shell Policy to `start_background_task`
 Modify `co_cli/tools/task_control.py` to enforce shell policy.
 - Import `evaluate_shell_command` and `ShellDecisionEnum`.
 - In `start_background_task`, before creating the span and task, evaluate the command.

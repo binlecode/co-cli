@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.8.203]
+
+### Security fixes — SSRF protection and background task shell policy
+
+- **DNS-rebinding SSRF fix** — `SSRFSafeNetworkBackend` (httpcore layer) resolves and validates the IP before every TCP connect, closing the TOCTOU gap between `is_url_safe()` pre-check and the actual connection. `ssrf_redirect_guard` rejects redirect targets that resolve to private/internal addresses.
+- **`make_ssrf_safe_transport()`** — factory injects `SSRFSafeNetworkBackend` into the `httpx.AsyncHTTPTransport` pool; `web_fetch` uses this transport for every request.
+- **Background task shell policy** — `task_start` now calls `evaluate_shell_command` before spawning; commands that match a `DENY` policy return a `tool_error` instead of executing, matching the behaviour of `run_shell_command`.
+
 ## [0.8.201]
 
 ### Fix four bugs in agent toolset construction

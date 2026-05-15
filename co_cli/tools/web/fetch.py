@@ -12,7 +12,12 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output
-from co_cli.tools.web._ssrf import SSRFRedirectError, is_url_safe, ssrf_redirect_guard
+from co_cli.tools.web._ssrf import (
+    SSRFRedirectError,
+    is_url_safe,
+    make_ssrf_safe_transport,
+    ssrf_redirect_guard,
+)
 from co_cli.tools.web.search import _http_get_with_retries
 
 # ---------------------------------------------------------------------------
@@ -161,6 +166,7 @@ async def web_fetch(
 
     try:
         async with httpx.AsyncClient(
+            transport=make_ssrf_safe_transport(),
             timeout=timeout,
             follow_redirects=True,
             max_redirects=5,

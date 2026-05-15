@@ -3,6 +3,7 @@
 Defends against regression of the file-only output contract: spawn → file
 written → tail_log returns last N → kill_task closes handle → cleanup unlinks.
 Also covers the spawn-failure path (no file, spawn_error populated).
+Covers shell policy enforcement in task_start (DENY commands blocked before spawn).
 """
 
 from __future__ import annotations
@@ -11,12 +12,15 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from pydantic_ai import RunContext
+from pydantic_ai.usage import RunUsage
+from tests._settings import SETTINGS
 from tests._timeouts import (
     BG_TASK_COMPLETION_TIMEOUT_SECS,
     BG_TASK_TEARDOWN_TIMEOUT_SECS,
 )
 
-from co_cli.deps import CoSessionState
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.background import (
     BackgroundTaskState,
     kill_task,
@@ -24,6 +28,21 @@ from co_cli.tools.background import (
     spawn_task,
     tail_log,
 )
+from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tasks.control import task_start
+
+
+def _make_task_ctx(tmp_path: Path) -> RunContext[CoDeps]:
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS,
+        tool_results_dir=tmp_path / "tool-results",
+    )
+    return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_start")
+
+
+def _is_error(result) -> bool:
+    return result.metadata is not None and result.metadata.get("error") is True
 
 
 def _make_state(task_id: str, command: str, cwd: str) -> BackgroundTaskState:
@@ -135,3 +154,16 @@ async def test_spawn_failure_sets_spawn_error_and_no_log_file(tmp_path: Path) ->
     assert "spawn failed" in state.spawn_error
     assert state.log_path is None
     assert not logs_dir.exists() or not any(logs_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# task_start shell policy (DENY commands blocked before spawn)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_task_start_denies_rm_rf(tmp_path: Path) -> None:
+    ctx = _make_task_ctx(tmp_path)
+    result = await task_start(ctx, command="rm -rf /", description="should be denied")
+    assert _is_error(result)
+    assert "task_start blocked" in result.return_value

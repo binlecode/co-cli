@@ -24,7 +24,8 @@ from co_cli.tools.background import (
     spawn_task,
     tail_log,
 )
-from co_cli.tools.tool_io import tool_output
+from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
+from co_cli.tools.tool_io import tool_error, tool_output
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, is_concurrent_safe=True)
@@ -53,6 +54,10 @@ async def task_start(
         description: Human-readable description of what this task does.
         working_directory: Working directory for the command. Defaults to cwd.
     """
+    policy = evaluate_shell_command(command, ctx.deps.config.shell.safe_commands)
+    if policy.decision is ShellDecisionEnum.DENY:
+        return tool_error(f"task_start blocked: {policy.reason}", ctx=ctx)
+
     cwd = working_directory or str(Path.cwd())
 
     tracer = otel_trace.get_tracer("co-cli")
