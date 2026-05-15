@@ -12,7 +12,6 @@ import math
 import re
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlparse
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
@@ -263,69 +262,13 @@ def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
 def _skill_manage_approval_subject(args: dict) -> ApprovalSubject:
     action = args.get("action", "unknown")
     name = args.get("name", "")
-    source = args.get("source") or ""
-    if action == "install":
-        if source.startswith("http://") or source.startswith("https://"):
-            host = urlparse(source).netloc or "unknown"
-            value = f"tool:skill_manage:install:url:{host}"
-        else:
-            value = "tool:skill_manage:install:localfile"
-        display = f"skill_manage(action='install', source={source!r})"
-    else:
-        value = f"tool:skill_manage:{action}:{name}"
-        display = f"skill_manage(action={action!r}, name={name!r})"
     return ApprovalSubject(
         tool_name="skill_manage",
         kind=ApprovalKindEnum.TOOL,
-        value=value,
-        display=display,
+        value=f"tool:skill_manage:{action}:{name}",
+        display=f"skill_manage(action={action!r}, name={name!r})",
         can_remember=True,
     )
-
-
-def _skill_install(ctx: RunContext[CoDeps], source: str) -> ToolReturn:
-    """Fetch, scan, write, and index a new skill from a URL or local path."""
-    from co_cli.skills.installer import SkillFetchError, fetch_skill_content
-
-    try:
-        content, filename = fetch_skill_content(source)
-    except SkillFetchError as exc:
-        return tool_error(str(exc), ctx=ctx)
-
-    skill_name = Path(filename).stem
-    if not _NAME_RE.match(skill_name) or len(skill_name) > 64:
-        return tool_error(
-            f"Skill name derived from source {skill_name!r} is invalid. "
-            "Name must be lowercase letters, digits, hyphens, or underscores; max 64 chars.",
-            ctx=ctx,
-        )
-    if _find_user_skill(ctx.deps, skill_name) is not None:
-        return tool_error(
-            f"Skill {skill_name!r} already exists. Use action='edit' to update it.",
-            ctx=ctx,
-        )
-    err = _validate_skill_content(content)
-    if err:
-        return tool_error(err, ctx=ctx)
-
-    path = ctx.deps.user_skills_dir / filename
-    atomic_write_text(path, content)
-    scan_err = _scan_or_rollback(path, content, original=None)
-    if scan_err:
-        return tool_error(scan_err, ctx=ctx)
-
-    _reload_skills(ctx)
-    install_result: dict = {
-        "success": True,
-        "message": f"Skill {skill_name!r} installed.",
-        "path": str(path),
-    }
-    if len(ctx.deps.skill_commands) >= 30:
-        install_result["size_warning"] = (
-            f"Skill count is now {len(ctx.deps.skill_commands)}; "
-            "consider reviewing and pruning unused skills."
-        )
-    return tool_output(json.dumps(install_result), ctx=ctx)
 
 
 @agent_tool(
@@ -336,7 +279,7 @@ def _skill_install(ctx: RunContext[CoDeps], source: str) -> ToolReturn:
 )
 async def skill_manage(
     ctx: RunContext[CoDeps],
-    action: Literal["create", "edit", "patch", "delete", "install", "write_file", "remove_file"],
+    action: Literal["create", "edit", "patch", "delete", "write_file", "remove_file"],
     name: str = "",
     content: str | None = None,
     category: str | None = None,
@@ -345,9 +288,8 @@ async def skill_manage(
     old_string: str | None = None,
     new_string: str | None = None,
     replace_all: bool = False,
-    source: str | None = None,
 ) -> ToolReturn:
-    """Create, edit, patch, delete, or install a user-installed skill.
+    """Create, edit, patch, or delete a user-installed skill.
 
     Behavioral guidance:
 
@@ -375,14 +317,12 @@ async def skill_manage(
       edit        Replace an existing user-installed skill's full content.
       patch       Surgical find-and-replace within a skill body.
       delete      Remove a user-installed skill.
-      install     Fetch a skill from a URL or local path, scan, and install it.
-                  Requires source; do not provide name (derived from the file).
       write_file  Not yet supported — returns error.
       remove_file Not yet supported — returns error.
 
     Args:
-        action:      One of the seven actions above.
-        name:        Skill name for create/edit/patch/delete. Not used for install.
+        action:      One of the six actions above.
+        name:        Skill name for create/edit/patch/delete.
         content:     Full SKILL.md content for create/edit (frontmatter + body).
         category:    Category hint (accepted for hermes parity; silently ignored today).
         file_path:   Linked-file path within the skill (not yet supported).
@@ -390,18 +330,7 @@ async def skill_manage(
         old_string:  Text to find for patch.
         new_string:  Replacement text for patch.
         replace_all: When True replace all occurrences; otherwise require exactly one match.
-        source:      URL (http/https) or local file path for install action.
     """
-    if action == "install":
-        if not source:
-            return tool_error("source is required for 'install'.", ctx=ctx)
-        if name:
-            return tool_error(
-                "name must not be provided for 'install'; it is derived from the source.",
-                ctx=ctx,
-            )
-        return _skill_install(ctx, source)
-
     if not _NAME_RE.match(name) or len(name) > 64:
         return tool_error(
             f"Invalid skill name {name!r}. "
@@ -419,6 +348,6 @@ async def skill_manage(
     if action in ("write_file", "remove_file"):
         return tool_error(_LINKED_FILE_ERROR, ctx=ctx)
     return tool_error(
-        f"Unknown action {action!r}. Valid actions: create, edit, patch, delete, install.",
+        f"Unknown action {action!r}. Valid actions: create, edit, patch, delete.",
         ctx=ctx,
     )

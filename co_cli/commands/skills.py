@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from co_cli.commands._utils import _confirm
 from co_cli.commands.registry import (
     BUILTIN_COMMANDS,
     filter_namespace_conflicts,
@@ -12,14 +11,7 @@ from co_cli.commands.types import CommandContext
 from co_cli.config.core import settings
 from co_cli.display.core import console, make_table
 from co_cli.skills._lint import lint_skill
-from co_cli.skills.installer import (
-    SkillFetchError,
-    discover_skill_files,
-    fetch_skill_content,
-    find_skill_source_url,
-    read_skill_meta,
-    write_skill_file,
-)
+from co_cli.skills.lifecycle import discover_skill_files, read_skill_meta
 from co_cli.skills.loader import (
     diagnose_requires_failures,
     load_skills,
@@ -158,7 +150,7 @@ def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
 
 
 async def _cmd_skills(ctx: CommandContext, args: str) -> None:
-    """List and inspect loaded skills, or install a new one."""
+    """List and inspect loaded skills."""
     sub = args.strip().split(maxsplit=1)
     subcmd = sub[0].lower() if sub else "list"
     subargs = sub[1] if len(sub) > 1 else ""
@@ -167,21 +159,16 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         _cmd_skills_list(ctx)
     elif subcmd == "check":
         _cmd_skills_check(ctx)
-    elif subcmd == "install":
-        await _install_skill(ctx, subargs)
     elif subcmd == "lint":
         _cmd_skills_lint(ctx, subargs)
     elif subcmd == "reload":
         _cmd_skills_reload(ctx)
-    elif subcmd == "upgrade":
-        await _upgrade_skill(ctx, subargs)
     elif subcmd == "review":
         await _cmd_skills_review(ctx, subargs)
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
         console.print(
-            "[dim]Usage: /skills [list|check|install <path|url>|lint [<name>|--all]|reload|"
-            "upgrade <name>|review run][/dim]"
+            "[dim]Usage: /skills [list|check|lint [<name>|--all]|reload|review run][/dim]"
         )
 
     return None
@@ -207,71 +194,3 @@ async def _cmd_skills_review(ctx: CommandContext, args: str) -> None:
         console.print(f"[success]✓ Review done:[/success] {summary}")
     except Exception as exc:
         console.print(f"[bold red]Review failed:[/bold red] {exc}")
-
-
-async def _install_skill(ctx: CommandContext, target: str, force: bool = False) -> None:
-    """Copy a skill .md file from a local path or URL into skills_dir and reload."""
-    target = target.strip()
-    if not target:
-        console.print("[bold red]Usage:[/bold red] /skills install <path|url>")
-        return
-
-    try:
-        content, filename = fetch_skill_content(target)
-    except SkillFetchError as e:
-        console.print(f"[bold red]Failed to fetch skill:[/bold red] {e}")
-        return
-
-    warnings = scan_skill_content(content)
-    if warnings:
-        console.print("[bold yellow]Security scan warnings:[/bold yellow]")
-        for w in warnings:
-            console.print(f"  [yellow]{w}[/yellow]")
-        if not _confirm(ctx, "Install anyway? [y/N] "):
-            console.print("[dim]Install cancelled.[/dim]")
-            return
-
-    dest = ctx.deps.user_skills_dir / filename
-    if (
-        dest.exists()
-        and not force
-        and not _confirm(ctx, f"Overwrite existing skill '{filename}'? [y/N] ")
-    ):
-        console.print("[dim]Install cancelled.[/dim]")
-        return
-
-    write_skill_file(content, filename, ctx.deps.user_skills_dir)
-
-    errors: list[str] = []
-    new_skills = load_skills(
-        ctx.deps.skills_dir, settings, user_skills_dir=ctx.deps.user_skills_dir, errors=errors
-    )
-    new_skills = filter_namespace_conflicts(new_skills, set(BUILTIN_COMMANDS.keys()), errors)
-    for msg in errors:
-        console.print(f"[warning]{msg}[/warning]")
-    set_skill_commands(new_skills, ctx.deps)
-    refresh_completer(ctx)
-
-    console.print(f"[success]✓ Installed skill: {filename.removesuffix('.md')}[/success]")
-
-
-async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
-    """Re-fetch and reinstall a skill that was installed from a URL."""
-    name = args.strip()
-    if not name:
-        console.print("[bold red]Usage:[/bold red] /skills upgrade <name>")
-        return
-    if name not in ctx.deps.skill_commands:
-        console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
-        return
-    skill_file = ctx.deps.user_skills_dir / f"{name}.md"
-    if not skill_file.exists():
-        console.print(f"[bold red]Skill '{name}' not found in user skills dir.[/bold red]")
-        return
-    source_url = find_skill_source_url(skill_file)
-    if not source_url:
-        console.print(
-            f"[bold red]Skill '{name}' has no source-url — not installed from a URL.[/bold red]"
-        )
-        return
-    await _install_skill(ctx, source_url, force=True)

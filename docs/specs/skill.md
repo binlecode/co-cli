@@ -53,7 +53,6 @@ Supported frontmatter fields parsed from the skill file:
 | `disable-model-invocation` | hide from `get_skill_registry()` output and skills channel search results |
 | `requires` | gate loading on bins, anyBins, env, os, or settings |
 | `skill-env` | turn-scoped env injection, filtered through a blocked-key list |
-| `source-url` | installation provenance; read at upgrade time by `_upgrade_skill()`, not stored in `SkillConfig` |
 
 The skill name is always the filename stem. Built-in slash commands are reserved names and cannot be shadowed.
 
@@ -103,12 +102,7 @@ Skill content is scanned by `scan_skill_content()` using static regex checks bef
 3. destructive shell fragments
 4. prompt-injection style text
 
-Behavior differs by path:
-
-| Path | Behavior |
-| --- | --- |
-| startup / reload load path | warning only; file may still load |
-| `skill_manage(action='install')` | warnings are shown and require explicit user confirmation |
+Scan runs at startup and on `/skills reload`. Findings are warnings only — the file still loads.
 
 `skill-env` is additionally filtered through `_SKILL_ENV_BLOCKED`, which prevents overriding critical process variables such as `PATH`, `PYTHONPATH`, `HOME`, and shell-loader variables.
 
@@ -177,14 +171,10 @@ The built-in `/skills` command family is implemented in `_cmd_skills()` and rela
 | --- | --- |
 | `/skills list` | show loaded skills |
 | `/skills check` | compare available files vs actually loaded skills across both tiers and report skip reasons |
-| `/skills install <path|url>` | copy skill into user skills dir and reload (CLI parity with `skill_manage(action='install')`; see §3 above) |
 | `/skills lint [<name>|--all]` | run R1–R10 lint rules against one skill or all loaded skills; exit 1 on any finding |
 | `/skills reload` | rescan the user-global skill directory and reload into the live session |
-| `/skills upgrade <name>` | reinstall from stored `source-url` |
 
 `/skills reload` rescans only the user-global directory; bundled skills are version-controlled and not rescanned at runtime. `/skills check` covers both tiers (bundled and user-global).
-
-Installed skills are written to `~/.co-cli/skills/`.
 
 ## 3. Model-Callable Surface
 
@@ -200,7 +190,6 @@ Single write entry point for the skills channel. Lives at `co_cli/tools/system/s
 | `edit` | Full rewrite of an existing user-installed skill; validate + scan + rollback on flag; reload. |
 | `patch` | Find-and-replace within a skill body; `replace_all=False` enforces exactly one match; scan + rollback on flag; reload. |
 | `delete` | Remove user-installed skill; reload; returns `shadowed_bundled=true` when a bundled skill of the same name becomes active. |
-| `install` | Fetch skill content from a path or URL; copy into `user_skills_dir`; security scan with rollback on flag; reload. |
 
 **Bundled-skill protection.** `edit`, `patch`, and `delete` reject any name that exists only in the bundled directory with a "copy to `~/.co-cli/skills/` first" error.
 
@@ -213,8 +202,6 @@ Single write entry point for the skills channel. Lives at `co_cli/tools/system/s
 | Action | Approval subject |
 | --- | --- |
 | create / edit / patch / delete | `tool:skill_manage:<action>:<name>` |
-| install (URL source) | `tool:skill_manage:install:url:<host>` |
-| install (local file source) | `tool:skill_manage:install:localfile` |
 
 ### `skill_view(name, file_path=None)`
 
@@ -263,13 +250,12 @@ Resolved skill paths live on `CoDeps`; behaviour knobs live on `SkillsSettings`.
 | `co_cli/skills/skill_types.py` | `SkillConfig` frozen dataclass |
 | `co_cli/skills/_lint.py` | `lint_skill(content, path)` — R1–R10 lint validator; `LintFinding` dataclass |
 | `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content`, `_check_requires` |
-| `co_cli/skills/installer.py` | `fetch_skill_content`, `write_skill_file`, `discover_skill_files`, `find_skill_source_url`, `read_skill_meta` |
 | `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model |
 | `co_cli/skills/registry.py` | `set_skill_commands()` — replaces `deps.skill_commands`; `get_skill_registry()` — derives model-facing list |
-| `co_cli/skills/lifecycle.py` | skill load, install, upgrade, reload orchestration |
+| `co_cli/skills/lifecycle.py` | `refresh_skills`, `discover_skill_files`, `read_skill_meta`, `cleanup_skill_run_state` |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — renders the `<available_skills>` block injected into the static system prompt |
 | `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/lint/reload/upgrade/review) |
+| `co_cli/commands/skills.py` | `/skills` command family (list/check/lint/reload/review) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, `_build_completer_words` |
 | `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection at agent construction |
@@ -412,7 +398,7 @@ Ten mechanical rules, each with a check description and a *why*. The `/skills li
 
 | Rule | Check | Why |
 |------|-------|-----|
-| **R1** | Frontmatter present — file opens with `---` | Without frontmatter the loader rejects the skill at runtime; the check catches authoring errors before install |
+| **R1** | Frontmatter present — file opens with `---` | Without frontmatter the loader rejects the skill at runtime; the check catches authoring errors before load |
 | **R2** | Frontmatter `description` field present and non-empty | Manifest injection relies on description; absent = invisible in the model surface |
 | **R3** | `description` ≤ 1024 chars | Descriptions longer than 1024 chars bloat the manifest and degrade prompt cache hit rates |
 | **R4** | H1 title present after frontmatter | Body without an H1 reads as raw instructions; the H1 anchors skill identity in `skill_view` output |
@@ -431,7 +417,7 @@ Each finding emitted by the validator references the rule by its anchor: `R1` th
 
 Lint (R1–R10) is **collaborative** — it catches well-meaning skills that won't perform well. The security scan (`scan_skill_content` in `co_cli/skills/loader.py`) is **adversarial** — it catches actively malicious content. They run in different lifecycles:
 
-- Security scan: runs at install time and on `/skills reload`. Blocks the write on findings.
+- Security scan: runs on every `skill_manage` write (create/edit/patch) and on `/skills reload`. Blocks the write on findings.
 - Lint: runs on `/skills lint [name|--all]`. Never blocks; exits 1 on findings, file unchanged.
 
 ## 8. Protocol

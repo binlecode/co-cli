@@ -85,3 +85,18 @@ HTTP_HEALTH_TIMEOUT_SECS: int = 15
 # Local async operations
 FILE_DB_TIMEOUT_SECS: int = 30
 """Filesystem + SQLite operations: knowledge index sync, session restore, task status reads."""
+
+# Background subprocess management
+BG_TASK_COMPLETION_TIMEOUT_SECS: int = 15
+"""Wait-for-completion ceiling on background subprocess `_monitor_task` awaits.
+
+Covers fast shell commands like `seq` / `echo` loops used as test fixtures —
+these are essentially instantaneous; 15s is a generous safety net, not a tight
+budget. >15s means the monitor task hung, not that the subprocess is slow."""
+
+BG_TASK_TEARDOWN_TIMEOUT_SECS: int = 5
+"""Kill / log-appear ceiling on background subprocess teardown awaits.
+
+Covers `kill_task` (SIGTERM→SIGKILL) and poll-for-log-file-existence loops.
+Both should complete in sub-second under normal conditions; 5s is the
+safety-net ceiling."""

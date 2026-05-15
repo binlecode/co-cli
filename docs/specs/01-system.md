@@ -54,10 +54,24 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Sessions | [sessions.md](sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
 | Dream cycle | [dream.md](dream.md) | Session-end mining, knowledge merge, decay, archive |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
-| Skills | [skill.md](skill.md) | Skill index, search/view/manage surface, dispatch |
+| Skills | [skill.md](skill.md) | Skill manifest, view/manage surface, dispatch |
 | Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
 | Config | [config.md](config.md) | Settings model, env vars, load pipeline |
 | Observability | [observability.md](observability.md) | OTel spans, JSONL logs, trace viewer |
+
+### Package Dependency Direction (one-way rule)
+
+```
+main → bootstrap → agent → tools / context / config / knowledge / memory
+```
+
+- `main` owns CLI entrypoints and REPL lifecycle; it calls into `bootstrap` and `agent`.
+- `bootstrap` assembles `CoDeps` at session start.
+- `agent` builds the foreground agent and its toolset from `CoDeps`.
+- `tools`, `context`, `config`, `knowledge`, `memory` are leaf packages — they do not import from each other or from `agent`, `bootstrap`, or `main`.
+- All cross-package communication goes through `CoDeps` (passed via `RunContext[CoDeps]` in tool calls), never through direct imports.
+
+Importing upward (e.g. a tool importing from `agent`) is a design error — fix the API.
 
 
 ## 2. Core Workflows
@@ -166,7 +180,7 @@ Dream runs are idempotent. The trigger is `session_end` by default; `manual` tri
 
 ### Skills
 
-Skills are procedural capability units — YAML-fronted markdown files in `~/.co-cli/skills/`. They are discovered at startup, indexed under `source='skill'` in the same DB as memory, and surfaced through three model-callable tools: `skill_search`, `skill_view`, `skill_manage`. Slash commands in the REPL dispatch to installed skills via the `skill_commands` registry on `CoDeps`.
+Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest. Slash commands in the REPL dispatch to installed skills via the `skill_commands` registry on `CoDeps`.
 
 → [skill.md](skill.md) · [tui.md](tui.md)
 

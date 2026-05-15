@@ -17,7 +17,7 @@ Promote a procedure you just executed into a reusable skill. Walks from decision
 Check two conditions before authoring:
 
 1. **Reusability bar:** "Would I run the same sequence of steps for another task of this type?" If no — one-off — stop here. Don't create.
-2. **Dedup check:** Call `skill_search('<task-type-name>')`. If a skill for this task type already exists, load it with `skill_view` and patch it instead of creating a duplicate.
+2. **Dedup check:** Scan the `<available_skills>` manifest for a skill matching this task type. If one exists, load it with `skill_view` and patch it instead of creating a duplicate.
 
 If both pass, continue.
 
@@ -60,7 +60,7 @@ On success, `refresh_skills` makes the skill immediately dispatchable and search
 
 ## Rules
 
-- Search before creating: `skill_search` first to avoid duplicates.
+- Search before creating: scan the `<available_skills>` manifest first to avoid duplicates.
 - Name by task type, not by instance.
 - Don't create for one-offs — the bar is repeated use of the same procedure.
 - Lint clean is non-negotiable: R1–R10 must pass before and after write.

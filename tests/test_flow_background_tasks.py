@@ -11,6 +11,10 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from tests._timeouts import (
+    BG_TASK_COMPLETION_TIMEOUT_SECS,
+    BG_TASK_TEARDOWN_TIMEOUT_SECS,
+)
 
 from co_cli.deps import CoSessionState
 from co_cli.tools.background import (
@@ -43,7 +47,7 @@ async def test_spawn_writes_full_output_to_log_file(tmp_path: Path) -> None:
 
     await spawn_task(state, session, logs_dir=logs_dir)
     assert state._monitor_task is not None
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
         await state._monitor_task
 
     assert state.status == "completed"
@@ -65,7 +69,7 @@ async def test_tail_log_returns_last_n_from_oversized_run(tmp_path: Path) -> Non
 
     await spawn_task(state, session, logs_dir=logs_dir)
     assert state._monitor_task is not None
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
         await state._monitor_task
 
     assert state.status == "completed"
@@ -102,11 +106,11 @@ async def test_kill_task_closes_log_handle_so_file_can_be_unlinked(tmp_path: Pat
 
     await spawn_task(state, session, logs_dir=logs_dir)
     assert state.log_path is not None
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(BG_TASK_TEARDOWN_TIMEOUT_SECS):
         while not (state.log_path.exists() and state.log_path.stat().st_size > 0):
             await asyncio.sleep(0.05)
 
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(BG_TASK_TEARDOWN_TIMEOUT_SECS):
         await kill_task(state)
 
     assert state.status == "cancelled"

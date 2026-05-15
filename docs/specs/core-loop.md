@@ -1,7 +1,7 @@
 # Co CLI Core Loop Design
 
 
-For top-level architecture and startup sequencing, see [system.md](system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); session persistence and recall live in [sessions.md](sessions.md); knowledge artifacts and recall live in [knowledge.md](knowledge.md); compaction mechanics in [compaction.md](compaction.md).
+For top-level architecture and startup sequencing, see [01-system.md](01-system.md) and [bootstrap.md](bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and the orchestration points where history processors and compaction recovery are invoked. Instruction-layer construction and per-request assembly live in [prompt-assembly.md](prompt-assembly.md); session persistence and recall live in [sessions.md](sessions.md); knowledge artifacts and recall live in [knowledge.md](knowledge.md); compaction mechanics in [compaction.md](compaction.md).
 
 ## 1. Foreground Turn Flow
 

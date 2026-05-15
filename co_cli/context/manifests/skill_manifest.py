@@ -1,9 +1,4 @@
-"""Bundled skill manifest — declares bundled skills in the static system prompt.
-
-Bundled skills land via the manifest (always-visible, cache-stable, ~300 tokens).
-User-installed skills land via skill_search (query-driven, on-demand). The split
-keeps the prompt small while the long tail stays discoverable.
-"""
+"""Skill manifest — declares all discoverable skills in the static system prompt."""
 
 from __future__ import annotations
 
@@ -20,21 +15,18 @@ def render_skill_manifest(
     skills_dir: Path,
     user_skills_dir: Path,
 ) -> str:
-    """Render `<available_skills>` for bundled skills only — empty string if none.
+    """Render `<available_skills>` for all discoverable skills — empty string if none.
 
-    Bundled = present in skills_dir and not shadowed by a same-named file in
-    user_skills_dir. Filter at render time (no frontmatter metadata required).
+    All entries in skill_commands are emitted: bundled and user-installed.
+    For a name present in both directories the user-dir description wins
+    (skill_commands[name] already carries the shadowed value from the loader).
     """
-    bundled_names = sorted(
-        name
-        for name in skill_commands
-        if (skills_dir / f"{name}.md").is_file() and not (user_skills_dir / f"{name}.md").is_file()
-    )
-    if not bundled_names:
+    all_names = sorted(skill_commands)
+    if not all_names:
         return ""
 
     lines: list[str] = ["<available_skills>"]
-    for name in bundled_names:
+    for name in all_names:
         skill = skill_commands[name]
         description = (skill.description or "").strip()
         lines.append(

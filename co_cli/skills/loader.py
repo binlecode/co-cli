@@ -78,32 +78,6 @@ def scan_skill_content(content: str) -> list[str]:
     return warnings
 
 
-def _inject_source_url(content: str, url: str) -> str:
-    """Inject or update source-url field in skill frontmatter."""
-    if not content.startswith("---\n"):
-        return f"---\nsource-url: {url}\n---\n{content}"
-    rest = content[4:]
-    close_match = re.search(r"\n---(\n|$)", rest)
-    if close_match is None:
-        return f"---\nsource-url: {url}\n---\n{content}"
-    close_start = close_match.start()
-    fm_block = rest[:close_start]
-    after_close = rest[close_match.end() :]
-    lines = fm_block.splitlines()
-    new_lines = []
-    replaced = False
-    for line in lines:
-        if line.startswith("source-url:"):
-            new_lines.append(f"source-url: {url}")
-            replaced = True
-        else:
-            new_lines.append(line)
-    if not replaced:
-        new_lines.append(f"source-url: {url}")
-    new_fm = "\n".join(new_lines)
-    return f"---\n{new_fm}\n---\n{after_close}"
-
-
 def _check_requires(name: str, requires: dict, settings: Any = None) -> bool:
     """Evaluate the requires block. Returns True when all conditions are met."""
     bins = requires.get("bins", [])

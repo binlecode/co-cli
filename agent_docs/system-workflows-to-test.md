@@ -117,7 +117,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
   merged `tool_index` includes failed-server tools.
 - **Required test depth**: real MCP toolset with one good + one bad server; assert
   `degradations` populated and good-server tools present.
-- **Spec**: bootstrap.md §6, system.md §2.4
+- **Spec**: bootstrap.md §6, 01-system.md §2.4
 
 ### 1.8 Session restore (latest *.jsonl)
 
@@ -144,7 +144,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
 
 ### 1.10 Capability discovery & degradation reporting
 
-- **Entry**: `co_cli/bootstrap/core.py: create_deps` (collects degradations); `co_cli/tools/system/capabilities_check.py: capabilities_check`
+- **Entry**: `co_cli/bootstrap/core.py: create_deps` (collects degradations); `co_cli/tools/system/capabilities.py: capabilities_check`
 - **Behavior**: Bootstrap detects optional integration health; runtime tool reports
   status via `capabilities_check` (also surfaced by `/doctor`).
 - **Primary failure modes**: degradation set but not reported; tool reports stale
@@ -321,6 +321,19 @@ Severity calibration for `/clean-tests` Phase 4.5:
   MCP entries appear.
 - **Spec**: tui.md §3
 
+### 2.16 `/help` listing
+
+- **Entry**: `co_cli/commands/help.py: _cmd_help`
+- **Behavior**: Renders a table of every built-in slash command plus every
+  user-invocable skill command (with description and optional argument hint).
+- **Primary failure modes**: built-in command missing from the table;
+  user-invocable skill omitted; non-user-invocable skill surfaced; argument
+  hint dropped.
+- **Required test depth**: real `BUILTIN_COMMANDS` registry + real
+  `skill_commands` dict mixing user-invocable and internal-only entries;
+  assert listing contents and hint formatting.
+- **Spec**: tui.md §3
+
 ---
 
 ## 3. Foreground Turn Orchestration
@@ -378,7 +391,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
 
 ### 3.5 Clarify (question prompt)
 
-- **Entry**: `co_cli/tools/clarify.py: clarify` + `_collect_deferred_tool_approvals` clarify path
+- **Entry**: `co_cli/tools/system/user_input.py: clarify` + `_collect_deferred_tool_approvals` clarify path
 - **Behavior**: When metadata contains `questions`, prompts each via
   `frontend.prompt_question`, collects answers, encodes as
   `ToolApproved(override_args={"user_answers": [...]})`.
@@ -528,7 +541,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
 
 ### 5.1 `dedup_tool_results`
 
-- **Entry**: `co_cli/context/_dedup_tool_results.py: dedup_tool_results`
+- **Entry**: `co_cli/context/history_processors.py: dedup_tool_results`
 - **Behavior**: Pre-tail region only. Collapses identical `(tool_name, sha256(content))`
   returns into back-references pointing at the latest `tool_call_id`. Eligibility:
   string content ≥ 200 chars.
@@ -652,7 +665,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
 
 ### 6.6 Token estimation (`max(local, reported)`)
 
-- **Entry**: `co_cli/context/tokens.py` + `co_cli/context/summarization.py: estimate_message_tokens`, `latest_response_input_tokens`
+- **Entry**: `co_cli/context/summarization.py: estimate_message_tokens`, `latest_response_input_tokens`
 - **Behavior**: Local char-based estimate floored against latest `ModelResponse.usage.input_tokens`.
   Max-floor ensures stale provider count cannot suppress trigger.
 - **Primary failure modes**: `compaction_applied_this_turn` not zero-ing reported
@@ -731,9 +744,9 @@ Severity calibration for `/clean-tests` Phase 4.5:
   full-read; assert allow/deny.
 - **Spec**: tools.md §2 (Concurrency Safety)
 
-### 7.6 Staleness tracking (`file_read_mtimes`)
+### 7.6 Staleness tracking (`file_tracker`)
 
-- **Entry**: `co_cli/deps.py: file_read_mtimes` + checked in `file_write`/`file_patch`
+- **Entry**: `co_cli/deps.py: file_tracker` + checked in `file_write`/`file_patch`
 - **Behavior**: Reads snapshot mtime; writes/patches fail if disk mtime advanced
   before commit.
 - **Primary failure modes**: mtime not snapshotted; staleness check skipped.
@@ -746,7 +759,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
 
 ### 8.1 `file_find`
 
-- **Entry**: `co_cli/tools/files/find.py: file_find`
+- **Entry**: `co_cli/tools/files/read.py: file_find`
 - **Behavior**: List directory or find files by glob pattern; capped at `max_entries`.
 - **Primary failure modes**: pattern interpreted as regex; cap not enforced; symlink
   loops crash.
@@ -766,7 +779,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
 
 ### 8.3 `file_search` (regex content search)
 
-- **Entry**: `co_cli/tools/files/search.py: file_search`
+- **Entry**: `co_cli/tools/files/read.py: file_search`
 - **Behavior**: Regex content search with glob-limited file set, configurable
   context_lines, head_limit, offset. `output_mode="content"` default.
 - **Primary failure modes**: glob ignored (searches everything); head_limit
@@ -824,7 +837,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
 
 ### 10.1 `shell` command-shape policy
 
-- **Entry**: `co_cli/tools/shell/execute.py: run_shell_command` + `co_cli/tools/_shell_policy.py`
+- **Entry**: `co_cli/tools/shell/execute.py: shell` + `co_cli/tools/shell_policy.py`
 - **Behavior**: Classifies `cmd` as `DENY` / `ALLOW` (safe-prefix) / `REQUIRE_APPROVAL`.
   Only `REQUIRE_APPROVAL` reaches deferred approval. `workdir` blocks traversal.
   Hard cap by `shell.max_timeout`.
@@ -835,7 +848,7 @@ Severity calibration for `/clean-tests` Phase 4.5:
 
 ### 10.2 `code_execute`
 
-- **Entry**: `co_cli/tools/code_execute.py: code_execute`
+- **Entry**: `co_cli/tools/code/execute.py: code_execute`
 - **Behavior**: Run interpreter command with same approval policy as shell. Locked
   (sequential).
 - **Primary failure modes**: same as shell + lock leak.
@@ -865,6 +878,22 @@ Severity calibration for `/clean-tests` Phase 4.5:
 - **Required test depth**: real delegation with each subagent; assert isolation
   and tool scope.
 - **Spec**: tools.md §3, core-loop.md §2.7
+
+### 10.5 Session todos (`todo_write` / `todo_read`)
+
+- **Entry**: `co_cli/tools/todo/rw.py: todo_write` + `todo_read`
+- **Behavior**: `todo_write` replaces (`merge=False`) or merges-by-id
+  (`merge=True`) the per-session todo list on `deps.session.session_todos`.
+  Each item has `id`, `content`, `status ∈ {pending, in_progress, completed}`,
+  `priority`. At most one `in_progress` item allowed per session. `todo_read`
+  returns the formatted list plus pending/in-progress counts for end-of-turn
+  verification.
+- **Primary failure modes**: multiple `in_progress` items accepted; duplicate
+  ids accepted; empty `content` accepted; unknown status/priority accepted;
+  merge silently discards unknown ids; replace doesn't clear prior items.
+- **Required test depth**: real `RunContext` with a fresh `deps.session`;
+  exercise replace, merge, the single-in_progress invariant, and read-after-write.
+- **Spec**: tools.md §3, self-planning.md
 
 ---
 
@@ -929,9 +958,9 @@ Each integration is gated on a config setting; absence skips registration.
   whichever-first.
 - **Spec**: memory.md §3.2
 
-### 12.4 `memory_search` grep fallback (store=None)
+### 12.4 `knowledge_search` grep fallback (store=None)
 
-- **Entry**: `co_cli/tools/memory/read.py: grep_recall`
+- **Entry**: `co_cli/tools/memory/recall.py: _grep_recall`
 - **Behavior**: When `memory_store is None` (e.g. `search_backend='grep'`),
   in-memory substring match over title + content. Canon excluded.
 - **Primary failure modes**: canon included in grep path; case-sensitivity drift;
@@ -940,9 +969,9 @@ Each integration is gated on a config setting; absence skips registration.
   exclusion.
 - **Spec**: memory.md §3.2
 
-### 12.5 `memory_search` browse mode (empty query)
+### 12.5 `knowledge_search` browse mode (empty query)
 
-- **Entry**: `co_cli/tools/memory/recall.py: memory_search` (empty `query`)
+- **Entry**: `co_cli/tools/memory/recall.py: knowledge_search` (empty `query`)
 - **Behavior**: Returns recent-session metadata + artifact inventory; no FTS, no
   LLM. Excludes current session.
 - **Primary failure modes**: current session included; artifact count wrong; no-LLM
@@ -977,16 +1006,16 @@ Each integration is gated on a config setting; absence skips registration.
   unchanged.
 - **Spec**: memory.md §3.1
 
-### 12.9 `memory_search(channel='skills')` — removed channel guard
+### 12.9 `knowledge_search(kinds=['skills'])` — removed channel guard
 
-- **Entry**: `co_cli/tools/memory/recall.py: memory_search` (channel='skills' early-return)
+- **Entry**: `co_cli/tools/memory/recall.py: knowledge_search` (channel='skills' early-return)
 - **Behavior**: Channel='skills' was removed and now returns a `tool_error` immediately:
-  "channel='skills' is no longer supported — use skill_search instead." Skills are their
-  own surface accessible via `skill_search` / `skill_view`.
+  "channel='skills' is no longer supported — use skill_view or the manifest instead."
+  Skills are their own surface accessible via `skill_view` / `skill_manage`.
 - **Primary failure modes**: guard bypassed and request reaches FTS; error message absent
   or misleading; non-error return type returned for this channel.
 - **Required test depth**: call `memory_search(channel='skills', query='anything')`; assert
-  result is a tool error containing "skill_search"; assert no FTS rows returned.
+  result is a tool error; assert no FTS rows returned.
 - **Spec**: skill.md §2 (skills are a separate surface from memory)
 
 ---
@@ -1048,6 +1077,35 @@ Each integration is gated on a config setting; absence skips registration.
   exclusion.
 - **Spec**: memory.md §2.3
 
+### 13.6 `session_search` model-callable tool
+
+- **Entry**: `co_cli/tools/memory/recall.py: session_search`
+- **Behavior**: Empty `query` → recent-N session metadata (id, when, title) browse
+  mode (no FTS, no LLM). Non-empty `query` → BM25 chunk-cited search returning
+  `(session_id, when, source, chunk_text, start_line, end_line, score)`. Excludes
+  the current session.
+- **Primary failure modes**: browse mode triggers FTS or LLM; current session
+  surfaces in either mode; chunk citation fields missing; limit not honored;
+  whitespace-only query treated as non-empty.
+- **Required test depth**: real sessions index with ≥2 past sessions + current;
+  assert browse-mode no-FTS guarantee, non-empty BM25 path, citation completeness,
+  and current-session exclusion in both branches.
+- **Spec**: memory.md §2.3
+
+### 13.7 `session_view` verbatim turn loader
+
+- **Entry**: `co_cli/tools/memory/view.py: session_view`
+- **Behavior**: Reads a 1-indexed JSONL line range from a past session and returns
+  per-line `{line, role, content_preview, tool_name}`. Refuses ranges over 200
+  lines or content over 16KB (truncated=True). Validates `start_line >= 1` and
+  `end_line >= start_line`.
+- **Primary failure modes**: range cap bypassed; size cap bypassed; truncated
+  flag not set when caps hit; invalid range silently coerced; content_preview
+  leaks full body when truncated.
+- **Required test depth**: real session JSONL fixture covering the range cap, the
+  size cap, and a malformed range; assert refusal vs truncation behavior per case.
+- **Spec**: memory.md §2.3
+
 ---
 
 ## 14. Dream Cycle
@@ -1088,7 +1146,7 @@ Each integration is gated on a config setting; absence skips registration.
 
 ### 14.4 Phase 2: merge clustering + LLM call
 
-- **Entry**: `co_cli/memory/dream.py: _merge_artifacts`
+- **Entry**: `co_cli/memory/dream.py: _merge_similar_artifacts`
 - **Behavior**: Same-kind clustering by token-Jaccard; cap on clusters and
   per-cluster size; `llm_call` (no tools) for consolidated body; archive originals
   only after consolidated artifact durable.
@@ -1112,7 +1170,7 @@ Each integration is gated on a config setting; absence skips registration.
 
 ### 14.6 Dream state load/save
 
-- **Entry**: `co_cli/memory/dream.py: load_state` + `save_state`
+- **Entry**: `co_cli/memory/dream.py: load_dream_state` + `save_dream_state`
 - **Behavior**: Reads/writes `knowledge/_dream_state.json`. Forgiving on corrupt
   state (returns fresh, logs warning).
 - **Primary failure modes**: corrupt state aborts load; cumulative stats reset on
@@ -1169,15 +1227,17 @@ Each integration is gated on a config setting; absence skips registration.
   detection and policy.
 - **Spec**: skill.md §2 (Security Scan)
 
-### 15.3 `skills_list` model-callable tool
+### 15.3 Skill manifest coverage (bundled + user-global)
 
-- **Entry**: `co_cli/tools/system/skills.py: skills_list`
-- **Behavior**: Lists model-callable skills (excludes `disable-model-invocation`).
-  `category` parameter accepted but pass-through today.
-- **Primary failure modes**: hidden skills surfaced; blank-description skills
-  surfaced; category filter applied (it shouldn't be).
-- **Required test depth**: real registry with mixed visibility; assert listing.
-- **Spec**: skill.md §3
+- **Entry**: `co_cli/skills/loader.py: load_skills` → manifest injected into static prompt
+- **Behavior**: All skills (bundled and user-installed) appear in the `<available_skills>`
+  manifest block in the static prompt. Model discovers skills via manifest scan; no
+  separate search tool is needed.
+- **Primary failure modes**: user-installed skill missing from manifest; hidden skill
+  (`disable-model-invocation`) surfaced in manifest; bundled skill omitted.
+- **Required test depth**: real `load_skills()` with bundled + user skills; assert
+  manifest contains expected entries and excludes hidden ones.
+- **Spec**: skill.md §2, §3
 
 ### 15.4 `skill_view` (full body load)
 
@@ -1221,7 +1281,7 @@ Each integration is gated on a config setting; absence skips registration.
 
 ### 16.1 Approval prompt collection (`y` / `n` / `a`)
 
-- **Entry**: `co_cli/tools/approvals.py: _collect_deferred_tool_approvals` →
+- **Entry**: `co_cli/context/orchestrate.py: _collect_deferred_tool_approvals` →
   `frontend.prompt_approval`
 - **Behavior**: Prompts user per pending call; encodes choice into
   `DeferredToolResults` as `True` (approved) or `ToolDenied(...)` (denied).
@@ -1269,7 +1329,7 @@ Each integration is gated on a config setting; absence skips registration.
 
 ### 17.2 SQLite span exporter + redaction
 
-- **Entry**: `co_cli/observability/sqlite_exporter.py: SQLiteSpanExporter`
+- **Entry**: `co_cli/observability/telemetry.py: SQLiteSpanExporter`
 - **Behavior**: Persists spans to `~/.co-cli/co-cli-traces.db` for `co logs` and
   `co traces` viewers. PII redaction applied to attributes.
 - **Primary failure modes**: secrets persisted unredacted; export fails silently;

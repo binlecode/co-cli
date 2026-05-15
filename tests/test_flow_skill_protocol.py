@@ -13,8 +13,8 @@ def test_protocol_file_in_assembled_static_prompt() -> None:
     assert "# Skill protocol" in prompt
 
 
-def test_manifest_includes_skill_creator_and_installer(tmp_path: Path) -> None:
-    """<available_skills> manifest must include skill-creator and skill-installer."""
+def test_manifest_includes_skill_creator(tmp_path: Path) -> None:
+    """<available_skills> manifest must include skill-creator."""
     from co_cli.context.manifests.skill_manifest import render_skill_manifest
     from co_cli.skills.loader import load_skills
 
@@ -24,7 +24,6 @@ def test_manifest_includes_skill_creator_and_installer(tmp_path: Path) -> None:
     skills = load_skills(skills_dir, SETTINGS, user_skills_dir=user_skills_dir)
     manifest = render_skill_manifest(skills, skills_dir, user_skills_dir)
     assert 'name="skill-creator"' in manifest, "skill-creator missing from manifest"
-    assert 'name="skill-installer"' in manifest, "skill-installer missing from manifest"
 
 
 def test_protocol_has_background_review_section() -> None:

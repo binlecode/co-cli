@@ -105,7 +105,7 @@ Detailed semantics, validation, and approval flow: [knowledge.md §4](knowledge.
 
 ## 6. Indexer
 
-The shared search index lives at `~/.co-cli/co-cli-search.db`. Both memory channels write through `MemoryStore` in `co_cli/memory/memory_store.py`. (The skill index also uses the same DB file via `SkillIndex` — see [skill.md](skill.md) — but it owns the `'skill'` source exclusively and has its own API.)
+The shared search index lives at `~/.co-cli/co-cli-search.db`. Both memory channels write through `MemoryStore` in `co_cli/memory/memory_store.py`.
 
 ### `chunks_fts` table
 
@@ -116,7 +116,7 @@ FTS5 full-text index over all chunks. Sources owned by memory:
 | `'knowledge'` | knowledge | sliding-window body chunks |
 | `'session'` | session | sliding-window token chunks via `session_chunker.py` |
 
-Two other sources (`'skill'`, `'canon'`) coexist in the same table — `'skill'` is owned by `SkillIndex` (see [skill.md](skill.md)); `'canon'` is indexed at bootstrap for personality auto-injection only and is never returned by any model-callable tool.
+One other source (`'canon'`) coexists in the same table — it is indexed at bootstrap for personality auto-injection only and is never returned by any model-callable tool.
 
 ### Write-time indexing
 
@@ -132,23 +132,7 @@ Indexing is write-time, not search-time. Channel-specific entry points: `sync_di
 
 Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
 
-## 7. Backward-Compat Notes
-
-| Removed / renamed | Replacement |
-| --- | --- |
-| `memory_create` / `memory_modify` | `knowledge_manage(...)` |
-| `artifact_manage` | `knowledge_manage` (tool arg `artifact_kind` → `kind`) |
-| `skills_list` and unified recall with `channel='skills'` | `skill_search` |
-| Unified recall with `channel='canon'` | Not queryable; canon is auto-injected via the personality system |
-| Channel names `artifacts` / `sessions` | `knowledge` / `session` |
-| Unified recall with `channel='knowledge'` | `knowledge_search(query, kinds, limit)` |
-| Unified recall with `channel='session'` | `session_search(query, limit)` |
-| Unified recall (no channel arg) | Use `knowledge_search` or `session_search` depending on intent |
-| Verbatim session reader (former name `memory_read_*_turn`) | `session_view(session_id, start_line, end_line)` |
-
-All renames are hard — there are no aliases.
-
-## 8. Files
+## 7. Files
 
 ### Memory core (shared)
 
@@ -178,7 +162,7 @@ All renames are hard — there are no aliases.
 
 Channel-specific files (e.g. `co_cli/memory/artifact.py`, `co_cli/memory/session_chunker.py`) are listed in the respective sub-specs.
 
-## 9. Config
+## 8. Config
 
 ### Shared retrieval settings
 
@@ -202,6 +186,6 @@ Channel-specific settings (chunk sizes, consolidation, decay, session chunking) 
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | knowledge artifact source-of-truth directory |
 | `sessions_dir` | — | `~/.co-cli/sessions/` | transcript directory |
 | `tool_results_dir` | — | `~/.co-cli/tool-results/` | spill directory for oversized tool results |
-| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (sessions + knowledge; also hosts skill and canon sources owned by other tiers) |
+| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (sessions + knowledge; also hosts canon source for personality auto-injection) |
 
 Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).

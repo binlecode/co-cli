@@ -32,11 +32,11 @@ uv run pytest 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
 
 ### Architecture
 
-See `docs/specs/system.md` for architecture, `CoDeps`, capability surface, and security boundaries. See `docs/specs/core-loop.md` for agent loop internals, orchestration, and approval mechanics.
+See `docs/specs/01-system.md` for architecture, `CoDeps`, capability surface, and security boundaries. See `docs/specs/core-loop.md` for agent loop internals, orchestration, and approval mechanics.
 
 ### Memory System
 
-Four operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability — `skill_search` / `skill_view` / `skill_manage`; bundled skills also appear in the static prompt manifest), and **memory** (declarative state the agent accumulates). Memory itself has two channels: **knowledge** (preferences, feedback, rules, decisions, references, articles, notes) and **session** (past transcripts; FTS5 chunk-cited on recall).
+Four operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability — `skill_view` / `skill_manage`; all skills appear in the static prompt manifest for discovery), and **memory** (declarative state the agent accumulates). Memory itself has two channels: **knowledge** (preferences, feedback, rules, decisions, references, articles, notes) and **session** (past transcripts; FTS5 chunk-cited on recall).
 
 The model-facing surface:
 
@@ -45,11 +45,10 @@ The model-facing surface:
 - `knowledge_view(name)` — load a knowledge artifact's full body by filename_stem
 - `session_view(session_id, start_line, end_line)` — verbatim session turn reader
 - `knowledge_manage(action=...)` — write surface for knowledge (create / append / replace / delete)
-- `skill_search(query)` — ranked discovery over the skill index
 - `skill_view(name)` — load a skill's full body
 - `skill_manage(action=...)` — write surface for skills (create / edit / patch / delete / install)
 
-Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge entries. FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (knowledge + session via `MemoryStore`; skills via `SkillIndex` — same DB, separate API; canon is also indexed there for personality auto-injection but never returned by any model-callable tool). Implementation lives in `co_cli/memory/`, `co_cli/tools/memory/`, and `co_cli/skills/`. See `docs/specs/memory.md`, `docs/specs/skill.md`, and `docs/specs/personality.md` for the full model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
+Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge entries. FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (knowledge + session via `MemoryStore`; canon is also indexed there for personality auto-injection but never returned by any model-callable tool). Skills are discovered via the `<available_skills>` manifest injected into the static prompt (all bundled + user-installed); `skill_view` and `skill_manage` are the model-callable tools. Implementation lives in `co_cli/memory/`, `co_cli/tools/memory/`, and `co_cli/skills/`. See `docs/specs/memory.md`, `docs/specs/skill.md`, and `docs/specs/personality.md` for the full model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
 
 Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browsing is `knowledge_search` or `session_search` with an empty query; full-body knowledge reads use `knowledge_view(name)` with the `filename_stem` from a `knowledge_search` hit.
 

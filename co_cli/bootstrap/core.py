@@ -385,21 +385,6 @@ async def create_deps(
     # Step 7b: index canon scenes into the unified FTS pipeline
     _sync_canon_store(memory_store, config, frontend)
 
-    # Step 7c: construct SkillIndex and index loaded skills (own DB connection, same DB file)
-    skill_index = None
-    if memory_store is not None:
-        from co_cli.skills.index import SkillIndex
-
-        skill_index = SkillIndex(config=config)
-        for skill_name, skill in skill_commands.items():
-            user_path = paths["user_skills_dir"] / f"{skill_name}.md"
-            skill_path = (
-                str(user_path)
-                if user_path.is_file()
-                else str(paths["skills_dir"] / f"{skill_name}.md")
-            )
-            skill_index.upsert(skill_name, skill.description, skill_path)
-
     # Step 8: assemble deps
     runtime = CoRuntimeState()
     deps = CoDeps(
@@ -407,7 +392,6 @@ async def create_deps(
         config=config,
         model=llm_model,
         memory_store=memory_store,
-        skill_index=skill_index,
         tool_index=tool_registry.tool_index,
         tool_registry=tool_registry,
         skill_commands=skill_commands,

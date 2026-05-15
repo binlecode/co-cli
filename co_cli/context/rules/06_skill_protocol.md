@@ -6,21 +6,18 @@ procedures that define how to structure the task itself. Before any
 multi-step task, check the skill surface first; recall facts within
 whatever procedure applies.
 
-The bundled skill manifest is visible above (in the <available_skills>
-block). User-installed and dynamically-created skills are searchable
-via `skill_search`.
+The skill manifest (visible in the <available_skills> block above)
+covers all skills: bundled and user-installed. Scan it before any
+multi-step task.
 
 ## Discovery
 
-At the start of any multi-step task, scan the bundled skill manifest.
-If exactly one skill clearly applies, load it with `skill_view(name)`
-and follow it.
+At the start of any multi-step task, scan the `<available_skills>`
+manifest. If exactly one skill clearly applies, load it with
+`skill_view(name)` and follow it.
 
-If the manifest does not cover what you need, call
-`skill_search(query)` with keywords from your goal. User-installed
-skills and skills you created in this session live there. Err on the
-side of searching — it is cheaper to look and find nothing than to
-skip a relevant skill.
+If the manifest does not cover what you need, the task has no
+registered skill. Proceed with your default approach.
 
 Skip discovery for trivial single-step replies where the manifest
 clearly doesn't apply.
@@ -55,8 +52,8 @@ Name by task type, not the specific instance. Content must conform to
 `skill.md` §6: description, H1, `**Invocation:**` line, at least one
 `## Phase N — <name>` section.
 
-Search first: call `skill_search` to confirm no skill for this task
-type already exists.
+Search first: scan the `<available_skills>` manifest to confirm no
+skill for this task type already exists.
 
 Don't create for one-offs. The bar is "would I run this again for the
 same kind of task."

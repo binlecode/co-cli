@@ -1,10 +1,36 @@
-"""Skill lifecycle helpers — reload, index, and run-state cleanup."""
+"""Skill lifecycle helpers — reload, index, run-state cleanup, and file discovery."""
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from co_cli.deps import CoDeps
+
+
+def discover_skill_files(bundled_dir: Path, user_dir: Path) -> list[Path]:
+    """Return sorted .md paths from both dirs (bundled first, user second).
+
+    Skips dirs that don't exist.
+    """
+    result: list[Path] = []
+    if bundled_dir.exists():
+        result.extend(sorted(bundled_dir.glob("*.md")))
+    if user_dir.exists():
+        result.extend(sorted(user_dir.glob("*.md")))
+    return result
+
+
+def read_skill_meta(skill_path: Path) -> dict:
+    """Read frontmatter metadata from a skill .md file. Returns {} on any read or parse error."""
+    from co_cli.memory.frontmatter import parse_frontmatter
+
+    try:
+        content = skill_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    meta, _ = parse_frontmatter(content)
+    return meta
 
 
 def refresh_skills(deps: CoDeps) -> None:
@@ -21,15 +47,6 @@ def refresh_skills(deps: CoDeps) -> None:
         user_skills_dir=deps.user_skills_dir,
     )
     set_skill_commands(new_skills, deps)
-    if deps.skill_index is not None:
-        for name, skill in new_skills.items():
-            user_path = deps.user_skills_dir / f"{name}.md"
-            skill_path = (
-                str(user_path) if user_path.is_file() else str(deps.skills_dir / f"{name}.md")
-            )
-            deps.skill_index.upsert(name, skill.description, skill_path)
-        for stale in deps.skill_index.list_names() - set(new_skills):
-            deps.skill_index.remove(stale)
 
 
 def cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> None:

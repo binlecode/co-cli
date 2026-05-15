@@ -1,7 +1,7 @@
 """Memory tools — per-surface search over knowledge artifacts and session transcripts.
 
 Two surfaces: session (past transcripts) and knowledge (declarative artifacts).
-Skills are their own surface (skill_search). Canon is doctrine, auto-injected
+Skills are their own surface (skill_view / skill_manage). Canon is doctrine, auto-injected
 into the static prompt by the personality system — never returned by recall.
 """
 

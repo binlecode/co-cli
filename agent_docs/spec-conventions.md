@@ -20,6 +20,19 @@ Use pseudocode, never source code. Sequence-owning specs (`bootstrap.md`, `core-
 
 Specs live in `docs/specs/` — one file per subsystem. `docs/reference/` is for research and background material (`RESEARCH-*`) and is not linked from specs.
 
+## Partitioning
+
+When to split a spec:
+- The spec exceeds ~500 lines AND covers 3+ clearly separable sub-domains, OR
+- A sibling sub-spec already exists with parallel structure (e.g. `memory.md` foundation + `knowledge.md` / `sessions.md` channel sub-specs).
+
+When to merge:
+- The spec is <80 lines AND has no realistic growth runway.
+
+Never split for pure topic count. A spec covering ten small mechanisms that share one mental model belongs in one file.
+
+Renames and partitioning changes are immediate and complete: no aliases in code, no "Backward-Compat Notes" sections in specs, no migration ledgers. Co has no installed base; carrying compat surface area is pure overhead. `git log` is the authoritative history (see `feedback_zero_backward_compat` memory).
+
 ## Artifact Lifecycle
 
 - `REPORT-*.md` lives directly in `docs/`.
