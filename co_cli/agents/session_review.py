@@ -114,21 +114,26 @@ async def run_session_review(
     from co_cli.context.manifests.skill_manifest import render_skill_manifest
     from co_cli.context.summarization import serialize_messages
     from co_cli.deps import fork_deps_for_reviewer
+    from co_cli.skills.lifecycle import refresh_skills
     from co_cli.skills.session_review_prompts import (
         SESSION_REVIEW_INSTRUCTIONS,
         SESSION_REVIEW_PROMPT,
     )
 
+    child_deps = fork_deps_for_reviewer(deps)
+    # Reload skills from disk into the child registry so successive review passes
+    # see prior passes' writes. fork_deps shares parent.skill_commands by reference,
+    # and set_skill_commands rebinds only the receiving deps — without this refresh,
+    # pass-B would render its manifest against pass-A's pre-write snapshot.
+    refresh_skills(child_deps)
     skills_manifest = render_skill_manifest(
-        deps.skill_commands, deps.skills_dir, deps.user_skills_dir
+        child_deps.skill_commands, child_deps.skills_dir, child_deps.user_skills_dir
     )
     instructions = (
         f"{skills_manifest}\n\n{SESSION_REVIEW_INSTRUCTIONS}"
         if skills_manifest
         else SESSION_REVIEW_INSTRUCTIONS
     )
-
-    child_deps = fork_deps_for_reviewer(deps)
     agent = build_agent(
         config=deps.config,
         model=deps.model.model,

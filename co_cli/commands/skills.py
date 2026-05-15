@@ -10,8 +10,8 @@ from co_cli.commands.registry import (
 from co_cli.commands.types import CommandContext
 from co_cli.config.core import settings
 from co_cli.display.core import console, make_table
-from co_cli.skills._lint import lint_skill
 from co_cli.skills.lifecycle import discover_skill_files, read_skill_meta
+from co_cli.skills.lint import lint_skill
 from co_cli.skills.loader import (
     diagnose_requires_failures,
     load_skills,

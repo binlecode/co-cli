@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.8.200]
+
+### Turn-boundary session review + public surface cleanup
+- **Turn-boundary review** — session review now fires every ~5 tool-call iterations as a background task (`asyncio.create_task`) instead of once inline at REPL exit. Counter accumulates via `TurnResult.tool_iterations` (per-segment accumulator on `_TurnState`; multi-segment turns, approval cycles, and compaction-recovery are all immune). Single in-flight: skip if prior review task is still running, counter is NOT reset on skip. On REPL exit, pending review task is cancelled + bounded-drained (≤2s); no inline review fires at exit (hermes parity). Sessions shorter than `review_nudge_interval` (default 5) produce no review.
+- **`run_session_review` refresh order** — fork child deps → `refresh_skills(child_deps)` → render manifest from child registry → build instructions → `build_agent`. Ensures successive turn-boundary passes within one session see prior passes' skill creations.
+- **`CoSessionState`** — adds `iterations_since_review: int = 0` and `background_review_task: asyncio.Task | None`.
+- **`SkillsSettings`** — adds `review_nudge_interval: int = Field(default=5, ge=1)` + `CO_SKILLS_REVIEW_NUDGE_INTERVAL` env override.
+- **Protocol update** — `## Background review` section rewritten for turn-boundary cadence; dead curator/pin paragraph deleted.
+- **`_lint.py` renamed to `lint.py`** — drops leading underscore (public surface cleanup); all import sites updated.
+- **`run_dream_cycle` signature** — `miner_tool` moved from keyword-only to first positional argument; call sites updated.
+
 ## [0.8.198]
 
 ### Collapse skill discovery to manifest-only; remove SkillIndex, skill_search, URL-install, and curator

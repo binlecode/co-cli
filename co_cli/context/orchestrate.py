@@ -104,6 +104,10 @@ class TurnResult:
     # usage is forwarded opaquely to _merge_turn_usage and span attributes.
     usage: Any = None
     streamed_text: bool = False
+    # Count of tool-producing ModelResponses across all segments in this turn.
+    # Sourced from the per-segment accumulator on _TurnState; consumed by the
+    # post-turn skill-review hook to gate background firing.
+    tool_iterations: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +155,10 @@ class _TurnState:
     # cross-turn outcome flags
     outcome: TurnOutcome = "continue"
     interrupted: bool = False
+    # Accumulator across all segments in this turn — counts ModelResponses that
+    # contain at least one ToolCallPart. Compaction (which replaces current_history)
+    # does not reset this; the accumulator is segment-level state.
+    tool_iterations: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +400,11 @@ async def _execute_stream_segment(
             "_execute_stream_segment: stream ended without AgentRunResultEvent — segment contract violated"
         )
     turn_state.latest_result = result
+    turn_state.tool_iterations += sum(
+        1
+        for m in result.new_messages()
+        if isinstance(m, ModelResponse) and any(isinstance(p, ToolCallPart) for p in m.parts)
+    )
     turn_state.latest_streamed_text = renderer.streamed_text
     turn_state.latest_usage = result.usage()
     turn_state.tool_approval_decisions = None
@@ -442,6 +455,7 @@ def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
         interrupted=False,
         streamed_text=turn_state.latest_streamed_text,
         outcome="error",
+        tool_iterations=turn_state.tool_iterations,
     )
 
 
@@ -483,6 +497,7 @@ def _build_interrupted_turn_result(turn_state: _TurnState) -> TurnResult:
         interrupted=True,
         streamed_text=turn_state.latest_streamed_text,
         outcome="continue",
+        tool_iterations=turn_state.tool_iterations,
     )
 
 
@@ -692,6 +707,7 @@ async def run_turn(
                         interrupted=False,
                         streamed_text=turn_state.latest_streamed_text,
                         outcome="continue",
+                        tool_iterations=turn_state.tool_iterations,
                     )
 
                 except ModelHTTPError as e:

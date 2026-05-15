@@ -31,7 +31,7 @@ from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.bootstrap.core import restore_session
 from co_cli.commands.resume import _rehydrate_todos
-from co_cli.context._compaction_markers import TODO_SNAPSHOT_PREFIX
+from co_cli.context.compaction import TODO_SNAPSHOT_PREFIX
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display.core import TerminalFrontend
 from co_cli.memory.session import new_session_path, session_filename

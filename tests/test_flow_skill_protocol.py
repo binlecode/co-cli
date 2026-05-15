@@ -32,6 +32,40 @@ def test_protocol_has_background_review_section() -> None:
 
     prompt = build_static_instructions(SETTINGS)
     assert "## Background review" in prompt
-    assert "session-end review" in prompt or "review agent" in prompt
-    assert "/skills pin" in prompt
-    assert "/skills curator restore" in prompt
+    assert "after every ~5 tool calls" in prompt
+
+
+def test_protocol_background_review_turn_boundary() -> None:
+    """Background review section reflects 3.5c turn-boundary firing.
+
+    Contract:
+      - Exactly one paragraph follows the heading (the curator/pin paragraph
+        was deleted as dead doctrine).
+      - The new opening phrasing "after every ~5 tool calls" is present.
+      - Stale phrasings ("session-end review") and removed commands
+        ("/skills pin", "/skills curator restore") do not leak back in.
+    """
+    protocol_path = (
+        Path(__file__).parent.parent / "co_cli" / "context" / "rules" / "06_skill_protocol.md"
+    )
+    text = protocol_path.read_text()
+
+    # Locate the section body: from the heading to the next top-level heading
+    # (## …) or end-of-file.
+    marker = "## Background review"
+    start = text.index(marker) + len(marker)
+    after = text[start:]
+    next_heading = after.find("\n## ")
+    section = after if next_heading == -1 else after[:next_heading]
+
+    paragraphs = [p.strip() for p in section.strip().split("\n\n") if p.strip()]
+    assert len(paragraphs) == 1, (
+        f"expected exactly 1 paragraph in '## Background review', got {len(paragraphs)}"
+    )
+
+    body = paragraphs[0]
+    assert "after every ~5 tool calls" in body
+    assert "session-end review" not in body
+    assert "/skills pin" not in body
+    assert "/skills curator restore" not in body
+    assert "curator" not in body

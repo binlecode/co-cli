@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from co_cli.commands.types import CommandContext, ReplaceTranscript
-from co_cli.context._compaction_markers import TODO_SNAPSHOT_PREFIX
+from co_cli.context.compaction import TODO_SNAPSHOT_PREFIX
 from co_cli.deps import TodoItem
 from co_cli.display.core import console
 

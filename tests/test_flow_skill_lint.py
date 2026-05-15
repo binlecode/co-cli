@@ -1,8 +1,8 @@
-"""Tests for co_cli.skills._lint — R1-R10 per-rule behavioral coverage."""
+"""Tests for co_cli.skills.lint — R1-R10 per-rule behavioral coverage."""
 
 from __future__ import annotations
 
-from co_cli.skills._lint import lint_skill
+from co_cli.skills.lint import lint_skill
 
 _CLEAN_CONTENT = """\
 ---

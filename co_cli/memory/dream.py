@@ -443,9 +443,9 @@ class DreamResult:
 
 async def run_dream_cycle(
     deps: CoDeps,
+    miner_tool: Any,
     dry_run: bool = False,
     *,
-    miner_tool: Any,
     timeout_secs: float = _DREAM_CYCLE_TIMEOUT_SECS,
 ) -> DreamResult:
     """Execute a full dream cycle — mine transcripts, merge similar artifacts, decay stale.

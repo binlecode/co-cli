@@ -136,7 +136,7 @@ async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
     tokens = rest.split()
     dry_run = "--dry" in tokens
 
-    result = await run_dream_cycle(ctx.deps, dry_run=dry_run, miner_tool=knowledge_manage)
+    result = await run_dream_cycle(ctx.deps, knowledge_manage, dry_run=dry_run)
 
     header = "Dream cycle — dry run — no changes written" if dry_run else "Dream cycle complete"
     console.print(f"[info]{header}[/info]")

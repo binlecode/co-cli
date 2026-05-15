@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -132,20 +133,29 @@ async def _run_foreground_turn(
         )
     finally:
         cleanup_skill_run_state(saved_env, deps)
-    return await _finalize_turn(turn_result, message_history, deps, frontend)
+    next_history = await _finalize_turn(turn_result, message_history, deps, frontend)
+    _post_turn_hook(deps, next_history, turn_result.tool_iterations)
+    return next_history
 
 
 async def _drain_and_cleanup(
     deps: CoDeps | None,
     stack: AsyncExitStack,
-    message_history: list[ModelMessage] | None = None,
 ) -> None:
-    """Run session review and dream cycle if enabled, release resources."""
-    if deps is not None:
-        # 1. Session review — must precede dream cycle (review may write knowledge artifacts).
-        await _maybe_run_session_review(deps, message_history or [])
+    """Cancel pending review, run dream cycle, release resources.
 
-        # 2. Dream cycle — consolidates all knowledge artifacts, including review output.
+    Plan 3.5c: turn-boundary firing is the only review path; no inline
+    session-end review fires here. A still-pending background review is
+    cancelled and bounded-drained for ≤2s. Atomic-write atomicity makes
+    the cancel safe regardless of drain outcome.
+    """
+    if deps is not None:
+        review_task = deps.session.background_review_task
+        if review_task is not None and not review_task.done():
+            review_task.cancel()
+            with contextlib.suppress(Exception):
+                await asyncio.wait([review_task], timeout=2.0)
+
         await _maybe_run_dream_cycle(deps)
 
         from co_cli.tools.background import kill_task
@@ -171,7 +181,13 @@ def _sweep_tool_results(deps: CoDeps) -> None:
 
 
 async def _maybe_run_session_review(deps: CoDeps, message_history: list[ModelMessage]) -> None:
-    """Run the combined skill+knowledge session review on session end when enabled."""
+    """Run the combined skill+knowledge session review when enabled.
+
+    Used both as an awaited inline call (legacy) and as the body of a background
+    asyncio.Task spawned by _post_turn_hook. Yields at entry so spawning code
+    returns to the REPL before any sync setup (fork, build_agent, serialize).
+    """
+    await asyncio.sleep(0)
     if not deps.config.skills.review_enabled:
         return
     if not deps.model:
@@ -191,8 +207,45 @@ async def _maybe_run_session_review(deps: CoDeps, message_history: list[ModelMes
             cb(f"\U0001f4be {result.summary}")
     except TimeoutError:
         logger.warning("Session review timed out")
+    except asyncio.CancelledError:
+        logger.info("Session review cancelled")
+        raise
     except Exception:
         logger.warning("Session review failed", exc_info=True)
+
+
+def _post_turn_hook(
+    deps: CoDeps | None,
+    message_history: list[ModelMessage],
+    turn_iteration_count: int,
+) -> None:
+    """Bump the iteration counter; spawn background review when threshold tripped.
+
+    Constant-time: counter check + threshold compare + at-most-one create_task.
+    Single in-flight on deps.session.background_review_task — on skip, the
+    counter is not reset so the next eligible turn re-fires once the
+    in-flight task completes.
+    """
+    if deps is None:
+        return
+    settings = deps.config.skills
+    if not settings.review_enabled:
+        return
+    if deps.model is None:
+        return
+
+    deps.session.iterations_since_review += turn_iteration_count
+    if deps.session.iterations_since_review < settings.review_nudge_interval:
+        return
+
+    task = deps.session.background_review_task
+    if task is not None and not task.done():
+        return
+
+    deps.session.iterations_since_review = 0
+    deps.session.background_review_task = asyncio.create_task(
+        _maybe_run_session_review(deps, list(message_history))
+    )
 
 
 async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
@@ -212,7 +265,7 @@ async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
 
     logger = logging.getLogger(__name__)
     try:
-        result = await run_dream_cycle(deps, miner_tool=knowledge_manage)
+        result = await run_dream_cycle(deps, knowledge_manage)
         if result.any_changes:
             logger.info(
                 "Dream cycle: %d extracted, %d merged, %d archived",
@@ -397,7 +450,6 @@ async def _chat_loop(
     )
     stack = AsyncExitStack()
     deps: CoDeps | None = None
-    _final_message_history: list[ModelMessage] = []
     try:
         try:
             deps = await create_deps(frontend, stack, theme_override=theme)
@@ -479,11 +531,10 @@ async def _chat_loop(
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
                 continue
-            _final_message_history = state.message_history
             if state.should_exit:
                 break
     finally:
-        await _drain_and_cleanup(deps, stack, message_history=_final_message_history)
+        await _drain_and_cleanup(deps, stack)
 
 
 def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None) -> None:

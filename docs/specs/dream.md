@@ -294,7 +294,7 @@ Internal caps:
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `run_dream_cycle(deps, dry_run=False, *, miner_tool, timeout_secs=60) -> DreamResult` | `co_cli/memory/dream.py` | Async — orchestrates mining → merge → decay phases under `asyncio.timeout(timeout_secs)`; isolates phase failures |
+| `run_dream_cycle(deps, miner_tool, dry_run=False, *, timeout_secs=60) -> DreamResult` | `co_cli/memory/dream.py` | Async — orchestrates mining → merge → decay phases under `asyncio.timeout(timeout_secs)`; isolates phase failures |
 | `DreamResult` | `co_cli/memory/dream.py` | Frozen dataclass — `extracted`, `merged`, `decayed`, `errors: list[str]`, `timed_out: bool` |
 
 ### State persistence

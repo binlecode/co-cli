@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from co_cli.context.manifests.skill_manifest import render_skill_manifest
-from co_cli.skills._lint import lint_skill
+from co_cli.skills.lint import lint_skill
 from co_cli.skills.loader import load_skills
 
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "co_cli" / "skills"

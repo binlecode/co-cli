@@ -1,4 +1,9 @@
-"""Skill configuration type for the skills domain."""
+"""Skill types for the skills domain.
+
+``SkillConfig`` is a frozen dataclass representing a loaded-skill record (one instantiated skill
+command). It is NOT a settings model. For config/settings see ``SkillsSettings`` in
+``co_cli.config.skills``.
+"""
 
 from __future__ import annotations
 
