@@ -1,4 +1,4 @@
-"""Standalone agent runner for background agents (session_reviewer, skill_curator)."""
+"""Standalone agent runner for background agents (session_reviewer)."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ async def _run_agent_standalone(
 ) -> tuple[Any, RunUsage, str]:
     """Run a background agent without usage merge or ModelRetry.
 
-    Used by session_reviewer and skill_curator — differs from _run_agent_in_turn:
+    Used by session_reviewer — differs from _run_agent_in_turn:
     - Takes already-forked deps (no RunContext).
     - Does NOT merge usage into turn_usage.
     - Does NOT raise ModelRetry on failure (plain exceptions propagate).

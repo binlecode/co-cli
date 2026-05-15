@@ -4,7 +4,6 @@ import os
 import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 import typer
 from prompt_toolkit import PromptSession
@@ -143,19 +142,10 @@ async def _drain_and_cleanup(
 ) -> None:
     """Run session review and dream cycle if enabled, release resources."""
     if deps is not None:
-        # 1. Drain background curator task (5s) so its writes settle before review reads.
-        if deps.session.background_curator_task is not None:
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(deps.session.background_curator_task), timeout=5.0
-                )
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                deps.session.background_curator_task.cancel()
-
-        # 2. Session review — must precede dream cycle (review may write knowledge artifacts).
+        # 1. Session review — must precede dream cycle (review may write knowledge artifacts).
         await _maybe_run_session_review(deps, message_history or [])
 
-        # 3. Dream cycle — consolidates all knowledge artifacts, including review output.
+        # 2. Dream cycle — consolidates all knowledge artifacts, including review output.
         await _maybe_run_dream_cycle(deps)
 
         from co_cli.tools.background import kill_task
@@ -171,8 +161,6 @@ async def _drain_and_cleanup(
         deps.shell.cleanup()
         if deps.memory_store is not None:
             deps.memory_store.close()
-        if deps.skill_index is not None:
-            deps.skill_index.close()
     await stack.aclose()
 
 
@@ -180,14 +168,6 @@ def _sweep_tool_results(deps: CoDeps) -> None:
     swept = sweep_tool_result_orphans(deps.tool_results_dir)
     if swept:
         logging.getLogger(__name__).debug("Swept %d stale tool-result tmp file(s)", swept)
-
-
-async def _run_curator_background(deps: CoDeps) -> None:
-    """Thin wrapper — yields to the event loop then delegates to the curator module."""
-    await asyncio.sleep(0)
-    from co_cli.agents.skill_curator import maybe_run_curator
-
-    await maybe_run_curator(deps)
 
 
 async def _maybe_run_session_review(deps: CoDeps, message_history: list[ModelMessage]) -> None:
@@ -455,11 +435,6 @@ async def _chat_loop(
         render_security_findings(check_security())
         frontend.clear_status()
 
-        if deps.config.skills.curator_enabled:
-            deps.session.background_curator_task = asyncio.create_task(
-                _run_curator_background(deps)
-            )
-
         state = _IterationState(message_history=[], last_interrupt_time=0.0)
 
         while True:
@@ -467,12 +442,6 @@ async def _chat_loop(
                 frontend.set_input_active(True)
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
                 frontend.set_input_active(False)
-                if (
-                    user_input
-                    and user_input.strip()
-                    and user_input.lower() not in ("exit", "quit")
-                ):
-                    deps.session.last_user_input_at = datetime.now(UTC)
                 state = await _handle_one_input(
                     user_input=user_input,
                     eof=False,

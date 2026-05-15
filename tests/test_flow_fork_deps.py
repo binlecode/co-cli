@@ -1,4 +1,4 @@
-"""Tests for fork_deps, fork_deps_for_reviewer, and fork_deps_for_curator factories."""
+"""Tests for fork_deps and fork_deps_for_reviewer factories."""
 
 from tests._settings import SETTINGS_NO_MCP
 
@@ -6,7 +6,6 @@ from co_cli.deps import (
     CoDeps,
     CoRuntimeState,
     fork_deps,
-    fork_deps_for_curator,
     fork_deps_for_reviewer,
 )
 
@@ -38,24 +37,6 @@ def test_fork_deps_for_reviewer_sets_both_flags() -> None:
     child = fork_deps_for_reviewer(parent)
     assert child.runtime.auto_approve_skill_ops is True
     assert child.runtime.auto_approve_knowledge_ops is True
-
-
-def test_fork_deps_for_curator_sets_only_skill_flag() -> None:
-    """fork_deps_for_curator grants skill write access only; knowledge stays gated."""
-    parent = _make_deps()
-    child = fork_deps_for_curator(parent)
-    assert child.runtime.auto_approve_skill_ops is True
-    assert child.runtime.auto_approve_knowledge_ops is False
-
-
-def test_fork_deps_increments_agent_depth() -> None:
-    """fork_deps increments agent_depth by 1."""
-    parent = _make_deps()
-    assert parent.runtime.agent_depth == 0
-    child = fork_deps(parent)
-    assert child.runtime.agent_depth == 1
-    grandchild = fork_deps(child)
-    assert grandchild.runtime.agent_depth == 2
 
 
 def test_fork_deps_does_not_share_runtime() -> None:

@@ -111,15 +111,28 @@ async def run_session_review(
     from co_cli.agents._runner import _run_agent_standalone
     from co_cli.agents.core import build_agent, discover_delegation_tools
     from co_cli.config.skills import REVIEW_MAX_ITERATIONS
+    from co_cli.context.manifests.skill_manifest import render_skill_manifest
     from co_cli.context.summarization import serialize_messages
     from co_cli.deps import fork_deps_for_reviewer
-    from co_cli.skills.curator_prompts import SESSION_REVIEW_INSTRUCTIONS, SESSION_REVIEW_PROMPT
+    from co_cli.skills.session_review_prompts import (
+        SESSION_REVIEW_INSTRUCTIONS,
+        SESSION_REVIEW_PROMPT,
+    )
+
+    skills_manifest = render_skill_manifest(
+        deps.skill_commands, deps.skills_dir, deps.user_skills_dir
+    )
+    instructions = (
+        f"{skills_manifest}\n\n{SESSION_REVIEW_INSTRUCTIONS}"
+        if skills_manifest
+        else SESSION_REVIEW_INSTRUCTIONS
+    )
 
     child_deps = fork_deps_for_reviewer(deps)
     agent = build_agent(
         config=deps.config,
         model=deps.model.model,
-        instructions=SESSION_REVIEW_INSTRUCTIONS,
+        instructions=instructions,
         tool_fns=discover_delegation_tools("session_reviewer", deps.config),
         output_type=SessionReviewOutput,
     )

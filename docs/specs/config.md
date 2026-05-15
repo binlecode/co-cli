@@ -244,10 +244,7 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Track skill invocation counts in the skill index |
 | `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable automatic skill review after use |
-| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable the background skill curator agent |
-| `skills.curator_interval_hours` | `CO_SKILLS_CURATOR_INTERVAL_HOURS` | `168` | Hours between curator runs (minimum 1) |
 
 ### MCP servers (`mcp_servers.*`)
 

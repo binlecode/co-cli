@@ -4,7 +4,7 @@
 
 Skills are procedural capability — name-addressable workflows that shape **how** the agent approaches a recurring task. They are distinct from memory (declarative state), tools (callable primitives), and personality (a priori identity). Skills get their own surface because procedural discipline benefits from pre-action treatment; they are not just-another-recall-result.
 
-This doc owns the skill tier — the storage model (markdown skill files), the slash-command dispatch path, and the three model-callable tools (`skill_search`, `skill_view`, `skill_manage`). Bundled skills are also declared in the static system prompt via the bundled skill manifest; user-installed skills are discoverable on-demand via `skill_search`.
+This doc owns the skill tier — the storage model (markdown skill files), the slash-command dispatch path, and the two model-callable tools (`skill_view`, `skill_manage`). All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest.
 
 ## 1. What & How
 
@@ -181,37 +181,14 @@ The built-in `/skills` command family is implemented in `_cmd_skills()` and rela
 | `/skills lint [<name>|--all]` | run R1–R10 lint rules against one skill or all loaded skills; exit 1 on any finding |
 | `/skills reload` | rescan the user-global skill directory and reload into the live session |
 | `/skills upgrade <name>` | reinstall from stored `source-url` |
-| `/skills usage [<name>]` | print the usage sidecar — table for all agent-created skills, or full record for one |
-| `/skills pin <name>` | mark an agent-created skill as pinned in the usage sidecar (rejects bundled and URL-installed) |
-| `/skills unpin <name>` | clear the pinned flag on an agent-created skill |
 
 `/skills reload` rescans only the user-global directory; bundled skills are version-controlled and not rescanned at runtime. `/skills check` covers both tiers (bundled and user-global).
 
 Installed skills are written to `~/.co-cli/skills/`.
 
-### Usage Tracking Sidecar
-
-Per-skill counters and timestamps live in `~/.co-cli/skills/.usage.json` (out-of-frontmatter so bundled skill files stay untouched by user-state writes). Tracked fields:
-
-| Field | Meaning |
-| --- | --- |
-| `use_count` | reserved — dispatch invocations (no separate use-vs-view path in co-cli today) |
-| `view_count` | bumped by every successful `skill_view` call |
-| `patch_count` | bumped by `skill_manage(action='edit')` and `skill_manage(action='patch')` |
-| `created_at` | first time the skill entered the sidecar (initialised by `create`/`install` for local sources) |
-| `last_used_at` / `last_viewed_at` / `last_patched_at` | ISO 8601 timestamps |
-| `state` | reserved for future curator transitions; always `"active"` today |
-| `pinned` | user opt-out marker from future autonomous library mutation; toggled via `/skills pin` / `/skills unpin` |
-
-**Agent-created filter.** Sidecar writes apply only to skills that exist in `user_skills_dir` AND have no `source-url` frontmatter. Bundled skills (in `co_cli/skills/`) and URL-installed skills are upstream-managed and excluded from tracking.
-
-**Best-effort writes.** Hook failures (`bump_view`, `bump_use`, `bump_patch`, `record_create`, `forget`) are logged via `logger.debug` and swallowed — usage tracking never blocks the underlying skill operation. Writes use `tempfile + os.replace` for atomicity; the sidecar can be deleted at any time and rebuilds from zero counts.
-
-**Disable.** `SkillsSettings.usage_tracking_enabled` (env `CO_SKILLS_USAGE_TRACKING_ENABLED`) short-circuits every hook when set to `False`.
-
 ## 3. Model-Callable Surface
 
-The skill tier has three model-callable tools: ranked discovery (`skill_search`), a name-addressable reader (`skill_view`), and a write surface (`skill_manage`). Bundled skills are additionally declared in the static system prompt via the bundled skill manifest (see §3.5).
+The skill tier has two model-callable tools: a name-addressable reader (`skill_view`) and a write surface (`skill_manage`). All discoverable skills — bundled and user-installed — are declared in the static system prompt via the manifest (see §3.5).
 
 ### `skill_manage(action, name, ...)`
 
@@ -245,30 +222,9 @@ Returns a skill's full SKILL.md body. Plugin-qualified names (`plugin:skill`) ar
 
 Registered in `co_cli/tools/system/skills.py`.
 
-### `skill_search(query, limit=5)`
+### Skill manifest (static prompt injection)
 
-Ranked discovery over the skill index by name and description. Lives at `co_cli/tools/system/skills.py`.
-
-- **Indexed content**: name + description only. Bodies are not indexed in FTS5; load via `skill_view(name)` after a hit.
-- **Storage**: backed by `SkillIndex` in `co_cli/skills/index.py` — an FTS5 index over `source='skill'` in the shared `co-cli-search.db`. Separate API from `MemoryStore` (the boundary is by API, not by storage).
-- **Empty query**: rejected with `tool_error` — browse the bundled skills via the manifest in the static prompt; discover user-installed ones via a targeted keyword query.
-- **Approval-free**: `is_read_only=True`, `is_concurrent_safe=True`. No approval.
-- **Description**: returned via `skill_commands` lookup with FTS-row fallback, so descriptions are always current even right after a write.
-
-Result shape:
-
-```python
-{
-    "name": <skill name>,
-    "description": <skill description>,
-    "score": <BM25>,
-    "path": <absolute path to the skill .md>,
-}
-```
-
-### Bundled skill manifest (static prompt injection)
-
-Bundled skills (`co_cli/skills/*.md` not shadowed in `~/.co-cli/skills/`) are declared in the static system prompt as an `<available_skills>` XML block:
+All discoverable skills — bundled (`co_cli/skills/*.md`) and user-installed (`~/.co-cli/skills/*.md`) — are declared in the static system prompt as an `<available_skills>` XML block:
 
 ```
 <available_skills>
@@ -277,18 +233,16 @@ Bundled skills (`co_cli/skills/*.md` not shadowed in `~/.co-cli/skills/`) are de
 </available_skills>
 ```
 
-Rendered by `co_cli/context/manifests/skill_manifest.py:render_skill_manifest(skill_commands, skills_dir, user_skills_dir)` and injected by `build_agent()` after the tool guidance, before personality content. The manifest is bundled-only — user-installed and dynamically-created skills are surfaced via `skill_search` (the long tail stays out of the cacheable prefix).
+Rendered by `co_cli/context/manifests/skill_manifest.py:render_skill_manifest(skill_commands, skills_dir, user_skills_dir)` and injected by `build_agent()` after the tool guidance, before personality content. User-dir descriptions shadow bundled ones on name collision (already applied by the loader). The manifest is also prepended to subagent instructions for `session_reviewer` so that agent can discover skills without a separate tool call.
 
-### Indexer hook
+### Reload hook
 
-`refresh_skills(deps)` is the single entry point for re-indexing skills. It:
+`refresh_skills(deps)` is the single entry point for reloading skills. It:
 
 1. Re-loads skill files from bundled and user-global directories.
 2. Replaces `deps.skill_commands`.
-3. Calls `deps.skill_index.upsert(name, description, path)` for every loaded skill.
-4. Removes stale entries via `deps.skill_index.remove(name)` for names that disappeared.
 
-It is invoked on every `skill_manage(action=...)` write, on `/skills reload`, and at bootstrap (via the direct upsert loop in `create_deps()` Step 7c, before `CoDeps` is assembled).
+It is invoked on every `skill_manage(action=...)` write and on `/skills reload`.
 
 ## 4. Config
 
@@ -298,7 +252,6 @@ Resolved skill paths live on `CoDeps`; behaviour knobs live on `SkillsSettings`.
 | --- | --- | --- |
 | `deps.skills_dir` | package directory `co_cli/skills/` | bundled skills directory (lowest priority) |
 | `deps.user_skills_dir` | `~/.co-cli/skills/` | user-global skill directory (overrides bundled) |
-| `settings.skills.usage_tracking_enabled` | `co_cli/config/skills.py` (env `CO_SKILLS_USAGE_TRACKING_ENABLED`) | enable per-skill usage sidecar writes; default `True` |
 | `settings` values referenced by `requires.settings` | `co_cli/config/` | load gating only |
 
 `SkillsSettings` is wired into `Settings` as `skills:`. The config root is reserved for the broader 3.5b/3.5c hygiene + review knobs.
@@ -308,26 +261,23 @@ Resolved skill paths live on `CoDeps`; behaviour knobs live on `SkillsSettings`.
 | File | Purpose |
 | --- | --- |
 | `co_cli/skills/skill_types.py` | `SkillConfig` frozen dataclass |
-| `co_cli/skills/index.py` | `SkillIndex` — FTS5 index over name+description (same DB as MemoryStore, separate API); `SkillHit` dataclass |
 | `co_cli/skills/_lint.py` | `lint_skill(content, path)` — R1–R10 lint validator; `LintFinding` dataclass |
 | `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content`, `_check_requires` |
 | `co_cli/skills/installer.py` | `fetch_skill_content`, `write_skill_file`, `discover_skill_files`, `find_skill_source_url`, `read_skill_meta` |
-| `co_cli/skills/usage.py` | usage sidecar I/O — `bump_view`/`bump_use`/`bump_patch`/`record_create`/`forget`/`set_pinned`/`is_agent_created`/`read_records`/`write_records` |
-| `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model; current dynamic knob: `usage_tracking_enabled` |
+| `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model |
 | `co_cli/skills/registry.py` | `set_skill_commands()` — replaces `deps.skill_commands`; `get_skill_registry()` — derives model-facing list |
 | `co_cli/skills/lifecycle.py` | skill load, install, upgrade, reload orchestration |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — renders the `<available_skills>` block injected into the static system prompt |
 | `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/lint/reload/upgrade/usage/pin/unpin) |
+| `co_cli/commands/skills.py` | `/skills` command family (list/check/install/lint/reload/upgrade/review) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, `_build_completer_words` |
-| `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, SkillIndex construction, and knowledge store init at startup |
+| `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection at agent construction |
-| `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` and `skill_index` (top-level); `active_skill_name` (runtime) |
+| `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` (top-level); `active_skill_name` (runtime) |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
-| `co_cli/tools/system/skills.py` | `skill_search`, `skill_view`, `skill_manage` — model-callable surface for the skill tier; calls usage hooks on success paths |
+| `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` — model-callable surface for the skill tier |
 | `co_cli/skills/` | package-default shipped skills |
 | `~/.co-cli/skills/` | user-global skill files; override bundled skills on name collision |
-| `~/.co-cli/skills/.usage.json` | per-skill usage sidecar (counters, timestamps, `pinned`); written by usage hooks; agent-created skills only |
 | `docs/specs/memory.md` | sibling surface — declarative memory (session + knowledge) |
 | `docs/specs/personality.md` | sibling surface — doctrine (canon, soul seed, mindsets) |
 | `docs/specs/bootstrap.md` | when skills load during startup |
@@ -375,7 +325,7 @@ user-invocable: true
 
 | Section | Required | Notes |
 |---------|----------|-------|
-| Frontmatter `description` | Yes | ≤1024 chars; drives manifest injection and `skill_search` |
+| Frontmatter `description` | Yes | ≤1024 chars; drives manifest injection |
 | Frontmatter `argument-hint` | No | ≤80 chars; shown in `/skills list` |
 | H1 title | Yes | First non-frontmatter heading |
 | `**Invocation:**` line | Yes | Bold-formatted; appears in the first ~10 lines of the body |
@@ -463,7 +413,7 @@ Ten mechanical rules, each with a check description and a *why*. The `/skills li
 | Rule | Check | Why |
 |------|-------|-----|
 | **R1** | Frontmatter present — file opens with `---` | Without frontmatter the loader rejects the skill at runtime; the check catches authoring errors before install |
-| **R2** | Frontmatter `description` field present and non-empty | Manifest injection and `skill_search` rely on description; absent = invisible in the model surface |
+| **R2** | Frontmatter `description` field present and non-empty | Manifest injection relies on description; absent = invisible in the model surface |
 | **R3** | `description` ≤ 1024 chars | Descriptions longer than 1024 chars bloat the manifest and degrade prompt cache hit rates |
 | **R4** | H1 title present after frontmatter | Body without an H1 reads as raw instructions; the H1 anchors skill identity in `skill_view` output |
 | **R5** | `**Invocation:**` line present in the first 10 lines of body | Tells both the user and the model the slash-command name; absent = invocation discovery requires reading the whole body |

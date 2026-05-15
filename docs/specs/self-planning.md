@@ -1,6 +1,6 @@
 # Co CLI — Self-Planning System
 
-> Tool surface: [tools.md](tools.md). Compaction wiring: [compaction.md](compaction.md). Agent loop: [core-loop.md](core-loop.md). System overview: [system.md](system.md).
+> Tool surface: [tools.md](tools.md). Compaction wiring: [compaction.md](compaction.md). Agent loop: [core-loop.md](core-loop.md). System overview: [01-system.md](01-system.md).
 
 The self-planning capability is the agent's runtime planning surface. The unit is a **todo item**; the ordered list of todo items is the **agent's plan** for the current session. "Self-" disambiguates from human-authored exec-plan artifacts (build-time developer tooling, out of scope here).
 
@@ -143,7 +143,7 @@ The primary source is the `todo_write` tool return metadata, which carries the f
 
 When the agent delegates to a sub-agent via `fork_deps`, the sub-agent's `session_todos` is initialized to `[]` regardless of the parent's list. Delegation agents perform focused sub-work and plan their own steps independently; the parent's plan is not visible to them.
 
-Fields **not** inherited by delegation agents (reset to defaults on fork): `session_todos`, `background_tasks`, `last_user_input_at`, `background_curator_task`.
+Fields **not** inherited by delegation agents (reset to defaults on fork): `session_todos`, `background_tasks`.
 
 ## 3. Config
 

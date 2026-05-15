@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -25,7 +23,6 @@ if TYPE_CHECKING:
     from co_cli.agents.core import ToolRegistry
     from co_cli.llm.factory import LlmModel
     from co_cli.memory.memory_store import MemoryStore
-    from co_cli.skills.index import SkillIndex
     from co_cli.skills.skill_types import SkillConfig
     from co_cli.tools.background import BackgroundTaskState
     from co_cli.tools.resource_lock import ResourceLockStore
@@ -152,10 +149,6 @@ class CoSessionState:
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
-    # Timestamp of last user input — used by curator idle gate.
-    last_user_input_at: datetime | None = None
-    # Background curator task handle — spawned once at REPL startup.
-    background_curator_task: asyncio.Task | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -211,8 +204,8 @@ class CoRuntimeState:
     # Count of messages durably persisted to session_path; accumulates across the session.
     # Not reset per-turn — append-only persistence requires this to grow monotonically.
     persisted_message_count: int = 0
-    # Approval bypass flags for background sub-agents (session_reviewer, skill_curator).
-    # Set True only inside fork_deps_for_reviewer / fork_deps_for_curator factories.
+    # Approval bypass flags for background sub-agents (session_reviewer).
+    # Set True only inside fork_deps_for_reviewer factory.
     # NOT cleared by reset_for_turn — they live for the lifetime of the forked deps.
     auto_approve_skill_ops: bool = False
     auto_approve_knowledge_ops: bool = False
@@ -265,7 +258,6 @@ class CoDeps:
     file_tracker: FileReadTracker = field(default_factory=FileReadTracker, repr=False)
     # Service handles (optional, set during bootstrap)
     memory_store: MemoryStore | None = field(default=None, repr=False)
-    skill_index: SkillIndex | None = field(default=None, repr=False)
     model: LlmModel | None = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, ToolInfo] = field(default_factory=dict)
@@ -301,13 +293,6 @@ def fork_deps_for_reviewer(parent: CoDeps) -> CoDeps:
     child = fork_deps(parent)
     child.runtime.auto_approve_skill_ops = True
     child.runtime.auto_approve_knowledge_ops = True
-    return child
-
-
-def fork_deps_for_curator(parent: CoDeps) -> CoDeps:
-    """Fork deps for the skill_curator agent — grants skill write access only."""
-    child = fork_deps(parent)
-    child.runtime.auto_approve_skill_ops = True
     return child
 
 
@@ -359,7 +344,6 @@ def fork_deps(base: CoDeps) -> CoDeps:
         resource_locks=base.resource_locks,
         file_tracker=base.file_tracker,
         memory_store=base.memory_store,
-        skill_index=base.skill_index,
         model=base.model,
         tool_index=base.tool_index,
         skill_commands=base.skill_commands,

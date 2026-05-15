@@ -126,7 +126,6 @@ def test_session_reviewer_delegation_tools() -> None:
     from co_cli.agents.core import discover_delegation_tools
 
     tools = {fn.__name__ for fn in discover_delegation_tools("session_reviewer", SETTINGS_NO_MCP)}
-    assert "skill_search" in tools
     assert "skill_view" in tools
     assert "skill_manage" in tools
     assert "knowledge_search" in tools
@@ -136,18 +135,7 @@ def test_session_reviewer_delegation_tools() -> None:
     assert "shell" not in tools
     assert "file_read" not in tools
     assert "web_fetch" not in tools
-
-
-def test_skill_curator_delegation_tools() -> None:
-    """discover_delegation_tools('skill_curator') returns skill tools only — no knowledge tools."""
-    from co_cli.agents.core import discover_delegation_tools
-
-    tools = {fn.__name__ for fn in discover_delegation_tools("skill_curator", SETTINGS_NO_MCP)}
-    assert "skill_search" in tools
-    assert "skill_view" in tools
-    assert "skill_manage" in tools
-    assert "knowledge_manage" not in tools
-    assert "knowledge_search" not in tools
+    assert "skill_search" not in tools
 
 
 def test_serialize_messages_include_tool_results_false() -> None:
@@ -167,12 +155,12 @@ def test_serialize_messages_include_tool_results_false() -> None:
         ModelRequest(parts=[UserPromptPart(content="hello")]),
         ModelResponse(
             parts=[
-                ToolCallPart(tool_name="skill_search", args='{"query":"foo"}', tool_call_id="1"),
+                ToolCallPart(tool_name="skill_view", args='{"name":"foo"}', tool_call_id="1"),
             ],
             model_name="test",
         ),
         ModelRequest(
-            parts=[ToolReturnPart(tool_name="skill_search", content="result", tool_call_id="1")]
+            parts=[ToolReturnPart(tool_name="skill_view", content="result", tool_call_id="1")]
         ),
         ModelResponse(parts=[TextPart(content="found it")], model_name="test"),
     ]
@@ -249,3 +237,32 @@ async def test_review_unknown_subcommand(tmp_path: Path) -> None:
 
     output = cap.get()
     assert "Usage" in output
+
+
+def test_session_review_instructions_include_skills_manifest(tmp_path: Path) -> None:
+    """Combined instructions string prepends <available_skills> before SESSION_REVIEW_INSTRUCTIONS."""
+    from co_cli.context.manifests.skill_manifest import render_skill_manifest
+    from co_cli.skills.session_review_prompts import SESSION_REVIEW_INSTRUCTIONS
+    from co_cli.skills.skill_types import SkillConfig
+
+    skill_commands: dict[str, SkillConfig] = {
+        "git-workflows": SkillConfig(
+            name="git-workflows",
+            description="Git branching and merge workflows",
+            path=tmp_path / "git-workflows.md",
+        ),
+        "python-testing": SkillConfig(
+            name="python-testing",
+            description="Python pytest patterns",
+            path=tmp_path / "python-testing.md",
+        ),
+    }
+    manifest = render_skill_manifest(skill_commands, tmp_path, tmp_path)
+    combined = (
+        f"{manifest}\n\n{SESSION_REVIEW_INSTRUCTIONS}" if manifest else SESSION_REVIEW_INSTRUCTIONS
+    )
+
+    assert "<available_skills>" in combined
+    assert "git-workflows" in combined
+    assert "python-testing" in combined
+    assert SESSION_REVIEW_INSTRUCTIONS in combined

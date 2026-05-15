@@ -20,7 +20,6 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
 from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.persistence.atomic import atomic_write_text
-from co_cli.skills import usage as skill_usage
 from co_cli.skills.loader import scan_skill_content
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output
@@ -35,7 +34,7 @@ from co_cli.tools.tool_io import tool_error, tool_output
     is_read_only=True,
     is_concurrent_safe=True,
     spill_threshold_chars=math.inf,
-    delegation=frozenset({"session_reviewer", "skill_curator"}),
+    delegation=frozenset({"session_reviewer"}),
 )
 async def skill_view(
     ctx: RunContext[CoDeps],
@@ -64,61 +63,7 @@ async def skill_view(
         return tool_error(f"skill_view: skill {name!r} is not model-invocable.", ctx=ctx)
     if file_path is not None:
         return tool_error(f"skill_view: skill {name!r} has no linked files.", ctx=ctx)
-    skill_usage.bump_view(ctx.deps, lookup)
     return tool_output(skill.body, ctx=ctx, name=lookup, linked_files={})
-
-
-# ---------------------------------------------------------------------------
-# Read tools — skill_search
-# ---------------------------------------------------------------------------
-
-
-@agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS,
-    is_read_only=True,
-    is_concurrent_safe=True,
-    delegation=frozenset({"session_reviewer", "skill_curator"}),
-)
-async def skill_search(
-    ctx: RunContext[CoDeps],
-    query: str,
-    limit: int = 5,
-) -> ToolReturn:
-    """Search the skill index by name and description. Returns ranked hits.
-
-    Call before skill_manage(action='create') to confirm no skill for this
-    task type already exists — avoids duplicates.
-
-    Also use when: the bundled <available_skills> manifest doesn't cover
-    what you need (user-installed skills, or skills created this session
-    live in the search index, not in the manifest).
-
-    Args:
-        query: FTS5 keyword query — keywords joined OR, phrases quoted, prefix*.
-        limit: Maximum number of hits (default 5).
-
-    Returns: list of {name, description, score, path}. Load the body with skill_view.
-    """
-    if not query or not query.strip():
-        return tool_error("skill_search: query must be non-empty.", ctx=ctx)
-    limit = max(1, int(limit))
-    if ctx.deps.skill_index is None:
-        return tool_output("Skill index unavailable.", ctx=ctx, count=0, results=[])
-    hits = ctx.deps.skill_index.search(query, limit=limit)
-    skill_commands = ctx.deps.skill_commands or {}
-    results: list[dict] = []
-    for h in hits:
-        skill = skill_commands.get(h.name)
-        description = (skill.description if skill else None) or h.description or ""
-        results.append(
-            {"name": h.name, "description": description, "score": h.score, "path": h.path}
-        )
-    if not results:
-        return tool_output(f"No skills found for '{query}'.", ctx=ctx, count=0, results=[])
-    lines: list[str] = [f"Found {len(results)} skill(s) for '{query}':"]
-    for r in results:
-        lines.append(f"  - {r['name']}: {r['description']}")
-    return tool_output("\n".join(lines), ctx=ctx, count=len(results), results=results)
 
 
 # ---------------------------------------------------------------------------
@@ -197,10 +142,14 @@ def _skill_create(
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
-    skill_usage.record_create(ctx.deps, name)
     result: dict = {"success": True, "message": f"Skill {name!r} created.", "path": str(path)}
     if category:
         result["category_ignored"] = True
+    if len(ctx.deps.skill_commands) >= 30:
+        result["size_warning"] = (
+            f"Skill count is now {len(ctx.deps.skill_commands)}; "
+            "consider reviewing and pruning unused skills."
+        )
     return tool_output(json.dumps(result), ctx=ctx)
 
 
@@ -223,7 +172,6 @@ def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str | None) -> Tool
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
-    skill_usage.bump_patch(ctx.deps, name)
     return tool_output(
         json.dumps({"success": True, "message": f"Skill {name!r} updated.", "path": str(path)}),
         ctx=ctx,
@@ -274,7 +222,6 @@ def _skill_patch(
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
     _reload_skills(ctx)
-    skill_usage.bump_patch(ctx.deps, name)
     replaced_count = count if replace_all else 1
     return tool_output(
         json.dumps(
@@ -300,7 +247,6 @@ def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
         return tool_error(f"Skill {name!r} not found in user skills dir.", ctx=ctx)
     path.unlink()
     _reload_skills(ctx)
-    skill_usage.forget(ctx.deps, name)
     shadowed_bundled = (ctx.deps.skills_dir / f"{name}.md").exists()
     return tool_output(
         json.dumps(
@@ -369,20 +315,24 @@ def _skill_install(ctx: RunContext[CoDeps], source: str) -> ToolReturn:
         return tool_error(scan_err, ctx=ctx)
 
     _reload_skills(ctx)
-    skill_usage.record_create(ctx.deps, skill_name)
-    return tool_output(
-        json.dumps(
-            {"success": True, "message": f"Skill {skill_name!r} installed.", "path": str(path)}
-        ),
-        ctx=ctx,
-    )
+    install_result: dict = {
+        "success": True,
+        "message": f"Skill {skill_name!r} installed.",
+        "path": str(path),
+    }
+    if len(ctx.deps.skill_commands) >= 30:
+        install_result["size_warning"] = (
+            f"Skill count is now {len(ctx.deps.skill_commands)}; "
+            "consider reviewing and pruning unused skills."
+        )
+    return tool_output(json.dumps(install_result), ctx=ctx)
 
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
     approval=True,
     approval_subject_fn=_skill_manage_approval_subject,
-    delegation=frozenset({"session_reviewer", "skill_curator"}),
+    delegation=frozenset({"session_reviewer"}),
 )
 async def skill_manage(
     ctx: RunContext[CoDeps],
@@ -417,9 +367,6 @@ async def skill_manage(
     offer-to-save: after difficult or iterative work, briefly offer the
     user a save — "Want me to save this as a /<task-type> skill?" Confirm
     before invoking create on their behalf.
-
-    Search before creating: call skill_search(query) to confirm no skill
-    for this task type already exists.
 
     Bundled skills are read-only; copy to ~/.co-cli/skills/ first to modify them.
 
