@@ -25,8 +25,6 @@ import hashlib
 import logging
 import re
 import struct
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
@@ -228,6 +226,58 @@ def _dedup_by_path(results: list["SearchResult"]) -> list["SearchResult"]:
     return sorted(seen.values(), key=lambda r: r.score, reverse=True)
 
 
+class MemoryTransaction:
+    """Deferred-commit transaction over a MemoryStore connection.
+
+    Use via ``with store.transaction() as tx: tx.index(...); tx.index_chunks(...)``.
+    Commits on __exit__ success, rolls back on exception. Nesting raises
+    ``RuntimeError``. No explicit BEGIN — sqlite3 legacy mode opens the
+    transaction implicitly on the first DML.
+    """
+
+    def __init__(self, store: "MemoryStore") -> None:
+        self._store = store
+        self._active = False
+
+    def __enter__(self) -> "MemoryTransaction":
+        if self._store._transaction_open:
+            raise RuntimeError("Nested transactions not supported")
+        self._store._transaction_open = True
+        self._active = True
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
+        try:
+            if exc_type is None:
+                self._store._conn.commit()
+            else:
+                self._store._conn.rollback()
+        finally:
+            self._store._transaction_open = False
+            self._active = False
+
+    def index(self, **kwargs: Any) -> None:
+        self._guard()
+        self._store._index_no_commit(**kwargs)
+
+    def index_chunks(self, source: str, doc_path: str, chunks: list[Any]) -> None:
+        self._guard()
+        self._store._index_chunks_no_commit(source, doc_path, chunks)
+
+    def remove(self, source: str, path: str) -> None:
+        self._guard()
+        self._store._remove_no_commit(source, path)
+
+    def _guard(self) -> None:
+        if not self._active:
+            raise RuntimeError("MemoryTransaction methods called outside `with` block")
+
+
 class MemoryStore:
     """SQLite FTS5 index for ranked search across all memory sources.
 
@@ -287,10 +337,7 @@ class MemoryStore:
         self._conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
-        # Tracks whether a caller has opened a multi-write transaction via
-        # transaction(); when True, individual write methods skip their inner
-        # commit() so the outer context manager controls atomicity.
-        self._in_transaction = False
+        self._transaction_open: bool = False
 
         if self._backend == "hybrid":
             try:
@@ -326,29 +373,15 @@ class MemoryStore:
         m = re.search(r"float\[(\d+)\]", row[0] or "")
         return int(m.group(1)) if m else None
 
-    @contextmanager
-    def transaction(self) -> Iterator[None]:
-        """Group multiple index/remove calls into one SQLite transaction.
+    def transaction(self) -> "MemoryTransaction":
+        """Open a deferred-commit transaction over this store.
 
-        While the context is active, individual write methods (``index``,
-        ``index_chunks``, ``remove``, ``remove_chunks``) skip their internal
-        ``commit()`` so the outer context manager owns transaction boundaries.
-        Commits on clean exit; rolls back on any exception raised inside the
-        block. Required by callers outside ``co_cli/memory/`` (e.g.
-        ``SkillIndex.upsert``) that compose multiple write methods into one
-        atomic unit — reaching into ``self._conn`` directly violates the
-        package-private ``_prefix`` rule for cross-package access.
-
-        Nested calls are not supported and will raise.
+        Returns a ``MemoryTransaction`` for use as a context manager. Callers
+        compose multiple write operations via ``tx.index`` / ``tx.index_chunks``
+        / ``tx.remove`` inside the ``with`` block; the transaction commits on
+        clean exit and rolls back on any exception. Nesting raises.
         """
-        if self._in_transaction:
-            raise RuntimeError("MemoryStore.transaction() does not support nesting")
-        self._in_transaction = True
-        try:
-            with self._conn:
-                yield
-        finally:
-            self._in_transaction = False
+        return MemoryTransaction(self)
 
     def _index_no_commit(
         self,
@@ -430,8 +463,7 @@ class MemoryStore:
             source_ref=source_ref,
             artifact_id=artifact_id,
         )
-        if not self._in_transaction:
-            self._conn.commit()
+        self._conn.commit()
 
     def _index_chunks_no_commit(
         self,
@@ -491,11 +523,10 @@ class MemoryStore:
             chunks: List of Chunk objects from _chunker.chunk_text().
         """
         self._index_chunks_no_commit(source, doc_path, chunks)
-        if not self._in_transaction:
-            self._conn.commit()
+        self._conn.commit()
 
-    def remove_chunks(self, source: str, path: str) -> None:
-        """Remove all chunk rows for (source, path), including FTS and vec entries."""
+    def _remove_chunks_no_commit(self, source: str, path: str) -> None:
+        """Remove chunk rows (and vec rows in hybrid mode) without committing."""
         if self._backend == "hybrid":
             rowids = [
                 row[0]
@@ -514,6 +545,10 @@ class MemoryStore:
             "DELETE FROM chunks WHERE source=? AND doc_path=?",
             (source, path),
         )
+
+    def remove_chunks(self, source: str, path: str) -> None:
+        """Remove all chunk rows for (source, path), including FTS and vec entries."""
+        self._remove_chunks_no_commit(source, path)
         self._conn.commit()
 
     def find_by_source_ref(self, source_ref: str, source: str) -> str | None:
@@ -1217,15 +1252,21 @@ class MemoryStore:
         self.remove_stale("session", current_uuid8s)
         return processed
 
-    def remove(self, source: str, path: str) -> None:
-        """Remove a single document from the index by path."""
-        # Remove chunk rows first (rowid references must be cleaned before parent rows)
-        self.remove_chunks(source, path)
+    def _remove_no_commit(self, source: str, path: str) -> None:
+        """Remove docs + chunks rows for (source, path) without committing.
 
+        Chunks are removed before the docs row to preserve rowid integrity in
+        hybrid mode (the vec table is keyed by chunk rowids).
+        """
+        self._remove_chunks_no_commit(source, path)
         self._conn.execute(
             "DELETE FROM docs WHERE source = ? AND path = ?",
             (source, path),
         )
+
+    def remove(self, source: str, path: str) -> None:
+        """Remove a single document from the index by path."""
+        self._remove_no_commit(source, path)
         self._conn.commit()
 
     def remove_stale(

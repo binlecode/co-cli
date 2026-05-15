@@ -20,13 +20,14 @@ import logging
 import math
 import os
 import re
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace as otel_trace
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
+
+from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
@@ -94,13 +95,10 @@ def spill_if_oversized(
 
     try:
         hash_prefix = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
-        tool_results_dir.mkdir(parents=True, exist_ok=True)
         file_path = tool_results_dir / f"{hash_prefix}.txt"
 
         if not file_path.exists():
-            tmp_path = file_path.with_suffix(f".txt.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}")
-            tmp_path.write_text(content, encoding="utf-8", errors="replace")
-            os.replace(tmp_path, file_path)
+            atomic_write_text(file_path, content, errors="replace")
 
         preview, has_more = _generate_preview(content, TOOL_RESULT_PREVIEW_CHARS)
         elision = "\n..." if has_more else ""

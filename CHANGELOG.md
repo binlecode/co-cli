@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.8.194]
+
+### Persistence primitives + MemoryTransaction object redesign
+- **New package `co_cli/persistence/`** — `atomic_write_text(path, content, *, encoding="utf-8", errors="strict")` and `atomic_write_bytes(path, content)` live in `co_cli/persistence/atomic.py`. Both build `mkdir(parents=True, exist_ok=True)` into the primitive; callers no longer pre-create parent dirs. `co_cli/memory/mutator.py` deleted; 8 importers migrated to `co_cli.persistence.atomic`.
+- **Wrapper fold** — `_atomic_write_skill` deleted (5 internal callers in `tools/system/skills.py` now call `atomic_write_text` directly); `write_curator_state`, `write_records`, `write_skill_file` keep their signatures but drop the now-redundant `path.parent.mkdir(...)` line.
+- **`tool_io.py` folded** — the local `tempfile.write_text + os.replace` block in tool-spill output is replaced by `atomic_write_text(file_path, content, errors="replace")`. Content-addressed dedup guard preserved.
+- **`MemoryTransaction` object** — `MemoryStore.transaction()` now returns a `MemoryTransaction` context manager. `tx.index / tx.index_chunks / tx.remove` defer commits; `__exit__` commits on success or rolls back on exception. The hidden `_in_transaction` flag that silently switched `index() / index_chunks()` commit semantics is gone — those public methods always commit. The new private flag `_transaction_open` only refuses nested transactions.
+- **`SkillIndex.upsert`** rewritten to `with self._store.transaction() as tx: tx.index(...); tx.index_chunks(...)`.
+- **Convention docs** — `agent_docs/code-conventions.md` cites the new `co_cli.persistence.atomic.atomic_write_text` path and adds the rule "Multi-step writes to `MemoryStore` use `with store.transaction() as tx: ...`; hidden transaction state on the store is forbidden." `file_write` docstring carries an atomicity contract note pointing at the internal primitive.
+- **Test coverage** — `tests/test_atomic_write_persistence.py` extended with mkdir-parent, `errors="replace"`, and `atomic_write_bytes` cases. `tests/test_flow_skill_index.py` extended with `test_nested_transaction_raises`, `test_transaction_method_outside_with_raises`, `test_transaction_remove_rolls_back_on_exception` — real sqlite, no mocks.
+
 ## [0.8.192]
 
 ### Proactive compaction focus inference

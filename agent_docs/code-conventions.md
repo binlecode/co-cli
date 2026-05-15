@@ -49,7 +49,9 @@ Preserve existing suffix conventions (e.g. `*Registry`, `*Info`) unless explicit
 
 For cross-cutting concerns, use the existing project primitive before adding another path. Config loading, console output, filesystem roots, tool outputs, approval flow, tracing, and test harnesses should each have one obvious implementation route.
 
-Full-overwrite file mutation uses `co_cli.memory.mutator.atomic_write_text`. Local `tempfile.NamedTemporaryFile` + `os.replace` blocks in mutation paths are forbidden.
+Full-overwrite file mutation uses `co_cli.persistence.atomic.atomic_write_text` (or `atomic_write_bytes` for binary). Both primitives `mkdir(parents=True, exist_ok=True)` before writing — do not pre-create the parent at call sites. Local `tempfile.NamedTemporaryFile` + `os.replace` blocks in mutation paths are forbidden.
+
+Multi-step writes to `MemoryStore` use `with store.transaction() as tx: tx.index(...); tx.index_chunks(...)`. The public `index() / index_chunks() / remove() / remove_chunks()` methods always commit; hidden transaction state on the store is forbidden.
 
 ## Display
 

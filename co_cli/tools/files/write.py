@@ -494,6 +494,9 @@ async def file_write(
 
     Creates parent directories as needed. Overwrites the file if it already exists.
 
+    Direct write, follows symlinks; not atomic. For internal atomic writes,
+    use `co_cli.persistence.atomic.atomic_write_text`.
+
     Args:
         path: File path relative to the workspace root.
         content: Text content to write.

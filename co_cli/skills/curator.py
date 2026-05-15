@@ -14,7 +14,7 @@ from co_cli.config.skills import (
     CURATOR_STALE_AFTER_DAYS,
     SkillsSettings,
 )
-from co_cli.memory.mutator import atomic_write_text
+from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps, CoSessionState
@@ -168,7 +168,6 @@ def read_curator_state(deps: CoDeps) -> dict[str, Any]:
 def write_curator_state(deps: CoDeps, state: dict[str, Any]) -> None:
     """Atomically write the curator state file."""
     path = _curator_state_path(deps)
-    path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, json.dumps(state, indent=2))
 
 

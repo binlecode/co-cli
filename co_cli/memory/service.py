@@ -28,9 +28,9 @@ from co_cli.memory.frontmatter import (
     render_artifact_file,
     render_frontmatter,
 )
-from co_cli.memory.mutator import atomic_write_text
 from co_cli.memory.similarity import find_similar_artifacts, is_content_superset
 from co_cli.memory.text_chunker import chunk_text
+from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.memory.memory_store import MemoryStore

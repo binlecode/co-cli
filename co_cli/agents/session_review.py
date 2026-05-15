@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelMessage
 
-from co_cli.memory.mutator import atomic_write_text
+from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps

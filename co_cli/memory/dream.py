@@ -33,9 +33,9 @@ from co_cli.memory.artifact import (
     load_artifacts,
 )
 from co_cli.memory.decay import find_decay_candidates
-from co_cli.memory.mutator import atomic_write_text
 from co_cli.memory.service import reindex, save_artifact
 from co_cli.memory.similarity import token_jaccard
+from co_cli.persistence.atomic import atomic_write_text
 from co_cli.tools.lifecycle import CoToolLifecycle
 
 if TYPE_CHECKING:
@@ -101,7 +101,6 @@ def load_dream_state(knowledge_dir: Path) -> DreamState:
 
 def save_dream_state(knowledge_dir: Path, state: DreamState) -> None:
     """Persist dream state as JSON to ``knowledge_dir/_dream_state.json``."""
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
     path = dream_state_path(knowledge_dir)
     payload = state.model_dump()
     atomic_write_text(path, json.dumps(payload, indent=2))

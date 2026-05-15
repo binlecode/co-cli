@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from co_cli.memory.mutator import atomic_write_text
+from co_cli.persistence.atomic import atomic_write_text
 from co_cli.skills.installer import find_skill_source_url
 
 if TYPE_CHECKING:
@@ -91,7 +91,6 @@ def read_records(deps: CoDeps) -> dict[str, Any]:
 def write_records(deps: CoDeps, data: dict[str, Any]) -> None:
     """Atomically write the full sidecar."""
     path = _sidecar_path(deps)
-    path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, json.dumps(data, indent=2))
 
 

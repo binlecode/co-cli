@@ -467,7 +467,7 @@ async def test_skill_delete_then_not_searchable_via_index(tmp_path: Path) -> Non
 async def test_install_from_local_path_writes_file(tmp_path: Path) -> None:
     """install from a local .md path writes the file to user_skills_dir and reloads.
 
-    Regression guard: if install doesn't call _atomic_write_skill or _reload_skills,
+    Regression guard: if install doesn't call atomic_write_text or _reload_skills,
     the file will be missing or the new skill will not appear in skill_commands.
     """
     source = tmp_path / "source-dir" / "new-install.md"

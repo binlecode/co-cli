@@ -19,7 +19,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
 from co_cli.memory.frontmatter import parse_frontmatter
-from co_cli.memory.mutator import atomic_write_text
+from co_cli.persistence.atomic import atomic_write_text
 from co_cli.skills import usage as skill_usage
 from co_cli.skills.loader import scan_skill_content
 from co_cli.tools.agent_tool import agent_tool
@@ -158,12 +158,6 @@ def _validate_skill_content(content: str) -> str | None:
     return None
 
 
-def _atomic_write_skill(path: Path, content: str) -> None:
-    """Ensure parent dir exists, then write content atomically."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(path, content)
-
-
 def _scan_or_rollback(path: Path, content: str, original: str | None) -> str | None:
     """Scan content for security patterns; if flagged restore original and return error string."""
     flags = scan_skill_content(content)
@@ -172,7 +166,7 @@ def _scan_or_rollback(path: Path, content: str, original: str | None) -> str | N
     if original is None:
         path.unlink(missing_ok=True)
     else:
-        _atomic_write_skill(path, original)
+        atomic_write_text(path, original)
     pattern_names = ", ".join(sorted({f.split("]")[0].lstrip("[") for f in flags}))
     return f"Security scan blocked write: matched pattern(s): {pattern_names}."
 
@@ -198,7 +192,7 @@ def _skill_create(
             ctx=ctx,
         )
     path = ctx.deps.user_skills_dir / f"{name}.md"
-    _atomic_write_skill(path, content)
+    atomic_write_text(path, content)
     scan_err = _scan_or_rollback(path, content, original=None)
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
@@ -224,7 +218,7 @@ def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str | None) -> Tool
     if err:
         return tool_error(err, ctx=ctx)
     original = path.read_text(encoding="utf-8")
-    _atomic_write_skill(path, content)
+    atomic_write_text(path, content)
     scan_err = _scan_or_rollback(path, content, original=original)
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
@@ -275,7 +269,7 @@ def _skill_patch(
         if replace_all
         else original.replace(old_string, new_string, 1)
     )
-    _atomic_write_skill(path, new_content)
+    atomic_write_text(path, new_content)
     scan_err = _scan_or_rollback(path, new_content, original=original)
     if scan_err:
         return tool_error(scan_err, ctx=ctx)
@@ -369,7 +363,7 @@ def _skill_install(ctx: RunContext[CoDeps], source: str) -> ToolReturn:
         return tool_error(err, ctx=ctx)
 
     path = ctx.deps.user_skills_dir / filename
-    _atomic_write_skill(path, content)
+    atomic_write_text(path, content)
     scan_err = _scan_or_rollback(path, content, original=None)
     if scan_err:
         return tool_error(scan_err, ctx=ctx)

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from tests._settings import SETTINGS
 
+from co_cli.memory.memory_store import MemoryStore
 from co_cli.memory.text_chunker import Chunk
 from co_cli.skills.index import SkillHit, SkillIndex
 
@@ -142,9 +143,9 @@ def _drive_failing_two_step_write(
     ``ProgrammingError`` (or ``InterfaceError`` under pysqlite3) when binding
     that parameter — a real production exception, no monkey-patching needed.
     """
-    with idx._store.transaction():
-        idx._store.index(source="skill", path=path, title=title, description=description)
-        idx._store.index_chunks(
+    with idx._store.transaction() as tx:
+        tx.index(source="skill", path=path, title=title, description=description)
+        tx.index_chunks(
             "skill",
             path,
             [
@@ -238,3 +239,87 @@ def test_upsert_rollback_leaves_db_usable_for_next_upsert(tmp_path: Path) -> Non
         assert "bad-skill" not in idx.list_names()
     finally:
         idx.close()
+
+
+# ---------------------------------------------------------------------------
+# MemoryTransaction — nesting, lifecycle, and rollback semantics
+# ---------------------------------------------------------------------------
+
+
+def _make_store(tmp_path: Path) -> MemoryStore:
+    return MemoryStore(config=_STORE_CONFIG, memory_db_path=tmp_path / "search.db")
+
+
+def test_nested_transaction_raises(tmp_path: Path) -> None:
+    """A second ``with store.transaction():`` inside an open one raises RuntimeError."""
+    store = _make_store(tmp_path)
+    try:
+        with store.transaction() as outer:
+            assert outer is not None
+            # SIM117: keep the inner `with` distinct — the pytest.raises
+            # wrapper must observe the failure from the inner transaction
+            # enter, which would not happen if merged with the outer block.
+            with pytest.raises(RuntimeError, match="Nested transactions not supported"):  # noqa: SIM117
+                with store.transaction():
+                    pass
+    finally:
+        store.close()
+
+
+def test_transaction_method_outside_with_raises(tmp_path: Path) -> None:
+    """Calling tx.index() before entering the ``with`` block raises RuntimeError."""
+    store = _make_store(tmp_path)
+    try:
+        tx = store.transaction()
+        with pytest.raises(RuntimeError, match="outside `with` block"):
+            tx.index(source="skill", path="/x", title="x", description="d")
+    finally:
+        store.close()
+
+
+class _RollbackTriggerError(Exception):
+    """Sentinel raised inside a transaction block to verify rollback behavior."""
+
+
+def test_transaction_remove_rolls_back_on_exception(tmp_path: Path) -> None:
+    """tx.remove() inside a transaction that raises must leave doc + chunks intact."""
+    store = _make_store(tmp_path)
+    skill_path = str(tmp_path / "persistent-skill.md")
+    try:
+        store.index(source="skill", path=skill_path, title="persistent-skill", description="d")
+        store.index_chunks(
+            "skill",
+            skill_path,
+            [Chunk(index=0, content="rollback_marker body", start_line=0, end_line=0)],
+        )
+
+        doc_before = store._conn.execute(
+            "SELECT path FROM docs WHERE source='skill' AND path=?", (skill_path,)
+        ).fetchone()
+        assert doc_before is not None
+        chunks_before = store._conn.execute(
+            "SELECT chunk_index FROM chunks WHERE source='skill' AND doc_path=?",
+            (skill_path,),
+        ).fetchall()
+        assert len(chunks_before) == 1
+
+        # PT012 + SIM117: the multi-statement body is the contract under
+        # test — tx.remove() must be issued *then* an exception raised
+        # inside the transaction block to trigger rollback. Merging the two
+        # `with` statements would collapse the assertion frame.
+        with pytest.raises(_RollbackTriggerError):  # noqa: PT012, SIM117
+            with store.transaction() as tx:
+                tx.remove("skill", skill_path)
+                raise _RollbackTriggerError
+
+        doc_after = store._conn.execute(
+            "SELECT path FROM docs WHERE source='skill' AND path=?", (skill_path,)
+        ).fetchone()
+        assert doc_after is not None, "docs row must survive rolled-back tx.remove()"
+        chunks_after = store._conn.execute(
+            "SELECT chunk_index FROM chunks WHERE source='skill' AND doc_path=?",
+            (skill_path,),
+        ).fetchall()
+        assert len(chunks_after) == 1, "chunk rows must survive rolled-back tx.remove()"
+    finally:
+        store.close()

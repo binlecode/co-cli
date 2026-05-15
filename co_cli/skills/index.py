@@ -48,9 +48,9 @@ class SkillIndex:
         """
         from co_cli.memory.text_chunker import Chunk
 
-        with self._store.transaction():
-            self._store.index(source="skill", path=path, title=name, description=description)
-            self._store.index_chunks(
+        with self._store.transaction() as tx:
+            tx.index(source="skill", path=path, title=name, description=description)
+            tx.index_chunks(
                 "skill",
                 path,
                 [Chunk(index=0, content=f"{name}: {description}", start_line=0, end_line=0)],

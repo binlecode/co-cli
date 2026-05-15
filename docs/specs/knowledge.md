@@ -71,7 +71,7 @@ Tool args: `action`, `name`, `content`, `kind`, `section`. The `kind` arg is the
 | `replace` | Surgically replace a passage in an existing artifact body. Target must appear exactly once. |
 | `delete` | Remove an artifact file and its `chunks_fts` rows; returns confirmation. Hard-delete; archival is a separate future feature. |
 
-Writes use `atomic_write()` (temp-file + `os.replace`). `reindex()` is called at the tool layer with config-sourced `chunk_tokens`/`chunk_overlap_tokens` so the next `knowledge_search` reflects the change.
+Writes use `co_cli.persistence.atomic.atomic_write_text` (tempfile + `os.replace`, parent mkdir built-in). `reindex()` is called at the tool layer with config-sourced `chunk_tokens`/`chunk_overlap_tokens` so the next `knowledge_search` reflects the change.
 
 **Approval.** `knowledge_manage` is `approval=True`. The approval subject is scoped per-action and per-name (`tool:knowledge_manage:<action>:<name>`).
 
@@ -116,24 +116,13 @@ Result shape:
 }
 ```
 
-## 6. Backward-Compat Notes
-
-| Removed/renamed | Replacement |
-| --- | --- |
-| `memory_create` | `knowledge_manage(action='create', ...)` |
-| `memory_modify` | `knowledge_manage(action='append', ...)` or `knowledge_manage(action='replace', ...)` |
-| `artifact_manage` | `knowledge_manage` (rename; on-disk frontmatter field `artifact_kind` and internal `KnowledgeArtifact` class are unchanged) |
-| tool arg `artifact_kind` | `kind` |
-
-There are no aliases — the renames are hard. Internal callers were updated in the four-tier decomposition commit.
-
-## 7. Files
+## 6. Files
 
 | File | Purpose |
 | --- | --- |
 | `co_cli/memory/artifact.py` | `KnowledgeArtifact` schema, kind enums, artifact loaders |
 | `co_cli/memory/service.py` | pure-function write layer: `save_artifact()`, `mutate_artifact()`, `reindex()` |
-| `co_cli/memory/_mutator.py` | `atomic_write()` — temp-file + `os.replace` write helper |
+| `co_cli/persistence/atomic.py` | `atomic_write_text()` / `atomic_write_bytes()` — full-overwrite atomic write helpers (tempfile + `os.replace`, parent mkdir built-in) |
 | `co_cli/memory/archive.py` | `archive_artifacts()`, `restore_artifact()` |
 | `co_cli/memory/text_chunker.py` | knowledge artifact text chunking |
 | `co_cli/memory/frontmatter.py` | frontmatter parse, validate, render |
@@ -143,7 +132,7 @@ There are no aliases — the renames are hard. Internal callers were updated in 
 | `co_cli/tools/memory/manage.py` | `knowledge_manage()` — knowledge write surface |
 | `co_cli/tools/memory/recall.py:_grep_recall` | grep fallback when `memory_store` is `None` |
 
-## 8. Config
+## 7. Config
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
@@ -164,7 +153,7 @@ Backend, embedding, and retrieval settings (shared with other channels) live in 
 | --- | --- | --- | --- |
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | knowledge artifact source-of-truth directory |
 
-## 9. Test Gates
+## 8. Test Gates
 
 | Property | Test file |
 | --- | --- |
