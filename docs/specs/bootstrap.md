@@ -8,7 +8,7 @@ Session phases:
 ```text
 CLI start
   -> create_deps
-  -> build_agent
+  -> build_orchestrator(ORCHESTRATOR_SPEC, deps)
   -> restore_session
   -> init_session_index
   -> enter REPL
@@ -55,7 +55,10 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │
 ├─ deps.session.reasoning_display = CLI-selected mode
 ├─ completer.words = _build_completer_words(deps.skill_index)
-├─ build_agent(config=deps.config, model=deps.model, toolset=deps.toolset, tool_index=deps.tool_index)
+├─ build_orchestrator(ORCHESTRATOR_SPEC, deps)
+│      composes static instructions from ORCHESTRATOR_SPEC.static_instruction_builders (5 builders:
+│      static, toolset guidance, category awareness, skill manifest, personality critique),
+│      registers per-turn instructions (safety, current_time), and attaches history processors.
 │
 ├─ restore_session(deps, frontend) → current_session_path
 ├─ init_session_index(deps, current_session_path, frontend)
@@ -172,7 +175,7 @@ After bootstrap completes, `deps.config` is treated as read-only by convention e
 
 ### Step 11. Build the foreground agent
 
-Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, renders the bundled skill manifest via `render_skill_manifest(deps.skill_index, deps.skills_dir, deps.user_skills_dir)`, and calls `build_agent(config=deps.config, model=deps.model, toolset=deps.toolset, tool_index=deps.tool_index, skill_manifest=...)`. Prompt instruction assembly belongs to agent construction, not to bootstrap.
+Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, and calls `build_orchestrator(ORCHESTRATOR_SPEC, deps)`. The orchestrator builder composes its static instructions from the spec's five builders (static instructions, toolset guidance, category awareness, skill manifest, personality critique) — each pulls from `deps` directly. Prompt instruction assembly belongs to agent construction, not to bootstrap.
 
 ### Step 12. Restore or create the session
 
@@ -232,7 +235,7 @@ These settings most directly affect bootstrap behavior.
 | `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Selects provider-specific bootstrap checks and model wiring |
 | `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Host used by Ollama checks and runtime model calls |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
-| `llm.max_ctx` | — | `131072` | Ceiling on probed Ollama context window; `deps.model_max_ctx = min(probe, max_ctx)` |
+| `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window; `deps.model_max_ctx = min(probe, max_ctx)` |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
 | `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
 | `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge` | User-global knowledge artifact directory synced during bootstrap (extracted facts, articles, notes) |
@@ -265,7 +268,7 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/config/core.py` | Defines `Settings`, layered config loading, and env override mapping |
 | `co_cli/skills/loader.py` | `load_skills` — two-tier skill file loading used during bootstrap and `/skills reload` |
 | `co_cli/commands/core.py` | Slash-command `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` REPL command family (list/check/lint/reload/review) |
+| `co_cli/commands/skills.py` | `/skills` REPL command family (list/check/lint/reload/review/usage/pin/unpin/curator) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
 | `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/memory/memory_store.py` | Implements the `MemoryStore` used when bootstrap enables indexed retrieval |

@@ -15,7 +15,7 @@ The agent has no persistent state in model weights. Each request is reconstructe
 flowchart TD
     subgraph Build["agent construction (once)"]
         Static[build_static_instructions]
-        MainAgent[build_agent]
+        MainAgent[build_orchestrator]
         Static --> MainAgent
     end
 
@@ -40,12 +40,13 @@ flowchart TD
 
 ### 2.1 Static Instruction Assembly
 
-`build_agent()` assembles `static_instructions` from up to four ordered parts, all evaluated once at agent construction:
+`build_orchestrator()` assembles `static_instructions` by calling each builder in `ORCHESTRATOR_SPEC.static_instruction_builders` in order — five thin closures, each taking `deps` and returning `str | None`. All evaluated once at agent construction:
 
-1. **`build_static_instructions(config)`** — soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. Character memories and critique are NOT included here.
-2. **`build_toolset_guidance(tool_index)`** — tool-specific guidance blocks, each gated on the tool being present. Currently gated: `knowledge_search` / `session_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
-3. **`build_category_awareness_prompt(tool_index)`** — single-sentence category-level hint listing deferred tool categories reachable via `search_tools`. Derived from `VisibilityPolicyEnum.DEFERRED` entries. Empty when no deferred tools exist.
-4. **`load_soul_critique(config.personality)`** — self-assessment lens (`## Review lens`), appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
+1. **`_static_instructions_provider(deps)`** — wraps `build_static_instructions(deps.config)`: soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. Character memories and critique are NOT included here.
+2. **`_toolset_guidance_provider(deps)`** — wraps `build_toolset_guidance(deps.tool_index)`: tool-specific guidance blocks, each gated on the tool being present. Currently gated: `knowledge_search` / `session_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
+3. **`_category_awareness_provider(deps)`** — wraps `build_category_awareness_prompt(deps.tool_index)`: single-sentence category-level hint listing deferred tool categories reachable via `search_tools`. Derived from `VisibilityPolicyEnum.DEFERRED` entries. Empty when no deferred tools exist.
+4. **`_skill_manifest_provider(deps)`** — wraps `render_skill_manifest(deps.skill_index, deps.skills_dir, deps.user_skills_dir)`: bundled-skill manifest. Empty when no skills are loaded.
+5. **`_personality_critique_provider(deps)`** — wraps `load_soul_critique(deps.config.personality)` and prefixes with `## Review lens` heading; appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
 
 The parts are joined with `"\n\n"` and passed as the `instructions=` string to `Agent(...)`. The string is stable for the entire session — it never changes between turns.
 
@@ -53,7 +54,7 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 
 ### 2.2 Dynamic Instruction Layers
 
-Registered in `build_agent()` (`co_cli/agents/core.py`), evaluated fresh per request:
+Registered in `build_orchestrator()` (`co_cli/agent/build.py`) from `ORCHESTRATOR_SPEC.per_turn_instructions`, evaluated fresh per request:
 
 | Layer | Condition | Content |
 | --- | --- | --- |
@@ -72,7 +73,7 @@ New dynamic surfaces go in the tail. Audit every new `@agent.instructions` regis
 
 ### 2.4 History Processors And Dynamic Instructions
 
-Pure-transformer processors run in this exact order (registered in `build_agent()`):
+Pure-transformer processors run in this exact order (registered in `build_orchestrator()` from `ORCHESTRATOR_SPEC.history_processors`):
 
 | Processor | Behavior |
 | --- | --- |
@@ -133,15 +134,15 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `safety_prompt(ctx) -> str` | `co_cli/agents/_instructions.py` | `@agent.instructions` — doom-loop / shell-error warning; output is ephemeral, not persisted to history |
-| `current_time_prompt(ctx) -> str` | `co_cli/agents/_instructions.py` | `@agent.instructions` — current date/time string at tail position; ephemeral grounding |
+| `safety_prompt(ctx) -> str` | `co_cli/agent/_instructions.py` | `@agent.instructions` — doom-loop / shell-error warning; output is ephemeral, not persisted to history |
+| `current_time_prompt(ctx) -> str` | `co_cli/agent/_instructions.py` | `@agent.instructions` — current date/time string at tail position; ephemeral grounding |
 
 ## 5. Files
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/agents/core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
-| `co_cli/agents/_instructions.py` | per-turn instruction callbacks: `current_time_prompt`, `safety_prompt` |
+| `co_cli/agent/core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
+| `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `current_time_prompt`, `safety_prompt` |
 | `co_cli/context/assembly.py` | `build_static_instructions()` — soul + mindsets + rules + recency advisory; rule-file validation |
 | `co_cli/context/guidance.py` | `MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE` constants; `build_toolset_guidance()` — gated on tool presence |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |

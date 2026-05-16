@@ -246,6 +246,9 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 |---------|---------|---------|-------------|
 | `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable background session-review firing on the turn-boundary cadence |
 | `skills.review_nudge_interval` | `CO_SKILLS_REVIEW_NUDGE_INTERVAL` | `5` | Tool-iteration count that triggers a background review fire (min `1`) |
+| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill usage counters and timestamps to `.usage.json` |
+| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable curator second-pass (state transitions + consolidation) after the session reviewer |
+| `skills.curator_interval_hours` | `CO_SKILLS_CURATOR_INTERVAL_HOURS` | `168` | Minimum hours between curator runs (7 days) |
 
 ### MCP servers (`mcp_servers.*`)
 

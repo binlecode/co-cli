@@ -264,10 +264,10 @@ The session-end wrapper logs completion counts when changes occurred and logs ti
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `knowledge.consolidation_enabled` | `CO_KNOWLEDGE_CONSOLIDATION_ENABLED` | `false` | Enables dedup-on-write and dream-cycle maintenance |
-| `knowledge.consolidation_trigger` | n/a | `session_end` | Automatic trigger mode: `session_end` or `manual` |
-| `knowledge.consolidation_lookback_sessions` | n/a | `5` | Number of recent transcript files considered by mining |
-| `knowledge.consolidation_similarity_threshold` | n/a | `0.75` | Token-Jaccard threshold for dedup and merge clusters |
-| `knowledge.max_artifact_count` | n/a | `300` | Soft corpus-size setting; not directly enforced by the current dream cycle |
+| `knowledge.consolidation_trigger` | `CO_KNOWLEDGE_CONSOLIDATION_TRIGGER` | `session_end` | Automatic trigger mode: `session_end` or `manual` |
+| `knowledge.consolidation_lookback_sessions` | `CO_KNOWLEDGE_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Number of recent transcript files considered by mining |
+| `knowledge.consolidation_similarity_threshold` | `CO_KNOWLEDGE_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for dedup and merge clusters |
+| `knowledge.max_artifact_count` | `CO_KNOWLEDGE_MAX_ARTIFACT_COUNT` | `300` | Soft corpus-size setting; not directly enforced by the current dream cycle |
 | `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | Age and last-recall cutoff for decay candidacy |
 | `knowledge.chunk_tokens` | `CO_KNOWLEDGE_CHUNK_TOKENS` | `600` | Chunk size used when indexing consolidated artifacts |
 | `knowledge.chunk_overlap_tokens` | `CO_KNOWLEDGE_CHUNK_OVERLAP_TOKENS` | `80` | Chunk overlap used when indexing consolidated artifacts |

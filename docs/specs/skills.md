@@ -38,6 +38,21 @@ Per-turn: `main.py` saves current env for keys in `skill_env`, calls `os.environ
 
 ## 2. Core Logic
 
+### Invocation Paths
+
+Skills are reached through three distinct paths:
+
+**Path 1 — User slash-command.**
+The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name in `skill_index`, expands the body (argument substitution), and returns `DelegateToAgent`. The REPL then calls `run_turn()` with the expanded body as the user input — a full new agent turn. The skill body replaces the user's input for that turn; the model never sees the raw `/skill-name` string.
+
+**Path 2 — Model inline use.**
+The agent reads the `<available_skills>` manifest injected into the static system prompt, identifies a matching skill, and calls `skill_view(name)` to load the full body. The body is returned as a tool result inside the current turn. The agent reads it and follows its phases as its procedure — no new turn, no dispatch, no REPL involvement. This is the primary path for agent-initiated skill use.
+
+**Path 3 — Model write.**
+The agent calls `skill_manage(action=...)` to create, edit, patch, or delete a user skill. Used for drift fixes (stale steps), promoting a reusable procedure to a new skill, or removing an obsolete one. `skill_manage` requires approval, runs the security scan, and calls `refresh_skills(deps)` on success so the change is live immediately.
+
+Background passes (session reviewer, curator) also write via `skill_manage` but run in forked `CoDeps` with auto-approved skill ops — they are extensions of Path 3, not separate paths.
+
 ### Skill Model
 
 `SkillInfo` in `co_cli/skills/skill_types.py`:
@@ -78,7 +93,7 @@ create_deps()
 
 ### Load Safety
 
-**Containment.** For user-global skills, `_is_safe_skill_path(path, root)` resolves symlinks and verifies the resolved path is inside the load root. Files escaping containment are skipped with a warning. Bundled skills are not checked.
+**Containment.** For user-global skills, symlinks are rejected outright — only regular files are loaded. Symlink files are skipped with a warning. Bundled skills are not checked.
 
 **Security scan.** `scan_skill_content()` runs static regex checks on every user-global file at startup and on `/skills reload`. Warning classes: credential exfiltration, curl/wget piped to shell, destructive shell fragments, prompt-injection text. Findings are warnings — the file still loads.
 
@@ -86,26 +101,36 @@ create_deps()
 
 ### Dispatch
 
+Skill dispatch is the third branch of `dispatch()` (after built-ins and before unknown-command error). Full routing lives in `tui.md`; this section covers the skill branch only.
+
 ```
-dispatch(raw_input, ctx)
-  ├─ built-in in BUILTIN_COMMANDS?   → execute built-in
-  ├─ name in ctx.deps.skill_index?
-  │    yes → copy body → delegated_input
-  │           expand arguments ($ARGUMENTS, $0, $1, ...)
-  │           set deps.runtime.active_skill_name
-  │           return DelegateToAgent
-  └─ unknown → error
+name matched in ctx.deps.skill_index
+  body = skill.body
+  if args non-empty AND "$ARGUMENTS" in body:
+    args_list = args.split()           # whitespace-split positional args
+    body = body.replace("$ARGUMENTS", args)   # raw argument string
+    body = body.replace("$0", name)           # skill name
+    for i, arg in reversed(enumerate(args_list, 1)):
+      body = body.replace(f"${i}", arg)       # $1, $2, ... positional
+  # else: body used as-is (no args or no $ARGUMENTS token in body)
+  return DelegateToAgent(
+    delegated_input=body,
+    skill_env=dict(skill.skill_env),   # copy of filtered env vars
+    skill_name=skill.name,             # stored as deps.runtime.active_skill_name by caller
+  )
 ```
+
+Positional replacements iterate in reverse order so `$1` does not partially match `$10`, `$11`, etc.
 
 ### Argument Expansion
 
-| Token | Replacement |
-|-------|------------|
-| `$ARGUMENTS` | raw argument string |
-| `$0` | skill name |
-| `$1`, `$2`, ... | positional whitespace-split arguments |
+| Token | Replacement | Condition |
+|-------|------------|-----------|
+| `$ARGUMENTS` | raw argument string (unsplit) | only when args non-empty and token present in body |
+| `$0` | skill name | same |
+| `$1`, `$2`, ... | whitespace-split positional args | same; missing positionals left as literal `$N` |
 
-If no arguments are passed, the body is used as-is.
+If no arguments are passed, or the body contains no `$ARGUMENTS` token, the body is used verbatim.
 
 ### Skill Env Lifecycle
 
@@ -126,7 +151,7 @@ main.py — per-turn
 |---------|---------|
 | `/skills list` | show loaded skills |
 | `/skills check` | compare available files vs loaded skills across both tiers; report skip reasons |
-| `/skills lint [<name>\|--all]` | run R1–R10 lint rules; exit 1 on any finding |
+| `/skills lint [<name>\|--all]` | run R1–R4 advisory lint rules; exit 1 on any finding |
 | `/skills reload` | rescan user-global directory and reload into live session |
 | `/skills review run` | manually trigger one session-review pass against current transcript |
 | `/skills usage [<name>]` | print the per-skill usage sidecar (table for all; full record for one) |
@@ -140,7 +165,7 @@ main.py — per-turn
 
 ### Authoring Contract
 
-Every skill body must follow this structure:
+Every skill body has this minimum shape:
 
 ```markdown
 ---
@@ -151,23 +176,7 @@ user-invocable: true
 
 # <Skill name>
 
-**Invocation:** `/<name> [optional args]`
-
-<one paragraph: what the skill does and when to use it>
-
----
-
-## Phase 1 — <Accomplishment name>
-
-<step-by-step instructions>
-
-## Phase N — <Accomplishment name>
-
-...
-
-## Rules
-
-- <terminal invariant>
+<body — whatever structure fits the skill>
 ```
 
 Section requirements:
@@ -176,41 +185,51 @@ Section requirements:
 |---------|----------|-------|
 | Frontmatter `description` | Yes | ≤1024 chars; drives manifest injection |
 | H1 title | Yes | First non-frontmatter heading |
-| `**Invocation:**` line | Yes | In the first ~10 lines of body |
-| Opening summary paragraph | Yes | One paragraph after the invocation line |
-| At least one `## Phase N — <name>` | Yes | N is 1-indexed integer |
-| `## Rules` | No | Terminal invariants only |
+| Body content | Yes | Whatever structure best fits the skill |
 
 Length budget:
 
 | Scope | Limit | Enforcement |
 |-------|-------|-------------|
-| Frontmatter `description` | ≤1024 chars | Hard — validated at load time |
-| Body total | ≤8000 chars | Soft — R8 lint warning |
-| Each phase section | ≤2000 chars | Soft — R9 lint warning |
+| Frontmatter `description` | ≤1024 chars | Hard — `_validate_skill_content` blocks the write |
+| Total content | ≤50,000 chars | Hard — `_validate_skill_content` blocks the write |
+| Body | ≤8000 chars | Soft — R4 lint warning ("consider splitting") |
 
-Phase header format: `## Phase N — <Name>` — H2, integer N, em-dash (` — `), name describing what the phase **accomplishes** (e.g. `Phase 1 — Load`, not `Phase 1 — First steps`).
+Recommended structure for multi-step procedural skills (template, not requirement):
+
+```markdown
+## Phase 1 — <Accomplishment name>
+<step-by-step instructions>
+
+## Phase N — <Accomplishment name>
+...
+
+## Rules
+- <terminal invariant>
+```
+
+Phase headers use H2 with integer N, em-dash (` — `), and a name describing what the phase **accomplishes** (e.g. `Phase 1 — Load`, not `Phase 1 — First steps`). Short skills, reference tables, and quick-action skills do not need this structure.
 
 Style: imperative voice (`Run X`, `Check Y`), concrete tool names in backticks, no filler. `## Rules` entries are invariants, not steps.
 
 ### Lint Rules
 
-Ten rules enforced by `/skills lint`. Each finding is `R<n>: <message>` with a line number; at most one finding per rule per file.
+Four advisory rules surfaced by `/skills lint` and attached to `skill_manage` success output as `lint_warnings`. Each finding is `R<n>: <message>`; lint never blocks a write.
 
 | Rule | Check | Why |
 |------|-------|-----|
 | **R1** | Frontmatter present | Loader rejects files without frontmatter |
-| **R2** | `description` present and non-empty | Absent description = invisible in manifest |
-| **R3** | `description` ≤ 1024 chars | Longer descriptions bloat manifest and degrade prompt cache hit rates |
-| **R4** | H1 title present after frontmatter | Anchors skill identity in `skill_view` output |
-| **R5** | `**Invocation:**` line in first 10 body lines | Invocation discovery without reading the whole body |
-| **R6** | At least one `## Phase N — <name>` section | Structure required for model navigation of long bodies |
-| **R7** | All phase headers match `## Phase N — <name>` exactly | Inconsistent heading shape breaks the model's reading reflex |
-| **R8** | Body total ≤ 8000 chars | Long bodies signal overly broad skills that should be split |
-| **R9** | Each phase section ≤ 2000 chars | Within-phase length cap; overly long phases should be split |
-| **R10** | No `TODO`, `FIXME`, or `XXX` markers | Bundled skills are reference-quality; markers signal in-progress work |
+| **R2** | `description` present, non-empty, ≤ 1024 chars | Missing description = invisible in manifest; long descriptions bloat manifest and degrade prompt cache hit rates |
+| **R3** | H1 title present after frontmatter | Anchors skill identity in `skill_view` output |
+| **R4** | Body ≤ 8000 chars (warning) | Long bodies signal overly broad skills that should be split; the hard cap is 50,000 chars |
 
-Lint is collaborative — it catches well-meaning skills that won't perform well. The security scan (`scan_skill_content`) is adversarial — it catches actively malicious content. Lint never blocks load; security scan blocks on findings at write time.
+One additional gate for the shipped reference library only (run from `tests/test_flow_skill_bundled_library.py`):
+
+| Rule | Check | Scope |
+|------|-------|-------|
+| **B1** | No `TODO`, `FIXME`, or `XXX` markers | `co_cli/skills/*.md` only |
+
+Lint is collaborative — it catches well-meaning skills that won't perform well. The security scan (`scan_skill_content`) is adversarial — it catches actively malicious content. Integrity rules (frontmatter integrity, description present and ≤1024, total content ≤100k) block the write via `_validate_skill_content`; lint never blocks; security scan blocks on findings at write time.
 
 ### Curation & Self-Improvement
 
@@ -283,7 +302,7 @@ Pinned skills (`/skills pin <name>`) are exempt from all state transitions.
 | `~/.co-cli/skills/.usage.json` | `co_cli/skills/usage.py` | per-skill usage sidecar (counters, timestamps, state, pinned) |
 | `~/.co-cli/skills/.curator_state.json` | `co_cli/skills/curator.py` | curator run state (`last_run_at`, `run_count`, `paused`) |
 | `~/.co-cli/skills/.archive/` | `co_cli/skills/curator.py` | archived skills moved here; restored via `/skills curator restore` |
-| `~/.co-cli/curator-runs/<timestamp>-<run_id>/` | `co_cli/agents/skill_curator.py` | per-run curator reports (`run.json`, `run.md`) |
+| `~/.co-cli/curator-runs/<timestamp>-<run_id>/` | `co_cli/skills/curator.py` | per-run curator reports (`run.json`, `run.md`) |
 
 ## 4. Public Interface
 
@@ -332,8 +351,8 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | File | Purpose |
 |------|---------|
 | `co_cli/skills/skill_types.py` | `SkillInfo` frozen dataclass |
-| `co_cli/skills/_lint.py` | `lint_skill(content, path)` — R1–R10 validator; `LintFinding` dataclass |
-| `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content` |
+| `co_cli/skills/lint.py` | `lint_skill(content, path)` — R1–R4 advisory validator; `lint_bundled_extras(content)` — B1 no-marker gate; `LintFinding` dataclass |
+| `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `scan_skill_content` |
 | `co_cli/skills/index.py` | `set_skill_index()`, `get_skill_index()` |
 | `co_cli/skills/lifecycle.py` | `refresh_skills`, `discover_skill_files`, `read_skill_meta`, `cleanup_skill_run_state` |
 | `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model |
@@ -346,9 +365,8 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_index`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer`, `fork_deps_for_curator` |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` — both call into `co_cli/skills/usage.py` on success |
-| `co_cli/agents/session_review.py` | `run_session_review()` — pass 1 (skill+knowledge reviewer) |
-| `co_cli/agents/skill_curator.py` | `run_curator()` — pass 2 (state transitions + consolidation + report) |
-| `co_cli/skills/curator.py` | state machine (`apply_state_transitions`, `archive_skill`, `restore_skill`, `read_curator_state`, `write_curator_state`) |
+| `co_cli/skills/session_review.py` | `SESSION_REVIEW_SPEC`, `run_session_review()` — pass 1 (skill+knowledge reviewer) |
+| `co_cli/skills/curator.py` | `CURATOR_SPEC`, `run_curator()` — pass 2 (state transitions + consolidation + report); state machine (`apply_state_transitions`, `archive_skill`, `restore_skill`, `read_curator_state`, `write_curator_state`) |
 | `co_cli/skills/usage.py` | usage sidecar I/O (`bump_view`, `bump_use`, `bump_patch`, `record_create`, `forget`, `set_pinned`) |
 | `co_cli/skills/session_review_prompts.py` | reviewer agent instructions and prompt template |
 | `co_cli/skills/curator_prompts.py` | curator agent instructions and prompt template |
@@ -360,21 +378,18 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | Property | Test file |
 |----------|-----------|
 | All bundled skills load without error | `tests/test_flow_skill_bundled_library.py` |
-| All bundled skills pass lint (R1–R10) | `tests/test_flow_skill_bundled_library.py` |
+| All bundled skills pass lint (R1–R4) | `tests/test_flow_skill_bundled_library.py` |
+| All bundled skills pass B1 (no TODO/FIXME/XXX markers) | `tests/test_flow_skill_bundled_library.py` |
 | Skill manifest renders correct entry count for bundled set | `tests/test_flow_skill_bundled_library.py` |
 | /skill-creator dispatches to DelegateToAgent | `tests/test_flow_skill_creator_dispatch.py` |
 | skill-creator body references `skill_manage(action='create')` | `tests/test_flow_skill_creator_dispatch.py` |
 | R1 fires on missing frontmatter | `tests/test_flow_skill_lint.py` |
-| R2 fires on missing or empty description | `tests/test_flow_skill_lint.py` |
-| R3 fires when description exceeds 1024 chars | `tests/test_flow_skill_lint.py` |
-| R4 fires on missing H1 title | `tests/test_flow_skill_lint.py` |
-| R5 fires when **Invocation:** line is past line 10 | `tests/test_flow_skill_lint.py` |
-| R6 fires when no Phase section exists | `tests/test_flow_skill_lint.py` |
-| R7 fires on malformed phase header (no em-dash, colon separator) | `tests/test_flow_skill_lint.py` |
-| R8 fires when body exceeds 8000 chars | `tests/test_flow_skill_lint.py` |
-| R9 fires when a phase section exceeds 2000 chars | `tests/test_flow_skill_lint.py` |
-| R10 fires on TODO/FIXME/XXX markers | `tests/test_flow_skill_lint.py` |
-| §6-compliant content produces no lint findings | `tests/test_flow_skill_lint.py` |
+| R2 fires on missing, empty, or overlong description | `tests/test_flow_skill_lint.py` |
+| R3 fires on missing H1 title | `tests/test_flow_skill_lint.py` |
+| R4 fires when body exceeds 8000 chars | `tests/test_flow_skill_lint.py` |
+| B1 fires on TODO/FIXME/XXX markers | `tests/test_flow_skill_lint.py` |
+| Clean content produces no lint findings | `tests/test_flow_skill_lint.py` |
+| skill_manage success output includes lint_warnings when content has advisory findings | `tests/test_flow_skills_manage.py` |
 | Bundled skill renders as `<skill>` entry in manifest | `tests/test_flow_skill_manifest.py` |
 | User-installed skills appear in manifest | `tests/test_flow_skill_manifest.py` |
 | User skill shadows bundled skill with its own description | `tests/test_flow_skill_manifest.py` |

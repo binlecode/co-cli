@@ -172,7 +172,7 @@ Result fields for `session_search`: `{session_id, when, source, chunk_text, star
 | `co_cli/tools/memory/recall.py` | `knowledge_search()` — knowledge ranked recall; `session_search()` — session ranked recall; `_grep_recall()` — knowledge disk-scan fallback (no store) |
 | `co_cli/tools/memory/manage.py` | `knowledge_manage()` — knowledge write surface |
 | `co_cli/tools/memory/view.py` | `knowledge_view()` — full artifact body reader; `session_view()` — verbatim session turn reader |
-| `co_cli/agents/_native_toolset.py` | foreground toolset registration |
+| `co_cli/agent/toolset.py` | foreground toolset registration |
 
 ### Bootstrap and runtime
 

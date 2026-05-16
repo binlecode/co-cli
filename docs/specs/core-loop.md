@@ -247,7 +247,7 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-The main agent is built with five registered history processors (pure transformers) in this exact order (see `co_cli/agents/core.py` `history_processors=[...]`):
+The main agent is built with five registered history processors (pure transformers) in this exact order (see `co_cli/agent/core.py` `history_processors=[...]`):
 
 1. `dedup_tool_results`
 2. `evict_old_tool_results`
@@ -291,7 +291,7 @@ Compaction behavior:
 
 Knowledge recall is on-demand, not injected per-turn:
 
-- the session-start date is frozen into the static instructions in `build_agent()` — stable for the entire session
+- the session-start date is frozen into the static instructions in `build_orchestrator()` — stable for the entire session
 - personality memories live in the static system prompt (injected once at agent construction)
 - the agent calls `knowledge_search()` or `session_search()` proactively when past context is relevant
 
@@ -393,7 +393,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `recover_overflow_history(ctx, messages, budget, tail_fraction)` | `co_cli/context/compaction.py` | Async — strip-then-summarize overflow recovery on HTTP 400/413 |
 | `dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`, `sanitize_surrogate_codepoints` | `co_cli/context/history_processors.py` | Registered history processors run in order before every model request |
 | `strip_all_tool_returns(messages)` | `co_cli/context/history_processors.py` | Replaces every `ToolReturnPart` content with a per-tool semantic marker; idempotent |
-| `safety_prompt(ctx)`, `current_time_prompt(ctx)` | `co_cli/agents/_instructions.py` | Dynamic `@agent.instructions` callbacks evaluated per request |
+| `safety_prompt(ctx)`, `current_time_prompt(ctx)` | `co_cli/agent/_instructions.py` | Dynamic `@agent.instructions` callbacks evaluated per request |
 
 ### Approval flow
 
@@ -411,8 +411,8 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/context/history_processors.py` | registered history processors (`dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`, `sanitize_surrogate_codepoints`) and the `strip_all_tool_returns` recovery helper |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
-| `co_cli/agents/core.py` | main agent factory |
-| `co_cli/agents/_native_toolset.py` | native filtered toolset construction with per-tool loading policy |
+| `co_cli/agent/core.py` | main agent factory |
+| `co_cli/agent/toolset.py` | native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
 | `co_cli/tools/shell/execute.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |

@@ -16,13 +16,14 @@ Personality enters the agent via the static prompt — set once at construction 
 ```
 Session start
     ↓
-build_agent(config)
+build_orchestrator(ORCHESTRATOR_SPEC, deps)
     ↓
-    [1] build_static_instructions → soul seed, mindsets, behavioral rules, recency advisory
-    [2] build_toolset_guidance         — tool-specific guidance (conditional on tool presence)
-    [3] build_category_awareness_prompt — deferred tool category hint (conditional)
-    [4] render_skill_manifest          — <available_skills> for bundled skills (conditional)
-    [5] load_soul_critique             — ## Review lens, last (conditional on personality + critique file)
+    iterates ORCHESTRATOR_SPEC.static_instruction_builders in order:
+    [1] _static_instructions_provider   → soul seed, mindsets, behavioral rules, recency advisory
+    [2] _toolset_guidance_provider      — tool-specific guidance (conditional on tool presence)
+    [3] _category_awareness_provider    — deferred tool category hint (conditional)
+    [4] _skill_manifest_provider        — <available_skills> for bundled skills (conditional)
+    [5] _personality_critique_provider  — ## Review lens, last (conditional on personality + critique file)
     → joined and set as Agent.instructions (static, once per session)
 
 Character canon (souls/{role}/memories/*.md) is indexed at bootstrap by `_sync_canon_store()`
@@ -91,15 +92,19 @@ section_4 = RECENCY_CLEARING_ADVISORY           # Static advisory for tool-resul
 return "\n\n".join(non_empty_sections)
 ```
 
-`build_agent()` then appends operational guidance and critique after `build_static_instructions`:
+`build_orchestrator()` then iterates `ORCHESTRATOR_SPEC.static_instruction_builders`, calling each closure with `deps`:
 
 ```
-static_parts = [build_static_instructions(config)]
-static_parts += [build_toolset_guidance(...)]        # conditional on tool presence
-static_parts += [build_category_awareness_prompt(...)] # conditional on deferred tools
-if config.personality:
-    crit = load_soul_critique(role)                  # ## Review lens, always last
-    if crit: static_parts.append(...)
+parts = []
+for builder in ORCHESTRATOR_SPEC.static_instruction_builders:
+    piece = builder(deps)                            # _static_instructions_provider,
+                                                     # _toolset_guidance_provider,
+                                                     # _category_awareness_provider,
+                                                     # _skill_manifest_provider,
+                                                     # _personality_critique_provider
+    if piece:
+        parts.append(piece)
+static_instructions = "\n\n".join(parts)
 ```
 
 Character canon (`memories/*.md`) is NOT included in the static prompt. It is indexed at
@@ -207,5 +212,6 @@ for missing mindset files.
 | `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `06_skill_protocol.md` |
 | `co_cli/personality/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
-| `co_cli/agents/core.py` | `build_agent()` — calls `build_static_instructions()` and registers instruction callbacks |
-| `co_cli/agents/_instructions.py` | `current_time_prompt()` — dynamic instruction returning current date/time; `safety_prompt()` — doom-loop and shell-error warnings |
+| `co_cli/agent/build.py` | `build_orchestrator()` — iterates `ORCHESTRATOR_SPEC.static_instruction_builders` and registers per-turn instruction callbacks |
+| `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` and its 5 static-instruction builder closures |
+| `co_cli/agent/_instructions.py` | `current_time_prompt()` — dynamic instruction returning current date/time; `safety_prompt()` — doom-loop and shell-error warnings |
