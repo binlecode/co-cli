@@ -74,16 +74,6 @@ def scan_skill_content(content: str) -> list[str]:
     return warnings
 
 
-def _is_safe_skill_path(path: Path, root: Path) -> bool:
-    """Return True when path is safe to load (not a symlink pointing outside root)."""
-    if not path.is_symlink():
-        return True
-    try:
-        return path.resolve().is_relative_to(root.resolve())
-    except (OSError, ValueError):
-        return False
-
-
 def _load_skill_file(
     path: Path,
     result: dict[str, SkillInfo],
@@ -93,10 +83,8 @@ def _load_skill_file(
     errors: list[str] | None = None,
 ) -> None:
     """Parse a single skill .md file and add to result dict if valid."""
-    if not _is_safe_skill_path(path, root):
-        logger.warning(
-            f"Skill path containment violation — skipping {path} (expected root: {root})"
-        )
+    if path.is_symlink():
+        logger.warning(f"Symlink skill rejected — skipping {path}")
         return
     name = path.stem
     try:

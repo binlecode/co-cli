@@ -363,7 +363,6 @@ async def session_search(
     visibility=VisibilityPolicyEnum.ALWAYS,
     is_read_only=True,
     is_concurrent_safe=True,
-    delegation=frozenset({"knowledge_analyze", "session_reviewer"}),
 )
 async def knowledge_search(
     ctx: RunContext[CoDeps],

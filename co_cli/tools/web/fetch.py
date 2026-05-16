@@ -109,7 +109,6 @@ def _build_fetch_headers(hostname: str | None) -> dict[str, str]:
     is_read_only=True,
     is_concurrent_safe=True,
     retries=3,
-    delegation=frozenset({"web_research"}),
 )
 async def web_fetch(
     ctx: RunContext[CoDeps],

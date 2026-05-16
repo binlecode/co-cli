@@ -23,38 +23,28 @@ If both pass, continue.
 
 ## Phase 2 — Shape
 
-Draft the skill body in the §6 format (`skill.md` §6):
+Draft the skill body (`skill.md` §6):
 
 1. **Frontmatter** — `description` ≤1024 chars (single sentence: when to use this skill), `argument-hint` if args apply, `user-invocable: true`.
 2. **H1 title** — matches the slash name.
-3. **`**Invocation:**` line** — `/<name> [args]` in backticks; appears within the first 10 lines of the body.
-4. **Opening paragraph** — one paragraph: what the skill does and when.
-5. **Horizontal rule** — `---` after the opening paragraph.
-6. **Phases** — 2–5 `## Phase N — <name>` sections, each ≤2000 chars. Name describes what the phase accomplishes ("Phase 1 — Validate", not "Phase 1 — First step").
-7. **`## Rules` section** — optional; terminal invariants only ("Never X without Y first").
+3. **Body** — whatever structure fits the skill. For multi-step procedures, the recommended template is `## Phase N — <Name>` sections with a final `## Rules` section for terminal invariants. Short skills, reference tables, and quick-action skills do not need this template.
 
 Name by task type, not the specific instance: `review` not `review-pr-123`, `deploy` not `deploy-main-2025`.
 
 ## Phase 3 — Lint
 
-Check the draft against the R1–R10 rules before writing:
+Check the draft against the R1–R4 advisory rules before writing:
 
 - R1: opens with `---` frontmatter
-- R2: `description` present and non-empty
-- R3: description ≤1024 chars
-- R4: H1 present after frontmatter
-- R5: `**Invocation:**` line in the first 10 body lines
-- R6: at least one `## Phase N — <name>` section
-- R7: all phase headers match `## Phase N — <name>` (H2, integer N, em-dash separator)
-- R8: body total ≤8000 chars
-- R9: each phase ≤2000 chars
-- R10: no work-in-progress markers in body
+- R2: `description` present, non-empty, and ≤1024 chars
+- R3: H1 present after frontmatter
+- R4: body ≤8000 chars (warning — consider splitting if exceeded)
 
-Fix any violations before writing. Run `/skills lint <name>` post-create to confirm.
+Fix R1/R2/R3 before writing (R1 and R2 are also enforced as hard blocks by `_validate_skill_content`). R4 is advisory; address it if the skill is genuinely overly broad. Run `/skills lint <name>` post-create to confirm.
 
 ## Phase 4 — Write
 
-Call `skill_manage(action='create', name=<task-type-name>, content=<body>)`.
+Call `skill_manage(action='create', name=<task-type-name>, content=<body>)`. Any advisory findings come back as `lint_warnings` in the result.
 
 On success, `refresh_skills` makes the skill immediately dispatchable and searchable — confirm with `skill_view(<name>)`.
 
@@ -63,5 +53,5 @@ On success, `refresh_skills` makes the skill immediately dispatchable and search
 - Search before creating: scan the `<available_skills>` manifest first to avoid duplicates.
 - Name by task type, not by instance.
 - Don't create for one-offs — the bar is repeated use of the same procedure.
-- Lint clean is non-negotiable: R1–R10 must pass before and after write.
+- R1–R3 must pass before write; R4 is advisory.
 - One procedure per skill: don't fold multiple workflows into one body.

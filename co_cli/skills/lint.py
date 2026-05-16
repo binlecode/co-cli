@@ -1,4 +1,16 @@
-"""Lint validator for skill SKILL.md files -- checks R1-R10."""
+"""Lint validator for skill SKILL.md files -- advisory authoring checks.
+
+Four runtime rules (R1-R4), all advisory. Per docs/specs/skills.md §6,
+lint never blocks load; integrity-blocking checks live in
+co_cli.tools.system.skills._validate_skill_content.
+
+Rules R1-R3 are hermes parity (tools/skill_manager_tool.py:_validate_frontmatter).
+R4 is co-cli-specific: a soft body-size warning at 8000 chars to flag overly
+broad skills that should be split.
+
+A separate lint_bundled_extras() function enforces the no-TODO-marker rule on
+the shipped reference library only (co_cli/skills/*.md).
+"""
 
 from __future__ import annotations
 
@@ -8,137 +20,92 @@ from pathlib import Path
 
 from co_cli.memory.frontmatter import parse_frontmatter
 
+_DESCRIPTION_MAX_CHARS = 1024
+_BODY_WARNING_CHARS = 8000
+_TODO_RE = re.compile(r"\b(TODO|FIXME|XXX)\b")
+
 
 @dataclass
 class LintFinding:
     rule: str
     message: str
-    line: int  # 1-indexed; 0 if file-level
-
-
-_PHASE_HEADER_RE = re.compile(r"^## Phase (\d+) — .+$")
-_PHASE_START_RE = re.compile(r"^## Phase ")
-_TODO_RE = re.compile(r"\b(TODO|FIXME|XXX)\b")
-
-
-def _check_meta(meta: dict, has_frontmatter: bool) -> list[LintFinding]:
-    """Check R1-R3: frontmatter presence and description field."""
-    findings: list[LintFinding] = []
-    if not has_frontmatter:
-        findings.append(
-            LintFinding(
-                rule="R1", message="Frontmatter missing -- file must open with ---", line=0
-            )
-        )
-    description = meta.get("description", "")
-    if not description or not str(description).strip():
-        findings.append(
-            LintFinding(
-                rule="R2", message="Frontmatter 'description' field is missing or empty", line=0
-            )
-        )
-    elif len(str(description)) > 1024:
-        findings.append(
-            LintFinding(
-                rule="R3",
-                message=f"'description' exceeds 1024 chars ({len(str(description))})",
-                line=0,
-            )
-        )
-    return findings
-
-
-def _check_phase_headers(body_lines: list[str]) -> list[LintFinding]:
-    """Check R6-R7: phase section presence and header format."""
-    findings: list[LintFinding] = []
-    phase_headers = [line for line in body_lines if _PHASE_HEADER_RE.match(line)]
-    if not phase_headers:
-        findings.append(
-            LintFinding(rule="R6", message="No '## Phase N -- <name>' section found", line=0)
-        )
-    malformed = [
-        (i + 1, line)
-        for i, line in enumerate(body_lines)
-        if _PHASE_START_RE.match(line) and not _PHASE_HEADER_RE.match(line)
-    ]
-    if malformed:
-        first_line_no, first_line = malformed[0]
-        findings.append(
-            LintFinding(
-                rule="R7",
-                message=f"Malformed phase header at line {first_line_no}: {first_line!r}",
-                line=first_line_no,
-            )
-        )
-    return findings
-
-
-def _check_phase_sizes(body_lines: list[str]) -> list[LintFinding]:
-    """Check R9: each phase section <= 2000 chars."""
-    phase_indices = [i for i, line in enumerate(body_lines) if _PHASE_HEADER_RE.match(line)]
-    for idx, start in enumerate(phase_indices):
-        end = phase_indices[idx + 1] if idx + 1 < len(phase_indices) else len(body_lines)
-        segment_text = "\n".join(body_lines[start:end])
-        if len(segment_text) > 2000:
-            return [
-                LintFinding(
-                    rule="R9",
-                    message=f"Phase section at line {start + 1} exceeds 2000 chars ({len(segment_text)})",
-                    line=start + 1,
-                )
-            ]
-    return []
-
-
-def _check_todo_markers(body_lines: list[str]) -> list[LintFinding]:
-    """Check R10: no TODO, FIXME, or XXX markers."""
-    for i, line in enumerate(body_lines):
-        match = _TODO_RE.search(line)
-        if match:
-            return [
-                LintFinding(
-                    rule="R10",
-                    message=f"Forbidden marker '{match.group()}' found at line {i + 1}",
-                    line=i + 1,
-                )
-            ]
-    return []
+    line: int
 
 
 def lint_skill(content: str, path: Path | None = None) -> list[LintFinding]:
-    """Run all R1-R10 checks. Returns findings list (empty = clean)."""
-    has_frontmatter = content.startswith("---")
-    if has_frontmatter:
-        meta, body = parse_frontmatter(content)
-    else:
-        meta, body = {}, content
+    """Run advisory rules R1-R4. Returns findings list (empty = clean).
+
+    The `path` parameter is accepted for caller convenience but not used.
+    """
+    del path
 
     findings: list[LintFinding] = []
-    findings.extend(_check_meta(meta, has_frontmatter))
 
-    body_lines = body.splitlines()
-
-    # R4: H1 title present after frontmatter
-    if not any(line.startswith("# ") for line in body_lines):
-        findings.append(LintFinding(rule="R4", message="H1 title missing in body", line=0))
-
-    # R5: **Invocation:** line present in first 10 lines of body
-    if not any("**Invocation:**" in line for line in body_lines[:10]):
+    if not content.startswith("---"):
         findings.append(
             LintFinding(
-                rule="R5", message="**Invocation:** line missing in first 10 body lines", line=0
+                rule="R1", message="frontmatter missing -- file must open with ---", line=0
+            )
+        )
+        meta, body = {}, content
+    else:
+        meta, body = parse_frontmatter(content)
+
+    description = meta.get("description", "")
+    desc_str = str(description).strip() if description is not None else ""
+    if not desc_str:
+        findings.append(
+            LintFinding(rule="R2", message="frontmatter 'description' missing or empty", line=0)
+        )
+    elif len(desc_str) > _DESCRIPTION_MAX_CHARS:
+        findings.append(
+            LintFinding(
+                rule="R2",
+                message=f"'description' exceeds {_DESCRIPTION_MAX_CHARS} chars ({len(desc_str)})",
+                line=0,
             )
         )
 
-    findings.extend(_check_phase_headers(body_lines))
+    body_lines = body.splitlines()
+    if not any(line.startswith("# ") for line in body_lines):
+        findings.append(LintFinding(rule="R3", message="H1 title missing in body", line=0))
 
-    # R8: Body total <= 8000 chars
-    if len(body) > 8000:
+    if len(body) > _BODY_WARNING_CHARS:
         findings.append(
-            LintFinding(rule="R8", message=f"Body exceeds 8000 chars ({len(body)})", line=0)
+            LintFinding(
+                rule="R4",
+                message=(
+                    f"body exceeds {_BODY_WARNING_CHARS} chars ({len(body)}); "
+                    "consider splitting into a narrower skill"
+                ),
+                line=0,
+            )
         )
 
-    findings.extend(_check_phase_sizes(body_lines))
-    findings.extend(_check_todo_markers(body_lines))
+    return findings
 
+
+def lint_bundled_extras(content: str) -> list[LintFinding]:
+    """Extra rule for the shipped reference library: no TODO/FIXME/XXX markers.
+
+    Bundled skills are reference-quality and must not carry in-progress markers.
+    User-installed skills are exempt; this check runs only from the bundled
+    library test gate.
+    """
+    findings: list[LintFinding] = []
+    if content.startswith("---"):
+        _, body = parse_frontmatter(content)
+    else:
+        body = content
+    for i, line in enumerate(body.splitlines()):
+        match = _TODO_RE.search(line)
+        if match:
+            findings.append(
+                LintFinding(
+                    rule="B1",
+                    message=f"forbidden marker {match.group()!r} at line {i + 1}",
+                    line=i + 1,
+                )
+            )
+            break
     return findings

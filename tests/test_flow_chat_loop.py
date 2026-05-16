@@ -8,7 +8,9 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agents.core import build_agent, build_native_toolset
+from co_cli.agent.build import build_orchestrator
+from co_cli.agent.core import build_native_toolset
+from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
@@ -37,13 +39,15 @@ def _make_deps(tmp_path: Path) -> CoDeps:
 
 
 def _make_agent(deps: CoDeps):
-    """Build a real agent from deps config.
+    """Build a real orchestrator agent from deps config.
 
     Uses build_model so provider/model come from the user's real settings.
     """
     toolset, tool_index = build_native_toolset(deps.config)
-    model = build_model(deps.config.llm)
-    return build_agent(config=deps.config, model=model, toolset=toolset, tool_index=tool_index)
+    deps.toolset = toolset
+    deps.tool_index = tool_index
+    deps.model = build_model(deps.config.llm)
+    return build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
 
 def _fresh_state() -> _IterationState:

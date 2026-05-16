@@ -194,7 +194,7 @@ async def test_post_turn_hook_fires_real_review_writes_report(tmp_path: Path) ->
 
     reviews_dir = core_mod.SESSION_REVIEWS_DIR
     # The reviewer may produce no run dir if the LLM declines to call any tools
-    # (the report write happens inside _run_agent_standalone path). Accept either
+    # (the report write happens inside run_standalone path). Accept either
     # a written report OR a cleanly-completed task as the success signal — both
     # prove the spawn-and-run path executed end-to-end without crashing.
     assert task.done()

@@ -37,7 +37,6 @@ def _knowledge_manage_approval_subject(args: dict) -> ApprovalSubject:
     approval_subject_fn=_knowledge_manage_approval_subject,
     is_concurrent_safe=True,
     retries=1,
-    delegation=frozenset({"session_reviewer"}),
 )
 async def knowledge_manage(
     ctx: RunContext[CoDeps],

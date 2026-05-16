@@ -1,4 +1,9 @@
-"""Session-end combined skill+knowledge review agent."""
+"""Session-end combined skill+knowledge review agent.
+
+SESSION_REVIEW_SPEC declares the agent's tool surface, output schema, and
+budget; run_session_review wraps it with daemon orchestration (fork deps,
+refresh skills, write report).
+"""
 
 from __future__ import annotations
 
@@ -6,11 +11,14 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelMessage
 
+from co_cli.agent.spec import TaskAgentSpec
+from co_cli.config.skills import REVIEW_MAX_ITERATIONS
 from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
@@ -39,7 +47,30 @@ class SessionReviewResult:
     run_id: str
 
 
-def _make_run_dir(deps: CoDeps, run_id: str) -> object:
+def _session_review_instructions(_deps: CoDeps) -> str:
+    from co_cli.skills.session_review_prompts import SESSION_REVIEW_INSTRUCTIONS
+
+    return SESSION_REVIEW_INSTRUCTIONS
+
+
+SESSION_REVIEW_SPEC = TaskAgentSpec(
+    name="session_review",
+    instructions=_session_review_instructions,
+    tool_names=(
+        "knowledge_view",
+        "knowledge_search",
+        "knowledge_manage",
+        "skill_view",
+        "skill_manage",
+    ),
+    output_type=SessionReviewOutput,
+    default_budget=REVIEW_MAX_ITERATIONS,
+    error_message="",
+    include_skill_manifest=True,
+)
+
+
+def _make_run_dir(deps: CoDeps, run_id: str) -> Path:
     """Return a Path for the per-run report directory (created)."""
     from co_cli.config.core import SESSION_REVIEWS_DIR
 
@@ -79,7 +110,7 @@ def _write_review_report(
             "output_tokens": usage.output_tokens,
         }
 
-    atomic_write_text(run_dir / "run.json", json.dumps(report, indent=2))  # type: ignore[union-attr]
+    atomic_write_text(run_dir / "run.json", json.dumps(report, indent=2))
 
     md_lines = [
         "# Session Review Report",
@@ -101,24 +132,18 @@ def _write_review_report(
             ["**knowledge_updated:**"] + [f"- {s}" for s in output.knowledge_updated] + [""]
         )
 
-    atomic_write_text(run_dir / "run.md", "\n".join(md_lines))  # type: ignore[union-attr]
+    atomic_write_text(run_dir / "run.md", "\n".join(md_lines))
 
 
 async def run_session_review(
     deps: CoDeps, message_history: list[ModelMessage]
 ) -> SessionReviewResult:
     """Fork a session_reviewer agent and run the combined skill+knowledge review."""
-    from co_cli.agents._runner import _run_agent_standalone
-    from co_cli.agents.core import build_agent, discover_delegation_tools
-    from co_cli.config.skills import REVIEW_MAX_ITERATIONS
-    from co_cli.context.manifests.skill_manifest import render_skill_manifest
+    from co_cli.agent.run import run_standalone
     from co_cli.context.summarization import serialize_messages
     from co_cli.deps import fork_deps_for_reviewer
     from co_cli.skills.lifecycle import refresh_skills
-    from co_cli.skills.session_review_prompts import (
-        SESSION_REVIEW_INSTRUCTIONS,
-        SESSION_REVIEW_PROMPT,
-    )
+    from co_cli.skills.session_review_prompts import SESSION_REVIEW_PROMPT
 
     child_deps = fork_deps_for_reviewer(deps)
     # Reload skills from disk into the child index so successive review passes
@@ -126,34 +151,18 @@ async def run_session_review(
     # and set_skill_index rebinds only the receiving deps — without this refresh,
     # pass-B would render its manifest against pass-A's pre-write snapshot.
     refresh_skills(child_deps)
-    skills_manifest = render_skill_manifest(
-        child_deps.skill_index, child_deps.skills_dir, child_deps.user_skills_dir
-    )
-    instructions = (
-        f"{skills_manifest}\n\n{SESSION_REVIEW_INSTRUCTIONS}"
-        if skills_manifest
-        else SESSION_REVIEW_INSTRUCTIONS
-    )
-    agent = build_agent(
-        config=deps.config,
-        model=deps.model.model,
-        instructions=instructions,
-        tool_fns=discover_delegation_tools("session_reviewer", deps.config),
-        output_type=SessionReviewOutput,
-    )
     transcript = serialize_messages(
         message_history,
         deps.config.observability.redact_patterns,
         include_tool_results=False,
     )
     prompt = SESSION_REVIEW_PROMPT.format(transcript=transcript)
-    output, usage, run_id = await _run_agent_standalone(
-        agent=agent,
-        prompt=prompt,
-        deps=child_deps,
+    output, usage, run_id = await run_standalone(
+        SESSION_REVIEW_SPEC,
+        child_deps,
+        prompt,
         budget=REVIEW_MAX_ITERATIONS,
         model_settings=deps.model.settings,
-        role="session_review",
     )
     _write_review_report(deps, run_id, output, usage, transcript_length=len(transcript))
     return SessionReviewResult(summary=output.summary, run_id=run_id)

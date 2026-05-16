@@ -13,10 +13,11 @@ F = TypeVar("F", bound=Callable)
 
 AGENT_TOOL_ATTR = "__co_tool_info__"
 
-# Self-populating registry — every @agent_tool(register=True) decorated function is appended
-# at module import time. _native_toolset imports all tool modules as a side effect to ensure
+# Self-populating registries — every @agent_tool(register=True) decorated function is appended
+# at module import time. agent.toolset imports all tool modules as a side effect to ensure
 # full population before build_native_toolset() runs.
 TOOL_REGISTRY: list[Callable] = []
+TOOL_REGISTRY_BY_NAME: dict[str, Callable] = {}
 
 
 def agent_tool(
@@ -31,7 +32,6 @@ def agent_tool(
     spill_threshold_chars: int | float | None = None,
     check_fn: Callable | None = None,
     approval_subject_fn: Callable | None = None,
-    delegation: frozenset[str] | set[str] | None = None,
     register: bool = True,
 ) -> Callable[[F], F]:
     """Decorator that attaches ToolInfo policy metadata to a native tool function.
@@ -62,11 +62,11 @@ def agent_tool(
             spill_threshold_chars=spill_threshold_chars,
             check_fn=check_fn,
             approval_subject_fn=approval_subject_fn,
-            delegation=frozenset(delegation) if delegation is not None else None,
         )
         setattr(fn, AGENT_TOOL_ATTR, info)
         if register:
             TOOL_REGISTRY.append(fn)
+            TOOL_REGISTRY_BY_NAME[name] = fn
         return fn
 
     return decorator

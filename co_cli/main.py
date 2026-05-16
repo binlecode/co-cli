@@ -15,7 +15,8 @@ from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.agent import InstrumentationSettings
 from pydantic_ai.messages import ModelMessage
 
-from co_cli.agents.core import build_agent
+from co_cli.agent.build import build_orchestrator
+from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import create_deps, init_session_index, restore_session
 from co_cli.bootstrap.project_info import project_info
@@ -186,7 +187,7 @@ async def _maybe_run_session_review(deps: CoDeps, message_history: list[ModelMes
 
     Used both as an awaited inline call (legacy) and as the body of a background
     asyncio.Task spawned by _post_turn_hook. Yields at entry so spawning code
-    returns to the REPL before any sync setup (fork, build_agent, serialize).
+    returns to the REPL before any sync setup (fork, build, serialize).
     """
     await asyncio.sleep(0)
     if not deps.config.skills.review_enabled:
@@ -194,8 +195,8 @@ async def _maybe_run_session_review(deps: CoDeps, message_history: list[ModelMes
     if not deps.model:
         return
 
-    from co_cli.agents.session_review import run_session_review
     from co_cli.config.skills import REVIEW_TIMEOUT_SECONDS
+    from co_cli.skills.session_review import run_session_review
 
     logger = logging.getLogger(__name__)
     try:
@@ -240,9 +241,8 @@ async def _maybe_run_curator(deps: CoDeps) -> None:
     if not deps.model:
         return
 
-    from co_cli.agents.skill_curator import run_curator
     from co_cli.config.skills import CURATOR_TIMEOUT_SECONDS
-    from co_cli.skills.curator import read_curator_state
+    from co_cli.skills.curator import read_curator_state, run_curator
 
     logger = logging.getLogger(__name__)
     now = datetime.now(UTC)
@@ -505,18 +505,7 @@ async def _chat_loop(
         deps.session.reasoning_display = reasoning_display
 
         completer.update(build_completer_entries(deps.skill_index))
-        from co_cli.context.manifests.skill_manifest import render_skill_manifest
-
-        skill_manifest = render_skill_manifest(
-            deps.skill_index, deps.skills_dir, deps.user_skills_dir
-        )
-        agent = build_agent(
-            config=deps.config,
-            model=deps.model,
-            toolset=deps.toolset,
-            tool_index=deps.tool_index,
-            skill_manifest=skill_manifest or None,
-        )
+        agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
         current_session_path = restore_session(deps, frontend)
         init_session_index(deps, current_session_path, frontend)

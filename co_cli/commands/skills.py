@@ -91,7 +91,7 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
 
 
 def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
-    """Lint one or all loaded skills against R1-R10."""
+    """Lint one or all loaded skills against R1-R4."""
     args = args.strip()
 
     if args == "--all":
@@ -256,12 +256,12 @@ async def _cmd_skills_curator(ctx: CommandContext, args: str) -> None:
     """Curator control surface: status | run | restore <name>."""
     from datetime import UTC, datetime, timedelta
 
-    from co_cli.agents.skill_curator import run_curator
     from co_cli.skills.curator import (
         _parse_iso,
         apply_state_transitions,
         read_curator_state,
         restore_skill,
+        run_curator,
     )
     from co_cli.skills.usage import read_records
 
@@ -337,7 +337,7 @@ async def _cmd_skills_review(ctx: CommandContext, args: str) -> None:
         console.print("[bold red]No model configured — cannot run session review.[/bold red]")
         return
 
-    from co_cli.agents.session_review import run_session_review
+    from co_cli.skills.session_review import run_session_review
 
     console.print("[dim]Running session review…[/dim]")
     try:

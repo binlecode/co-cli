@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from tests._settings import SETTINGS
 
-from co_cli.agents.core import build_native_toolset
+from co_cli.agent.core import build_native_toolset
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent
 from co_cli.deps import CoDeps, CoSessionState

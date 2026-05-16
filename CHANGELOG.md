@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.8.204]
+
+### Agent spec + inclusive bundle
+
+- **`docs/specs/agents.md`** — new agent lifecycle spec: build, run, orchestration, agent-as-tool contract
+- **All specs updated** — 01-system, bootstrap, compaction, config, core-loop, dream, memory, observability, personality, prompt-assembly, skills, tools refreshed to current state
+- **`co_cli/agent/` package** — new modules: `build.py`, `run.py`, `orchestrator.py`, `spec.py`, `__init__.py`; `_runner.py` removed
+- **Evals refresh** — new: `eval_background.py`, `eval_daily_chat.py`, `eval_memory.py`, `eval_session_continuity.py`, `eval_skills.py`, `eval_trust_visibility.py`, `_report.py`, `_trace.py`; stale evals removed
+- **Tests** — deleted `test_flow_delegation_discovery.py`, `test_flow_skill_protocol.py`; new `test_agent_build_task_agent.py`; all remaining tests updated
+- **`agent_docs/system-workflows-to-test.md`** removed; `review.md` updated
+- **`docs/REPORT-*.md`** stale eval reports removed; active exec-plans added
+
 ## [0.8.203]
 
 ### Security fixes — SSRF protection and background task shell policy

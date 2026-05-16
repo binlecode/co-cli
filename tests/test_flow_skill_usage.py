@@ -10,7 +10,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
 
-from co_cli.agents.core import build_native_toolset
+from co_cli.agent.core import build_native_toolset
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.skills import usage as skill_usage
 from co_cli.skills.loader import load_skills

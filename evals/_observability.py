@@ -1,49 +1,154 @@
-"""Eval observability bootstrap — file logging + OTel tracing.
+"""Per-run JSONL observability + case-result accumulator for evals.
 
-Mirrors the dual-write setup in ``co_cli/main.py`` for standalone eval
-runners that do not import ``co_cli.main``.  Call ``init_eval_observability()``
-once at the top of ``main()`` in each eval runner; it is idempotent.
+``EvalRun(name)`` is an async context manager that owns one
+``evals/_outputs/<eval>-<ts>/`` directory. Each ``CaseResult`` is appended to
+``run.jsonl`` as it lands; ``TurnTrace`` lines (one per ``run_turn`` driven by
+the eval) are appended to ``case_<case_id>.jsonl`` via ``_trace.record_turn``.
 
-``service.name`` is set to ``"co-cli-eval"`` so eval spans are distinguishable
-from interactive CLI spans in the shared ``co-cli-logs.db``.
+Reviewers reading a REPORT row can click straight to the trace file and
+replay step-by-step why a case passed or failed.
 """
 
-import tomllib
+from __future__ import annotations
+
+import json
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic_ai import Agent
-from pydantic_ai.agent import InstrumentationSettings
-
-from co_cli.config.core import LOGS_DIR, settings
-from co_cli.observability.file_logging import setup_file_logging
-from co_cli.observability.telemetry import setup_tracer_provider
-
-_VERSION = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())[
-    "project"
-]["version"]
+_OUTPUTS_DIR = Path(__file__).parent / "_outputs"
 
 
-def init_eval_observability() -> None:
-    """Set up file logging and OTel tracing for eval runners.
+@dataclass
+class CaseResult:
+    """One sub-case outcome — appended to run.jsonl + rendered in REPORT.
 
-    Idempotent — safe to call multiple times and safe to call after
-    ``co_cli.main`` has already installed a provider (``skip_if_installed``
-    prevents a second provider from overwriting the first).
+    Field semantics:
+      passed                — True/False; SKIP records a separate skipped=True flag.
+      name                  — case id, e.g. "W1.A", used to look up case_<id>.jsonl.
+      duration_s            — total wall time including trace I/O.
+      model_call_seconds    — sum of ``run_turn`` model-call seconds (asserted
+                              against per-case latency budget per BC #13).
+      token_usage           — {"prompt", "completion", "total"} summed across turns.
+      trace_id              — OTel trace id for the case (best-effort; "" if absent).
+      trace_files           — list of relative paths under _outputs/<run>/.
+      reason                — short tag for FAIL/SKIP; empty for plain PASS.
+      skipped               — True when this is a SKIPPED:* record (mcp / product-gap).
+      skip_category         — "mcp" | "product-gap" | "" when skipped is False.
+      soft_fail             — True for W3.F-style degradation signals (case still PASSes
+                              the gate; surfaces in REPORT as a review signal).
     """
-    # Python logging + OTel spans → co-cli.jsonl (rotating, idempotent)
-    setup_file_logging(
-        log_dir=LOGS_DIR,
-        level=settings.observability.log_level,
-        max_size_mb=settings.observability.log_max_size_mb,
-        backup_count=settings.observability.log_backup_count,
-    )
 
-    # OTel spans → co-cli-logs.db (SQLite) + co-cli.jsonl (via JsonSpanExporter propagation)
-    # SimpleSpanProcessor (synchronous) flushes before the short-lived eval
-    # process exits; BatchSpanProcessor would drop spans without force_flush.
-    provider = setup_tracer_provider(
-        service_name="co-cli-eval",
-        service_version=_VERSION,
-        skip_if_installed=True,
+    name: str
+    passed: bool
+    duration_s: float
+    model_call_seconds: float = 0.0
+    token_usage: dict[str, int] = field(default_factory=dict)
+    trace_id: str = ""
+    trace_files: list[str] = field(default_factory=list)
+    reason: str = ""
+    skipped: bool = False
+    skip_category: str = ""
+    soft_fail: bool = False
+
+
+@dataclass
+class EvalRun:
+    """Per-run output directory + JSONL writer.
+
+    Lifecycle:
+      async with EvalRun("daily_chat") as run:
+          run.append(case_result)        # writes line to run.jsonl
+          run.case_dir(case_id) / "..."  # path helper for trace lines
+
+    On exit: closes the run.jsonl file; the directory itself stays for review.
+    """
+
+    name: str
+    iso: str = ""
+    started_at: float = 0.0
+    dir: Path = field(default_factory=Path)
+
+    @property
+    def run_jsonl_path(self) -> Path:
+        return self.dir / "run.jsonl"
+
+    def case_trace_path(self, case_id: str) -> Path:
+        """Relative-safe path for ``case_<id>.jsonl`` — created on first append."""
+        return self.dir / f"case_{case_id}.jsonl"
+
+    def append(self, case: CaseResult) -> None:
+        """Append one ``CaseResult`` line to ``run.jsonl``."""
+        line = json.dumps(asdict(case), default=str, separators=(",", ":"))
+        with self.run_jsonl_path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+
+@asynccontextmanager
+async def open_eval_run(name: str) -> AsyncIterator[EvalRun]:
+    """Create ``evals/_outputs/<name>-<ts>/`` and yield an ``EvalRun``."""
+    _OUTPUTS_DIR.mkdir(exist_ok=True)
+    iso_now = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_dir = _OUTPUTS_DIR / f"{name}-{iso_now}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    run = EvalRun(
+        name=name,
+        iso=datetime.now(UTC).isoformat(timespec="seconds"),
+        started_at=time.monotonic(),
+        dir=run_dir,
     )
-    Agent.instrument_all(InstrumentationSettings(tracer_provider=provider, version=3))
+    # Touch run.jsonl so the file exists even with zero cases.
+    run.run_jsonl_path.touch(exist_ok=True)
+    try:
+        yield run
+    finally:
+        pass
+
+
+def prior_run_dir(name: str, current: Path) -> Path | None:
+    """Return the most-recent prior run directory for ``<name>``, or None."""
+    if not _OUTPUTS_DIR.exists():
+        return None
+    candidates = sorted(
+        (
+            p
+            for p in _OUTPUTS_DIR.iterdir()
+            if p.is_dir() and p.name.startswith(f"{name}-") and p != current
+        ),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def load_prior_cases(run_dir: Path) -> dict[str, CaseResult]:
+    """Read ``run.jsonl`` from a prior run; return {case_name: CaseResult}."""
+    path = run_dir / "run.jsonl"
+    if not path.exists():
+        return {}
+    out: dict[str, CaseResult] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        case = CaseResult(
+            name=data.get("name", ""),
+            passed=bool(data.get("passed", False)),
+            duration_s=float(data.get("duration_s", 0.0)),
+            model_call_seconds=float(data.get("model_call_seconds", 0.0)),
+            token_usage=dict(data.get("token_usage") or {}),
+            trace_id=data.get("trace_id", ""),
+            trace_files=list(data.get("trace_files") or []),
+            reason=data.get("reason", ""),
+            skipped=bool(data.get("skipped", False)),
+            skip_category=data.get("skip_category", ""),
+            soft_fail=bool(data.get("soft_fail", False)),
+        )
+        out[case.name] = case
+    return out

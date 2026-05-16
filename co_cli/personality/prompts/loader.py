@@ -15,9 +15,9 @@ Each role is fully self-contained under ``souls/{role}/``. Adding a role require
 only a new directory with the required files — no Python changes.
 
 Callers:
-  co_cli.context.assembly — uses load_soul_seed, load_soul_mindsets
-                            inside build_static_instructions(), invoked by build_agent()
-  co_cli.agents.core       — uses load_soul_critique to append critique after toolset guidance
+  co_cli.context.assembly  — uses load_soul_seed, load_soul_mindsets inside
+                             build_static_instructions(), called by ORCHESTRATOR_SPEC
+  co_cli.agent.orchestrator — uses load_soul_critique to append critique after toolset guidance
 """
 
 from pathlib import Path
@@ -32,8 +32,8 @@ def load_soul_seed(role: str) -> str:
 
     The seed is the complete static identity anchor: identity declaration,
     distilled trait essence, and hard constraints (Never list). Placed at the
-    top of the static system prompt via ``build_agent(personality=…)`` so the
-    model's first context is always the soul.
+    top of the static system prompt via the orchestrator's static instruction
+    builders so the model's first context is always the soul.
 
     Behavioral guidance for specific task types is loaded statically via
     ``load_soul_mindsets`` and folded into the soul block at agent creation.

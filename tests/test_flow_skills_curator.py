@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from tests._settings import SETTINGS
 
-from co_cli.agents.core import build_native_toolset
+from co_cli.agent.core import build_native_toolset
 from co_cli.config.skills import (
     CURATOR_ARCHIVE_AFTER_DAYS,
     CURATOR_STALE_AFTER_DAYS,

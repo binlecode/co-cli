@@ -23,7 +23,7 @@ async def llm_call(
     """Single prompt→response LLM call. No tools, no agent loop.
 
     Defaults to deps.model.settings_noreason (per-provider noreason config).
-    Callers that need structured output or reasoning should use build_agent() instead.
+    Callers that need structured output or tools should use build_task_agent() instead.
     """
     messages: list[ModelMessage] = []
     if instructions:

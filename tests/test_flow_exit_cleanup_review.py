@@ -1,10 +1,9 @@
-"""Behavioral tests for REPL-exit cleanup (plan 3.5c TASK-2).
+"""Behavioral tests for REPL-exit cleanup.
 
 Verifies:
 - _drain_and_cleanup cancels a pending background review task and bounded-drains it.
 - No inline session-end review fires regardless of iterations_since_review value.
 - Cleanup returns within ~2s even when the cancelled task swallows CancelledError.
-- _drain_and_cleanup's signature dropped the message_history parameter.
 
 All tests use real CoDeps, real asyncio, no monkeypatching.
 """
@@ -13,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import os
 import time
 from contextlib import AsyncExitStack
@@ -54,51 +52,6 @@ def _make_deps(tmp_path: Path, *, review_enabled: bool = True, with_model: bool 
     deps.user_skills_dir = tmp_path / "skills"
     deps.user_skills_dir.mkdir(parents=True, exist_ok=True)
     return deps
-
-
-# ---------------------------------------------------------------------------
-# Signature contract
-# ---------------------------------------------------------------------------
-
-
-def test_drain_and_cleanup_signature_dropped_message_history() -> None:
-    """The (deps, stack) signature must not carry a message_history param."""
-    from co_cli.main import _drain_and_cleanup
-
-    sig = inspect.signature(_drain_and_cleanup)
-    param_names = list(sig.parameters)
-    assert param_names == ["deps", "stack"], f"unexpected params: {param_names}"
-
-
-def test_drain_and_cleanup_has_single_call_site_passing_two_args() -> None:
-    """Grep main.py: exactly one call site, with exactly two arguments."""
-    src = Path("co_cli/main.py").read_text()
-    # The definition itself + the single caller.
-    occurrences = src.count("_drain_and_cleanup(")
-    assert occurrences == 2, f"expected 2 occurrences (def + 1 call), got {occurrences}"
-    # The call site is `await _drain_and_cleanup(deps, stack)`. No message_history kwarg.
-    assert "_drain_and_cleanup(deps, stack)" in src
-    assert (
-        "message_history=" not in src.split("_drain_and_cleanup(deps, stack)")[1].split(")", 1)[0]
-    )
-
-
-def test_drain_and_cleanup_does_not_call_maybe_run_session_review() -> None:
-    """Source grep: _drain_and_cleanup body must not invoke _maybe_run_session_review.
-
-    Plan 3.5c removed the inline session-end review call; turn-boundary firing
-    is the only review path.
-    """
-    src = Path("co_cli/main.py").read_text()
-    # Extract the function body — from 'async def _drain_and_cleanup' to the next
-    # 'async def' or 'def' at column 0.
-    start = src.index("async def _drain_and_cleanup(")
-    rest = src[start + 1 :]
-    end = rest.index("\nasync def ") if "\nasync def " in rest else rest.index("\ndef ")
-    body = src[start : start + 1 + end]
-    assert "_maybe_run_session_review" not in body, (
-        "inline session-end review must be deleted from _drain_and_cleanup"
-    )
 
 
 # ---------------------------------------------------------------------------

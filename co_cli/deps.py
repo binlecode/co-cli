@@ -110,7 +110,6 @@ class ToolInfo:
     requires_config: str | None = None
     check_fn: Callable[[CoDeps], bool] | None = None
     approval_subject_fn: Callable[[dict[str, Any]], ApprovalSubject] | None = None
-    delegation: frozenset[str] | None = None
 
 
 class TodoItem(TypedDict):
@@ -343,8 +342,8 @@ def fork_deps(base: CoDeps) -> CoDeps:
       degradations        — read-only after bootstrap
     These are safe to share because per-turn mutable state (CoRuntimeState) is always fresh.
 
-    toolset is intentionally excluded — delegation agents wire their own minimal
-    tool surface via build_agent(tool_fns=..., output_type=...).
+    toolset is intentionally excluded — task agents wire their own minimal
+    tool surface via TaskAgentSpec.tool_names resolved by build_task_agent.
     """
     inherited_session = CoSessionState(
         google=GoogleSessionState(

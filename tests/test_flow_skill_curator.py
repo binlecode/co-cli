@@ -1,8 +1,8 @@
 """Behavioral tests for the skill curator runner and the session-review gate.
 
 Phase 2 (the consolidation agent) is exercised only at the wiring level:
-without a real model in deps, build_agent fails inside run_curator's Phase 2
-try-block and the path falls through to Phase 3. That lets us verify Phase 1
+without a real model in deps, build_task_agent fails inside run_curator's
+Phase 2 try-block and the path falls through to Phase 3. That lets us verify Phase 1
 (state transitions) and Phase 3 (report + state write) without depending on
 a real LLM.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from tests._settings import SETTINGS
 
-from co_cli.agents.core import build_native_toolset
+from co_cli.agent.core import build_native_toolset
 from co_cli.config.skills import CURATOR_STALE_AFTER_DAYS
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.main import _curator_gate_passes, _maybe_run_curator
@@ -141,7 +141,7 @@ async def test_maybe_run_curator_blocked_by_recent_run(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_run_curator_applies_state_transitions(tmp_path: Path) -> None:
     """A stale-eligible skill transitions active → stale during Phase 1."""
-    from co_cli.agents.skill_curator import run_curator
+    from co_cli.skills.curator import run_curator
 
     deps = _make_deps(tmp_path, curator_enabled=True)
     (deps.user_skills_dir / "old-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
@@ -176,10 +176,10 @@ async def test_run_curator_applies_state_transitions(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_run_curator_writes_state_even_when_phase2_fails(tmp_path: Path) -> None:
     """Phase 3 always writes last_run_at + bumps run_count, even if the agent failed."""
-    from co_cli.agents.skill_curator import run_curator
+    from co_cli.skills.curator import run_curator
 
     deps = _make_deps(tmp_path, curator_enabled=True)
-    # deps.model is None — Phase 2's build_agent will raise; Phase 3 must still run.
+    # deps.model is None — Phase 2's build_task_agent will raise; Phase 3 must still run.
 
     before = read_curator_state(deps)
     assert before.get("run_count", 0) == 0

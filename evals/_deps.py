@@ -1,77 +1,93 @@
-"""Eval session setup: CoDeps factory and model detection."""
+"""Eval-side bootstrap — real CoDeps against the real ``~/.co-cli/`` workspace.
 
+Builds production deps via ``create_deps()`` exactly as ``main.py`` does — no
+``CO_HOME`` override, no temp dirs, no inline model/settings overrides. The
+only adapter is :class:`EvalFrontend`, a ``TerminalFrontend`` subclass that
+overrides interactive prompts to non-interactive deterministic returns so
+``run_turn`` and slash dispatch can drive end-to-end without blocking.
+
+Lifetime: ``create_deps`` registers MCP servers + cleanup hooks on an
+``AsyncExitStack``. ``eval_deps()`` is therefore an async context manager —
+exiting the ``async with`` cleanly tears down the stack.
+
+Approval bypass: the plan called for an allow-all rule in
+``session_approval_rules``, but ``is_auto_approved`` matches rules by exact
+``(kind, value)`` (``co_cli/tools/approvals.py:166``) — a wildcard entry
+won't auto-approve a dynamic subject. The bypass is implemented at the
+frontend layer instead: ``EvalFrontend.prompt_approval`` returns ``"a"``
+(always-approve-and-remember), driving the production approval path through
+``record_approval_choice`` so the first subject hit is auto-approved on
+every subsequent call this session. This is a protocol-compliant frontend
+implementation — no mock, no patch — that uses values returned from real
+production code (an ApprovalSubject and a choice from the real ``y/n/a``
+set).
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 from pydantic_ai import Agent
 
-from co_cli.config.core import Settings, get_settings, settings
-from co_cli.deps import CoDeps, CoSessionState
-from co_cli.llm.factory import build_model
-from co_cli.tools.shell_backend import ShellBackend
+from co_cli.agent.build import build_orchestrator
+from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
+from co_cli.bootstrap.core import create_deps
+from co_cli.deps import ApprovalSubject, CoDeps
+from co_cli.display.core import QuestionPrompt, TerminalFrontend
 
 
-def detect_model_tag() -> str:
-    """Auto-detect a model tag from the current LLM config."""
-    provider = settings.llm.provider.lower()
-    model = settings.llm.model
-    if provider == "gemini":
-        return f"gemini-{model}" if model else "gemini"
-    if provider == "ollama":
-        return f"ollama-{model}" if model else "ollama"
-    return provider
+class EvalFrontend(TerminalFrontend):
+    """Non-interactive ``TerminalFrontend`` for eval-driven turns.
 
-
-def make_eval_deps(**overrides: Any) -> CoDeps:
-    """Build a CoDeps suitable for evals, pulling defaults from settings.
-
-    Pass keyword overrides to customise any CoDeps field, e.g.
-    ``make_eval_deps(brave_search_api_key=None)``.
-    Service fields (shell, memory_store, model) can
-    also be passed as overrides and are extracted before building CoDeps.
-
-    The ``model`` default is an ``LlmModel`` built via ``build_model(settings.llm)`` —
-    real sessions get this via bootstrap, and CoDeps.model is typed as ``LlmModel | None``
-    (with ``.context_window``, ``.settings``, ``.model``). Defaulting to None here would let
-    downstream paths like compaction.py (which reads ``deps.model.context_window``) trip
-    AttributeErrors only inside the eval. Callers can still pass ``model=None`` explicitly
-    when truly model-free behavior is desired.
+    Overrides only the blocking prompt surfaces — rendering surfaces
+    (``on_status``, ``on_text_delta``, etc.) inherit from ``TerminalFrontend``
+    unchanged so the production display pipeline still emits the same OTel
+    spans and stdout output a real REPL would produce.
     """
-    s = get_settings()
 
-    # Extract non-config fields before building CoDeps. Sentinel for `model` so we
-    # can distinguish "unset → build the default" from "explicitly None".
-    _UNSET = object()
-    shell = overrides.pop("shell", ShellBackend())
-    memory_store = overrides.pop("memory_store", None)
-    model = overrides.pop("model", _UNSET)
-    knowledge_dir = overrides.pop("knowledge_dir", None)
-    # Discard legacy overrides that no longer map to current fields
-    overrides.pop("session_id", None)
-    overrides.pop("mcp_servers", None)
+    def prompt_approval(self, subject: ApprovalSubject) -> str:
+        return "a" if subject.can_remember else "y"
 
-    if model is _UNSET:
-        model = build_model(s.llm)
+    def prompt_question(self, prompt: QuestionPrompt) -> str:
+        if prompt.options:
+            return prompt.options[0]
+        return ""
 
-    deps = CoDeps(
-        shell=shell,
-        memory_store=memory_store,
-        model=model,
-        config=s,
-        session=CoSessionState(),
-    )
-    if knowledge_dir is not None:
-        deps.knowledge_dir = knowledge_dir
-    return deps
+    def prompt_confirm(self, message: str) -> bool:
+        return True
 
 
-def make_eval_agent(config: Settings, **kwargs: Any) -> Agent[CoDeps, Any]:
-    """Native-only orchestrator agent for eval scripts.
+@asynccontextmanager
+async def eval_deps(
+    theme_override: str | None = None,
+) -> AsyncIterator[tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend]]:
+    """Yield a fully-bootstrapped ``(deps, agent, frontend)`` for the eval lifetime.
 
-    Skips MCP and full bootstrap — wires native toolset + tool_index and hands
-    them to build_agent(). Eval scripts that need MCP must go through the full
-    bootstrap path instead.
+    Mirrors ``main.py:_chat_loop``'s bootstrap exactly: ``create_deps`` on a
+    managed ``AsyncExitStack``, then ``build_orchestrator(ORCHESTRATOR_SPEC, deps)``.
+    The stack is closed when the ``async with`` exits, tearing down MCP
+    servers and any other registered cleanups.
     """
-    from co_cli.agents.core import build_agent, build_native_toolset
+    frontend = EvalFrontend()
+    async with AsyncExitStack() as stack:
+        deps = await create_deps(frontend, stack, theme_override=theme_override)
+        agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+        yield deps, agent, frontend
 
-    toolset, tool_index = build_native_toolset(config)
-    return build_agent(config=config, toolset=toolset, tool_index=tool_index, **kwargs)
+
+async def make_eval_deps() -> tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend, AsyncExitStack]:
+    """Imperative variant — returns deps + an open ``AsyncExitStack`` the caller closes.
+
+    Prefer :func:`eval_deps` (async context manager) for new code. This form
+    is provided for the import-smoke check in the plan's ``done_when`` and
+    for simple linear eval scripts that don't naturally nest under an
+    ``async with``. Caller must ``await stack.aclose()`` in a ``finally``.
+    """
+    frontend = EvalFrontend()
+    stack = AsyncExitStack()
+    await stack.__aenter__()
+    deps = await create_deps(frontend, stack, theme_override=None)
+    agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+    return deps, agent, frontend, stack

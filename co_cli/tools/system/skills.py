@@ -19,6 +19,7 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
 from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.persistence.atomic import atomic_write_text
+from co_cli.skills.lint import lint_skill
 from co_cli.skills.loader import scan_skill_content
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output
@@ -33,7 +34,6 @@ from co_cli.tools.tool_io import tool_error, tool_output
     is_read_only=True,
     is_concurrent_safe=True,
     spill_threshold_chars=math.inf,
-    delegation=frozenset({"session_reviewer", "skill_curator"}),
 )
 async def skill_view(
     ctx: RunContext[CoDeps],
@@ -75,7 +75,7 @@ async def skill_view(
 
 _NAME_RE: re.Pattern = re.compile(r"^[a-z0-9_-]+$")
 _MAX_DESCRIPTION_CHARS: int = 1024
-_MAX_SKILL_CHARS: int = 100_000
+_MAX_SKILL_CHARS: int = 50_000
 
 _LINKED_FILE_ERROR = (
     "Linked files (file_path) are not yet supported in co-cli. "
@@ -126,6 +126,14 @@ def _reload_skills(ctx: RunContext[CoDeps]) -> None:
     refresh_skills(ctx.deps)
 
 
+def _lint_warnings(content: str) -> list[str]:
+    """Run advisory lint and format findings for tool output.
+
+    Lint never blocks writes; integrity checks live in _validate_skill_content.
+    """
+    return [f"{f.rule}: {f.message}" for f in lint_skill(content)]
+
+
 def _skill_create(
     ctx: RunContext[CoDeps], name: str, content: str | None, category: str | None
 ) -> ToolReturn:
@@ -151,6 +159,9 @@ def _skill_create(
     result: dict = {"success": True, "message": f"Skill {name!r} created.", "path": str(path)}
     if category:
         result["category_ignored"] = True
+    warnings = _lint_warnings(content)
+    if warnings:
+        result["lint_warnings"] = warnings
     if len(ctx.deps.skill_index) >= 30:
         result["size_warning"] = (
             f"Skill count is now {len(ctx.deps.skill_index)}; "
@@ -181,10 +192,11 @@ def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str | None) -> Tool
     from co_cli.skills.usage import bump_patch
 
     bump_patch(ctx.deps, name)
-    return tool_output(
-        json.dumps({"success": True, "message": f"Skill {name!r} updated.", "path": str(path)}),
-        ctx=ctx,
-    )
+    result: dict = {"success": True, "message": f"Skill {name!r} updated.", "path": str(path)}
+    warnings = _lint_warnings(content)
+    if warnings:
+        result["lint_warnings"] = warnings
+    return tool_output(json.dumps(result), ctx=ctx)
 
 
 def _skill_patch(
@@ -235,16 +247,15 @@ def _skill_patch(
 
     bump_patch(ctx.deps, name)
     replaced_count = count if replace_all else 1
-    return tool_output(
-        json.dumps(
-            {
-                "success": True,
-                "message": f"Skill {name!r} patched ({replaced_count} replacement(s)).",
-                "path": str(path),
-            }
-        ),
-        ctx=ctx,
-    )
+    result: dict = {
+        "success": True,
+        "message": f"Skill {name!r} patched ({replaced_count} replacement(s)).",
+        "path": str(path),
+    }
+    warnings = _lint_warnings(new_content)
+    if warnings:
+        result["lint_warnings"] = warnings
+    return tool_output(json.dumps(result), ctx=ctx)
 
 
 def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
@@ -291,7 +302,6 @@ def _skill_manage_approval_subject(args: dict) -> ApprovalSubject:
     visibility=VisibilityPolicyEnum.ALWAYS,
     approval=True,
     approval_subject_fn=_skill_manage_approval_subject,
-    delegation=frozenset({"session_reviewer", "skill_curator"}),
 )
 async def skill_manage(
     ctx: RunContext[CoDeps],

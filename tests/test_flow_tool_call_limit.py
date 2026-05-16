@@ -12,10 +12,10 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.agents.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.lifecycle import CoToolLifecycle
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
 
 
 def _make_deps() -> CoDeps:

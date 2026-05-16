@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from co_cli.context.manifests.skill_manifest import render_skill_manifest
-from co_cli.skills.lint import lint_skill
 from co_cli.skills.loader import load_skills
 
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "co_cli" / "skills"
@@ -27,15 +24,6 @@ def test_all_bundled_skills_load() -> None:
     loaded_names = set(skills.keys())
     missing = _BUNDLED_NAMES - loaded_names
     assert not missing, f"Missing bundled skills: {missing}"
-
-
-@pytest.mark.parametrize("name", sorted(_BUNDLED_NAMES))
-def test_bundled_skill_lints_clean(name: str) -> None:
-    """Assertion 3: each bundled skill produces no lint findings."""
-    path = _SKILLS_DIR / f"{name}.md"
-    content = path.read_text(encoding="utf-8")
-    findings = lint_skill(content, path)
-    assert findings == [], f"Skill '{name}' has lint findings: {findings}"
 
 
 def test_manifest_renders_six_bundled_entries(tmp_path: Path) -> None:

@@ -11,6 +11,8 @@
 ## Code Change Principles
 
 - Prefer fail-fast over redundant fallbacks. Clean up dead code during implementation, not as a separate pass.
+- **Subagents**: each subagent cleans up dead code before returning. After all finish, do an integration review for stale imports and orphaned references.
+- Keep plans concise and actionable — resist over-engineering. If the user pushes back on complexity, simplify immediately rather than defending the design.
 - Do not swallow foreground or user-visible errors with broad `except`, empty handlers, or log-and-continue paths. Let unexpected errors propagate. Convert expected non-fatal conditions into typed project-standard results or exceptions with actionable context; for tool failures, use `tool_error()`. Background cleanup, shutdown, and best-effort degradation paths may log and continue only when failing the main operation would be worse than losing the auxiliary work.
 - When ambiguity affects behavior, persistence, security, approval, or public API shape, stop and surface the assumption. For low-risk local implementation details, make the smallest coherent assumption and state it in the delivery summary.
 - After renames or file moves: (1) grep for ALL remaining references to the old name across the whole repo, (2) check test imports specifically — they are the most common miss, (3) run the full test suite. Done only when grep finds zero stale references AND tests pass.

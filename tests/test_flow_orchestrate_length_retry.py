@@ -13,7 +13,9 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
-from co_cli.agents.core import build_agent, build_native_toolset
+from co_cli.agent.build import build_orchestrator
+from co_cli.agent.core import build_native_toolset
+from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.context.orchestrate import _length_retry_settings, run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend
@@ -108,23 +110,21 @@ def test_blocks_non_length_finish_reason() -> None:
 
 _LLM_MODEL = build_model(SETTINGS_NO_MCP.llm)
 _TOOLSET, _TOOL_INDEX = build_native_toolset(SETTINGS_NO_MCP)
-_AGENT = build_agent(
-    config=SETTINGS_NO_MCP,
-    model=_LLM_MODEL,
-    toolset=_TOOLSET,
-    tool_index=_TOOL_INDEX,
-)
 
 
 def _make_deps() -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         model=_LLM_MODEL,
+        toolset=_TOOLSET,
         tool_index=_TOOL_INDEX,
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
         model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
     )
+
+
+_AGENT = build_orchestrator(ORCHESTRATOR_SPEC, _make_deps())
 
 
 @pytest.mark.asyncio

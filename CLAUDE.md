@@ -36,21 +36,11 @@ See `docs/specs/01-system.md` for architecture, `CoDeps`, capability surface, an
 
 ### Memory System
 
-Four operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability — `skill_view` / `skill_manage`; all skills appear in the static prompt manifest for discovery), and **memory** (declarative state the agent accumulates). Memory itself has two channels: **knowledge** (preferences, feedback, rules, decisions, references, articles, notes) and **session** (past transcripts; FTS5 chunk-cited on recall).
+Four operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability), and **memory** (declarative state the agent accumulates). Memory itself has two channels: **knowledge** (preferences, feedback, rules, decisions, references, articles, notes) and **session** (past transcripts; FTS5 chunk-cited on recall).
 
-The model-facing surface:
+Storage: flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter; FTS5 (BM25) search in `~/.co-cli/co-cli-search.db` (knowledge + session via `MemoryStore`; canon indexed there for personality auto-injection but never returned by any model-callable tool). Skills are discovered via the `<available_skills>` manifest injected into the static prompt (all bundled + user-installed).
 
-- `knowledge_search(query, kinds?, limit)` — ranked recall over knowledge artifacts (preferences, feedback, rules, decisions, references, articles, notes)
-- `session_search(query, limit?)` — ranked recall over past session transcripts
-- `knowledge_view(name)` — load a knowledge artifact's full body by filename_stem
-- `session_view(session_id, start_line, end_line)` — verbatim session turn reader
-- `knowledge_manage(action=...)` — write surface for knowledge (create / append / replace / delete)
-- `skill_view(name)` — load a skill's full body
-- `skill_manage(action=...)` — write surface for skills (create / edit / patch / delete / install)
-
-Flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter store knowledge entries. FTS5 (BM25) search runs in `~/.co-cli/co-cli-search.db` (knowledge + session via `MemoryStore`; canon is also indexed there for personality auto-injection but never returned by any model-callable tool). Skills are discovered via the `<available_skills>` manifest injected into the static prompt (all bundled + user-installed); `skill_view` and `skill_manage` are the model-callable tools. Implementation lives in `co_cli/memory/`, `co_cli/tools/memory/`, and `co_cli/skills/`. See `docs/specs/memory.md`, `docs/specs/skills.md`, and `docs/specs/personality.md` for the full model. See `docs/specs/prompt-assembly.md` for how recall injects into the turn.
-
-Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browsing is `knowledge_search` or `session_search` with an empty query; full-body knowledge reads use `knowledge_view(name)` with the `filename_stem` from a `knowledge_search` hit.
+Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browse with `knowledge_search` / `session_search` (empty query is fine); full-body reads use `knowledge_view(name)` with the `filename_stem` from a search hit. Tool signatures live in the model's tool manifest — see `docs/specs/memory.md`, `docs/specs/skills.md`, `docs/specs/personality.md`, and `docs/specs/prompt-assembly.md` for the full model. Implementation: `co_cli/memory/`, `co_cli/tools/memory/`, `co_cli/skills/`.
 
 ## Engineering Rules
 
@@ -87,12 +77,7 @@ See `agent_docs/spec-conventions.md` — spec structure, section rules, artifact
 
 ### Working with Claude Code
 
-- When interrupted or redirected, immediately stop the current approach and follow the new direction — do not continue previous work or expand scope.
-- When asked to analyze or review, confirm the approach before searching, fetching, or writing.
-- When asked to append to an existing doc, never create a new file instead.
-- Never add unsolicited notes, reminders, or meta-commentary to outputs unless explicitly asked.
-- **Subagents**: declare tool permissions upfront (Read, Edit, Bash, Grep). Each subagent cleans up dead code before returning. After all finish, do an integration review for stale imports and orphaned references.
-- Keep plans concise and actionable — resist over-engineering. If the user pushes back on complexity, simplify immediately rather than defending the design.
+- **Subagents**: declare tool permissions upfront (Read, Edit, Bash, Grep). See `agent_docs/review.md` for cleanup and integration-review rules.
 
 ### Dev Workflow
 
@@ -118,14 +103,12 @@ TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full
 /ship <slug>                              (full tests safety net + version bump + plan archive + commit)
 ```
 
-- `/orchestrate-plan <slug>`: create or refine `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
-- `/orchestrate-dev <slug>`: execute from plan, mark completed tasks `✓ DONE` (never delete mid-delivery), append delivery summary, auto-invoke sync-doc.
-- `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification. Appends pass/fail verdict. **PASS means TL reads verdict at Gate 2 and ships.**
-- `/sync-doc [doc...]`: fix spec inaccuracies in `docs/specs/` in-place. No args means all specs. Auto-invoked by `orchestrate-dev`.
-- `/ship [slug]`: post-Gate-2 ship — full test safety net, version bump, plan archive (`git mv` to `completed/`), commit.
-- `/clean-tests [path]`: standalone test quality gate — enforce `agent_docs/testing.md` rules, purge structural/redundant tests, verify behavioral depth, run full suite. Default path: `tests/`. Call any time, not just pre-ship.
+Non-obvious nuances:
+- `/orchestrate-dev` marks completed tasks `✓ DONE` (never deletes mid-delivery) and auto-invokes `/sync-doc`.
+- `/review-impl` PASS verdict means TL reads it at Gate 2 and ships — no extra review pass.
+- `/clean-tests [path]` is callable any time, not just pre-ship.
 - For atomic/single-file changes, use Claude Code's built-in plan flow directly — no skill needed.
-- **Staged-file hygiene**: before shipping, verify only related files are staged — never include unrelated changes. Ask the user before staging any file that seems tangential to the task.
+- **Staged-file hygiene**: before shipping, verify only related files are staged. Ask before staging any file that seems tangential.
 
 ## Docs
 
@@ -138,14 +121,4 @@ Quick reference:
 
 ## Reference Repos
 
-Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-personality-peer-survey.md` for personality research.
-
-| Repo | Relevance to co-cli |
-|------|---------------------|
-| `fork-claude-code` | Agent CLI, tool approval, config, compaction, TUI |
-| `hermes-agent` | Direct co-cli peer — agent CLI, REPL, streaming |
-| `elizaos` | Character personality schema, tool policy layering, memory scoping |
-| `letta` | Memory architecture (MemGPT-style) |
-| `gemini-cli` | Agent CLI, config patterns, tool design |
-| `opencode` | Agent CLI, tool patterns, config |
-| `opensouls` | CognitiveStep + MentalProcess chaining (TypeScript, near-stale) |
+Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-peer-repos.md` for the table.

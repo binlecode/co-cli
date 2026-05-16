@@ -2,7 +2,7 @@
 
 Static instruction scaffold assembly lives here: soul scaffold, mindsets, and behavioral
 rules. Runtime-only layers such as date and conditional safety warnings are added later
-via ``@agent.instructions`` in ``agent/core.py``.
+via ``@agent.instructions`` in ``co_cli/agent/core.py``.
 """
 
 from __future__ import annotations
@@ -92,8 +92,9 @@ def build_static_instructions(config: Settings) -> str:
     4. Recency-clearing advisory (explains the ``[tool result cleared…]``
        placeholders that appear after ``evict_old_tool_results`` runs)
 
-    Canon and critique are NOT injected here — canon is surfaced on demand via
-    ``knowledge_search``; critique is appended in ``core.py`` after operational guidance.
+    Canon and critique are NOT injected here — canon is indexed at bootstrap under
+    ``source='canon'`` for personality-system auto-injection only (no model-callable
+    read path); critique is appended in ``core.py`` after operational guidance.
 
     Returns the fully assembled static instructions string.
     """

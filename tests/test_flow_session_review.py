@@ -82,8 +82,8 @@ def test_write_review_report_creates_json_and_md(tmp_path: Path) -> None:
 
     importlib.reload(core_mod)
 
-    from co_cli.agents.session_review import SessionReviewOutput, _write_review_report
     from co_cli.deps import CoDeps
+    from co_cli.skills.session_review import SessionReviewOutput, _write_review_report
     from co_cli.tools.shell_backend import ShellBackend
 
     config = SETTINGS_NO_MCP
@@ -121,16 +121,18 @@ def test_write_review_report_creates_json_and_md(tmp_path: Path) -> None:
     assert "foo" in md_text
 
 
-def test_session_reviewer_delegation_tools() -> None:
-    """discover_delegation_tools('session_reviewer') returns the expected set."""
-    from co_cli.agents.core import discover_delegation_tools
+def test_session_reviewer_spec_tool_names() -> None:
+    """SESSION_REVIEW_SPEC.tool_names declares the expected reviewer toolset."""
+    from co_cli.skills.session_review import SESSION_REVIEW_SPEC
 
-    tools = {fn.__name__ for fn in discover_delegation_tools("session_reviewer", SETTINGS_NO_MCP)}
-    assert "skill_view" in tools
-    assert "skill_manage" in tools
-    assert "knowledge_search" in tools
-    assert "knowledge_view" in tools
-    assert "knowledge_manage" in tools
+    tools = set(SESSION_REVIEW_SPEC.tool_names)
+    assert tools == {
+        "skill_view",
+        "skill_manage",
+        "knowledge_search",
+        "knowledge_view",
+        "knowledge_manage",
+    }
     # Must NOT include terminal/file/web tools
     assert "shell" not in tools
     assert "file_read" not in tools

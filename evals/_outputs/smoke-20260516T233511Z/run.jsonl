@@ -1,0 +1,1 @@
+{"name":"smoke","passed":true,"duration_s":16.087420084048063,"model_call_seconds":16.087067500222474,"token_usage":{"prompt":12653,"completion":20,"total":12673},"trace_id":"","trace_files":["smoke-20260516T233511Z/case_smoke.jsonl"],"reason":"","skipped":false,"skip_category":"","soft_fail":false}
