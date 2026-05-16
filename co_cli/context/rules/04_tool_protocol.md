@@ -132,3 +132,11 @@ in later sessions and can override the user's current request.
 | URL or external resource to save | `reference` |
 | Web article to index | `article` |
 | Free-form note | `note` |
+
+### Anti-patterns
+
+Don't save to knowledge:
+- Task progress, completed-work logs, session outcomes, or temporary TODO state — these are
+  ephemeral; recall them later via `session_search`.
+- Procedures and reusable workflows — those belong in skills (`skill_manage(action='create')`),
+  not knowledge artifacts. Knowledge holds facts; skills hold procedures.
