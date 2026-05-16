@@ -21,7 +21,7 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_deps(tmp_path: Path) -> CoDeps:
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS_NO_MCP, user_skills_dir=tmp_path)
+    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
     _, tool_index = build_native_toolset(SETTINGS_NO_MCP)
     return CoDeps(
         shell=ShellBackend(),

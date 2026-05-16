@@ -23,6 +23,5 @@ class SkillInfo:
     argument_hint: str = ""
     user_invocable: bool = True
     disable_model_invocation: bool = False
-    requires: dict = field(default_factory=dict)
     skill_env: dict[str, str] = field(default_factory=dict)
     path: Path | None = None

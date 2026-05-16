@@ -8,30 +8,23 @@ from co_cli.commands.registry import (
     refresh_completer,
 )
 from co_cli.commands.types import CommandContext
-from co_cli.config.core import settings
 from co_cli.display.core import console, make_table
 from co_cli.skills import usage as skill_usage
 from co_cli.skills.index import set_skill_index
 from co_cli.skills.lifecycle import discover_skill_files, read_skill_meta
 from co_cli.skills.lint import lint_skill
-from co_cli.skills.loader import (
-    diagnose_requires_failures,
-    load_skills,
-    scan_skill_content,
-)
+from co_cli.skills.loader import load_skills, scan_skill_content
 
 
 def _cmd_skills_list(ctx: CommandContext) -> None:
     if not ctx.deps.skill_index:
         console.print("[dim]No skills loaded.[/dim]")
         return
-    table = make_table("Name", "Description", "Requires", "User-Invocable")
+    table = make_table("Name", "Description", "User-Invocable")
     for skill in ctx.deps.skill_index.values():
-        req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
         table.add_row(
             skill.name,
             skill.description or "",
-            req_keys,
             "✓" if skill.user_invocable else "✗",
         )
     console.print(table)
@@ -52,13 +45,10 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
             table.add_row(path.name, "[success]✓ Loaded[/success]", "")
         else:
             try:
-                meta = read_skill_meta(path)
-                requires = (
-                    meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
+                read_skill_meta(path)
+                table.add_row(
+                    path.name, "[bold red]✗ Skipped[/bold red]", "name conflict with built-in"
                 )
-                failures = diagnose_requires_failures(requires, settings)
-                reason = "; ".join(failures) if failures else "name conflict with built-in"
-                table.add_row(path.name, "[bold red]✗ Skipped[/bold red]", reason)
             except Exception as e:
                 table.add_row(path.name, "[bold red]✗ Error[/bold red]", str(e))
 
@@ -68,9 +58,7 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
 def _cmd_skills_reload(ctx: CommandContext) -> None:
     user_skills_dir = ctx.deps.user_skills_dir
     errors: list[str] = []
-    new_skills = load_skills(
-        ctx.deps.skills_dir, settings, user_skills_dir=user_skills_dir, errors=errors
-    )
+    new_skills = load_skills(ctx.deps.skills_dir, user_skills_dir=user_skills_dir, errors=errors)
     new_skills = filter_namespace_conflicts(new_skills, set(BUILTIN_COMMANDS.keys()), errors)
     for msg in errors:
         console.print(f"[warning]{msg}[/warning]")

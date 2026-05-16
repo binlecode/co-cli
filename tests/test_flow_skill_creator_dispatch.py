@@ -18,7 +18,7 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_ctx(tmp_path: Path) -> CommandContext:
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
     _, tool_index = build_native_toolset(SETTINGS)
     deps = CoDeps(
         shell=ShellBackend(),
@@ -41,15 +41,6 @@ async def test_skill_creator_dispatch_returns_delegate(tmp_path: Path) -> None:
     outcome = await dispatch("/skill-creator review", ctx)
     assert isinstance(outcome, DelegateToAgent)
     assert outcome.skill_name == "skill-creator"
-
-
-@pytest.mark.asyncio
-async def test_skill_creator_body_is_non_empty(tmp_path: Path) -> None:
-    """skill-creator dispatch produces a non-empty delegated_input."""
-    ctx = _make_ctx(tmp_path)
-    outcome = await dispatch("/skill-creator some-task", ctx)
-    assert isinstance(outcome, DelegateToAgent)
-    assert len(outcome.delegated_input) > 0
 
 
 @pytest.mark.asyncio

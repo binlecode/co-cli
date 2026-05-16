@@ -21,7 +21,7 @@ def test_manifest_includes_skill_creator(tmp_path: Path) -> None:
     skills_dir = Path(__file__).parent.parent / "co_cli" / "skills"
     user_skills_dir = tmp_path / "user_skills"
     user_skills_dir.mkdir()
-    skills = load_skills(skills_dir, SETTINGS, user_skills_dir=user_skills_dir)
+    skills = load_skills(skills_dir, user_skills_dir=user_skills_dir)
     manifest = render_skill_manifest(skills, skills_dir, user_skills_dir)
     assert 'name="skill-creator"' in manifest, "skill-creator missing from manifest"
 

@@ -367,7 +367,6 @@ async def create_deps(
     skill_errors: list[str] = []
     loaded_skills = load_skills(
         paths["skills_dir"],
-        settings=config,
         user_skills_dir=paths["user_skills_dir"],
         errors=skill_errors,
     )

@@ -43,7 +43,6 @@ def refresh_skills(deps: CoDeps) -> None:
 
     new_skills = load_skills(
         deps.skills_dir,
-        deps.config,
         user_skills_dir=deps.user_skills_dir,
     )
     set_skill_index(new_skills, deps)

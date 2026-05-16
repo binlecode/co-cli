@@ -50,7 +50,6 @@ Per-turn: `main.py` saves current env for keys in `skill_env`, calls `os.environ
 | `argument_hint` | UI hint for `/help` and `/skills` |
 | `user_invocable` | whether the skill appears as a slash command |
 | `disable_model_invocation` | hide from `get_skill_index()` results and manifest |
-| `requires` | environment/platform/settings gates |
 | `skill_env` | env vars injected for the duration of the dispatched turn |
 | `path` | absolute path to the `.md` file on disk; `None` for programmatic configs |
 
@@ -64,7 +63,6 @@ Markdown files parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter
 | `argument-hint` | argument usage hint |
 | `user-invocable` | include in slash-command completer and `/help` |
 | `disable-model-invocation` | hide from `get_skill_index()` and manifest |
-| `requires` | gate loading on bins, anyBins, env, os, or settings |
 | `skill-env` | turn-scoped env injection, filtered through `_SKILL_ENV_BLOCKED` |
 
 ### Load Order
@@ -77,18 +75,6 @@ create_deps()
        security scan applied
        name collision → user-global overrides bundled
 ```
-
-### Load Gating
-
-`requires` block evaluated before a skill enters the registry. Failing skills are skipped entirely.
-
-| Key | Rule |
-|-----|------|
-| `bins` | all listed binaries must exist on `PATH` |
-| `anyBins` | at least one listed binary must exist |
-| `env` | all listed environment variables must be set |
-| `os` | `sys.platform` must match one of the listed prefixes |
-| `settings` | named settings fields must be present and truthy |
 
 ### Load Safety
 
@@ -146,7 +132,7 @@ main.py — per-turn
 | `/skills usage [<name>]` | print the per-skill usage sidecar (table for all; full record for one) |
 | `/skills pin <name>` | pin an agent-created skill — exempt from curator lifecycle transitions |
 | `/skills unpin <name>` | clear the pinned flag |
-| `/skills curator status` | show curator gate state — `enabled`, `last_run_at`, `next_eligible_at`, `interval_hours`, `pending_transitions`, `run_count` |
+| `/skills curator status` | show curator gate state — `enabled`, `last_run_at`, `next_eligible_at`, `interval_hours`, `pending_transitions`, `run_count`, `last_summary` |
 | `/skills curator run` | run the curator immediately (skips the interval gate; still respects `curator_enabled`) |
 | `/skills curator restore <name>` | move an archived skill back from `.archive/` into the active library |
 
@@ -261,12 +247,12 @@ The reviewer runs in a forked `CoDeps` via `fork_deps_for_reviewer`; the curator
 
 Curation preference order: update a skill loaded in the current session → update an existing umbrella skill → create a new class-level skill only if nothing applicable exists.
 
-**Curator gate.** The curator pass runs after the session reviewer completes. It is suppressed unless `skills.curator_enabled=True` AND either `last_run_at` is absent OR the elapsed time since `last_run_at` exceeds `curator_interval_hours` (default 168h = 7 days). Manual `/skills curator run` skips the time gate.
+**Curator gate.** The curator pass runs after the session reviewer completes. It is suppressed unless all of the following hold: `skills.curator_enabled=True`, a model is configured (`deps.model is not None`), the curator state is not `paused`, and either `last_run_at` is absent OR the elapsed time since `last_run_at` exceeds `curator_interval_hours` (default 168h = 7 days). Manual `/skills curator run` skips the time gate but still requires a model and respects `curator_enabled`.
 
 **Lifecycle states.** Each agent-created skill carries a `state` field in the usage sidecar (`~/.co-cli/skills/.usage.json`):
 - `active` — default; eligible for dispatch and consolidation.
-- `stale` — `last_used_at` exceeded `CURATOR_STALE_AFTER_DAYS` (30 days). Skill remains in `user_skills_dir`; consolidation candidate.
-- `archived` — `last_used_at` exceeded `CURATOR_ARCHIVE_AFTER_DAYS` (90 days). File moves to `user_skills_dir/.archive/`; excluded from the manifest. Restored manually via `/skills curator restore <name>`.
+- `stale` — idle longer than `CURATOR_STALE_AFTER_DAYS` (30 days). Skill remains in `user_skills_dir`; consolidation candidate. Recovers to `active` automatically if used again within the stale threshold.
+- `archived` — was `stale` and idle longer than `CURATOR_ARCHIVE_AFTER_DAYS` (90 days). File moves to `user_skills_dir/.archive/`; excluded from the manifest. Restored manually via `/skills curator restore <name>`.
 
 Pinned skills (`/skills pin <name>`) are exempt from all state transitions.
 
@@ -294,6 +280,10 @@ Pinned skills (`/skills pin <name>`) are exempt from all state transitions.
 |------|--------|-------------|
 | `deps.skills_dir` | package directory `co_cli/skills/` | bundled skills (lowest priority) |
 | `deps.user_skills_dir` | `~/.co-cli/skills/` | user-global skills (overrides bundled on name collision) |
+| `~/.co-cli/skills/.usage.json` | `co_cli/skills/usage.py` | per-skill usage sidecar (counters, timestamps, state, pinned) |
+| `~/.co-cli/skills/.curator_state.json` | `co_cli/skills/curator.py` | curator run state (`last_run_at`, `run_count`, `paused`) |
+| `~/.co-cli/skills/.archive/` | `co_cli/skills/curator.py` | archived skills moved here; restored via `/skills curator restore` |
+| `~/.co-cli/curator-runs/<timestamp>-<run_id>/` | `co_cli/agents/skill_curator.py` | per-run curator reports (`run.json`, `run.md`) |
 
 ## 4. Public Interface
 
@@ -334,7 +324,7 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `SkillInfo` | `co_cli/skills/skill_types.py` | Frozen dataclass — `name`, `description`, `body`, `argument_hint`, `user_invocable`, `disable_model_invocation`, `requires`, `skill_env`, `path` |
+| `SkillInfo` | `co_cli/skills/skill_types.py` | Frozen dataclass — `name`, `description`, `body`, `argument_hint`, `user_invocable`, `disable_model_invocation`, `skill_env`, `path` |
 | `LintFinding` | `co_cli/skills/_lint.py` | Frozen dataclass — `rule`, `line`, `message` |
 
 ## 5. Files
@@ -343,7 +333,7 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 |------|---------|
 | `co_cli/skills/skill_types.py` | `SkillInfo` frozen dataclass |
 | `co_cli/skills/_lint.py` | `lint_skill(content, path)` — R1–R10 validator; `LintFinding` dataclass |
-| `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content`, `_check_requires` |
+| `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `_is_safe_skill_path`, `scan_skill_content` |
 | `co_cli/skills/index.py` | `set_skill_index()`, `get_skill_index()` |
 | `co_cli/skills/lifecycle.py` | `refresh_skills`, `discover_skill_files`, `read_skill_meta`, `cleanup_skill_run_state` |
 | `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model |
@@ -407,3 +397,36 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | skill_view returns body inline regardless of size | `tests/test_flow_skills_tools.py` |
 | skill_view resolves plugin-qualified names | `tests/test_flow_skills_tools.py` |
 | skill_view errors on unknown name, hidden skill, or file_path | `tests/test_flow_skills_tools.py` |
+| active → stale transition when idle exceeds stale threshold | `tests/test_flow_skills_curator.py` |
+| stale → active recovery when recently used within threshold | `tests/test_flow_skills_curator.py` |
+| stale → archived transition when idle exceeds archive threshold | `tests/test_flow_skills_curator.py` |
+| pinned skill skips all state transitions | `tests/test_flow_skills_curator.py` |
+| archived skill is skipped by transition scan | `tests/test_flow_skills_curator.py` |
+| fallback to created_at when last_used_at is absent | `tests/test_flow_skills_curator.py` |
+| archive_skill moves file to .archive/; restore_skill reverses it | `tests/test_flow_skills_curator.py` |
+| archive_skill idempotent when already archived | `tests/test_flow_skills_curator.py` |
+| read_curator_state returns defaults when file absent or corrupt | `tests/test_flow_skills_curator.py` |
+| write_curator_state is atomic (write + read roundtrip) | `tests/test_flow_skills_curator.py` |
+| curator gate: passes when never run | `tests/test_flow_skill_curator.py` |
+| curator gate: blocks within interval | `tests/test_flow_skill_curator.py` |
+| curator gate: blocks when paused even if interval elapsed | `tests/test_flow_skill_curator.py` |
+| curator gate: tolerates unparseable last_run_at | `tests/test_flow_skill_curator.py` |
+| _maybe_run_curator short-circuits when disabled or no model | `tests/test_flow_skill_curator.py` |
+| _maybe_run_curator blocked by recent run (run_count unchanged) | `tests/test_flow_skill_curator.py` |
+| run_curator applies Phase 1 state transitions (active → stale) | `tests/test_flow_skill_curator.py` |
+| run_curator writes Phase 3 state even when Phase 2 agent fails | `tests/test_flow_skill_curator.py` |
+| usage sidecar read/write roundtrip; returns empty when missing or corrupt | `tests/test_flow_skill_usage.py` |
+| write_records is atomic | `tests/test_flow_skill_usage.py` |
+| is_agent_created: true for user skill, false for bundled or nonexistent | `tests/test_flow_skill_usage.py` |
+| bump_view/bump_use/bump_patch increment counters and set timestamps | `tests/test_flow_skill_usage.py` |
+| bump_view skips bundled skills and short-circuits when tracking disabled | `tests/test_flow_skill_usage.py` |
+| record_create initializes sidecar entry | `tests/test_flow_skill_usage.py` |
+| forget removes sidecar entry; no-op on unknown | `tests/test_flow_skill_usage.py` |
+| set_pinned creates stub when no record; toggles existing record | `tests/test_flow_skill_usage.py` |
+| bump_view swallows write failures (best-effort) | `tests/test_flow_skill_usage.py` |
+| skill_manage create/view/patch/edit/delete update sidecar counters | `tests/test_flow_skill_usage.py` |
+| /skills pin sets pinned flag; /skills unpin clears it | `tests/test_flow_skills_pin.py` |
+| /skills pin on bundled skill is rejected | `tests/test_flow_skills_pin.py` |
+| /skills pin on unknown skill is rejected | `tests/test_flow_skills_pin.py` |
+| /skills usage lists agent-created skills; excludes bundled | `tests/test_flow_skills_usage.py` |
+| /skills usage <name> prints full record | `tests/test_flow_skills_usage.py` |

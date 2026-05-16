@@ -18,7 +18,7 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_deps(tmp_path: Path, extra_skills: dict[str, SkillInfo] | None = None) -> CoDeps:
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS, user_skills_dir=tmp_path)
+    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
     if extra_skills:
         skill_index = {**skill_index, **extra_skills}
     _, tool_index = build_native_toolset(SETTINGS)
@@ -50,7 +50,7 @@ async def test_skill_view_returns_body_inline(tmp_path: Path) -> None:
     assert "<persisted-output>" not in result.return_value
     assert len(result.return_value) > 0
     # Verify body matches what's loaded from disk
-    loaded = load_skills(_BUNDLED_SKILLS_DIR, SETTINGS)
+    loaded = load_skills(_BUNDLED_SKILLS_DIR)
     assert result.return_value == loaded["doctor"].body
 
 

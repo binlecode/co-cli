@@ -9,12 +9,8 @@ need to filter by reserved name should apply filter_namespace_conflicts()
 from __future__ import annotations
 
 import logging
-import os
 import re
-import shutil
-import sys
 from pathlib import Path
-from typing import Any
 
 from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.skills.skill_types import SkillInfo
@@ -78,77 +74,6 @@ def scan_skill_content(content: str) -> list[str]:
     return warnings
 
 
-def _check_requires(name: str, requires: dict, settings: Any = None) -> bool:
-    """Evaluate the requires block. Returns True when all conditions are met."""
-    bins = requires.get("bins", [])
-    if bins and not all(shutil.which(b) for b in bins):
-        logger.info(f"Skipping skill {name}: requires bins not satisfied: {bins}")
-        return False
-
-    any_bins = requires.get("anyBins", [])
-    if any_bins and not any(shutil.which(b) for b in any_bins):
-        logger.info(f"Skipping skill {name}: requires anyBins not satisfied: {any_bins}")
-        return False
-
-    env_vars = requires.get("env", [])
-    if env_vars and not all(os.getenv(e) for e in env_vars):
-        logger.info(f"Skipping skill {name}: requires env not satisfied: {env_vars}")
-        return False
-
-    platforms = requires.get("os", [])
-    if platforms and not sys.platform.startswith(tuple(platforms)):
-        logger.info(f"Skipping skill {name}: requires os not satisfied: {platforms}")
-        return False
-
-    settings_fields = requires.get("settings", [])
-    if settings_fields and (
-        settings is None or not all(getattr(settings, f, None) for f in settings_fields)
-    ):
-        logger.info(f"Skipping skill {name}: requires settings not satisfied: {settings_fields}")
-        return False
-
-    return True
-
-
-def diagnose_requires_failures(requires: dict, settings: Any = None) -> list[str]:
-    """Evaluate the requires block and return human-readable failure strings.
-
-    Empty list means all requirements are met.
-    """
-    failures: list[str] = []
-
-    bins = requires.get("bins", [])
-    if bins:
-        missing = [b for b in bins if not shutil.which(b)]
-        if missing:
-            failures.append(f"missing bins: {', '.join(missing)}")
-
-    any_bins = requires.get("anyBins", [])
-    if any_bins and not any(shutil.which(b) for b in any_bins):
-        failures.append(f"none of anyBins found: {', '.join(any_bins)}")
-
-    env_vars = requires.get("env", [])
-    if env_vars:
-        missing_env = [e for e in env_vars if not os.getenv(e)]
-        if missing_env:
-            failures.append(f"missing env vars: {', '.join(missing_env)}")
-
-    platforms = requires.get("os", [])
-    if platforms and not sys.platform.startswith(tuple(platforms)):
-        failures.append(f"os not satisfied: need {platforms}, got {sys.platform}")
-
-    settings_fields = requires.get("settings", [])
-    if settings_fields:
-        if settings is None:
-            failures.append(f"missing settings: {', '.join(settings_fields)}")
-        else:
-            missing_settings = [f for f in settings_fields if not getattr(settings, f, None)]
-            if missing_settings:
-                failures.append(f"missing settings: {', '.join(missing_settings)}")
-
-    return failures
-
-
 def _is_safe_skill_path(path: Path, root: Path) -> bool:
     """Return True when path is safe to load (not a symlink pointing outside root)."""
     if not path.is_symlink():
@@ -162,7 +87,6 @@ def _is_safe_skill_path(path: Path, root: Path) -> bool:
 def _load_skill_file(
     path: Path,
     result: dict[str, SkillInfo],
-    settings: Any = None,
     *,
     root: Path,
     scan: bool = True,
@@ -178,10 +102,6 @@ def _load_skill_file(
     try:
         text = path.read_text(encoding="utf-8")
         meta, body = parse_frontmatter(text)
-
-        requires = meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
-        if not _check_requires(name, requires, settings):
-            return
 
         if scan:
             for w in scan_skill_content(text):
@@ -201,7 +121,6 @@ def _load_skill_file(
             argument_hint=meta.get("argument-hint", ""),
             user_invocable=meta.get("user-invocable", True),
             disable_model_invocation=meta.get("disable-model-invocation", False),
-            requires=requires,
             skill_env=skill_env,
             path=path,
         )
@@ -214,7 +133,6 @@ def _load_skill_file(
 
 def load_skills(
     skills_dir: Path,
-    settings: Any = None,
     *,
     user_skills_dir: Path | None = None,
     errors: list[str] | None = None,
@@ -225,18 +143,18 @@ def load_skills(
       1. Co-bundled skills (skills_dir = co_cli/skills/) — version-controlled, not user-editable
       2. User skills (user_skills_dir = ~/.co-cli/skills/) — override bundled on name collision
 
-    Returns every parseable skill that passes skill-internal validation (requires, env, .md,
-    security scan). Reserved-name filtering is the caller's responsibility — apply
+    Returns every parseable skill that passes skill-internal validation (.md, security scan).
+    Reserved-name filtering is the caller's responsibility — apply
     filter_namespace_conflicts() from co_cli.commands.registry after this call.
     """
     result: dict[str, SkillInfo] = {}
 
     if skills_dir.exists():
         for path in sorted(skills_dir.glob("*.md")):
-            _load_skill_file(path, result, settings, root=skills_dir, scan=False, errors=errors)
+            _load_skill_file(path, result, root=skills_dir, scan=False, errors=errors)
 
     if user_skills_dir is not None and user_skills_dir.exists():
         for path in sorted(user_skills_dir.glob("*.md")):
-            _load_skill_file(path, result, settings, root=user_skills_dir, errors=errors)
+            _load_skill_file(path, result, root=user_skills_dir, errors=errors)
 
     return result
