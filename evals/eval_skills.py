@@ -15,7 +15,7 @@ section prepended to ``docs/REPORT-eval-skills.md``.
 
 Eval-seeded artifacts (deterministic names; reruns overwrite in place):
   - ``~/.co-cli/skills/eval_smoke.md`` — written by W4.A; **left in place**.
-  - ``~/.co-cli/skills/eval_W4_lifecycle.md`` — created and deleted by W4.C.
+  - ``~/.co-cli/skills/eval_w4_lifecycle.md`` — created and deleted by W4.C.
   - ``~/.co-cli/skills/help.md`` — W4.D's shadowing attempt; **always cleaned
     up** at case end (its presence would brick ``/help`` on future sessions).
 
@@ -167,8 +167,8 @@ async def case_w4_a_dispatch_user_skill(
         f"  CO_EVAL_TOKEN: {token_value}\n"
         "---\n"
         "Follow each step exactly:\n"
-        "1. Print the value of the environment variable CO_EVAL_TOKEN verbatim.\n"
-        "2. Print the value of $ARGUMENTS verbatim.\n"
+        '1. Invoke the `shell_exec` tool with command `printf %s "$CO_EVAL_TOKEN"` and include the captured stdout in your response, prefixed with `CO_EVAL_TOKEN=`.\n'
+        "2. In your same response, also include the literal text `ARGS=$ARGUMENTS`.\n"
     )
     skill_path.write_text(skill_body, encoding="utf-8")
 
@@ -361,7 +361,7 @@ async def case_w4_c_skill_manage_create_edit_delete(
 ) -> CaseResult:
     """W4.C — drive ``skill_manage`` create / patch / delete on a fresh skill.
 
-    Uses the deterministic name ``eval_W4_lifecycle`` (created and deleted
+    Uses the deterministic name ``eval_w4_lifecycle`` (created and deleted
     by this case in a single pass; reruns recreate-and-delete cleanly). The
     tool is invoked directly via a manually constructed RunContext —
     ``@agent_tool`` returns the function unchanged, so no agent loop is
@@ -372,7 +372,7 @@ async def case_w4_c_skill_manage_create_edit_delete(
     trace_file = run.case_trace_path(case_id)
     trace_file.touch(exist_ok=True)
 
-    name = "eval_W4_lifecycle"
+    name = "eval_w4_lifecycle"
     ctx = _make_run_context(deps, agent)
     skill_path = deps.user_skills_dir / f"{name}.md"
 

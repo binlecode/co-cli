@@ -12,7 +12,6 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 from pydantic_ai import Agent, DeferredToolRequests
-from pydantic_ai.agent import InstrumentationSettings
 from pydantic_ai.messages import ModelMessage
 
 from co_cli.agent.build import build_orchestrator
@@ -26,7 +25,6 @@ from co_cli.commands.registry import build_completer_entries
 from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
-    LOGS_DB,
     LOGS_DIR,
     REASONING_DISPLAY_FULL,
     USER_DIR,
@@ -38,7 +36,7 @@ from co_cli.deps import CoDeps
 from co_cli.display.core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
 from co_cli.memory.transcript import persist_session_history
 from co_cli.observability.file_logging import setup_file_logging
-from co_cli.observability.telemetry import setup_tracer_provider
+from co_cli.observability.tracing import setup_log as setup_spans_log
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
 
@@ -53,12 +51,12 @@ def _setup_observability() -> None:
         max_size_mb=settings.observability.log_max_size_mb,
         backup_count=settings.observability.log_backup_count,
     )
-    tracer_provider = setup_tracer_provider(
-        service_name="co-cli",
-        service_version=_VERSION,
+    setup_spans_log(
+        log_path=LOGS_DIR / "co-cli-spans.jsonl",
+        max_size_mb=settings.observability.spans_log_max_size_mb,
+        backup_count=settings.observability.spans_log_backup_count,
         redact_patterns=settings.observability.redact_patterns,
     )
-    Agent.instrument_all(InstrumentationSettings(tracer_provider=tracer_provider, version=3))
     for logger_name in _SUPPRESS_LOGGERS:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
@@ -610,37 +608,18 @@ def chat(
 
 
 @app.command()
-def traces():
-    """Open a visual trace viewer with nested spans (like Logfire)."""
-    import webbrowser
-
-    from co_cli.observability.viewer import write_trace_html
-
-    db_path = LOGS_DB
-    if not db_path.exists():
-        console.print("[yellow]No traces found yet. Run 'co chat' first.[/yellow]")
-        return
-
-    html_path = write_trace_html()
-    console.print(f"[bold green]Generated trace viewer:[/bold green] {html_path}")
-    webbrowser.open(f"file://{html_path}")
-
-
-@app.command()
 def tail(
     trace_id: str = typer.Option(None, "--trace", "-i", help="Filter to a specific trace ID"),
     tools_only: bool = typer.Option(False, "--tools-only", "-T", help="Only show tool spans"),
-    models_only: bool = typer.Option(
-        False, "--models-only", "-m", help="Only show model/chat spans"
-    ),
-    poll: float = typer.Option(1.0, "--poll", "-p", help="Poll interval in seconds"),
+    models_only: bool = typer.Option(False, "--models-only", "-m", help="Only show model spans"),
+    poll: float = typer.Option(0.1, "--poll", "-p", help="Poll interval in seconds"),
     no_follow: bool = typer.Option(False, "--no-follow", "-n", help="Print recent spans and exit"),
     last: int = typer.Option(20, "--last", "-l", help="Number of recent spans to show on startup"),
-    verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Show LLM input/output content for model spans"
+    detail: bool = typer.Option(
+        False, "--detail", "-d", help="Append type-aware detail blocks (input/output/args/result)"
     ),
 ):
-    """Tail agent spans in real time (like tail -f for OTel traces)."""
+    """Tail agent spans in real time (like tail -f for the structured-log spans file)."""
     from co_cli.observability.tail import run_tail
 
     run_tail(
@@ -650,8 +629,18 @@ def tail(
         poll_interval=poll,
         no_follow=no_follow,
         last=last,
-        verbose=verbose,
+        detail=detail,
     )
+
+
+@app.command()
+def trace(
+    trace_id: str = typer.Argument(..., help="Trace ID to render"),
+):
+    """Render one trace as a snapshot tree from the structured-log spans file."""
+    from co_cli.observability.trace_view import render_trace
+
+    render_trace(trace_id)
 
 
 if __name__ == "__main__":

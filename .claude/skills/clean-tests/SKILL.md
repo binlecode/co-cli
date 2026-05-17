@@ -1,315 +1,283 @@
 ---
 name: clean-tests
-description: Keep the suite focused on functional logic verification and aggressive issue finding. Purge dead/structural tests, dedup overlaps, trim subsumed units, audit workflow coverage, consolidate by workflow. Active test quality gate.
+description: Keep the suite focused on functional behavior verification. Purge dead, structural, unit-only, duplicate, low-ROI, backward-compat, and noise tests. Active test quality gate.
 ---
 
 # clean-tests
 
 **Invocation:** `/clean-tests [path]`
 
-**Mission:** cleanse, trim, and consolidate tests for concise functional-only coverage. Six phases, in order:
+**Mission:** every test must verify functional behavior of production code under realistic conditions. Delete anything that doesn't.
 
-0. Load rules + code-scan entry points
-1. Build test catalog
-2. Rule audit + overlap detection
-3. Coverage scan
-4. File consolidation plan
-5. Auto-fix + suite
+**Default stance:** violations exist. PASS is earned, not assumed.
 
-**Default stance: violations exist. PASS is earned, not assumed.**
+**Non-negotiable:** Pass 1 requires reading every test file with the Read tool and annotating every `def test_*` function. Grep patterns are supplementary triage only — they are not a substitute for reading test bodies. A run that skips per-test reading is incomplete regardless of what the summary claims. For every batch, the private-call inventory (step 2 below) must complete before any annotation row is written — skipping it is a protocol violation even if all verdicts would be KEEP.
 
-**Consumes:** every `test_*.py` under `[path]` (default: `tests/`), `agent_docs/testing.md`, `tests/_*.py` support files.  
-**Produces:** terminal summary + `.pytest-logs/<timestamp>-clean-tests.log`. No REPORT-*.md.  
-**Verdict:** binary **PASS** / **FAIL**. Any unfixed Blocking violation or red suite → FAIL.
+**Produces:** terminal summary + `.pytest-logs/<timestamp>-clean-tests.log`.
+
+**Verdict:** binary **PASS** / **FAIL**. Any unfixed Blocking, lint error, or red suite → FAIL.
 
 ---
 
-## Phase 0 — Load Rules + Code-Scan Entry Points
+## Pass 0 — File-level triage (fast scan before per-test audit)
 
-Read `agent_docs/testing.md` in full. Keep it loaded for all phases.
-
-Scan the codebase for entry points:
-
-1. **Agent tools**: `grep -rn '^@agent_tool' co_cli/` — extract file path and function name from each match.
-2. **Slash commands**: read `co_cli/commands/core.py` — extract every key in the `BUILTIN_COMMANDS` dict.
-3. **Agent public surfaces**: read every `.py` in `co_cli/agents/` — collect public functions and classes (names not starting with `_`): `build_orchestrator`, `run_session_review`, `run_curator`, `MCPToolsetEntry`, etc.
-
-Build a unified entry-point list: `{id, kind: tool|command|agent, module_path, function_name, tier}`.
-
-**Tier classification** — assign algorithmically, not from a hardcoded list:
-
-For each `@agent_tool` function, inspect its decorator arguments and the `ToolInfo` it registers:
-- **Tier 1**: `requires` field is absent or resolves to a production setting satisfied by a default install (no API keys, no optional external services). These are tools a user exercises in every session without any extra configuration.
-- **Tier 2**: `requires` field references an optional production setting (e.g. `obsidian_enabled`, MCP config, delegation profile). Present only when the user opts in — no credentials required.
-- **Tier 3**: `requires` field references a credential-bearing production setting (OAuth token, external API key). Always skipped without explicit setup.
-
-If the `requires` field is absent or ambiguous, read the tool's implementation for capability guards (e.g. `if not config.mcp_enabled: return`). A guarded tool is Tier 2; an unguarded tool is Tier 1.
-
-For slash commands: read the handler source for capability guards. Tier 1 if no guard; Tier 2 if guarded by an optional subsystem; Tier 3 if credential-gated.
-
-Announce total entry-point count, tier breakdown, and scan path.
-
----
-
-## Phase 1 — Test Catalog
-
-Read the foundational support files before opening test files:
-- `tests/_settings.py` — `SETTINGS`, `SETTINGS_NO_MCP`, `make_settings()`
-- `tests/_timeouts.py` — timeout constants
-- `tests/_ollama.py` — `ensure_ollama_warm` contract (must run before any `asyncio.timeout` block)
-- `tests/_co_harness.py` — pytest plugin
-
-Read every `test_*.py` in full (no excerpts, no Explore subagent). For each test function record:
-
-```yaml
-- test: <file_path>::<function_name>
-  prod_imports: [co_cli modules imported]
-  entry_called: [entry-point function(s) the test exercises]
-  assertion_kind: behavioral | structural | content_gate | schema_check
-  gates_on: [return_value | persisted_state | raised_error | side_effect | string_content]
-  pipeline_position: terminal | internal | standalone
-  uses_real_llm: true | false
-  fixtures: [pytest fixtures]
-  legacy_signals: [import_path_mismatch | assertion_stale | compat_alias_only]  # optional; omit if none
-```
-
-**Field definitions:**
-
-`assertion_kind` — classify the test's most demanding assertion. Use the highest-fidelity category that applies:
-- `behavioral`: asserts on an observable outcome that can only pass if the production code does the right thing — return value correctness, state change, error raised at the right condition, side effect executed. A test with any behavioral assertion is `behavioral` regardless of other weaker assertions also present.
-- `structural`: asserts only on Python or import-system facts — dataclass defaults, field existence, module importability, class attribute presence, type annotations, registration table membership. Applies only when there is NO behavioral assertion.
-- `content_gate`: asserts that specific string content exists in a file or function output (e.g. "section heading in assembled prompt", "lint finds no TODO in skill file") — tests the content of an asset. Applies when the string check is the only meaningful assertion and no behavioral outcome is verified.
-- `schema_check`: asserts only on the shape/structure of a data object (field names, count of items, ordering) without checking that the values are functionally correct. Applies when there is no behavioral or content assertion.
-
-`gates_on` — what observable the assertion is sensitive to:
-- `return_value`: the function's return value must equal or contain something specific.
-- `persisted_state`: a side effect (file write, DB row, env var) must have happened.
-- `raised_error`: a specific exception must be raised under a specific condition.
-- `side_effect`: an external observable (span emitted, callback called, process spawned) must occur.
-- `string_content`: a specific substring must appear in a string output.
-
-`pipeline_position` — where does `entry_called` sit in production call chains?
-- `terminal`: the function is a public entry point that orchestrates a complete user-facing operation (e.g. `run_turn`, `knowledge_search`, `dispatch`). Or it is a pure utility with no callers in the production pipeline.
-- `internal`: the function is called by another production function that is itself tested. The function is a non-terminal step in a pipeline (e.g. `enforce_request_size` inside the processor chain, `_gather_session_todos` inside compaction, `_repair_json_args` inside `before_tool_validate`).
-- `standalone`: helper that is NOT reachable from any terminal function that has a test. Before assigning `standalone`, verify by reading the function's callers: confirm no tested terminal entry reaches it (e.g. bootstrap startup functions called once during `run_bootstrap`, OTEL span emitters called only from bootstrap). If the function IS reachable from a tested terminal, classify as `internal` instead.
-
-`legacy_signals` — optional; populate only when one or more of these hold:
-- `import_path_mismatch`: the imported symbol or module path does not match the current canonical location in source. Verify: `grep -rn "<symbol>" co_cli/ --include="*.py"` — if the symbol appears only in an `__init__.py` re-export and not in any implementation file, the test is hitting a compat shim.
-- `assertion_stale`: the assertion value does not match what the current implementation produces. Signals: test comment references an issue, PR, or "old behavior"; running the test in isolation shows actual ≠ expected.
-- `compat_alias_only`: test exists solely to verify a compat layer (e.g. `__all__` export kept only for old callers). Verify: `grep -rn "<symbol>" . --include="*.py" | grep -v test_` — if no non-test callers, the alias is dead.
-
-`entry_called` is derived from `prod_imports` and call sites in the test body.
-
----
-
-## Phase 2 — Rule Audit + Overlap Detection
-
-Apply every rule from `agent_docs/testing.md` AND the rules below to each test. Classify violations:
-
-- **Blocking**: must fix or delete before PASS.
-- **Minor**: fix inline where trivial; note otherwise.
-
-For each classified violation, apply the deletion test before recording it: **"If this test is deleted, will a real regression go undetected by any remaining test?"** If yes — the test is valuable, drop the finding. If no — the finding stands. Also check: is the violation covered by a conftest fixture? Is the "duplicate" testing a meaningfully different failure mode? Only findings that survive the deletion test are recorded.
-
----
-
-### R-Series: Standard Rules (from testing.md)
-
-- **Blocking**: mock/patch usage (`monkeypatch`, `unittest.mock`, `pytest-mock`, hand-assembled domain objects that substitute for production code paths rather than serving as realistic inputs).
-- **Blocking**: `assert True` or truthy-only assertion (`assert result`, `assert result.flag`).
-- **Blocking**: no behavioral assertion — test body drives code but asserts nothing meaningful.
-- **Blocking**: stale call signature — test calls a function with arguments that don't exist in current source.
-- **Blocking**: fixture not wired — `tmp_path` or injected fixture in signature but never passed to a production function.
-- **Blocking** *(not in testing.md — enforced here)*: `ensure_ollama_warm` called inside an `asyncio.timeout` block — it must precede all timeout blocks; move it outside.
-- **Blocking** *(not in testing.md — enforced here)*: multiple sequential LLM `await`s wrapped in a single `asyncio.timeout` — each individual `await` to an LLM or external service must have its own `asyncio.timeout(N)`, never grouped.
-- **Minor**: naming convention mismatch (`test_flow_` prefix missing).
-- **Minor**: `asyncio.timeout` missing on an `await` that calls a real LLM or external service.
-- **Minor**: test name describes arrangement rather than behavior — name should state what the code does under what condition, not what the file or function is called (e.g. `test_search_returns_empty_when_store_missing` not `test_disk_scan_fallback`).
-
----
-
-### S-Series: Structural / Schema Tests
-
-**S1 — Structural assertion** (Blocking): `assertion_kind == structural`. A test whose assertion would still pass if the production function body were replaced with `pass` or `return None`. Examples: testing a dataclass default value, testing that a field is assignable, testing module importability. Delete unless the test can be rewritten to assert on a behavioral outcome.
-
-**S2 — Schema check** (Blocking): `assertion_kind == schema_check` where the schema check is the *only* assertion and no behavioral outcome is verified. Example: asserting `len(result) == 6` without asserting what those 6 items are. Delete or strengthen to `behavioral`.
-
----
-
-### U-Series: Unit Test Hygiene
-
-**U1 — Subsumed private function** (Blocking): test calls a `_private()` function while a public entry covering that helper already has a test with the same or broader failure modes.
-
-Algorithm:
-1. Find tests where `entry_called` contains a name starting with `_`.
-2. For each such test `U` calling helper `_h`, find public-entry tests `W` from the same module.
-3. Read `W`'s entry point source body once — scan for literal `_h(` (direct call only). If absent, skip.
-4. If `_h(` is present AND `U`'s `gates_on` set is a subset of `W`'s `gates_on` set — flag `U` for deletion.
-
-**U2 — Pipeline-internal unit test** (Blocking): `pipeline_position == internal` AND a `terminal` test for the same pipeline exists AND the failure mode is reachable through that terminal test with realistic inputs.
-
-Algorithm:
-1. Find tests where `pipeline_position == internal`.
-2. For each such test `I` calling internal function `f`, find terminal-entry tests `T` from the same module or the pipeline's orchestrating module.
-3. Verify `T` exercises `f` by reading `T`'s entry-point source and confirming `f(` (or a caller of `f`) appears in the reachable call chain. If absent, skip — `I` is the only guard; do not flag.
-4. If `f` IS reachable from `T`: determine whether `I`'s specific failure modes can be triggered through `T` using production-realistic inputs.
-   - **Flag for deletion (Blocking)**: the failure mode is reachable through `T` with realistic inputs. Example: `enforce_request_size` called from the processor chain — oversized results from real tool calls can be passed through the chain.
-   - **Do not flag**: the failure mode requires a synthetic boundary input that cannot be deterministically produced through `T`. Examples: `_repair_json_args` tests with specific malformed JSON patterns the LLM produces but a behavioral test can't trigger reliably; `_check_ollama_num_ctx_floor` raising ValueError on a misconfigured model unavailable in CI.
-
----
-
-### B-Series: Backward-Compatibility Tests
-
-Detect using the `legacy_signals` field populated in Phase 1. A test with no `legacy_signals` entries is not a B-series candidate.
-
-**B1 — Legacy symbol import** (Blocking): `legacy_signals` contains `import_path_mismatch`. Fix: update the import to the canonical path, then verify the test still exercises the same behavior. If the canonical path no longer exists, delete the test.
-
-**B2 — Legacy behavior assertion** (Blocking): `legacy_signals` contains `assertion_stale`. Fix: if the test covers a real failure mode (the production logic can still fail in the way the test expects), update the expected value to match current correct behavior. If the failure mode no longer exists, delete the test.
-
-**B3 — Dead compat alias test** (Blocking): `legacy_signals` contains `compat_alias_only`. Delete the test and verify the compat layer itself has no non-test callers before removing it.
-
----
-
-### L-Series: Low-ROI Tests
-
-**L1 — Content gate with higher-fidelity neighbor** (Blocking): `assertion_kind == content_gate` AND a behavioral test anywhere in the suite already covers the same production code path with broader assertions. The content gate adds no additional failure mode. Delete.
-
-Signal: the content gate asserts `"string" in output` while a behavioral test — in any file — asserts on the return value, persisted state, or error behavior of the same function with the same or broader inputs. The behavioral test would catch any code regression that would also break the content gate. The neighbor does not need to be in the same file; cross-file behavioral coverage counts.
-
----
-
-### N-Series: Noise Tests
-
-**N1 — Tautological assertion** (Blocking): the test's assertion passes regardless of what the production code returns, because its truth value is determined solely by Python semantics with no reference to production output. Specific case: `assert x == x` or any expression that is true by construction. (Truthy-only assertions are covered by R-series; default-value assertions by S1; degenerate LLM assertions by N3. N1 applies only to mathematically tautological assertions.)
-
-**N2 — Dead test** (Blocking): the test imports a symbol that no longer exists, or calls a function with a signature that no longer matches current source. Would fail at import or collection time. Fix the stale call signature or delete.
-
-**N3 — Trivially-passing LLM test** (Minor): an LLM-backed test whose assertion passes whether or not the model followed the prompt (e.g. the test body comments "if the model defied the prompt… accept it", or asserts only `result.outcome == "continue"` which is always true). The test provides no regression signal. Record in terminal summary under "Degenerate LLM tests"; do not auto-delete (the test structure may be salvageable by tightening the assertion).
-
----
-
-### I-Series: Isolation Violations
-
-**I1 — Unguarded filesystem write** (Blocking): the test writes to a path not derived from `tmp_path` (e.g. hardcodes `~/.co-cli/`, uses `USER_DIR` directly, or constructs a path from `CO_HOME` without overriding it via `tmp_path`). These writes bleed state across test runs and make the suite non-deterministic. Fix: derive all paths from `tmp_path`; set `CO_HOME` to `tmp_path` if the production code reads it at call time.
-
-**I2 — Unrestored os.environ mutation** (Blocking): the test sets or deletes `os.environ` keys without a `try/finally` that restores the original value (or `None` if the key was absent). A test failure mid-run leaves stale env vars that silently corrupt subsequent tests. Fix: snapshot before mutation, restore in `finally`.
-
-**I3 — Shared mutable module-level state** (Minor): detection requires three steps: (1) identify module-level objects in the test file, excluding `SETTINGS`, `SETTINGS_NO_MCP`, and cached LLM models (explicitly allowed by testing.md); (2) list each object's public mutation methods by reading its class definition; (3) check whether any test body calls a mutation method without a corresponding reset in teardown (no `yield` fixture or `finally` block that undoes the mutation). Flag only objects where step 3 confirms unrestored mutation.
-
----
-
-### O-Series: Overlap Detection
-
-**O1 — Cross-file overlap** (Blocking): two tests in different files share at least one entry in `entry_called` AND assert the same behavioral outcome (same `gates_on` observable on the same code path). Keep the one in the canonical file (or the more thorough one); delete the copy.
-
-Algorithm:
-1. For each pair of catalog records `(A, B)` where `A.file != B.file`: compute `entry_called(A) ∩ entry_called(B)`. If the intersection is non-empty, the pair is a candidate.
-2. For each candidate pair: read the shared function's source and identify which branches each test's inputs activate. Determine whether both tests assert the same `gates_on` observable on the same branches, with no distinct failure mode exercised by one but not the other.
-3. If yes: flag the weaker test (fewer failure modes, less specific assertion, non-canonical file) for deletion. If both are equally thorough, delete from the non-canonical file.
-
-**O2 — Same-file near-duplicate** (Blocking): two tests in the same file call the same function with different inputs but activate the same code branches and assert the same observable. Read the production function source, identify which branches each test's inputs activate — if the branch sets are identical and `assertion_kind` is the same, flag the weaker one for deletion.
-
----
-
-## Phase 3 — Coverage Scan
-
-For each entry point from Phase 0, check if ≥1 catalog entry has it in `entry_called` AND `assertion_kind == behavioral`.
-
-**Classification:**
-- **Covered**: ≥1 behavioral test exercises this entry point.
-- **Uncovered**: no test, or only structural/content_gate/schema_check tests, or only truthy assertions.
-
-**Tiered gating:**
-
-| Tier | Uncovered → | Action |
-|------|-------------|--------|
-| 1    | **Blocking** | Promoted to Blocking finding. Waiver requires an explicit note explaining why the entry point cannot be tested without infrastructure unavailable in CI. |
-| 2    | Terminal output only | List in summary; does not gate verdict. |
-| 3    | Terminal output only | List in summary with "(credential-gated)" annotation. |
-
-Print a coverage table grouped by tier and kind.
-
----
-
-## Phase 4 — File Consolidation Plan
-
-Derive the canonical filename for each test from its entry point's `co_cli/` path:
-- Rule: take the last 1–2 path segments of `co_cli/<pkg>/<module>.py` → `test_flow_<pkg>_<module>.py`
-- Examples:
-  - `co_cli/tools/memory/recall.py` → `test_flow_memory_recall.py`
-  - `co_cli/commands/core.py` → `test_flow_slash_dispatch.py`
-  - `co_cli/agents/session_review.py` → `test_flow_session_review.py`
-  - `co_cli/tools/web/fetch.py` → `test_flow_web_fetch.py`
-
-**Multi-module exemption**: if a test file's `entry_called` entries resolve to more than two distinct `co_cli/` module paths, the file may be named after the workflow rather than any single module — do not flag for consolidation. If entries resolve to two or fewer distinct module paths, the exemption does not apply.
-
-Flag tests living in a different file than their canonical file (and not covered by the exemption). Plan the file moves. No execution yet.
-
----
-
-## Phase 5 — Auto-Fix + Suite
-
-Apply fixes in sequence:
-
-**A.** Delete subsumed tests (U1, U2-Blocking findings).  
-**B.** Delete structural/schema tests (S1, S2 findings).  
-**C.** Delete content gates with higher-fidelity neighbors (L1 findings).  
-**D.** Delete same-file near-duplicates and cross-file overlaps (O1, O2 findings — keep canonical, delete copy).  
-**E.** Delete tautological assertions (N1 findings).  
-**F.** Fix or delete backward-compat tests (B1: update import or delete; B2: update expected value if failure mode still exists, else delete; B3: delete test and verify compat layer has no remaining non-test callers).  
-
-**G — Post-deletion coverage check**: after steps A–F, re-run Phase 3 over the surviving catalog (in memory — no re-read needed). Any Tier-1 entry point newly uncovered by the deletions is a new Blocking finding. Either restore the deleted test, write a replacement, or record a waiver before proceeding to step H.
-
-**H.** Fix remaining Blocking violations (R-series, I-series, N2 findings). Fix principle: minimal correct fix — rewrite to drive a real code path and assert on observable outcome; delete if no real failure mode exists. No mocks under any circumstances. Escalate if fixing requires a public API change or architectural restructuring.  
-**I.** Move tests to canonical files (Phase 4 plan — cut/paste + update imports; delete empty source files).  
-**J.** Post-fix sweep: for each deleted symbol, `grep -rn "<symbol>" . --include="*.py"` — remove orphaned imports and stale references.  
-**K.** Run lint before the suite:
+Run once across all test files before touching individual tests. Identifies whole-file issues so they can be resolved before the per-test pass.
 
 ```bash
-scripts/quality-gate.sh lint
+ls tests/test_*.py
 ```
 
-If lint fails, fix all reported issues before proceeding. Do not suppress with `# noqa` without an explanatory comment.
-
-**L.** Run the full suite:
+### 0a — Broken imports
 
 ```bash
-mkdir -p .pytest-logs
-uv run pytest -x -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-clean-tests.log
+uv run pytest --collect-only 2>&1 | grep -E "ERROR collecting"
 ```
 
-**Suite failure protocol**: if a test fails:
-1. Check whether the failing test has `uses_real_llm: true`.
-2. If yes: rerun that test in isolation (`uv run pytest <file>::<test> -v`). If it passes alone, the failure is LLM non-determinism — note it in the terminal summary and continue the full suite run without `-x`. If it fails alone consistently (≥2 solo runs), treat as a real failure and diagnose.
-3. If no (non-LLM test fails): diagnose root cause immediately. Fix and re-run with `-x`. Never report PASS until the full suite is green.
+Run this once to get the full list of broken files. If a file fails to import/collect → every test in it is Rule 4 (stale). Mark the whole file `BROKEN`. Do not audit individual tests. Fix the import or delete the file outright if the underlying module is gone.
+
+### 0b — Pervasive bad patterns (grep-level pre-scan)
+
+```bash
+grep -l "monkeypatch\|unittest\.mock\|from unittest import mock\|patch\b" tests/test_*.py
+grep -l "assert True\b\|assert result\b\|assert result\." tests/test_*.py
+grep -l "from.*_legacy\|from.*_compat\|from.*_old\b" tests/test_*.py
+```
+
+Use these to pre-tag files as `SUSPECT_MOCK` or `SUSPECT_STRUCTURAL`. These tags guide priority during Pass 1 — they do **not** replace reading the file.
+
+### 0c — Clustered test name scan (Rule 11 trigger)
+
+These clusters are the most common form of same-file near-duplicates (Rule 11):
+
+```bash
+grep -h "^def test_" tests/test_*.py | sed 's/(.*$//' | sed 's/^def //' | \
+  awk -F_ '{print $1"_"$2"_"$3}' | sort | uniq -c | sort -rn | head -20
+```
+
+Flag any 3-part prefix with **count ≥ 3** (e.g., `test_blocks_*`, `test_fires_on_*`, `test_approval_subject_*`). During Pass 1, compare every test in the group side-by-side before assigning verdicts. The most common sub-patterns:
+
+- **Enumerated-input negatives**: `test_blocks_X / _Y / _Z` all assert `is None` / `raises` for different inputs that activate the same branch. Keep the most representative input; delete the rest.
+- **Format-template variants**: `test_subject_create / _delete / _append` all verify the same substitution formula with different values. Two examples (a boundary pair) prove the pattern; delete the rest.
+
+### 0d — Merge candidates (file-pair scan)
+
+The grep-per-line approach misses file pairs that share multiple modules. Use the pairwise scan instead:
+
+```python
+# Run via: python3 - << 'EOF' ... EOF
+import glob, re
+files = {}
+for f in sorted(glob.glob("tests/test_*.py")):
+    mods = set()
+    for line in open(f):
+        line = line.strip()
+        if line.startswith("from co_cli") or line.startswith("import co_cli"):
+            m = re.match(r"(?:from|import) (co_cli[.\w]*)", line)
+            if m:
+                mods.add(m.group(1))
+    files[f] = mods
+names = list(files)
+for i in range(len(names)):
+    for j in range(i+1, len(names)):
+        shared = files[names[i]] & files[names[j]]
+        if len(shared) >= 4:
+            print(f"[{len(shared)} shared] {names[i]} <-> {names[j]}")
+            for s in sorted(shared): print(f"  {s}")
+            print()
+```
+
+Flag every pair with **≥4 shared `co_cli` modules** for investigation. For each flagged pair:
+
+1. **Read both files** (do not skip — shared infrastructure imports like `CoDeps` inflate the count; the true signal is which production *functions* are called).
+2. A pair is a **merge candidate** when ≥50% of tests in each file call functions from the **same production module**.
+3. A pair is **NOT** a merge candidate when:
+   - The shared imports are all infrastructure (`CoDeps`, `ShellBackend`, `CoSessionState`, `skills.loader`) and the tests call functions from different production modules.
+   - One file is workflow-named and spans >2 distinct `co_cli/` module paths.
+
+Canonical filename rule: `co_cli/<pkg>/<module>.py` → `test_flow_<pkg>_<module>.py`.
+
+Examples:
+- `co_cli/skills/curator.py` → `test_flow_skills_curator.py`
+- `co_cli/tools/memory/recall.py` → `test_flow_memory_recall.py`
+- `co_cli/commands/core.py` → `test_flow_slash_dispatch.py`
+
+Record each confirmed merge candidate. Merges execute in Pass 2.
 
 ---
 
-## Verdict + Terminal Summary
+## Pass 1 — Per-test audit (mandatory full read)
 
-- **PASS**: all Blocking findings fixed + lint clean + suite green.
-- **FAIL**: any Blocking finding unfixed OR lint errors OR suite not green.
+### How to execute
+
+Process test files **in batches of 5**. For each batch:
+
+1. **Read every file in the batch using the Read tool.** Do not use grep output as a substitute for file content. If a file is too long to read in one call, read it in offset/limit chunks until you have seen every line.
+
+2. **Private-call inventory — mandatory before any annotation row.**
+
+   Scan the batch for private symbols imported from `co_cli` or accessed as module attributes:
+
+   ```bash
+   # Private symbols imported from co_cli modules
+   grep -n "from co_cli" <file> | grep " _[a-z]"
+   # Private attribute access on co_cli module references
+   grep -En "[a-z_]+\._[a-z][a-z_]*\(" <file> | grep -v "#"
+   ```
+
+   For each unique private symbol found (e.g. `_repair_json_args`, `trace_view._build_tree`):
+
+   a. Locate its definition: `grep -rn "def _symbol_name" co_cli/`
+   b. Find all production callers: `grep -rn "_symbol_name" co_cli/` (production code only, not tests)
+   c. Identify which public-facing functions or entry points invoke it.
+   d. Check whether any existing test exercises one of those public entry points with realistic inputs that would hit the same failure mode as the private-function test.
+   e. Record your conclusion per symbol:
+      - `_symbol → reachable via public_fn(); subsumed if test_X covers same branch` — Rule 8 candidate
+      - `_symbol → not reachable via public entry for this input class` — keep the private test
+
+   **Do not write any annotation row for a test calling a private co_cli symbol until its inventory entry is recorded.** A KEEP verdict without an inventory entry is a protocol violation.
+
+3. **For every `def test_*` function in each file**, produce an annotation row:
+
+   ```
+   file | test_name | production_fn_called | verdict | rule (if violated)
+   ```
+
+   Verdict options: `KEEP`, `DELETE (rule N)`, `FIX (rule N)`.
+
+4. Evaluate rules in order (1 → 16). Stop at the first Blocking violation per test — one is enough to act.
+5. After annotating all tests in the batch, execute the deletions/fixes for that batch before moving to the next. **Dependency check before each deletion (Rules 8–11):** verify the test you are relying on as the subsuming test is not itself flagged for deletion in this or a prior batch. If it is, keep the original.
+
+**Do not begin Pass 2 until every non-BROKEN test file has a complete annotation row for every test function.**
+
+### Source code reads for subsumption rules (8, 9)
+
+Rules 8-9 cannot be evaluated without reading production source. The private-call inventory in step 2 above is the enforcement mechanism — it happens per-batch before annotation, not as an afterthought. Key criteria:
+
+- **Rule 8 (subsumed private helper)**: private function is called by a public entry point AND an existing integration test exercises that entry point with inputs that reach the same branch. Both conditions required.
+- **Rule 9 (subsumed pipeline-internal)**: a test drives a non-terminal step in a pipeline when a terminal integration test already covers the same failure mode. Read the production pipeline to identify the terminal step.
+
+For Rule 9, read the production pipeline to understand which step is "terminal" for the workflow being tested.
+
+### Deletion test (apply before flagging any rule)
+
+> "If this test is deleted, will a real regression go undetected by **any remaining test that is not itself being deleted**?"
+> Yes → keep (note why). No → flag for deletion.
+
+### Blocking — default action is DELETE
+
+Fix only when: (a) the test covers a failure mode with no other coverage **and** (b) the fix is a one-line correction (wrong assertion value, stale import path). If the body needs rewriting, delete.
+
+| # | Rule | Default action |
+|---|---|---|
+| 1 | **Mock/patch** — `monkeypatch`, `unittest.mock`, `pytest-mock`, or hand-rolled fakes replacing production behavior. Input literals (`User(id=1)`) are fine; fake return values (`LLMResponse(content="x")` to skip the LLM) are not. | Delete unless unique coverage with no real-call alternative |
+| 2 | **Truthy-only assertion** — `assert True`, `assert result`, `assert result.flag` | Delete |
+| 3 | **No behavioral assertion** — body drives code but asserts nothing meaningful | Delete |
+| 4 | **Stale call signature** — calls a function with args/kwargs that don't exist in current source | Fix (update call) or delete |
+| 5 | **Tautological assertion** — `assert x == x` or always-true by Python semantics | Delete |
+| 6 | **Structural-only** — asserts dataclass defaults, field existence, module importability, type annotations; would pass if function body were `pass` | Delete |
+| 7 | **Schema-only** — asserts shape (`len(result) == 6`) without checking values are functionally correct | Delete |
+| 8 | **Subsumed private helper** — calls `_private()` while a public-entry test already exercises that helper via realistic inputs that hit the same failure mode. **Requires reading the production source.** | Delete |
+| 9 | **Subsumed pipeline-internal** — drives a non-terminal step when a terminal test already covers the same failure mode with realistic inputs. Keep only when the unit-only input can't be reached from the terminal (specific malformed JSON, exception-only branches). **Requires reading the production pipeline.** | Delete otherwise |
+| 10 | **Subsumed content gate** — asserts a narrow property (substring, field absent, flag value) that a broader behavioral test in the same file already asserts on the same production function. To confirm: grep the same file for that assertion string. If the broader test would also fail if the property changed, delete the narrower one. If they cover different code paths or the broader test would still pass, keep. | Delete |
+| 11 | **Same-file near-duplicate** — two tests in the same file, same function, same branches activated, same observable asserted. **Read both test bodies before deciding.** Common sub-patterns: (a) enumerated-input negatives — `test_blocks_X / _Y / _Z` each pass a different input that hits the same `return None` branch; keep the most representative, delete the rest; (b) format-template variants — tests that verify the same string formula with different substitution values; two examples (a boundary pair) prove the pattern, delete the rest. | Delete the weaker one |
+| 12 | **Backward-compat shim** — imports from `*_legacy`/`*_compat`/`*_old`, or docstring mentions `old behavior`/`compat`/`deprecated`/`legacy`. | (a) Update import to canonical. (b) Rerun; update expected value if failure mode still exists. (c) Delete if verifying an alias with no non-test callers. Flag alias as separate-cleanup candidate. |
+| 13 | **Unguarded filesystem write** — writes to `~/.co-cli/`, `USER_DIR`, or `CO_HOME` without `tmp_path` | Fix: route paths through `tmp_path`; set `CO_HOME=tmp_path` if production reads it at call time |
+| 14 | **Unrestored env mutation** — sets/deletes `os.environ` without `try/finally` restoring original | Fix |
+| 15 | **`ensure_ollama_warm` inside `asyncio.timeout`** — must precede all timeout blocks | Move outside |
+| 16 | **Multiple LLM awaits in one `asyncio.timeout`** — each LLM/external await needs its own timeout | Split |
+
+**Rule-failed files:** if ≥50% of a file's tests are flagged Blocking and no unique coverage survives after deletions, delete the entire file.
+
+### Minor — record, fix if trivial
+
+- Naming: test function name missing `test_flow_` prefix.
+- Missing `asyncio.timeout` on a real-LLM `await`.
+- Test name describes arrangement not behavior (`test_disk_scan_fallback` → `test_search_returns_empty_when_store_missing`).
+- **Degenerate LLM test**: assertion passes regardless of model behavior (`result.outcome == "continue"`, or body comment says "if model defied prompt, accept it"). List; do not auto-delete.
+- **Shared mutable module-level state** that changes during a test without restoration. Exempt: `SETTINGS`, `SETTINGS_NO_MCP`, cached LLM models.
+- **Trim candidate**: behavioral test carrying a weaker sub-assertion (Rule 6, 7, or 10 territory) inside an otherwise strong test. Note for in-place trim in Pass 2.
+
+---
+
+## Pass 2 — Structural cleanup
+
+Perform the file-level actions identified in Pass 0 that could not be done per-batch:
+
+1. **Fix BROKEN files** (Pass 0a): update import or delete file.
+2. **Merge duplicate files** (Pass 0d):
+   - Copy unique tests from the non-canonical file into the canonical file.
+   - Delete the non-canonical file.
+   - If the canonical file doesn't exist yet, rename the more complete file to the canonical name, then merge the other's unique tests in and delete it.
+3. **Delete rule-failed files** (≥50% Blocking, no unique coverage).
+4. **Trim candidates**: strip the weak sub-assertion, keep the behavioral core.
+5. If any deletion leaves a production helper with zero callers, flag it in the summary — do not delete production code.
+
+---
+
+## Pass 3 — Verify
+
+1. Coverage sanity check: for each public `@agent_tool`, slash command, and `co_cli/agent/` public surface, confirm at least one behavioral test survives.
+
+   ```bash
+   grep -rn -E '^\s*@agent_tool' co_cli/
+   ```
+
+   Read `co_cli/commands/core.py` `BUILTIN_COMMANDS` for the command list. If a deletion stripped the only coverage of a user-facing entry, restore or write a replacement (waiver allowed with rationale).
+
+2. Run lint — catches orphaned imports left by deletions:
+
+   ```bash
+   scripts/quality-gate.sh lint
+   ```
+
+   Fix every issue. No `# noqa` without an explanatory comment.
+
+3. Run the suite:
+
+   ```bash
+   mkdir -p .pytest-logs
+   uv run pytest -x -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-clean-tests.log
+   ```
+
+   **Suite failure protocol:**
+   - Real-LLM test fails → rerun in isolation. Passes alone → LLM non-determinism; note in summary and restart suite without `-x`. Fails alone consistently (≥2 solo runs) → real failure; diagnose.
+   - Non-LLM test fails → diagnose root cause, fix, re-run with `-x`. Never report PASS until suite is green.
+
+---
+
+## Verdict + terminal summary
+
+- **PASS**: all Blocking resolved + lint clean + suite green.
+- **FAIL**: any unfixed Blocking, lint error, or red suite.
 
 ```
 ## clean-tests — <date>
 
-Files scanned: N
-Entry points scanned: N (Tier-1: A covered / B total, Tier-2: C/D, Tier-3: E/F)
-Blocking findings fixed: N
-  R-series (rules): N
-  S-series (structural): N
-  U-series (unit hygiene): N
-  B-series (backward-compat): N
-  L-series (low-ROI): N
-  N-series (noise): N
-  I-series (isolation): N
-  O-series (overlap): N
-Minor findings: N fixed inline / M deferred
-Degenerate LLM tests (N3): N flagged — [list test names]
-Tests deleted: N total (subsumed: A, structural: B, content-gate: C, backward-compat: D, noise: E, overlap: F)
-Files consolidated: M
-Tier-1 waivers: N (list each with rationale)
-LLM non-determinism events: N (list test + run count)
+Test files scanned: N
+Broken files fixed/deleted: N — [list]
+Duplicate files merged: N — [pairs: source → target]
+Rule-failed files deleted: N — [list]
+
+Tests audited: N  ← must equal total collected; no sampling
+Tests deleted: N total
+  Mock/patch (rule 1):                  N
+  Vacuous/tautological (rules 2, 3, 5): N
+  Structural/schema (rules 6-7):        N
+  Subsumed (rules 8-10):                N
+  Same-file dup (rule 11):              N
+  Backward-compat delete (rule 12c):    N
+Tests fixed: N total
+  Stale signature (rule 4):             N
+  Backward-compat update (rule 12a/b):  N
+  Isolation (rules 13-14):             N
+  Async discipline (rules 15-16):       N
+Minor findings: N (noted/deferred)
+Degenerate LLM tests: N — [list]
+Trim candidates resolved: N
+Tests moved to canonical files: N
+Coverage gaps after deletion: N — [list with waivers]
+Separate-cleanup candidates: N — [list]
+LLM non-determinism events: N — [test + run count]
 Suite: N passed, 0 failed
 Log: .pytest-logs/<timestamp>-clean-tests.log
 

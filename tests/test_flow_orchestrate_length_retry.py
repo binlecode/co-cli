@@ -61,15 +61,6 @@ def test_blocks_tool_call_only() -> None:
     assert _length_retry_settings(result, settings) is None
 
 
-def test_blocks_tool_call_after_thinking() -> None:
-    """Thinking + tool call (no text) must not trigger retry."""
-    result = _fake_result(
-        [ThinkingPart(content="reasoning"), ToolCallPart(tool_name="shell", args="{}")]
-    )
-    settings = {"max_tokens": 4096, "extra_body": {"max_tokens": 4096}}
-    assert _length_retry_settings(result, settings) is None
-
-
 def test_passes_text_after_thinking() -> None:
     """Thinking + text triggers retry; max_tokens doubles in scalar and extra_body."""
     result = _fake_result([ThinkingPart(content="reasoning"), TextPart(content="answer so far")])

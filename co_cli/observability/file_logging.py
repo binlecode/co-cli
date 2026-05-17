@@ -1,15 +1,15 @@
 """Rotating JSONL log handler for Python ``logging`` output.
 
 Writes two files under ``log_dir``:
-- ``co-cli.jsonl`` — INFO+ records (Python logging + OTel spans via propagation)
+- ``co-cli.jsonl`` — INFO+ records (Python ``logging`` output only)
 - ``errors.jsonl`` — WARNING+ only; fixed 2 MB / 2 backups for fast error triage
 
 Each line is a JSON object: ``{"ts", "kind": "log", "level", "logger", "msg"}``,
 plus ``"exc_info"`` when a record carries exception info.
 
-OTel span output (agent/model/tool events) is also written to ``co-cli.jsonl``
-via ``JsonSpanExporter`` in ``_telemetry.py``, which emits through a propagating
-logger so all output converges in one file.
+Span/trace data is a separate stream: ``co-cli-spans.jsonl`` under the same
+``log_dir``, written by ``co_cli.observability.tracing`` with ``propagate=False``
+so the two files stay disjoint.
 """
 
 import json

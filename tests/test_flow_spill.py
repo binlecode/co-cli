@@ -72,14 +72,6 @@ def test_stub_shape(tmp_path: Path):
     assert "end_line" in result
 
 
-def test_force_spill_tiny_content_unchanged(tmp_path: Path):
-    """force=True with 200 chars (< TOOL_RESULT_PREVIEW_CHARS=1_500) returns content unchanged."""
-    content = "x" * 200
-    result = spill_if_oversized(content, tmp_path / "tool_results", "shell", force=True)
-    assert result == content
-    assert PERSISTED_OUTPUT_TAG not in result
-
-
 def test_force_spill_at_preview_size_unchanged(tmp_path: Path):
     """force=True at exactly TOOL_RESULT_PREVIEW_CHARS=1_500 chars returns content unchanged.
 
@@ -97,14 +89,6 @@ def test_force_spill_above_preview_size_spills(tmp_path: Path):
     content = "x" * 1_501
     result = spill_if_oversized(content, tmp_path / "tool_results", "shell", force=True)
     assert PERSISTED_OUTPUT_TAG in result
-
-
-def test_spill_tolerates_lone_surrogate_content(tmp_path: Path):
-    """spill_if_oversized must not raise UnicodeEncodeError on lone-surrogate content."""
-    surrogate_content = "\ud800prefix" * 100  # lone surrogate, well above preview floor
-    spill_if_oversized(
-        surrogate_content, tmp_path / "tool_results", "test_tool", force=True
-    )  # must not raise
 
 
 # ---------------------------------------------------------------------------

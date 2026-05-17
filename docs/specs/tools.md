@@ -44,7 +44,7 @@ graph LR
 
 `CoToolLifecycle` (`co_cli/tools/lifecycle.py`) is the pydantic-ai capability registered on the orchestrator agent. It fires four hooks per tool call: `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute`. All tool instrumentation and safety guards run through these hooks — no inline per-tool branching.
 
-Task-agent lifecycle — `fork_deps`, `build_task_agent`, `run_in_turn`, `run_standalone` — is owned by [agents.md](agents.md). Tool-side concerns end at `fork_deps`: it forwards `tool_index` for approval/OTel checks and explicitly excludes `toolset` so the orchestrator's combined routing surface never propagates to a task agent.
+Task-agent lifecycle — `fork_deps`, `build_task_agent`, `run_in_turn`, `run_standalone` — is owned by [agents.md](agents.md). Tool-side concerns end at `fork_deps`: it forwards `tool_index` for approval and span-attribute lookup and explicitly excludes `toolset` so the orchestrator's combined routing surface never propagates to a task agent.
 
 ## 2. Core Logic
 

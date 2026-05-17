@@ -17,7 +17,6 @@ from __future__ import annotations
 from copy import copy
 from typing import TYPE_CHECKING, Any
 
-from opentelemetry import trace as otel_trace
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
 from pydantic_ai.usage import RunUsage, UsageLimits
@@ -30,8 +29,6 @@ if TYPE_CHECKING:
 
     from co_cli.agent.spec import TaskAgentSpec
     from co_cli.deps import CoDeps
-
-_TRACER = otel_trace.get_tracer("co-cli.agents")
 
 MAX_AGENT_DEPTH: int = 2
 
@@ -69,7 +66,11 @@ async def _run_attempt(
             deps=child_deps,
             usage_limits=UsageLimits(request_limit=budget),
             model_settings=model_settings,
-            metadata={"session_id": ctx.deps.session.session_path.stem[-8:]},
+            metadata={
+                "session_id": ctx.deps.session.session_path.stem[-8:],
+                "role": spec.name,
+                "request_limit": budget,
+            },
         )
     except Exception as exc:
         raise ModelRetry(spec.error_message) from exc
@@ -103,14 +104,9 @@ async def run_in_turn(
     child_deps = fork_deps(ctx.deps)
     child_deps.runtime.tool_progress_callback = ctx.deps.runtime.tool_progress_callback
 
-    with _TRACER.start_as_current_span(spec.name) as span:
-        span.set_attribute("agent.role", spec.name)
-        span.set_attribute("agent.model", str(model_obj))
-        span.set_attribute("agent.request_limit", request_limit)
-        output, usage, run_id = await _run_attempt(spec, ctx, prompt, request_limit, child_deps)
-        _merge_turn_usage(ctx, usage)
-        requests_used = usage.requests
-        span.set_attribute("agent.requests_used", requests_used)
+    output, usage, run_id = await _run_attempt(spec, ctx, prompt, request_limit, child_deps)
+    _merge_turn_usage(ctx, usage)
+    requests_used = usage.requests
 
     display = f"{output.result}\n[{spec.name} · {model_obj} · {requests_used}/{request_limit} req]"
     return tool_output(
@@ -152,16 +148,16 @@ async def run_standalone(
     settings = model_settings if model_settings is not None else deps.model.settings
     agent = build_task_agent(spec, deps, deps.model.model)
 
-    with _TRACER.start_as_current_span(spec.name) as span:
-        span.set_attribute("agent.role", spec.name)
-        span.set_attribute("agent.request_limit", request_limit)
-        result = await agent.run(
-            prompt,
-            deps=deps,
-            usage_limits=UsageLimits(request_limit=request_limit),
-            model_settings=settings,
-            metadata={"session_id": deps.session.session_path.stem[-8:], "role": spec.name},
-        )
-        usage = result.usage()
-        span.set_attribute("agent.requests_used", usage.requests)
-        return result.output, copy(usage), result.run_id
+    result = await agent.run(
+        prompt,
+        deps=deps,
+        usage_limits=UsageLimits(request_limit=request_limit),
+        model_settings=settings,
+        metadata={
+            "session_id": deps.session.session_path.stem[-8:],
+            "role": spec.name,
+            "request_limit": request_limit,
+        },
+    )
+    usage = result.usage()
+    return result.output, copy(usage), result.run_id

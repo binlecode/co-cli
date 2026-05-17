@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
-from opentelemetry import trace
+from co_cli.observability.tracing import current_span, trace
 
 if TYPE_CHECKING:
     from co_cli.memory.memory_store import MemoryStore
@@ -21,7 +21,6 @@ from co_cli.memory.session import find_latest_session, new_session_path
 from co_cli.tools.shell_backend import ShellBackend
 
 logger = logging.getLogger(__name__)
-_TRACER = trace.get_tracer("co-cli.bootstrap")
 KnowledgeBackendLiteral = Literal["grep", "fts5", "hybrid"]
 
 
@@ -152,6 +151,7 @@ def _discover_memory_backend(
             ) from exc
 
 
+@trace("sync_knowledge")
 def _sync_memory_store(
     store: MemoryStore | None,
     config: Settings,
@@ -168,26 +168,26 @@ def _sync_memory_store(
         frontend.on_status("  Knowledge store not available — skipped")
         return None
 
-    with _TRACER.start_as_current_span("sync_knowledge") as span:
+    span = current_span()
+    try:
+        if knowledge_dir.exists():
+            count = store.sync_dir("knowledge", knowledge_dir)
+            backend = config.knowledge.search_backend
+            span.set_attribute("count", count)
+            span.set_attribute("backend", backend)
+            span.set_attribute("status", "ok")
+            frontend.on_status(f"  Knowledge synced — {count} item(s) ({backend})")
+        else:
+            span.set_attribute("status", "skipped")
+            frontend.on_status("  Knowledge store empty — no knowledge dir")
+    except Exception as e:
+        span.set_attribute("status", "error")
+        span.set_attribute("error", str(e))
         try:
-            if knowledge_dir.exists():
-                count = store.sync_dir("knowledge", knowledge_dir)
-                backend = config.knowledge.search_backend
-                span.set_attribute("count", count)
-                span.set_attribute("backend", backend)
-                span.set_attribute("status", "ok")
-                frontend.on_status(f"  Knowledge synced — {count} item(s) ({backend})")
-            else:
-                span.set_attribute("status", "skipped")
-                frontend.on_status("  Knowledge store empty — no knowledge dir")
-        except Exception as e:
-            span.set_attribute("status", "error")
-            span.set_attribute("error", str(e))
-            try:
-                store.close()
-            except Exception:
-                pass
-            raise RuntimeError(f"Knowledge store sync failed: {e}") from e
+            store.close()
+        except Exception:
+            pass
+        raise RuntimeError(f"Knowledge store sync failed: {e}") from e
 
     return store
 
@@ -257,24 +257,21 @@ def _probe_model_ctx(config: Settings) -> int:
     return config.llm.max_ctx
 
 
+@trace("tool_budget.resolved")
 def _emit_tool_budget_span(
     model_max_ctx: int,
     spill_ratio: float,
     spill_threshold_tokens: int,
-    *,
-    _tracer: trace.Tracer | None = None,
 ) -> None:
     from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
-    if _tracer is None:
-        _tracer = trace.get_tracer("co-cli.tool_budget")
-    with _tracer.start_as_current_span("tool_budget.resolved") as span:
-        span.set_attribute("budget.context_window_tokens", model_max_ctx)
-        span.set_attribute("budget.spill_ratio", spill_ratio)
-        span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
-        span.set_attribute("budget.spill_threshold_chars", SPILL_THRESHOLD_CHARS)
-        span.set_attribute("budget.spill_threshold_tokens", spill_threshold_tokens)
+    span = current_span()
+    span.set_attribute("budget.context_window_tokens", model_max_ctx)
+    span.set_attribute("budget.spill_ratio", spill_ratio)
+    span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
+    span.set_attribute("budget.spill_threshold_chars", SPILL_THRESHOLD_CHARS)
+    span.set_attribute("budget.spill_threshold_tokens", spill_threshold_tokens)
 
 
 async def create_deps(
@@ -438,25 +435,26 @@ def init_session_index(
         frontend.on_status(f"  Session index sync failed — {exc}")
 
 
+@trace("restore_session")
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> Path:
     """Restore the most recent session from sessions/ dir, or create a new session path.
 
     Returns the session Path (existing or newly constructed — file not created until
     first append_transcript call).
     """
-    with _TRACER.start_as_current_span("restore_session") as span:
-        session_path = find_latest_session(deps.sessions_dir)
-        if session_path is not None:
-            deps.session.session_path = session_path
-            short_id = session_path.stem[-8:]
-            span.set_attribute("status", "restored")
-            span.set_attribute("session_id", short_id)
-            frontend.on_status(f"  Session restored — {short_id}...")
-        else:
-            session_path = new_session_path(deps.sessions_dir)
-            deps.session.session_path = session_path
-            short_id = session_path.stem[-8:]
-            span.set_attribute("status", "new")
-            span.set_attribute("session_id", short_id)
-            frontend.on_status(f"  Session new — {short_id}...")
-        return session_path
+    span = current_span()
+    session_path = find_latest_session(deps.sessions_dir)
+    if session_path is not None:
+        deps.session.session_path = session_path
+        short_id = session_path.stem[-8:]
+        span.set_attribute("status", "restored")
+        span.set_attribute("session_id", short_id)
+        frontend.on_status(f"  Session restored — {short_id}...")
+    else:
+        session_path = new_session_path(deps.sessions_dir)
+        deps.session.session_path = session_path
+        short_id = session_path.stem[-8:]
+        span.set_attribute("status", "new")
+        span.set_attribute("session_id", short_id)
+        frontend.on_status(f"  Session new — {short_id}...")
+    return session_path

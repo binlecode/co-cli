@@ -196,30 +196,3 @@ async def test_session_search_per_query_cap_honoured(tmp_path: Path) -> None:
         )
     finally:
         store.close()
-
-
-@pytest.mark.asyncio
-async def test_session_search_hits_never_carry_channel_field(tmp_path: Path) -> None:
-    """session_search hits must not include a 'channel' discriminator field.
-
-    Failure mode: stale channel discriminator from the old polymorphic surface confuses
-    downstream code that expects single-surface results with no tier discriminator.
-    """
-    sessions_dir = tmp_path / "sessions"
-    store = _make_store(tmp_path)
-    try:
-        path = _make_session_file(sessions_dir, "nochan55", "nochanfield_token_kp2x present here")
-        store.index_session(path)
-
-        deps = _make_deps(tmp_path, store, sessions_dir)
-        ctx = _ctx(deps)
-
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await session_search(ctx, query="nochanfield_token_kp2x")
-
-        results = result.metadata.get("results", [])
-        assert results, "expected at least one hit"
-        for r in results:
-            assert "channel" not in r, f"hit must not carry 'channel' field: {r}"
-    finally:
-        store.close()

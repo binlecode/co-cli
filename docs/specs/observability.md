@@ -3,35 +3,30 @@
 
 ## 1. What & How
 
-Co CLI uses OpenTelemetry (OTel) to trace every agent operation. All data stays local in a SQLite database — no external telemetry endpoints. Two viewers are available: a static HTML tree viewer and a real-time terminal tail.
+co-cli emits structured JSON-line trace records to a local log file. No OpenTelemetry SDK, no external collector, no embedded database — span data is appended to `~/.co-cli/logs/co-cli-spans.jsonl` one record per line. Two viewers consume it: a live `tail -f`-style stream and a snapshot tree of one trace.
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│                         Co CLI                            │
-│                                                           │
-│   Agent.run() ──▶ Model Call ──▶ Tool Execution           │
-│        │               │               │                  │
-│        └───────────────┴───────────────┘                  │
-│                         │                                 │
-│        ┌────────────────┴────────────────┐                │
-│        ▼                                 ▼                │
-│   Agent.instrument_all()        setup_file_logging()      │
-│   setup_tracer_provider()              │                  │
-│        │                               ▼                  │
-│        ▼                    RotatingFileHandler            │
-│   TracerProvider                co-cli.jsonl              │
-│   ├──▶ SQLiteSpanExporter           ▲                     │
-│   └──▶ JsonSpanExporter ────────────┘ (propagating logger)│
-└──────────────┬────────────────────────────────────────────┘
-               │
-   ┌───────────┴──────────────┐
-   ▼                          ▼
-~/.co-cli/co-cli-logs.db    ~/.co-cli/logs/co-cli.jsonl
-               │
-   ┌───────────┴───────────┐
-   ▼                       ▼
-co traces               co tail
-  (HTML)              (terminal)
+┌──────────────────────────────────────────────────────────────┐
+│                         co CLI                                │
+│                                                                │
+│   Agent.run() ──▶ Model Call ──▶ Tool Execution                │
+│        │               │               │                       │
+│        ▼               ▼               ▼                       │
+│   ObservabilityCapability  +  CoToolLifecycle  +  @trace(...)  │
+│                           (push/pop spans)                     │
+│                              │                                 │
+│                              ▼                                 │
+│             logging.getLogger("co_cli.observability.spans")    │
+│              propagate=False · RotatingFileHandler             │
+└──────────────────────────────┬────────────────────────────────┘
+                               │
+                               ▼
+            ~/.co-cli/logs/co-cli-spans.jsonl
+                               │
+                ┌──────────────┴─────────────┐
+                ▼                            ▼
+            co tail                  co trace <trace_id>
+        (live append-only)            (snapshot tree)
 ```
 
 Run `co chat` in one terminal and `co tail` in another to watch the agent→model→tool flow live:
@@ -39,196 +34,179 @@ Run `co chat` in one terminal and `co tail` in another to watch the agent→mode
 ```
 ┌──────────────────────┐       ┌──────────────────────────┐
 │  Terminal A           │       │  Terminal B               │
-│  $ co chat            │       │  $ co tail -v             │
-│  Co > search my notes │  ───▶ │  14:23:05  model  chat    │
+│  $ co chat            │       │  $ co tail --detail       │
+│  co > search my notes │  ───▶ │  14:23:05  model  chat    │
 │                       │       │  14:23:06  tool   search  │
 │  Found 3 notes...     │       │  14:23:07  model  chat    │
 └──────────────────────┘       └──────────────────────────┘
-                                       ▲ polls SQLite
-                              ~/.co-cli/co-cli-logs.db
+                                       ▲ polls the JSONL log
+                              ~/.co-cli/logs/co-cli-spans.jsonl
 ```
 
 ## 2. Core Logic
 
 ### Instrumentation Setup (`main.py`)
 
-Telemetry is bootstrapped at module load time, before any agent is created. All write targets — the JSONL file handler, the SQLite exporter, and the JSONL span exporter — are initialised at this step:
+Telemetry is bootstrapped at module load time, before any agent is created. Two separate rotating JSONL streams are configured: one for application log records, one for spans.
 
 ```
-setup_file_logging(LOGS_DIR, level, max_size_mb, backup_count)   # co-cli.jsonl
-tracer_provider = setup_tracer_provider(                          # co-cli-logs.db + co-cli.jsonl
-    service_name, service_version,
-    redact_patterns=settings.observability.redact_patterns
-)
-Agent.instrument_all(InstrumentationSettings(tracer_provider, version=3))
-for logger_name in ["openai", "httpx", "anthropic", "hpack"]:    # co_cli.* loggers unaffected
+setup_file_logging(LOGS_DIR, level, max_size_mb, backup_count)        # co-cli.jsonl (app log)
+setup_spans_log(LOGS_DIR / "co-cli-spans.jsonl",                       # co-cli-spans.jsonl
+                max_size_mb=spans_log_max_size_mb,                     # spans only
+                backup_count=spans_log_backup_count,
+                redact_patterns=settings.observability.redact_patterns)
+for logger_name in ["openai", "httpx", "anthropic", "hpack"]:          # co_cli.* loggers unaffected
     logging.getLogger(logger_name).setLevel(WARNING)
 ```
 
-`setup_tracer_provider()` (in `_telemetry.py`) creates a `TracerProvider` with two `SimpleSpanProcessor`s: one wrapping `SQLiteSpanExporter` and one wrapping `JsonSpanExporter`. Both receive every span.
+`setup_spans_log()` (in `tracing.py`) installs a `RotatingFileHandler` on the dedicated `co_cli.observability.spans` logger with `propagate=False`, so span output never appears in the application log. Application logging (`co-cli.jsonl`) and span logging (`co-cli-spans.jsonl`) are two disjoint streams.
 
-### File Logging (`_file_logging.py`)
+### Span lifecycle (`tracing.py`)
 
-`setup_file_logging()` attaches two `RotatingFileHandler`s to the Python root logger. Every `logging.*` call anywhere in the process is captured without per-module configuration.
+`tracing.py` is the single observability primitive used across the codebase. Three ContextVars hold per-task state: `_SESSION_ID`, `_TRACE_ID`, and `_SPAN_STACK` (a tuple of in-flight span dicts). Spans are pushed on entry, mutated via a proxy, and emitted as one JSON record on pop.
 
-**Files written under `~/.co-cli/logs/`:**
+```
+push_span(name, kind, attributes)         # capability hooks + @trace
+    ↓ appends span dict to _SPAN_STACK
+    ↓ parent_span_id = previous top (None for root)
+    ↓ trace_id from _TRACE_ID (lazy-generated on first push)
 
-| File | Level filter | Max size | Backups |
-|------|-------------|----------|---------|
-| `co-cli.jsonl` | INFO+ | `log_max_size_mb` MB | `log_backup_count` |
-| `errors.jsonl` | WARNING+ | 2 MB (hardcoded) | 2 (hardcoded) |
+current_span().set_attribute(k, v)        # mutates top-of-stack
+current_span().add_event(name, attrs)     # appends event to top-of-stack
 
-**Format:** one JSON object per line. Python logging records use `"kind": "log"`:
+pop_span(status, status_msg, attributes)  # capability hooks + @trace
+    ↓ pops top-of-stack
+    ↓ computes duration_ms from start_perf
+    ↓ redacts string values (attributes, events, status_msg)
+    ↓ emits one JSON line via logging.getLogger("co_cli.observability.spans")
+```
+
+When the stack is empty, `current_span()` returns a `_NoOpSpan` that debug-logs each call but never raises — observability code must never break business logic.
+
+### The `@trace` decorator
+
+`@trace(name=None, *, new_trace=False)` wraps any sync or async function. It detects coroutine functions via `inspect.iscoroutinefunction(func)` and dispatches to the right wrapper. On entry it pushes a span; on exit it pops and emits, with `status="ERROR"` and `status_msg=str(exc)` on exception (then re-raises).
+
+The `new_trace=True` flag resets `trace_id` BEFORE pushing — used at the top of each user turn (`@trace("co.turn", new_trace=True)`) so the `co.turn` span itself carries the fresh trace_id and all its children inherit it.
+
+`run_with_context(fn, *args, **kwargs)` captures the current `contextvars.Context` and returns a 0-arg callable. Use it to bridge `loop.run_in_executor` calls so the worker thread sees the parent task's span stack and session_id.
+
+### `ObservabilityCapability` (`capability.py`)
+
+`ObservabilityCapability(AbstractCapability[CoDeps])` hooks into pydantic-ai's agent/model/tool lifecycle. Replaces `Agent.instrument_all(InstrumentationSettings(tracer_provider=...))`. Wired into `agent/build.py`'s `capabilities=[ObservabilityCapability(), CoToolLifecycle()]` list.
+
+| Hook | Action |
+|------|--------|
+| `before_run` | `push_span("invoke_agent {name}", kind="agent", attrs={"co.agent.role", "co.agent.model", "co.agent.request_limit"})` |
+| `after_run` | `pop_span(attrs={"co.agent.requests_used", "co.agent.final_result"})` |
+| `on_run_error` | `pop_span(status="ERROR", status_msg=str(error))`, then re-raise |
+| `before_model_request` | `push_span("chat {model}", kind="model", attrs={"co.model.name", "co.model.input"})` |
+| `after_model_request` | `pop_span(attrs={"co.model.output", "co.model.tokens.input/output", "co.model.name", "co.model.finish_reason"})` |
+| `on_model_request_error` | `pop_span(status="ERROR", ...)`, then re-raise |
+| `before_tool_execute` | `push_span("tool {name}", kind="tool", attrs={"co.tool.name", "co.tool.args"})` |
+| `after_tool_execute` | `pop_span(attrs={"co.tool.result"})` |
+| `on_tool_execute_error` | `pop_span(status="ERROR", ...)`, then re-raise |
+
+**Capability ordering invariant.** pydantic-ai's `CombinedCapability` calls `before_*` in forward declaration order and `after_*` / `on_*_error` in reverse (LIFO). With `[ObservabilityCapability(), CoToolLifecycle()]`:
+
+- `before_tool_execute`: Observability pushes span first; `CoToolLifecycle` runs inside it.
+- `after_tool_execute`: `CoToolLifecycle` runs FIRST, attaching `co.tool.source` / `co.tool.requires_approval` / `co.tool.result_size` via `current_span().set_attribute(...)` while the tool span is still active; THEN Observability closes the span.
+
+If this order were reversed, `CoToolLifecycle.after_tool_execute` would land attribute writes on a no-op proxy. The wiring site in `agent/build.py` is commented to preserve this invariant.
+
+### Record schema
+
+One JSON object per closed span, one line per record. Schema version 1:
+
 ```json
-{"ts": "2026-04-15T10:04:17.000Z", "kind": "log", "level": "INFO", "logger": "co_cli.context.orchestrate", "msg": "..."}
-```
-OTel span records (from `JsonSpanExporter`) use `"kind": "span"` and are passed through as-is.
-
-**Secret redaction:** `_JsonRedactingFormatter` applies regex substitutions to each message before serialisation. Patterns covered: bearer tokens, `sk-*` / `sk-ant-*` API keys, GitHub `ghp_` tokens, `AIza*` Google tokens, JSON fields named `api_key`, `token`, `secret`, `password`, or `credential`, and PEM private key blocks.
-
-**Idempotent:** calling `setup_file_logging()` more than once with the same log directory is safe — duplicate handlers are not added.
-
-### JSON Span Exporter (`_telemetry.py`)
-
-`JsonSpanExporter` writes every OTel span to `~/.co-cli/logs/co-cli.jsonl` as a JSON line containing 100% of span content — enabling `jq` queries without a DB query. Uses a dedicated `co_cli.observability.spans` logger with `propagate=True` and no own handler, so records flow to the root logger's `RotatingFileHandler` that owns `co-cli.jsonl`.
-
-**Format:** one JSON object per completed span:
-```json
-{"ts": "2026-04-15T10:04:19.123Z", "kind": "span", "span_id": "...", "trace_id": "...", "parent_id": "...", "name": "execute_tool web_search", "attributes": {"gen_ai.tool.name": "web_search", ...}, "events": [], "duration_ms": 890.0, "status": "OK", "status_description": null}
-```
-
-Full attributes and events are included with no truncation. String attribute values are redacted using the same patterns as `SQLiteSpanExporter`.
-
-**Querying with jq:** `jq 'select(.kind=="span" and .name=="co.turn")' ~/.co-cli/logs/co-cli.jsonl`
-
-**Pretty-tailing JSONL (standalone shell utility):**
-`scripts/tail-jsonl.sh` is a self-contained `jq`-based tail utility — no Python runtime required. It color-codes output by record type: agent spans (cyan), model spans (magenta), tool spans (yellow), log records by level. Requires only `jq`.
-
-```bash
-scripts/tail-jsonl.sh              # follow from current end
-scripts/tail-jsonl.sh -n 20        # show last 20 lines then follow
-scripts/tail-jsonl.sh errors.jsonl # tail the errors file
+{
+  "ts": "2026-05-17T19:30:00.123456Z",
+  "schema_version": 1,
+  "session_id": "a1b2c3d4",
+  "trace_id": "t_e5f6g7h8...",
+  "span_id": "s_i9j0k1l2...",
+  "parent_span_id": "s_xxxx",
+  "name": "co.turn",
+  "kind": "agent",
+  "start_ts": "2026-05-17T19:30:00.000123Z",
+  "duration_ms": 123.456,
+  "status": "OK",
+  "status_msg": null,
+  "attributes": { ... },
+  "events": [ { "ts": "...", "name": "...", "attributes": {...} } ]
+}
 ```
 
-`InstrumentationSettings(version=3)` selects the latest OTel GenAI semantic conventions:
+| Field | Use |
+|-------|-----|
+| `ts` | Emission timestamp; used by `co tail` for ordering across rotation |
+| `schema_version` | Forward compatibility |
+| `session_id` | Filter / correlation; matches `co chat` session boundary |
+| `trace_id` | Group records into a trace for `co trace <id>` and `--trace` filter |
+| `span_id` | Parent linkage target |
+| `parent_span_id` | Tree assembly; null for trace roots |
+| `name` | Display + filter |
+| `kind` | Display color, `--tools-only` / `--models-only` filter — one of `agent`, `model`, `tool`, `co` |
+| `start_ts` | Sibling ordering in tree view (record `ts` is close-time) |
+| `duration_ms` | Summary line, performance triage |
+| `status` | `OK` / `ERROR` |
+| `status_msg` | Error context; null on OK; populated by `on_*_error` hooks. Distinct from Python exception tracebacks (those go to the app log) |
+| `attributes` | Per-record payload |
+| `events` | Nested mini-records for "thing happened with attributes but no duration to measure" (converted from former zero-duration spans) |
 
-| Version | Span Names | Attribute Style |
-|---------|------------|-----------------|
-| 1 (legacy) | `agent run` | `logfire.*` |
-| 2 (default) | `agent run`, `running tool` | `gen_ai.*` + `tool_arguments` |
-| **3 (spec)** | `invoke_agent {name}`, `execute_tool {name}` | `gen_ai.*` per spec |
+### Redaction
 
-### SQLite Span Exporter (`_telemetry.py`)
+`settings.observability.redact_patterns` continues to work. Patterns apply to string values inside `attributes`, `events[*].attributes`, AND `status_msg` (exception messages can echo tool args back). Algorithm: for each string value, apply each compiled pattern's `.sub("[REDACTED]", ...)`. If a string value `json.loads()` cleanly, walk the parsed Python structure fully recursively (a JSON tree is bounded) applying per-leaf regex, then re-serialize. This catches secrets nested inside `co.model.input` / `co.model.output` where content sits multiple levels deep.
 
-Custom `SpanExporter` that writes spans to SQLite. Uses two-phase export: serialise spans into row tuples (no DB lock held), then write all rows in a single `executemany` (minimal lock window).
+### Rotation safety
 
-**Schema:**
+`RotatingFileHandler.doRollover` is synchronous and holds the handler's lock — concurrent writes from other threads queue on the lock. Records in flight at rollover are not lost. `co tail`'s follow loop detects rotation via inode change (`os.stat().st_ino`) and re-opens the new file from offset 0.
 
-```sql
-CREATE TABLE spans (
-    id TEXT PRIMARY KEY,           -- 16-char hex span ID
-    trace_id TEXT NOT NULL,        -- 32-char hex trace ID
-    parent_id TEXT,                -- Parent span ID (null for root)
-    name TEXT NOT NULL,            -- Operation name
-    kind TEXT,                     -- INTERNAL, CLIENT, SERVER
-    start_time INTEGER NOT NULL,   -- Nanoseconds epoch
-    end_time INTEGER,
-    duration_ms REAL,              -- Calculated: (end_time - start_time) / 1_000_000
-    status_code TEXT,              -- OK, ERROR, UNSET
-    status_description TEXT,
-    attributes TEXT,               -- JSON object
-    events TEXT,                   -- JSON array of {name, timestamp, attributes}
-    resource TEXT                  -- JSON (service.name, service.version)
-);
--- Indexes: trace_id, parent_id, start_time DESC
-```
+### What gets traced
 
-### Concurrent Access (WAL Mode)
+| Span name | Kind | Key attributes |
+|-----------|------|----------------|
+| `co.turn` | `agent` (wrapping) | `co.user_prompt.chars`, `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens` — root span for every user turn; `@trace("co.turn", new_trace=True)` on `run_turn()`. On terminal `ModelHTTPError`, adds a `provider_error` event with `http.status_code` and `error.body` (capped at 500 chars). |
+| `invoke_agent {name}` | `agent` | `co.agent.role`, `co.agent.model`, `co.agent.request_limit`, `co.agent.requests_used`, `co.agent.final_result` — emitted by `ObservabilityCapability.before_run`/`after_run`. |
+| `chat {model}` | `model` | `co.model.name`, `co.model.input` (JSON list of message dicts preserving role + part types incl. `thinking`), `co.model.output` (same shape), `co.model.tokens.input`, `co.model.tokens.output`, `co.model.finish_reason` — emitted by `ObservabilityCapability.before_model_request`/`after_model_request`. |
+| `tool {name}` | `tool` | `co.tool.name`, `co.tool.args` (JSON string), `co.tool.result` (JSON string, size-capped), `co.tool.result_size`, `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.args_chars` — `co.tool.{name,args,result}` from `ObservabilityCapability`, the rest from `CoToolLifecycle` via `current_span().set_attribute()`. |
+| `background_task_execute` | `co` | `task.command`, `task.description`, `task.cwd` — `@trace("background_task_execute")` on `task_start`. |
+| `tool_budget.resolved` | `co` | `budget.context_window_tokens`, `budget.spill_ratio`, `budget.tool_call_limit`, `budget.spill_threshold_chars`, `budget.spill_threshold_tokens` — emitted once at bootstrap by `@trace("tool_budget.resolved")` on `_emit_tool_budget_span()`. |
+| `sync_knowledge` | `co` | `count`, `backend`, `status` — `@trace("sync_knowledge")` on `_sync_memory_store()`. |
+| `restore_session` | `co` | `status` (`restored`/`new`), `session_id` — `@trace("restore_session")` on `restore_session()`. |
+| `co.dream.cycle` | `co` | `dream.dry_run`, `dream.extracted`, `dream.merged`, `dream.decayed`, `dream.errors`, `dream.timed_out` — `@trace("co.dream.cycle")` on `run_dream_cycle()`. |
+| `co.dream.mine` | `co` | mine attributes — `@trace("co.dream.mine")` on `_mine_transcripts()`. |
+| `co.dream.merge.apply` / `co.dream.merge.preview` | `co` | merge attributes — split by dry-run/apply path. |
+| `co.dream.decay.apply` / `co.dream.decay.preview` | `co` | decay attributes — split by dry-run/apply path. |
+| `co.knowledge.knowledge_manage.{create,mutate,delete}` | `co` | `knowledge.artifact_kind`, `knowledge.filename_stem`, `knowledge.action` — `@trace(...)` on `_handle_{create,mutate,delete}()`. |
+| `co.web_research.retry_loop` | `co` | `agent.role`, `agent.model`, `agent.request_limit`, `agent.requests_used` — `@trace("co.web_research.retry_loop")` on `web_research()` retry-on-empty wrapper. |
+| `compaction.proactive_check` | `co` | `compaction.msgs`, `compaction.token_count`, `compaction.threshold`, `compaction.budget`, `compaction.fired` (bool), `compaction.skip_reason`, `compaction.tokens_after`, `compaction.savings_pct`, etc. — `@trace("compaction.proactive_check")` on `proactive_window_processor()`. |
 
-Two processes touch the same DB simultaneously: `co chat` (writer) and `co tail` (reader, long-lived connection). Three layers of defense:
+### Events on existing spans
 
-1. **WAL journal mode** — separates reads from writes; readers see a consistent snapshot while the writer appends.
-2. **Busy timeout (5 s)** — handles brief exclusive locks during WAL checkpoints.
-3. **Export-level retry (3×, exponential backoff starting at 0.1 s)** — catches persistent checkpoint conflicts.
+These small attribute-only blocks were previously zero-duration spans; they are now events attached to whatever span is active when they fire:
 
-The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes it immediately after. This avoids stale WAL readers that can prevent checkpoint progress. Span loss is tolerable — telemetry is best-effort.
-
-### What Gets Traced
-
-| Span Name (v3) | Kind | Key Attributes |
-|----------------|------|----------------|
-| `co.turn` | INTERNAL | `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens` — root span for every user turn; emitted by `co-cli.orchestrate` tracer in `run_turn()`; all pydantic-ai child spans attach under this root automatically. On terminal `ModelHTTPError` (429/5xx or budget-exhausted 400), adds a `provider_error` event with `http.status_code` (int) and `error.body` (str, capped at 500 chars). |
-| `invoke_agent {name}` | INTERNAL | `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `pydantic_ai.all_messages`, `final_result` |
-| `chat {model}` | CLIENT | `gen_ai.request.model`, `gen_ai.response.finish_reasons`, `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
-| `running tools` | INTERNAL | list of tool names |
-| `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`; enriched by `CoToolLifecycle.after_tool_execute` with `co.tool.result_size` (int, all tool spans); `co.tool.source` (`native`/`mcp`) and `co.tool.requires_approval` (bool) are set for native tools only (present in `tool_index`); `session_search` stamps `memory.summarizer.runs=0`, `memory.summarizer.failures=0`, and `memory.summarizer.timed_out=false` on empty-query recent-session browse because current session recall is index/snippet based, not LLM-summarized |
-| `{spec.name}` | INTERNAL | `agent.role`, `agent.model`, `agent.request_limit`, `agent.requests_used` — emitted by `co-cli.agents` tracer (`run_in_turn` / `run_standalone` in `co_cli/agent/run.py`, or `web_research`'s wrapper for retry-on-empty); span name comes from `TaskAgentSpec.name`; covers one task-agent run including optional retry (e.g. `web_research`, `knowledge_analyze`, `reason`, `session_review`, `skill_curator`) |
-| `background_task_execute` | INTERNAL | `task.command`, `task.description`, `task.cwd` — span ID passed to `spawn_task()` for cross-session task linkage |
-| `tool_budget.resolved` | INTERNAL | `budget.context_window_tokens`, `budget.spill_ratio`, `budget.tool_call_limit`, `budget.spill_threshold_chars`, `budget.spill_threshold_tokens` — emitted once at bootstrap by `co-cli.tool_budget` tracer; records the resolved tool budget constants for the session |
-| `tool_budget.spill_tool_result` | INTERNAL | `tool.name`, `spill.threshold_chars`, `spill.content_chars`, `spill.fired` (bool), `spill.forced` (bool), `spill.savings_chars` — emitted by `co-cli.tool_budget` tracer on every L1 emit-time spill check |
-| `tool_budget.enforce_request_size` | INTERNAL | `budget.context_window_tokens`, `request.threshold_tokens`, `request.tokens_before`, `request.tokens_after`, `request.candidates_count`, `request.spillable_count`, `request.spilled_count`, `request.spill_errors`, `request.spill_fired` (bool), `request.skip_reason` (one of `""`, `below_threshold`, `no_candidates`, `all_spilled`, `fallback_to_summarize`) — emitted by `co-cli.tool_budget` tracer on every `ModelRequestNode` entry by the `enforce_request_size` history processor; the cheap (non-LLM) per-request cap that runs before `proactive_window_processor` |
-| `tool_budget.enforce_tool_call_limit` | INTERNAL | `budget.context_window_tokens`, `tool_calls.limit`, `tool_calls.issued`, `tool_calls.allowed`, `tool_calls.rejected`, `tool_calls.limit_exceeded` (bool) — emitted by `co-cli.tool_budget` tracer after each `CallToolsNode` via `CoToolLifecycle.after_node_run`; records the L0 brake outcome for the turn |
-| `tool_budget.dedup_tool_calls` | INTERNAL | `dedup.parts_before`, `dedup.parts_after`, `dedup.dropped` (int) — emitted by `co-cli.tool_budget` tracer in `CoToolLifecycle.before_node_run` only when one or more duplicate `(tool_name, args)` `ToolCallPart`s are dropped from a `ModelResponse`; absent when no duplicates were found |
-
-### Trace HTML Viewer (`co traces`)
-
-`co traces` generates a static HTML file with nested, collapsible spans — similar to Logfire. It reads the last 20 traces from the DB, builds a span tree from flat rows via `build_span_tree()`, then renders each span recursively with waterfall timing bars showing relative duration.
-
-**Stats panel** shows total traces, total spans, and tool call count.
-
-**Attribute rendering:** tool, model, message, and token fields are rendered first, then the remaining attributes are appended. Long values are truncated at 200 chars with an `[expand]` toggle that pretty-prints JSON in-place. `logfire.*` internal attributes are suppressed.
-
-**Color scheme** — consistent across both viewers:
-
-| Type | HTML class | Hex |
-|------|-----------|-----|
-| agent | `.agent` | `#00d4ff` (cyan) |
-| model | `.model` | `#9b59b6` (purple) |
-| tool | `.tool` | `#f39c12` (orange) |
-| error | `.ERROR` | `#e74c3c` (red) |
-
-`get_span_type(name)` classifies spans by substring: names containing `agent` → agent, `tool` → tool, `model`/`chat` → model.
-
-The HTML file is written to `~/.co-cli/traces.html` and auto-opened in the browser. It requires no server — purely static.
+| Event name | Attached to | Attributes |
+|------------|-------------|-----------|
+| `ctx_overflow_check` | active `co.turn` span | `ctx.input_tokens`, `ctx.max_ctx`, `ctx.ratio` |
+| `tool_budget.dedup_tool_calls` | active span | `dedup.parts_before`, `dedup.parts_after`, `dedup.dropped` |
+| `tool_budget.enforce_tool_call_limit` | active span | `tool_calls.limit`, `tool_calls.issued`, `tool_calls.allowed`, `tool_calls.rejected`, `tool_calls.limit_exceeded` |
+| `tool_budget.spill_tool_result` | active span | `tool.name`, `spill.threshold_chars`, `spill.content_chars`, `spill.fired`, `spill.forced`, `spill.savings_chars` |
+| `tool_budget.enforce_request_size` | active model span | `request.threshold_tokens`, `request.tokens_before`, `request.tokens_after`, `request.spilled_count`, `request.spill_fired`, `request.skip_reason` (one of `""`, `below_threshold`, `no_candidates`, `all_spilled`, `fallback_to_summarize`) |
+| `provider_error` | active `co.turn` span | `http.status_code`, `error.body` (capped at 500 chars) |
 
 ### Live Tail Viewer (`co tail`)
 
-`co tail` polls the OTel SQLite database and prints completed spans as they arrive — like `tail -f` for agent traces.
+`co tail` follows the JSONL spans log — like `tail -f` for agent traces. No DB query, no per-record SQL.
 
-**Startup:** fetch the N most recent spans (`--last`, default 20) ordered by `start_time`, print them, record the highest `start_time` as the high-water mark.
+**Startup:** read the last N lines (`--last`, default 20), apply filters, render.
 
-**Follow loop:** sleep `--poll` seconds (default 1.0), query spans with `start_time > high_water_mark`, print any new rows, advance the high-water mark. Uses one long-lived connection for the whole session (read-only; WAL mode ensures it doesn't block the writer).
+**Follow loop:** sleep `--poll` seconds (default 0.1), re-stat the file. If the inode changed (rotation), open the new file from offset 0. Read available new lines from the current byte offset, parse each as JSON, render. Each rendered line carries timestamp, kind, name, key attributes, and duration; `ERROR` status appends a red marker.
 
-**Output format** — one line per span:
-
-```
-14:23:05  model  chat qwen3:30b-a3b-thinking-2507-q8_0     in=3745 out=25  5.26s
-           │ [thinking] Let me search the notes for that topic.
-14:23:06  tool   execute_tool obsidian_search   tool=obsidian_search  args={"query":"test"}…  120ms
-14:23:08  agent  invoke_agent agent             model=qwen3:30b-a3b-thinking-2507-q8_0  tokens=7877→4502  255.72s
-```
-
-| Column | Source | Format |
-|--------|--------|--------|
-| Timestamp | `start_time` (ns epoch) | Local `HH:MM:SS` |
-| Type tag | `get_span_type(name)` | Left-padded 6 chars |
-| Span name | `spans.name` | Left-padded 30 chars |
-| Key attrs | JSON `attributes` column | Type-specific (see below) |
-| Duration | `duration_ms` | `format_duration()` — µs/ms/s |
-| Status | `status_code` | Only shown for `ERROR` (bold red) |
-
-**Per-type attribute extraction:**
-
-| Span type | Extracted fields |
-|-----------|-----------------|
-| agent | `gen_ai.request.model` → `model=…`, `gen_ai.usage.input_tokens` + `output_tokens` → `tokens=in→out` |
-| model | `gen_ai.usage.input_tokens` → `in=…`, `gen_ai.usage.output_tokens` → `out=…` |
-| tool | `gen_ai.tool.name` → `tool=…`, `gen_ai.tool.call.arguments` → `args=…` (truncated to 80 chars) |
-
-**Verbose mode (`-v`):** expands each span with detailed content:
-- **agent**: shows the final output result via `[final]`.
-- **model**: shows the first line of the system prompt, the last user message, and the full response. Parsed from `gen_ai.input.messages` and `gen_ai.output.messages`. Thinking blocks are prefixed with `[thinking]` in dim italic.
-- **tool**: shows full arguments (pretty-printed JSON) and the full tool result.
+**`--detail` mode** (replaces the old `--verbose`):
+- **agent**: shows `co.agent.final_result` via `[final]`.
+- **model**: shows the last user message from `co.model.input`, and renders `co.model.output` parts — `thinking` blocks dim italic, `text` parts as `[response]`, `tool_call` parts as `[tool_call] <name>`.
+- **tool**: pretty-prints `co.tool.args` and `co.tool.result` JSON.
 
 **Rich color scheme:**
 
@@ -237,68 +215,63 @@ The HTML file is written to `~/.co-cli/traces.html` and auto-opened in the brows
 | agent | `cyan` |
 | model | `magenta` |
 | tool | `yellow` |
+| co | `white` |
 | error | `bold red` |
 
-### Example SQL Queries
+### Snapshot Tree (`co trace <trace_id>`)
 
-```sql
--- Recent root spans
-SELECT trace_id, name, duration_ms, status_code
-FROM spans WHERE parent_id IS NULL ORDER BY start_time DESC LIMIT 10;
+`co trace <trace_id>` reads all records matching one `trace_id` from the live spans log plus any rotated backups (glob `co-cli-spans.jsonl*`), groups by `parent_span_id`, sorts siblings by `start_ts`, and renders a depth-uncapped indented tree. One-shot snapshot — no follow.
 
--- Tool calls with arguments and duration (v3 attribute names)
-SELECT datetime(start_time/1e9, 'unixepoch', 'localtime') AS time,
-    json_extract(attributes, '$.gen_ai.tool.name') AS tool,
-    json_extract(attributes, '$.gen_ai.tool.call.arguments') AS args,
-    duration_ms
-FROM spans WHERE name LIKE 'execute_tool%' ORDER BY start_time DESC;
+Distinct from `co tail`: tail is append-only / live; `trace` is a tree question over completed records.
 
--- Token usage by model
-SELECT json_extract(attributes, '$.gen_ai.request.model') AS model,
-    COUNT(*) AS runs,
-    SUM(json_extract(attributes, '$.gen_ai.usage.input_tokens')) AS input_tokens,
-    SUM(json_extract(attributes, '$.gen_ai.usage.output_tokens')) AS output_tokens
-FROM spans WHERE name LIKE 'invoke_agent%' GROUP BY model;
+### Querying with jq
 
--- Provider errors (429/5xx/budget-exhausted 400) with status code and body
-SELECT datetime(start_time/1e9, 'unixepoch', 'localtime') AS time,
-    json_extract(events, '$[0].attributes."http.status_code"') AS status,
-    json_extract(events, '$[0].attributes."error.body"') AS body
-FROM spans WHERE name = 'co.turn' AND status_code = 'ERROR'
-    AND json_extract(events, '$[0].name') = 'provider_error'
-ORDER BY start_time DESC;
+```bash
+# Recent root spans (trace roots — parent_span_id null)
+jq 'select(.parent_span_id == null)' ~/.co-cli/logs/co-cli-spans.jsonl | tail -10
+
+# Tool calls with name and duration
+jq 'select(.kind == "tool") | {time: .start_ts, tool: .attributes."co.tool.name", duration_ms}' \
+    ~/.co-cli/logs/co-cli-spans.jsonl
+
+# Token usage by model
+jq -s '[.[] | select(.kind == "agent")] | group_by(.attributes."co.agent.model") |
+    map({model: .[0].attributes."co.agent.model",
+         runs: length,
+         requests: (map(.attributes."co.agent.requests_used") | add)})' \
+    ~/.co-cli/logs/co-cli-spans.jsonl
+
+# Provider errors on co.turn
+jq 'select(.name == "co.turn" and .status == "ERROR") |
+    {time: .start_ts, error: .events[] | select(.name == "provider_error") | .attributes}' \
+    ~/.co-cli/logs/co-cli-spans.jsonl
 ```
 
 ### Troubleshooting
 
 | Issue | Command | What to look for |
 |-------|---------|-----------------|
-| Agent stuck in tool loop | `co tail -v` | Repeating `chat → tool` without `stop` finish reason |
+| Agent stuck in tool loop | `co tail --detail` | Repeating `chat → tool` without `stop` finish reason |
 | Context growing too large | `co tail --models-only` | `in=` token count growing each model call |
-| Tool returning errors | `co tail --tools-only` | `ERROR` status on tool spans |
-| Spans not appearing | Check for an active run | `co tail` only shows completed spans after they are exported |
+| Tool returning errors | `co tail --tools-only` | `ERROR` on tool records |
+| Records not appearing | Check for an active run | Spans emit on close; running operations not yet visible |
 
 ### Privacy
 
-All data stays local. Tool responses and full conversation history are captured in span attributes. Before any span is written to SQLite, `SQLiteSpanExporter` applies regex redaction to every string attribute value and every string value in event attribute dicts — replacing matches with `[REDACTED]`. The default pattern set covers common secret formats (OpenAI/Anthropic `sk-*` keys, Bearer tokens, GitHub `ghp_` tokens, generic `api_key=` pairs, AWS AKIA IDs, PEM private key headers). Values exceeding 64 KB bypass redaction as a performance guard. There is no built-in retention or pruning policy — the DB grows unbounded. To clear all traces: `rm ~/.co-cli/co-cli-logs.db`.
+All data stays local. Tool responses and full conversation history are captured in span attributes. Before any record is written, the redaction pipeline applies regex substitutions to every string value in `attributes`, `events[*].attributes`, and `status_msg` — including string-encoded JSON values, which are parsed and walked recursively. The default pattern set covers common secret formats (OpenAI/Anthropic `sk-*` keys, Bearer tokens, GitHub `ghp_` tokens, generic `api_key=` pairs, AWS AKIA IDs, PEM private key headers). There is no built-in retention or pruning policy beyond the rotating handler's backup count — to clear all spans: `rm ~/.co-cli/logs/co-cli-spans.jsonl*`.
 
 ## 3. Config
-
-### Exporter / DB
-
-| Setting | Env Var | Default | Description |
-|---------|--------|---------|-------------|
-| DB path | — | `~/.co-cli/co-cli-logs.db` | Span storage (user dotdir) |
-| Instrumentation version | — | `3` | Hardcoded in `main.py` for OTel GenAI spec compliance |
 
 ### File Logging (`observability` settings group)
 
 | Setting | Env Var | Default | Description |
-|---------|--------|---------|-------------|
+|---------|---------|---------|-------------|
 | `observability.log_level` | `CO_LOG_LEVEL` | `INFO` | Minimum level written to `co-cli.jsonl` (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
-| `observability.log_max_size_mb` | `CO_LOG_MAX_SIZE_MB` | `5` | Max file size in MB before rotation (1–500) |
-| `observability.log_backup_count` | `CO_LOG_BACKUP_COUNT` | `3` | Rotated backup files to keep per log file (0–20) |
-| `observability.redact_patterns` | — | 6 default patterns | Regex list applied to span attribute strings before SQLite storage; extend via `settings.json` for custom secret formats |
+| `observability.log_max_size_mb` | `CO_LOG_MAX_SIZE_MB` | `5` | Max app-log file size in MB before rotation (1–500) |
+| `observability.log_backup_count` | `CO_LOG_BACKUP_COUNT` | `3` | Rotated app-log backups to keep (0–20) |
+| `observability.spans_log_max_size_mb` | `CO_SPANS_LOG_MAX_SIZE_MB` | `50` | Max spans-log file size in MB before rotation (1–2000); defaults higher than the app log because span volume is higher |
+| `observability.spans_log_backup_count` | `CO_SPANS_LOG_BACKUP_COUNT` | `5` | Rotated spans-log backups to keep (0–50) |
+| `observability.redact_patterns` | — | 6 default patterns | Regex list applied to string values before write; extend via `settings.json` for custom secret formats |
 
 ### `co tail` Flags
 
@@ -306,11 +279,17 @@ All data stays local. Tool responses and full conversation history are captured 
 |------|-------|---------|-------------|
 | `--trace` | `-i` | None | Filter to a specific trace ID |
 | `--tools-only` | `-T` | `False` | Only show tool spans |
-| `--models-only` | `-m` | `False` | Only show model/chat spans |
-| `--poll` | `-p` | `1.0` | Poll interval in seconds |
+| `--models-only` | `-m` | `False` | Only show model spans |
+| `--poll` | `-p` | `0.1` | Poll interval in seconds |
 | `--no-follow` | `-n` | `False` | Print recent spans and exit |
-| `--last` | `-l` | `20` | Number of recent spans shown on startup |
-| `--verbose` | `-v` | `False` | Show LLM output content for model spans |
+| `--last` | `-l` | `20` | Number of recent records shown on startup |
+| `--detail` | `-d` | `False` | Append per-record detail block (input/output/args/result) |
+
+### `co trace` Args
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `trace_id` | required | The trace ID to render as a snapshot tree |
 
 ## 4. Public Interface
 
@@ -318,35 +297,47 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `setup_tracer_provider(service_name, service_version, redact_patterns) -> TracerProvider` | `co_cli/observability/telemetry.py` | Builds the OTel `TracerProvider` with `SQLiteSpanExporter` + `JsonSpanExporter` `SimpleSpanProcessor`s |
+| `setup_log(log_path, *, max_size_mb, backup_count, redact_patterns) -> None` | `co_cli/observability/tracing.py` | Configures the `co_cli.observability.spans` rotating JSONL handler with `propagate=False`; compiles and stores redact patterns; idempotent |
 | `setup_file_logging(logs_dir, log_level, log_max_size_mb, log_backup_count) -> None` | `co_cli/observability/file_logging.py` | Attaches two `RotatingFileHandler`s to root logger (`co-cli.jsonl` INFO+, `errors.jsonl` WARNING+); idempotent |
 
-### Span exporters
+### Tracing primitives
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `SQLiteSpanExporter(SpanExporter)` | `co_cli/observability/telemetry.py` | Two-phase export to `~/.co-cli/co-cli-logs.db`; WAL journal, 5s busy timeout, 3× retry with backoff |
-| `JsonSpanExporter(SpanExporter)` | `co_cli/observability/telemetry.py` | Writes every completed span as one JSON line via the `co_cli.observability.spans` propagating logger |
+| `@trace(name=None, *, new_trace=False)` | `co_cli/observability/tracing.py` | Decorator for sync or async functions; emits one span per call. `new_trace=True` resets `trace_id` before push so the decorated function's span carries the fresh id |
+| `current_span() -> _Span \| _NoOpSpan` | `co_cli/observability/tracing.py` | Proxy over the top-of-stack span; `.set_attribute(k, v)`, `.add_event(name, attrs)`, `.set_status(status, msg)`; no-op proxy when stack empty (debug-logs each call) |
+| `push_span(name, *, kind="co", attributes) -> dict` | `co_cli/observability/tracing.py` | Explicit span management for capability hooks; returns the span dict for identity-based cleanup |
+| `pop_span(*, status="OK", status_msg=None, attributes=None) -> None` | `co_cli/observability/tracing.py` | Pops top-of-stack span, applies attributes/status, redacts, emits one JSON record |
+| `new_trace() -> str` | `co_cli/observability/tracing.py` | Generates a fresh 16-hex `trace_id` and binds it to the contextvar; existing spans on the stack keep their own id |
+| `set_session_context(session_id)` / `clear_session_context()` | `co_cli/observability/tracing.py` | Bind/clear the `session_id` contextvar |
+| `run_with_context(fn, *args, **kwargs) -> Callable[[], Any]` | `co_cli/observability/tracing.py` | Captures the current Context and returns a 0-arg callable; pass to `loop.run_in_executor` to carry the span/trace/session context across the thread boundary |
+
+### Capability
+
+| Symbol | Source | Contract |
+|--------|--------|---------|
+| `ObservabilityCapability(AbstractCapability[CoDeps])` | `co_cli/observability/capability.py` | Hooks `before_run`/`after_run`/`on_run_error`, `before_model_request`/`after_model_request`/`on_model_request_error`, `before_tool_execute`/`after_tool_execute`/`on_tool_execute_error` — pushes/pops spans and emits agent/model/tool records. Must be placed FIRST in `capabilities=[...]` so `CoToolLifecycle` can attach attributes via `current_span()` before the tool span closes |
 
 ### Viewers (CLI entrypoints)
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `co traces` | `co_cli/main.py` → `co_cli/observability/viewer.py` | Generates `~/.co-cli/traces.html` from the last 20 traces and auto-opens it |
-| `co tail` | `co_cli/main.py` → `co_cli/observability/tail.py:run_tail` | Polls the spans DB and prints completed spans in real time |
+| `co tail` | `co_cli/main.py` → `co_cli/observability/tail.py:run_tail` | Reads and follows the JSONL spans log; rotation-safe via inode tracking; filters by trace/tool/model kind; summary or `--detail` |
+| `co trace <trace_id>` | `co_cli/main.py` → `co_cli/observability/trace_view.py:render_trace` | Reads all records for one trace from the live log and rotated backups; builds parent/child tree; renders indented snapshot |
 
 ## 5. Files
 
 | File | Purpose |
 |------|---------|
-| `co_cli/observability/telemetry.py` | `SQLiteSpanExporter` (spans → SQLite), `JsonSpanExporter` (spans → `co-cli.jsonl` via propagating logger), `setup_tracer_provider()` (provider factory for both exporters) |
+| `co_cli/observability/tracing.py` | `setup_log`, `@trace` decorator, `current_span`, `push_span`/`pop_span`, `new_trace`, `set_session_context`/`clear_session_context`, `run_with_context`; contextvars-based span stack; redaction pipeline; JSON-line emit via dedicated logger |
+| `co_cli/observability/capability.py` | `ObservabilityCapability` — pydantic-ai capability emitting agent/model/tool records on lifecycle hooks; replaces `Agent.instrument_all(...)` |
 | `co_cli/observability/file_logging.py` | `setup_file_logging()` — attaches two rotating JSONL handlers to root logger: `co-cli.jsonl` (INFO+) and `errors.jsonl` (WARNING+, 2 MB/2 backups hardcoded) |
-| `co_cli/observability/viewer.py` | HTML generator — collapsible nested span tree, waterfall bars; shared `get_span_type()`, `format_duration()`, `extract_span_attrs()` |
-| `co_cli/observability/tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
-| `co_cli/main.py` | `@app.command()` wrappers for `traces` and `tail`; module-level OTel + file logging bootstrap |
+| `co_cli/observability/tail.py` | `run_tail()` — JSONL follow loop, per-kind attribute extraction, `--detail` rendering for agent/model/tool |
+| `co_cli/observability/trace_view.py` | `render_trace()` — snapshot tree builder; reads live log + rotated backups; sorts siblings by `start_ts`; depth-uncapped indented render |
+| `co_cli/main.py` | `@app.command()` wrappers for `tail` and `trace`; module-level `_setup_observability()` bootstraps both file logging and spans logging |
 | `co_cli/config/core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
-| `co_cli/config/observability.py` | `ObservabilitySettings` — file logging settings (`log_level`, `log_max_size_mb`, `log_backup_count`) and span redaction (`redact_patterns`) |
-| `~/.co-cli/co-cli-logs.db` | SQLite span storage |
-| `~/.co-cli/logs/co-cli.jsonl` | Master rotating JSONL log — INFO+ Python logging records (`"kind": "log"`) and OTel span records (`"kind": "span"`) |
-| `~/.co-cli/logs/errors.jsonl` | Dedicated rotating JSONL log — WARNING+ only; 2 MB / 2 backups; for fast error triage without parsing span JSON |
-| `~/.co-cli/traces.html` | Generated static HTML viewer (written by `co traces`) |
+| `co_cli/config/observability.py` | `ObservabilitySettings` — file-logging settings, spans-log settings, redaction patterns |
+| `co_cli/agent/build.py` | Wires `[ObservabilityCapability(), CoToolLifecycle()]` into agent construction; ordering invariant documented at the wiring site |
+| `~/.co-cli/logs/co-cli.jsonl` | Rotating app log — INFO+ Python `logging` records (`"kind": "log"`); independent stream from spans |
+| `~/.co-cli/logs/co-cli-spans.jsonl` | Rotating spans log — one JSON line per closed span |
+| `~/.co-cli/logs/errors.jsonl` | Rotating WARNING+ app log — 2 MB / 2 backups; for fast error triage |

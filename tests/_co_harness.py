@@ -1,39 +1,34 @@
 """Pytest harness plugin for low-level per-test diagnostics.
 
-Enables OTel span export during pytest and prints a compact per-test summary.
-Slow or failing tests also get span-by-span detail in the pytest log stream.
+Configures the structured-log tracing pipeline during pytest and prints a
+compact per-test summary. Slow or failing tests also get span-by-span detail
+in the pytest log stream.
+
+Reads records from the spans JSON log written by
+``co_cli.observability.tracing.setup_log``.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
-import sqlite3
 import time
-import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
-from opentelemetry import trace
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from pydantic_ai import Agent
-from pydantic_ai.agent import InstrumentationSettings
 
-from co_cli.config.core import LOGS_DB
-from co_cli.observability.telemetry import SQLiteSpanExporter
+from co_cli.config.core import LOGS_DIR
+from co_cli.observability import tracing
 
-# Per-test outcome tracking — avoids monkey-patching pytest Item objects.
 _test_outcomes: dict[str, str] = {}
 
-_PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
-_VERSION = tomllib.loads(_PYPROJECT.read_text())["project"]["version"]
 _SLOW_MS = int(os.getenv("CO_PYTEST_TRACE_SLOW_MS", "2000"))
 _DETAIL_LIMIT = int(os.getenv("CO_PYTEST_TRACE_DETAIL_LIMIT", "12"))
-_INSTALLED = False
+
+_SPANS_LOG = LOGS_DIR / "co-cli-spans.jsonl"
 
 
 def _is_eval_path(path_str: str) -> bool:
@@ -44,19 +39,19 @@ def _is_eval_path(path_str: str) -> bool:
 def _harness_enabled(config: pytest.Config) -> bool:
     if os.getenv("CO_PYTEST_HARNESS", "1") == "0":
         return False
-    # Evals must not couple to the pytest harness. If the invocation explicitly
-    # targets eval files or directories, skip all harness behavior.
     args = [str(a) for a in config.args]
     return not (args and all(_is_eval_path(a) for a in args if not a.startswith("-")))
 
 
 @dataclass
 class _SpanRow:
-    rowid: int
-    trace_id: str
+    trace_id: str | None
     name: str
+    kind: str
     duration_ms: float | None
-    attributes: dict[str, Any]
+    attributes: dict[str, Any] = field(default_factory=dict)
+    status: str = "OK"
+    status_msg: str | None = None
 
 
 def _compact_json(value: Any, limit: int = 180) -> str:
@@ -66,71 +61,62 @@ def _compact_json(value: Any, limit: int = 180) -> str:
     return text[: limit - 3] + "..."
 
 
-def _load_spans_after(rowid: int) -> list[_SpanRow]:
-    if not LOGS_DB.exists():
-        return []
-    with sqlite3.connect(LOGS_DB) as conn:
-        rows = conn.execute(
-            """
-            SELECT rowid, trace_id, name, duration_ms, attributes
-            FROM spans
-            WHERE rowid > ?
-            ORDER BY rowid ASC
-            """,
-            (rowid,),
-        ).fetchall()
-    parsed: list[_SpanRow] = []
-    for raw_rowid, trace_id, name, duration_ms, attributes_json in rows:
-        try:
-            attributes = json.loads(attributes_json) if attributes_json else {}
-        except json.JSONDecodeError:
-            attributes = {}
-        parsed.append(
-            _SpanRow(
-                rowid=int(raw_rowid),
-                trace_id=trace_id,
-                name=name,
-                duration_ms=duration_ms,
-                attributes=attributes,
-            )
-        )
-    return parsed
+def _flush_spans_logger() -> None:
+    for handler in logging.getLogger("co_cli.observability.spans").handlers:
+        handler.flush()
 
 
-def _db_high_water_mark() -> int:
-    if not LOGS_DB.exists():
+def _log_high_water_mark() -> int:
+    if not _SPANS_LOG.exists():
         return 0
-    with sqlite3.connect(LOGS_DB) as conn:
-        row = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM spans").fetchone()
-    return int(row[0]) if row else 0
+    return _SPANS_LOG.stat().st_size
+
+
+def _records_since(byte_offset: int) -> list[_SpanRow]:
+    _flush_spans_logger()
+    if not _SPANS_LOG.exists():
+        return []
+    rows: list[_SpanRow] = []
+    with _SPANS_LOG.open("r", encoding="utf-8") as f:
+        f.seek(byte_offset)
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            rows.append(
+                _SpanRow(
+                    trace_id=rec.get("trace_id"),
+                    name=rec.get("name", ""),
+                    kind=rec.get("kind", "co"),
+                    duration_ms=rec.get("duration_ms"),
+                    attributes=rec.get("attributes") or {},
+                    status=rec.get("status", "OK"),
+                    status_msg=rec.get("status_msg"),
+                )
+            )
+    return rows
 
 
 def _extract_model(row: _SpanRow) -> str | None:
-    model = row.attributes.get("model_name") or row.attributes.get("gen_ai.request.model")
+    model = row.attributes.get("co.model.name") or row.attributes.get("co.agent.model")
     if isinstance(model, str) and model:
         return model
     return None
 
 
 def _extract_tool(row: _SpanRow) -> str | None:
-    tool = row.attributes.get("gen_ai.tool.name")
+    if row.kind != "tool":
+        return None
+    tool = row.attributes.get("co.tool.name")
     if not isinstance(tool, str) or not tool:
         return None
-    # Exclude deferred-approval resolution spans: pydantic-ai fires execute_tool
-    # spans for both deferred approval bookkeeping (~1-4ms) and actual tool
-    # execution (always >10ms for real I/O). Only count real execution in the
-    # tools= summary so denied tools are not reported as having run.
     if row.duration_ms is not None and row.duration_ms < 5:
         return None
     return tool
-
-
-def _extract_api(row: _SpanRow) -> str | None:
-    host = row.attributes.get("server.address")
-    port = row.attributes.get("server.port")
-    if isinstance(host, str) and host:
-        return f"{host}:{port}" if port is not None else host
-    return None
 
 
 def _span_detail(row: _SpanRow) -> str:
@@ -146,51 +132,38 @@ def _span_detail(row: _SpanRow) -> str:
     tool = _extract_tool(row)
     if tool:
         parts.append(f"tool={tool}")
-        args = row.attributes.get("gen_ai.tool.call.arguments")
+        args = row.attributes.get("co.tool.args")
         if args:
-            parts.append(f"args={args}")
+            parts.append(f"args={args[:80] if isinstance(args, str) else _compact_json(args)}")
 
-    api = _extract_api(row)
-    if api:
-        provider = row.attributes.get("gen_ai.provider.name")
-        system = row.attributes.get("gen_ai.system")
-        parts.append(f"api={api}")
-        if provider:
-            parts.append(f"provider={provider}")
-        if system:
-            parts.append(f"system={system}")
-
-    if row.name.startswith("chat "):
-        in_tokens = row.attributes.get("gen_ai.usage.input_tokens")
-        out_tokens = row.attributes.get("gen_ai.usage.output_tokens")
-        finish_reasons = row.attributes.get("gen_ai.response.finish_reasons", [])
-        if isinstance(finish_reasons, str):
-            try:
-                finish_reasons = json.loads(finish_reasons)
-            except json.JSONDecodeError:
-                finish_reasons = [finish_reasons]
+    if row.kind == "model":
+        in_tokens = row.attributes.get("co.model.tokens.input")
+        out_tokens = row.attributes.get("co.model.tokens.output")
+        finish = row.attributes.get("co.model.finish_reason")
         if in_tokens is not None:
             parts.append(f"in_tokens={in_tokens}")
         if out_tokens is not None:
             parts.append(f"out_tokens={out_tokens}")
-        if finish_reasons:
-            parts.append(f"finish={finish_reasons[0]}")
+        if finish:
+            parts.append(f"finish={finish}")
 
-    final_result = row.attributes.get("final_result")
-    if isinstance(final_result, str) and final_result:
-        excerpt = final_result.replace("\n", " ")
+    final = row.attributes.get("co.agent.final_result")
+    if isinstance(final, str) and final:
+        excerpt = final.replace("\n", " ")
         if len(excerpt) > 160:
             excerpt = excerpt[:157] + "..."
         parts.append(f"result={excerpt}")
+
+    if row.status == "ERROR":
+        parts.append(f"status=ERROR msg={row.status_msg!r}")
 
     return " | ".join(parts)
 
 
 def _summary_line(nodeid: str, duration_s: float, outcome: str, spans: list[_SpanRow]) -> str:
     trace_ids = {row.trace_id for row in spans if row.trace_id}
-    models = sorted({model for row in spans if (model := _extract_model(row))})
-    tools = sorted({tool for row in spans if (tool := _extract_tool(row))})
-    apis = sorted({api for row in spans if (api := _extract_api(row))})
+    models = sorted({m for row in spans if (m := _extract_model(row))})
+    tools = sorted({t for row in spans if (t := _extract_tool(row))})
 
     parts = [
         f"[pytest-harness] {nodeid}",
@@ -203,42 +176,45 @@ def _summary_line(nodeid: str, duration_s: float, outcome: str, spans: list[_Spa
         parts.append(f"models={','.join(models)}")
     if tools:
         parts.append(f"tools={','.join(tools)}")
-    if apis:
-        parts.append(f"apis={','.join(apis)}")
     return " | ".join(parts)
 
 
-def _ensure_telemetry() -> TracerProvider:
-    global _INSTALLED
-    provider = trace.get_tracer_provider()
-    if not isinstance(provider, TracerProvider):
-        provider = TracerProvider(
-            resource=Resource.create(
-                {
-                    "service.name": "co-cli-pytest",
-                    "service.version": _VERSION,
-                }
-            )
-        )
-        trace.set_tracer_provider(provider)
+def _ensure_tracing() -> None:
+    """Install the structured-log tracing pipeline.
 
-    if not _INSTALLED:
-        provider.add_span_processor(SimpleSpanProcessor(SQLiteSpanExporter()))
-        Agent.instrument_all(
-            InstrumentationSettings(
-                tracer_provider=provider,
-                version=3,
-            )
-        )
-        _INSTALLED = True
-    return provider
+    Re-asserts the handler on every call: tests that pin the spans logger to a
+    tmp-dir for their own isolation (e.g. ``test_tracing_decorator.py``) leave
+    the logger pointing somewhere we cannot read. Re-asserting restores the
+    harness's handler before the next non-isolated test runs.
+    """
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    tracing.setup_log(
+        log_path=_SPANS_LOG,
+        max_size_mb=50,
+        backup_count=2,
+        redact_patterns=[],
+    )
+
+
+def recorded_spans(since: int = 0) -> list[_SpanRow]:
+    """Public helper for tests that need to inspect emitted records.
+
+    Pass the byte offset returned from a previous ``_log_high_water_mark()``
+    to read only records emitted after that point.
+    """
+    return _records_since(since)
+
+
+def spans_log_offset() -> int:
+    """Snapshot the current spans log size — pass to ``recorded_spans(since=...)``."""
+    return _log_high_water_mark()
 
 
 @pytest.hookimpl
 def pytest_configure(config: pytest.Config) -> None:
     if not _harness_enabled(config):
         return
-    _ensure_telemetry()
+    _ensure_tracing()
 
 
 @pytest.hookimpl
@@ -257,28 +233,23 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
     if not _harness_enabled(item.config):
         yield
         return
-    provider = _ensure_telemetry()
-    # Re-assert pydantic-ai instrumentation before each test. Test-module imports
-    # (e.g. `from co_cli.main import ...`) can call Agent.instrument_all with the
-    # production "co-cli" provider during collection, overriding the harness setup.
-    Agent.instrument_all(InstrumentationSettings(tracer_provider=provider, version=3))
+    _ensure_tracing()
     start = time.perf_counter()
-    before_rowid = _db_high_water_mark()
+    before_offset = _log_high_water_mark()
     try:
         yield
     except BaseException:
         _test_outcomes[item.nodeid] = "failed"
         raise
     finally:
-        provider.force_flush()
-        spans = _load_spans_after(before_rowid)
+        spans = _records_since(before_offset)
         duration_s = time.perf_counter() - start
         outcome = _test_outcomes.pop(item.nodeid, "passed")
         terminal = item.config.pluginmanager.get_plugin("terminalreporter")
         if terminal is not None:
             terminal.write_line(_summary_line(item.nodeid, duration_s, outcome, spans))
-            has_llm_calls = any(r.name.startswith("chat ") for r in spans)
-            if outcome != "passed" or duration_s * 1000 >= _SLOW_MS or has_llm_calls:
+            has_model_calls = any(row.kind == "model" for row in spans)
+            if outcome != "passed" or duration_s * 1000 >= _SLOW_MS or has_model_calls:
                 for row in spans[:_DETAIL_LIMIT]:
                     terminal.write_line(f"[pytest-harness]   {_span_detail(row)}")
                 hidden = len(spans) - _DETAIL_LIMIT

@@ -9,14 +9,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from opentelemetry import trace as otel_trace
-from opentelemetry.trace import Span
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.memory.artifact import KnowledgeArtifact, load_artifacts
 from co_cli.memory.session_browser import list_sessions
+from co_cli.observability.tracing import current_span
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
@@ -60,7 +59,7 @@ def _grep_recall(
 def _browse_recent(
     ctx: RunContext[CoDeps],
     limit: int,
-    span: Span,
+    span: Any,
 ) -> list[dict]:
     """Return recent-session metadata as a list of dicts — no LLM calls."""
     sessions = list_sessions(ctx.deps.sessions_dir)
@@ -87,7 +86,7 @@ def _list_artifacts(
     ctx: RunContext[CoDeps],
     kinds: list[str] | None,
     limit: int,
-    span: Span,
+    span: Any,
 ) -> list[dict]:
     """Paginated inventory of knowledge artifacts, sorted by created descending."""
     if ctx.deps.memory_store is not None:
@@ -222,7 +221,7 @@ def _grep_artifacts_fallback(
 def _search_sessions(
     ctx: RunContext[CoDeps],
     query: str,
-    span: Span,
+    span: Any,
 ) -> list[dict]:
     """Chunked recall over session transcripts via MemoryStore.search(sources=["session"]).
 
@@ -331,7 +330,7 @@ async def session_search(
         query: FTS5 keyword query.
         limit: Max sessions returned (default 3).
     """
-    span = otel_trace.get_current_span()
+    span = current_span()
     limit = max(1, int(limit))
     query = query.strip() if query else ""
 
@@ -395,7 +394,7 @@ async def knowledge_search(
         kinds: Up to 3 artifact kinds to filter results. None searches all kinds.
         limit: Max results (default 10).
     """
-    span = otel_trace.get_current_span()
+    span = current_span()
     limit = max(1, int(limit))
     query = query.strip() if query else ""
 

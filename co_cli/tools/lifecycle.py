@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any
 
-from opentelemetry import trace as otel_trace
 from pydantic_ai import CallToolsNode, RunContext
 from pydantic_ai.capabilities import (
     AbstractCapability,
@@ -22,6 +21,7 @@ from pydantic_ai.messages import ModelResponsePart, ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 
 from co_cli.deps import CoDeps, ToolSourceEnum
+from co_cli.observability.tracing import current_span
 from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
 from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
 from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS, spill_with_span
@@ -144,16 +144,13 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     Hooks:
     - before_node_run: dedup duplicate tool calls within one ModelResponse
     - wrap_tool_execute: per-call cap brake (N times per model turn)
-    - after_node_run: tool-call-limit span (L0). Per-request size enforcement
-      lives in ``enforce_request_size`` (history processor at MRN entry), not here.
+    - after_node_run: tool-call-limit event on the active capability span.
+      Per-request size enforcement lives in ``enforce_request_size``
+      (history processor at MRN entry), not here.
     - before_tool_validate: syntactic JSON repair for malformed model output
     - before_tool_execute: path normalization for file tools
     - after_tool_execute: span enrichment + audit logging
     """
-
-    _tracer: otel_trace.Tracer = field(
-        default_factory=lambda: otel_trace.get_tracer("co-cli.tool_budget")
-    )
 
     async def before_node_run(
         self,
@@ -169,10 +166,14 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         before = len(node.model_response.parts)
         after = len(deduped)
         dropped = before - after
-        with self._tracer.start_as_current_span("tool_budget.dedup_tool_calls") as span:
-            span.set_attribute("dedup.parts_before", before)
-            span.set_attribute("dedup.parts_after", after)
-            span.set_attribute("dedup.dropped", dropped)
+        current_span().add_event(
+            "tool_budget.dedup_tool_calls",
+            {
+                "dedup.parts_before": before,
+                "dedup.parts_after": after,
+                "dedup.dropped": dropped,
+            },
+        )
         node.model_response = replace(node.model_response, parts=deduped)
         logger.debug("dedup_tool_calls dropped=%d", dropped)
         return node
@@ -212,14 +213,17 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         allowed = min(issued, MAX_TOOL_CALLS_PER_MODEL_TURN)
         rejected = max(0, issued - MAX_TOOL_CALLS_PER_MODEL_TURN)
 
-        with self._tracer.start_as_current_span("tool_budget.enforce_tool_call_limit") as span:
-            span.set_attribute("budget.context_window_tokens", ctx.deps.model_max_ctx)
-            span.set_attribute("tool_calls.limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
-            span.set_attribute("tool_calls.issued", issued)
-            span.set_attribute("tool_calls.allowed", allowed)
-            span.set_attribute("tool_calls.rejected", rejected)
-            span.set_attribute("tool_calls.limit_exceeded", rejected > 0)
-
+        current_span().add_event(
+            "tool_budget.enforce_tool_call_limit",
+            {
+                "budget.context_window_tokens": ctx.deps.model_max_ctx,
+                "tool_calls.limit": MAX_TOOL_CALLS_PER_MODEL_TURN,
+                "tool_calls.issued": issued,
+                "tool_calls.allowed": allowed,
+                "tool_calls.rejected": rejected,
+                "tool_calls.limit_exceeded": rejected > 0,
+            },
+        )
         return result
 
     async def before_tool_validate(
@@ -243,7 +247,7 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         args: ValidatedToolArgs,
         result: Any,
     ) -> Any:
-        span = otel_trace.get_current_span()
+        span = current_span()
         info = ctx.deps.tool_index.get(call.tool_name)
 
         # MCP results are plain strings that bypass tool_output() — enforce spill gate here.
@@ -260,11 +264,10 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
                 threshold_chars=threshold,
             )
 
-        if span.is_recording():
-            span.set_attribute("co.tool.result_size", len(str(result)))
-            if info:
-                span.set_attribute("co.tool.source", info.source.value)
-                span.set_attribute("co.tool.requires_approval", info.approval)
+        span.set_attribute("co.tool.result_size", len(str(result)))
+        if info:
+            span.set_attribute("co.tool.source", info.source.value)
+            span.set_attribute("co.tool.requires_approval", info.approval)
         logger.debug("tool_executed tool_name=%s", call.tool_name)
         return result
 
@@ -276,13 +279,11 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         tool_def: ToolDefinition,
         args: ValidatedToolArgs,
     ) -> ValidatedToolArgs:
-        span = otel_trace.get_current_span()
-        if span.is_recording():
-            try:
-                args_chars = len(json.dumps(args, ensure_ascii=False, default=str))
-            except (TypeError, ValueError):
-                args_chars = 0
-            span.set_attribute("co.tool.args_chars", args_chars)
+        try:
+            args_chars = len(json.dumps(args, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            args_chars = 0
+        current_span().set_attribute("co.tool.args_chars", args_chars)
         if call.tool_name in PATH_NORMALIZATION_TOOLS and "path" in args:
             workspace_dir = ctx.deps.workspace_dir
             args["path"] = str((workspace_dir / args["path"]).resolve())

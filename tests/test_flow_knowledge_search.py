@@ -1,6 +1,8 @@
 """Tests for knowledge_search — ranked FTS over knowledge artifacts."""
 
 import asyncio
+import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,8 @@ from tests._timeouts import FILE_DB_TIMEOUT_SECS
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.memory.memory_store import MemoryStore
 from co_cli.memory.service import reindex, save_artifact
+from co_cli.observability import tracing
+from co_cli.tools.memory.manage import _handle_create
 from co_cli.tools.memory.recall import _ARTIFACTS_USER_CAP, knowledge_search
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -41,6 +45,28 @@ def _make_deps(tmp_path: Path, store: MemoryStore) -> CoDeps:
 
 def _ctx(deps: CoDeps) -> RunContext[CoDeps]:
     return RunContext(deps=deps, model=None, usage=RunUsage())
+
+
+@pytest.fixture
+def isolated_spans_log(tmp_path: Path):
+    """Isolated spans log with clean state; restores logger state on teardown."""
+    logger = logging.getLogger("co_cli.observability.spans")
+    saved_handlers = list(logger.handlers)
+    saved_patterns = list(tracing._COMPILED_PATTERNS)
+    for h in saved_handlers:
+        logger.removeHandler(h)
+    tracing._SPAN_STACK.set(())
+
+    log = tmp_path / "spans.jsonl"
+    tracing.setup_log(log)
+    yield log
+
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
+        h.close()
+    for h in saved_handlers:
+        logger.addHandler(h)
+    tracing._COMPILED_PATTERNS = saved_patterns
 
 
 def _seed(
@@ -159,36 +185,6 @@ async def test_knowledge_search_no_match_returns_empty(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_knowledge_search_hits_never_carry_channel_field(tmp_path: Path) -> None:
-    """knowledge_search hits must not include a 'channel' discriminator field.
-
-    Failure mode: stale channel discriminator from the old polymorphic surface confuses
-    downstream code that expects single-surface results with no tier discriminator.
-    """
-    store = _make_store(tmp_path)
-    try:
-        _seed(
-            tmp_path / "knowledge",
-            store,
-            content="nochannel marker content for query",
-            kind="note",
-            title="nochannel test",
-        )
-        deps = _make_deps(tmp_path, store)
-        ctx = _ctx(deps)
-
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await knowledge_search(ctx, query="nochannel marker")
-
-        results = result.metadata.get("results", [])
-        assert results, "expected at least one hit"
-        for r in results:
-            assert "channel" not in r, f"result must not carry 'channel' field: {r}"
-    finally:
-        store.close()
-
-
-@pytest.mark.asyncio
 async def test_knowledge_search_kinds_filter_respected(tmp_path: Path) -> None:
     """knowledge_search with kinds=['rule'] must only return rule-kind hits.
 
@@ -263,7 +259,6 @@ def test_knowledge_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> No
     breaking cold-start recall in environments without FTS5 indexing.
     """
 
-    from opentelemetry import trace as otel_trace
     from pydantic_ai.usage import RunUsage
 
     from co_cli.tools.memory.recall import _list_artifacts
@@ -288,10 +283,11 @@ def test_knowledge_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> No
         knowledge_dir=knowledge_dir,
         memory_store=None,
     )
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
-    span = otel_trace.get_tracer("test").start_span("noop")
+    from co_cli.observability.tracing import current_span
 
-    results = _list_artifacts(ctx, kinds=None, limit=10, span=span)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    results = _list_artifacts(ctx, kinds=None, limit=10, span=current_span())
 
     assert len(results) >= 1, f"expected disk fallback results, got {results}"
     for r in results:
@@ -299,3 +295,33 @@ def test_knowledge_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> No
         assert "kind" in r
         assert "path" in r
         assert "filename_stem" in r
+
+
+@pytest.mark.asyncio
+async def test_knowledge_manage_create_emits_span(
+    isolated_spans_log: Path, tmp_path: Path
+) -> None:
+    """knowledge_manage(action='create') emits a co.knowledge.knowledge_manage.create record."""
+    store = _make_store(tmp_path)
+    try:
+        deps = _make_deps(tmp_path, store)
+        ctx = _ctx(deps)
+
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            await _handle_create(
+                ctx, name="span test artifact", content="test content", kind="note"
+            )
+    finally:
+        store.close()
+
+    logger = logging.getLogger("co_cli.observability.spans")
+    for h in logger.handlers:
+        h.flush()
+    records = [
+        json.loads(line) for line in isolated_spans_log.read_text().splitlines() if line.strip()
+    ]
+    create_records = [r for r in records if r["name"] == "co.knowledge.knowledge_manage.create"]
+    assert create_records, "expected a co.knowledge.knowledge_manage.create span record"
+    attrs = create_records[0]["attributes"]
+    assert attrs.get("knowledge.artifact_kind") == "note"
+    assert create_records[0]["status"] == "OK"

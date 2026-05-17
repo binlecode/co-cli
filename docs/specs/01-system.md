@@ -35,7 +35,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 │                                                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐ │
 │  │  Knowledge   │  │  Sessions    │  │     Observability     │ │
-│  │  artifacts   │  │  JSONL       │  │     OTel → SQLite     │ │
+│  │  artifacts   │  │  JSONL       │  │    Structured JSONL   │ │
 │  └──────────────┘  └──────────────┘  └───────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
           │                    │                    │
@@ -57,7 +57,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Skills | [skills.md](skills.md) | Skill manifest, view/manage surface, dispatch |
 | Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
 | Config | [config.md](config.md) | Settings model, env vars, load pipeline |
-| Observability | [observability.md](observability.md) | OTel spans, JSONL logs, trace viewer |
+| Observability | [observability.md](observability.md) | Structured JSON-line spans log, `@trace` decorator, `co tail` / `co trace` viewers |
 | Self-planning | [self-planning.md](self-planning.md) | `todo_write` / `todo_read` plan state, compaction snapshot, rehydration on `/resume` |
 
 ### Package Dependency Direction (one-way rule)
@@ -204,7 +204,7 @@ CoDeps
 │   ├── resource_locks    ResourceLockStore — shared across forks
 │   └── file_tracker      FileReadTracker — shared across forks
 ├── registries
-│   ├── tool_index        dict[name, ToolInfo] — approval + OTel; forwarded to forks
+│   ├── tool_index        dict[name, ToolInfo] — approval + span attribute lookup; forwarded to forks
 │   ├── toolset           AbstractToolset[CoDeps] — orchestrator routing surface; excluded from forks
 │   └── skill_index       dict[name, SkillInfo] — slash-command dispatch; forwarded to forks
 ├── mutable state

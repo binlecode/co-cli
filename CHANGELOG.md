@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.8.206]
+
+### Retire OTel — structured-log tracing + decorator-based spans
+
+- **OTel removed** — `opentelemetry-sdk` dropped as direct dependency; `telemetry.py` and `viewer.py` deleted; `Agent.instrument_all()` removed
+- **`co_cli/observability/tracing.py`** — new: `@trace` decorator (sync + async), `ContextVar`-based span stack, `RotatingFileHandler` JSON spans log at `~/.co-cli/logs/co-cli-spans.jsonl`, recursive redaction of nested JSON attributes
+- **`co_cli/observability/capability.py`** — new: `ObservabilityCapability` wired alongside `CoToolLifecycle`; all 9 pydantic-ai lifecycle hooks with correct return types; capability ordering invariant documented
+- **29 OTel touchpoints migrated** — 24 manual span sites converted to `@trace` decorators or events; 5 `get_current_span()` sites swapped to `current_span()`
+- **`co tail`** — refactored to read JSON spans log; rotation-safe inode tracking; `--detail` reads new `co.agent.*`/`co.model.*`/`co.tool.*` attribute vocabulary; no `--tree`
+- **`co trace <trace_id>`** — new snapshot tree command; reads live log + rotated backups; renders indented tree sorted by `start_ts`
+- **`co traces`** — deleted; `co trace` replaces it
+- **Test suite** — harness rewired; OTel-coupled tests updated; 4 new test files covering tracing, capability, tail, and trace command
+
 ## [0.8.204]
 
 ### Agent spec + inclusive bundle

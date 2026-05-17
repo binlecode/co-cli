@@ -34,6 +34,7 @@ Helpers (from sibling modules): ``make_eval_deps``, ``ensure_ollama_warm``,
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import time
 from pathlib import Path
@@ -64,7 +65,7 @@ from co_cli.context._compaction_markers import (
     SUMMARY_MARKER_PREFIX,
 )
 from co_cli.context.orchestrate import run_turn
-from co_cli.memory.transcript import load_transcript
+from co_cli.memory.transcript import append_messages, load_transcript
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-session-continuity.md"
 
@@ -356,6 +357,11 @@ async def case_w2_d_resume_provides_continuity(
             token_usage[k] = token_usage.get(k, 0) + v
         history = list(seed_result.messages)
         prior_session_path = deps.session.session_path
+        # run_turn does not itself persist — that's the chat-loop's job
+        # (co_cli/main.py:_finalize_turn → persist_session_history). The eval
+        # mimics that step so load_transcript() below can read the seed turn
+        # back from disk after /new rotates.
+        append_messages(prior_session_path, list(seed_result.messages))
     except Exception as exc:
         passed = False
         reason = f"seed turn failed: {type(exc).__name__}: {exc}"
@@ -677,6 +683,27 @@ async def case_w2_f_compact_idempotent(
 # ---------------------------------------------------------------------------
 
 
+def _force_blocking_stdio() -> None:
+    """Force stdout/stderr to blocking mode.
+
+    W2.E drives ~10 sequential turns; rich's streaming renderer floods the
+    pipe buffer when piped through ``tee``. macOS sets piped fds non-blocking
+    by default, so a fast burst can raise ``BlockingIOError(EAGAIN)`` deep
+    inside rich's writer. Forcing blocking mode here makes the pipeline
+    backpressure naturally — the eval waits for tee to drain instead of
+    crashing the inflation loop.
+    """
+    import fcntl
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            fd = stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            continue
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+
+
 async def main() -> int:
     """Run W2 cases against the real ``~/.co-cli/`` workspace.
 
@@ -684,6 +711,7 @@ async def main() -> int:
     ``CoDeps`` + agent + frontend via :func:`make_eval_deps`, then runs each
     sub-case in order. Sub-case failures do not abort the run.
     """
+    _force_blocking_stdio()
     await ensure_ollama_warm()
 
     deps, agent, frontend, stack = await make_eval_deps()

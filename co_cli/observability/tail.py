@@ -1,72 +1,111 @@
-"""Real-time span tail viewer — polls OTel SQLite DB and prints spans."""
+"""Live tail viewer for the structured-log spans file.
+
+Polls ``~/.co-cli/logs/co-cli-spans.jsonl`` and renders one summary line per
+record. Detects rotation via inode change. Snapshot tree view is served by
+``co trace <trace_id>`` — this command is append-only / live-follow only.
+"""
 
 import json
-import sqlite3
 import time
-from datetime import UTC, datetime
+from datetime import datetime
+from pathlib import Path
 
 from rich.console import Console
 from rich.text import Text
 
-from co_cli.config.core import LOGS_DB
-from co_cli.observability.viewer import extract_span_attrs, format_duration, get_span_type
+from co_cli.config.core import LOGS_DIR
+
+_SPANS_LOG = LOGS_DIR / "co-cli-spans.jsonl"
 
 TYPE_STYLES = {
     "agent": "cyan",
     "model": "magenta",
     "tool": "yellow",
+    "co": "white",
 }
 
-# Wide enough for the longest span names (e.g. "chat qwen3:30b-a3b-thinking-2507-q8_0-agentic")
 SPAN_NAME_WIDTH = 48
 
-DB_PATH = LOGS_DB
+
+def _format_duration(ms: float | None) -> str:
+    if ms is None:
+        return "-"
+    if ms < 1:
+        return f"{ms * 1000:.0f}µs"
+    if ms < 1000:
+        return f"{ms:.0f}ms"
+    return f"{ms / 1000:.2f}s"
 
 
-def _extract_output_messages(attrs: dict) -> list[tuple[str, str]]:
-    """Return (part_type, content) pairs from gen_ai.output.messages."""
-    raw = attrs.get("gen_ai.output.messages", "")
-    if not raw:
-        return []
-    try:
-        messages = json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, TypeError):
-        return []
-    parts: list[tuple[str, str]] = []
-    for msg in messages:
-        for part in msg.get("parts", []):
-            ptype = part.get("type", "")
-            content = part.get("content", "")
-            if ptype in ("text", "thinking") and content:
-                parts.append((ptype, content))
+def _agent_attrs(attrs: dict) -> list[str]:
+    parts: list[str] = []
+    model = attrs.get("co.agent.model")
+    if model:
+        parts.append(f"model={model}")
+    requests_used = attrs.get("co.agent.requests_used")
+    if requests_used is not None:
+        parts.append(f"req={requests_used}")
     return parts
 
 
-def _extract_attrs(span_type: str, attrs: dict) -> str:
-    """Compact single-line attribute summary shown on every span."""
-    return "  ".join(extract_span_attrs(span_type, attrs, args_truncate=80))
+def _model_attrs(attrs: dict) -> list[str]:
+    parts: list[str] = []
+    in_tok = attrs.get("co.model.tokens.input")
+    out_tok = attrs.get("co.model.tokens.output")
+    if in_tok is not None:
+        parts.append(f"in={in_tok}")
+    if out_tok is not None:
+        parts.append(f"out={out_tok}")
+    finish = attrs.get("co.model.finish_reason")
+    if finish:
+        parts.append(f"finish={finish}")
+    return parts
+
+
+def _tool_attrs(attrs: dict, *, args_truncate: int = 80) -> list[str]:
+    parts: list[str] = []
+    tool_name = attrs.get("co.tool.name")
+    if tool_name:
+        parts.append(f"tool={tool_name}")
+    args = attrs.get("co.tool.args")
+    if args:
+        arg_str = args if isinstance(args, str) else json.dumps(args)
+        if len(arg_str) > args_truncate:
+            arg_str = arg_str[:args_truncate] + "…"
+        parts.append(f"args={arg_str}")
+    return parts
+
+
+def _summary_attrs(kind: str, attrs: dict) -> str:
+    if kind == "agent":
+        return "  ".join(_agent_attrs(attrs))
+    if kind == "model":
+        return "  ".join(_model_attrs(attrs))
+    if kind == "tool":
+        return "  ".join(_tool_attrs(attrs))
+    return ""
 
 
 def _vline(content: str, text_style: str = "white") -> Text:
     t = Text()
-    t.append("           \u2502 ", style="dim")
+    t.append("           │ ", style="dim")
     t.append(content, style=text_style)
     return t
 
 
 def _render_agent_detail(attrs: dict) -> list[Text]:
     lines: list[Text] = []
-    final = attrs.get("final_result", "")
+    final = attrs.get("co.agent.final_result")
     if final:
         lines.append(_vline("[final]", text_style="dim"))
-        for tl in final.splitlines():
+        for tl in str(final).splitlines():
             lines.append(_vline(f"  {tl}", text_style="green"))
     return lines
 
 
 def _render_tool_detail(attrs: dict) -> list[Text]:
     lines: list[Text] = []
-    raw_args = attrs.get("gen_ai.tool.call.arguments", "")
+    raw_args = attrs.get("co.tool.args")
     if raw_args:
         arg_str = raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
         try:
@@ -76,7 +115,7 @@ def _render_tool_detail(attrs: dict) -> list[Text]:
         lines.append(_vline("args:", text_style="dim"))
         for tl in arg_str.splitlines():
             lines.append(_vline(f"  {tl}"))
-    result = attrs.get("gen_ai.tool.call.result", "")
+    result = attrs.get("co.tool.result")
     if result:
         result_str = result if isinstance(result, str) else json.dumps(result)
         try:
@@ -89,88 +128,95 @@ def _render_tool_detail(attrs: dict) -> list[Text]:
     return lines
 
 
-def _render_model_input_lines(input_msgs: list) -> list[Text]:
-    """Render system prompt first line + last user message from input messages."""
-    lines: list[Text] = []
-    # System prompt: first line only — identifies which persona/agent is active
-    for msg in input_msgs:
-        if msg.get("role") == "system":
-            for part in msg.get("parts", []):
-                if part.get("type") == "text":
-                    first_line = part.get("content", "").split("\n")[0][:120]
-                    lines.append(_vline(f"[system] {first_line}", text_style="dim"))
-            break
-    # Last user message — what triggered this model call
-    for msg in reversed(input_msgs):
-        if msg.get("role") == "user":
-            lines.append(_vline("[user]", text_style="dim"))
-            for part in msg.get("parts", []):
-                if part.get("type") == "text":
-                    for tl in part.get("content", "").splitlines():
-                        lines.append(_vline(f"  {tl}", text_style="cyan"))
-            break
-    return lines
+def _safe_json_load(value: object) -> object:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return value
+
+
+def _render_model_input(raw_in: object) -> list[Text]:
+    msgs = _safe_json_load(raw_in)
+    if not isinstance(msgs, list):
+        return []
+    for msg in reversed(msgs):
+        if not (isinstance(msg, dict) and msg.get("role") == "request"):
+            continue
+        for part in msg.get("parts", []):
+            if isinstance(part, dict) and part.get("type") == "user":
+                out: list[Text] = [_vline("[user]", text_style="dim")]
+                for tl in str(part.get("content", "")).splitlines():
+                    out.append(_vline(f"  {tl}", text_style="cyan"))
+                return out
+        break
+    return []
+
+
+def _render_model_output_part(part: dict) -> list[Text]:
+    ptype = part.get("type", "")
+    content = str(part.get("content", ""))
+    if ptype == "thinking" and content:
+        out = [_vline("[thinking]", text_style="dim italic")]
+        for tl in content.splitlines():
+            out.append(_vline(f"  {tl}", text_style="dim italic"))
+        return out
+    if ptype == "text" and content:
+        out = [_vline("[response]", text_style="dim")]
+        for tl in content.splitlines():
+            out.append(_vline(f"  {tl}", text_style="white"))
+        return out
+    if ptype == "tool_call":
+        return [_vline(f"[tool_call] {part.get('tool_name', '?')}", text_style="yellow")]
+    return []
 
 
 def _render_model_detail(attrs: dict) -> list[Text]:
-    lines: list[Text] = []
-    input_raw = attrs.get("gen_ai.input.messages", "")
-    if input_raw:
-        try:
-            input_msgs = json.loads(input_raw) if isinstance(input_raw, str) else input_raw
-            lines.extend(_render_model_input_lines(input_msgs))
-        except (json.JSONDecodeError, TypeError):
-            pass
-    for ptype, content in _extract_output_messages(attrs):
-        if ptype == "thinking":
-            lines.append(_vline("[thinking]", text_style="dim italic"))
-            for tl in content.splitlines():
-                lines.append(_vline(f"  {tl}", text_style="dim italic"))
-            lines.append(_vline("", text_style="dim"))
-        else:
-            lines.append(_vline("[response]", text_style="dim"))
-            for tl in content.splitlines():
-                lines.append(_vline(f"  {tl}", text_style="white"))
+    lines = _render_model_input(attrs.get("co.model.input"))
+    output_parts = _safe_json_load(attrs.get("co.model.output"))
+    if isinstance(output_parts, list):
+        for part in output_parts:
+            if isinstance(part, dict):
+                lines.extend(_render_model_output_part(part))
     return lines
 
 
-def _verbose_detail_lines(span_type: str, attrs: dict) -> list[Text]:
-    """Indented detail block appended after the summary line in verbose mode."""
-    if span_type == "agent":
+def _detail_lines(kind: str, attrs: dict) -> list[Text]:
+    if kind == "agent":
         return _render_agent_detail(attrs)
-    if span_type == "tool":
+    if kind == "tool":
         return _render_tool_detail(attrs)
-    if span_type == "model":
+    if kind == "model":
         return _render_model_detail(attrs)
     return []
 
 
-def _format_span_line(row: sqlite3.Row, verbose: bool = False) -> list[Text]:
-    """Format a span row into one summary line plus optional verbose detail lines."""
-    name = row["name"]
-    span_type = get_span_type(name)
-    style = TYPE_STYLES.get(span_type, "dim")
-    status_code = row["status_code"] or "UNSET"
-    duration_ms = row["duration_ms"]
+def _format_line(record: dict, detail: bool) -> list[Text]:
+    name = record.get("name", "?")
+    kind = record.get("kind", "co")
+    style = TYPE_STYLES.get(kind, "dim")
+    status = record.get("status", "OK")
+    duration_ms = record.get("duration_ms")
+    attrs = record.get("attributes") or {}
 
-    start_ns = row["start_time"]
-    ts = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=UTC).astimezone()
-    ts_str = ts.strftime("%H:%M:%S")
-
-    attrs: dict = {}
-    if row["attributes"]:
+    ts_str = ""
+    start_ts = record.get("start_ts") or record.get("ts")
+    if start_ts:
         try:
-            attrs = json.loads(row["attributes"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+            dt = datetime.fromisoformat(start_ts.replace("Z", "+00:00"))
+            ts_str = dt.astimezone().strftime("%H:%M:%S")
+        except (ValueError, AttributeError):
+            ts_str = ""
 
-    attr_str = _extract_attrs(span_type, attrs)
-    dur_str = format_duration(duration_ms)
+    attr_str = _summary_attrs(kind, attrs)
+    dur_str = _format_duration(duration_ms)
 
     line = Text()
-    line.append(ts_str, style="dim")
-    line.append("  ")
-    line.append(f"{span_type:<6}", style=style)
+    if ts_str:
+        line.append(ts_str, style="dim")
+        line.append("  ")
+    line.append(f"{kind:<6}", style=style)
     line.append(" ")
     line.append(f"{name:<{SPAN_NAME_WIDTH}}", style=f"bold {style}")
     line.append(" ")
@@ -178,138 +224,169 @@ def _format_span_line(row: sqlite3.Row, verbose: bool = False) -> list[Text]:
         line.append(attr_str, style="dim")
         line.append("  ")
     line.append(dur_str, style="dim")
-    if status_code == "ERROR":
+    if status == "ERROR":
         line.append("  ")
         line.append("ERROR", style="bold red")
 
     lines = [line]
-    if verbose:
-        lines.extend(_verbose_detail_lines(span_type, attrs))
-
+    if detail:
+        lines.extend(_detail_lines(kind, attrs))
     return lines
 
 
-def _trace_separator(trace_id: str, start_ns: int) -> Text:
-    ts = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=UTC).astimezone()
-    ts_str = ts.strftime("%H:%M:%S")
-    short_id = trace_id[:8] if trace_id else "?"
-    label = f" trace:{short_id}  {ts_str} "
-    bar = "\u2500" * 60
-    t = Text()
-    t.append(f"\u250c\u2500\u2500{label}{bar}", style="dim")
-    return t
+def _record_passes_filters(
+    record: dict,
+    *,
+    trace_id: str | None,
+    tools_only: bool,
+    models_only: bool,
+) -> bool:
+    if trace_id and record.get("trace_id") != trace_id:
+        return False
+    kind = record.get("kind", "co")
+    if tools_only and kind != "tool":
+        return False
+    return not (models_only and kind != "model")
 
 
-def _print_spans(
+def _read_records_from(path: Path, start_byte: int = 0) -> tuple[list[dict], int]:
+    """Read records from ``start_byte`` to EOF. Returns (records, new_byte_offset)."""
+    if not path.exists():
+        return [], start_byte
+    records: list[dict] = []
+    with path.open("r", encoding="utf-8") as f:
+        f.seek(start_byte)
+        for raw_line in f:
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                records.append(json.loads(raw_line))
+            except json.JSONDecodeError:
+                continue
+        end_byte = f.tell()
+    return records, end_byte
+
+
+def _tail_last_n_records(path: Path, n: int) -> list[dict]:
+    """Return the last N records by streaming the file (handles arbitrary file sizes)."""
+    if not path.exists():
+        return []
+    from collections import deque
+
+    keep: deque[dict] = deque(maxlen=n)
+    with path.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                keep.append(json.loads(raw_line))
+            except json.JSONDecodeError:
+                continue
+    return list(keep)
+
+
+def _inode_of(path: Path) -> int | None:
+    try:
+        return path.stat().st_ino
+    except OSError:
+        return None
+
+
+def _print_records(
     console: Console,
-    rows: list[sqlite3.Row],
-    verbose: bool,
-    last_trace_id: str | None = None,
+    records: list[dict],
+    detail: bool,
+    last_trace_id: str | None,
 ) -> str | None:
-    """Print rows with trace separators; return the last trace_id seen."""
-    for row in rows:
-        tid = row["trace_id"]
-        if tid != last_trace_id:
-            console.print(_trace_separator(tid, row["start_time"]))
+    for rec in records:
+        tid = rec.get("trace_id")
+        if tid and tid != last_trace_id:
+            console.print(_trace_separator(tid, rec.get("start_ts") or rec.get("ts", "")))
             last_trace_id = tid
-        for line in _format_span_line(row, verbose=verbose):
+        for line in _format_line(rec, detail=detail):
             console.print(line)
     return last_trace_id
 
 
-def _query_recent(
-    conn: sqlite3.Connection,
-    limit: int,
-    trace_id: str | None,
-    span_filter: str | None,
-) -> list[sqlite3.Row]:
-    where_clauses = []
-    params: list = []
-    if trace_id:
-        where_clauses.append("trace_id = ?")
-        params.append(trace_id)
-    if span_filter == "tools":
-        where_clauses.append("name LIKE '%tool%'")
-    elif span_filter == "models":
-        where_clauses.append("(name LIKE '%model%' OR name LIKE '%chat%')")
-    where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-    rows = conn.execute(
-        f"SELECT * FROM spans {where} ORDER BY start_time DESC LIMIT ?",
-        [*params, limit],
-    ).fetchall()
-    return list(reversed(rows))
-
-
-def _query_new(
-    conn: sqlite3.Connection,
-    high_water: int,
-    trace_id: str | None,
-    span_filter: str | None,
-) -> list[sqlite3.Row]:
-    where_clauses = ["start_time > ?"]
-    params: list = [high_water]
-    if trace_id:
-        where_clauses.append("trace_id = ?")
-        params.append(trace_id)
-    if span_filter == "tools":
-        where_clauses.append("name LIKE '%tool%'")
-    elif span_filter == "models":
-        where_clauses.append("(name LIKE '%model%' OR name LIKE '%chat%')")
-    where = f"WHERE {' AND '.join(where_clauses)}"
-    return conn.execute(
-        f"SELECT * FROM spans {where} ORDER BY start_time ASC",
-        params,
-    ).fetchall()
+def _trace_separator(trace_id: str, start_ts: str) -> Text:
+    ts_str = ""
+    if start_ts:
+        try:
+            dt = datetime.fromisoformat(start_ts.replace("Z", "+00:00"))
+            ts_str = dt.astimezone().strftime("%H:%M:%S")
+        except (ValueError, AttributeError):
+            ts_str = ""
+    short_id = trace_id[:10] if trace_id else "?"
+    label = f" trace:{short_id}  {ts_str} "
+    bar = "─" * 60
+    t = Text()
+    t.append(f"┌──{label}{bar}", style="dim")
+    return t
 
 
 def run_tail(
+    *,
+    log_path: Path | None = None,
     trace_id: str | None = None,
     tools_only: bool = False,
     models_only: bool = False,
-    poll_interval: float = 1.0,
+    poll_interval: float = 0.1,
     no_follow: bool = False,
     last: int = 20,
-    verbose: bool = False,
+    detail: bool = False,
 ) -> None:
-    """Main tail loop — prints recent spans then polls for new ones."""
+    """Main tail loop — print last N records, then follow new records via append + rotation."""
     console = Console()
+    path = log_path or _SPANS_LOG
 
-    if not DB_PATH.exists():
-        console.print("[yellow]No database found. Run 'co chat' first.[/yellow]")
+    if not path.exists():
+        console.print(f"[yellow]No spans log at {path}. Run 'co chat' first.[/yellow]")
         return
 
-    span_filter: str | None = None
-    if tools_only:
-        span_filter = "tools"
-    elif models_only:
-        span_filter = "models"
+    initial = _tail_last_n_records(path, last)
+    initial = [
+        r
+        for r in initial
+        if _record_passes_filters(
+            r, trace_id=trace_id, tools_only=tools_only, models_only=models_only
+        )
+    ]
 
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-
-    recent = _query_recent(conn, last, trace_id, span_filter)
-    high_water = 0
     last_trace_id: str | None = None
-
-    if recent:
-        last_trace_id = _print_spans(console, recent, verbose)
-        high_water = max(row["start_time"] for row in recent)
+    if initial:
+        last_trace_id = _print_records(console, initial, detail, last_trace_id)
     else:
         console.print("[dim]No spans found.[/dim]")
 
     if no_follow:
-        conn.close()
         return
 
     console.print("[dim]Following new spans... (Ctrl+C to stop)[/dim]")
+    offset = path.stat().st_size if path.exists() else 0
+    current_inode = _inode_of(path)
+
     try:
         while True:
             time.sleep(poll_interval)
-            new_rows = _query_new(conn, high_water, trace_id, span_filter)
-            if new_rows:
-                last_trace_id = _print_spans(console, new_rows, verbose, last_trace_id)
-                high_water = max(row["start_time"] for row in new_rows)
+            new_inode = _inode_of(path)
+            if new_inode is not None and new_inode != current_inode:
+                offset = 0
+                current_inode = new_inode
+            records, offset = _read_records_from(path, offset)
+            if not records:
+                continue
+            records = [
+                r
+                for r in records
+                if _record_passes_filters(
+                    r, trace_id=trace_id, tools_only=tools_only, models_only=models_only
+                )
+            ]
+            last_trace_id = _print_records(console, records, detail, last_trace_id)
     except KeyboardInterrupt:
         console.print("\n[dim]Stopped.[/dim]")
-    finally:
-        conn.close()
+
+
+__all__ = ["run_tail"]

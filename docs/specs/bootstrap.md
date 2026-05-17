@@ -25,8 +25,8 @@ Canonical startup flow for `co-cli`, from settings resolution to the point where
 co_cli.main  (module import)
 │
 ├─ settings resolved via config/display imports
-├─ setup_file_logging(...settings.observability...)
-├─ SQLiteSpanExporter() → TracerProvider → Agent.instrument_all()
+├─ setup_file_logging(...settings.observability...)        # co-cli.jsonl
+├─ setup_spans_log(LOGS_DIR / "co-cli-spans.jsonl", ...)   # co-cli-spans.jsonl
 │
 co_cli.main.chat() → asyncio.run(_chat_loop())
 │

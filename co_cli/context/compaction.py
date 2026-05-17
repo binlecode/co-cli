@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 
-from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
@@ -56,8 +55,7 @@ from co_cli.context.summarization import (
     summarize_messages,
 )
 from co_cli.deps import CoDeps
-
-_TRACER = otel_trace.get_tracer("co-cli.compaction")
+from co_cli.observability.tracing import current_span, trace
 
 __all__ = [
     "STATIC_MARKER_PREFIX",
@@ -299,7 +297,6 @@ def _record_proactive_outcome(
     summary_text: str | None,
     *,
     token_count: int,
-    span: otel_trace.Span,
 ) -> None:
     """Apply proactive-specific post-compaction policy.
 
@@ -331,6 +328,7 @@ def _record_proactive_outcome(
         len(result),
     )
 
+    span = current_span()
     span.set_attribute("compaction.tokens_after", tokens_after)
     span.set_attribute("compaction.savings_pct", round(savings * 100, 1))
     span.set_attribute("compaction.msgs_after", len(result))
@@ -411,6 +409,7 @@ def _resolve_proactive_focus(
     return None
 
 
+@trace("compaction.proactive_check")
 async def proactive_window_processor(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -497,87 +496,85 @@ async def proactive_window_processor(
             tool_calls_in_history,
         )
 
-        with _TRACER.start_as_current_span("compaction.proactive_check") as span:
-            span.set_attribute("compaction.msgs", len(messages))
-            span.set_attribute("compaction.local_tokens", tokens_before_local)
-            span.set_attribute("compaction.reported_tokens", reported)
-            span.set_attribute("compaction.token_count", token_count)
-            span.set_attribute("compaction.threshold", token_threshold)
-            span.set_attribute("compaction.budget", budget)
-            span.set_attribute("compaction.guard_active", guard_active)
-            span.set_attribute("compaction.guard_cleared", guard_cleared)
-            span.set_attribute(
-                "compaction.fresh_responses_after_compact", fresh_responses_after_compact
-            )
-            span.set_attribute("compaction.tool_calls_in_history", tool_calls_in_history)
-            span.set_attribute(
-                "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn
-            )
+        span = current_span()
+        span.set_attribute("compaction.msgs", len(messages))
+        span.set_attribute("compaction.local_tokens", tokens_before_local)
+        span.set_attribute("compaction.reported_tokens", reported)
+        span.set_attribute("compaction.token_count", token_count)
+        span.set_attribute("compaction.threshold", token_threshold)
+        span.set_attribute("compaction.budget", budget)
+        span.set_attribute("compaction.guard_active", guard_active)
+        span.set_attribute("compaction.guard_cleared", guard_cleared)
+        span.set_attribute(
+            "compaction.fresh_responses_after_compact", fresh_responses_after_compact
+        )
+        span.set_attribute("compaction.tool_calls_in_history", tool_calls_in_history)
+        span.set_attribute(
+            "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn
+        )
 
-            from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+        from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
 
-            span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
-            span.set_attribute(
-                "compaction.request_tokens_estimate",
-                ctx.deps.runtime.current_request_tokens_estimate or -1,
-            )
+        span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
+        span.set_attribute(
+            "compaction.request_tokens_estimate",
+            ctx.deps.runtime.current_request_tokens_estimate or -1,
+        )
 
-            if token_count <= token_threshold:
-                span.set_attribute("compaction.fired", False)
-                span.set_attribute("compaction.skip_reason", "below_threshold")
-                return messages
+        if token_count <= token_threshold:
+            span.set_attribute("compaction.fired", False)
+            span.set_attribute("compaction.skip_reason", "below_threshold")
+            return messages
 
-            log.debug(
-                "Compaction trigger: tokens=%d threshold=%d budget=%d msgs=%d",
-                token_count,
-                token_threshold,
+        log.debug(
+            "Compaction trigger: tokens=%d threshold=%d budget=%d msgs=%d",
+            token_count,
+            token_threshold,
+            budget,
+            len(messages),
+        )
+
+        if (
+            ctx.deps.runtime.consecutive_low_yield_proactive_compactions
+            >= cfg.proactive_thrash_window
+        ):
+            log.info("Compaction: anti-thrashing gate active, skipping")
+            span.set_attribute("compaction.fired", False)
+            span.set_attribute("compaction.skip_reason", "anti_thrash_gate")
+            return messages
+
+        bounds = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
+        if bounds is None:
+            log.warning(
+                "Compaction: boundary planning returned None. "
+                "budget=%d tail_fraction=%.2f — no compaction possible.",
                 budget,
-                len(messages),
+                cfg.tail_fraction,
             )
+            span.set_attribute("compaction.fired", False)
+            span.set_attribute("compaction.skip_reason", "no_boundary")
+            return messages
 
-            if (
-                ctx.deps.runtime.consecutive_low_yield_proactive_compactions
-                >= cfg.proactive_thrash_window
-            ):
-                log.info("Compaction: anti-thrashing gate active, skipping")
-                span.set_attribute("compaction.fired", False)
-                span.set_attribute("compaction.skip_reason", "anti_thrash_gate")
-                return messages
+        head_end, tail_start, dropped_count = bounds
+        log.debug(
+            "Compaction boundaries: msgs=%d head=0..%d dropped=%d..%d(%d) tail=%d..%d(%d)",
+            len(messages),
+            head_end,
+            head_end,
+            tail_start,
+            dropped_count,
+            tail_start,
+            len(messages),
+            len(messages) - tail_start,
+        )
 
-            bounds = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
-            if bounds is None:
-                log.warning(
-                    "Compaction: boundary planning returned None. "
-                    "budget=%d tail_fraction=%.2f — no compaction possible.",
-                    budget,
-                    cfg.tail_fraction,
-                )
-                span.set_attribute("compaction.fired", False)
-                span.set_attribute("compaction.skip_reason", "no_boundary")
-                return messages
+        focus = _resolve_proactive_focus(ctx, messages)
+        result, summary_text = await compact_messages(ctx, messages, bounds, focus=focus)
+        if summary_text is not None:
+            log.info("Sliding window: summarised %d messages inline", dropped_count)
 
-            head_end, tail_start, dropped_count = bounds
-            log.debug(
-                "Compaction boundaries: msgs=%d head=0..%d dropped=%d..%d(%d) tail=%d..%d(%d)",
-                len(messages),
-                head_end,
-                head_end,
-                tail_start,
-                dropped_count,
-                tail_start,
-                len(messages),
-                len(messages) - tail_start,
-            )
-
-            focus = _resolve_proactive_focus(ctx, messages)
-            result, summary_text = await compact_messages(ctx, messages, bounds, focus=focus)
-            if summary_text is not None:
-                log.info("Sliding window: summarised %d messages inline", dropped_count)
-
-            _record_proactive_outcome(
-                ctx, messages, result, summary_text, token_count=token_count, span=span
-            )
-            return result
+        _record_proactive_outcome(ctx, messages, result, summary_text, token_count=token_count)
+        return result
     except Exception:
         log.warning("Mid-turn compaction failed — skipping", exc_info=True)
         return messages

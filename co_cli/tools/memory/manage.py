@@ -3,18 +3,16 @@
 import logging
 from typing import Literal
 
-from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
 from co_cli.memory.artifact import ArtifactKindEnum
 from co_cli.memory.service import mutate_artifact, reindex, save_artifact
+from co_cli.observability.tracing import current_span, trace
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.resource_lock import ResourceBusyError
 from co_cli.tools.tool_io import tool_error, tool_output
-
-_TRACER = otel_trace.get_tracer("co.knowledge")
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +85,7 @@ async def knowledge_manage(
     )
 
 
+@trace("co.knowledge.knowledge_manage.create")
 async def _handle_create(
     ctx: RunContext[CoDeps],
     *,
@@ -108,30 +107,30 @@ async def _handle_create(
 
     knowledge_dir = ctx.deps.knowledge_dir
 
-    with _TRACER.start_as_current_span("co.knowledge.knowledge_manage.create") as span:
-        span.set_attribute("knowledge.artifact_kind", kind)
+    span = current_span()
+    span.set_attribute("knowledge.artifact_kind", kind)
 
-        result = save_artifact(
-            knowledge_dir,
-            content=content,
-            artifact_kind=kind,
-            title=name,
-            consolidation_enabled=ctx.deps.config.knowledge.consolidation_enabled,
-            consolidation_similarity_threshold=ctx.deps.config.knowledge.consolidation_similarity_threshold,
-            memory_store=ctx.deps.memory_store,
+    result = save_artifact(
+        knowledge_dir,
+        content=content,
+        artifact_kind=kind,
+        title=name,
+        consolidation_enabled=ctx.deps.config.knowledge.consolidation_enabled,
+        consolidation_similarity_threshold=ctx.deps.config.knowledge.consolidation_similarity_threshold,
+        memory_store=ctx.deps.memory_store,
+    )
+    span.set_attribute("knowledge.action", result.action)
+    if result.action != "skipped" and ctx.deps.memory_store is not None:
+        reindex(
+            ctx.deps.memory_store,
+            result.path,
+            result.content,
+            result.markdown_content,
+            result.frontmatter_dict,
+            result.filename_stem,
+            chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
+            chunk_overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
         )
-        span.set_attribute("knowledge.action", result.action)
-        if result.action != "skipped" and ctx.deps.memory_store is not None:
-            reindex(
-                ctx.deps.memory_store,
-                result.path,
-                result.content,
-                result.markdown_content,
-                result.frontmatter_dict,
-                result.filename_stem,
-                chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
-                chunk_overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
-            )
 
     if result.action == "skipped":
         return tool_output(
@@ -157,6 +156,7 @@ async def _handle_create(
     )
 
 
+@trace("co.knowledge.knowledge_manage.mutate")
 async def _handle_mutate(
     ctx: RunContext[CoDeps],
     *,
@@ -169,31 +169,30 @@ async def _handle_mutate(
         return tool_error(f"content is required for action='{op}'", ctx=ctx)
 
     knowledge_dir = ctx.deps.knowledge_dir
+    span = current_span()
+    span.set_attribute("knowledge.filename_stem", filename_stem)
+    span.set_attribute("knowledge.action", op)
 
     try:
         async with ctx.deps.resource_locks.try_acquire(filename_stem):
-            with _TRACER.start_as_current_span("co.knowledge.knowledge_manage.mutate") as span:
-                span.set_attribute("knowledge.filename_stem", filename_stem)
-                span.set_attribute("knowledge.action", op)
-
-                result = mutate_artifact(
-                    knowledge_dir,
-                    filename_stem=filename_stem,
-                    action=op,
-                    content=content,
-                    target=target,
+            result = mutate_artifact(
+                knowledge_dir,
+                filename_stem=filename_stem,
+                action=op,
+                content=content,
+                target=target,
+            )
+            if ctx.deps.memory_store is not None:
+                reindex(
+                    ctx.deps.memory_store,
+                    result.path,
+                    result.updated_body,
+                    result.markdown_content,
+                    result.frontmatter,
+                    result.filename_stem,
+                    chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
+                    chunk_overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
                 )
-                if ctx.deps.memory_store is not None:
-                    reindex(
-                        ctx.deps.memory_store,
-                        result.path,
-                        result.updated_body,
-                        result.markdown_content,
-                        result.frontmatter,
-                        result.filename_stem,
-                        chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
-                        chunk_overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
-                    )
 
             return tool_output(
                 f"✓ {result.action.capitalize()} artifact '{filename_stem}'.",
@@ -212,6 +211,7 @@ async def _handle_mutate(
         return tool_error(str(exc), ctx=ctx)
 
 
+@trace("co.knowledge.knowledge_manage.delete")
 async def _handle_delete(
     ctx: RunContext[CoDeps],
     *,
@@ -226,13 +226,11 @@ async def _handle_delete(
             ctx=ctx,
         )
 
-    with _TRACER.start_as_current_span("co.knowledge.knowledge_manage.delete") as span:
-        span.set_attribute("knowledge.filename_stem", filename_stem)
+    current_span().set_attribute("knowledge.filename_stem", filename_stem)
+    artifact_path.unlink()
 
-        artifact_path.unlink()
-
-        if ctx.deps.memory_store is not None:
-            ctx.deps.memory_store.remove("knowledge", str(artifact_path))
+    if ctx.deps.memory_store is not None:
+        ctx.deps.memory_store.remove("knowledge", str(artifact_path))
 
     return tool_output(
         f"✓ Deleted artifact '{filename_stem}'.",

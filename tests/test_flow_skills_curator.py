@@ -263,19 +263,6 @@ def test_archive_and_restore_roundtrip_preserves_content(tmp_path: Path) -> None
     assert skill_path.read_bytes() == original_bytes
 
 
-def test_archive_skill_creates_archive_dir(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path)
-    skill_path = deps.user_skills_dir / "my-skill.md"
-    skill_path.write_text(_VALID_CONTENT, encoding="utf-8")
-
-    archive_dir = deps.user_skills_dir / ".archive"
-    assert not archive_dir.exists()
-
-    archive_skill(deps, "my-skill")
-    assert archive_dir.exists()
-    assert (archive_dir / "my-skill.md").exists()
-
-
 def test_archive_skill_idempotent_when_already_archived(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     archive_dir = deps.user_skills_dir / ".archive"

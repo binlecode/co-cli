@@ -10,10 +10,21 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 from tests._settings import SETTINGS_NO_MCP
+
+
+@pytest.fixture(autouse=True)
+def _restore_co_home() -> Generator[None, None, None]:
+    original = os.environ.get("CO_HOME")
+    yield
+    if original is None:
+        os.environ.pop("CO_HOME", None)
+    else:
+        os.environ["CO_HOME"] = original
 
 
 def _make_deps(

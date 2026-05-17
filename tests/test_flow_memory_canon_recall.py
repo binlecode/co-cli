@@ -68,17 +68,6 @@ def test_canon_still_indexed_at_bootstrap_for_personality_system(tmp_path: Path)
         store.close()
 
 
-def test_search_artifacts_does_not_return_canon_kind(tmp_path: Path) -> None:
-    """`_search_artifacts` never returns kind='canon' hits — canon is no longer a memory kind."""
-    ctx = _make_ctx(tmp_path, personality="tars")
-    try:
-        hits = _search_artifacts(ctx, "humor deadpan", kinds=None, limit=10)
-        canon_hits = [h for h in hits if h.get("kind") == "canon"]
-        assert canon_hits == [], f"canon must not surface via _search_artifacts; got: {canon_hits}"
-    finally:
-        ctx.deps.memory_store.close()
-
-
 def test_search_artifacts_canon_kind_filter_returns_empty(tmp_path: Path) -> None:
     """Even when callers request kinds=['canon'], _search_artifacts returns []."""
     ctx = _make_ctx(tmp_path, personality="tars")

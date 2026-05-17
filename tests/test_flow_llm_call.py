@@ -26,7 +26,7 @@ async def test_llm_call_returns_non_empty_text():
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await llm_call(_DEPS, "Reply with the single word: PONG")
     assert isinstance(result, str)
-    assert result.strip()
+    assert "PONG" in result.upper()
 
 
 @pytest.mark.asyncio
@@ -76,4 +76,4 @@ async def test_reasoning_model_settings_drive_real_call():
             model_settings=settings,
         )
     assert isinstance(result, str)
-    assert result.strip()
+    assert "PONG" in result.upper()

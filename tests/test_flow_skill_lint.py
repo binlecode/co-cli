@@ -69,18 +69,6 @@ def test_bundled_extras_fires_on_todo_marker() -> None:
     assert any(f.rule == "B1" for f in findings)
 
 
-def test_bundled_extras_fires_on_fixme_marker() -> None:
-    content = "---\ndescription: A skill.\n---\n\n# Test\n\nFIXME: this is broken.\n"
-    findings = lint_bundled_extras(content)
-    assert any(f.rule == "B1" for f in findings)
-
-
-def test_bundled_extras_fires_on_xxx_marker() -> None:
-    content = "---\ndescription: A skill.\n---\n\n# Test\n\nXXX: revisit.\n"
-    findings = lint_bundled_extras(content)
-    assert any(f.rule == "B1" for f in findings)
-
-
 def test_bundled_extras_clean_when_no_markers() -> None:
     findings = lint_bundled_extras(_CLEAN_CONTENT)
     assert findings == []

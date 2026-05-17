@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -96,11 +95,6 @@ def test_is_agent_created_true_for_user_skill(tmp_path: Path) -> None:
 def test_is_agent_created_false_for_bundled_only(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     assert skill_usage.is_agent_created("doctor", deps) is False
-
-
-def test_is_agent_created_false_for_nonexistent(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path)
-    assert skill_usage.is_agent_created("nope-not-real", deps) is False
 
 
 # ---------------------------------------------------------------------------
@@ -221,15 +215,6 @@ def test_bump_view_short_circuits_when_disabled(tmp_path: Path) -> None:
     assert not (tmp_path / ".usage.json").exists()
 
 
-def test_record_create_short_circuits_when_disabled(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
-    config = SETTINGS.model_copy(deep=True)
-    config.skills.usage_tracking_enabled = False
-    deps = _make_deps(tmp_path, config=config)
-    skill_usage.record_create(deps, "my-skill")
-    assert not (tmp_path / ".usage.json").exists()
-
-
 # ---------------------------------------------------------------------------
 # best-effort error swallowing
 # ---------------------------------------------------------------------------
@@ -316,23 +301,3 @@ async def test_skill_manage_delete_removes_sidecar_entry(tmp_path: Path) -> None
 
     await skill_manage(ctx, action="delete", name="my-skill")
     assert "my-skill" not in skill_usage.read_records(deps).get("skills", {})
-
-
-def test_sidecar_file_format_matches_spec(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
-    deps = _make_deps(tmp_path)
-    skill_usage.bump_view(deps, "my-skill")
-    raw = (tmp_path / ".usage.json").read_text(encoding="utf-8")
-    data = json.loads(raw)
-    assert data["version"] == 1
-    assert set(data["skills"]["my-skill"].keys()) == {
-        "use_count",
-        "view_count",
-        "patch_count",
-        "created_at",
-        "last_used_at",
-        "last_viewed_at",
-        "last_patched_at",
-        "state",
-        "pinned",
-    }

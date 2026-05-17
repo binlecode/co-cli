@@ -10,11 +10,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from opentelemetry import trace as otel_trace
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.observability.tracing import current_span, trace
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.background import (
     BackgroundCleanupError,
@@ -29,6 +29,7 @@ from co_cli.tools.tool_io import tool_error, tool_output
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, is_concurrent_safe=True)
+@trace("background_task_execute")
 async def task_start(
     ctx: RunContext[CoDeps],
     command: str,
@@ -60,25 +61,24 @@ async def task_start(
 
     cwd = working_directory or str(Path.cwd())
 
-    tracer = otel_trace.get_tracer("co-cli")
-    with tracer.start_as_current_span("background_task_execute") as span:
-        span.set_attribute("task.command", command)
-        span.set_attribute("task.description", description)
-        span.set_attribute("task.cwd", cwd)
-        task_id = make_task_id()
-        state = BackgroundTaskState(
-            task_id=task_id,
-            command=command,
-            cwd=cwd,
-            description=description,
-            status="running",
-            started_at=datetime.now(UTC).isoformat(),
-        )
-        ctx.deps.session.background_tasks[task_id] = state
-        try:
-            await spawn_task(state, ctx.deps.session)
-        except Exception as e:
-            raise ModelRetry(f"Failed to start background task: {e}") from e
+    span = current_span()
+    span.set_attribute("task.command", command)
+    span.set_attribute("task.description", description)
+    span.set_attribute("task.cwd", cwd)
+    task_id = make_task_id()
+    state = BackgroundTaskState(
+        task_id=task_id,
+        command=command,
+        cwd=cwd,
+        description=description,
+        status="running",
+        started_at=datetime.now(UTC).isoformat(),
+    )
+    ctx.deps.session.background_tasks[task_id] = state
+    try:
+        await spawn_task(state, ctx.deps.session)
+    except Exception as e:
+        raise ModelRetry(f"Failed to start background task: {e}") from e
 
     display = f"[{task_id}] started — command: {command}"
     return tool_output(display, ctx=ctx, task_id=task_id, status="running")

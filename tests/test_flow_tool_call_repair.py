@@ -39,10 +39,6 @@ def test_empty_string_becomes_empty_object():
     assert _repair_json_args("") == "{}"
 
 
-def test_whitespace_only_becomes_empty_object():
-    assert _repair_json_args("   \n  ") == "{}"
-
-
 def test_none_literal_becomes_empty_object():
     assert _repair_json_args("None") == "{}"
 

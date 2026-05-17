@@ -1,36 +1,59 @@
 """Bootstrap ``tool_budget.resolved`` span emission contract."""
 
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+import json
+import logging
+from pathlib import Path
+
+import pytest
 
 from co_cli.bootstrap.core import _emit_tool_budget_span
+from co_cli.observability import tracing
 from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
 from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
 
-def test_tool_budget_resolved_span_emits_all_attrs():
+@pytest.fixture(autouse=True)
+def _reset_tracing(tmp_path: Path) -> None:
+    logger = logging.getLogger("co_cli.observability.spans")
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    tracing._COMPILED_PATTERNS = []
+    tracing._SESSION_ID.set(None)
+    tracing._TRACE_ID.set(None)
+    tracing._SPAN_STACK.set(())
+
+
+def _read_records(log_path: Path) -> list[dict]:
+    logger = logging.getLogger("co_cli.observability.spans")
+    for handler in logger.handlers:
+        handler.flush()
+    if not log_path.exists():
+        return []
+    return [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+
+
+def test_tool_budget_resolved_span_emits_all_attrs(tmp_path: Path) -> None:
     """_emit_tool_budget_span fires exactly one span with all five budget attributes."""
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("co-cli.tool_budget")
+    log = tmp_path / "spans.jsonl"
+    tracing.setup_log(log)
 
     model_max_ctx = 32768
     spill_ratio = 0.5
     spill_threshold_tokens = int(spill_ratio * model_max_ctx)
+
     _emit_tool_budget_span(
         model_max_ctx=model_max_ctx,
         spill_ratio=spill_ratio,
         spill_threshold_tokens=spill_threshold_tokens,
-        _tracer=tracer,
     )
 
-    spans = exporter.get_finished_spans()
-    assert len(spans) == 1, f"Expected 1 span, got {len(spans)}"
-    span = spans[0]
-    assert span.name == "tool_budget.resolved"
-    attrs = dict(span.attributes)
+    records = _read_records(log)
+    assert len(records) == 1, f"Expected 1 span, got {len(records)}"
+
+    rec = records[0]
+    assert rec["name"] == "tool_budget.resolved"
+    attrs = rec["attributes"]
     assert attrs["budget.context_window_tokens"] == model_max_ctx
     assert attrs["budget.spill_ratio"] == spill_ratio
     assert attrs["budget.tool_call_limit"] == MAX_TOOL_CALLS_PER_MODEL_TURN

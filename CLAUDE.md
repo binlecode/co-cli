@@ -13,8 +13,9 @@ git config core.hooksPath .githooks  # Activate version-controlled git hooks
 
 ```bash
 uv run co chat                   # Interactive REPL
-uv run co traces                 # Nested HTML trace viewer (opens browser)
-uv run co tail                   # Stream agent spans in real time (like tail -f)
+uv run co tail                   # Stream agent spans in real time (tail -f the JSON spans log)
+uv run co tail --detail          # Append per-record detail block (input/output/args/result)
+uv run co trace <trace_id>       # Snapshot tree of one trace from the structured-log spans file
 
 # Quality gates (scripts/quality-gate.sh — single source of truth for all checks)
 scripts/quality-gate.sh lint              # ruff check + format (pre-commit hook)

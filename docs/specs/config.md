@@ -38,7 +38,7 @@ graph TD
 | `WebSettings` | `web.py` | Domain allowlist/blocklist and HTTP retry policy |
 | `ShellSettings` | `shell.py` | Shell timeout limit and auto-approval safe command list |
 | `MemorySettings` | `memory.py` | Memory recall half-life |
-| `ObservabilitySettings` | `observability.py` | Log level, rotation, OTel span redaction patterns |
+| `ObservabilitySettings` | `observability.py` | Log level, app-log + spans-log rotation, span-attribute redaction patterns |
 | `SkillsSettings` | `skills.py` | Skill review automation knobs (enable + per-N-tool-call nudge interval) |
 | `MCPServerSettings` | `mcp.py` | Per-server transport config (stdio or HTTP) |
 
@@ -77,7 +77,6 @@ All user-global paths resolve from `USER_DIR`, which is read once at module impo
 USER_DIR          = CO_HOME env var | ~/.co-cli
 SETTINGS_FILE     = USER_DIR / settings.json
 SEARCH_DB         = USER_DIR / co-cli-search.db
-LOGS_DB           = USER_DIR / co-cli-logs.db
 LOGS_DIR          = USER_DIR / logs
 KNOWLEDGE_DIR     = USER_DIR / knowledge
 SESSIONS_DIR      = USER_DIR / sessions
@@ -233,10 +232,12 @@ Default safe commands: `ls`, `tree`, `find`, `fd`, `cat`, `head`, `tail`, `grep`
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `observability.log_level` | `CO_LOG_LEVEL` | `"INFO"` | Min log level for JSONL file output |
-| `observability.log_max_size_mb` | `CO_LOG_MAX_SIZE_MB` | `5` | Max log file size in MB before rotation |
-| `observability.log_backup_count` | `CO_LOG_BACKUP_COUNT` | `3` | Rotated backup count per log file |
-| `observability.redact_patterns` | — | see defaults | Regex list applied to OTel span values before storage; `[REDACTED]` substitution |
+| `observability.log_level` | `CO_LOG_LEVEL` | `"INFO"` | Min log level for app-log JSONL output (`co-cli.jsonl`) |
+| `observability.log_max_size_mb` | `CO_LOG_MAX_SIZE_MB` | `5` | Max app-log file size in MB before rotation |
+| `observability.log_backup_count` | `CO_LOG_BACKUP_COUNT` | `3` | Rotated app-log backups to keep |
+| `observability.spans_log_max_size_mb` | `CO_SPANS_LOG_MAX_SIZE_MB` | `50` | Max spans-log file size in MB before rotation (defaults higher than app log because span volume is higher) |
+| `observability.spans_log_backup_count` | `CO_SPANS_LOG_BACKUP_COUNT` | `5` | Rotated spans-log backups to keep |
+| `observability.redact_patterns` | — | see defaults | Regex list applied to span attribute string values (including string-encoded JSON) before write; `[REDACTED]` substitution |
 
 Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub tokens, generic `API_KEY:` patterns, AWS `AKIA*` keys, PEM private key headers.
 
@@ -297,8 +298,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `USER_DIR` | `co_cli/config/core.py` | `CO_HOME` env var or `~/.co-cli/` |
 | `SETTINGS_FILE` | `co_cli/config/core.py` | `USER_DIR / settings.json` |
 | `SEARCH_DB` | `co_cli/config/core.py` | `USER_DIR / co-cli-search.db` |
-| `LOGS_DB` | `co_cli/config/core.py` | `USER_DIR / co-cli-logs.db` |
-| `LOGS_DIR` | `co_cli/config/core.py` | `USER_DIR / logs` |
+| `LOGS_DIR` | `co_cli/config/core.py` | `USER_DIR / logs` (holds `co-cli.jsonl` and `co-cli-spans.jsonl`) |
 | `KNOWLEDGE_DIR` | `co_cli/config/core.py` | `USER_DIR / knowledge` |
 | `SESSIONS_DIR` | `co_cli/config/core.py` | `USER_DIR / sessions` |
 | `TOOL_RESULTS_DIR` | `co_cli/config/core.py` | `USER_DIR / tool-results` |

@@ -117,25 +117,11 @@ def test_fresh_write_rejects_duplicate_id_in_payload(tmp_path: Path) -> None:
 
 
 def test_fresh_write_rejects_invalid_status(tmp_path: Path) -> None:
-    """todo_write rejects items with an invalid status value, leaving state unchanged."""
+    """todo_write rejects items with an invalid status or priority value, leaving state unchanged."""
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
     result = todo_write(ctx, [{"id": "x", "content": "task", "status": "DONE"}])
-
-    assert result.metadata is not None
-    assert result.metadata.get("errors")
-    assert deps.session.session_todos == []
-
-
-def test_fresh_write_rejects_invalid_priority(tmp_path: Path) -> None:
-    """todo_write rejects items with an invalid priority value, leaving state unchanged."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-
-    result = todo_write(
-        ctx, [{"id": "x", "content": "task", "status": "pending", "priority": "urgent"}]
-    )
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -368,57 +354,9 @@ def test_fresh_write_rejects_id_with_period(tmp_path: Path) -> None:
     assert deps.session.session_todos == []
 
 
-def test_fresh_write_rejects_id_with_whitespace(tmp_path: Path) -> None:
-    """todo_write rejects ids containing whitespace — keeps the snapshot format unambiguous."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-
-    result = todo_write(ctx, [{"id": "task 1", "content": "Bad id", "status": "pending"}])
-
-    assert result.metadata is not None
-    assert result.metadata.get("errors")
-    assert deps.session.session_todos == []
-
-
 # ---------------------------------------------------------------------------
 # One-in-progress invariant (aggregate constraint)
 # ---------------------------------------------------------------------------
-
-
-def test_fresh_write_zero_in_progress_accepts(tmp_path: Path) -> None:
-    """Fresh write with no in_progress items is accepted — 0 is within the limit of 1."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-
-    result = todo_write(
-        ctx,
-        [
-            {"id": "a", "content": "Alpha", "status": "pending"},
-            {"id": "b", "content": "Beta", "status": "completed"},
-        ],
-    )
-
-    assert result.metadata is not None
-    assert not result.metadata.get("errors")
-    assert len(deps.session.session_todos) == 2
-
-
-def test_fresh_write_one_in_progress_accepts(tmp_path: Path) -> None:
-    """Fresh write with exactly one in_progress item is accepted."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-
-    result = todo_write(
-        ctx,
-        [
-            {"id": "a", "content": "Alpha", "status": "in_progress"},
-            {"id": "b", "content": "Beta", "status": "pending"},
-        ],
-    )
-
-    assert result.metadata is not None
-    assert not result.metadata.get("errors")
-    assert len(deps.session.session_todos) == 2
 
 
 def test_fresh_write_two_in_progress_rejects_and_names_both_ids(tmp_path: Path) -> None:

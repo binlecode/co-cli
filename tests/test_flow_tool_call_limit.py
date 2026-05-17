@@ -1,18 +1,16 @@
-"""Tests for the per-model-turn tool-call brake (L0 cap) — behavior + OTEL span."""
+"""Tests for the per-model-turn tool-call brake (L0 cap) — behavior + recorded events."""
 
 import asyncio
 import json
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic_ai import CallToolsNode, RunContext, UserPromptNode
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
+from co_cli.observability import tracing
 from co_cli.tools.lifecycle import CoToolLifecycle
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
@@ -41,13 +39,21 @@ def _call_tools_node() -> CallToolsNode:
 
 
 @pytest.fixture
-def otel_lifecycle() -> tuple[CoToolLifecycle, InMemorySpanExporter]:
-    """CoToolLifecycle wired to an in-memory OTEL exporter via constructor injection."""
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("co-cli.tool_budget")
-    return CoToolLifecycle(_tracer=tracer), exporter
+def lifecycle_with_span():
+    """Open a parent span before each test so add_event() lands on a real span.
+
+    Returns ``(CoToolLifecycle, span_dict)`` — read ``span_dict["events"]`` to
+    inspect events emitted by the capability hooks. The fixture pops the span
+    on teardown without emitting (raw inspection rather than log read)."""
+    tracing._SPAN_STACK.set(())
+    tracing._TRACE_ID.set(None)
+    span = tracing.push_span("test_parent", kind="agent")
+    try:
+        yield CoToolLifecycle(), span
+    finally:
+        stack = tracing._SPAN_STACK.get()
+        if stack and stack[-1] is span:
+            tracing._SPAN_STACK.set(stack[:-1])
 
 
 # ---------------------------------------------------------------------------
@@ -214,14 +220,21 @@ def test_guidance_contains_interpolated_values():
 
 
 # ---------------------------------------------------------------------------
-# OTEL span — tool_budget.enforce_tool_call_limit
+# tool_budget.enforce_tool_call_limit — event on active capability span
 # ---------------------------------------------------------------------------
 
 
+def _find_event(span: dict, name: str) -> dict | None:
+    for event in span["events"]:
+        if event["name"] == name:
+            return event
+    return None
+
+
 @pytest.mark.asyncio
-async def test_enforce_tool_call_limit_span_on_saturation(otel_lifecycle):
-    """8 calls in one turn: span fires with issued=8, allowed=6, rejected=2, limit_exceeded=True."""
-    lifecycle, exporter = otel_lifecycle
+async def test_enforce_tool_call_limit_event_on_saturation(lifecycle_with_span):
+    """8 calls in one turn: event fires with issued=8, allowed=6, rejected=2, limit_exceeded=True."""
+    lifecycle, parent_span = lifecycle_with_span
     deps = _make_deps()
     ctx = _ctx(deps, run_step=1)
 
@@ -232,11 +245,11 @@ async def test_enforce_tool_call_limit_span_on_saturation(otel_lifecycle):
 
     await lifecycle.after_node_run(ctx, node=_call_tools_node(), result=None)
 
-    spans = {s.name: s for s in exporter.get_finished_spans()}
-    assert "tool_budget.enforce_tool_call_limit" in spans, (
-        f"Expected enforce_tool_call_limit span; got: {list(spans)}"
+    event = _find_event(parent_span, "tool_budget.enforce_tool_call_limit")
+    assert event is not None, (
+        f"Expected enforce_tool_call_limit event; got events: {[e['name'] for e in parent_span['events']]}"
     )
-    attrs = dict(spans["tool_budget.enforce_tool_call_limit"].attributes)
+    attrs = event["attributes"]
     assert attrs["tool_calls.issued"] == 8
     assert attrs["tool_calls.allowed"] == MAX_TOOL_CALLS_PER_MODEL_TURN
     assert attrs["tool_calls.rejected"] == 8 - MAX_TOOL_CALLS_PER_MODEL_TURN
@@ -245,9 +258,9 @@ async def test_enforce_tool_call_limit_span_on_saturation(otel_lifecycle):
 
 
 @pytest.mark.asyncio
-async def test_enforce_tool_call_limit_span_within_cap(otel_lifecycle):
-    """3 calls in one turn: span fires with limit_exceeded=False."""
-    lifecycle, exporter = otel_lifecycle
+async def test_enforce_tool_call_limit_event_within_cap(lifecycle_with_span):
+    """3 calls in one turn: event fires with limit_exceeded=False."""
+    lifecycle, parent_span = lifecycle_with_span
     deps = _make_deps()
     ctx = _ctx(deps, run_step=1)
 
@@ -258,19 +271,17 @@ async def test_enforce_tool_call_limit_span_within_cap(otel_lifecycle):
 
     await lifecycle.after_node_run(ctx, node=_call_tools_node(), result=None)
 
-    spans = {s.name: s for s in exporter.get_finished_spans()}
-    assert "tool_budget.enforce_tool_call_limit" in spans, (
-        "enforce_tool_call_limit span must fire even for under-cap turns"
-    )
-    attrs = dict(spans["tool_budget.enforce_tool_call_limit"].attributes)
+    event = _find_event(parent_span, "tool_budget.enforce_tool_call_limit")
+    assert event is not None, "enforce_tool_call_limit event must fire even for under-cap turns"
+    attrs = event["attributes"]
     assert attrs["tool_calls.issued"] == 3
     assert attrs["tool_calls.limit_exceeded"] is False
 
 
 @pytest.mark.asyncio
-async def test_enforce_tool_call_limit_span_skipped_for_non_call_tools_node(otel_lifecycle):
-    """after_node_run must not emit the span when node is not a CallToolsNode."""
-    lifecycle, exporter = otel_lifecycle
+async def test_enforce_tool_call_limit_event_skipped_for_non_call_tools_node(lifecycle_with_span):
+    """after_node_run must not emit the event when node is not a CallToolsNode."""
+    lifecycle, parent_span = lifecycle_with_span
     deps = _make_deps()
     ctx = _ctx(deps, run_step=1)
 
@@ -282,7 +293,6 @@ async def test_enforce_tool_call_limit_span_skipped_for_non_call_tools_node(otel
     node = UserPromptNode(user_prompt="hi")
     await lifecycle.after_node_run(ctx, node=node, result=None)
 
-    spans = [s.name for s in exporter.get_finished_spans()]
-    assert "tool_budget.enforce_tool_call_limit" not in spans, (
-        f"Span must not fire for non-CallToolsNode; got: {spans}"
+    assert _find_event(parent_span, "tool_budget.enforce_tool_call_limit") is None, (
+        f"Event must not fire for non-CallToolsNode; got events: {[e['name'] for e in parent_span['events']]}"
     )

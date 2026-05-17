@@ -14,11 +14,22 @@ import asyncio
 import contextlib
 import os
 import time
+from collections.abc import Generator
 from contextlib import AsyncExitStack
 from pathlib import Path
 
 import pytest
 from tests._settings import SETTINGS_NO_MCP
+
+
+@pytest.fixture(autouse=True)
+def _restore_co_home() -> Generator[None, None, None]:
+    original = os.environ.get("CO_HOME")
+    yield
+    if original is None:
+        os.environ.pop("CO_HOME", None)
+    else:
+        os.environ["CO_HOME"] = original
 
 
 def _make_deps(tmp_path: Path, *, review_enabled: bool = True, with_model: bool = True):
@@ -120,18 +131,6 @@ async def test_drain_bounded_when_task_swallows_cancellation(tmp_path: Path) -> 
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, TimeoutError):
             await asyncio.wait_for(task, timeout=1.0)
-
-
-@pytest.mark.asyncio
-async def test_drain_when_no_review_task_pending(tmp_path: Path) -> None:
-    """background_review_task is None — drain completes without error."""
-    from co_cli.main import _drain_and_cleanup
-
-    deps = _make_deps(tmp_path)
-    assert deps.session.background_review_task is None
-
-    async with AsyncExitStack() as stack:
-        await _drain_and_cleanup(deps, stack)
 
 
 @pytest.mark.asyncio

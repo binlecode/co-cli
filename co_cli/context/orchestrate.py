@@ -30,7 +30,6 @@ from pydantic_ai.usage import UsageLimits
 # Local alias — DeferredToolResults carries approval decisions (allow/deny),
 # not executed tool output. Actual tool output returns later as ToolReturnPart.
 ToolApprovalDecisions = DeferredToolResults
-from opentelemetry import trace as otel_trace
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.messages import (
     FinalResultEvent,
@@ -55,7 +54,6 @@ from pydantic_ai.usage import RunUsage
 # Typed return value from run_turn() to chat loop
 TurnOutcome = Literal["continue", "error"]
 
-_TRACER = otel_trace.get_tracer("co-cli.orchestrate")
 logger = logging.getLogger(__name__)
 
 _LLM_SEGMENT_WARN_SECS: int = 90
@@ -76,6 +74,7 @@ from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
 from co_cli.display.stream_renderer import StreamRenderer
+from co_cli.observability.tracing import current_span, trace
 from co_cli.tools.approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -380,7 +379,11 @@ async def _execute_stream_segment(
                 usage=turn_state.latest_usage,
                 usage_limits=UsageLimits(request_limit=None),
                 deferred_tool_results=turn_state.tool_approval_decisions,
-                metadata={"session_id": deps.session.session_path.stem[-8:]},
+                metadata={
+                    "session_id": deps.session.session_path.stem[-8:],
+                    "role": "orchestrator",
+                    "request_limit": None,
+                },
             ):
                 event_result = _handle_stream_event(event, renderer, deps, frontend)
                 if event_result is not None:
@@ -525,25 +528,29 @@ def _check_output_limits(
     latest_input = latest_response_input_tokens(turn_state.current_history)
     if latest_input > 0:
         ratio = latest_input / deps.model_max_ctx
-        with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
-            ctx_span.set_attribute("ctx.input_tokens", latest_input)
-            ctx_span.set_attribute("ctx.max_ctx", deps.model_max_ctx)
-            ctx_span.set_attribute("ctx.ratio", ratio)
-            if ratio >= 1.0:
+        current_span().add_event(
+            "ctx_overflow_check",
+            {
+                "ctx.input_tokens": latest_input,
+                "ctx.max_ctx": deps.model_max_ctx,
+                "ctx.ratio": ratio,
+            },
+        )
+        if ratio >= 1.0:
+            frontend.on_status(
+                f"Context limit reached ({latest_input:,} / {deps.model_max_ctx:,} tokens)"
+                " — prompt may have been truncated. Use /compact or /new."
+            )
+        elif ratio >= deps.config.compaction.compaction_ratio:
+            # Only nudge when proactive compaction has given up (anti-thrash gate active).
+            # Below that threshold proactive will fire on the next request automatically,
+            # making a manual nudge redundant.
+            thrash_count = deps.runtime.consecutive_low_yield_proactive_compactions
+            if thrash_count >= deps.config.compaction.proactive_thrash_window:
                 frontend.on_status(
-                    f"Context limit reached ({latest_input:,} / {deps.model_max_ctx:,} tokens)"
-                    " — prompt may have been truncated. Use /compact or /new."
+                    f"Context {ratio:.0%} full ({latest_input:,} / {deps.model_max_ctx:,} tokens)."
+                    " Auto-compaction paused — try /compact for one more pass or /new for a fresh session."
                 )
-            elif ratio >= deps.config.compaction.compaction_ratio:
-                # Only nudge when proactive compaction has given up (anti-thrash gate active).
-                # Below that threshold proactive will fire on the next request automatically,
-                # making a manual nudge redundant.
-                thrash_count = deps.runtime.consecutive_low_yield_proactive_compactions
-                if thrash_count >= deps.config.compaction.proactive_thrash_window:
-                    frontend.on_status(
-                        f"Context {ratio:.0%} full ({latest_input:,} / {deps.model_max_ctx:,} tokens)."
-                        " Auto-compaction paused — try /compact for one more pass or /new for a fresh session."
-                    )
 
 
 def _emit_final_output_if_needed(
@@ -639,6 +646,7 @@ def _apply_400_reformulation(
 # ---------------------------------------------------------------------------
 
 
+@trace("co.turn", new_trace=True)
 async def run_turn(
     *,
     agent: SessionAgent,
@@ -661,134 +669,121 @@ async def run_turn(
     """
     deps.runtime.reset_for_turn()
     deps.runtime.status_callback = frontend.on_status
-    # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
     turn_state = _TurnState(
         current_input=user_input,
         current_history=message_history,
     )
 
-    with _TRACER.start_as_current_span("co.turn") as span:
-        span.set_attribute("co.user_prompt.chars", len(user_input or ""))
-        try:
-            active_settings: ModelSettings | None = model_settings
-            while True:
-                try:
-                    await _execute_stream_segment(
-                        turn_state,
-                        agent,
-                        deps,
-                        active_settings,
-                        frontend,
-                        message_history=turn_state.current_history,
-                    )
+    span = current_span()
+    span.set_attribute("co.user_prompt.chars", len(user_input or ""))
+    try:
+        active_settings: ModelSettings | None = model_settings
+        while True:
+            try:
+                await _execute_stream_segment(
+                    turn_state,
+                    agent,
+                    deps,
+                    active_settings,
+                    frontend,
+                    message_history=turn_state.current_history,
+                )
 
-                    await _run_approval_loop(turn_state, agent, deps, active_settings, frontend)
-                    latest_result = turn_state.latest_result
-                    assert latest_result is not None
-                    turn_state.current_history = latest_result.all_messages()
-                    _emit_final_output_if_needed(turn_state, latest_result, frontend)
+                await _run_approval_loop(turn_state, agent, deps, active_settings, frontend)
+                latest_result = turn_state.latest_result
+                assert latest_result is not None
+                turn_state.current_history = latest_result.all_messages()
+                _emit_final_output_if_needed(turn_state, latest_result, frontend)
 
-                    boosted_settings = _length_retry_settings(latest_result, active_settings)
-                    if boosted_settings is not None:
-                        active_settings = boosted_settings
-                        turn_state.current_input = None
-                        frontend.on_status(
-                            f"Response truncated — retrying with {active_settings['max_tokens']:,} output tokens…"
-                        )
-                        continue
-
-                    _check_output_limits(turn_state, deps, frontend)
-
-                    return TurnResult(
-                        messages=turn_state.current_history,
-                        output=latest_result.output,
-                        usage=turn_state.latest_usage,
-                        interrupted=False,
-                        streamed_text=turn_state.latest_streamed_text,
-                        outcome="continue",
-                        tool_iterations=turn_state.tool_iterations,
-                    )
-
-                except ModelHTTPError as e:
-                    code = e.status_code
-                    # Context overflow — must resolve completely (compact+retry OR terminal).
-                    # Design invariant: NEVER falls through to the 400 reformulation handler.
-                    if is_context_overflow(e):
-                        if not turn_state.overflow_recovery_attempted:
-                            turn_state.overflow_recovery_attempted = True
-                            recovery_ctx = RunContext(
-                                deps=deps,
-                                model=agent.model,
-                                usage=turn_state.latest_usage or RunUsage(),
-                            )
-                            recovery_history = _history_with_pending_user_input(turn_state)
-                            compacted = await recover_overflow_history(
-                                recovery_ctx, recovery_history
-                            )
-                            if compacted is not None:
-                                turn_state.current_history = compacted
-                                turn_state.current_input = None
-                                frontend.on_status("Context overflow — compacting and retrying...")
-                                continue
-                        # Terminal: either second overflow after retry, or recovery returned None.
-                        frontend.on_status("Context overflow — unrecoverable.")
-                        turn_state.outcome = "error"
-                        return _build_error_turn_result(turn_state)
-                    # HTTP 400: malformed tool call — reflect error to model for reformulation.
-                    # This is app logic (not transport retry); budget is independent of SDK retries.
-                    if code == 400 and _apply_400_reformulation(turn_state, e):
-                        frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
-                        await asyncio.sleep(0.5)
-                        continue
-                    # All other HTTP errors (429/5xx already retried by SDK, terminal errors)
-                    frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
-                    turn_state.outcome = "error"
-                    span.add_event(
-                        "provider_error",
-                        {
-                            "http.status_code": code,
-                            "error.body": str(e.body)[:500],
-                        },
-                    )
-                    return _build_error_turn_result(turn_state)
-
-                except (ModelAPIError, httpx.ReadError) as e:
-                    # ModelAPIError: network errors already retried by SDK — terminal.
-                    # httpx.ReadError: mid-stream HTTP teardown (e.g. timeout fires while
-                    # response stream is open; pydantic-ai does not wrap this on the
-                    # streaming path).
-                    frontend.on_status(f"Network error: {e}")
-                    turn_state.outcome = "error"
-                    return _build_error_turn_result(turn_state)
-
-                except TimeoutError:
+                boosted_settings = _length_retry_settings(latest_result, active_settings)
+                if boosted_settings is not None:
+                    active_settings = boosted_settings
+                    turn_state.current_input = None
                     frontend.on_status(
-                        "LLM call timed out — model did not respond in time. Try a shorter prompt, or ask Co 'what can you do right now?' or run /doctor."
+                        f"Response truncated — retrying with {active_settings['max_tokens']:,} output tokens…"
                     )
+                    continue
+
+                _check_output_limits(turn_state, deps, frontend)
+
+                return TurnResult(
+                    messages=turn_state.current_history,
+                    output=latest_result.output,
+                    usage=turn_state.latest_usage,
+                    interrupted=False,
+                    streamed_text=turn_state.latest_streamed_text,
+                    outcome="continue",
+                    tool_iterations=turn_state.tool_iterations,
+                )
+
+            except ModelHTTPError as e:
+                code = e.status_code
+                # Context overflow — must resolve completely (compact+retry OR terminal).
+                # Design invariant: NEVER falls through to the 400 reformulation handler.
+                if is_context_overflow(e):
+                    if not turn_state.overflow_recovery_attempted:
+                        turn_state.overflow_recovery_attempted = True
+                        recovery_ctx = RunContext(
+                            deps=deps,
+                            model=agent.model,
+                            usage=turn_state.latest_usage or RunUsage(),
+                        )
+                        recovery_history = _history_with_pending_user_input(turn_state)
+                        compacted = await recover_overflow_history(recovery_ctx, recovery_history)
+                        if compacted is not None:
+                            turn_state.current_history = compacted
+                            turn_state.current_input = None
+                            frontend.on_status("Context overflow — compacting and retrying...")
+                            continue
+                    frontend.on_status("Context overflow — unrecoverable.")
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)
+                if code == 400 and _apply_400_reformulation(turn_state, e):
+                    frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
+                    await asyncio.sleep(0.5)
+                    continue
+                frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
+                turn_state.outcome = "error"
+                span.add_event(
+                    "provider_error",
+                    {
+                        "http.status_code": code,
+                        "error.body": str(e.body)[:500],
+                    },
+                )
+                return _build_error_turn_result(turn_state)
 
-                except UnexpectedModelBehavior as e:
-                    frontend.on_status(f"Model returned malformed output: {e}")
-                    turn_state.outcome = "error"
-                    return _build_error_turn_result(turn_state)
+            except (ModelAPIError, httpx.ReadError) as e:
+                frontend.on_status(f"Network error: {e}")
+                turn_state.outcome = "error"
+                return _build_error_turn_result(turn_state)
 
-                except (KeyboardInterrupt, asyncio.CancelledError):
-                    turn_state.interrupted = True
-                    return _build_interrupted_turn_result(turn_state)
+            except TimeoutError:
+                frontend.on_status(
+                    "LLM call timed out — model did not respond in time. Try a shorter prompt, or ask Co 'what can you do right now?' or run /doctor."
+                )
+                turn_state.outcome = "error"
+                return _build_error_turn_result(turn_state)
 
-        finally:
-            span.set_attribute("turn.outcome", turn_state.outcome)
-            span.set_attribute("turn.interrupted", turn_state.interrupted)
-            span.set_attribute(
-                "turn.input_tokens",
-                turn_state.latest_usage.input_tokens if turn_state.latest_usage else 0,
-            )
-            span.set_attribute(
-                "turn.output_tokens",
-                turn_state.latest_usage.output_tokens if turn_state.latest_usage else 0,
-            )
-            deps.runtime.tool_progress_callback = (
-                None  # belt-and-suspenders; also cleared by reset_for_turn() at next turn entry
-            )
+            except UnexpectedModelBehavior as e:
+                frontend.on_status(f"Model returned malformed output: {e}")
+                turn_state.outcome = "error"
+                return _build_error_turn_result(turn_state)
+
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                turn_state.interrupted = True
+                return _build_interrupted_turn_result(turn_state)
+
+    finally:
+        span.set_attribute("turn.outcome", turn_state.outcome)
+        span.set_attribute("turn.interrupted", turn_state.interrupted)
+        span.set_attribute(
+            "turn.input_tokens",
+            turn_state.latest_usage.input_tokens if turn_state.latest_usage else 0,
+        )
+        span.set_attribute(
+            "turn.output_tokens",
+            turn_state.latest_usage.output_tokens if turn_state.latest_usage else 0,
+        )
+        deps.runtime.tool_progress_callback = None

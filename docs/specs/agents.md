@@ -1,6 +1,6 @@
 # Co CLI — Agents
 
-> For tool registration, approval flow, and lifecycle hooks: [tools.md](tools.md). For the orchestration loop and segment/turn semantics: [core-loop.md](core-loop.md). For orchestrator static-instruction composition: [prompt-assembly.md](prompt-assembly.md). For daemon callers and curation hooks: [skills.md](skills.md). For OTel span shape: [observability.md](observability.md).
+> For tool registration, approval flow, and lifecycle hooks: [tools.md](tools.md). For the orchestration loop and segment/turn semantics: [core-loop.md](core-loop.md). For orchestrator static-instruction composition: [prompt-assembly.md](prompt-assembly.md). For daemon callers and curation hooks: [skills.md](skills.md). For span record shape and the `ObservabilityCapability`: [observability.md](observability.md).
 
 ## 1. Functional Architecture
 
@@ -48,11 +48,11 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
 
 ### Shared entry points
 
-`build_orchestrator(spec, deps)` (`co_cli/agent/build.py`) composes the orchestrator. Static instructions are assembled by calling each `spec.static_instruction_builders` closure in order and joining with double newlines; per-turn instructions are registered via `agent.instructions(...)`; history processors are attached as a list. Output type is fixed `[str, DeferredToolRequests]`; capabilities `[CoToolLifecycle()]`; retries from `deps.config.tool_retries`. Toolset comes from `deps.toolset` directly — orchestrator is a singleton, no factory abstraction.
+`build_orchestrator(spec, deps)` (`co_cli/agent/build.py`) composes the orchestrator. Static instructions are assembled by calling each `spec.static_instruction_builders` closure in order and joining with double newlines; per-turn instructions are registered via `agent.instructions(...)`; history processors are attached as a list. Output type is fixed `[str, DeferredToolRequests]`; capabilities `[ObservabilityCapability(), CoToolLifecycle()]` — Observability first so it brackets `CoToolLifecycle`'s `after_*` hooks (see [observability.md](observability.md) for the ordering invariant); retries from `deps.config.tool_retries`. Toolset comes from `deps.toolset` directly — orchestrator is a singleton, no factory abstraction.
 
 `build_task_agent(spec, deps, model)` (`co_cli/agent/build.py`) resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME` (populated by `@agent_tool` at import time), filters through `_config_requirement_met` to drop integration tools whose credentials are absent, and registers each resolved tool with `requires_approval=False`. Unknown names raise `ValueError` at build time. When `spec.include_skill_manifest=True`, the rendered skill manifest is prepended to `spec.instructions(deps)`.
 
-`run_in_turn(spec, ctx, prompt, budget)` and `run_standalone(spec, deps, prompt, budget, model_settings)` (`co_cli/agent/run.py`) are the two task-agent runners. `_run_attempt` is the inner primitive both share — `web_research` calls it twice inside a single outer span to drive its retry-on-empty loop without splitting the OTel trace.
+`run_in_turn(spec, ctx, prompt, budget)` and `run_standalone(spec, deps, prompt, budget, model_settings)` (`co_cli/agent/run.py`) are the two task-agent runners. `_run_attempt` is the inner primitive both share — `web_research` calls it twice inside a single outer span via `@trace("co.web_research.retry_loop")` so the two attempts share one parent retry-envelope span.
 
 ## 2. Core Logic
 
@@ -64,7 +64,7 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
      daemon          → co_cli/skills/<domain>.py
 2. Define the spec record next to the caller:
      SPEC = TaskAgentSpec(
-       name="my_agent",                # OTel span name + role tag
+       name="my_agent",                # span name + role tag (carried via agent.run metadata)
        instructions=_my_instructions,  # callable: (deps) -> str
        tool_names=("tool_a", "tool_b"),# must exist in TOOL_REGISTRY_BY_NAME
        output_type=MyOutput,           # pydantic BaseModel
@@ -167,7 +167,7 @@ otel_span("web_research"):                                 # outer span owns bot
         _merge_turn_usage(ctx, usage_2)
 ```
 
-`web_research` is the only caller that reaches below `run_in_turn`. The reason is OTel topology: a retry should appear as one `web_research` span with two child agent runs, not two sibling spans. All other delegation tools call `run_in_turn` directly.
+`web_research` is the only caller that reaches below `run_in_turn`. The reason is span topology: a retry should appear as one `co.web_research.retry_loop` span with two child agent runs, not two sibling spans. All other delegation tools call `run_in_turn` directly.
 
 ## 3. Config
 

@@ -8,6 +8,8 @@ OBSERVABILITY_ENV_MAP: dict[str, str] = {
     "log_level": "CO_LOG_LEVEL",
     "log_max_size_mb": "CO_LOG_MAX_SIZE_MB",
     "log_backup_count": "CO_LOG_BACKUP_COUNT",
+    "spans_log_max_size_mb": "CO_SPANS_LOG_MAX_SIZE_MB",
+    "spans_log_backup_count": "CO_SPANS_LOG_BACKUP_COUNT",
 }
 
 # Default patterns redacted from span attribute values before SQLite storage.
@@ -29,7 +31,7 @@ def redact_text(text: str, patterns: list[str]) -> str:
 
 
 class ObservabilitySettings(BaseModel):
-    """Controls JSONL file logging and OTel span redaction."""
+    """Controls structured-log file output and span attribute redaction."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -41,18 +43,33 @@ class ObservabilitySettings(BaseModel):
         default=5,
         ge=1,
         le=500,
-        description="Maximum size of each log file in MB before rotation.",
+        description="Maximum size of each application log file (co-cli.jsonl) in MB before rotation.",
     )
     log_backup_count: int = Field(
         default=3,
         ge=0,
         le=20,
-        description="Number of rotated log backups to keep per file.",
+        description="Number of rotated application log backups to keep per file.",
+    )
+    spans_log_max_size_mb: int = Field(
+        default=50,
+        ge=1,
+        le=2000,
+        description=(
+            "Maximum size of the spans log file (co-cli-spans.jsonl) in MB before rotation. "
+            "Defaults higher than the app log because span volume is higher."
+        ),
+    )
+    spans_log_backup_count: int = Field(
+        default=5,
+        ge=0,
+        le=50,
+        description="Number of rotated spans log backups to keep.",
     )
     redact_patterns: list[str] = Field(
         default_factory=lambda: list(_DEFAULT_REDACT_PATTERNS),
         description=(
-            "Regex patterns applied to span attribute string values before SQLite storage. "
+            "Regex patterns applied to span attribute string values before they are written to disk. "
             "Matching substrings are replaced with [REDACTED]. "
             "This list is not exhaustive — users with custom secret formats should extend it via settings.json."
         ),

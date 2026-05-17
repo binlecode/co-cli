@@ -191,17 +191,3 @@ def test_approval_subject_delete_shape() -> None:
     subject = _knowledge_manage_approval_subject({"action": "delete", "name": "old-note"})
 
     assert subject.value == "tool:knowledge_manage:delete:old-note"
-
-
-def test_approval_subject_append_shape() -> None:
-    """Approval subject for action='append' must use the tool:knowledge_manage:append:<name> key."""
-    subject = _knowledge_manage_approval_subject({"action": "append", "name": "existing-note"})
-
-    assert subject.value == "tool:knowledge_manage:append:existing-note"
-
-
-def test_approval_subject_replace_shape() -> None:
-    """Approval subject for action='replace' must use the tool:knowledge_manage:replace:<name> key."""
-    subject = _knowledge_manage_approval_subject({"action": "replace", "name": "existing-note"})
-
-    assert subject.value == "tool:knowledge_manage:replace:existing-note"

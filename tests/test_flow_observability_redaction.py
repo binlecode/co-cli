@@ -1,20 +1,41 @@
-"""Consolidated E2E tests for test_flow_observability_redaction."""
+"""Tests for observability redaction — text helper and JSON log emission path."""
 
 import json
-import sqlite3
+import logging
+from pathlib import Path
 
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+import pytest
 
 from co_cli.config.observability import _DEFAULT_REDACT_PATTERNS, redact_text
-from co_cli.observability.telemetry import SQLiteSpanExporter
+from co_cli.observability import tracing
 
 
-def _make_provider(db_path: str, patterns: list[str] | None = None) -> TracerProvider:
-    exporter = SQLiteSpanExporter(db_path=db_path, redact_patterns=patterns)
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    return provider
+def _read_log(log: Path) -> list[dict]:
+    logger = logging.getLogger("co_cli.observability.spans")
+    for h in logger.handlers:
+        h.flush()
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+
+
+@pytest.fixture
+def redact_log(tmp_path: Path):
+    """Isolated spans log with redact patterns; restores logger + pattern state on teardown."""
+    logger = logging.getLogger("co_cli.observability.spans")
+    saved_handlers = list(logger.handlers)
+    saved_patterns = list(tracing._COMPILED_PATTERNS)
+    for h in saved_handlers:
+        logger.removeHandler(h)
+
+    yield tmp_path / "spans.jsonl"
+
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
+        h.close()
+    for h in saved_handlers:
+        logger.addHandler(h)
+    tracing._COMPILED_PATTERNS = saved_patterns
 
 
 def test_redact_text_removes_credential():
@@ -31,20 +52,35 @@ def test_redact_text_clean_text_unchanged():
     assert redact_text(text, _DEFAULT_REDACT_PATTERNS) == text
 
 
-def test_sk_api_key_attribute_redacted(tmp_path):
-    """An sk- API key in a span attribute is stored as [REDACTED]."""
-    db = str(tmp_path / "spans.db")
-    provider = _make_provider(db, patterns=[r"sk-[A-Za-z0-9]{20,}"])
-    tracer = provider.get_tracer("test")
+def test_emission_string_attribute_redacted(redact_log: Path) -> None:
+    """A span attribute whose value matches a pattern is [REDACTED] in the emitted JSON record."""
+    tracing.setup_log(redact_log, redact_patterns=[r"sk-[A-Za-z0-9]{20,}"])
 
-    with tracer.start_as_current_span("redact.api_key") as span:
-        span.set_attribute("secret_value", "sk-abc123abc123abc123abc")
+    @tracing.trace("redact_attr_test")
+    def f() -> None:
+        tracing.current_span().set_attribute("auth", "token=sk-abc123def456ghi789jkl")
 
-    provider.force_flush()
+    f()
+    recs = _read_log(redact_log)
+    assert recs, "expected at least one emitted record"
+    assert "sk-abc123def456ghi789jkl" not in recs[0]["attributes"]["auth"]
+    assert "[REDACTED]" in recs[0]["attributes"]["auth"]
 
-    conn = sqlite3.connect(db)
-    row = conn.execute("SELECT attributes FROM spans WHERE name = 'redact.api_key'").fetchone()
-    conn.close()
 
-    attributes = json.loads(row[0])
-    assert attributes["secret_value"] == "[REDACTED]"
+def test_emission_nested_json_attribute_redacted(redact_log: Path) -> None:
+    """Secrets buried 3+ levels deep in a JSON-string attribute are [REDACTED] in the emitted record."""
+    tracing.setup_log(redact_log, redact_patterns=[r"sk-[A-Za-z0-9]{20,}"])
+
+    nested = json.dumps(
+        [{"role": "user", "parts": [{"type": "text", "content": "key: sk-abc123def456ghi789jkl"}]}]
+    )
+
+    @tracing.trace("nested_redact_test")
+    def f() -> None:
+        tracing.current_span().set_attribute("co.model.input", nested)
+
+    f()
+    recs = _read_log(redact_log)
+    assert recs, "expected at least one emitted record"
+    assert "sk-abc123def456ghi789jkl" not in recs[0]["attributes"]["co.model.input"]
+    assert "[REDACTED]" in recs[0]["attributes"]["co.model.input"]

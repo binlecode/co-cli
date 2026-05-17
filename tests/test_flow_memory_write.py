@@ -245,31 +245,6 @@ def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
         store.close()
 
 
-def test_find_article_by_url_file_scan_fallback(tmp_path):
-    """_find_article_by_url with memory_store=None falls back to file scan.
-
-    Failure mode: if the file-scan fallback is removed, saves without a warm index
-    (e.g. first-run bootstrap) would create duplicate articles.
-    """
-    from co_cli.memory.service import _find_article_by_url
-
-    knowledge_dir = tmp_path / "knowledge"
-    url = "https://example.com/fallback-scan"
-
-    saved = save_artifact(
-        knowledge_dir,
-        content="content for fallback test",
-        artifact_kind="article",
-        title="fallback test",
-        source_url=url,
-    )
-
-    result = _find_article_by_url(knowledge_dir, url, memory_store=None)
-
-    assert result is not None, "file-scan fallback returned None for a known URL"
-    assert result == saved.path, f"Expected {saved.path}, got {result}"
-
-
 def _write_seeded_artifact(path: Path, body: str) -> None:
     frontmatter = {
         "kind": "knowledge",

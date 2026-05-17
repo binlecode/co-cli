@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.8.204"
+version = "0.8.206"
 description = "Co — personal AI assistant CLI with approval-gated shell, Google Drive/Gmail/Calendar, Obsidian, and OTel tracing"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,7 +13,6 @@ dependencies = [
     "google-auth-httplib2>=0.3.0",
     "google-auth-oauthlib>=1.2.4",
     "google-genai>=1.61.0",
-    "opentelemetry-sdk>=1.39.1",
     "prompt-toolkit>=3.0.52",
     "pydantic-ai==1.81.0",
     "rich>=14.3.2",

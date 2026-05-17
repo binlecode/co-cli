@@ -7,7 +7,6 @@ share a single outer OTel span (single-span retry topology).
 
 from __future__ import annotations
 
-from opentelemetry import trace as otel_trace
 from pydantic import BaseModel
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
@@ -15,10 +14,9 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.agent.run import MAX_AGENT_DEPTH, _merge_turn_usage, _run_attempt, run_in_turn
 from co_cli.agent.spec import TaskAgentSpec
 from co_cli.deps import CoDeps, VisibilityPolicyEnum, fork_deps
+from co_cli.observability.tracing import current_span, trace
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
-
-_TRACER = otel_trace.get_tracer("co-cli.agents")
 
 
 class AgentOutput(BaseModel):
@@ -115,6 +113,7 @@ REASON_SPEC = TaskAgentSpec(
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
+@trace("co.web_research.retry_loop")
 async def web_research(
     ctx: RunContext[CoDeps],
     query: str,
@@ -159,33 +158,33 @@ async def web_research(
     child_deps = fork_deps(ctx.deps)
     child_deps.runtime.tool_progress_callback = ctx.deps.runtime.tool_progress_callback
 
-    with _TRACER.start_as_current_span(WEB_RESEARCH_SPEC.name) as span:
-        span.set_attribute("agent.role", WEB_RESEARCH_SPEC.name)
-        span.set_attribute("agent.model", str(model_obj))
-        span.set_attribute("agent.request_limit", budget)
+    span = current_span()
+    span.set_attribute("agent.role", WEB_RESEARCH_SPEC.name)
+    span.set_attribute("agent.model", str(model_obj))
+    span.set_attribute("agent.request_limit", budget)
 
-        output, usage_1, run_id = await _run_attempt(
-            WEB_RESEARCH_SPEC, ctx, scoped_prompt, budget, child_deps
+    output, usage_1, run_id = await _run_attempt(
+        WEB_RESEARCH_SPEC, ctx, scoped_prompt, budget, child_deps
+    )
+    _merge_turn_usage(ctx, usage_1)
+    requests_used = usage_1.requests
+
+    remaining = budget - usage_1.requests
+    if remaining > 0 and not output.result.strip():
+        retry_query = (
+            f"The previous search returned no results. "
+            f"Try with different keywords: {query} (alternative framing)."
         )
-        _merge_turn_usage(ctx, usage_1)
-        requests_used = usage_1.requests
+        output_2, usage_2, _ = await _run_attempt(
+            WEB_RESEARCH_SPEC, ctx, retry_query, remaining, child_deps
+        )
+        _merge_turn_usage(ctx, usage_2)
+        output = output_2
+        requests_used = usage_1.requests + usage_2.requests
+    if not output.result.strip():
+        output = AgentOutput(result="No results found despite multiple searches.")
 
-        remaining = budget - usage_1.requests
-        if remaining > 0 and not output.result.strip():
-            retry_query = (
-                f"The previous search returned no results. "
-                f"Try with different keywords: {query} (alternative framing)."
-            )
-            output_2, usage_2, _ = await _run_attempt(
-                WEB_RESEARCH_SPEC, ctx, retry_query, remaining, child_deps
-            )
-            _merge_turn_usage(ctx, usage_2)
-            output = output_2
-            requests_used = usage_1.requests + usage_2.requests
-        if not output.result.strip():
-            output = AgentOutput(result="No results found despite multiple searches.")
-
-        span.set_attribute("agent.requests_used", requests_used)
+    span.set_attribute("agent.requests_used", requests_used)
 
     display = (
         f"{output.result}\n[{WEB_RESEARCH_SPEC.name} · {model_obj} · {requests_used}/{budget} req]"

@@ -247,15 +247,15 @@ Archive restore moves an archived markdown file back to the active knowledge dir
 
 ### 2.9 Observability
 
-Dreaming emits OpenTelemetry spans under the `co.dream` tracer:
+Dreaming emits structured span records via the `@trace` decorator (see [observability.md](observability.md)):
 
-| Span | Purpose |
-| --- | --- |
-| `co.dream.cycle` | Whole-cycle envelope with dry-run, timeout, count, error, and timeout attributes |
-| `co.dream.mine` | Mining phase count |
-| `invoke_agent _dream_miner_agent` | Dream miner agent invocation with `agent.role=dream_miner` |
-| `co.dream.merge` | Merge phase count |
-| `co.dream.decay` | Decay phase count |
+| Span | Source | Purpose |
+| --- | --- | --- |
+| `co.dream.cycle` | `@trace` on `run_dream_cycle` | Whole-cycle envelope with dry-run, timeout, count, error, and timeout attributes |
+| `co.dream.mine` | `@trace` on `_mine_transcripts` | Mining phase count |
+| `invoke_agent _dream_miner_agent` | `ObservabilityCapability` | Each `miner_agent.run()` iteration; `co.agent.role=dream_miner` carried via `agent.run(metadata={"role": "dream_miner"})` |
+| `co.dream.merge.preview` / `co.dream.merge.apply` | `@trace` on preview vs apply helpers | Merge phase count (dry-run vs apply paths emit distinct spans) |
+| `co.dream.decay.preview` / `co.dream.decay.apply` | `@trace` on preview vs apply helpers | Decay phase count (dry-run vs apply paths emit distinct spans) |
 
 The session-end wrapper logs completion counts when changes occurred and logs timeout or failure warnings without surfacing them as foreground turn failures.
 

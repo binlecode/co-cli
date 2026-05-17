@@ -23,10 +23,10 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from opentelemetry import trace as otel_trace
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
 
+from co_cli.observability.tracing import current_span
 from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
@@ -46,8 +46,6 @@ TOOL_RESULT_PREVIEW_CHARS = 1_500
 SPILL_THRESHOLD_CHARS = 4_000
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
-
-_TRACER = otel_trace.get_tracer("co-cli.tool_budget")
 
 
 def _generate_preview(content: str, max_chars: int) -> tuple[str, bool]:
@@ -143,14 +141,16 @@ def spill_with_span(
         new_content = spill_if_oversized(content, tool_results_dir, tool_name, force=forced)
         spill_fired = new_content != content
         content = new_content
-    with _TRACER.start_as_current_span("tool_budget.spill_tool_result") as span:
-        span.set_attribute("tool.name", tool_name)
-        span.set_attribute("spill.threshold_chars", span_threshold)
-        span.set_attribute("spill.content_chars", content_chars)
-        span.set_attribute("spill.fired", spill_fired)
-        span.set_attribute("spill.forced", forced)
-        if spill_fired:
-            span.set_attribute("spill.savings_chars", content_chars - len(content))
+    event_attrs: dict[str, Any] = {
+        "tool.name": tool_name,
+        "spill.threshold_chars": span_threshold,
+        "spill.content_chars": content_chars,
+        "spill.fired": spill_fired,
+        "spill.forced": forced,
+    }
+    if spill_fired:
+        event_attrs["spill.savings_chars"] = content_chars - len(content)
+    current_span().add_event("tool_budget.spill_tool_result", event_attrs)
     return content
 
 

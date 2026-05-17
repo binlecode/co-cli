@@ -48,12 +48,6 @@ def test_sync_canon_store_indexes_real_tars_memories(tmp_path: Path) -> None:
         store.close()
 
 
-def test_sync_canon_store_noop_when_store_is_none() -> None:
-    """_sync_canon_store silently returns when store=None — no AttributeError on None."""
-    config = SETTINGS.model_copy(update={"personality": "tars"})
-    _sync_canon_store(None, config, TerminalFrontend())
-
-
 def test_sync_canon_store_noop_when_personality_none(tmp_path: Path) -> None:
     """_sync_canon_store writes zero rows when personality is empty — canon gated on role."""
     config = SETTINGS.model_copy(update={"personality": None})

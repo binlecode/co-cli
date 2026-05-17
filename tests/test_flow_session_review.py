@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,16 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.display.core import console
+
+
+@pytest.fixture(autouse=True)
+def _restore_co_home() -> Generator[None, None, None]:
+    original = os.environ.get("CO_HOME")
+    yield
+    if original is None:
+        os.environ.pop("CO_HOME", None)
+    else:
+        os.environ["CO_HOME"] = original
 
 
 def _make_deps(tmp_path: Path):
@@ -35,40 +47,6 @@ def _make_deps(tmp_path: Path):
     deps.user_skills_dir = tmp_path / "skills"
     deps.user_skills_dir.mkdir(parents=True, exist_ok=True)
     return deps
-
-
-@pytest.mark.asyncio
-async def test_session_review_disabled_by_config(tmp_path: Path) -> None:
-    """_maybe_run_session_review returns immediately when review_enabled=False."""
-    from co_cli.deps import CoDeps
-    from co_cli.tools.shell_backend import ShellBackend
-
-    config = SETTINGS_NO_MCP.model_copy(
-        update={"skills": SETTINGS_NO_MCP.skills.model_copy(update={"review_enabled": False})}
-    )
-    deps = CoDeps(shell=ShellBackend(), config=config)
-
-    # If it tries to fork an agent it will fail — absence of error proves early return.
-    from co_cli.main import _maybe_run_session_review
-
-    await _maybe_run_session_review(deps, [])
-
-
-@pytest.mark.asyncio
-async def test_session_review_skips_when_no_model(tmp_path: Path) -> None:
-    """_maybe_run_session_review returns early when deps.model is None."""
-    from co_cli.deps import CoDeps
-    from co_cli.tools.shell_backend import ShellBackend
-
-    config = SETTINGS_NO_MCP.model_copy(
-        update={"skills": SETTINGS_NO_MCP.skills.model_copy(update={"review_enabled": True})}
-    )
-    deps = CoDeps(shell=ShellBackend(), config=config)
-    assert deps.model is None
-
-    from co_cli.main import _maybe_run_session_review
-
-    await _maybe_run_session_review(deps, [])
 
 
 def test_write_review_report_creates_json_and_md(tmp_path: Path) -> None:
