@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.8.208]
+
+### Agent lifecycle / spec split
+
+- **`co_cli/agent/`** — `agents/` renamed to `agent/`; `_native_toolset.py` → `toolset.py`; `tool_call_limit.py` moved to `tools/`
+- **`OrchestratorSpec` + `TaskAgentSpec`** — independent frozen dataclasses in `agent/spec.py`; no shared base; all collection fields are `tuple[...]`
+- **`build_orchestrator` / `build_task_agent`** — typed builders in `agent/build.py`; task builder resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME` (fail-loud on unknown names), filters by config credentials, registers tools with `requires_approval=False`
+- **`run_in_turn` / `run_standalone` / `_run_attempt`** — typed runners in `agent/run.py`; depth check + usage merge owned by `run_in_turn`; `run_standalone` skips both; `_run_attempt` is the inner primitive for `web_research`'s single-span two-attempt retry
+- **`ORCHESTRATOR_SPEC`** — declarative record in `agent/orchestrator.py` (5 static builders, 2 per-turn, 5 history processors)
+- **3 in-turn task specs** (`WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`, `REASON_SPEC`) in `tools/agents/delegation.py`; `knowledge_analyze` and `reason` reduced to one-liners
+- **`SESSION_REVIEW_SPEC`** in `skills/session_review.py`; `CURATOR_SPEC` in `skills/curator.py`; domain ownership matches lifecycle caller
+- **Decorator flip** — `delegation=` kwarg removed from `@agent_tool`; `ToolInfo.delegation` field removed; `TOOL_REGISTRY_BY_NAME` populated at import time alongside `TOOL_REGISTRY`
+- **Legacy deleted** — `build_agent`, `discover_delegation_tools`, `_run_agent_in_turn`, `_run_agent_standalone`, `_delegate_agent`; `test_flow_delegation_discovery.py` removed
+
 ## [0.8.206]
 
 ### Retire OTel — structured-log tracing + decorator-based spans
