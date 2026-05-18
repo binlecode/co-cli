@@ -1,4 +1,4 @@
-"""Behavioral tests for atomic_write_text / atomic_write_bytes — co_cli.persistence.atomic.
+"""Behavioral tests for atomic_write_text / atomic_write_bytes — co_cli.fileio.atomic.
 
 Verifies: success path replaces file atomically, no .tmp orphans after success,
 no .tmp orphans after exception mid-write, parent dirs are created on demand,
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from co_cli.persistence.atomic import atomic_write_bytes, atomic_write_text
+from co_cli.fileio.atomic import atomic_write_bytes, atomic_write_text
 
 
 def test_writes_content_atomically_for_new_file(tmp_path: Path) -> None:

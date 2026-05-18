@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.216]
+
+### Rename `co_cli/persistence/` → `co_cli/fileio/`
+
+- **Package renamed** `co_cli/persistence/` → `co_cli/fileio/` — the old name overstated scope; `fileio` is accurate and unambiguous.
+- **7 source import sites** migrated from `co_cli.persistence.atomic` to `co_cli.fileio.atomic` (`tool_io.py`, `tools/system/skills.py`, `memory/service.py`, `memory/dream.py`, `skills/session_review.py`, `skills/usage.py`, `skills/curator.py`).
+- **Doc references updated** in `agent_docs/code-conventions.md` and `co_cli/tools/files/write.py` docstring.
+- **Test file renamed** `test_atomic_write_persistence.py` → `test_atomic_write.py`; import updated.
+
 ## [0.8.214]
 
 ### Skill-env propagation + single subprocess env chokepoint + `shell` → `shell_exec` rename

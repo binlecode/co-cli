@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from co_cli.persistence.atomic import atomic_write_text
+from co_cli.fileio.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps

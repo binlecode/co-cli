@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING, Any
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
 
+from co_cli.fileio.atomic import atomic_write_text
 from co_cli.observability.tracing import current_span
-from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext

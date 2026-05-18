@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from co_cli.fileio.atomic import atomic_write_text
 from co_cli.llm.call import llm_call
 from co_cli.memory._window import build_transcript_window
 from co_cli.memory.archive import archive_artifacts
@@ -35,7 +36,6 @@ from co_cli.memory.decay import find_decay_candidates
 from co_cli.memory.service import save_artifact
 from co_cli.memory.similarity import token_jaccard
 from co_cli.observability.tracing import current_span, trace
-from co_cli.persistence.atomic import atomic_write_text
 from co_cli.session.persistence import load_transcript
 from co_cli.tools.lifecycle import CoToolLifecycle
 

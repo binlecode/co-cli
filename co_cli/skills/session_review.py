@@ -19,7 +19,7 @@ from pydantic_ai.messages import ModelMessage
 
 from co_cli.agent.spec import TaskAgentSpec
 from co_cli.config.skills import REVIEW_MAX_ITERATIONS
-from co_cli.persistence.atomic import atomic_write_text
+from co_cli.fileio.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps

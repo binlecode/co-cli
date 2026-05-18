@@ -17,8 +17,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
+from co_cli.fileio.atomic import atomic_write_text
 from co_cli.memory.frontmatter import parse_frontmatter
-from co_cli.persistence.atomic import atomic_write_text
 from co_cli.skills.lint import lint_skill
 from co_cli.skills.loader import scan_skill_content
 from co_cli.tools.agent_tool import agent_tool

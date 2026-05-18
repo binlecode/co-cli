@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
+from co_cli.fileio.atomic import atomic_write_text
 from co_cli.memory.artifact import (
     ArtifactKindEnum,
     MemoryArtifact,
@@ -30,7 +31,6 @@ from co_cli.memory.frontmatter import (
 )
 from co_cli.memory.similarity import find_similar_artifacts, is_content_superset
 from co_cli.memory.store import MEMORY_SOURCE
-from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.index.store import IndexStore

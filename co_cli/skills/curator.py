@@ -24,7 +24,7 @@ from co_cli.config.skills import (
     CURATOR_STALE_AFTER_DAYS,
     SkillsSettings,
 )
-from co_cli.persistence.atomic import atomic_write_text
+from co_cli.fileio.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
