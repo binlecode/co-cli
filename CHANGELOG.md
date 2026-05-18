@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.8.224]
+
+### UAT evals phase-1 refactor — mission-tenet alignment
+
+- **Mission-tenet citations** added to all 6 phase-1 eval module docstrings (`eval_daily_chat.py`, `eval_session_continuity.py`, `eval_memory.py`, `eval_skills.py`, `eval_background.py`, `eval_trust_visibility.py`)
+- **W1.D `dream_propagates_to_recall`** replaces `dream_callable_smoke`; real `run_dream_cycle(dry_run=False)` + structural XOR gate (exactly one original archived) + judged agent recall turn (SOFT_FAIL on borderline miss)
+- **W1.E `tool_spill_summary`** new case: oversized `memory_view` triggers spill; asserts `PERSISTED_OUTPUT_TAG` in `ToolReturnPart` + spill file created + judge rubric on coherent fact-citing answer
+- **W2.D `rehydrate_uses_context`** upgraded: judged follow-up verifies agent uses rehydrated session context (DEPLOY_77 marker)
+- **W2.E `compact_quality_holds`** upgraded: Lighthouse marker seeded pre-inflation; judged post-compact turn confirms marker survived compaction summarization
+- **W3.G `forget_propagates_to_recall`** new case: 3-turn recall→delete→recall; judged assertion that agent does not cite deleted artifact
+- **W6.C `deny_blocks_execution`** new case: `_DenyFrontend` exercises real approval-resume deny path; structural seed-survived check + judged denial-acknowledgement rubric
+- **`kind: memory` discriminator removed** from memory frontmatter (`frontmatter.py`, `item.py`) and all fixtures/seeds — memory and session are peer tiers with no top-level discriminator
+- **Phase-1 case count**: 26 → 29 (+3 net); judge-using cases: 2/26 → 9/29
+
 ## [0.8.222]
 
 ### TUI status surface — `PromptSession` footer toolbar
