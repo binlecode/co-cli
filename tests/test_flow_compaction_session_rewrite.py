@@ -17,8 +17,8 @@ from pathlib import Path
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-from co_cli.memory.session import new_session_path
-from co_cli.memory.transcript import (
+from co_cli.session.filename import new_session_path
+from co_cli.session.persistence import (
     append_messages,
     load_transcript,
     persist_session_history,

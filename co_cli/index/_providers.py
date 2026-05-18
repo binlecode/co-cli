@@ -1,4 +1,4 @@
-"""Embedding provider dispatch for the knowledge index."""
+"""Embedding provider dispatch — ollama / gemini / tei / none."""
 
 from __future__ import annotations
 
@@ -57,7 +57,6 @@ def build_embedder(
                 resp.raise_for_status()
                 return resp.json()[0]
 
-            # provider == "none" or unknown
             return None
 
         except Exception as e:

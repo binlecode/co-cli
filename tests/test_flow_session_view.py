@@ -11,7 +11,7 @@ from tests._settings import SETTINGS_NO_MCP
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.tools.memory.view import session_view
+from co_cli.tools.session.view import session_view
 from co_cli.tools.shell_backend import ShellBackend
 
 _SESSION_TIMESTAMP = "2026-01-01-T120000Z"

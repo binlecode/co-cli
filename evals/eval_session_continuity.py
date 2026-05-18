@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from evals._deps import make_eval_deps
-from evals._observability import CaseResult, open_eval_run
+from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
 from evals._timeouts import (
@@ -65,7 +65,7 @@ from co_cli.context._compaction_markers import (
     SUMMARY_MARKER_PREFIX,
 )
 from co_cli.context.orchestrate import run_turn
-from co_cli.memory.transcript import append_messages, load_transcript
+from co_cli.session.persistence import append_messages, load_transcript
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-session-continuity.md"
 
@@ -169,7 +169,7 @@ async def case_w2_a_new_rotates_session_id(
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         reason=reason,
         trace_files=[],
@@ -251,7 +251,7 @@ async def case_w2_b_clear_resets_history(
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -304,7 +304,12 @@ async def case_w2_c_sessions_lists_real_sessions(
             pass
 
     duration = time.monotonic() - t0
-    result = CaseResult(name=case_id, passed=passed, duration_s=duration, reason=reason)
+    result = CaseResult(
+        name=case_id,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
+        duration_s=duration,
+        reason=reason,
+    )
     run.append(result)
     return result
 
@@ -314,15 +319,19 @@ async def case_w2_c_sessions_lists_real_sessions(
 # ---------------------------------------------------------------------------
 
 
-async def case_w2_d_resume_provides_continuity(
+async def case_w2_d_resume_helpers_rehydrate(
     deps: Any, agent: Any, frontend: Any, run: Any
 ) -> CaseResult:
     """Seed deploy id + todo, rotate, rehydrate from disk, ask follow-up.
 
-    Exercises the rehydration mechanism directly (per Open Q3 in the plan —
-    /resume is interactive and can't be driven via dispatch yet). The
-    follow-up turn runs with ``message_history=prior_messages`` so the agent
-    has the prior conversation as context.
+    **Not an end-to-end /resume test.** ``/resume`` is interactive and can't be
+    driven via ``dispatch`` today (Open Q3 in the plan). This case exercises
+    the rehydration *mechanism* directly — ``load_transcript`` +
+    ``_rehydrate_todos`` — and verifies a follow-up ``run_turn`` with
+    ``message_history=prior_messages`` still recovers the seeded fact. A
+    regression in ``_cmd_resume``'s picker / ``prompt_selection`` UX is NOT
+    caught here; that gap closes when ``_cmd_resume`` is refactored to call
+    ``ctx.deps.frontend.prompt_selection(...)``.
     """
     case_id = "W2.D"
     t0 = time.monotonic()
@@ -424,7 +433,7 @@ async def case_w2_d_resume_provides_continuity(
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -547,7 +556,7 @@ async def case_w2_e_compact_replaces_with_summary(
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -583,7 +592,7 @@ async def case_w2_f_compact_idempotent(
         duration = time.monotonic() - t0
         result = CaseResult(
             name=case_id,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=duration,
             reason="W2.E produced no post-compact history; cannot assert idempotence",
         )
@@ -669,7 +678,7 @@ async def case_w2_f_compact_idempotent(
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         reason=reason,
@@ -747,7 +756,7 @@ async def main() -> int:
             )
 
             # W2.D — resume continuity.
-            case_d = await case_w2_d_resume_provides_continuity(deps, agent, frontend, run)
+            case_d = await case_w2_d_resume_helpers_rehydrate(deps, agent, frontend, run)
             cases.append(case_d)
             print(
                 f"[session-continuity] {case_d.name}: "

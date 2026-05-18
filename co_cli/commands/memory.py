@@ -53,7 +53,7 @@ async def _subcmd_memory_list(
     """Display matching knowledge artifacts — one line each, with a count footer."""
     kind_filter = filters.get("kind")
     entries = load_artifacts(
-        ctx.deps.knowledge_dir,
+        ctx.deps.memory_dir,
         artifact_kinds=[kind_filter] if kind_filter is not None else None,
     )
     entries = filter_artifacts(entries, filters)
@@ -73,7 +73,7 @@ async def _subcmd_memory_count(
     """Print the count of matching artifacts."""
     kind_filter = filters.get("kind")
     entries = load_artifacts(
-        ctx.deps.knowledge_dir,
+        ctx.deps.memory_dir,
         artifact_kinds=[kind_filter] if kind_filter is not None else None,
     )
     entries = filter_artifacts(entries, filters)
@@ -99,7 +99,7 @@ async def _subcmd_memory_forget(
 
     kind_filter = filters.get("kind")
     entries = load_artifacts(
-        ctx.deps.knowledge_dir,
+        ctx.deps.memory_dir,
         artifact_kinds=[kind_filter] if kind_filter is not None else None,
     )
     entries = filter_artifacts(entries, filters)
@@ -122,7 +122,7 @@ async def _subcmd_memory_forget(
     for m in entries:
         m.path.unlink()
         if ctx.deps.memory_store is not None:
-            ctx.deps.memory_store.remove("knowledge", str(m.path))
+            ctx.deps.memory_store.remove(m.path)
 
     console.print(f"[success]✓ Deleted {len(entries)} memories.[/success]")
     return None
@@ -131,12 +131,12 @@ async def _subcmd_memory_forget(
 async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
     """Manually trigger a dream cycle; honour ``--dry`` for a non-destructive preview."""
     from co_cli.memory.dream import run_dream_cycle
-    from co_cli.tools.memory.manage import knowledge_manage
+    from co_cli.tools.memory.manage import memory_manage
 
     tokens = rest.split()
     dry_run = "--dry" in tokens
 
-    result = await run_dream_cycle(ctx.deps, knowledge_manage, dry_run=dry_run)
+    result = await run_dream_cycle(ctx.deps, memory_manage, dry_run=dry_run)
 
     header = "Dream cycle — dry run — no changes written" if dry_run else "Dream cycle complete"
     console.print(f"[info]{header}[/info]")
@@ -157,7 +157,7 @@ async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
     tokens = [t for t in rest.split() if not t.startswith("--")]
     slug = tokens[0] if tokens else ""
 
-    archive_dir = ctx.deps.knowledge_dir / "_archive"
+    archive_dir = ctx.deps.memory_dir / "_archive"
     if not slug:
         if not archive_dir.exists():
             console.print("[dim]No archived artifacts.[/dim]")
@@ -177,7 +177,7 @@ async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
         console.print(f"[dim]{len(entries)} archived artifact(s)[/dim]")
         return None
 
-    restored = restore_artifact(slug, ctx.deps.knowledge_dir, ctx.deps.memory_store)
+    restored = restore_artifact(slug, ctx.deps.memory_dir, ctx.deps.memory_store)
     if restored:
         console.print(f"[success]✓ Restored {slug}[/success]")
     else:
@@ -194,7 +194,7 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
     tokens = rest.split()
     dry_run = "--dry" in tokens
 
-    candidates = find_decay_candidates(ctx.deps.knowledge_dir, ctx.deps.config.knowledge)
+    candidates = find_decay_candidates(ctx.deps.memory_dir, ctx.deps.config.memory)
     if not candidates:
         console.print("[dim]No decay candidates.[/dim]")
         return None
@@ -215,7 +215,7 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
         console.print("[dim]Aborted.[/dim]")
         return None
 
-    archived = archive_artifacts(candidates, ctx.deps.knowledge_dir, ctx.deps.memory_store)
+    archived = archive_artifacts(candidates, ctx.deps.memory_dir, ctx.deps.memory_store)
     console.print(f"[success]✓ Archived {archived}.[/success]")
 
 
@@ -224,7 +224,7 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     from co_cli.memory.decay import find_decay_candidates
     from co_cli.memory.dream import load_dream_state
 
-    knowledge_dir = ctx.deps.knowledge_dir
+    knowledge_dir = ctx.deps.memory_dir
     artifacts = load_artifacts(knowledge_dir)
     total = len(artifacts)
 
@@ -249,7 +249,7 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     else:
         last_dream = "never"
 
-    candidates = find_decay_candidates(knowledge_dir, ctx.deps.config.knowledge)
+    candidates = find_decay_candidates(knowledge_dir, ctx.deps.config.memory)
 
     console.print(f"Knowledge: {total} artifacts")
     if kind_parts:

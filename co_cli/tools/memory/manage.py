@@ -1,4 +1,4 @@
-"""Memory management tool — `knowledge_manage` for create, append, replace, and delete actions."""
+"""Memory management tool — `memory_manage` for create, append, replace, delete."""
 
 import logging
 from typing import Literal
@@ -17,14 +17,14 @@ from co_cli.tools.tool_io import tool_error, tool_output
 logger = logging.getLogger(__name__)
 
 
-def _knowledge_manage_approval_subject(args: dict) -> ApprovalSubject:
+def _memory_manage_approval_subject(args: dict) -> ApprovalSubject:
     action = args.get("action", "unknown")
     name = args.get("name", "unknown")
     return ApprovalSubject(
-        tool_name="knowledge_manage",
+        tool_name="memory_manage",
         kind=ApprovalKindEnum.TOOL,
-        value=f"tool:knowledge_manage:{action}:{name}",
-        display=f"knowledge_manage(action={action!r}, name={name!r})",
+        value=f"tool:memory_manage:{action}:{name}",
+        display=f"memory_manage(action={action!r}, name={name!r})",
         can_remember=True,
     )
 
@@ -32,11 +32,11 @@ def _knowledge_manage_approval_subject(args: dict) -> ApprovalSubject:
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
     approval=True,
-    approval_subject_fn=_knowledge_manage_approval_subject,
+    approval_subject_fn=_memory_manage_approval_subject,
     is_concurrent_safe=True,
     retries=1,
 )
-async def knowledge_manage(
+async def memory_manage(
     ctx: RunContext[CoDeps],
     action: Literal["create", "append", "replace", "delete"],
     name: str,
@@ -44,27 +44,20 @@ async def knowledge_manage(
     kind: str | None = None,
     section: str | None = None,
 ) -> ToolReturn:
-    """Create, update, or delete a knowledge artifact.
+    """Create, update, or delete a memory artifact.
 
     action='create'  — Save a new artifact. Requires content and kind.
-                       Dedup behavior:
-                       - name treated as title; source_url dedup not supported here.
-                       - consolidation_enabled in config → Jaccard dedup.
     action='append'  — Add content at the end of an existing artifact body.
-                       name must be the filename_stem (from knowledge_search).
+                       name must be the filename_stem (from memory_search).
     action='replace' — Surgically replace a passage in an existing artifact.
                        name must be the filename_stem; section is the exact passage
                        to replace (must appear exactly once); content is the replacement.
     action='delete'  — Remove the artifact file and its index entries.
-                       name must be the filename_stem (from knowledge_search).
-
-    Returns a dict with:
-    - display: confirmation message — show directly to the user
-    - action: the action that was performed
+                       name must be the filename_stem (from memory_search).
 
     Args:
         action: One of create | append | replace | delete.
-        name: For create — the artifact title. For append/replace/delete — the filename_stem (from knowledge_search).
+        name: For create — the artifact title. For append/replace/delete — the filename_stem.
         content: Text body for create/append, or replacement text for replace.
         kind: Required for create. One of user | rule | article | note.
         section: For replace — the exact passage to replace (must appear exactly once).
@@ -85,7 +78,7 @@ async def knowledge_manage(
     )
 
 
-@trace("co.knowledge.knowledge_manage.create")
+@trace("co.memory.memory_manage.create")
 async def _handle_create(
     ctx: RunContext[CoDeps],
     *,
@@ -105,31 +98,31 @@ async def _handle_create(
             ctx=ctx,
         )
 
-    knowledge_dir = ctx.deps.knowledge_dir
+    memory_dir = ctx.deps.memory_dir
 
     span = current_span()
-    span.set_attribute("knowledge.artifact_kind", kind)
+    span.set_attribute("memory.artifact_kind", kind)
 
     result = save_artifact(
-        knowledge_dir,
+        memory_dir,
         content=content,
         artifact_kind=kind,
         title=name,
-        consolidation_enabled=ctx.deps.config.knowledge.consolidation_enabled,
-        consolidation_similarity_threshold=ctx.deps.config.knowledge.consolidation_similarity_threshold,
-        memory_store=ctx.deps.memory_store,
+        consolidation_enabled=ctx.deps.config.memory.consolidation_enabled,
+        consolidation_similarity_threshold=ctx.deps.config.memory.consolidation_similarity_threshold,
+        index_store=ctx.deps.index_store,
     )
-    span.set_attribute("knowledge.action", result.action)
-    if result.action != "skipped" and ctx.deps.memory_store is not None:
+    span.set_attribute("memory.action", result.action)
+    if result.action != "skipped" and ctx.deps.index_store is not None:
         reindex(
-            ctx.deps.memory_store,
+            ctx.deps.index_store,
             result.path,
             result.content,
             result.markdown_content,
             result.frontmatter_dict,
             result.filename_stem,
-            chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
-            chunk_overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
+            chunk_tokens=ctx.deps.config.memory.chunk_tokens,
+            chunk_overlap_tokens=ctx.deps.config.memory.chunk_overlap_tokens,
         )
 
     if result.action == "skipped":
@@ -156,7 +149,7 @@ async def _handle_create(
     )
 
 
-@trace("co.knowledge.knowledge_manage.mutate")
+@trace("co.memory.memory_manage.mutate")
 async def _handle_mutate(
     ctx: RunContext[CoDeps],
     *,
@@ -168,30 +161,30 @@ async def _handle_mutate(
     if content is None:
         return tool_error(f"content is required for action='{op}'", ctx=ctx)
 
-    knowledge_dir = ctx.deps.knowledge_dir
+    memory_dir = ctx.deps.memory_dir
     span = current_span()
-    span.set_attribute("knowledge.filename_stem", filename_stem)
-    span.set_attribute("knowledge.action", op)
+    span.set_attribute("memory.filename_stem", filename_stem)
+    span.set_attribute("memory.action", op)
 
     try:
         async with ctx.deps.resource_locks.try_acquire(filename_stem):
             result = mutate_artifact(
-                knowledge_dir,
+                memory_dir,
                 filename_stem=filename_stem,
                 action=op,
                 content=content,
                 target=target,
             )
-            if ctx.deps.memory_store is not None:
+            if ctx.deps.index_store is not None:
                 reindex(
-                    ctx.deps.memory_store,
+                    ctx.deps.index_store,
                     result.path,
                     result.updated_body,
                     result.markdown_content,
                     result.frontmatter,
                     result.filename_stem,
-                    chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
-                    chunk_overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
+                    chunk_tokens=ctx.deps.config.memory.chunk_tokens,
+                    chunk_overlap_tokens=ctx.deps.config.memory.chunk_overlap_tokens,
                 )
 
             return tool_output(
@@ -211,26 +204,26 @@ async def _handle_mutate(
         return tool_error(str(exc), ctx=ctx)
 
 
-@trace("co.knowledge.knowledge_manage.delete")
+@trace("co.memory.memory_manage.delete")
 async def _handle_delete(
     ctx: RunContext[CoDeps],
     *,
     filename_stem: str,
 ) -> ToolReturn:
-    knowledge_dir = ctx.deps.knowledge_dir
-    artifact_path = knowledge_dir / f"{filename_stem}.md"
+    memory_dir = ctx.deps.memory_dir
+    artifact_path = memory_dir / f"{filename_stem}.md"
 
     if not artifact_path.exists():
         return tool_error(
-            f"Artifact '{filename_stem}' not found — verify the filename_stem via knowledge_search",
+            f"Artifact '{filename_stem}' not found — verify the filename_stem via memory_search",
             ctx=ctx,
         )
 
-    current_span().set_attribute("knowledge.filename_stem", filename_stem)
+    current_span().set_attribute("memory.filename_stem", filename_stem)
     artifact_path.unlink()
 
     if ctx.deps.memory_store is not None:
-        ctx.deps.memory_store.remove("knowledge", str(artifact_path))
+        ctx.deps.memory_store.remove(artifact_path)
 
     return tool_output(
         f"✓ Deleted artifact '{filename_stem}'.",

@@ -10,7 +10,7 @@ from co_cli.display.core import console
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Start a fresh session."""
-    from co_cli.memory.session import new_session_path
+    from co_cli.session.filename import new_session_path
 
     if not ctx.message_history:
         console.print("[dim]Nothing to rotate — history is empty.[/dim]")

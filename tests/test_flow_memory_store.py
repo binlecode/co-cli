@@ -1,11 +1,13 @@
-"""Tests for MemoryStore — chunked FTS5 search and sync_dir(no_chunk=True) + get_chunk_content()."""
+"""Tests for IndexStore + MemoryStore — chunked FTS5 search and canon indexing."""
 
 from pathlib import Path
 
 import yaml
 from tests._settings import SETTINGS, make_settings
 
-from co_cli.memory.memory_store import MemoryStore
+from co_cli.index.chunk import Chunk
+from co_cli.index.store import IndexStore
+from co_cli.memory.store import MEMORY_SOURCE, MemoryStore
 
 _CANON_BODY = """\
 TARS humor is tactical: front-loaded, delivered flat, never announced.
@@ -17,14 +19,14 @@ Deference without servility: TARS endorses the structure because the structure e
 Operator owns the override. Unit executes within that boundary — no passive-aggressive drag.
 """
 
-_FTS5_CONFIG = SETTINGS.knowledge.model_copy(
+_FTS5_CONFIG = SETTINGS.memory.model_copy(
     update={
         "search_backend": "fts5",
         "embedding_provider": "none",
         "cross_encoder_reranker_url": None,
     }
 )
-_STORE_CONFIG = SETTINGS.model_copy(update={"knowledge": _FTS5_CONFIG})
+_STORE_CONFIG = SETTINGS.model_copy(update={"memory": _FTS5_CONFIG})
 
 
 def _write_canon_file(path: Path, body: str) -> None:
@@ -32,102 +34,123 @@ def _write_canon_file(path: Path, body: str) -> None:
     path.write_text(frontmatter + body, encoding="utf-8")
 
 
-def _make_store(tmp_path: Path) -> MemoryStore:
-    return MemoryStore(config=_STORE_CONFIG, memory_db_path=tmp_path / "search.db")
+def _make_index(tmp_path: Path) -> IndexStore:
+    return IndexStore(config=_STORE_CONFIG, db_path=tmp_path / "search.db")
+
+
+def _index_canon_file(index: IndexStore, path: Path, body: str) -> None:
+    """Index a canon file with no chunking (one chunk per file) — replicates bootstrap path."""
+    import hashlib
+
+    body_stripped = body.strip()
+    chunk = Chunk(
+        index=0,
+        content=body_stripped,
+        start_line=0,
+        end_line=max(0, len(body_stripped.splitlines()) - 1),
+    )
+    with index.transaction() as tx:
+        tx.upsert(
+            source="canon",
+            kind="canon",
+            path=str(path),
+            title=path.stem,
+            mtime=path.stat().st_mtime,
+            hash=hashlib.sha256(path.read_text().encode()).hexdigest(),
+        )
+        tx.index_chunks("canon", str(path), [chunk])
 
 
 def test_nochunk_produces_one_chunk_per_file(tmp_path: Path) -> None:
-    """sync_dir(no_chunk=True) stores exactly one chunk row per file, not one per paragraph."""
-    canon_dir = tmp_path / "memories"
+    """Canon indexing writes exactly one chunk row per file."""
+    canon_dir = tmp_path / "canon"
     canon_dir.mkdir()
-    _write_canon_file(canon_dir / "scene-a.md", _CANON_BODY)
-    _write_canon_file(canon_dir / "scene-b.md", _CANON_BODY_2)
+    a = canon_dir / "scene-a.md"
+    b = canon_dir / "scene-b.md"
+    _write_canon_file(a, _CANON_BODY)
+    _write_canon_file(b, _CANON_BODY_2)
 
-    store = _make_store(tmp_path)
+    index = _make_index(tmp_path)
     try:
-        store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)
-        row = store._conn.execute(
+        _index_canon_file(index, a, _CANON_BODY)
+        _index_canon_file(index, b, _CANON_BODY_2)
+        row = index._conn.execute(
             "SELECT COUNT(*) AS cnt FROM chunks WHERE source='canon'"
         ).fetchone()
         assert row["cnt"] == 2, f"expected 2 chunk rows (one per file), got {row['cnt']}"
     finally:
-        store.close()
+        index.close()
 
 
 def test_nochunk_chunk_index_is_zero(tmp_path: Path) -> None:
-    """sync_dir(no_chunk=True) assigns chunk_index=0 — no additional chunks at higher indices."""
-    canon_dir = tmp_path / "memories"
+    """Canon indexing assigns chunk_index=0."""
+    canon_dir = tmp_path / "canon"
     canon_dir.mkdir()
-    _write_canon_file(canon_dir / "scene-a.md", _CANON_BODY)
+    a = canon_dir / "scene-a.md"
+    _write_canon_file(a, _CANON_BODY)
 
-    store = _make_store(tmp_path)
+    index = _make_index(tmp_path)
     try:
-        store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)
-        rows = store._conn.execute(
+        _index_canon_file(index, a, _CANON_BODY)
+        rows = index._conn.execute(
             "SELECT chunk_index FROM chunks WHERE source='canon'"
         ).fetchall()
         assert all(r["chunk_index"] == 0 for r in rows), "all canon chunks must have chunk_index=0"
     finally:
-        store.close()
+        index.close()
 
 
 def test_get_chunk_content_returns_full_body(tmp_path: Path) -> None:
-    """get_chunk_content() returns the complete post-frontmatter body — not a snippet."""
-    canon_dir = tmp_path / "memories"
+    """get_chunk_content() returns the complete post-frontmatter body."""
+    canon_dir = tmp_path / "canon"
     canon_dir.mkdir()
     file_path = canon_dir / "scene-a.md"
     _write_canon_file(file_path, _CANON_BODY)
 
-    store = _make_store(tmp_path)
+    index = _make_index(tmp_path)
     try:
-        store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)
-        content = store.get_chunk_content("canon", str(file_path), 0)
-        assert content is not None, "get_chunk_content must return content for an indexed file"
-        assert "tactical" in content, "stored body must contain original text"
-        assert "humor" in content, "stored body must contain original text"
-        assert len(content) == len(_CANON_BODY.strip()), (
-            f"stored content length {len(content)} != body length {len(_CANON_BODY.strip())} — body was truncated"
-        )
+        _index_canon_file(index, file_path, _CANON_BODY)
+        content = index.get_chunk_content("canon", str(file_path), 0)
+        assert content is not None
+        assert "tactical" in content
+        assert "humor" in content
+        assert len(content) == len(_CANON_BODY.strip())
     finally:
-        store.close()
+        index.close()
 
 
 def test_get_chunk_content_returns_none_for_missing(tmp_path: Path) -> None:
-    """get_chunk_content() returns None rather than raising when the key does not exist."""
-    store = _make_store(tmp_path)
+    """get_chunk_content() returns None for an absent key."""
+    index = _make_index(tmp_path)
     try:
-        result = store.get_chunk_content("canon", "/nonexistent/path.md", 0)
+        result = index.get_chunk_content("canon", "/nonexistent/path.md", 0)
         assert result is None
     finally:
-        store.close()
+        index.close()
 
 
 def test_hash_skip_produces_zero_writes_on_rerun(tmp_path: Path) -> None:
-    """Re-running sync_dir on unchanged canon files skips all files — zero DB writes."""
-    canon_dir = tmp_path / "memories"
-    canon_dir.mkdir()
-    _write_canon_file(canon_dir / "scene-a.md", _CANON_BODY)
+    """MemoryStore.sync_dir skips unchanged files via hash check."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory_file(memory_dir / "001-test.md", body="some test body")
 
-    store = _make_store(tmp_path)
+    index = _make_index(tmp_path)
+    memory = MemoryStore(index=index, config=_STORE_CONFIG)
     try:
-        first = store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)
+        first = memory.sync_dir(memory_dir)
         assert first == 1, f"expected 1 file indexed on first run, got {first}"
 
-        second = store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)
+        second = memory.sync_dir(memory_dir)
         assert second == 0, f"expected 0 files indexed on second run (hash-skip), got {second}"
     finally:
-        store.close()
+        index.close()
 
 
-# ---------------------------------------------------------------------------
-# Chunked FTS5 search — default sync_dir path used by knowledge artifacts
-# ---------------------------------------------------------------------------
-
-
-def _write_knowledge_file(path: Path, *, body: str) -> None:
+def _write_memory_file(path: Path, *, body: str) -> None:
     fm = {
         "id": "test-1",
-        "kind": "knowledge",
+        "kind": "memory",
         "artifact_kind": "user",
         "created": "2026-01-01T00:00:00+00:00",
     }
@@ -138,13 +161,14 @@ def _write_knowledge_file(path: Path, *, body: str) -> None:
 
 
 def test_fts5_search_finds_indexed_entry(tmp_path: Path) -> None:
-    """MemoryStore FTS5-only path must return results for a synced artifact."""
-    knowledge_dir = tmp_path / "knowledge"
-    knowledge_dir.mkdir()
-    _write_knowledge_file(knowledge_dir / "001-test.md", body="Finch the robot dog test")
+    """IndexStore FTS5-only path returns results for a synced memory artifact."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    expected_path = memory_dir / "001-test.md"
+    _write_memory_file(expected_path, body="Finch the robot dog test")
 
     config = make_settings(
-        knowledge=SETTINGS.knowledge.model_copy(
+        memory=SETTINGS.memory.model_copy(
             update={
                 "search_backend": "fts5",
                 "embedding_provider": "none",
@@ -152,14 +176,14 @@ def test_fts5_search_finds_indexed_entry(tmp_path: Path) -> None:
             }
         ),
     )
-    expected_path = str(knowledge_dir / "001-test.md")
-    store = MemoryStore(config=config, memory_db_path=tmp_path / "search.db")
+    index = IndexStore(config=config, db_path=tmp_path / "search.db")
+    memory = MemoryStore(index=index, config=config)
     try:
-        store.sync_dir("knowledge", knowledge_dir)
-        results = store.search("Finch robot", sources=["knowledge"], limit=5)
+        memory.sync_dir(memory_dir)
+        results = index.search("Finch robot", sources=[MEMORY_SOURCE], limit=5)
         assert len(results) > 0, "FTS5 search returned no results for a synced artifact"
-        assert results[0].path == expected_path, (
-            f"expected result path {expected_path!r}, got {results[0].path!r}"
+        assert results[0].path == str(expected_path), (
+            f"expected result path {expected_path!s}, got {results[0].path!r}"
         )
     finally:
-        store.close()
+        index.close()

@@ -21,7 +21,7 @@ def _make_deps(tmp_path: Path) -> CoDeps:
         shell=ShellBackend(),
         config=SETTINGS,
         session=CoSessionState(),
-        knowledge_dir=tmp_path / "knowledge",
+        memory_dir=tmp_path / "knowledge",
     )
 
 

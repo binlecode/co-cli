@@ -43,8 +43,9 @@ class EvalFrontend(TerminalFrontend):
 
     Overrides only the blocking prompt surfaces — rendering surfaces
     (``on_status``, ``on_text_delta``, etc.) inherit from ``TerminalFrontend``
-    unchanged so the production display pipeline still emits the same OTel
-    spans and stdout output a real REPL would produce.
+    unchanged so the production display pipeline still emits the same
+    structured-log spans (``co_cli.observability.tracing``) and stdout
+    output a real REPL would produce.
     """
 
     def prompt_approval(self, subject: ApprovalSubject) -> str:

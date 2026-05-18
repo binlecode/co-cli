@@ -10,6 +10,7 @@ Public surface:
 - ``setup_log`` — configure the rotating JSON-line handler and redaction patterns
 - ``set_session_context`` / ``clear_session_context`` — bind a session_id to the contextvar
 - ``new_trace`` — start a fresh ``trace_id`` (spans on the stack keep their own id)
+- ``current_trace_id`` — read the trace_id bound to the contextvar (None if unset)
 - ``current_span`` — proxy over the top-of-stack span
 - ``trace`` — decorator with optional ``new_trace=True`` to reset the trace_id
   before pushing the decorated function's span
@@ -102,6 +103,17 @@ def new_trace() -> str:
     trace_id = _new_id("t")
     _TRACE_ID.set(trace_id)
     return trace_id
+
+
+def current_trace_id() -> str | None:
+    """Return the trace_id bound to the current contextvar, or None if unset.
+
+    After a ``@trace(new_trace=True)``-decorated function returns, the trace_id
+    set during its invocation remains in the contextvar (``pop_span`` clears
+    the span stack but does not reset the trace id). Callers like evals can
+    read this immediately after the call to learn which trace just ran.
+    """
+    return _TRACE_ID.get()
 
 
 class _Span:
@@ -343,6 +355,7 @@ def run_with_context(fn: Callable, *args: Any, **kwargs: Any) -> Callable[[], An
 __all__ = [
     "clear_session_context",
     "current_span",
+    "current_trace_id",
     "new_trace",
     "pop_span",
     "push_span",

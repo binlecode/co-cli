@@ -25,7 +25,7 @@ Specs live in `docs/specs/` — one file per subsystem. `docs/reference/` is for
 
 When to split a spec:
 - The spec exceeds ~500 lines AND covers 3+ clearly separable sub-domains, OR
-- A sibling sub-spec already exists with parallel structure (e.g. `memory.md` foundation + `knowledge.md` / `sessions.md` channel sub-specs).
+- A sibling sub-spec already exists with parallel structure (e.g. `memory.md` foundation + `memory.md` / `sessions.md` channel sub-specs).
 
 When to merge:
 - The spec is <80 lines AND has no realistic growth runway.

@@ -35,13 +35,15 @@ uv run pytest 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
 
 See `docs/specs/01-system.md` for architecture, `CoDeps`, capability surface, and security boundaries. See `docs/specs/core-loop.md` for agent loop internals, orchestration, and approval mechanics.
 
-### Memory System
+### Memory and Session
 
-Four operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability), and **memory** (declarative state the agent accumulates). Memory itself has two channels: **knowledge** (preferences, feedback, rules, decisions, references, articles, notes) and **session** (past transcripts; FTS5 chunk-cited on recall).
+Five operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability), **memory** (long-term declarative artifacts: user preferences, rules, articles, notes), and **session** (past conversation transcripts; FTS5 chunk-cited on recall).
 
-Storage: flat `~/.co-cli/knowledge/*.md` files with YAML frontmatter; FTS5 (BM25) search in `~/.co-cli/co-cli-search.db` (knowledge + session via `MemoryStore`; canon indexed there for personality auto-injection but never returned by any model-callable tool). Skills are discovered via the `<available_skills>` manifest injected into the static prompt (all bundled + user-installed).
+Storage: flat `~/.co-cli/memory/*.md` files with YAML frontmatter for memory artifacts; JSONL transcripts in `~/.co-cli/sessions/`; FTS5 (BM25) search in `~/.co-cli/co-cli-search.db` indexed by the shared `IndexStore` infrastructure facade (memory + session + canon, source-discriminated). Canon is indexed there for personality auto-injection but never returned by any model-callable tool. Skills are discovered via the `<available_skills>` manifest injected into the static prompt.
 
-Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browse with `knowledge_search` / `session_search` (empty query is fine); full-body reads use `knowledge_view(name)` with the `filename_stem` from a search hit. Tool signatures live in the model's tool manifest — see `docs/specs/memory.md`, `docs/specs/skills.md`, `docs/specs/personality.md`, and `docs/specs/prompt-assembly.md` for the full model. Implementation: `co_cli/memory/`, `co_cli/tools/memory/`, `co_cli/skills/`.
+Architecture: `co_cli/index/` (infrastructure facade — `IndexStore` public; retrieval, embedding, providers private) sits below two domain modules `co_cli/memory/` (`MemoryStore` — kinds, decay, dream) and `co_cli/session/` (`SessionStore` — transcripts, append-only). Tool surface at `co_cli/tools/memory/` (`memory_search`, `memory_view`, `memory_manage`) and `co_cli/tools/session/` (`session_search`, `session_view`).
+
+Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browse with `memory_search` / `session_search` (empty query is fine); full-body reads use `memory_view(name)` with the `filename_stem` from a search hit, or `session_view(session_id, start_line, end_line)` for verbatim turns. See `docs/specs/memory.md`, `docs/specs/sessions.md`, `docs/specs/skills.md`, `docs/specs/personality.md`, and `docs/specs/prompt-assembly.md` for the full model.
 
 ## Engineering Rules
 

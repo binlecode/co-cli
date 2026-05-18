@@ -1,12 +1,12 @@
-"""Dream-cycle state and orchestration for the knowledge lifecycle.
+"""Dream-cycle state and orchestration for the memory lifecycle.
 
 The dream cycle is a batch lifecycle pass that runs on session end (when
 ``consolidation_enabled`` is set). It performs three phases — transcript
-mining, knowledge merge, and automated decay — each bounded and each
-recoverable via ``knowledge_dir/_archive/``. Cross-cycle state (which
-sessions have already been mined, cumulative counters, last-run timestamp)
-persists to ``knowledge_dir/_dream_state.json``. See ``docs/specs/dream.md``
-for the dream lifecycle model.
+mining, memory merge, and automated decay — each bounded and each
+recoverable via ``memory_dir/_archive/``. Cross-cycle state (which sessions
+have already been mined, cumulative counters, last-run timestamp) persists
+to ``memory_dir/_dream_state.json``. See ``docs/specs/dream.md`` for the
+dream lifecycle model.
 """
 
 from __future__ import annotations
@@ -27,15 +27,16 @@ from co_cli.llm.call import llm_call
 from co_cli.memory._window import build_transcript_window
 from co_cli.memory.archive import archive_artifacts
 from co_cli.memory.artifact import (
-    KnowledgeArtifact,
+    MemoryArtifact,
     SourceTypeEnum,
     load_artifacts,
 )
 from co_cli.memory.decay import find_decay_candidates
-from co_cli.memory.service import reindex, save_artifact
+from co_cli.memory.service import save_artifact
 from co_cli.memory.similarity import token_jaccard
 from co_cli.observability.tracing import current_span, trace
 from co_cli.persistence.atomic import atomic_write_text
+from co_cli.session.persistence import load_transcript
 from co_cli.tools.lifecycle import CoToolLifecycle
 
 if TYPE_CHECKING:
@@ -69,25 +70,21 @@ class DreamStats(BaseModel):
 
 
 class DreamState(BaseModel):
-    """Cross-cycle dream state persisted at ``knowledge_dir/_dream_state.json``.
-
-    ``processed_sessions`` tracks session filenames that have been mined so
-    the retrospective extractor skips them on subsequent cycles.
-    """
+    """Cross-cycle dream state persisted at ``memory_dir/_dream_state.json``."""
 
     last_dream_at: str | None = None
     processed_sessions: list[str] = Field(default_factory=list)
     stats: DreamStats = Field(default_factory=DreamStats)
 
 
-def dream_state_path(knowledge_dir: Path) -> Path:
+def dream_state_path(memory_dir: Path) -> Path:
     """Canonical path for the dream-state JSON file."""
-    return knowledge_dir / _DREAM_STATE_FILENAME
+    return memory_dir / _DREAM_STATE_FILENAME
 
 
-def load_dream_state(knowledge_dir: Path) -> DreamState:
+def load_dream_state(memory_dir: Path) -> DreamState:
     """Load dream state from disk; return a fresh instance if missing or corrupt."""
-    path = dream_state_path(knowledge_dir)
+    path = dream_state_path(memory_dir)
     if not path.exists():
         return DreamState()
     try:
@@ -98,9 +95,9 @@ def load_dream_state(knowledge_dir: Path) -> DreamState:
         return DreamState()
 
 
-def save_dream_state(knowledge_dir: Path, state: DreamState) -> None:
-    """Persist dream state as JSON to ``knowledge_dir/_dream_state.json``."""
-    path = dream_state_path(knowledge_dir)
+def save_dream_state(memory_dir: Path, state: DreamState) -> None:
+    """Persist dream state as JSON to ``memory_dir/_dream_state.json``."""
+    path = dream_state_path(memory_dir)
     payload = state.model_dump()
     atomic_write_text(path, json.dumps(payload, indent=2))
 
@@ -111,7 +108,7 @@ def save_dream_state(knowledge_dir: Path, state: DreamState) -> None:
 
 
 def build_dream_miner_agent(miner_tool: Any) -> Agent[CoDeps, str]:
-    """Build a dream miner agent. Instantiated once per session; call .run() per chunk."""
+    """Build a dream miner agent. Instantiated once per session."""
     return Agent(
         instructions=_DREAM_PROMPT_PATH.read_text(encoding="utf-8").strip(),
         tools=[miner_tool],
@@ -126,9 +123,6 @@ def _chunk_dream_window(
     chunk_chars: int = _DREAM_WINDOW_CHUNK_CHARS,
     overlap_chars: int = _DREAM_WINDOW_CHUNK_OVERLAP_CHARS,
 ) -> list[str]:
-    """Split an oversized window into overlapping chunks; return a single-element
-    list when the window fits under ``soft_limit``.
-    """
     if len(window) <= soft_limit:
         return [window]
     chunks: list[str] = []
@@ -146,19 +140,15 @@ def _chunk_dream_window(
 async def _mine_transcripts(deps: CoDeps, state: DreamState, miner_tool: Any) -> int:
     """Mine recent unprocessed session transcripts for durable knowledge.
 
-    Returns the number of new knowledge artifacts written to
-    ``deps.knowledge_dir`` during this cycle. Sessions already listed in
-    ``state.processed_sessions`` are skipped. Malformed or empty transcripts
-    are marked processed so they are not retried. Sub-agent failures are
-    logged and the session is left unmarked so a future cycle can retry.
+    Returns the number of new artifacts written to ``deps.memory_dir`` during
+    this cycle. Sessions already listed in ``state.processed_sessions`` are
+    skipped.
     """
-    from co_cli.memory.transcript import load_transcript
-
     sessions_dir = deps.sessions_dir
     if not sessions_dir.exists():
         return 0
 
-    lookback = deps.config.knowledge.consolidation_lookback_sessions
+    lookback = deps.config.memory.consolidation_lookback_sessions
     all_sessions = sorted(sessions_dir.glob("*.jsonl"), reverse=True)
     recent = all_sessions[:lookback]
 
@@ -190,8 +180,7 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState, miner_tool: Any) ->
             state.processed_sessions.append(session_name)
             continue
 
-        before_count = _count_active_artifacts(deps.knowledge_dir)
-        # defensive init — bound even if miner_agent raises on the first chunk
+        before_count = _count_active_artifacts(deps.memory_dir)
         saves_so_far = 0
         miner_agent = build_dream_miner_agent(miner_tool)
         try:
@@ -202,7 +191,7 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState, miner_tool: Any) ->
                     model=model_obj,
                     metadata={"role": "dream_miner"},
                 )
-                saves_so_far = _count_active_artifacts(deps.knowledge_dir) - before_count
+                saves_so_far = _count_active_artifacts(deps.memory_dir) - before_count
                 if saves_so_far >= _MAX_MINE_SAVES_PER_SESSION:
                     logger.info(
                         "dream.mine: per-session save cap reached for %s (%d saves)",
@@ -224,34 +213,29 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState, miner_tool: Any) ->
     return extracted_total
 
 
-def _count_active_artifacts(knowledge_dir: Path) -> int:
+def _count_active_artifacts(memory_dir: Path) -> int:
     """Count top-level ``*.md`` artifacts, excluding the ``_archive/`` subdir."""
-    if not knowledge_dir.exists():
+    if not memory_dir.exists():
         return 0
-    return sum(1 for path in knowledge_dir.glob("*.md") if path.is_file())
+    return sum(1 for path in memory_dir.glob("*.md") if path.is_file())
 
 
 # ---------------------------------------------------------------------------
-# Knowledge merge — consolidate similar artifacts of the same kind
+# Memory merge — consolidate similar artifacts of the same kind
 # ---------------------------------------------------------------------------
 
 
 _DREAM_MERGE_PROMPT: str = _DREAM_MERGE_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
-def _is_merge_immune(artifact: KnowledgeArtifact) -> bool:
-    """decay_protected artifacts are never merged."""
+def _is_merge_immune(artifact: MemoryArtifact) -> bool:
     return artifact.decay_protected
 
 
 def _cluster_by_similarity(
-    members: list[KnowledgeArtifact], threshold: float
-) -> list[list[KnowledgeArtifact]]:
-    """Union-find clustering by pairwise token-Jaccard similarity.
-
-    Returns clusters of size ≥ 2 in arbitrary order. Same-kind grouping is
-    handled by the caller.
-    """
+    members: list[MemoryArtifact], threshold: float
+) -> list[list[MemoryArtifact]]:
+    """Union-find clustering by pairwise token-Jaccard similarity."""
     size = len(members)
     if size < 2:
         return []
@@ -276,14 +260,13 @@ def _cluster_by_similarity(
             if token_jaccard(members[i].content, members[j].content) >= threshold:
                 union(i, j)
 
-    grouped: dict[int, list[KnowledgeArtifact]] = defaultdict(list)
+    grouped: dict[int, list[MemoryArtifact]] = defaultdict(list)
     for idx, member in enumerate(members):
         grouped[find(idx)].append(member)
     return [cluster for cluster in grouped.values() if len(cluster) >= 2]
 
 
-def _render_merge_prompt(cluster: list[KnowledgeArtifact]) -> str:
-    """Format cluster entries for the merge sub-agent."""
+def _render_merge_prompt(cluster: list[MemoryArtifact]) -> str:
     parts: list[str] = []
     for index, artifact in enumerate(cluster, start=1):
         label = artifact.title or "untitled"
@@ -295,41 +278,34 @@ def _render_merge_prompt(cluster: list[KnowledgeArtifact]) -> str:
 
 def _write_consolidated_artifact(
     deps: CoDeps,
-    cluster: list[KnowledgeArtifact],
+    cluster: list[MemoryArtifact],
     merged_body: str,
 ) -> Path:
     """Write a new consolidated artifact via save_artifact and index it."""
     kind = cluster[0].artifact_kind
     title = cluster[0].title or f"consolidated {kind}"
     result = save_artifact(
-        deps.knowledge_dir,
+        deps.memory_dir,
         content=merged_body.strip(),
         artifact_kind=kind,
         title=title,
         source_type=SourceTypeEnum.CONSOLIDATED.value,
+        index_store=deps.index_store,
     )
 
-    if deps.memory_store is not None:
-        reindex(
-            deps.memory_store,
+    if deps.memory_store is not None and result.action != "skipped":
+        deps.memory_store.reindex_one(
             result.path,
             result.content,
             result.markdown_content,
             result.frontmatter_dict,
-            result.filename_stem,
-            chunk_tokens=deps.config.knowledge.chunk_tokens,
-            chunk_overlap_tokens=deps.config.knowledge.chunk_overlap_tokens,
         )
 
     return result.path
 
 
-async def _merge_cluster(deps: CoDeps, cluster: list[KnowledgeArtifact]) -> Path | None:
-    """Invoke the consolidation sub-agent and write one merged artifact.
-
-    Returns the new artifact's path on success; returns ``None`` when the
-    sub-agent output is too short or empty to trust (caller will skip archive).
-    """
+async def _merge_cluster(deps: CoDeps, cluster: list[MemoryArtifact]) -> Path | None:
+    """Invoke the consolidation sub-agent and write one merged artifact."""
     prompt = _render_merge_prompt(cluster)
     merged_body = (await llm_call(deps, prompt, instructions=_DREAM_MERGE_PROMPT) or "").strip()
     if len(merged_body) < _MERGED_BODY_MIN_CHARS:
@@ -341,22 +317,20 @@ async def _merge_cluster(deps: CoDeps, cluster: list[KnowledgeArtifact]) -> Path
     return _write_consolidated_artifact(deps, cluster, merged_body)
 
 
-def _identify_mergeable_clusters(deps: CoDeps) -> list[list[KnowledgeArtifact]]:
-    """Identify same-kind, non-immune clusters whose pairwise similarity clears
-    the configured threshold. Applied caps: per-cluster size and per-cycle count.
-    """
-    threshold = deps.config.knowledge.consolidation_similarity_threshold
-    artifacts = load_artifacts(deps.knowledge_dir)
+def _identify_mergeable_clusters(deps: CoDeps) -> list[list[MemoryArtifact]]:
+    """Identify same-kind, non-immune clusters above the similarity threshold."""
+    threshold = deps.config.memory.consolidation_similarity_threshold
+    artifacts = load_artifacts(deps.memory_dir)
     if not artifacts:
         return []
 
-    groups: dict[str, list[KnowledgeArtifact]] = defaultdict(list)
+    groups: dict[str, list[MemoryArtifact]] = defaultdict(list)
     for artifact in artifacts:
         if _is_merge_immune(artifact):
             continue
         groups[artifact.artifact_kind].append(artifact)
 
-    clusters: list[list[KnowledgeArtifact]] = []
+    clusters: list[list[MemoryArtifact]] = []
     for members in groups.values():
         clusters.extend(_cluster_by_similarity(members, threshold))
 
@@ -366,18 +340,10 @@ def _identify_mergeable_clusters(deps: CoDeps) -> list[list[KnowledgeArtifact]]:
 
 @trace("co.dream.merge.apply")
 async def _merge_similar_artifacts(deps: CoDeps) -> int:
-    """Run the merge phase of the dream cycle.
-
-    Returns the number of clusters merged. Respects per-cycle and per-cluster
-    caps. Decay-protected artifacts are excluded before clustering and never
-    appear in any cluster. Archives originals only after the merged artifact
-    is durably written.
-    """
     clusters = _identify_mergeable_clusters(deps)
     if not clusters:
         return 0
 
-    knowledge_dir = deps.knowledge_dir
     merged_count = 0
     for cluster in clusters:
         try:
@@ -388,7 +354,7 @@ async def _merge_similar_artifacts(deps: CoDeps) -> int:
         if merged is None:
             continue
         try:
-            archive_artifacts(cluster, knowledge_dir, deps.memory_store)
+            archive_artifacts(cluster, deps.memory_dir, deps.memory_store)
         except Exception:
             logger.warning(
                 "dream.merge: archive failed after merge; merged artifact kept",
@@ -406,18 +372,12 @@ async def _merge_similar_artifacts(deps: CoDeps) -> int:
 
 @trace("co.dream.decay.apply")
 def _decay_sweep(deps: CoDeps) -> int:
-    """Archive decay-eligible artifacts; return the number archived.
-
-    Uses :func:`find_decay_candidates` (TASK-5.2) then moves the oldest
-    ``_MAX_DECAY_PER_CYCLE`` entries to ``knowledge_dir/_archive/`` via
-    :func:`archive_artifacts` (TASK-5.1). Pinned and decay-protected entries
-    are already excluded by the candidate selector.
-    """
-    candidates = find_decay_candidates(deps.knowledge_dir, deps.config.knowledge)
+    """Archive decay-eligible artifacts; return the number archived."""
+    candidates = find_decay_candidates(deps.memory_dir, deps.config.memory)
     if not candidates:
         return 0
     batch = candidates[:_MAX_DECAY_PER_CYCLE]
-    return archive_artifacts(batch, deps.knowledge_dir, deps.memory_store)
+    return archive_artifacts(batch, deps.memory_dir, deps.memory_store)
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +410,7 @@ def _preview_merge_clusters(deps: CoDeps) -> int:
 
 @trace("co.dream.decay.preview")
 def _preview_decay_candidates(deps: CoDeps) -> int:
-    candidates = find_decay_candidates(deps.knowledge_dir, deps.config.knowledge)
+    candidates = find_decay_candidates(deps.memory_dir, deps.config.memory)
     n = min(len(candidates), _MAX_DECAY_PER_CYCLE)
     current_span().set_attribute("dream.decayed", n)
     return n
@@ -464,20 +424,9 @@ async def run_dream_cycle(
     *,
     timeout_secs: float = _DREAM_CYCLE_TIMEOUT_SECS,
 ) -> DreamResult:
-    """Execute a full dream cycle — mine transcripts, merge similar artifacts, decay stale.
-
-    Each phase is independently try/except'd so one failure does not block the
-    others. The whole cycle runs under an ``asyncio.timeout(timeout_secs)``
-    bound (default 60s); on timeout the partial result is returned with
-    ``timed_out=True`` and a marker appended to ``errors``. When ``dry_run``
-    is True, no files are written, no originals are archived, and no state is
-    persisted; ``result.merged`` reports the number of clusters that would be
-    merged and ``result.decayed`` reports the number of artifacts that would
-    be archived. Mining is skipped in dry-run mode (requires an LLM call to
-    predict).
-    """
+    """Execute a full dream cycle — mine, merge, decay."""
     result = DreamResult()
-    state = load_dream_state(deps.knowledge_dir)
+    state = load_dream_state(deps.memory_dir)
 
     cycle_span = current_span()
     cycle_span.set_attribute("dream.dry_run", dry_run)
@@ -512,7 +461,7 @@ async def run_dream_cycle(
                 state.stats.total_extracted += result.extracted
                 state.stats.total_merged += result.merged
                 state.stats.total_decayed += result.decayed
-                save_dream_state(deps.knowledge_dir, state)
+                save_dream_state(deps.memory_dir, state)
     except TimeoutError:
         logger.warning("dream.cycle: timeout after %ss — returning partial result", timeout_secs)
         result.timed_out = True

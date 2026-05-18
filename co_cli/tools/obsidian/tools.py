@@ -7,7 +7,7 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.memory.search_util import snippet_around
+from co_cli.index.search_util import snippet_around
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
 
@@ -39,6 +39,37 @@ def _extract_frontmatter_tags(content: str) -> set[str]:
     return tags
 
 
+def _sync_obsidian_dir(index_store, search_root: Path) -> None:
+    """Incrementally index an Obsidian directory under source='obsidian'."""
+    import hashlib
+
+    from co_cli.index.chunk import Chunk
+    from co_cli.memory.chunker import chunk_text
+
+    current_paths: set[str] = set()
+    for file_path in search_root.rglob("*.md"):
+        path_str = str(file_path)
+        current_paths.add(path_str)
+        try:
+            raw = file_path.read_text(encoding="utf-8")
+            file_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            if not index_store.needs_reindex("obsidian", path_str, file_hash):
+                continue
+            with index_store.transaction() as tx:
+                tx.upsert(
+                    source="obsidian",
+                    path=path_str,
+                    title=file_path.stem,
+                    mtime=file_path.stat().st_mtime,
+                    hash=file_hash,
+                )
+                chunks: list[Chunk] = chunk_text(raw.strip(), chunk_tokens=600, overlap_tokens=80)
+                tx.index_chunks("obsidian", path_str, chunks)
+        except Exception:
+            continue
+    index_store.remove_stale("obsidian", current_paths, directory=search_root)
+
+
 def _format_note_result(file_path: str, snippet: str | None) -> list[str]:
     """Format one note search result into display lines."""
     lines = [f"**{file_path}**"]
@@ -59,8 +90,8 @@ def _fts_search_notes(
 ) -> ToolReturn | None:
     """FTS5 search path. Returns ToolReturn on success, None to fall through to regex."""
     try:
-        ctx.deps.memory_store.sync_dir("obsidian", search_root)
-        fts_results = ctx.deps.memory_store.search(
+        _sync_obsidian_dir(ctx.deps.index_store, search_root)
+        fts_results = ctx.deps.index_store.search(
             query,
             sources=["obsidian"],
             limit=limit + 1,
@@ -187,7 +218,7 @@ def obsidian_search(
     query is broad.
 
     This tool searches the user's Obsidian note vault (local markdown files).
-    For stored preferences and decisions, use knowledge_search instead. For cloud
+    For stored preferences and decisions, use memory_search instead. For cloud
     documents, use google_drive_search.
 
     Returns a dict with:
@@ -219,7 +250,7 @@ def obsidian_search(
         tag = f"#{tag}"
     search_root = vault / folder if folder else vault
 
-    if ctx.deps.memory_store is not None:
+    if ctx.deps.index_store is not None:
         result = _fts_search_notes(ctx, vault, search_root, query, keywords, tag, limit)
         if result is not None:
             return result

@@ -167,24 +167,25 @@ def google_drive_read(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
         text = content.decode("utf-8")
 
         # FTS index — opportunistically cache Drive content after full fetch
-        if ctx.deps.memory_store is not None:
+        if ctx.deps.index_store is not None:
             try:
                 import hashlib as _hashlib
 
-                ctx.deps.memory_store.index(
-                    source="drive",
-                    path=file_id,
-                    title=file.get("name"),
-                    hash=_hashlib.sha256(text.encode()).hexdigest(),
-                )
-                from co_cli.memory.text_chunker import chunk_text
+                from co_cli.memory.chunker import chunk_text
 
                 drive_chunks = chunk_text(
                     text,
-                    chunk_tokens=ctx.deps.config.knowledge.chunk_tokens,
-                    overlap_tokens=ctx.deps.config.knowledge.chunk_overlap_tokens,
+                    chunk_tokens=ctx.deps.config.memory.chunk_tokens,
+                    overlap_tokens=ctx.deps.config.memory.chunk_overlap_tokens,
                 )
-                ctx.deps.memory_store.index_chunks("drive", file_id, drive_chunks)
+                with ctx.deps.index_store.transaction() as tx:
+                    tx.upsert(
+                        source="drive",
+                        path=file_id,
+                        title=file.get("name"),
+                        hash=_hashlib.sha256(text.encode()).hexdigest(),
+                    )
+                    tx.index_chunks("drive", file_id, drive_chunks)
             except Exception:
                 pass
 

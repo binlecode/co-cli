@@ -71,3 +71,19 @@ def build_model(llm: LlmSettings) -> LlmModel:
         )
 
     raise ValueError(f"Unsupported provider: {llm.provider!r}")
+
+
+def build_judge_model(llm: LlmSettings) -> LlmModel | None:
+    """Build a pinned-distinct judge model from ``llm.judge_model``.
+
+    Returns None when ``judge_model`` is unset — callers fall back to the agent
+    model and flag ``[judge_model_same_as_agent]`` in ``CaseResult.reason``.
+
+    The judge inherits provider/host/api_key from ``llm``; only the model name
+    differs. This is intentional: phase-2 UAT is local Ollama with multiple
+    models on the same host. Cross-provider judges are out of scope.
+    """
+    if llm.judge_model is None:
+        return None
+    judge_settings = llm.model_copy(update={"model": llm.judge_model})
+    return build_model(judge_settings)

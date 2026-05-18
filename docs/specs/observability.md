@@ -178,7 +178,7 @@ One JSON object per closed span, one line per record. Schema version 1:
 | `co.dream.mine` | `co` | mine attributes — `@trace("co.dream.mine")` on `_mine_transcripts()`. |
 | `co.dream.merge.apply` / `co.dream.merge.preview` | `co` | merge attributes — split by dry-run/apply path. |
 | `co.dream.decay.apply` / `co.dream.decay.preview` | `co` | decay attributes — split by dry-run/apply path. |
-| `co.knowledge.knowledge_manage.{create,mutate,delete}` | `co` | `knowledge.artifact_kind`, `knowledge.filename_stem`, `knowledge.action` — `@trace(...)` on `_handle_{create,mutate,delete}()`. |
+| `co.knowledge.memory_manage.{create,mutate,delete}` | `co` | `knowledge.artifact_kind`, `knowledge.filename_stem`, `knowledge.action` — `@trace(...)` on `_handle_{create,mutate,delete}()`. |
 | `co.web_research.retry_loop` | `co` | `agent.role`, `agent.model`, `agent.request_limit`, `agent.requests_used` — `@trace("co.web_research.retry_loop")` on `web_research()` retry-on-empty wrapper. |
 | `compaction.proactive_check` | `co` | `compaction.msgs`, `compaction.token_count`, `compaction.threshold`, `compaction.budget`, `compaction.fired` (bool), `compaction.skip_reason`, `compaction.tokens_after`, `compaction.savings_pct`, etc. — `@trace("compaction.proactive_check")` on `proactive_window_processor()`. |
 

@@ -11,8 +11,8 @@ import pytest
 import yaml
 from tests._settings import SETTINGS
 
+from co_cli.index.store import IndexStore
 from co_cli.memory.artifact import load_artifact
-from co_cli.memory.memory_store import MemoryStore
 from co_cli.memory.service import mutate_artifact, reindex, save_artifact
 
 # ---------------------------------------------------------------------------
@@ -20,8 +20,8 @@ from co_cli.memory.service import mutate_artifact, reindex, save_artifact
 # ---------------------------------------------------------------------------
 
 
-def _make_store(tmp_path, name="test-search.db") -> MemoryStore:
-    return MemoryStore(config=SETTINGS, memory_db_path=tmp_path / name)
+def _make_store(tmp_path, name="test-search.db") -> IndexStore:
+    return IndexStore(config=SETTINGS, db_path=tmp_path / name)
 
 
 # ---------------------------------------------------------------------------
@@ -32,14 +32,14 @@ def _make_store(tmp_path, name="test-search.db") -> MemoryStore:
 def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
     """save_artifact (straight path) must write a file AND index it in FTS5.
 
-    Failure mode: file written but not indexed → knowledge_search misses newly
+    Failure mode: file written but not indexed → memory_search misses newly
     created artifacts on the next turn.
     """
-    knowledge_dir = tmp_path / "knowledge"
+    memory_dir = tmp_path / "memory"
     store = _make_store(tmp_path)
     try:
         result = save_artifact(
-            knowledge_dir,
+            memory_dir,
             content="pytest is a testing framework",
             artifact_kind="note",
             title="pytest note",
@@ -77,11 +77,11 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
     Failure mode: duplicate articles accumulate silently → user gets stale
     content in search results.
     """
-    knowledge_dir = tmp_path / "knowledge"
+    memory_dir = tmp_path / "memory"
     url = "https://example.com/test-page"
 
     save_artifact(
-        knowledge_dir,
+        memory_dir,
         content="original content",
         artifact_kind="article",
         title="test article",
@@ -89,7 +89,7 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
     )
 
     second = save_artifact(
-        knowledge_dir,
+        memory_dir,
         content="updated content",
         artifact_kind="article",
         title="test article",
@@ -97,7 +97,7 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
     )
 
     assert second.action in ("appended", "merged"), f"expected dedup action, got {second.action!r}"
-    md_files = list(knowledge_dir.glob("*.md"))
+    md_files = list(memory_dir.glob("*.md"))
     assert len(md_files) == 1, (
         f"expected exactly 1 .md file after URL dedup, found {len(md_files)}: {md_files}"
     )
@@ -114,7 +114,7 @@ def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
     The code checks best_score > 0.9 before the superset path, so 'skipped'
     fires regardless of superset status.
     """
-    knowledge_dir = tmp_path / "knowledge"
+    memory_dir = tmp_path / "memory"
     # 20 distinct meaningful tokens (no stopwords, all len > 1).
     base = (
         "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
@@ -122,7 +122,7 @@ def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
     ) * 3
 
     save_artifact(
-        knowledge_dir,
+        memory_dir,
         content=base,
         artifact_kind="note",
         title="nato note",
@@ -131,7 +131,7 @@ def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
 
     # Adding one word: Jaccard = 20/21 ≈ 0.95 > 0.9 → triggers 'skipped'.
     second = save_artifact(
-        knowledge_dir,
+        memory_dir,
         content=base + " ultraviolet",
         artifact_kind="note",
         title="nato note",
@@ -149,16 +149,16 @@ def test_mutate_artifact_append_adds_content_at_end(tmp_path):
     Failure mode: append silently no-ops or overwrites → memory modification
     is lost on the next read.
     """
-    knowledge_dir = tmp_path / "knowledge"
+    memory_dir = tmp_path / "memory"
     saved = save_artifact(
-        knowledge_dir,
+        memory_dir,
         content="initial body",
         artifact_kind="note",
         title="my note",
     )
 
     mutate_result = mutate_artifact(
-        knowledge_dir,
+        memory_dir,
         filename_stem=saved.filename_stem,
         action="append",
         content="new line",
@@ -178,9 +178,9 @@ def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
     Failure mode: replace picks wrong occurrence → artifact body silently
     corrupted with no error surfaced to the caller.
     """
-    knowledge_dir = tmp_path / "knowledge"
+    memory_dir = tmp_path / "memory"
     saved = save_artifact(
-        knowledge_dir,
+        memory_dir,
         content="same line\nsame line\nother content",
         artifact_kind="note",
         title="dupe note",
@@ -188,7 +188,7 @@ def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
 
     with pytest.raises(ValueError, match="appears"):
         mutate_artifact(
-            knowledge_dir,
+            memory_dir,
             filename_stem=saved.filename_stem,
             action="replace",
             target="same line",
@@ -202,13 +202,13 @@ def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
     Failure mode: without memory_store, dedup relies on O(n) file scan; with it, a single
     SQL lookup replaces the scan — this test confirms the index path produces action='merged'.
     """
-    knowledge_dir = tmp_path / "knowledge"
+    memory_dir = tmp_path / "memory"
     store = _make_store(tmp_path)
     url = "https://example.com/index-dedup"
 
     try:
         first = save_artifact(
-            knowledge_dir,
+            memory_dir,
             content="first version",
             artifact_kind="article",
             title="index dedup test",
@@ -226,18 +226,18 @@ def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
         )
 
         second = save_artifact(
-            knowledge_dir,
+            memory_dir,
             content="updated version",
             artifact_kind="article",
             title="index dedup test",
             source_url=url,
-            memory_store=store,
+            index_store=store,
         )
 
         assert second.action == "merged", (
             f"Expected 'merged' when index path is used for dedup, got {second.action!r}"
         )
-        md_files = list(knowledge_dir.glob("*.md"))
+        md_files = list(memory_dir.glob("*.md"))
         assert len(md_files) == 1, (
             f"Expected 1 .md file after index-path dedup, found {len(md_files)}"
         )
@@ -247,7 +247,7 @@ def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
 
 def _write_seeded_artifact(path: Path, body: str) -> None:
     frontmatter = {
-        "kind": "knowledge",
+        "kind": "memory",
         "artifact_kind": "note",
         "id": "test-123",
         "created": "2026-01-01T00:00:00+00:00",
@@ -260,13 +260,13 @@ def _write_seeded_artifact(path: Path, body: str) -> None:
 
 def test_mutate_artifact_replace_preserves_frontmatter(tmp_path: Path) -> None:
     """mutate_artifact action='replace' must update the body without corrupting frontmatter."""
-    knowledge_dir = tmp_path / "knowledge"
-    knowledge_dir.mkdir()
-    artifact_path = knowledge_dir / "test-art.md"
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    artifact_path = memory_dir / "test-art.md"
     _write_seeded_artifact(artifact_path, "original body content")
 
     mutate_artifact(
-        knowledge_dir,
+        memory_dir,
         filename_stem="test-art",
         action="replace",
         content="updated body content",

@@ -6,21 +6,27 @@ REPORT structure per the plan:
 - Top-3 slow operations (sorted by ``model_call_seconds``)
 - Regression-vs-prior-run diff (deltas vs the previous run's cases)
 - Per-case trace-file links → ``_outputs/<eval>-<ts>/case_<id>.jsonl``
+- Review signals — SOFT_PASS / SOFT_FAIL cases surfaced for human attention
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from evals._observability import CaseResult, load_prior_cases, prior_run_dir
+from evals._observability import CaseResult, Verdict, load_prior_cases, prior_run_dir
+
+_VERDICT_CHIP = {
+    Verdict.PASS: "PASS",
+    Verdict.FAIL: "FAIL",
+    Verdict.SOFT_PASS: "SOFT_PASS",
+    Verdict.SOFT_FAIL: "SOFT_FAIL",
+}
 
 
 def _verdict_chip(case: CaseResult) -> str:
     if case.skipped:
         return f"SKIP:{case.skip_category or '?'}"
-    if case.passed:
-        return "SOFT" if case.soft_fail else "PASS"
-    return "FAIL"
+    return _VERDICT_CHIP[case.verdict]
 
 
 def _fmt_tokens(usage: dict[str, int]) -> str:
@@ -60,6 +66,17 @@ def _build_slow_ops(cases: list[CaseResult]) -> list[str]:
     return lines
 
 
+def _build_review_signals(cases: list[CaseResult]) -> list[str]:
+    soft = [c for c in cases if c.soft]
+    if not soft:
+        return ["_(no review signals this run)_"]
+    lines = []
+    for c in soft:
+        chip = _verdict_chip(c)
+        lines.append(f"- **{c.name}** [{chip}] — {c.reason or '_(no reason)_'}")
+    return lines
+
+
 def _build_regression_diff(
     cases: list[CaseResult],
     prior: dict[str, CaseResult],
@@ -72,10 +89,9 @@ def _build_regression_diff(
         if p is None:
             rows.append(f"- {c.name}: new case (no prior run)")
             continue
-        if c.passed != p.passed:
+        if c.verdict != p.verdict:
             rows.append(
-                f"- {c.name}: verdict {'PASS' if p.passed else 'FAIL'} → "
-                f"{'PASS' if c.passed else 'FAIL'}"
+                f"- {c.name}: verdict {_VERDICT_CHIP[p.verdict]} → {_VERDICT_CHIP[c.verdict]}"
             )
         if c.model_call_seconds > 0 and p.model_call_seconds > 0:
             delta = c.model_call_seconds - p.model_call_seconds
@@ -97,8 +113,8 @@ def _build_trace_links(cases: list[CaseResult], run_dir_relpath: str) -> list[st
             lines.append(f"- **{c.name}** — _(no trace)_")
             continue
         link_parts = [f"[{Path(t).name}]({run_dir_relpath}/{Path(t).name})" for t in c.trace_files]
-        otel = f" · trace_id=`{c.trace_id}`" if c.trace_id else ""
-        lines.append(f"- **{c.name}** — {', '.join(link_parts)}{otel}")
+        trace_chip = f" · `co trace {c.trace_id}`" if c.trace_id else ""
+        lines.append(f"- **{c.name}** — {', '.join(link_parts)}{trace_chip}")
     return lines
 
 
@@ -127,21 +143,24 @@ def prepend_report(
         except ValueError:
             run_dir_relpath = str(run_dir)
 
-    failed = sum(1 for c in cases if not c.passed and not c.skipped)
-    soft = sum(1 for c in cases if c.soft_fail)
+    passed = sum(1 for c in cases if c.verdict == Verdict.PASS and not c.skipped)
+    failed = sum(1 for c in cases if c.verdict == Verdict.FAIL and not c.skipped)
+    soft_pass = sum(1 for c in cases if c.verdict == Verdict.SOFT_PASS)
+    soft_fail = sum(1 for c in cases if c.verdict == Verdict.SOFT_FAIL)
     skipped = sum(1 for c in cases if c.skipped)
-    passed = sum(1 for c in cases if c.passed and not c.skipped)
 
     section_lines: list[str] = [
         f"## Run {run_iso}",
         "",
-        f"**Summary:** {passed} PASS · {failed} FAIL · {soft} SOFT_FAIL · {skipped} SKIP "
-        f"(total {len(cases)})",
+        f"**Summary:** {passed} PASS · {failed} FAIL · {soft_pass} SOFT_PASS · "
+        f"{soft_fail} SOFT_FAIL · {skipped} SKIP (total {len(cases)})",
         "",
         "### Cases",
         "",
     ]
     section_lines += _build_header_table(cases)
+    section_lines += ["", "### Review signals", ""]
+    section_lines += _build_review_signals(cases)
     section_lines += ["", "### Slow ops (top 3)", ""]
     section_lines += _build_slow_ops(cases)
     section_lines += ["", "### Regression vs prior run", ""]

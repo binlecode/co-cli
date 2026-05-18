@@ -1,14 +1,16 @@
-"""UAT eval — Workflow 1: Daily chat / one-shot task.
+"""UAT eval — Workflow 1: Daily chat (multi-turn conversation).
 
-Covers the default REPL path: ``uv run co chat`` → prompt → ``run_turn`` →
-personality + recall injection → tool loop with approval gates → reasoning
-display → JSONL persist → dream-cycle smoke.
+Drives the default REPL path: ``uv run co chat`` → multi-turn dialogue →
+``run_turn`` with carried ``message_history`` → tool loop with approval gates
+→ reasoning display → dream-cycle smoke. Each conversational case runs
+2-3 turns so context retention and tool chaining — the parts of agent
+behavior that single-turn evals can't see — are actually exercised.
 
 Cases:
-  W1.A  happy_path_qualified_response   single-turn + LLM judge for on-topic + voice.
-  W1.B  tool_choice_quality              prompt that should pick ``file_find``.
-  W1.C  recall_used_in_response          seeded knowledge token surfaces in response.
-  W1.D  dream_callable_smoke (failure)   dream cycle dry-run is callable, no lock leaks.
+  W1.A  multi_turn_coherence    3-turn ask → follow-up → recap. Judge rubric on coherence + voice.
+  W1.B  tool_chain              2-turn: list files → read a listed file.
+  W1.C  recall_reuse            2-turn: memory_view a seed → follow-up uses the recalled content.
+  W1.D  dream_callable_smoke    Boundary: ``run_dream_cycle(dry_run=True)`` callable, no lock leaks.
 
 Specs: docs/specs/core-loop.md, prompt-assembly.md, dream.md.
 
@@ -22,16 +24,22 @@ import asyncio
 import sys
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from evals._deps import eval_deps
-from evals._judge import judge_with_llm
-from evals._observability import CaseResult, open_eval_run
+from evals._judge import judge_model_annotation, judge_with_llm
+from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
-from evals._timeouts import CALL_TIMEOUT_S, DREAM_CYCLE_BUDGET_S, TURN_BUDGET_S
+from evals._timeouts import (
+    CALL_TIMEOUT_S,
+    DREAM_CYCLE_BUDGET_S,
+    TOOL_TURN_BUDGET_S,
+    TURN_BUDGET_S,
+)
 from evals._trace import record_turn, scan_artifact_paths
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 
@@ -39,7 +47,7 @@ from co_cli.context.orchestrate import run_turn
 from co_cli.memory.artifact import ArtifactKindEnum
 from co_cli.memory.dream import run_dream_cycle
 from co_cli.memory.frontmatter import render_frontmatter
-from co_cli.tools.memory.manage import knowledge_manage
+from co_cli.tools.memory.manage import memory_manage
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-daily-chat.md"
 
@@ -47,13 +55,27 @@ _SEED_STEM = "eval_W1_seed"
 _SEED_TOKEN = "MNEMONIC_TOKEN_42"
 _SEED_BODY = f"{_SEED_TOKEN} my staging deploy id reminder."
 
-_JUDGE_NOTE = "[judge_model_same_as_agent]"
+
+@dataclass(frozen=True)
+class _TurnSlice:
+    """Per-turn view of a multi-turn drive.
+
+    ``assistant_text`` and ``tool_calls`` cover ONLY the messages added during
+    this turn — not the cumulative history. The cumulative history lives on
+    ``result.messages`` and is what the next turn carries forward.
+    """
+
+    result: Any
+    trace: Any
+    new_messages: list[Any]
+    assistant_text: str
+    tool_calls: list[ToolCallPart]
 
 
-def _response_text(result: Any) -> str:
-    """Concatenate all assistant text parts emitted across the turn."""
+def _assistant_text_from(messages: list[Any]) -> str:
+    """Concatenate ``TextPart.content`` across the given assistant messages."""
     parts: list[str] = []
-    for msg in getattr(result, "messages", None) or []:
+    for msg in messages:
         if isinstance(msg, ModelResponse):
             for part in msg.parts:
                 if isinstance(part, TextPart):
@@ -61,10 +83,10 @@ def _response_text(result: Any) -> str:
     return " ".join(parts)
 
 
-def _tool_calls(result: Any) -> list[ToolCallPart]:
-    """Walk the turn's messages → list of ToolCallPart entries in call order."""
+def _tool_calls_from(messages: list[Any]) -> list[ToolCallPart]:
+    """Extract ToolCallParts in call order across the given assistant messages."""
     calls: list[ToolCallPart] = []
-    for msg in getattr(result, "messages", None) or []:
+    for msg in messages:
         if isinstance(msg, ModelResponse):
             for part in msg.parts:
                 if isinstance(part, ToolCallPart):
@@ -72,14 +94,25 @@ def _tool_calls(result: Any) -> list[ToolCallPart]:
     return calls
 
 
-def _session_line_count(path: Path) -> int:
-    """Best-effort line count of the active session JSONL — 0 if absent."""
-    if not path or not Path(path).exists():
-        return 0
-    try:
-        return sum(1 for _ in Path(path).open("r", encoding="utf-8"))
-    except OSError:
-        return 0
+def _used_shell_command(calls: list[ToolCallPart], cmd: str) -> bool:
+    """True if any ``shell_exec`` call's args mention the given command substring."""
+    for tc in calls:
+        if tc.tool_name != "shell_exec":
+            continue
+        args_repr = tc.args if isinstance(tc.args, str) else repr(tc.args)
+        if cmd in args_repr.lower():
+            return True
+    return False
+
+
+def _aggregate_trace_stats(slices: list[_TurnSlice]) -> tuple[float, dict[str, int]]:
+    """Sum ``model_call_seconds`` and ``token_usage`` across turns."""
+    total_seconds = sum(getattr(s.trace, "model_call_seconds", 0.0) for s in slices)
+    totals: dict[str, int] = {}
+    for s in slices:
+        for k, v in (getattr(s.trace, "token_usage", None) or {}).items():
+            totals[k] = totals.get(k, 0) + int(v)
+    return total_seconds, totals
 
 
 def _seed_knowledge_artifact(knowledge_dir: Path) -> Path:
@@ -114,73 +147,133 @@ def _dream_lock_keys(deps: Any) -> list[str]:
     return [k for k in locks if "dream" in str(k).lower()]
 
 
-async def _case_w1_a_happy_path(
+async def _drive_turns(
+    *,
+    case_id: str,
+    deps: Any,
+    agent: Any,
+    frontend: Any,
+    case_dir_path: Path,
+    inputs: list[str],
+) -> list[_TurnSlice]:
+    """Drive N user turns carrying ``message_history`` forward.
+
+    Each turn gets its own ``CALL_TIMEOUT_S`` budget. ``record_turn`` writes
+    every turn under the same case JSONL with a distinct ``turn_index``. The
+    returned slices expose per-turn assistant text and tool calls so checks
+    can target a specific turn rather than the cumulative history.
+    """
+    history: list[Any] = []
+    slices: list[_TurnSlice] = []
+    for i, user_input in enumerate(inputs):
+        prior_len = len(history)
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            result, trace = await record_turn(
+                case_id=case_id,
+                turn_index=i,
+                user_input=user_input,
+                run_turn_callable=(
+                    lambda h=history, ui=user_input: run_turn(
+                        agent=agent,
+                        user_input=ui,
+                        deps=deps,
+                        message_history=h,
+                        frontend=frontend,
+                    )
+                ),
+                case_dir_path=case_dir_path,
+                agent=agent,
+            )
+        history = list(result.messages)
+        new_msgs = history[prior_len:]
+        slices.append(
+            _TurnSlice(
+                result=result,
+                trace=trace,
+                new_messages=new_msgs,
+                assistant_text=_assistant_text_from(new_msgs),
+                tool_calls=_tool_calls_from(new_msgs),
+            )
+        )
+    return slices
+
+
+async def _case_w1_a_multi_turn_coherence(
     deps: Any,
     agent: Any,
     frontend: Any,
     run: Any,
 ) -> CaseResult:
-    """W1.A — single turn, judge rubric on on-topic + voice.
+    """W1.A — 3-turn coherence + voice.
 
-    Persistence note: ``run_turn`` does NOT itself write to the session JSONL —
-    persistence is the chat-loop's responsibility (``_finalize_turn`` in
-    ``co_cli/main.py``). The eval only drives ``run_turn``, so a session
-    JSONL grow check would be testing a layer the eval doesn't exercise.
-    Instead, the structural signal is ``result.messages`` non-empty (the
-    agent produced output that the chat loop *would* persist).
+    Turn 0 opens a technical thread; turn 1 is a follow-up that only makes
+    sense in context; turn 2 forces a recap. The judge rubric PASSes only if
+    every turn is substantive, turn 1 builds on turn 0 instead of restarting,
+    turn 2 actually summarizes the prior discussion concretely, and the voice
+    stays consistent across turns.
+
+    Single-turn rubrics can't catch context drift, hallucinated recaps, or
+    persona resets — this case is here precisely for those failure modes.
     """
     case_id = "W1.A"
     case_t0 = time.monotonic()
-    user_input = "hi, summarize my last session"
-    reason_parts: list[str] = [_JUDGE_NOTE]
+    inputs = [
+        "Hi — I'm weighing sqlite vs duckdb for a 50GB analytics workload. Help me think it through.",
+        "What about query latency for ad-hoc analytical reads?",
+        "Summarize the tradeoffs we just discussed in 3 bullet points.",
+    ]
+    reason_parts: list[str] = [judge_model_annotation(deps)]
     passed = False
     model_call_seconds = 0.0
     token_usage: dict[str, int] = {}
 
     try:
-        async with asyncio.timeout(CALL_TIMEOUT_S):
-            result, trace = await record_turn(
-                case_id=case_id,
-                turn_index=0,
-                user_input=user_input,
-                run_turn_callable=lambda: run_turn(
-                    agent=agent,
-                    user_input=user_input,
-                    deps=deps,
-                    message_history=[],
-                    frontend=frontend,
-                ),
-                case_dir_path=run.case_trace_path(case_id),
-                agent=agent,
-            )
-        model_call_seconds = trace.model_call_seconds
-        token_usage = dict(trace.token_usage)
+        slices = await _drive_turns(
+            case_id=case_id,
+            deps=deps,
+            agent=agent,
+            frontend=frontend,
+            case_dir_path=run.case_trace_path(case_id),
+            inputs=inputs,
+        )
+        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
 
-        outcome_ok = getattr(result, "outcome", None) == "continue"
-        response_text = _response_text(result).strip()
-        response_nonempty = bool(response_text)
-        budget_ok = model_call_seconds <= TURN_BUDGET_S
+        outcomes = [getattr(s.result, "outcome", None) for s in slices]
+        all_continue = all(o == "continue" for o in outcomes)
+        per_turn_text = [s.assistant_text.strip() for s in slices]
+        all_nonempty = all(t for t in per_turn_text)
+
+        budget = TURN_BUDGET_S * len(inputs)
+        budget_ok = model_call_seconds <= budget
         if not budget_ok:
-            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {TURN_BUDGET_S}.0s")
+            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {budget:.0f}s")
 
         rubric = (
-            "Did the assistant engage with the user's prompt on-topic and produce a "
-            "substantive response (not an error, refusal, or empty reply)? "
-            "PASS if the response addresses the request (even partially) AND is in the "
-            "assistant's voice. FAIL only on hard misses: empty reply, refusal without "
-            "reason, completely off-topic, or exception text."
+            "You are reviewing a 3-turn user/assistant conversation. PASS only if ALL hold:\n"
+            "(a) every assistant turn is substantive and on-topic — not empty, error, or refusal;\n"
+            "(b) turn 2 builds on turn 1's context (the sqlite/duckdb framing) and does NOT "
+            "restart or ask 'what were we discussing';\n"
+            "(c) turn 3 concretely summarizes the prior two turns (mentions sqlite/duckdb "
+            "tradeoffs by name) rather than producing a generic database-comparison answer;\n"
+            "(d) voice is consistent across turns — no jarring tonal shift or persona reset.\n"
+            "FAIL on: empty turn, refusal, off-topic drift, generic summary that ignores prior "
+            "turns, or context regression."
         )
+        final_history = slices[-1].result.messages if slices else []
         async with asyncio.timeout(CALL_TIMEOUT_S):
-            verdict = await judge_with_llm(rubric, result.messages, deps=deps)
+            verdict = await judge_with_llm(
+                rubric, final_history, deps=deps, model=deps.judge_model
+            )
         reason_parts.append(f"judge.score={verdict.score}")
         if verdict.rationale:
-            reason_parts.append(verdict.rationale[:120])
+            reason_parts.append(verdict.rationale[:160])
 
-        passed = bool(outcome_ok and response_nonempty and verdict.passed and budget_ok)
-        if not outcome_ok:
-            reason_parts.append(f"outcome={getattr(result, 'outcome', None)!r}")
-        if not response_nonempty:
-            reason_parts.append("empty_response")
+        passed = bool(all_continue and all_nonempty and verdict.passed and budget_ok)
+        if not all_continue:
+            reason_parts.append(f"outcomes={outcomes!r}")
+        if not all_nonempty:
+            empty_idx = [i for i, t in enumerate(per_turn_text) if not t]
+            reason_parts.append(f"empty_turns={empty_idx!r}")
     except Exception as exc:
         passed = False
         reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
@@ -188,7 +281,7 @@ async def _case_w1_a_happy_path(
     duration = time.monotonic() - case_t0
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -197,64 +290,85 @@ async def _case_w1_a_happy_path(
     )
 
 
-async def _case_w1_b_tool_choice(
+async def _case_w1_b_tool_chain(
     deps: Any,
     agent: Any,
     frontend: Any,
     run: Any,
 ) -> CaseResult:
-    """W1.B — 'list files in the current directory' should pick file_find (or ls fallback)."""
+    """W1.B — 2-turn tool chain.
+
+    Turn 0 asks for a directory listing (expects ``file_find`` or ``shell_exec ls``).
+    Turn 1 asks to read a specific file by name (expects ``file_read`` or
+    ``shell_exec cat/head``). PASS requires both turns picked an appropriate
+    tool — the second turn proves the agent can carry on after a tool result
+    and pick a different tool for a different ask.
+    """
     case_id = "W1.B"
     case_t0 = time.monotonic()
-    user_input = "list files in the current directory"
+    inputs = [
+        "list files in the current directory",
+        "now show me the contents of pyproject.toml",
+    ]
     reason_parts: list[str] = []
     passed = False
     model_call_seconds = 0.0
     token_usage: dict[str, int] = {}
 
     try:
-        async with asyncio.timeout(CALL_TIMEOUT_S):
-            result, trace = await record_turn(
-                case_id=case_id,
-                turn_index=0,
-                user_input=user_input,
-                run_turn_callable=lambda: run_turn(
-                    agent=agent,
-                    user_input=user_input,
-                    deps=deps,
-                    message_history=[],
-                    frontend=frontend,
-                ),
-                case_dir_path=run.case_trace_path(case_id),
-                agent=agent,
-            )
-        model_call_seconds = trace.model_call_seconds
-        token_usage = dict(trace.token_usage)
+        slices = await _drive_turns(
+            case_id=case_id,
+            deps=deps,
+            agent=agent,
+            frontend=frontend,
+            case_dir_path=run.case_trace_path(case_id),
+            inputs=inputs,
+        )
+        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
 
-        tool_calls = _tool_calls(result)
-        tool_names = [tc.tool_name for tc in tool_calls]
-        used_file_find = "file_find" in tool_names
-        used_shell_ls = False
-        for tc in tool_calls:
-            if tc.tool_name != "shell_exec":
-                continue
-            args_repr = tc.args if isinstance(tc.args, str) else repr(tc.args)
-            if "ls" in args_repr.lower():
-                used_shell_ls = True
-                break
+        t0_calls = slices[0].tool_calls
+        t1_calls = slices[1].tool_calls
+        t0_names = [tc.tool_name for tc in t0_calls]
+        t1_names = [tc.tool_name for tc in t1_calls]
 
-        if used_file_find:
+        t0_tool_ok = "file_find" in t0_names or _used_shell_command(t0_calls, "ls")
+        t1_tool_ok = (
+            "file_read" in t1_names
+            or "file_view" in t1_names
+            or _used_shell_command(t1_calls, "cat")
+            or _used_shell_command(t1_calls, "head")
+        )
+
+        # Tool-effect verification: the response must reflect actual tool output,
+        # not a hallucinated listing / file body. Without this floor, an agent
+        # could emit ceremonial tool calls and confabulate the rest.
+        t0_text = slices[0].assistant_text
+        t1_text = slices[1].assistant_text
+        t0_effect_ok = any(
+            stem in t0_text for stem in ("pyproject.toml", "README.md", "CLAUDE.md")
+        )
+        t1_effect_ok = "[project]" in t1_text
+
+        t0_ok = t0_tool_ok and t0_effect_ok
+        t1_ok = t1_tool_ok and t1_effect_ok
+
+        if t0_ok and t1_ok:
             passed = True
-            reason_parts.append("file_find")
-        elif used_shell_ls:
-            passed = True
-            reason_parts.append("[shell_fallback]")
+            reason_parts.append(f"t0={t0_names!r} t1={t1_names!r} effects=ok")
         else:
-            reason_parts.append(f"no_listing_tool tools={tool_names!r}")
+            if not t0_tool_ok:
+                reason_parts.append(f"t0_no_listing tools={t0_names!r}")
+            elif not t0_effect_ok:
+                reason_parts.append(f"t0_no_listed_file_in_response text={t0_text[:120]!r}")
+            if not t1_tool_ok:
+                reason_parts.append(f"t1_no_read tools={t1_names!r}")
+            elif not t1_effect_ok:
+                reason_parts.append(f"t1_no_pyproject_marker text={t1_text[:120]!r}")
 
-        if model_call_seconds > TURN_BUDGET_S:
+        budget = TOOL_TURN_BUDGET_S * len(inputs)
+        if model_call_seconds > budget:
             passed = False
-            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {TURN_BUDGET_S}.0s")
+            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {budget:.0f}s")
     except Exception as exc:
         passed = False
         reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
@@ -262,7 +376,7 @@ async def _case_w1_b_tool_choice(
     duration = time.monotonic() - case_t0
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -271,13 +385,20 @@ async def _case_w1_b_tool_choice(
     )
 
 
-async def _case_w1_c_recall(
+async def _case_w1_c_recall_reuse(
     deps: Any,
     agent: Any,
     frontend: Any,
     run: Any,
 ) -> CaseResult:
-    """W1.C — seed an artifact, drive a recall-triggering turn, expect token verbatim."""
+    """W1.C — 2-turn recall + reuse.
+
+    Turn 0 forces a knowledge-channel read of the seeded artifact and expects
+    the token verbatim. Turn 1 asks a follow-up that only the seed content
+    can answer — proving the recalled snippet persisted into working memory
+    rather than vanishing after turn 0. Turn 1 may or may not re-tool; the
+    check is that the answer references the seed content correctly.
+    """
     case_id = "W1.C"
     case_t0 = time.monotonic()
     reason_parts: list[str] = []
@@ -286,65 +407,51 @@ async def _case_w1_c_recall(
     token_usage: dict[str, int] = {}
 
     try:
-        _seed_knowledge_artifact(deps.knowledge_dir)
-        # Re-index the knowledge dir so the FTS chunks_fts table sees the new seed.
-        deps.memory_store.sync_dir("knowledge", deps.knowledge_dir)
+        _seed_knowledge_artifact(deps.memory_dir)
+        deps.memory_store.sync_dir(deps.memory_dir)
 
-        # Prompt explicitly steers the agent to the knowledge channel. The earlier
-        # phrasing ("What do you remember from eval_W1_seed?") was ambiguous between
-        # session_search and knowledge_search; on first run the agent picked session_search
-        # and returned old transcripts that mentioned the term but never opened the
-        # artifact. The fix: name the channel and the tool by their public surface.
-        user_input = (
-            f"Use the `knowledge_view` tool to read the artifact whose filename_stem is "
-            f"`{_SEED_STEM}`, then quote its body verbatim in your response."
+        inputs = [
+            (
+                f"Use the `memory_view` tool to read the artifact whose filename_stem is "
+                f"`{_SEED_STEM}`, then quote its body verbatim in your response."
+            ),
+            "In one sentence, what did that snippet say the token referred to?",
+        ]
+        slices = await _drive_turns(
+            case_id=case_id,
+            deps=deps,
+            agent=agent,
+            frontend=frontend,
+            case_dir_path=run.case_trace_path(case_id),
+            inputs=inputs,
         )
-        async with asyncio.timeout(CALL_TIMEOUT_S):
-            result, trace = await record_turn(
-                case_id=case_id,
-                turn_index=0,
-                user_input=user_input,
-                run_turn_callable=lambda: run_turn(
-                    agent=agent,
-                    user_input=user_input,
-                    deps=deps,
-                    message_history=[],
-                    frontend=frontend,
-                ),
-                case_dir_path=run.case_trace_path(case_id),
-                agent=agent,
-            )
-        model_call_seconds = trace.model_call_seconds
-        token_usage = dict(trace.token_usage)
+        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
 
-        # Two complementary signals: the agent called a knowledge-channel tool
-        # (knowledge_view or knowledge_search) AND the seeded token reached the
-        # response. Both must hold for PASS — either signal alone is too lenient
-        # (silent tool drop) or too strict (agent echoes the token from another path).
-        tool_calls = _tool_calls(result)
-        knowledge_tool_used = any(
-            tc.tool_name in {"knowledge_view", "knowledge_search"} for tc in tool_calls
+        t0_names = [tc.tool_name for tc in slices[0].tool_calls]
+        t0_knowledge = any(n in {"memory_view", "memory_search"} for n in t0_names)
+        t0_token = _SEED_TOKEN in slices[0].assistant_text
+
+        t1_text_lower = slices[1].assistant_text.lower()
+        t1_uses_seed = (
+            "staging" in t1_text_lower
+            or "deploy" in t1_text_lower
+            or _SEED_TOKEN.lower() in t1_text_lower
         )
-        response_text = _response_text(result)
-        token_present = _SEED_TOKEN in response_text
 
-        if knowledge_tool_used and token_present:
+        t0_ok = t0_knowledge or t0_token
+        if t0_ok and t1_uses_seed:
             passed = True
-            reason_parts.append("knowledge_tool+token")
-        elif knowledge_tool_used and not token_present:
-            reason_parts.append("knowledge_tool_used_but_token_missing")
-        elif not knowledge_tool_used and token_present:
-            reason_parts.append(
-                f"token_from_recall_no_tool tools={[tc.tool_name for tc in tool_calls]!r}"
-            )
-            # Soft PASS — recall did its job even though the agent didn't tool-call.
-            passed = True
+            reason_parts.append(f"t0_knowledge={t0_knowledge} t0_token={t0_token} t1_seed=True")
         else:
-            reason_parts.append(f"no_knowledge_path tools={[tc.tool_name for tc in tool_calls]!r}")
+            reason_parts.append(
+                f"t0_knowledge={t0_knowledge} t0_token={t0_token} "
+                f"t1_seed={t1_uses_seed} t1_text={slices[1].assistant_text[:120]!r}"
+            )
 
-        if model_call_seconds > TURN_BUDGET_S:
+        budget = TURN_BUDGET_S * len(inputs)
+        if model_call_seconds > budget:
             passed = False
-            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {TURN_BUDGET_S}.0s")
+            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {budget:.0f}s")
     except Exception as exc:
         passed = False
         reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
@@ -352,7 +459,7 @@ async def _case_w1_c_recall(
     duration = time.monotonic() - case_t0
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -367,17 +474,17 @@ async def _case_w1_d_dream_smoke(
     frontend: Any,
     run: Any,
 ) -> CaseResult:
-    """W1.D — boundary: run_dream_cycle(dry_run=True) is callable, leaves no locks or mutations."""
+    """W1.D — boundary: ``run_dream_cycle(dry_run=True)`` is callable, leaves no locks or mutations."""
     case_id = "W1.D"
     case_t0 = time.monotonic()
     reason_parts: list[str] = []
     passed = False
 
     try:
-        scan_roots = [deps.knowledge_dir]
+        scan_roots = [deps.memory_dir]
         before = scan_artifact_paths(scan_roots)
         async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
-            await run_dream_cycle(deps, knowledge_manage, dry_run=True)
+            await run_dream_cycle(deps, memory_manage, dry_run=True)
         after = scan_artifact_paths(scan_roots)
 
         lock_leaks = _dream_lock_keys(deps)
@@ -401,7 +508,7 @@ async def _case_w1_d_dream_smoke(
     duration = time.monotonic() - case_t0
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=duration,
         model_call_seconds=0.0,
         token_usage={},
@@ -418,9 +525,9 @@ async def main() -> int:
         cases: list[CaseResult] = []
 
         for runner in (
-            _case_w1_a_happy_path,
-            _case_w1_b_tool_choice,
-            _case_w1_c_recall,
+            _case_w1_a_multi_turn_coherence,
+            _case_w1_b_tool_chain,
+            _case_w1_c_recall_reuse,
             _case_w1_d_dream_smoke,
         ):
             try:
@@ -428,7 +535,7 @@ async def main() -> int:
             except Exception as exc:
                 case = CaseResult(
                     name=runner.__name__,
-                    passed=False,
+                    verdict=Verdict.FAIL,
                     duration_s=0.0,
                     reason=f"runner_crash: {type(exc).__name__}: {exc}",
                 )

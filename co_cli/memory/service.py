@@ -1,7 +1,7 @@
-"""Knowledge service layer — pure CRUD functions, no RunContext or agent dependencies.
+"""Memory service layer — pure CRUD functions, no RunContext or agent dependencies.
 
 Provides save_artifact and mutate_artifact as the canonical write path for all
-knowledge mutations. Tool wrappers acquire resource locks before calling these
+memory mutations. Tool wrappers acquire resource locks before calling these
 functions, then call reindex explicitly after a successful write.
 """
 
@@ -16,12 +16,12 @@ from uuid import uuid4
 
 from co_cli.memory.artifact import (
     ArtifactKindEnum,
-    IndexSourceEnum,
-    KnowledgeArtifact,
+    MemoryArtifact,
     SourceTypeEnum,
     load_artifact,
     load_artifacts,
 )
+from co_cli.memory.chunker import chunk_text
 from co_cli.memory.frontmatter import (
     artifact_to_frontmatter,
     parse_frontmatter,
@@ -29,11 +29,11 @@ from co_cli.memory.frontmatter import (
     render_frontmatter,
 )
 from co_cli.memory.similarity import find_similar_artifacts, is_content_superset
-from co_cli.memory.text_chunker import chunk_text
+from co_cli.memory.store import MEMORY_SOURCE
 from co_cli.persistence.atomic import atomic_write_text
 
 if TYPE_CHECKING:
-    from co_cli.memory.memory_store import MemoryStore
+    from co_cli.index.store import IndexStore
 
 logger = logging.getLogger(__name__)
 
@@ -70,21 +70,21 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50]
 
 
-def _find_by_filename_stem(knowledge_dir: Path, filename_stem: str) -> Path | None:
-    return next((p for p in knowledge_dir.glob("*.md") if p.stem == filename_stem), None)
+def _find_by_filename_stem(memory_dir: Path, filename_stem: str) -> Path | None:
+    return next((p for p in memory_dir.glob("*.md") if p.stem == filename_stem), None)
 
 
 def _find_article_by_url(
-    knowledge_dir: Path,
+    memory_dir: Path,
     origin_url: str,
-    memory_store: "MemoryStore | None" = None,
+    index_store: "IndexStore | None" = None,
 ) -> Path | None:
-    if memory_store is not None:
-        result = memory_store.find_by_source_ref(origin_url, IndexSourceEnum.KNOWLEDGE)
+    if index_store is not None:
+        result = index_store.find_by_source_ref(origin_url, MEMORY_SOURCE)
         return Path(result) if result else None
-    if not knowledge_dir.exists():
+    if not memory_dir.exists():
         return None
-    for path in knowledge_dir.glob("*.md"):
+    for path in memory_dir.glob("*.md"):
         try:
             raw = path.read_text(encoding="utf-8")
             if origin_url not in raw:
@@ -98,7 +98,7 @@ def _find_article_by_url(
 
 
 def reindex(
-    store: "MemoryStore | None",
+    index_store: "IndexStore | None",
     path: Path,
     body: str,
     markdown_content: str,
@@ -108,31 +108,32 @@ def reindex(
     chunk_tokens: int,
     chunk_overlap_tokens: int,
 ) -> None:
-    """Re-index a single knowledge file in the FTS store without RunContext."""
-    if store is None:
+    """Re-index a single memory file in the index store without RunContext."""
+    if index_store is None:
         return
     content_hash = hashlib.sha256(markdown_content.encode()).hexdigest()
     artifact_kind = frontmatter.get("artifact_kind", ArtifactKindEnum.NOTE.value)
-    store.index(
-        source=IndexSourceEnum.KNOWLEDGE,
-        kind=artifact_kind,
-        path=str(path),
-        title=frontmatter.get("title") or filename_stem,
-        mtime=path.stat().st_mtime,
-        hash=content_hash,
-        created=frontmatter.get("created"),
-        description=frontmatter.get("description"),
-        source_ref=frontmatter.get("source_ref"),
-        artifact_id=str(frontmatter["id"]) if frontmatter.get("id") is not None else None,
-    )
-    chunks = chunk_text(
-        body.strip(), chunk_tokens=chunk_tokens, overlap_tokens=chunk_overlap_tokens
-    )
-    store.index_chunks(IndexSourceEnum.KNOWLEDGE, str(path), chunks)
+    with index_store.transaction() as tx:
+        tx.upsert(
+            source=MEMORY_SOURCE,
+            kind=artifact_kind,
+            path=str(path),
+            title=frontmatter.get("title") or filename_stem,
+            mtime=path.stat().st_mtime,
+            hash=content_hash,
+            created=frontmatter.get("created"),
+            description=frontmatter.get("description"),
+            source_ref=frontmatter.get("source_ref"),
+            artifact_id=str(frontmatter["id"]) if frontmatter.get("id") is not None else None,
+        )
+        chunks = chunk_text(
+            body.strip(), chunk_tokens=chunk_tokens, overlap_tokens=chunk_overlap_tokens
+        )
+        tx.index_chunks(MEMORY_SOURCE, str(path), chunks)
 
 
 def save_artifact(
-    knowledge_dir: Path,
+    memory_dir: Path,
     *,
     content: str,
     artifact_kind: str,
@@ -143,19 +144,19 @@ def save_artifact(
     decay_protected: bool = False,
     consolidation_enabled: bool = False,
     consolidation_similarity_threshold: float = 0.75,
-    memory_store: "MemoryStore | None" = None,
+    index_store: "IndexStore | None" = None,
 ) -> SaveResult:
-    """Save or consolidate a knowledge artifact. Pure — no RunContext.
+    """Save or consolidate a memory artifact. Pure — no RunContext.
 
     Three dispatch paths:
     - source_url set → URL-keyed dedup (web articles); decay_protected forced True.
     - consolidation_enabled → Jaccard dedup; near-identical skipped, overlapping merged.
     - else → straight create.
     """
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir.mkdir(parents=True, exist_ok=True)
 
     if source_url is not None:
-        existing_path = _find_article_by_url(knowledge_dir, source_url, memory_store)
+        existing_path = _find_article_by_url(memory_dir, source_url, index_store)
 
         if existing_path is not None:
             try:
@@ -167,7 +168,7 @@ def save_artifact(
                 existing = None
 
         if existing_path is not None and existing is not None:
-            artifact = KnowledgeArtifact(
+            artifact = MemoryArtifact(
                 id=existing.id,
                 path=existing_path,
                 artifact_kind=ArtifactKindEnum.ARTICLE.value,
@@ -195,8 +196,8 @@ def save_artifact(
         artifact_id = str(uuid4())
         slug = slugify((title or content)[:50])
         filename = f"{slug}-{artifact_id[:8]}.md"
-        file_path = knowledge_dir / filename
-        artifact = KnowledgeArtifact(
+        file_path = memory_dir / filename
+        artifact = MemoryArtifact(
             id=artifact_id,
             path=file_path,
             artifact_kind=ArtifactKindEnum.ARTICLE.value,
@@ -222,7 +223,7 @@ def save_artifact(
     if consolidation_enabled:
         threshold = consolidation_similarity_threshold
         existing = load_artifacts(
-            knowledge_dir,
+            memory_dir,
             artifact_kinds=[artifact_kind] if artifact_kind is not None else None,
         )
         matches = find_similar_artifacts(content, artifact_kind, existing, threshold)
@@ -262,9 +263,9 @@ def save_artifact(
     artifact_id = str(uuid4())
     slug = slugify(title) if title else slugify(content[:50])
     filename = f"{slug}-{artifact_id[:8]}.md"
-    file_path = knowledge_dir / filename
+    file_path = memory_dir / filename
 
-    artifact = KnowledgeArtifact(
+    artifact = MemoryArtifact(
         id=artifact_id,
         path=file_path,
         artifact_kind=artifact_kind,
@@ -289,20 +290,14 @@ def save_artifact(
 
 
 def mutate_artifact(
-    knowledge_dir: Path,
+    memory_dir: Path,
     *,
     filename_stem: str,
     action: Literal["append", "replace"],
     content: str,
     target: str = "",
 ) -> MutateResult:
-    """Append or surgically replace a passage in an existing knowledge artifact.
-
-    Guards applied before any I/O:
-    - Rejects content / target containing Read-tool line-number prefixes.
-    - For replace: target must appear exactly once in the body.
-    - For replace: empty target is rejected (ambiguous).
-    """
+    """Append or surgically replace a passage in an existing memory artifact."""
     for s, name in ((content, "content"), (target, "target")):
         if _LINE_PREFIX_RE.search(s) or _LINE_NUM_RE.search(s):
             raise ValueError(
@@ -310,9 +305,9 @@ def mutate_artifact(
                 "Strip them before calling mutate_artifact."
             )
 
-    match_path = _find_by_filename_stem(knowledge_dir, filename_stem)
+    match_path = _find_by_filename_stem(memory_dir, filename_stem)
     if match_path is None:
-        raise FileNotFoundError(f"Knowledge artifact '{filename_stem}' not found")
+        raise FileNotFoundError(f"Memory artifact '{filename_stem}' not found")
 
     raw = match_path.read_text(encoding="utf-8")
     frontmatter, body = parse_frontmatter(raw)

@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from evals._deps import EvalFrontend, make_eval_deps
-from evals._observability import CaseResult, open_eval_run
+from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
 
@@ -100,7 +100,7 @@ async def case_w6_a_approvals_list_clear(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         reason=reason,
         trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -147,7 +147,7 @@ async def case_w6_b_unknown_slash_local_only(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         reason=reason,
         trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -174,7 +174,7 @@ async def main() -> int:
                 except Exception as exc:
                     cr = CaseResult(
                         name=fn.__name__,
-                        passed=False,
+                        verdict=Verdict.FAIL,
                         duration_s=0.0,
                         reason=f"{type(exc).__name__}: {exc}",
                     )

@@ -23,7 +23,7 @@ flowchart TD
     end
 
     subgraph Cycle["Dream Cycle — mine → merge → decay"]
-        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ knowledge_manage via miner Agent\n→ new knowledge/*.md artifacts"]
+        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ memory_manage via miner Agent\n→ new knowledge/*.md artifacts"]
         Merge["Phase 2: Merge\nactive same-kind similar clusters\n→ llm_call() for consolidated body\n→ write consolidated artifact, archive originals"]
         Decay["Phase 3: Decay\nold, unrecalled, non-protected artifacts\n→ archive to knowledge/_archive/"]
         State["Persist DreamState\n(processed_sessions, last_dream_at, cumulative stats)"]
@@ -122,7 +122,7 @@ for each unprocessed session:
 
 Mining uses the shared transcript-window builder (`_window.py`). It keeps user and assistant text plus selected tool calls/results, skips file-read style output, and drops large non-prose tool returns. Dream mining uses wider caps than agent-explicit knowledge saves because its purpose is cross-turn pattern discovery.
 
-The dream miner is a **tool-using pydantic-ai Agent** equipped with the `knowledge_manage` tool. It is instructed to save only durable artifacts, especially:
+The dream miner is a **tool-using pydantic-ai Agent** equipped with the `memory_manage` tool. It is instructed to save only durable artifacts, especially:
 
 - cross-turn patterns
 - implicit preferences
@@ -169,7 +169,7 @@ Merge invariants:
 - If archiving fails after the consolidated artifact is written, the consolidated artifact remains; the failure is logged and the cycle continues.
 - The merge prompt may combine and deduplicate existing facts, but must not invent new facts.
 
-The merge call is a **direct `llm_call`** (no tool access, body text only) — in contrast with the mining phase which uses a tool-equipped Agent that calls `knowledge_manage` to write artifacts.
+The merge call is a **direct `llm_call`** (no tool access, body text only) — in contrast with the mining phase which uses a tool-equipped Agent that calls `memory_manage` to write artifacts.
 
 The consolidated artifact uses `source_type: consolidated` and inherits the union of tags from the originals. The active index is updated for the consolidated artifact, and archived originals are removed from the index.
 
@@ -263,14 +263,14 @@ The session-end wrapper logs completion counts when changes occurred and logs ti
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `knowledge.consolidation_enabled` | `CO_KNOWLEDGE_CONSOLIDATION_ENABLED` | `false` | Enables dedup-on-write and dream-cycle maintenance |
-| `knowledge.consolidation_trigger` | `CO_KNOWLEDGE_CONSOLIDATION_TRIGGER` | `session_end` | Automatic trigger mode: `session_end` or `manual` |
-| `knowledge.consolidation_lookback_sessions` | `CO_KNOWLEDGE_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Number of recent transcript files considered by mining |
-| `knowledge.consolidation_similarity_threshold` | `CO_KNOWLEDGE_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for dedup and merge clusters |
-| `knowledge.max_artifact_count` | `CO_KNOWLEDGE_MAX_ARTIFACT_COUNT` | `300` | Soft corpus-size setting; not directly enforced by the current dream cycle |
-| `knowledge.decay_after_days` | `CO_KNOWLEDGE_DECAY_AFTER_DAYS` | `90` | Age and last-recall cutoff for decay candidacy |
-| `knowledge.chunk_tokens` | `CO_KNOWLEDGE_CHUNK_TOKENS` | `600` | Chunk size used when indexing consolidated artifacts |
-| `knowledge.chunk_overlap_tokens` | `CO_KNOWLEDGE_CHUNK_OVERLAP_TOKENS` | `80` | Chunk overlap used when indexing consolidated artifacts |
+| `knowledge.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enables dedup-on-write and dream-cycle maintenance |
+| `knowledge.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `session_end` | Automatic trigger mode: `session_end` or `manual` |
+| `knowledge.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Number of recent transcript files considered by mining |
+| `knowledge.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for dedup and merge clusters |
+| `knowledge.max_artifact_count` | `CO_MEMORY_MAX_ARTIFACT_COUNT` | `300` | Soft corpus-size setting; not directly enforced by the current dream cycle |
+| `knowledge.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Age and last-recall cutoff for decay candidacy |
+| `knowledge.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Chunk size used when indexing consolidated artifacts |
+| `knowledge.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Chunk overlap used when indexing consolidated artifacts |
 
 Internal caps:
 
@@ -311,7 +311,7 @@ Internal caps:
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `build_dream_miner_agent(miner_tool) -> Agent[CoDeps, str]` | `co_cli/memory/dream.py` | Constructs the tool-using sub-agent equipped with `knowledge_manage` used during mining |
+| `build_dream_miner_agent(miner_tool) -> Agent[CoDeps, str]` | `co_cli/memory/dream.py` | Constructs the tool-using sub-agent equipped with `memory_manage` used during mining |
 
 ### Archive and decay helpers (used by `/memory` commands)
 
@@ -334,7 +334,7 @@ Internal caps:
 | `co_cli/memory/artifact.py` | Knowledge artifact schema and active top-level artifact loading |
 | `co_cli/memory/frontmatter.py` | Knowledge markdown rendering and frontmatter validation |
 | `co_cli/memory/memory_store.py` | Derived index updates for consolidated and archived artifacts |
-| `co_cli/tools/memory/manage.py` | `knowledge_manage` tool used by dream mining |
+| `co_cli/tools/memory/manage.py` | `memory_manage` tool used by dream mining |
 | `co_cli/main.py` | Session-end dream trigger (`_maybe_run_dream_cycle`) |
 | `co_cli/commands/knowledge.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, and `/memory stats` |
 

@@ -22,7 +22,7 @@ def _format_tool_list(names: list[str], empty_label: str = "none") -> str:
 
 
 def _resolve_reranker(deps: CoDeps) -> str:
-    ce_url = deps.config.knowledge.cross_encoder_reranker_url
+    ce_url = deps.config.memory.cross_encoder_reranker_url
     return f"tei ({ce_url})" if ce_url else "none"
 
 

@@ -17,9 +17,29 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 _OUTPUTS_DIR = Path(__file__).parent / "_outputs"
+
+
+class Verdict(StrEnum):
+    """4-state case outcome. PASS / FAIL are gates; SOFT_PASS / SOFT_FAIL are review signals.
+
+    SOFT_PASS — case passes the gate, but a non-load-bearing criterion was borderline
+    (e.g. LLM-merge dropped a rare token in W3.F: the dedup behavior is correct, the
+    rare-token preservation isn't).
+
+    SOFT_FAIL — case fails a behavioral criterion within known LLM variance bounds
+    (judge rubric flagged a borderline call). Surfaces in REPORT for review; doesn't
+    fail the eval exit code. Three SOFT_FAILs in a row on the same case warrants
+    manual promotion to FAIL.
+    """
+
+    PASS = "pass"
+    FAIL = "fail"
+    SOFT_PASS = "soft_pass"
+    SOFT_FAIL = "soft_fail"
 
 
 @dataclass
@@ -27,23 +47,27 @@ class CaseResult:
     """One sub-case outcome — appended to run.jsonl + rendered in REPORT.
 
     Field semantics:
-      passed                — True/False; SKIP records a separate skipped=True flag.
       name                  — case id, e.g. "W1.A", used to look up case_<id>.jsonl.
+      verdict               — 4-state Verdict (see Verdict docstring).
       duration_s            — total wall time including trace I/O.
       model_call_seconds    — sum of ``run_turn`` model-call seconds (asserted
                               against per-case latency budget per BC #13).
       token_usage           — {"prompt", "completion", "total"} summed across turns.
-      trace_id              — OTel trace id for the case (best-effort; "" if absent).
+      trace_id              — co trace id (from observability spans log) for the case;
+                              empty when no turn captured one. Use with ``co tail`` /
+                              ``co trace <trace_id>`` to inspect the structured-log timeline.
       trace_files           — list of relative paths under _outputs/<run>/.
-      reason                — short tag for FAIL/SKIP; empty for plain PASS.
+      reason                — short tag for FAIL/SKIP/SOFT; empty for plain PASS.
       skipped               — True when this is a SKIPPED:* record (mcp / product-gap).
       skip_category         — "mcp" | "product-gap" | "" when skipped is False.
-      soft_fail             — True for W3.F-style degradation signals (case still PASSes
-                              the gate; surfaces in REPORT as a review signal).
+
+    The ``passed`` property is True iff verdict ∈ {PASS, SOFT_PASS} — kept for
+    exit-code logic and read-site backward-compat. Construction sites must use
+    ``verdict=Verdict.PASS|FAIL|SOFT_PASS|SOFT_FAIL``.
     """
 
     name: str
-    passed: bool
+    verdict: Verdict
     duration_s: float
     model_call_seconds: float = 0.0
     token_usage: dict[str, int] = field(default_factory=dict)
@@ -52,7 +76,16 @@ class CaseResult:
     reason: str = ""
     skipped: bool = False
     skip_category: str = ""
-    soft_fail: bool = False
+
+    @property
+    def passed(self) -> bool:
+        """True iff verdict is PASS or SOFT_PASS — for exit-code logic."""
+        return self.verdict in (Verdict.PASS, Verdict.SOFT_PASS)
+
+    @property
+    def soft(self) -> bool:
+        """True iff verdict is SOFT_PASS or SOFT_FAIL — for REPORT review-signal section."""
+        return self.verdict in (Verdict.SOFT_PASS, Verdict.SOFT_FAIL)
 
 
 @dataclass
@@ -100,7 +133,6 @@ async def open_eval_run(name: str) -> AsyncIterator[EvalRun]:
         started_at=time.monotonic(),
         dir=run_dir,
     )
-    # Touch run.jsonl so the file exists even with zero cases.
     run.run_jsonl_path.touch(exist_ok=True)
     try:
         yield run
@@ -125,7 +157,12 @@ def prior_run_dir(name: str, current: Path) -> Path | None:
 
 
 def load_prior_cases(run_dir: Path) -> dict[str, CaseResult]:
-    """Read ``run.jsonl`` from a prior run; return {case_name: CaseResult}."""
+    """Read ``run.jsonl`` from a prior run; return {case_name: CaseResult}.
+
+    Reads the post-migration schema (``verdict`` string). Lines missing the
+    ``verdict`` field are skipped — old pre-migration JSONLs are not loadable
+    by design (zero-backward-compat). Delete ``evals/_outputs/`` to start fresh.
+    """
     path = run_dir / "run.jsonl"
     if not path.exists():
         return {}
@@ -137,9 +174,16 @@ def load_prior_cases(run_dir: Path) -> dict[str, CaseResult]:
             data = json.loads(line)
         except json.JSONDecodeError:
             continue
+        verdict_raw = data.get("verdict")
+        if verdict_raw is None:
+            continue
+        try:
+            verdict = Verdict(verdict_raw)
+        except ValueError:
+            continue
         case = CaseResult(
             name=data.get("name", ""),
-            passed=bool(data.get("passed", False)),
+            verdict=verdict,
             duration_s=float(data.get("duration_s", 0.0)),
             model_call_seconds=float(data.get("model_call_seconds", 0.0)),
             token_usage=dict(data.get("token_usage") or {}),
@@ -148,7 +192,6 @@ def load_prior_cases(run_dir: Path) -> dict[str, CaseResult]:
             reason=data.get("reason", ""),
             skipped=bool(data.get("skipped", False)),
             skip_category=data.get("skip_category", ""),
-            soft_fail=bool(data.get("soft_fail", False)),
         )
         out[case.name] = case
     return out

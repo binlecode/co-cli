@@ -1,13 +1,12 @@
+"""Paragraph-aware text chunking for memory artifacts.
+
+Returns the canonical ``Chunk`` write contract directly. ``start_line`` /
+``end_line`` carry 0-indexed file line numbers.
+"""
+
 from dataclasses import dataclass, field
 
-
-@dataclass
-class Chunk:
-    index: int
-    content: str
-    start_line: int
-    # 0-based line index of last line (inclusive)
-    end_line: int
+from co_cli.index.chunk import Chunk
 
 
 @dataclass
@@ -112,20 +111,16 @@ def chunk_text(
     Split priority: paragraph boundaries > line boundaries > character split.
     Overlap prepends the last `overlap_tokens` tokens of the previous chunk.
     """
-    # Normalise Windows line endings
     text = text.replace("\r\n", "\n")
 
-    # Empty string edge case
     if text == "":
         return [Chunk(index=0, content="", start_line=0, end_line=0)]
 
-    # Clamp overlap silently when overlap >= chunk_tokens
     if overlap_tokens >= chunk_tokens:
         overlap_tokens = chunk_tokens // 4
 
     lines = text.split("\n")
 
-    # Short-document fast path
     if len(text) / 4 <= chunk_tokens:
         return [Chunk(index=0, content=text, start_line=0, end_line=max(0, len(lines) - 1))]
 

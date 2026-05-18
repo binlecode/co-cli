@@ -1,4 +1,4 @@
-"""Tests for knowledge_search — ranked FTS over knowledge artifacts."""
+"""Tests for memory_search — ranked FTS over memory artifacts."""
 
 import asyncio
 import json
@@ -12,34 +12,38 @@ from tests._settings import SETTINGS
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.memory.memory_store import MemoryStore
+from co_cli.index.store import IndexStore
 from co_cli.memory.service import reindex, save_artifact
+from co_cli.memory.store import _USER_PRIORITY_CAP, MemoryStore
 from co_cli.observability import tracing
 from co_cli.tools.memory.manage import _handle_create
-from co_cli.tools.memory.recall import _ARTIFACTS_USER_CAP, knowledge_search
+from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
-_FTS5_CONFIG = SETTINGS.knowledge.model_copy(
+_FTS5_CONFIG = SETTINGS.memory.model_copy(
     update={
         "search_backend": "fts5",
         "embedding_provider": "none",
         "cross_encoder_reranker_url": None,
     }
 )
-_TEST_SETTINGS = SETTINGS.model_copy(update={"knowledge": _FTS5_CONFIG})
+_TEST_SETTINGS = SETTINGS.model_copy(update={"memory": _FTS5_CONFIG})
 
 
-def _make_store(tmp_path: Path) -> MemoryStore:
-    return MemoryStore(config=_TEST_SETTINGS, memory_db_path=tmp_path / "search.db")
+def _make_stores(tmp_path: Path) -> tuple[IndexStore, MemoryStore]:
+    index = IndexStore(config=_TEST_SETTINGS, db_path=tmp_path / "search.db")
+    memory = MemoryStore(index=index, config=_TEST_SETTINGS)
+    return index, memory
 
 
-def _make_deps(tmp_path: Path, store: MemoryStore) -> CoDeps:
+def _make_deps(tmp_path: Path, index: IndexStore, memory: MemoryStore) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         config=_TEST_SETTINGS,
         session=CoSessionState(),
-        knowledge_dir=tmp_path / "knowledge",
-        memory_store=store,
+        memory_dir=tmp_path / "memory",
+        index_store=index,
+        memory_store=memory,
     )
 
 
@@ -70,16 +74,16 @@ def isolated_spans_log(tmp_path: Path):
 
 
 def _seed(
-    knowledge_dir: Path,
-    store: MemoryStore,
+    memory_dir: Path,
+    index: IndexStore,
     *,
     content: str,
     kind: str,
     title: str,
 ) -> None:
-    r = save_artifact(knowledge_dir, content=content, artifact_kind=kind, title=title)
+    r = save_artifact(memory_dir, content=content, artifact_kind=kind, title=title)
     reindex(
-        store,
+        index,
         r.path,
         r.content,
         r.markdown_content,
@@ -91,26 +95,22 @@ def _seed(
 
 
 @pytest.mark.asyncio
-async def test_knowledge_search_returns_hit_with_correct_field_shape(tmp_path: Path) -> None:
-    """knowledge_search must return hits with the expected field set.
-
-    Failure mode: renaming/removing a result field silently breaks downstream
-    callers (knowledge_view, display logic) that rely on filename_stem and path.
-    """
-    store = _make_store(tmp_path)
+async def test_memory_search_returns_hit_with_correct_field_shape(tmp_path: Path) -> None:
+    """memory_search must return hits with the expected field set."""
+    index, memory = _make_stores(tmp_path)
     try:
         _seed(
-            tmp_path / "knowledge",
-            store,
+            tmp_path / "memory",
+            index,
             content="zqpuniqtoken7x content about something",
             kind="note",
             title="test shape",
         )
-        deps = _make_deps(tmp_path, store)
+        deps = _make_deps(tmp_path, index, memory)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await knowledge_search(ctx, query="zqpuniqtoken7x")
+            result = await memory_search(ctx, query="zqpuniqtoken7x")
 
         results = result.metadata.get("results", [])
         assert results, "expected at least one hit"
@@ -119,36 +119,33 @@ async def test_knowledge_search_returns_hit_with_correct_field_shape(tmp_path: P
             assert field in r, f"missing field {field!r} in result: {r}"
         assert "channel" not in r, f"result must not carry 'channel' field: {r}"
     finally:
-        store.close()
+        index.close()
 
 
 @pytest.mark.asyncio
-async def test_knowledge_search_empty_query_browse_returns_user_kind(tmp_path: Path) -> None:
-    """Empty-query knowledge_search with kinds=['user'] returns user-kind artifacts.
-
-    Failure mode: browse mode not filtering by kinds → non-user artifacts appear.
-    """
-    store = _make_store(tmp_path)
+async def test_memory_search_empty_query_browse_returns_user_kind(tmp_path: Path) -> None:
+    """Empty-query memory_search with kinds=['user'] returns user-kind artifacts."""
+    index, memory = _make_stores(tmp_path)
     try:
         _seed(
-            tmp_path / "knowledge",
-            store,
+            tmp_path / "memory",
+            index,
             content="user preference about editors",
             kind="user",
             title="editor prefs",
         )
         _seed(
-            tmp_path / "knowledge",
-            store,
+            tmp_path / "memory",
+            index,
             content="article about vim configuration",
             kind="article",
             title="vim article",
         )
-        deps = _make_deps(tmp_path, store)
+        deps = _make_deps(tmp_path, index, memory)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await knowledge_search(ctx, query="", kinds=["user"])
+            result = await memory_search(ctx, query="", kinds=["user"])
 
         results = result.metadata.get("results", [])
         assert results, "expected at least one result"
@@ -156,23 +153,19 @@ async def test_knowledge_search_empty_query_browse_returns_user_kind(tmp_path: P
             f"browse with kinds=['user'] must only return user-kind: {results}"
         )
     finally:
-        store.close()
+        index.close()
 
 
 @pytest.mark.asyncio
-async def test_knowledge_search_no_match_returns_empty(tmp_path: Path) -> None:
-    """knowledge_search with a no-match query returns count=0 and empty results, no error.
-
-    Failure mode: returning an error instead of an empty result list causes the agent
-    to treat a cache miss as a tool failure rather than a genuine empty recall.
-    """
-    store = _make_store(tmp_path)
+async def test_memory_search_no_match_returns_empty(tmp_path: Path) -> None:
+    """memory_search with a no-match query returns count=0 and empty results, no error."""
+    index, memory = _make_stores(tmp_path)
     try:
-        deps = _make_deps(tmp_path, store)
+        deps = _make_deps(tmp_path, index, memory)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await knowledge_search(ctx, query="xyzzy_absolutely_no_match_7q9r")
+            result = await memory_search(ctx, query="xyzzy_absolutely_no_match_7q9r")
 
         assert result.metadata is not None
         assert result.metadata.get("error") is not True, (
@@ -181,36 +174,33 @@ async def test_knowledge_search_no_match_returns_empty(tmp_path: Path) -> None:
         assert result.metadata.get("count", 0) == 0
         assert result.metadata.get("results", []) == []
     finally:
-        store.close()
+        index.close()
 
 
 @pytest.mark.asyncio
-async def test_knowledge_search_kinds_filter_respected(tmp_path: Path) -> None:
-    """knowledge_search with kinds=['rule'] must only return rule-kind hits.
-
-    Failure mode: kinds filter not applied → user preference hits pollute rule results.
-    """
-    store = _make_store(tmp_path)
+async def test_memory_search_kinds_filter_respected(tmp_path: Path) -> None:
+    """memory_search with kinds=['rule'] must only return rule-kind hits."""
+    index, memory = _make_stores(tmp_path)
     try:
         _seed(
-            tmp_path / "knowledge",
-            store,
+            tmp_path / "memory",
+            index,
             content="filterkind marker rule for coding conventions",
             kind="rule",
             title="coding convention",
         )
         _seed(
-            tmp_path / "knowledge",
-            store,
+            tmp_path / "memory",
+            index,
             content="filterkind marker user preference about something",
             kind="user",
             title="user pref",
         )
-        deps = _make_deps(tmp_path, store)
+        deps = _make_deps(tmp_path, index, memory)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await knowledge_search(ctx, query="filterkind marker", kinds=["rule"])
+            result = await memory_search(ctx, query="filterkind marker", kinds=["rule"])
 
         results = result.metadata.get("results", [])
         assert results, "expected at least one rule hit"
@@ -218,69 +208,59 @@ async def test_knowledge_search_kinds_filter_respected(tmp_path: Path) -> None:
             f"kinds=['rule'] filter must exclude non-rule results: {results}"
         )
     finally:
-        store.close()
+        index.close()
 
 
 @pytest.mark.asyncio
-async def test_knowledge_search_user_priority_pass_cap_honoured(tmp_path: Path) -> None:
-    """knowledge_search must cap user-kind hits at _ARTIFACTS_USER_CAP per call.
-
-    Failure mode: unbounded user results crowd out other kinds and waste context tokens.
-    """
-    store = _make_store(tmp_path)
+async def test_memory_search_user_priority_pass_cap_honoured(tmp_path: Path) -> None:
+    """memory_search must cap user-kind hits at _USER_PRIORITY_CAP per call."""
+    index, memory = _make_stores(tmp_path)
     try:
         cap_token = "usercap_marker_xq8z"
-        for i in range(_ARTIFACTS_USER_CAP + 2):
+        for i in range(_USER_PRIORITY_CAP + 2):
             _seed(
-                tmp_path / "knowledge",
-                store,
+                tmp_path / "memory",
+                index,
                 content=f"{cap_token} user preference number {i}",
                 kind="user",
                 title=f"user pref {i}",
             )
-        deps = _make_deps(tmp_path, store)
+        deps = _make_deps(tmp_path, index, memory)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await knowledge_search(ctx, query=cap_token, kinds=["user"])
+            result = await memory_search(ctx, query=cap_token, kinds=["user"])
 
         user_hits = [r for r in result.metadata.get("results", []) if r["kind"] == "user"]
-        assert len(user_hits) <= _ARTIFACTS_USER_CAP, (
-            f"user hits must be capped at {_ARTIFACTS_USER_CAP}, got {len(user_hits)}"
+        assert len(user_hits) <= _USER_PRIORITY_CAP, (
+            f"user hits must be capped at {_USER_PRIORITY_CAP}, got {len(user_hits)}"
         )
     finally:
-        store.close()
+        index.close()
 
 
-def test_knowledge_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> None:
-    """knowledge_search falls back to disk scan when memory_store is None.
-
-    Failure mode: no-store path returns empty instead of available artifacts,
-    breaking cold-start recall in environments without FTS5 indexing.
-    """
-
-    from pydantic_ai.usage import RunUsage
-
+def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> None:
+    """memory_search falls back to disk scan when memory_store is None."""
     from co_cli.tools.memory.recall import _list_artifacts
 
-    knowledge_dir = tmp_path / "knowledge"
-    store_tmp = _make_store(tmp_path)
+    memory_dir = tmp_path / "memory"
+    index_tmp, _memory_tmp = _make_stores(tmp_path)
     try:
         _seed(
-            knowledge_dir,
-            store_tmp,
+            memory_dir,
+            index_tmp,
             content="disk fallback content here",
             kind="note",
             title="disk artifact",
         )
     finally:
-        store_tmp.close()
+        index_tmp.close()
 
     deps = CoDeps(
         shell=ShellBackend(),
         config=_TEST_SETTINGS,
         session=CoSessionState(),
-        knowledge_dir=knowledge_dir,
+        memory_dir=memory_dir,
         memory_store=None,
     )
     from co_cli.observability.tracing import current_span
@@ -298,13 +278,11 @@ def test_knowledge_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_knowledge_manage_create_emits_span(
-    isolated_spans_log: Path, tmp_path: Path
-) -> None:
-    """knowledge_manage(action='create') emits a co.knowledge.knowledge_manage.create record."""
-    store = _make_store(tmp_path)
+async def test_memory_manage_create_emits_span(isolated_spans_log: Path, tmp_path: Path) -> None:
+    """memory_manage(action='create') emits a co.memory.memory_manage.create record."""
+    index, memory = _make_stores(tmp_path)
     try:
-        deps = _make_deps(tmp_path, store)
+        deps = _make_deps(tmp_path, index, memory)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
@@ -312,7 +290,7 @@ async def test_knowledge_manage_create_emits_span(
                 ctx, name="span test artifact", content="test content", kind="note"
             )
     finally:
-        store.close()
+        index.close()
 
     logger = logging.getLogger("co_cli.observability.spans")
     for h in logger.handlers:
@@ -320,8 +298,8 @@ async def test_knowledge_manage_create_emits_span(
     records = [
         json.loads(line) for line in isolated_spans_log.read_text().splitlines() if line.strip()
     ]
-    create_records = [r for r in records if r["name"] == "co.knowledge.knowledge_manage.create"]
-    assert create_records, "expected a co.knowledge.knowledge_manage.create span record"
+    create_records = [r for r in records if r["name"] == "co.memory.memory_manage.create"]
+    assert create_records, "expected a co.memory.memory_manage.create span record"
     attrs = create_records[0]["attributes"]
-    assert attrs.get("knowledge.artifact_kind") == "note"
+    assert attrs.get("memory.artifact_kind") == "note"
     assert create_records[0]["status"] == "OK"

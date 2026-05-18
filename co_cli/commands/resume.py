@@ -64,8 +64,8 @@ def _rehydrate_todos(messages: list) -> list[TodoItem]:
 async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Resume a past session via interactive picker."""
     from co_cli.display.core import prompt_selection
-    from co_cli.memory.session_browser import format_file_size, list_sessions
-    from co_cli.memory.transcript import load_transcript
+    from co_cli.session.browser import format_file_size, list_sessions
+    from co_cli.session.persistence import load_transcript
 
     sessions = list_sessions(ctx.deps.sessions_dir)
     if not sessions:

@@ -1,59 +1,49 @@
 # Co CLI — Memory
 
-> Channel sub-specs: [knowledge.md](knowledge.md) · [sessions.md](sessions.md). Sibling surface (own tier): [skills.md](skills.md). Doctrine (auto-injected into static prompt; never queried as memory): [personality.md](personality.md). Tool registration and approval: [tools.md](tools.md). Dream-cycle mining, merge, decay, archive: [dream.md](dream.md). Prompt assembly: [prompt-assembly.md](prompt-assembly.md). Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md). Compaction mechanics: [compaction.md](compaction.md).
+> Peer tier: [sessions.md](sessions.md) (past conversation transcripts). Sibling surfaces: [skills.md](skills.md) (procedural capability). Doctrine (auto-injected into static prompt; never queried as memory): [personality.md](personality.md). Tool registration and approval: [tools.md](tools.md). Dream-cycle mining, merge, decay, archive: [dream.md](dream.md). Prompt assembly: [prompt-assembly.md](prompt-assembly.md). Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md).
 
-Foundation spec for the memory surface — dynamic, declarative state accumulated by the agent through operation. Channel-specific lifecycle (storage, mutation, validation, indexing details, channel-specific test gates) lives in the two sub-specs.
+Foundation spec for the memory tier — long-term declarative artifacts (user preferences, rules, articles, notes) that the agent accumulates and recalls.
 
-Memory is one of four operational tiers in the agent loop: **doctrine** ([personality.md](personality.md), identity), **tools** ([tools.md](tools.md), capability), **skills** ([skills.md](skills.md), procedure), **memory** (this file — declarative state). Each tier is structurally distinct: doctrine is auto-injected, tools are registered, skills have their own search/view/manage surface, and memory is what the agent accumulates through operation.
+Memory is one of five operational tiers in the agent loop: **doctrine** ([personality.md](personality.md), identity), **tools** ([tools.md](tools.md), capability), **skills** ([skills.md](skills.md), procedure), **memory** (this file — long-term declarative artifacts), and **session** ([sessions.md](sessions.md) — past conversation transcripts). Memory and session are peer tiers sharing the same index infrastructure but with distinct domain logic, mutation models, and lifecycle policies.
 
 ## 1. Functional Architecture
 
-Memory contributes two channels — session and knowledge — both genuinely dynamic (accumulated by the agent during operation) and declarative (facts, not procedure or identity).
+Memory holds long-term declarative artifacts: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_manage`), kind-typed (user / rule / article / note), and subject to lifecycle (decay, dream consolidation).
 
-Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, personality-context artifacts, bundled skill manifest) is injected once at agent construction. Everything else is loaded on-demand through the memory tool surface, keeping context bounded and recall purposeful.
-
-Memory and skill surfaces sit at different operational tiers. Memory holds facts you recall to inform reasoning during a task; skills hold procedures that define how to structure the task itself. The skill surface is documented in [skills.md](skills.md) and governed by [06_skill_protocol.md](../../co_cli/context/rules/06_skill_protocol.md).
+Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, bundled skill manifest) is injected once at agent construction. Memory artifacts are loaded on-demand through the recall tool surface, keeping context bounded and recall purposeful.
 
 ```mermaid
 flowchart TD
-    Knowledge["knowledge\n(knowledge/*.md)"] -->|"source='knowledge'"| SearchDB["co-cli-search.db\n(chunks + FTS5 + optional vec)"]
-    Sessions["sessions\n(sessions/*.jsonl)"] -->|"source='session'"| SearchDB
-    SearchDB --> KnowSearch["knowledge_search()"]
-    SearchDB --> SessSearch["session_search()"]
-    KnowManage["knowledge_manage()"] --> Knowledge
+    MemoryFiles["memory artifacts\n(~/.co-cli/memory/*.md)"] -->|"source='memory'"| IndexDB["co-cli-search.db\n(IndexStore + FTS5 + optional vec)"]
+    IndexDB --> MemSearch["memory_search()"]
+    IndexDB --> MemView["memory_view()"]
+    MemManage["memory_manage()"] --> MemoryFiles
 ```
 
-### Channel Ontology
+### Tier ontology
 
-| Channel | Sub-spec | Storage | Mutation | Indexing |
-| --- | --- | --- | --- | --- |
-| **knowledge** | [knowledge.md](knowledge.md) | `~/.co-cli/knowledge/*.md` | `knowledge_manage(action=...)` | FTS5 BM25 + optional hybrid; chunks body text |
-| **sessions** | [sessions.md](sessions.md) | `~/.co-cli/sessions/*.jsonl` | append-only via `persist_session_history` | sliding-window token chunks |
+| Tier | Storage | Mutation | Indexing |
+| --- | --- | --- | --- |
+| **memory** (this spec) | `~/.co-cli/memory/*.md` | `memory_manage(action=create/append/replace/delete)` | FTS5 BM25 + optional hybrid; paragraph-aware chunking |
+| **session** ([sessions.md](sessions.md)) | `~/.co-cli/sessions/*.jsonl` | append-only via `persist_session_history` | sliding-window token chunks |
 
-Skills and canon are intentionally absent from this table — they live on their own tiers (see [skills.md](skills.md) and [personality.md](personality.md)). Canon is doctrine, auto-injected by the personality system; skills are procedural capability with their own search/view/manage surface.
+Canon scenes (`souls/{role}/canon/*.md`) coexist in the same DB under `source='canon'` for personality auto-injection, but are never returned by any model-callable tool. Skills live on their own tier.
 
-## 2. Core Logic
+## 2. Architecture layers
 
-### Indexer
+```
+co_cli/tools/memory/     Agent surface — memory_search, memory_view, memory_manage
+        ↓
+co_cli/memory/           Domain — MemoryStore (kinds, decay, dream, two-pass search)
+        ↓
+co_cli/index/            Infrastructure facade — IndexStore (public) + retrieval, embedding, providers (private)
+        ↓
+                         SQLite + FTS5 + optional sqlite-vec
+```
 
-The shared search index lives at `~/.co-cli/co-cli-search.db`. Both memory channels write through `MemoryStore` in `co_cli/memory/memory_store.py`.
+`IndexStore` is the only public class in `co_cli/index/`. `RetrievalService` (FTS + vec + RRF + rerank), `EmbeddingService` (embed + cache), and provider dispatch are private submodules — domain modules never import them directly.
 
-#### `chunks_fts` table
-
-FTS5 full-text index over all chunks. Sources owned by memory:
-
-| Source value | Channel | Chunk strategy |
-| --- | --- | --- |
-| `'knowledge'` | knowledge | sliding-window body chunks |
-| `'session'` | session | sliding-window token chunks via `session_chunker.py` |
-
-One other source (`'canon'`) coexists in the same table — it is indexed at bootstrap for personality auto-injection only and is never returned by any model-callable tool.
-
-#### Write-time indexing
-
-Indexing is write-time, not search-time. Channel-specific entry points: `sync_dir()` for knowledge, `index_session()` / `sync_sessions()` for sessions. See each channel sub-spec for chunking details.
-
-#### Retrieval backends
+### Retrieval backends
 
 | Backend | Mechanism | When used |
 | --- | --- | --- |
@@ -63,124 +53,106 @@ Indexing is write-time, not search-time. Channel-specific entry points: `sync_di
 
 Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
 
-### Recall pipeline
-
-```
-knowledge_search(ctx, query, kinds, limit)              # tools/memory/recall.py
-  ├─ _search_artifacts → user + waterfall passes          # see knowledge.md
-
-session_search(ctx, query, limit)                       # tools/memory/recall.py
-  └─ _search_sessions  → chunk-cited BM25                 # see sessions.md
-```
-
 ## 3. Config
-
-### Shared retrieval settings
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | preferred retrieval backend before runtime degradation |
-| `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | embedding backend (`ollama`, `gemini`, `tei`, `none`) |
-| `knowledge.embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `embeddinggemma` | embedding model name |
-| `knowledge.embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | embedding vector dimensions |
-| `knowledge.embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
-| `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI cross-encoder reranker URL |
-| `knowledge.tei_rerank_batch_size` | *(no env var)* | `50` | batch size for TEI rerank HTTP requests |
-| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | defined lifecycle setting; not currently consumed by recall ranking |
+| `memory.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | preferred retrieval backend before runtime degradation |
+| `memory.embedding_provider` | `CO_MEMORY_EMBEDDING_PROVIDER` | `tei` | embedding backend (`ollama`, `gemini`, `tei`, `none`) |
+| `memory.embedding_model` | `CO_MEMORY_EMBEDDING_MODEL` | `embeddinggemma` | embedding model name |
+| `memory.embedding_dims` | `CO_MEMORY_EMBEDDING_DIMS` | `1024` | embedding vector dimensions |
+| `memory.embed_api_url` | `CO_MEMORY_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
+| `memory.cross_encoder_reranker_url` | `CO_MEMORY_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI cross-encoder reranker URL |
+| `memory.tei_rerank_batch_size` | *(no env var)* | `50` | batch size for TEI rerank HTTP requests |
+| `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory artifacts |
+| `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | chunk overlap |
+| `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | dream-cycle consolidation |
+| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | lifecycle setting; not currently consumed by recall ranking |
 
-Channel-specific settings (chunk sizes, consolidation, decay, session chunking) live in the respective sub-specs.
+Session chunking settings live alongside memory settings under `config.memory.session_chunk_*` since both tiers share the index infrastructure. See [sessions.md](sessions.md) for session-specific config.
 
 ### Paths
 
 | Path | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | knowledge artifact source-of-truth directory |
+| `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | memory artifact source-of-truth directory |
 | `sessions_dir` | — | `~/.co-cli/sessions/` | transcript directory |
 | `tool_results_dir` | — | `~/.co-cli/tool-results/` | spill directory for oversized tool results |
-| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (sessions + knowledge; also hosts canon source for personality auto-injection) |
-
-Dream-cycle and lifecycle maintenance settings live in [dream.md](dream.md).
+| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (memory + session + canon) |
 
 ## 4. Public Interface
 
-### Knowledge channel — recall and view
+### Recall and view
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `knowledge_search(ctx, query, kinds=None, limit=10)` | `co_cli/tools/memory/recall.py` | Async tool — two-pass ranked recall over knowledge artifacts; empty query → recent-artifact browse |
-| `knowledge_view(ctx, name)` | `co_cli/tools/memory/view.py` | Async tool — returns full artifact body by `filename_stem`; frontmatter stripped |
+| `memory_search(ctx, query, kinds=None, limit=10)` | `co_cli/tools/memory/recall.py` | Async tool — two-pass ranked recall over memory artifacts; empty query → recent-artifact browse |
+| `memory_view(ctx, name)` | `co_cli/tools/memory/view.py` | Async tool — returns full artifact body by `filename_stem`; frontmatter stripped |
 
-Result fields for `knowledge_search`: `{kind, title, snippet, score, path, filename_stem}`. Channel caps: `_ARTIFACTS_USER_CAP=3`, `_ARTIFACTS_WATERFALL_CHUNK_CAP=5`, `_ARTIFACTS_WATERFALL_SIZE_CAP=2000` chars.
+Result fields for `memory_search`: `{kind, title, snippet, score, path, filename_stem}`. Two-pass policy in `co_cli/memory/store.py`: user-kind priority pass (cap `_USER_PRIORITY_CAP=3`) + waterfall over remaining kinds (cap `_WATERFALL_CHUNK_CAP=5`).
 
-### Knowledge channel — write
-
-| Symbol | Source | Contract |
-| --- | --- | --- |
-| `knowledge_manage(ctx, action, name, content=None, kind=None, section=None)` | `co_cli/tools/memory/manage.py` | Async tool — `create`/`append`/`replace`/`delete`; `approval=True`; subject `tool:knowledge_manage:<action>:<name>` |
-
-Detailed semantics and validation: [knowledge.md §4](knowledge.md).
-
-### Sessions channel
+### Write
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `session_search(ctx, query, limit=3)` | `co_cli/tools/memory/recall.py` | Async tool — BM25-ranked chunk recall over past sessions; current session excluded; empty query → recent-session browse |
-| `session_view(ctx, session_id, start_line, end_line)` | `co_cli/tools/memory/view.py` | Async tool — verbatim JSONL line-range reader by uuid8 |
+| `memory_manage(ctx, action, name, content=None, kind=None, section=None)` | `co_cli/tools/memory/manage.py` | Async tool — `create`/`append`/`replace`/`delete`; `approval=True`; subject `tool:memory_manage:<action>:<name>` |
 
-Result fields for `session_search`: `{session_id, when, source, chunk_text, start_line, end_line, score}`. Channel cap: `_SESSIONS_CHANNEL_CAP=3` unique sessions.
-
-### Store API (cross-channel)
+### Domain API
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `MemoryStore` | `co_cli/memory/memory_store.py` | Unified search backend over `co-cli-search.db`; manages FTS5 / hybrid / vec tables |
-| `MemoryStore.search(query, sources, kinds=None, limit=...)` | `co_cli/memory/memory_store.py` | Returns ranked `SearchResult` rows from `chunks_fts` (+ optional vec) |
-| `MemoryStore.sync_dir(source, directory, glob, no_chunk=False)` | `co_cli/memory/memory_store.py` | Hash-based directory indexer; supports unchunked single-chunk mode (used by canon) |
-| `MemoryStore.index_session(session_path)` | `co_cli/memory/memory_store.py` | Indexes one JSONL transcript under `source='session'` |
-| `MemoryStore.sync_sessions(sessions_dir, exclude=None)` | `co_cli/memory/memory_store.py` | Hash-based sync of all transcripts; excludes the live session |
-| `MemoryStore.count_docs(source)` | `co_cli/memory/memory_store.py` | Returns the number of indexed docs for the given source (`SELECT COUNT(*) FROM docs WHERE source=?`) |
-| `MemoryStore.list_titles_by_source(source)` | `co_cli/memory/memory_store.py` | Generic helper — returns `(title, path)` rows for a source |
-| `MemoryStore.get_path_by_title(source, title)` | `co_cli/memory/memory_store.py` | Generic helper — resolves title back to absolute path |
-| `MemoryStore.get_chunk_content(source, path, chunk_index)` | `co_cli/memory/memory_store.py` | Returns a single chunk's body text (used by canon read path) |
-| `SearchResult` | `co_cli/memory/memory_store.py` | Dataclass row — `chunk_text`, `source`, `path`, `score`, `kind`, `chunk_index`, `start_line`, `end_line` |
-| `build_embedder(provider, model, dims, url)` | `co_cli/memory/_embedder.py` | Returns the embedder used by hybrid backend; raises on misconfiguration |
+| `MemoryStore(index, config)` | `co_cli/memory/store.py` | Domain store composing IndexStore — owns memory kinds, two-pass search, decay hooks |
+| `MemoryStore.sync_dir(memory_dir)` | `co_cli/memory/store.py` | Hash-based directory indexer for memory artifacts |
+| `MemoryStore.search_artifacts(query, kinds, limit)` | `co_cli/memory/store.py` | Two-pass FTS recall with user-kind priority + kind waterfall |
+| `MemoryStore.list_artifacts(kinds, limit)` | `co_cli/memory/store.py` | Inventory rows for browse mode |
+| `MemoryArtifact` | `co_cli/memory/artifact.py` | Reusable artifact data model |
+| `ArtifactKindEnum` | `co_cli/memory/artifact.py` | USER / RULE / ARTICLE / NOTE (and CANON for the doctrine source) |
+| `save_artifact`, `mutate_artifact` | `co_cli/memory/service.py` | Pure write functions — no RunContext |
 
-### FTS5 helpers (search_util)
+### Index API (cross-tier)
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `run_fts(conn, query, sources, kinds=None, limit=...)` | `co_cli/memory/search_util.py` | Executes a sanitized FTS5 query and returns raw rows |
-| `sanitize_fts5_query(query)` | `co_cli/memory/search_util.py` | Strips stopwords and FTS5 operators that would otherwise raise |
-| `normalize_bm25(rows)` | `co_cli/memory/search_util.py` | Normalizes BM25 scores to `[0, 1]` for cross-backend merge |
-| `snippet_around(text, query, max_chars)` | `co_cli/memory/search_util.py` | Returns query-aware snippet (used when FTS5 `snippet()` is unavailable) |
-| `STOPWORDS` | `co_cli/memory/stopwords.py` | `frozenset[str]` — common stopwords stripped before FTS query construction |
+| `IndexStore` | `co_cli/index/store.py` | Infrastructure facade — schema, write CRUD, transactions, search facade |
+| `IndexStore.search(query, sources, kinds, limit)` | `co_cli/index/store.py` | Delegates to private RetrievalService — returns `SearchResult` rows |
+| `IndexStore.upsert(...)`, `index_chunks(source, doc_path, chunks)` | `co_cli/index/store.py` | Source-agnostic write CRUD |
+| `IndexStore.remove(source, path)`, `remove_stale(source, current_paths)` | `co_cli/index/store.py` | Source-agnostic deletion |
+| `Chunk` | `co_cli/index/chunk.py` | Write contract — `(index, content, start_line, end_line)` |
+| `SearchResult` | `co_cli/index/_retrieval.py` | Ranked result row |
 
 ## 5. Files
 
-### Memory core (shared)
+### Infrastructure (`co_cli/index/`)
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/memory/memory_store.py` | `MemoryStore` — FTS5/hybrid search, `sync_dir()`, `index_session()`, `sync_sessions()`, generic helpers `list_titles_by_source()` / `get_path_by_title()` |
-| `co_cli/memory/_embedder.py` | `build_embedder()` — embedding provider dispatch |
-| `co_cli/memory/search_util.py` | `normalize_bm25()`, `run_fts()`, `sanitize_fts5_query()`, `snippet_around()` |
-| `co_cli/memory/stopwords.py` | `STOPWORDS` frozenset |
+| `co_cli/index/store.py` | `IndexStore` — schema, CRUD, transactions, search facade |
+| `co_cli/index/chunk.py` | `Chunk` dataclass — write contract |
+| `co_cli/index/schema.py` | DDL constants |
+| `co_cli/index/_retrieval.py` | `RetrievalService` — FTS + vec + RRF + rerank (private) |
+| `co_cli/index/_embedding.py` | `EmbeddingService` — embed + cache (private) |
+| `co_cli/index/_providers.py` | ollama / tei / gemini dispatch (private) |
+| `co_cli/index/_search_util.py` | FTS5 query sanitize, BM25 normalize, snippet helpers (private) |
+| `co_cli/index/_stopwords.py` | `STOPWORDS` frozenset (private) |
 
-### Memory tool surface
-
-| File | Purpose |
-| --- | --- |
-| `co_cli/tools/memory/recall.py` | `knowledge_search()` — knowledge ranked recall; `session_search()` — session ranked recall; `_grep_recall()` — knowledge disk-scan fallback (no store) |
-| `co_cli/tools/memory/manage.py` | `knowledge_manage()` — knowledge write surface |
-| `co_cli/tools/memory/view.py` | `knowledge_view()` — full artifact body reader; `session_view()` — verbatim session turn reader |
-| `co_cli/agent/toolset.py` | foreground toolset registration |
-
-### Bootstrap and runtime
+### Memory domain (`co_cli/memory/`)
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/bootstrap/core.py` | `restore_session()`, `init_session_index()`, `_sync_canon_store()` (personality-load-only), `create_deps()` |
-| `co_cli/main.py` | `_finalize_turn()` — session persistence bridge and session-end dream trigger |
-| `co_cli/tools/tool_io.py` | oversized tool-result spill, preview placeholders, size warnings |
+| `co_cli/memory/store.py` | `MemoryStore` — domain store composing IndexStore |
+| `co_cli/memory/service.py` | `save_artifact`, `mutate_artifact`, `reindex` |
+| `co_cli/memory/chunker.py` | `chunk_text` — paragraph-aware chunking |
+| `co_cli/memory/artifact.py` | `MemoryArtifact`, `ArtifactKindEnum`, `IndexSourceEnum` |
+| `co_cli/memory/frontmatter.py` | YAML frontmatter parse/render |
+| `co_cli/memory/similarity.py` | Jaccard dedup for consolidation |
+| `co_cli/memory/decay.py` | Decay candidate identification |
+| `co_cli/memory/dream.py` | Dream-cycle orchestration |
+| `co_cli/memory/archive.py` | Archive / restore artifact files |
 
-Channel-specific files (e.g. `co_cli/memory/artifact.py`, `co_cli/memory/session_chunker.py`) are listed in the respective sub-specs.
+### Tool surface (`co_cli/tools/memory/`)
+
+| File | Purpose |
+| --- | --- |
+| `co_cli/tools/memory/recall.py` | `memory_search` — ranked recall |
+| `co_cli/tools/memory/view.py` | `memory_view` — full artifact body reader |
+| `co_cli/tools/memory/manage.py` | `memory_manage` — write surface |

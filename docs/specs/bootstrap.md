@@ -48,7 +48,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ load_skills(skills_dir, settings=config, user_skills_dir=...) → filter_namespace_conflicts()
 │  ├─ _discover_memory_backend(config, frontend, degradations)
 │  ├─ _sync_memory_store(store, config, frontend, knowledge_dir)
-│  │      indexes every .md in knowledge_dir under source="knowledge"; on failure closes store and aborts startup
+│  │      indexes every .md in knowledge_dir under source="memory"; on failure closes store and aborts startup
 │  ├─ _sync_canon_store(store, config, frontend)
 │  │      indexes souls/{role}/memories/*.md under source="canon" (no_chunk=True); no-op when store=None or personality empty
 │  └─ return CoDeps(...)
@@ -134,7 +134,7 @@ User-global skills override bundled skills on name collision. After `create_deps
 
 ### Step 8. Resolve the knowledge backend
 
-Bootstrap decides whether the session can use `hybrid`, `fts5`, or only `grep`. This step intentionally mutates `config.knowledge.search_backend` to runtime truth, not requested intent.
+Bootstrap decides whether the session can use `hybrid`, `fts5`, or only `grep`. This step intentionally mutates `config.memory.search_backend` to runtime truth, not requested intent.
 
 ```text
 if configured backend is grep:
@@ -152,7 +152,7 @@ When degradation happens, bootstrap records the reason in `deps.degradations`. D
 
 ### Step 9. Sync the knowledge store
 
-If a `MemoryStore` exists, bootstrap syncs every `.md` file under `knowledge_dir` into the index under a single `source="knowledge"` label — extracted facts and articles alike are indexed into `docs` + `chunks_fts` (and `chunks_vec` in hybrid mode). Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and raises a startup error instead of silently losing indexed retrieval and session recall.
+If a `MemoryStore` exists, bootstrap syncs every `.md` file under `knowledge_dir` into the index under a single `source="memory"` label — extracted facts and articles alike are indexed into `docs` + `chunks_fts` (and `chunks_vec` in hybrid mode). Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and raises a startup error instead of silently losing indexed retrieval and session recall.
 
 ### Step 9b. Sync canon scenes
 
@@ -220,10 +220,10 @@ Everything from `create_deps()` through banner display runs inside `_chat_loop()
 | Config validation fails in `load_config()` | startup stops before `chat_loop()` begins |
 | `create_deps()` raises `ValueError` | `_chat_loop()` prints a startup error and exits |
 | MCP server fails to connect | status warning + `degradations["mcp.<prefix>"]` recorded; native tools and other MCP servers still work |
-| Knowledge backend construction fails | hybrid may degrade to `fts5`; `fts5` failure aborts startup unless `knowledge.search_backend="grep"` was explicitly configured |
-| Knowledge sync fails | close the store and abort startup with a knowledge sync error |
+| Memory backend construction fails | hybrid may degrade to `fts5`; `fts5` failure aborts startup unless `memory.search_backend="grep"` was explicitly configured |
+| Memory sync fails | close the index and abort startup with a memory sync error |
 | Session restore fails to find usable state | create a new session |
-| Session index sync fails | log warning, print status, keep `deps.memory_store`; session channel may be incomplete until next successful sync |
+| Session index sync fails | log warning, print status, keep `deps.session_store`; session tier may be incomplete until next successful sync |
 | One skill file fails to load | skip that file and continue loading others |
 
 ## 3. Config
@@ -236,9 +236,9 @@ These settings most directly affect bootstrap behavior.
 | `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Host used by Ollama checks and runtime model calls |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
 | `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window; `deps.model_max_ctx = min(probe, max_ctx)` |
-| `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
-| `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
-| `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge` | User-global knowledge artifact directory synced during bootstrap (extracted facts, articles, notes) |
+| `knowledge.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
+| `knowledge.embedding_provider` | `CO_MEMORY_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
+| `knowledge_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | User-global knowledge artifact directory synced during bootstrap (extracted facts, articles, notes) |
 | `mcp_servers` | `CO_MCP_SERVERS` | bundled defaults | MCP server definitions connected during startup |
 | `personality` | `CO_PERSONALITY` | `tars` | Personality selected before agent instruction assembly |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Default reasoning-display mode at startup; CLI flags can override it before REPL entry |

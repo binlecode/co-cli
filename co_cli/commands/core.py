@@ -11,7 +11,7 @@ from co_cli.commands.clear import _cmd_clear
 from co_cli.commands.compact import _cmd_compact
 from co_cli.commands.help import _cmd_help
 from co_cli.commands.history import _cmd_history
-from co_cli.commands.knowledge import _cmd_memory
+from co_cli.commands.memory import _cmd_memory
 from co_cli.commands.new import _cmd_new
 from co_cli.commands.reasoning import _cmd_reasoning
 from co_cli.commands.registry import (

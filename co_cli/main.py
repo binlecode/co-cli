@@ -34,9 +34,9 @@ from co_cli.config.core import (
 from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.deps import CoDeps
 from co_cli.display.core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
-from co_cli.memory.transcript import persist_session_history
 from co_cli.observability.file_logging import setup_file_logging
 from co_cli.observability.tracing import setup_log as setup_spans_log
+from co_cli.session.persistence import persist_session_history
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
 
@@ -298,18 +298,18 @@ async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
     Errors are logged and never propagated — session shutdown must not fail
     because consolidation hit a snag.
     """
-    knowledge_config = deps.config.knowledge
-    if not knowledge_config.consolidation_enabled:
+    memory_config = deps.config.memory
+    if not memory_config.consolidation_enabled:
         return
-    if knowledge_config.consolidation_trigger != "session_end":
+    if memory_config.consolidation_trigger != "session_end":
         return
 
     from co_cli.memory.dream import run_dream_cycle
-    from co_cli.tools.memory.manage import knowledge_manage
+    from co_cli.tools.memory.manage import memory_manage
 
     logger = logging.getLogger(__name__)
     try:
-        result = await run_dream_cycle(deps, knowledge_manage)
+        result = await run_dream_cycle(deps, memory_manage)
         if result.any_changes:
             logger.info(
                 "Dream cycle: %d extracted, %d merged, %d archived",
@@ -515,12 +515,13 @@ async def _chat_loop(
         if deps.session.session_path.exists():
             console.print("[dim]Previous session available — /resume to continue[/dim]")
 
-        knowledge_count = 0
+        memory_count = 0
         session_count = 0
         if deps.memory_store is not None:
-            knowledge_count = deps.memory_store.count_docs("knowledge")
-            session_count = deps.memory_store.count_docs("session")
-        display_welcome_banner(deps, knowledge_count=knowledge_count, session_count=session_count)
+            memory_count = deps.memory_store.count()
+        if deps.session_store is not None:
+            session_count = deps.session_store.count()
+        display_welcome_banner(deps, memory_count=memory_count, session_count=session_count)
         from co_cli.bootstrap.security import check_security, render_security_findings
 
         render_security_findings(check_security())

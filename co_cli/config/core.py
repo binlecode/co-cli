@@ -17,7 +17,6 @@ from pydantic import (
 )
 
 from co_cli.config.compaction import COMPACTION_ENV_MAP, CompactionSettings
-from co_cli.config.knowledge import KNOWLEDGE_ENV_MAP, KnowledgeSettings
 from co_cli.config.llm import LLM_ENV_MAP, LlmSettings, resolve_api_key_from_env
 from co_cli.config.mcp import DEFAULT_MCP_SERVERS, MCPServerSettings, parse_mcp_servers_from_env
 from co_cli.config.memory import MEMORY_ENV_MAP, MemorySettings
@@ -35,7 +34,7 @@ ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials
 SETTINGS_FILE = USER_DIR / "settings.json"
 SEARCH_DB = USER_DIR / "co-cli-search.db"
 LOGS_DIR = USER_DIR / "logs"
-KNOWLEDGE_DIR = USER_DIR / "knowledge"
+MEMORY_DIR = USER_DIR / "memory"
 SESSIONS_DIR = USER_DIR / "sessions"
 TOOL_RESULTS_DIR = USER_DIR / "tool-results"
 SESSION_REVIEWS_DIR = USER_DIR / "session-reviews"
@@ -63,7 +62,7 @@ def _ensure_dirs() -> None:
     """Create the canonical user-global directory and subdirectories (idempotent)."""
     USER_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     SESSION_REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
@@ -82,9 +81,8 @@ class Settings(BaseModel):
 
     # Nested sub-model groups
     llm: LlmSettings = Field(default_factory=LlmSettings)
-    knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
-    web: WebSettings = Field(default_factory=WebSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    web: WebSettings = Field(default_factory=WebSettings)
     shell: ShellSettings = Field(default_factory=ShellSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     compaction: CompactionSettings = Field(default_factory=CompactionSettings)
@@ -94,7 +92,7 @@ class Settings(BaseModel):
     obsidian_vault_path: str | None = Field(default=None)
     brave_search_api_key: str | None = Field(default=None)
     google_credentials_path: str | None = Field(default=None)
-    knowledge_path: str | None = Field(default=None)
+    memory_path: str | None = Field(default=None)
     workspace_path: str | None = Field(default=None)
 
     # Flat — behavior
@@ -137,7 +135,7 @@ class Settings(BaseModel):
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
-            "knowledge_path": "CO_KNOWLEDGE_PATH",
+            "memory_path": "CO_MEMORY_PATH",
             "workspace_path": "CO_WORKSPACE_PATH",
             "theme": "CO_THEME",
             "reasoning_display": "CO_REASONING_DISPLAY",
@@ -154,7 +152,6 @@ class Settings(BaseModel):
         # Nested fields — each group owns its env-var map in its own module
         nested_env_map: dict[str, dict[str, str]] = {
             "llm": LLM_ENV_MAP,
-            "knowledge": KNOWLEDGE_ENV_MAP,
             "memory": MEMORY_ENV_MAP,
             "shell": SHELL_ENV_MAP,
             "web": WEB_ENV_MAP,

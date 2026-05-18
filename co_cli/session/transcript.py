@@ -30,11 +30,7 @@ class ExtractedMessage:
 
 
 def extract_messages(path: Path) -> list[ExtractedMessage]:
-    """Extract indexable parts from a session JSONL file.
-
-    Returns user-prompt, text (assistant), tool-call, and tool-return parts.
-    Skips thinking, system-prompt, retry-prompt and compact-boundary / session-meta lines.
-    """
+    """Extract indexable parts from a session JSONL file."""
     results: list[ExtractedMessage] = []
     try:
         with path.open("r", encoding="utf-8") as f:
@@ -58,8 +54,6 @@ def _extract_from_line(
     line_idx: int,
     results: list[ExtractedMessage],
 ) -> None:
-    """Extract indexable parts from one parsed JSONL line, appending to results."""
-    # Skip non-array lines
     if not isinstance(data, list) or not data:
         return
     msg = data[0]
@@ -83,17 +77,12 @@ def _extract_part(
     line_idx: int,
     msg_timestamp: object,
 ) -> ExtractedMessage | None:
-    """Return an ExtractedMessage for a retained part kind, or None to skip.
-
-    Retained: user-prompt, text (assistant), tool-call, tool-return.
-    Dropped: thinking, system-prompt, retry-prompt.
-    """
+    """Return an ExtractedMessage for a retained part kind, or None to skip."""
     part_kind = part.get("part_kind")
     ts = _to_str(part.get("timestamp") or msg_timestamp)
 
     if part_kind == "user-prompt":
         content = part.get("content", "")
-        # Multi-modal content is a list of typed sub-parts
         if isinstance(content, list):
             texts = [
                 sub.get("text", "")

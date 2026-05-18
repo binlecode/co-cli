@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.8.212]
+
+### Memory module refactor — `knowledge` → `memory`, session tier promotion, IndexStore facade
+
+- **`co_cli/index/`** — new infrastructure facade: `IndexStore` (SQLite + FTS5 + sqlite-vec), `RetrievalService`, `EmbeddingService`, `Chunk`, public `search_util.py` / `stopwords.py`
+- **`co_cli/memory/`** — domain store: `MemoryStore` composes `IndexStore`; two-pass search policy (`search_artifacts`); `IndexSourceEnum.MEMORY = 'memory'`; `MemoryArtifact` replaces `KnowledgeArtifact`
+- **`co_cli/session/`** — new domain: `SessionStore` composes `IndexStore`; `chunk_session()` returns `list[Chunk]` directly (drops `SessionChunk`); browser, transcript, persistence, filename modules
+- **Tool surface**: `memory_search`, `memory_view`, `memory_manage` (renamed from `knowledge_*`); `session_search`, `session_view` promoted to own tier under `co_cli/tools/session/`
+- **Config**: `Settings.memory_path`, `MemorySettings`, `MEMORY_DIR`, `CO_MEMORY_*` env vars; `co_cli/config/knowledge.py` deleted
+- **Bootstrap / Deps**: `CoDeps` gains `index_store`, `session_store`; `memory_dir` replaces `knowledge_dir`; canon path `souls/{role}/canon/` replaces `memories/`
+- **System prompt assets**: `04_tool_protocol.md` and `skills/triage.md` updated to `memory_*` tool names
+
 ## [0.8.210]
 
 ### Startup banner — Knowledge → Memory with counts

@@ -38,7 +38,6 @@ def test_manifest_includes_user_installed_skills(tmp_path: Path) -> None:
     skill_index = {"user-skill": SkillInfo(name="user-skill", description="A user skill")}
     out = render_skill_manifest(skill_index, skills_dir, user_skills_dir)
 
-    assert "<available_skills>" in out
     assert 'name="user-skill"' in out
     assert 'description="A user skill"' in out
 

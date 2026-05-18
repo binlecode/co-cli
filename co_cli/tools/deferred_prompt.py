@@ -13,7 +13,7 @@ from co_cli.deps import ToolInfo, VisibilityPolicyEnum
 _NATIVE_CATEGORIES: dict[str, str] = {
     "file_write": "file editing",
     "file_patch": "file editing",
-    "knowledge_manage": "memory management",
+    "memory_manage": "memory management",
     "task_start": "background tasks",
     "task_status": "background tasks",
     "task_cancel": "background tasks",
@@ -29,9 +29,9 @@ _NATIVE_CATEGORY_REPS: dict[str, list[str]] = {
     "file editing": ["file_write", "file_patch"],
     "background tasks": ["task_start"],
     "memory management": [
-        "knowledge_manage",
-        "knowledge_search",
-        "knowledge_view",
+        "memory_manage",
+        "memory_search",
+        "memory_view",
         "session_search",
         "session_view",
     ],

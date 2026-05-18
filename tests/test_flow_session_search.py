@@ -11,24 +11,26 @@ from tests._settings import SETTINGS
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.memory.memory_store import MemoryStore
-from co_cli.tools.memory.recall import _SESSIONS_CHANNEL_CAP, session_search
+from co_cli.index.store import IndexStore
+from co_cli.session.store import SessionStore
+from co_cli.tools.session.recall import _SESSIONS_CHANNEL_CAP, session_search
 from co_cli.tools.shell_backend import ShellBackend
 
-_FTS5_CONFIG = SETTINGS.knowledge.model_copy(
+_FTS5_CONFIG = SETTINGS.memory.model_copy(
     update={
         "search_backend": "fts5",
         "embedding_provider": "none",
         "cross_encoder_reranker_url": None,
     }
 )
-_TEST_SETTINGS = SETTINGS.model_copy(update={"knowledge": _FTS5_CONFIG})
+_TEST_SETTINGS = SETTINGS.model_copy(update={"memory": _FTS5_CONFIG})
 
 _SESSION_TIMESTAMP = "2026-01-01-T120000Z"
 
 
-def _make_store(tmp_path: Path) -> MemoryStore:
-    return MemoryStore(config=_TEST_SETTINGS, memory_db_path=tmp_path / "search.db")
+def _make_stores(tmp_path: Path) -> tuple[IndexStore, SessionStore]:
+    index = IndexStore(config=_TEST_SETTINGS, db_path=tmp_path / "search.db")
+    return index, SessionStore(index=index, config=_TEST_SETTINGS)
 
 
 def _make_session_file(sessions_dir: Path, uuid8: str, content: str) -> Path:
@@ -40,13 +42,16 @@ def _make_session_file(sessions_dir: Path, uuid8: str, content: str) -> Path:
     return path
 
 
-def _make_deps(tmp_path: Path, store: MemoryStore, sessions_dir: Path) -> CoDeps:
+def _make_deps(
+    tmp_path: Path, index: IndexStore, store: SessionStore, sessions_dir: Path
+) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         config=_TEST_SETTINGS,
         session=CoSessionState(),
         sessions_dir=sessions_dir,
-        memory_store=store,
+        index_store=index,
+        session_store=store,
     )
 
 
@@ -62,13 +67,13 @@ async def test_session_search_returns_chunk_cited_hit(tmp_path: Path) -> None:
     session_view(session_id, start_line, end_line) to read verbatim turns.
     """
     sessions_dir = tmp_path / "sessions"
-    store = _make_store(tmp_path)
+    index, store = _make_stores(tmp_path)
     try:
         uuid8 = "aabb1122"
         path = _make_session_file(sessions_dir, uuid8, "sesquniquetoken8z discussion here")
         store.index_session(path)
 
-        deps = _make_deps(tmp_path, store, sessions_dir)
+        deps = _make_deps(tmp_path, index, store, sessions_dir)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
@@ -89,7 +94,7 @@ async def test_session_search_returns_chunk_cited_hit(tmp_path: Path) -> None:
             assert field in r, f"missing field {field!r} in hit: {r}"
         assert "channel" not in r, f"hit must not carry 'channel' field: {r}"
     finally:
-        store.close()
+        index.close()
 
 
 @pytest.mark.asyncio
@@ -100,12 +105,12 @@ async def test_session_search_empty_query_returns_browse_metadata(tmp_path: Path
     when there are sessions to browse.
     """
     sessions_dir = tmp_path / "sessions"
-    store = _make_store(tmp_path)
+    index, store = _make_stores(tmp_path)
     try:
         path = _make_session_file(sessions_dir, "ccdd3344", "some past session content")
         store.index_session(path)
 
-        deps = _make_deps(tmp_path, store, sessions_dir)
+        deps = _make_deps(tmp_path, index, store, sessions_dir)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
@@ -118,7 +123,7 @@ async def test_session_search_empty_query_returns_browse_metadata(tmp_path: Path
         assert "when" in r, f"browse result must include when: {r}"
         assert "channel" not in r, f"browse result must not carry 'channel': {r}"
     finally:
-        store.close()
+        index.close()
 
 
 @pytest.mark.asyncio
@@ -129,7 +134,7 @@ async def test_session_search_excludes_current_session(tmp_path: Path) -> None:
     own in-progress conversation as a past session hit.
     """
     sessions_dir = tmp_path / "sessions"
-    store = _make_store(tmp_path)
+    index, store = _make_stores(tmp_path)
     try:
         current_uuid8 = "current1"
         other_uuid8 = "other111"
@@ -151,7 +156,8 @@ async def test_session_search_excludes_current_session(tmp_path: Path) -> None:
             config=_TEST_SETTINGS,
             session=session_state,
             sessions_dir=sessions_dir,
-            memory_store=store,
+            index_store=index,
+            session_store=store,
         )
         ctx = _ctx(deps)
 
@@ -164,7 +170,7 @@ async def test_session_search_excludes_current_session(tmp_path: Path) -> None:
             f"current session {current_uuid8!r} must be excluded from results: {returned_ids}"
         )
     finally:
-        store.close()
+        index.close()
 
 
 @pytest.mark.asyncio
@@ -175,7 +181,7 @@ async def test_session_search_per_query_cap_honoured(tmp_path: Path) -> None:
     the cap that keeps recall focused.
     """
     sessions_dir = tmp_path / "sessions"
-    store = _make_store(tmp_path)
+    index, store = _make_stores(tmp_path)
     try:
         cap_token = "captoken_mk9r"
         for i in range(_SESSIONS_CHANNEL_CAP + 2):
@@ -183,7 +189,7 @@ async def test_session_search_per_query_cap_honoured(tmp_path: Path) -> None:
             path = _make_session_file(sessions_dir, uuid8, f"{cap_token} session number {i}")
             store.index_session(path)
 
-        deps = _make_deps(tmp_path, store, sessions_dir)
+        deps = _make_deps(tmp_path, index, store, sessions_dir)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
@@ -195,4 +201,4 @@ async def test_session_search_per_query_cap_honoured(tmp_path: Path) -> None:
             f"unique sessions must be capped at {_SESSIONS_CHANNEL_CAP}, got {len(unique_ids)}"
         )
     finally:
-        store.close()
+        index.close()

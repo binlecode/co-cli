@@ -1,1 +1,1 @@
-"""Memory layer — session transcripts and reusable knowledge artifacts."""
+"""Memory domain — long-term declarative artifacts (user / rule / article / note)."""

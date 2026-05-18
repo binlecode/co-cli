@@ -183,13 +183,13 @@ def _check_embedder(config: "Settings") -> CheckResult:
     Ollama: probes the configured embedding model.
     Gemini: validates API key presence.
     """
-    provider = config.knowledge.embedding_provider
+    provider = config.memory.embedding_provider
     if provider == "none":
         return CheckResult(ok=True, status="skipped", detail="Embedding provider is 'none'")
     if provider == "tei":
-        return _check_tei(config.knowledge.embed_api_url)
+        return _check_tei(config.memory.embed_api_url)
     if provider == "ollama":
-        return _check_ollama_model(config.llm.host, config.knowledge.embedding_model)
+        return _check_ollama_model(config.llm.host, config.memory.embedding_model)
     if provider == "gemini":
         return _check_gemini_key(config.llm.api_key)
     return CheckResult(ok=True, status="skipped", detail=f"Unknown provider: {provider}")
@@ -200,9 +200,9 @@ def _check_cross_encoder(config: "Settings") -> CheckResult:
 
     Skipped if no cross-encoder URL is configured.
     """
-    if config.knowledge.cross_encoder_reranker_url is None:
+    if config.memory.cross_encoder_reranker_url is None:
         return CheckResult(ok=True, status="skipped", detail="Cross-encoder not configured")
-    return _check_tei(config.knowledge.cross_encoder_reranker_url)
+    return _check_tei(config.memory.cross_encoder_reranker_url)
 
 
 def _check_mcp_server(command: str | None, url: str | None) -> CheckResult:
@@ -335,7 +335,7 @@ def check_runtime(
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
     _emit_progress(progress, "Doctor: checking knowledge backend...")
-    knowledge_result = _check_memory_store(deps.memory_store, deps.config.knowledge.search_backend)
+    knowledge_result = _check_memory_store(deps.memory_store, deps.config.memory.search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
     from co_cli.skills.index import get_skill_index
@@ -375,7 +375,7 @@ def check_runtime(
         "obsidian": obsidian_result.status == "ok",
         "brave": brave_result.status == "ok",
         "mcp_count": mcp_count,
-        "knowledge_backend": deps.config.knowledge.search_backend,
+        "knowledge_backend": deps.config.memory.search_backend,
         "checks": checks,
     }
 
@@ -394,7 +394,7 @@ def check_runtime(
         "tool_count": len(tool_index),
         "skill_count": len(get_skill_index(deps.skill_index)),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
-        "knowledge_mode": deps.config.knowledge.search_backend,
+        "knowledge_mode": deps.config.memory.search_backend,
         "source_counts": source_counts,
     }
 

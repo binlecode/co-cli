@@ -6,20 +6,20 @@ from tests._settings import SETTINGS
 
 from co_cli.bootstrap.core import _sync_canon_store
 from co_cli.display.core import TerminalFrontend
-from co_cli.memory.memory_store import MemoryStore
+from co_cli.index.store import IndexStore
 
-_FTS5_CONFIG = SETTINGS.knowledge.model_copy(
+_FTS5_CONFIG = SETTINGS.memory.model_copy(
     update={
         "search_backend": "fts5",
         "embedding_provider": "none",
         "cross_encoder_reranker_url": None,
     }
 )
-_STORE_CONFIG = SETTINGS.model_copy(update={"knowledge": _FTS5_CONFIG})
+_STORE_CONFIG = SETTINGS.model_copy(update={"memory": _FTS5_CONFIG})
 
 
-def _make_store(tmp_path: Path) -> MemoryStore:
-    return MemoryStore(config=_STORE_CONFIG, memory_db_path=tmp_path / "search.db")
+def _make_store(tmp_path: Path) -> IndexStore:
+    return IndexStore(config=_STORE_CONFIG, db_path=tmp_path / "search.db")
 
 
 def test_sync_canon_store_indexes_real_tars_memories(tmp_path: Path) -> None:

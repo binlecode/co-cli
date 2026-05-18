@@ -25,21 +25,21 @@ def build_memory_line(
     *,
     backend: str,
     backend_label: str,
-    knowledge_degradation: str | None,
-    knowledge_count: int,
+    memory_degradation: str | None,
+    memory_count: int,
     session_count: int,
 ) -> str:
     """Build the Memory: status line for the welcome banner."""
     line = f"    Memory: [accent]{backend_label}[/accent]"
-    if knowledge_degradation:
-        line += f"  [yellow]({knowledge_degradation})[/yellow]"
+    if memory_degradation:
+        line += f"  [yellow]({memory_degradation})[/yellow]"
     if backend != "grep":
-        line += f"  knowledge: {knowledge_count}  sessions: {session_count}"
+        line += f"  memory: {memory_count}  sessions: {session_count}"
     return line
 
 
 def display_welcome_banner(
-    deps: "CoDeps", *, knowledge_count: int = 0, session_count: int = 0
+    deps: "CoDeps", *, memory_count: int = 0, session_count: int = 0
 ) -> None:
     """Render welcome banner with ASCII art, model, and environment info."""
     from rich.panel import Panel
@@ -64,13 +64,13 @@ def display_welcome_banner(
         1 for s in deps.skill_index.values() if s.user_invocable
     )
 
-    backend = deps.config.knowledge.search_backend
-    knowledge_degradation = deps.degradations.get("knowledge")
+    backend = deps.config.memory.search_backend
+    memory_degradation = deps.degradations.get("memory")
 
     if backend == "hybrid":
         backend_label = (
-            f"hybrid · {deps.config.knowledge.embedding_provider}/"
-            f"{deps.config.knowledge.embedding_model} {deps.config.knowledge.embedding_dims}d"
+            f"hybrid · {deps.config.memory.embedding_provider}/"
+            f"{deps.config.memory.embedding_model} {deps.config.memory.embedding_dims}d"
         )
     elif backend == "fts5":
         backend_label = "fts5"
@@ -80,8 +80,8 @@ def display_welcome_banner(
     memory_line = build_memory_line(
         backend=backend,
         backend_label=backend_label,
-        knowledge_degradation=knowledge_degradation,
-        knowledge_count=knowledge_count,
+        memory_degradation=memory_degradation,
+        memory_count=memory_count,
         session_count=session_count,
     )
 

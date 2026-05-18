@@ -1,38 +1,34 @@
-"""Archive and restore knowledge artifact files.
+"""Archive and restore memory artifact files.
 
-Archived artifacts live in ``knowledge_dir/_archive/`` and are removed from the
+Archived artifacts live in ``memory_dir/_archive/`` and are removed from the
 FTS index. Restore moves a file back to the active directory and re-indexes it.
 The ``_archive/`` subdir is never traversed by the default top-level loaders
 (see ``load_artifacts``), so archived files are invisible to recall
 but preserved on disk for later restore.
 
 Collisions on the destination filename are resolved by suffixing the stem with
-a short counter so archive is always recoverable — rename never clobbers an
-existing file on either leg.
+a short counter so archive is always recoverable.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from co_cli.memory.artifact import KnowledgeArtifact
-from co_cli.memory.memory_store import MemoryStore
+from co_cli.memory.artifact import MemoryArtifact
+
+if TYPE_CHECKING:
+    from co_cli.memory.store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
 _ARCHIVE_SUBDIR = "_archive"
-_KNOWLEDGE_SOURCE = "knowledge"
 _MAX_COLLISION_SUFFIX = 1000
 
 
 def _non_colliding_path(dest_dir: Path, filename: str) -> Path:
-    """Return a path in ``dest_dir`` that does not overwrite an existing file.
-
-    If ``filename`` is already free, return ``dest_dir / filename``. Otherwise
-    append ``-1``, ``-2``, … to the stem until a free slot is found. Bounded
-    by ``_MAX_COLLISION_SUFFIX`` to prevent infinite loops on a malformed dir.
-    """
+    """Return a path in ``dest_dir`` that does not overwrite an existing file."""
     candidate = dest_dir / filename
     if not candidate.exists():
         return candidate
@@ -48,19 +44,18 @@ def _non_colliding_path(dest_dir: Path, filename: str) -> Path:
 
 
 def archive_artifacts(
-    entries: list[KnowledgeArtifact],
-    knowledge_dir: Path,
+    entries: list[MemoryArtifact],
+    memory_dir: Path,
     memory_store: MemoryStore | None = None,
 ) -> int:
-    """Move artifact files to ``knowledge_dir/_archive/`` and remove them from the FTS index.
+    """Move artifact files to ``memory_dir/_archive/`` and remove from the index.
 
     Creates the ``_archive/`` subdirectory on demand. Entries whose source file
     no longer exists are logged and skipped. Filename collisions inside
     ``_archive/`` are resolved by appending a numeric suffix so prior archives
-    are never clobbered. Returns the number of artifacts actually archived
-    (missing files excluded from the count).
+    are never clobbered. Returns the number of artifacts actually archived.
     """
-    archive_dir = knowledge_dir / _ARCHIVE_SUBDIR
+    archive_dir = memory_dir / _ARCHIVE_SUBDIR
     archive_dir.mkdir(parents=True, exist_ok=True)
 
     archived = 0
@@ -70,7 +65,7 @@ def archive_artifacts(
             logger.warning("archive_artifacts: source missing, skipping: %s", source_path)
             continue
 
-        original_path_str = str(source_path)
+        original_path = source_path
         dest_path = _non_colliding_path(archive_dir, source_path.name)
         if dest_path.name != source_path.name:
             logger.info(
@@ -81,7 +76,7 @@ def archive_artifacts(
         source_path.rename(dest_path)
 
         if memory_store is not None:
-            memory_store.remove(_KNOWLEDGE_SOURCE, original_path_str)
+            memory_store.remove(original_path)
 
         archived += 1
 
@@ -90,19 +85,15 @@ def archive_artifacts(
 
 def restore_artifact(
     slug: str,
-    knowledge_dir: Path,
+    memory_dir: Path,
     memory_store: MemoryStore | None = None,
 ) -> bool:
-    """Move an archived file whose filename starts with ``slug`` back to the active dir.
+    """Move an archived file whose filename starts with ``slug`` back to active.
 
-    Searches ``knowledge_dir/_archive/`` for files whose name starts with the
-    given slug. Returns True on a single unambiguous match (file moved back
-    and re-indexed if a store is provided). Returns False if zero matches or
-    multiple matches (caller must disambiguate). Filename collisions against
-    the active directory are resolved by appending a numeric suffix so
-    restore never clobbers an existing artifact.
+    Returns True on a single unambiguous match. Returns False if zero matches
+    or multiple matches.
     """
-    archive_dir = knowledge_dir / _ARCHIVE_SUBDIR
+    archive_dir = memory_dir / _ARCHIVE_SUBDIR
     if not archive_dir.exists():
         return False
 
@@ -118,7 +109,7 @@ def restore_artifact(
         return False
 
     source_path = matches[0]
-    dest_path = _non_colliding_path(knowledge_dir, source_path.name)
+    dest_path = _non_colliding_path(memory_dir, source_path.name)
     if dest_path.name != source_path.name:
         logger.info(
             "restore_artifact: renaming to avoid collision: %s -> %s",
@@ -128,6 +119,6 @@ def restore_artifact(
     source_path.rename(dest_path)
 
     if memory_store is not None:
-        memory_store.sync_dir(_KNOWLEDGE_SOURCE, knowledge_dir, glob="*.md")
+        memory_store.sync_dir(memory_dir, glob="*.md")
 
     return True

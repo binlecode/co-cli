@@ -77,39 +77,35 @@ def test_check_security_no_dot_env_no_finding(tmp_path: Path) -> None:
     assert not any(f.check_id == "dot-env-permissions" for f in findings)
 
 
-def test_knowledge_settings_env_prefix_overrides_default(tmp_path: Path) -> None:
-    """CO_KNOWLEDGE_CHUNK_TOKENS env var overrides the KnowledgeSettings default."""
+def test_memory_settings_env_prefix_overrides_default(tmp_path: Path) -> None:
+    """CO_MEMORY_CHUNK_TOKENS env var overrides the MemorySettings default."""
     result = load_config(
         _user_config_path=tmp_path / "settings.json",
-        _env={"CO_KNOWLEDGE_CHUNK_TOKENS": "42"},
+        _env={"CO_MEMORY_CHUNK_TOKENS": "42"},
     )
 
-    assert result.knowledge.chunk_tokens == 42
+    assert result.memory.chunk_tokens == 42
 
 
-def test_knowledge_settings_env_overrides_json_config(tmp_path: Path) -> None:
-    """Env var takes priority over the JSON config value for knowledge fields."""
-    (tmp_path / "settings.json").write_text(
-        '{"knowledge": {"chunk_tokens": 200}}', encoding="utf-8"
-    )
+def test_memory_settings_env_overrides_json_config(tmp_path: Path) -> None:
+    """Env var takes priority over the JSON config value for memory fields."""
+    (tmp_path / "settings.json").write_text('{"memory": {"chunk_tokens": 200}}', encoding="utf-8")
 
     result = load_config(
         _user_config_path=tmp_path / "settings.json",
-        _env={"CO_KNOWLEDGE_CHUNK_TOKENS": "99"},
+        _env={"CO_MEMORY_CHUNK_TOKENS": "99"},
     )
 
-    assert result.knowledge.chunk_tokens == 99
+    assert result.memory.chunk_tokens == 99
 
 
-def test_knowledge_settings_json_config_applies_without_env(tmp_path: Path) -> None:
-    """JSON config value is used for knowledge fields when no env var is set."""
-    (tmp_path / "settings.json").write_text(
-        '{"knowledge": {"chunk_tokens": 300}}', encoding="utf-8"
-    )
+def test_memory_settings_json_config_applies_without_env(tmp_path: Path) -> None:
+    """JSON config value is used for memory fields when no env var is set."""
+    (tmp_path / "settings.json").write_text('{"memory": {"chunk_tokens": 300}}', encoding="utf-8")
 
     result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
 
-    assert result.knowledge.chunk_tokens == 300
+    assert result.memory.chunk_tokens == 300
 
 
 def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:

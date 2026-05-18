@@ -1,9 +1,9 @@
-"""Token-level Jaccard similarity for knowledge artifact dedup."""
+"""Token-level Jaccard similarity for memory artifact dedup."""
 
 from __future__ import annotations
 
-from co_cli.memory.artifact import KnowledgeArtifact
-from co_cli.memory.stopwords import STOPWORDS
+from co_cli.index.stopwords import STOPWORDS
+from co_cli.memory.artifact import MemoryArtifact
 
 
 def token_jaccard(a: str, b: str) -> float:
@@ -25,9 +25,9 @@ def token_jaccard(a: str, b: str) -> float:
 def find_similar_artifacts(
     content: str,
     artifact_kind: str | None,
-    artifacts: list[KnowledgeArtifact],
+    artifacts: list[MemoryArtifact],
     threshold: float,
-) -> list[tuple[KnowledgeArtifact, float]]:
+) -> list[tuple[MemoryArtifact, float]]:
     """Return artifacts whose content similarity to *content* exceeds *threshold*.
 
     Only compares artifacts with the same *artifact_kind* when one is supplied.
@@ -38,7 +38,7 @@ def find_similar_artifacts(
         if artifact_kind is not None
         else list(artifacts)
     )
-    matches: list[tuple[KnowledgeArtifact, float]] = []
+    matches: list[tuple[MemoryArtifact, float]] = []
     for artifact in candidates:
         score = token_jaccard(content, artifact.content)
         if score >= threshold:

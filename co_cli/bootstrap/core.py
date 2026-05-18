@@ -11,17 +11,19 @@ from typing import TYPE_CHECKING, Literal
 from co_cli.observability.tracing import current_span, trace
 
 if TYPE_CHECKING:
-    from co_cli.memory.memory_store import MemoryStore
+    from co_cli.index.store import IndexStore
+    from co_cli.memory.store import MemoryStore
+    from co_cli.session.store import SessionStore
 
 import co_cli.personality
 from co_cli.config.core import Settings, get_settings
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display.core import TerminalFrontend
-from co_cli.memory.session import find_latest_session, new_session_path
+from co_cli.session.filename import find_latest_session, new_session_path
 from co_cli.tools.shell_backend import ShellBackend
 
 logger = logging.getLogger(__name__)
-KnowledgeBackendLiteral = Literal["grep", "fts5", "hybrid"]
+MemoryBackendLiteral = Literal["grep", "fts5", "hybrid"]
 
 
 def _summarize_backend_error(exc: Exception) -> str:
@@ -44,25 +46,24 @@ def _resolve_reranker(
     if cross_result.status == "ok":
         tei_batch = cross_result.extra.get("max_client_batch_size")
         if isinstance(tei_batch, int) and tei_batch > 0:
-            config.knowledge.tei_rerank_batch_size = tei_batch
+            config.memory.tei_rerank_batch_size = tei_batch
         return True
-    # TEI not configured or unreachable — hybrid requires TEI reranker
     if cross_result.status == "skipped":
         statuses.append("  Hybrid requires TEI reranker — cross_encoder_reranker_url not set")
         logger.warning("TEI cross-encoder not configured; hybrid mode cannot start")
     else:
         statuses.append("  Hybrid requires TEI reranker — TEI cross-encoder unavailable")
         logger.warning("TEI cross-encoder configured but unavailable; hybrid mode cannot start")
-        config.knowledge.cross_encoder_reranker_url = None
+        config.memory.cross_encoder_reranker_url = None
     return False
 
 
-def _discover_memory_backend(
+def _discover_index_backend(
     config: Settings,
     frontend: TerminalFrontend,
     degradations: dict[str, str],
-) -> MemoryStore | None:
-    """Discover which knowledge backend is available and construct the store.
+) -> IndexStore | None:
+    """Discover which memory backend is available and construct IndexStore.
 
     Two-tier resolution with fail-fast on FTS unavailability:
       1. hybrid  — sqlite-vec + embedding provider (richest search)
@@ -71,25 +72,21 @@ def _discover_memory_backend(
 
     FTS5 is the minimum required backend. If the configured backend is fts5 or
     hybrid and FTS5 fails to initialise, bootstrap raises rather than silently
-    degrading — a grep fallback would lose the sessions recall channel entirely.
-    Raises RuntimeError on FTS5 init failure.
+    degrading — a grep fallback would lose the session recall channel entirely.
     """
-    if config.knowledge.search_backend == "grep":
+    if config.memory.search_backend == "grep":
         return None
 
-    configured: KnowledgeBackendLiteral = config.knowledge.search_backend
+    configured: MemoryBackendLiteral = config.memory.search_backend
     statuses: list[str] = []
 
-    # Resolve reranker — if TEI is configured but unreachable, hybrid cannot start
     reranker_ok = _resolve_reranker(config, statuses)
 
-    # --- Level 1: hybrid (sqlite-vec + embedding) ---
-    # Only attempt hybrid if that's what was configured; respect explicit fts5 choice.
-    resolved_backend: KnowledgeBackendLiteral = "fts5"
+    resolved_backend: MemoryBackendLiteral = "fts5"
     if configured == "hybrid":
         if not reranker_ok:
             logger.warning("Hybrid skipped: TEI reranker configured but unavailable")
-        elif config.knowledge.embedding_provider == "none":
+        elif config.memory.embedding_provider == "none":
             logger.info("Hybrid skipped: embedding provider is 'none'")
         else:
             from co_cli.bootstrap.check import _check_embedder
@@ -98,7 +95,7 @@ def _discover_memory_backend(
             if embedder_check.status not in ("ok", "skipped"):
                 logger.warning("Hybrid skipped: embedder unavailable — %s", embedder_check.detail)
                 statuses.append(
-                    f"  Knowledge degraded — embedder unavailable "
+                    f"  Memory degraded — embedder unavailable "
                     f"({embedder_check.detail}); using fts5"
                 )
             else:
@@ -109,117 +106,148 @@ def _discover_memory_backend(
 
     if resolved_backend != configured:
         reason = "TEI reranker unavailable" if not reranker_ok else "embedder unavailable"
-        degradations["knowledge"] = f"{configured} → {resolved_backend} ({reason})"
-    config.knowledge.search_backend = resolved_backend
+        degradations["memory"] = f"{configured} → {resolved_backend} ({reason})"
+    config.memory.search_backend = resolved_backend
 
-    # --- Construct store with resolved config ---
-    from co_cli.memory.memory_store import MemoryStore as _MS
+    from co_cli.index.store import IndexStore as _IS
 
-    def _degrade_to(backend: KnowledgeBackendLiteral, reason: str) -> None:
-        config.knowledge.search_backend = backend
-        degradations["knowledge"] = f"{configured} → {backend} ({reason})"
+    def _degrade_to(backend: MemoryBackendLiteral, reason: str) -> None:
+        config.memory.search_backend = backend
+        degradations["memory"] = f"{configured} → {backend} ({reason})"
 
     try:
-        return _MS(config=config)
+        return _IS(config=config)
     except Exception as exc:
         if resolved_backend == "hybrid":
             logger.warning("Hybrid backend unavailable: %s", exc)
             frontend.on_status(
-                f"  Knowledge degraded — hybrid unavailable "
+                f"  Memory degraded — hybrid unavailable "
                 f"({_summarize_backend_error(exc)}); trying fts5"
             )
             _degrade_to("fts5", _summarize_backend_error(exc))
             try:
-                return _MS(config=config)
+                return _IS(config=config)
             except Exception as exc2:
                 detail = _summarize_backend_error(exc2)
                 logger.error("FTS5 backend unavailable: %s", exc2)
-                frontend.on_status(f"  Knowledge error — fts5 unavailable ({detail})")
+                frontend.on_status(f"  Memory error — fts5 unavailable ({detail})")
                 raise RuntimeError(
-                    f"FTS5 knowledge backend failed to initialise ({detail}). "
+                    f"FTS5 memory backend failed to initialise ({detail}). "
                     "FTS5 is the minimum required backend for session recall. "
                     "Set search_backend: grep in config to opt out of FTS entirely."
                 ) from exc2
         else:
             detail = _summarize_backend_error(exc)
             logger.error("FTS5 backend unavailable: %s", exc)
-            frontend.on_status(f"  Knowledge error — fts5 unavailable ({detail})")
+            frontend.on_status(f"  Memory error — fts5 unavailable ({detail})")
             raise RuntimeError(
-                f"FTS5 knowledge backend failed to initialise ({detail}). "
+                f"FTS5 memory backend failed to initialise ({detail}). "
                 "FTS5 is the minimum required backend for session recall. "
                 "Set search_backend: grep in config to opt out of FTS entirely."
             ) from exc
 
 
-@trace("sync_knowledge")
-def _sync_memory_store(
-    store: MemoryStore | None,
+@trace("sync_memory")
+def _sync_memory_domain(
+    memory_store: MemoryStore | None,
     config: Settings,
     frontend: TerminalFrontend,
-    knowledge_dir: Path,
-) -> MemoryStore | None:
-    """Reconcile the knowledge store with current knowledge files on disk.
-
-    Hash-based — skips unchanged files. On sync failure, raises RuntimeError
-    rather than silently dropping the store — a None store would lose session
-    recall for the session without any visible signal.
-    """
-    if store is None:
-        frontend.on_status("  Knowledge store not available — skipped")
-        return None
+    memory_dir: Path,
+) -> None:
+    """Reconcile memory artifacts with current files on disk."""
+    if memory_store is None:
+        frontend.on_status("  Memory store not available — skipped")
+        return
 
     span = current_span()
     try:
-        if knowledge_dir.exists():
-            count = store.sync_dir("knowledge", knowledge_dir)
-            backend = config.knowledge.search_backend
+        if memory_dir.exists():
+            count = memory_store.sync_dir(memory_dir)
+            backend = config.memory.search_backend
             span.set_attribute("count", count)
             span.set_attribute("backend", backend)
             span.set_attribute("status", "ok")
-            frontend.on_status(f"  Knowledge synced — {count} item(s) ({backend})")
+            frontend.on_status(f"  Memory synced — {count} item(s) ({backend})")
         else:
             span.set_attribute("status", "skipped")
-            frontend.on_status("  Knowledge store empty — no knowledge dir")
+            frontend.on_status("  Memory store empty — no memory dir")
     except Exception as e:
         span.set_attribute("status", "error")
         span.set_attribute("error", str(e))
-        try:
-            store.close()
-        except Exception:
-            pass
-        raise RuntimeError(f"Knowledge store sync failed: {e}") from e
-
-    return store
+        raise RuntimeError(f"Memory store sync failed: {e}") from e
 
 
 def _sync_canon_store(
-    store: MemoryStore | None,
+    index_store: IndexStore | None,
     config: Settings,
     frontend: TerminalFrontend,
 ) -> None:
-    """Index canon scene files into the unified FTS pipeline under source='canon'.
-
-    No-ops when store is None (grep backend) or personality is not set.
-    """
-    if store is None or not config.personality:
+    """Index canon scene files into the shared FTS pipeline under source='canon'."""
+    if index_store is None or not config.personality:
         return
     souls_dir = (Path(co_cli.personality.__file__).parent / "prompts" / "souls").resolve()
-    canon_dir = souls_dir / config.personality / "memories"
+    canon_dir = souls_dir / config.personality / "canon"
+    if not canon_dir.exists():
+        return
     try:
-        count = store.sync_dir("canon", canon_dir, glob="*.md", no_chunk=True)
+        count = _sync_canon_dir(index_store, canon_dir)
         logger.debug("Canon synced — %d file(s) for role=%s", count, config.personality)
     except Exception as exc:
         logger.warning("Canon store sync failed: %s", exc)
         frontend.on_status(f"  Canon sync failed — {exc}")
 
 
-def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
-    """Raise ValueError when the model's num_ctx undercuts the configured max_ctx floor.
+def _sync_canon_dir(index_store: IndexStore, canon_dir: Path) -> int:
+    """Index canon files under source='canon' with no chunking (one chunk per file)."""
+    import hashlib
 
-    max_ctx is the contract pivot: probed Modelfile num_ctx must be >= max_ctx (floor),
-    and the static num_ctx in _LLM_SETTINGS must be <= max_ctx (ceiling, checked separately
-    by validate_ollama_num_ctx). The two checks do not compare against each other.
-    """
+    from co_cli.index.chunk import Chunk
+    from co_cli.memory.frontmatter import parse_frontmatter
+
+    current_paths: set[str] = set()
+    indexed = 0
+    for file_path in canon_dir.glob("*.md"):
+        path_str = str(file_path)
+        current_paths.add(path_str)
+        try:
+            raw = file_path.read_text(encoding="utf-8")
+            file_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            if not index_store.needs_reindex("canon", path_str, file_hash):
+                continue
+
+            frontmatter, body = parse_frontmatter(raw)
+            artifact_kind = frontmatter.get("artifact_kind") or frontmatter.get("kind") or "canon"
+            title = frontmatter.get("title") or file_path.stem
+            body_stripped = body.strip()
+            chunk = Chunk(
+                index=0,
+                content=body_stripped,
+                start_line=0,
+                end_line=max(0, len(body_stripped.splitlines()) - 1),
+            )
+            with index_store.transaction() as tx:
+                tx.upsert(
+                    source="canon",
+                    kind=artifact_kind,
+                    path=path_str,
+                    title=title,
+                    mtime=file_path.stat().st_mtime,
+                    hash=file_hash,
+                    created=frontmatter.get("created"),
+                    updated=frontmatter.get("updated"),
+                    description=frontmatter.get("description"),
+                )
+                tx.index_chunks("canon", path_str, [chunk])
+            indexed += 1
+        except Exception as e:
+            logger.warning(f"Failed to index canon file {file_path}: {e}")
+
+    index_store.remove_stale("canon", current_paths, directory=canon_dir)
+    return indexed
+
+
+def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
+    """Raise ValueError when the model's num_ctx undercuts the configured max_ctx floor."""
     if num_ctx < max_ctx:
         raise ValueError(
             f"Ollama model {model!r} reports num_ctx={num_ctx:,} "
@@ -229,12 +257,7 @@ def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
 
 
 def _probe_model_ctx(config: Settings) -> int:
-    """Resolve model_max_ctx from config + Ollama probe.
-
-    Ollama: probe loaded Modelfile; raise if num_ctx < max_ctx (floor contract).
-    Non-Ollama or probe failure: fall back to configured max_ctx.
-    Raises ValueError on hard constraint violations.
-    """
+    """Resolve model_max_ctx from config + Ollama probe."""
     if not config.llm.uses_ollama():
         logger.debug(
             "non-ollama provider %s; using configured max_ctx=%d",
@@ -279,10 +302,10 @@ async def create_deps(
     stack: AsyncExitStack,
     theme_override: str | None = None,
 ) -> CoDeps:
-    """Assemble CoDeps from settings: config, registries, MCP, knowledge, skills.
+    """Assemble CoDeps from settings: config, registries, MCP, memory, skills.
 
     MCP servers are entered on the provided stack so they stay alive for the
-    session and are cleaned up when the stack closes. Knowledge backend is
+    session and are cleaned up when the stack closes. Memory backend is
     resolved with three-tier fallback (hybrid → fts5 → grep) and files synced.
 
     Raises ValueError on provider/model hard errors.
@@ -293,22 +316,19 @@ async def create_deps(
         build_native_toolset,
     )
     from co_cli.agent.mcp import discover_mcp_tools
-    from co_cli.llm.factory import build_model
+    from co_cli.llm.factory import build_judge_model, build_model
 
     config = copy.deepcopy(get_settings())
     if theme_override:
         config.theme = theme_override
     paths = resolve_workspace_paths(config)
 
-    # Step 2: fail-fast gate (config shape only — no IO)
     error = config.llm.validate_config()
     if error:
         raise ValueError(error)
 
-    # Step 2b: resolve runtime context budget (Ollama probe or configured ceiling).
     model_max_ctx = _probe_model_ctx(config)
 
-    # Cache spill threshold for the enforce_request_size history processor.
     from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
@@ -329,12 +349,11 @@ async def create_deps(
         spill_threshold_tokens,
     )
 
-    # Step 3: build registries
     llm_model = build_model(config.llm)
+    judge_llm_model = build_judge_model(config.llm)
     native_toolset, tool_index = build_native_toolset(config)
     mcp_entries = build_mcp_entries(config, tool_index)
 
-    # Step 4: MCP connect + discovery — per-entry timeout, per-entry failure isolation
     degradations: dict[str, str] = {}
     from co_cli.agent.mcp import MCPToolsetEntry
 
@@ -357,7 +376,6 @@ async def create_deps(
 
     toolset = assemble_routing_toolset(native_toolset, [entry.toolset for entry in connected])
 
-    # Step 5: load skills (filesystem reads — three-pass precedence merge)
     from co_cli.commands.registry import BUILTIN_COMMANDS, filter_namespace_conflicts
     from co_cli.skills.loader import load_skills
 
@@ -373,27 +391,33 @@ async def create_deps(
     for msg in skill_errors:
         frontend.on_status(msg)
 
-    # Step 6: discover memory backend + construct store (IO probes — three-tier fallback)
-    memory_store = _discover_memory_backend(config, frontend, degradations)
+    index_store = _discover_index_backend(config, frontend, degradations)
 
-    # Step 7: sync memory store with current files on disk
-    memory_store = _sync_memory_store(
-        memory_store,
-        config,
-        frontend,
-        knowledge_dir=paths["knowledge_dir"],
-    )
+    memory_store: MemoryStore | None = None
+    session_store: SessionStore | None = None
+    if index_store is not None:
+        from co_cli.memory.store import MemoryStore as _MS
+        from co_cli.session.store import SessionStore as _SS
 
-    # Step 7b: index canon scenes into the unified FTS pipeline
-    _sync_canon_store(memory_store, config, frontend)
+        memory_store = _MS(index=index_store, config=config)
+        session_store = _SS(index=index_store, config=config)
+        try:
+            _sync_memory_domain(memory_store, config, frontend, paths["memory_dir"])
+        except RuntimeError:
+            index_store.close()
+            raise
 
-    # Step 8: assemble deps
+    _sync_canon_store(index_store, config, frontend)
+
     runtime = CoRuntimeState()
     deps = CoDeps(
         shell=ShellBackend(),
         config=config,
         model=llm_model,
+        judge_model=judge_llm_model,
+        index_store=index_store,
         memory_store=memory_store,
+        session_store=session_store,
         tool_index=tool_index,
         toolset=toolset,
         skill_index=skill_index,
@@ -415,21 +439,13 @@ def init_session_index(
     """Sync past sessions into the unified chunks pipeline.
 
     The current session is excluded so the in-progress transcript is never
-    indexed mid-session. On first run after migration, removes the obsolete
-    session-index.db.
+    indexed mid-session.
     """
-    if deps.memory_store is None:
+    if deps.session_store is None:
         frontend.on_status("  Session index unavailable — memory store missing")
         return
     try:
-        legacy_db = deps.sessions_dir.parent / "session-index.db"
-        if legacy_db.exists():
-            try:
-                legacy_db.unlink()
-                logger.info("Removed legacy session-index.db (superseded by chunks pipeline)")
-            except OSError as exc:
-                logger.warning("Could not remove legacy session-index.db: %s", exc)
-        deps.memory_store.sync_sessions(deps.sessions_dir, exclude=current_session_path)
+        deps.session_store.sync(deps.sessions_dir, exclude=current_session_path)
     except Exception as exc:
         logger.warning("Session sync failed: %s", exc)
         frontend.on_status(f"  Session index sync failed — {exc}")
@@ -437,11 +453,7 @@ def init_session_index(
 
 @trace("restore_session")
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> Path:
-    """Restore the most recent session from sessions/ dir, or create a new session path.
-
-    Returns the session Path (existing or newly constructed — file not created until
-    first append_transcript call).
-    """
+    """Restore the most recent session or create a new session path."""
     span = current_span()
     session_path = find_latest_session(deps.sessions_dir)
     if session_path is not None:

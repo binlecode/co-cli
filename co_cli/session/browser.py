@@ -1,12 +1,7 @@
 """Session browser — listing, title extraction, and summary for UI.
 
 Lightweight session metadata for listing/picker display. No transcript
-content loading — delegates to ``transcript.py`` for I/O primitives.
-
-Public API:
-    SessionSummary    — frozen dataclass for listing UI
-    list_sessions     — list past sessions by filename descending (= chronological)
-    format_file_size  — human-readable byte size
+content loading — delegates to ``persistence.py`` for I/O primitives.
 """
 
 from __future__ import annotations
@@ -17,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from co_cli.memory.session import parse_session_filename
+from co_cli.session.filename import parse_session_filename
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +30,7 @@ class SessionSummary:
 
 
 def _extract_title(path: Path, max_bytes: int = 4096) -> str:
-    """Extract the first user-prompt content from a JSONL transcript head.
-
-    Reads at most max_bytes to avoid loading full transcripts.
-    """
+    """Extract the first user-prompt content from a JSONL transcript head."""
     try:
         raw = path.read_bytes()[:max_bytes].decode("utf-8", errors="replace")
         for line in raw.splitlines():
@@ -74,22 +66,13 @@ def format_file_size(size: int) -> str:
 
 
 def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
-    """List past sessions sorted by filename descending (= most recent first).
-
-    Session files use the format YYYY-MM-DD-THHMMSSZ-{uuid8}.jsonl.
-    session_id is the 8-char UUID suffix; created_at is parsed from the filename prefix.
-    Files that do not match this format are skipped.
-
-    Title is extracted from the first 4KB of the JSONL file (head read only).
-    File size and last_modified come from stat — no full file scan.
-    """
+    """List past sessions sorted by filename descending (= most recent first)."""
     if not sessions_dir.exists():
         return []
     jsonl_files = list(sessions_dir.glob("*.jsonl"))
     if not jsonl_files:
         return []
 
-    # Lexicographic sort descending (filename format = chronological order)
     jsonl_files.sort(key=lambda p: p.name, reverse=True)
 
     summaries: list[SessionSummary] = []

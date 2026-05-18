@@ -2,8 +2,15 @@
 
 Every ``run_turn`` driven by an eval is wrapped with :func:`record_turn`,
 which captures prompt-snapshot hashes, full message history, tool
-calls/returns, thinking, token usage, model latency, and OTel span ids
+calls/returns, thinking, token usage, model latency, and the co trace id
 into ``evals/_outputs/<eval>-<ts>/case_<id>.jsonl``.
+
+The trace id comes from co's structured-log tracing
+(``co_cli.observability.tracing.current_trace_id``) — ``run_turn`` is
+decorated with ``@trace("co.turn", new_trace=True)``, so each turn runs
+under a fresh trace_id that's still bound to the contextvar when the call
+returns. Use ``co tail`` to follow new records as they land or
+``co trace <trace_id>`` to render the snapshot tree for one turn.
 
 Long fields are truncated to ~4 KB inline; truncation is marked so the trace
 file size stays bounded across runs. Thinking capture is opt-in via the
@@ -21,12 +28,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from opentelemetry import trace
+from co_cli.observability.tracing import current_trace_id
 
 _INLINE_MAX_CHARS = 4096
 _THINKING_ENV = "EVAL_VERBOSE_TRACE"
-
-_tracer = trace.get_tracer("co-cli.evals.trace")
 
 
 @dataclass
@@ -49,7 +54,7 @@ class TurnTrace:
     thinking: str | None = None
     token_usage: dict[str, int] = field(default_factory=dict)
     model_call_seconds: float = 0.0
-    span_ids: list[str] = field(default_factory=list)
+    trace_ids: list[str] = field(default_factory=list)
     prompt_snapshot: dict[str, str] = field(default_factory=dict)
     error: str = ""
 
@@ -139,15 +144,6 @@ def _extract_usage(usage: Any) -> dict[str, int]:
     return out
 
 
-def _current_trace_id() -> str:
-    """Best-effort OTel trace id for the active span, formatted hex16."""
-    span = trace.get_current_span()
-    ctx = span.get_span_context() if span else None
-    if ctx is None or not ctx.is_valid:
-        return ""
-    return f"{ctx.trace_id:032x}"
-
-
 def _prompt_snapshot_from_agent(agent: Any) -> dict[str, str]:
     """Best-effort static-prompt hash without instrumenting agent internals."""
     out: dict[str, str] = {}
@@ -187,44 +183,48 @@ async def record_turn(
     tool_calls: list[ToolCallRecord] = []
     thinking: str | None = None
     usage_dict: dict[str, int] = {}
-    span_ids: list[str] = []
+    trace_ids: list[str] = []
 
-    with _tracer.start_as_current_span("eval.run_turn") as span:
-        span.set_attribute("eval.case_id", case_id)
-        span.set_attribute("eval.turn_index", turn_index)
-        span_ids.append(_current_trace_id())
-        t0 = time.monotonic()
-        try:
-            turn_result = await run_turn_callable()
-        except Exception as exc:
-            error_msg = f"{type(exc).__name__}: {exc}"
-            raise
-        finally:
-            model_call_seconds = time.monotonic() - t0
-            if turn_result is not None:
-                msgs = getattr(turn_result, "messages", None) or []
-                assistant_text, tool_calls, thinking_raw = _extract_messages(msgs)
-                if verbose_thinking:
-                    thinking = thinking_raw
-                usage_dict = _extract_usage(getattr(turn_result, "usage", None))
+    t0 = time.monotonic()
+    try:
+        turn_result = await run_turn_callable()
+    except Exception as exc:
+        error_msg = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        model_call_seconds = time.monotonic() - t0
+        # ``run_turn`` is decorated with ``@trace("co.turn", new_trace=True)`` —
+        # by the time we read here, the trace id of the just-completed turn is
+        # still bound to the contextvar (``pop_span`` clears the stack, not the
+        # trace id). Read once; subsequent eval-orchestration code stays on
+        # the same trace until the next turn starts a new one.
+        tid = current_trace_id()
+        if tid:
+            trace_ids.append(tid)
+        if turn_result is not None:
+            msgs = getattr(turn_result, "messages", None) or []
+            assistant_text, tool_calls, thinking_raw = _extract_messages(msgs)
+            if verbose_thinking:
+                thinking = thinking_raw
+            usage_dict = _extract_usage(getattr(turn_result, "usage", None))
 
-            assistant_trunc, _ = _truncate(assistant_text)
-            thinking_trunc, _ = _truncate(thinking) if thinking else ("", False)
-            trace_obj = TurnTrace(
-                case_id=case_id,
-                turn_index=turn_index,
-                user_input=user_input,
-                assistant_text=assistant_trunc,
-                tool_calls=tool_calls,
-                thinking=thinking_trunc if thinking else None,
-                token_usage=usage_dict,
-                model_call_seconds=model_call_seconds,
-                span_ids=span_ids,
-                prompt_snapshot=snapshot,
-                error=error_msg,
-            )
-            with trace_file.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(asdict(trace_obj), default=str) + "\n")
+        assistant_trunc, _ = _truncate(assistant_text)
+        thinking_trunc, _ = _truncate(thinking) if thinking else ("", False)
+        trace_obj = TurnTrace(
+            case_id=case_id,
+            turn_index=turn_index,
+            user_input=user_input,
+            assistant_text=assistant_trunc,
+            tool_calls=tool_calls,
+            thinking=thinking_trunc if thinking else None,
+            token_usage=usage_dict,
+            model_call_seconds=model_call_seconds,
+            trace_ids=trace_ids,
+            prompt_snapshot=snapshot,
+            error=error_msg,
+        )
+        with trace_file.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(asdict(trace_obj), default=str) + "\n")
 
     return turn_result, trace_obj
 

@@ -8,7 +8,7 @@ from co_cli.display.core import console, make_table
 
 async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
     """List past sessions, optionally filtered by keyword."""
-    from co_cli.memory.session_browser import format_file_size, list_sessions
+    from co_cli.session.browser import format_file_size, list_sessions
 
     summaries = list_sessions(ctx.deps.sessions_dir)
     if args:

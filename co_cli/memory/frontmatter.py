@@ -1,6 +1,6 @@
-"""YAML frontmatter parse and render for knowledge artifacts.
+"""YAML frontmatter parse and render for memory artifacts.
 
-See ``co_cli.memory.artifact.KnowledgeArtifact`` for the data model.
+See ``co_cli.memory.artifact.MemoryArtifact`` for the data model.
 """
 
 from __future__ import annotations
@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 if TYPE_CHECKING:
-    from co_cli.memory.artifact import KnowledgeArtifact
+    from co_cli.memory.artifact import MemoryArtifact
 
 logger = logging.getLogger(__name__)
 
-KIND_KNOWLEDGE = "knowledge"
+KIND_MEMORY = "memory"
 
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
@@ -54,15 +54,15 @@ def strip_frontmatter(content: str) -> str:
     return body
 
 
-def artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
-    """Serialize a KnowledgeArtifact to its frontmatter dict.
+def artifact_to_frontmatter(artifact: MemoryArtifact) -> dict[str, Any]:
+    """Serialize a MemoryArtifact to its frontmatter dict.
 
     Drops None, empty-list, and default-valued fields so files stay readable.
     Always keeps id, kind, artifact_kind, created (required identity).
     """
     frontmatter: dict[str, Any] = {
         "id": artifact.id,
-        "kind": KIND_KNOWLEDGE,
+        "kind": KIND_MEMORY,
         "artifact_kind": artifact.artifact_kind,
         "created": artifact.created,
     }
@@ -84,17 +84,13 @@ def artifact_to_frontmatter(artifact: KnowledgeArtifact) -> dict[str, Any]:
     return frontmatter
 
 
-def render_artifact_file(artifact: KnowledgeArtifact) -> str:
-    """Render a KnowledgeArtifact to a .md file (YAML frontmatter + body)."""
+def render_artifact_file(artifact: MemoryArtifact) -> str:
+    """Render a MemoryArtifact to a .md file (YAML frontmatter + body)."""
     frontmatter = artifact_to_frontmatter(artifact)
     return render_frontmatter(frontmatter, artifact.content)
 
 
 def render_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
-    """Serialize a frontmatter dict + body to .md text.
-
-    Used by in-place updates that already hold a parsed frontmatter dict.
-    For new writes, prefer ``render_artifact_file(artifact)``.
-    """
+    """Serialize a frontmatter dict + body to .md text."""
     yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
     return f"---\n{yaml_text}---\n\n{body.strip()}\n"

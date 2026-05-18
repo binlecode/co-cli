@@ -50,7 +50,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Prompt assembly | [prompt-assembly.md](prompt-assembly.md) | Instruction layers, history processors, recall injection |
 | Compaction | [compaction.md](compaction.md) | Spill, proactive summarization, session JSONL rewrite |
 | Memory | [memory.md](memory.md) | Memory tier overview: knowledge + session channels, search surface |
-| Knowledge | [knowledge.md](knowledge.md) | Artifact storage, kind taxonomy, `knowledge_manage` |
+| Knowledge | [memory.md](memory.md) | Artifact storage, kind taxonomy, `memory_manage` |
 | Sessions | [sessions.md](sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
 | Dream cycle | [dream.md](dream.md) | Session-end mining, knowledge merge, decay, archive |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
@@ -122,7 +122,7 @@ Every turn's system prompt is assembled from three layers injected before the ag
 
 1. **Static** — soul seed + mindsets + bundled skill manifest (injected at agent construction, not per-turn)
 2. **Dynamic** — personality-context artifacts from the knowledge index (canon, not user-queryable)
-3. **Recall** — `knowledge_search` + `session_search` results injected into the turn context window
+3. **Recall** — `memory_search` + `session_search` results injected into the turn context window
 
 Recall is search-driven and on-demand — nothing is wholesale injected into every turn. History processors (compaction, spill placeholders) apply in the pre-run pass.
 
@@ -130,25 +130,25 @@ Recall is search-driven and on-demand — nothing is wholesale injected into eve
 
 ---
 
-### Memory Channels
+### Memory and Session Tiers
 
-Two channels share one index (`co-cli-search.db`, FTS5 + optional vec):
+Memory and session are peer operational tiers sharing one index (`co-cli-search.db`, FTS5 + optional vec):
 
-- **Knowledge** (`~/.co-cli/knowledge/*.md`) — declarative facts, rules, articles, notes. Model-writable via `knowledge_manage`. Mined and decayed by the dream cycle.
-- **Sessions** (`~/.co-cli/sessions/*.jsonl`) — past turn transcripts. Append-only; chunked at write time. Recalled via BM25 chunk snippets with line citations; full turns fetched via `session_view`.
+- **Memory** (`~/.co-cli/memory/*.md`) — long-term declarative artifacts: user preferences, rules, articles, notes. Model-writable via `memory_manage`. Mined and decayed by the dream cycle.
+- **Session** (`~/.co-cli/sessions/*.jsonl`) — past conversation transcripts. Append-only; chunked at write time. Recalled via BM25 chunk snippets with line citations; full turns fetched via `session_view`.
 
-Recall is always search-driven. No channel is bulk-injected. Browse mode (empty query) returns recent-item metadata.
+Recall is always search-driven. Nothing is bulk-injected. Browse mode (empty query) returns recent-item metadata.
 
 ```
-knowledge_search / session_search
-  → MemoryStore.search (FTS5 BM25 [+ vec cosine + cross-encoder rerank])
+memory_search / session_search
+  → IndexStore.search (FTS5 BM25 [+ vec cosine + cross-encoder rerank])
   → snippet hits with line/path citations
 
-knowledge_view / session_view
+memory_view / session_view
   → full artifact body / verbatim JSONL lines from disk
 ```
 
-→ [knowledge.md](knowledge.md) · [sessions.md](sessions.md)
+→ [memory.md](memory.md) · [sessions.md](sessions.md)
 
 ---
 
@@ -237,8 +237,8 @@ Settings most relevant to system assembly:
 | `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-q4_k_m-agentic` | Primary model for the foreground agent |
 | `mcp_servers` | `CO_MCP_SERVERS` | bundled defaults | MCP server definitions attached during runtime assembly |
 | `personality` | `CO_PERSONALITY` | `tars` | Personality assets injected during prompt assembly |
-| `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |
-| `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | User-global knowledge artifact store |
+| `knowledge.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |
+| `knowledge_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | User-global knowledge artifact store |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Terminal reasoning display mode for interactive turns |
 
 Full settings reference: [config.md](config.md).

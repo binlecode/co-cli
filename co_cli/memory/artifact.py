@@ -1,9 +1,9 @@
-"""Unified knowledge artifact data model.
+"""Unified memory artifact data model.
 
-KnowledgeArtifact is the single reusable-artifact model — user, rule, article,
-and note artifacts share this schema. Memory (raw transcripts) lives in
-``sessions/``; knowledge (everything reusable) lives in ``knowledge_dir/``.
-See ``docs/specs/knowledge.md`` for the knowledge model and
+MemoryArtifact is the single reusable-artifact model — user, rule, article,
+and note artifacts share this schema. Sessions (raw transcripts) live in the
+session/ module; memory artifacts (everything reusable) live in ``memory_dir/``.
+See ``docs/specs/memory.md`` for the memory tier model and
 ``docs/specs/sessions.md`` for session recall.
 """
 
@@ -39,14 +39,16 @@ class SourceTypeEnum(StrEnum):
 
 
 class IndexSourceEnum(StrEnum):
-    KNOWLEDGE = "knowledge"
+    """`source` column values in the index store for write-eligible domains."""
+
+    MEMORY = "memory"
     OBSIDIAN = "obsidian"
     DRIVE = "drive"
 
 
 @dataclass
-class KnowledgeArtifact:
-    """A single reusable knowledge artifact (preferences, rules, articles, notes, …)."""
+class MemoryArtifact:
+    """A single reusable memory artifact (preferences, rules, articles, notes, …)."""
 
     id: str
     path: Path
@@ -64,9 +66,9 @@ class KnowledgeArtifact:
     recall_count: int = 0
 
 
-def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> KnowledgeArtifact:
-    """Build a KnowledgeArtifact from canonical kind=knowledge frontmatter."""
-    return KnowledgeArtifact(
+def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> MemoryArtifact:
+    """Build a MemoryArtifact from canonical kind=memory frontmatter."""
+    return MemoryArtifact(
         id=str(frontmatter["id"]),
         path=path,
         artifact_kind=frontmatter.get("artifact_kind", ArtifactKindEnum.NOTE.value),
@@ -84,10 +86,10 @@ def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> Knowle
     )
 
 
-def load_artifact(path: Path) -> KnowledgeArtifact:
-    """Load a single .md file as a KnowledgeArtifact.
+def load_artifact(path: Path) -> MemoryArtifact:
+    """Load a single .md file as a MemoryArtifact.
 
-    Requires ``kind: knowledge`` frontmatter with ``id`` and ``created`` set.
+    Requires ``kind: memory`` frontmatter with ``id`` and ``created`` set.
     Raises ValueError on any missing required field or unexpected ``kind``.
     """
     raw = path.read_text(encoding="utf-8")
@@ -96,26 +98,26 @@ def load_artifact(path: Path) -> KnowledgeArtifact:
         raise ValueError(f"{path}: missing required field 'id'")
     if "created" not in frontmatter:
         raise ValueError(f"{path}: missing required field 'created'")
-    if frontmatter.get("kind") != "knowledge":
-        raise ValueError(f"{path}: expected kind='knowledge', got {frontmatter.get('kind')!r}")
+    if frontmatter.get("kind") != "memory":
+        raise ValueError(f"{path}: expected kind='memory', got {frontmatter.get('kind')!r}")
     return _coerce_fields(frontmatter, body, path)
 
 
 def load_artifacts(
-    knowledge_dir: Path,
+    memory_dir: Path,
     *,
     artifact_kinds: list[str] | None = None,
-) -> list[KnowledgeArtifact]:
-    """Load all .md files under knowledge_dir as KnowledgeArtifacts.
+) -> list[MemoryArtifact]:
+    """Load all .md files under memory_dir as MemoryArtifacts.
 
     Files that fail to parse are skipped with a warning. Top-level glob only —
     subdirectories like ``_archive/`` are not traversed.
     """
-    if not knowledge_dir.exists():
+    if not memory_dir.exists():
         return []
 
-    artifacts: list[KnowledgeArtifact] = []
-    for path in knowledge_dir.glob("*.md"):
+    artifacts: list[MemoryArtifact] = []
+    for path in memory_dir.glob("*.md"):
         try:
             artifact = load_artifact(path)
         except Exception as exc:
@@ -128,13 +130,9 @@ def load_artifacts(
 
 
 def filter_artifacts(
-    entries: list[KnowledgeArtifact], filters: dict[str, Any]
-) -> list[KnowledgeArtifact]:
-    """Apply older_than_days filter to a loaded artifact list.
-
-    ``kind`` is applied upstream via ``load_artifacts(artifact_kinds=...)``
-    and is not re-applied here.
-    """
+    entries: list[MemoryArtifact], filters: dict[str, Any]
+) -> list[MemoryArtifact]:
+    """Apply older_than_days filter to a loaded artifact list."""
     result = entries
     if "older_than_days" in filters:
         cutoff_days = filters["older_than_days"]
@@ -147,7 +145,7 @@ def filter_artifacts(
     return result
 
 
-def format_artifact_row(m: KnowledgeArtifact) -> str:
+def format_artifact_row(m: MemoryArtifact) -> str:
     id_prefix = m.id[:8]
     created = m.created[:10]
     snippet = m.content[:80]

@@ -25,13 +25,13 @@ def test_static_instructions_contains_phase1_rules() -> None:
 
 
 def test_toolset_guidance_memory_section_emitted_when_tool_present() -> None:
-    """build_toolset_guidance must emit the memory retry rule when knowledge_search is in the index."""
+    """build_toolset_guidance must emit the memory retry rule when memory_search is in the index."""
     from co_cli.context.guidance import build_toolset_guidance
     from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 
     tool_index = {
-        "knowledge_search": ToolInfo(
-            name="knowledge_search",
+        "memory_search": ToolInfo(
+            name="memory_search",
             description="search knowledge artifacts",
             approval=False,
             source=ToolSourceEnum.NATIVE,

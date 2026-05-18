@@ -31,8 +31,8 @@ import time
 from pathlib import Path
 
 from evals._deps import EvalFrontend, make_eval_deps
-from evals._judge import judge_with_llm
-from evals._observability import CaseResult, open_eval_run
+from evals._judge import judge_model_annotation, judge_with_llm
+from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
 from evals._timeouts import CALL_TIMEOUT_S, TURN_BUDGET_S
@@ -189,7 +189,7 @@ async def case_w4_a_dispatch_user_skill(
         return (
             CaseResult(
                 name=case_id,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=(f"dispatch returned {type(outcome).__name__}, expected DelegateToAgent"),
                 trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -231,7 +231,7 @@ async def case_w4_a_dispatch_user_skill(
                 )
             model_call_seconds = turn_trace.model_call_seconds
             token_usage = dict(turn_trace.token_usage)
-            trace_id = turn_trace.span_ids[0] if turn_trace.span_ids else ""
+            trace_id = turn_trace.trace_ids[0] if turn_trace.trace_ids else ""
         except TimeoutError:
             passed = False
             reason = f"run_turn exceeded CALL_TIMEOUT_S ({CALL_TIMEOUT_S}s)"
@@ -270,27 +270,23 @@ async def case_w4_a_dispatch_user_skill(
                     "step 2 must surface the $ARGUMENTS value.",
                     turn_result.messages,
                     deps=deps,
+                    model=deps.judge_model,
                 )
         except TimeoutError:
             passed = False
             reason = f"judge call exceeded CALL_TIMEOUT_S ({CALL_TIMEOUT_S}s)"
         else:
+            chip = judge_model_annotation(deps)
             if not verdict.passed:
                 passed = False
-                reason = (
-                    f"judge FAIL (score={verdict.score}): {verdict.rationale} "
-                    "[judge_model_same_as_agent]"
-                )
+                reason = f"judge FAIL (score={verdict.score}): {verdict.rationale} {chip}"
             else:
-                reason = (
-                    f"token + args present; judge score={verdict.score} "
-                    "[judge_model_same_as_agent]"
-                )
+                reason = f"token + args present; judge score={verdict.score} {chip}"
 
     return (
         CaseResult(
             name=case_id,
-            passed=passed,
+            verdict=Verdict.PASS if passed else Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             model_call_seconds=model_call_seconds,
             token_usage=token_usage,
@@ -342,7 +338,7 @@ async def case_w4_b_env_restored_after_dispatch(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         trace_files=[str(trace_file.relative_to(run.dir.parent))],
         reason=reason,
@@ -437,7 +433,7 @@ async def case_w4_c_skill_manage_create_edit_delete(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         trace_files=[str(trace_file.relative_to(run.dir.parent))],
         reason=reason,
@@ -516,7 +512,7 @@ async def case_w4_d_builtin_shadowing_blocked(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         trace_files=[str(trace_file.relative_to(run.dir.parent))],
         reason=reason,
@@ -548,7 +544,7 @@ async def main() -> int:
             except Exception as exc:
                 cr_a = CaseResult(
                     name="W4.A",
-                    passed=False,
+                    verdict=Verdict.FAIL,
                     duration_s=0.0,
                     reason=f"{type(exc).__name__}: {exc}",
                 )
@@ -564,7 +560,7 @@ async def main() -> int:
             except Exception as exc:
                 cr_b = CaseResult(
                     name="W4.B",
-                    passed=False,
+                    verdict=Verdict.FAIL,
                     duration_s=0.0,
                     reason=f"{type(exc).__name__}: {exc}",
                 )
@@ -580,7 +576,7 @@ async def main() -> int:
             except Exception as exc:
                 cr_c = CaseResult(
                     name="W4.C",
-                    passed=False,
+                    verdict=Verdict.FAIL,
                     duration_s=0.0,
                     reason=f"{type(exc).__name__}: {exc}",
                 )
@@ -596,7 +592,7 @@ async def main() -> int:
             except Exception as exc:
                 cr_d = CaseResult(
                     name="W4.D",
-                    passed=False,
+                    verdict=Verdict.FAIL,
                     duration_s=0.0,
                     reason=f"{type(exc).__name__}: {exc}",
                 )

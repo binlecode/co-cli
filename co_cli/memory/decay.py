@@ -1,6 +1,6 @@
-"""Decay candidate identification for the knowledge lifecycle.
+"""Decay candidate identification for the memory lifecycle.
 
-Pure selection logic — callers (e.g. the dream-cycle decay sweep in TASK-5.6)
+Pure selection logic — callers (e.g. the dream-cycle decay sweep)
 archive the returned artifacts. Pinned and decay-protected entries are immune.
 See ``docs/specs/dream.md`` for the dream lifecycle model.
 """
@@ -11,16 +11,16 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from co_cli.config.knowledge import KnowledgeSettings
-from co_cli.memory.artifact import KnowledgeArtifact, load_artifacts
+from co_cli.config.memory import MemorySettings
+from co_cli.memory.artifact import MemoryArtifact, load_artifacts
 
 logger = logging.getLogger(__name__)
 
 
 def find_decay_candidates(
-    knowledge_dir: Path,
-    config: KnowledgeSettings,
-) -> list[KnowledgeArtifact]:
+    memory_dir: Path,
+    config: MemorySettings,
+) -> list[MemoryArtifact]:
     """Return artifacts eligible for automated decay.
 
     Filters applied in order:
@@ -32,9 +32,9 @@ def find_decay_candidates(
     Result is sorted by age descending (oldest ``created`` first).
     """
     cutoff = datetime.now(UTC) - timedelta(days=config.decay_after_days)
-    artifacts = load_artifacts(knowledge_dir)
+    artifacts = load_artifacts(memory_dir)
 
-    candidates: list[KnowledgeArtifact] = []
+    candidates: list[MemoryArtifact] = []
     for artifact in artifacts:
         if artifact.decay_protected:
             continue
@@ -55,12 +55,7 @@ def find_decay_candidates(
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
-    """Parse an ISO8601 timestamp string; return None on any failure.
-
-    Accepts the trailing ``Z`` suffix by normalising it to ``+00:00`` before
-    delegation to ``datetime.fromisoformat``. Naive timestamps are treated as
-    UTC so they compare correctly with an aware cutoff.
-    """
+    """Parse an ISO8601 timestamp string; return None on any failure."""
     if value is None:
         return None
     normalised = value.strip()

@@ -34,8 +34,8 @@ from co_cli.commands.resume import _rehydrate_todos
 from co_cli.context.compaction import TODO_SNAPSHOT_PREFIX
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display.core import TerminalFrontend
-from co_cli.memory.session import new_session_path, session_filename
-from co_cli.memory.transcript import (
+from co_cli.session.filename import new_session_path, session_filename
+from co_cli.session.persistence import (
     MAX_TRANSCRIPT_READ_BYTES,
     append_messages,
     load_transcript,
@@ -60,7 +60,7 @@ def _make_deps(tmp_path: Path) -> CoDeps:
         session=CoSessionState(),
         runtime=CoRuntimeState(),
         sessions_dir=tmp_path / "sessions",
-        knowledge_dir=tmp_path / "knowledge",
+        memory_dir=tmp_path / "memory",
     )
 
 

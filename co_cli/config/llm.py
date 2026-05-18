@@ -151,6 +151,11 @@ class LlmSettings(BaseModel):
     provider: Literal["ollama", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)
     host: str = Field(default=DEFAULT_LLM_HOST)
     model: str = Field(default="")
+    # Optional pinned judge model — used by phase-2 behavioral evals so a regression
+    # in the agent doesn't simultaneously regress the judge. Inherits provider/host/
+    # api_key from this LlmSettings; only the model name differs. When None, the
+    # judge falls back to ``model`` and CaseResult.reason carries [judge_model_same_as_agent].
+    judge_model: str | None = Field(default=None)
     # Contract pivot for Ollama context: static num_ctx in _LLM_SETTINGS must be <= max_ctx
     # (ceiling check); probed Modelfile num_ctx must be >= max_ctx (floor check).
     # Both checks use max_ctx as the reference — they do not compare against each other.

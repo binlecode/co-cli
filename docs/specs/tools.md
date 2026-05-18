@@ -29,7 +29,7 @@ graph LR
 |-------|-------|-------|
 | Interaction & Session | `clarify`, `capabilities_check`, `todo_write`, `todo_read` | All ALWAYS |
 | Workspace & Files | `file_find`, `file_read`, `file_search`, `file_write`, `file_patch` | `file_write`/`file_patch` approval + lock |
-| Knowledge, Memory & Skills | `session_search`, `session_view`, `knowledge_search`, `knowledge_view`, `knowledge_manage`, `skill_view`, `skill_manage` | `knowledge_manage`/`skill_manage` approval |
+| Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_manage`, `skill_view`, `skill_manage` | `memory_manage`/`skill_manage` approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
 | Execution & Jobs | `shell`, `task_start`, `task_status`, `task_cancel`, `task_list`, `code_execute` | `shell`/`code_execute` hybrid approval |
 | Delegation | `web_research`, `knowledge_analyze`, `reason` | All DEFERRED; spawn task agents |
@@ -165,7 +165,7 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Required for `web_search` |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Registration gate for Obsidian tools |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google tools |
-| `knowledge_path` | `CO_KNOWLEDGE_PATH` | `~/.co-cli/knowledge/` | Unified knowledge artifact directory |
+| `knowledge_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | Unified knowledge artifact directory |
 | `mcp_servers` | `CO_MCP_SERVERS` | 2 defaults | MCP server definitions |
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Default agent retry budget |
 | `max_requests` tool arg | — | 10 / 8 / 3 | Per-call delegation request cap (research / analysis / reasoning); defaults are function-local |
@@ -227,9 +227,9 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 | `co_cli/tools/agents/delegation.py` | `web_research`, `knowledge_analyze`, `reason` tools; `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`, `REASON_SPEC` |
 | `co_cli/tools/files/read.py` | `file_read`, `file_find`, `file_search` |
 | `co_cli/tools/files/write.py` | `file_write`, `file_patch` |
-| `co_cli/tools/memory/recall.py` | `knowledge_search`, `session_search` |
-| `co_cli/tools/memory/view.py` | `knowledge_view`, `session_view` |
-| `co_cli/tools/memory/manage.py` | `knowledge_manage` |
+| `co_cli/tools/memory/recall.py` | `memory_search`, `session_search` |
+| `co_cli/tools/memory/view.py` | `memory_view`, `session_view` |
+| `co_cli/tools/memory/manage.py` | `memory_manage` |
 | `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` |
 | `co_cli/tools/web/search.py` | `web_search` |
 | `co_cli/tools/web/fetch.py` | `web_fetch` |

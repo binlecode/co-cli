@@ -8,12 +8,11 @@ assertions where deterministic checking would be brittle.
 Returns :class:`JudgeVerdict` with ``passed: bool`` (not ``pass`` — Python
 keyword), ``score: int`` (0-10), and a one-line ``rationale``.
 
-Judge model isolation (Open Q5): the judge currently uses the same
-``deps.model`` as the agent under test. When ``settings.llm.judge_model``
-ships, ``judge_with_llm`` will resolve a distinct model handle and the
-``[judge_model_same_as_agent]`` reason chip will disappear from
-``CaseResult.reason``. Today, every judge invocation logs that chip so
-reviewers know the single-model risk applies.
+Judge model isolation: pass ``model=deps.judge_model`` to pin a distinct model
+than the agent under test (recommended for phase-2 behavioral evals — see
+``settings.llm.judge_model``). When ``model`` is None (no pinned judge
+configured), the call falls back to ``deps.model`` and callers should emit
+``[judge_model_same_as_agent]`` in ``CaseResult.reason``.
 """
 
 from __future__ import annotations
@@ -28,6 +27,21 @@ from evals._timeouts import LLM_REASONING_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
+from co_cli.llm.factory import LlmModel
+
+
+def judge_model_annotation(deps: CoDeps) -> str:
+    """Return the judge-model annotation chip for ``CaseResult.reason``.
+
+    Returns ``[judge_model=<name>]`` when ``deps.judge_model`` is pinned and
+    ``[judge_model_same_as_agent]`` when the judge falls back to the agent
+    model — a single-model regression risk the reviewer should be aware of.
+    """
+    if deps.judge_model is None:
+        return "[judge_model_same_as_agent]"
+    name = deps.config.llm.judge_model or "?"
+    return f"[judge_model={name}]"
+
 
 _JUDGE_SYSTEM_PROMPT = """You are a rubric-based judge for an AI agent eval.
 Read the rubric, read the transcript, and return ONE compact JSON object on a
@@ -120,8 +134,14 @@ async def judge_with_llm(
     transcript: list[Any],
     *,
     deps: CoDeps,
+    model: LlmModel | None = None,
 ) -> JudgeVerdict:
     """Score a transcript against a rubric using the configured judge model.
+
+    When ``model`` is passed (typically ``deps.judge_model``), the judge runs
+    on that pinned handle instead of ``deps.model``. Falls back to ``deps.model``
+    when ``model`` is None — the caller is responsible for flagging
+    ``[judge_model_same_as_agent]`` in the resulting ``CaseResult.reason``.
 
     Wrapped in ``asyncio.timeout(LLM_REASONING_TIMEOUT_SECS)`` to bound a
     stalled judge call without hiding a regression. Returns a ``JudgeVerdict``
@@ -131,5 +151,5 @@ async def judge_with_llm(
     transcript_text = _stringify_transcript(transcript)
     prompt = f"RUBRIC:\n{rubric_md.strip()}\n\nTRANSCRIPT:\n{transcript_text}\n\nReturn JSON now."
     async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
-        raw = await llm_call(deps, prompt, instructions=_JUDGE_SYSTEM_PROMPT)
+        raw = await llm_call(deps, prompt, instructions=_JUDGE_SYSTEM_PROMPT, model=model)
     return _parse_verdict(raw)

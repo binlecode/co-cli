@@ -7,9 +7,9 @@ Personality is assembled from these sources in this order:
 - ``souls/{role}/mindsets/{task_type}.md``     — task-specific behavioral guidance (static)
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by build_static_instructions)
 
-Character memories (``souls/{role}/memories/*.md``) are NOT loaded here. They are
-surfaced on demand via the canon channel in ``knowledge_search`` (see
-``co_cli/tools/memory/recall.py``).
+Canon scenes (``souls/{role}/canon/*.md``) are NOT loaded here. They are
+indexed at bootstrap into the shared FTS pipeline under source='canon' and
+surfaced via personality auto-injection (never returned by any model-callable tool).
 
 Each role is fully self-contained under ``souls/{role}/``. Adding a role requires
 only a new directory with the required files — no Python changes.

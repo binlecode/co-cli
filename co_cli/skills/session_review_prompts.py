@@ -16,7 +16,7 @@ Scope:
   artifacts for anything the user explicitly corrected or that reflects a reusable insight.
 
 Do NOT:
-- Call skill_manage(action='delete') or knowledge_manage(action='delete').
+- Call skill_manage(action='delete') or memory_manage(action='delete').
 - Create session-specific skills (e.g. "fix-pr-123"). Only class-level taxonomies.
 - Duplicate what is already in the skill/knowledge library — search first.
 

@@ -1,12 +1,12 @@
 """UAT eval — Workflow 3: Memory recall and curation.
 
-Covers `knowledge_search`, `session_search`, `knowledge_view`, `knowledge_manage`
+Covers `memory_search`, `session_search`, `memory_view`, `memory_manage`
 via agent calls, plus the `/memory list|forget` user surface and the dream
 cycle's merge/decay/archive. Validates BM25/hybrid recall, write-time
 indexing, on-disk artifact lifecycle, and dream-cycle content preservation.
 
 Per plan section W3, case ordering is a hard contract:
-  W3.A seeds `eval_W3_fact` (agent-driven via knowledge_manage).
+  W3.A seeds `eval_W3_fact` (agent-driven via memory_manage).
   W3.B/C/D read it (search, recall, list).
   W3.E forgets it (boundary).
   W3.F uses its own pre-seeded `eval_W3_dupA` / `eval_W3_dupB` pair to exercise
@@ -31,7 +31,7 @@ from typing import Any
 from uuid import uuid4
 
 from evals._deps import EvalFrontend, make_eval_deps
-from evals._observability import CaseResult, EvalRun, open_eval_run
+from evals._observability import CaseResult, EvalRun, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
 from evals._timeouts import (
@@ -49,9 +49,8 @@ from co_cli.commands.types import CommandContext
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps
 from co_cli.memory.dream import run_dream_cycle
-from co_cli.memory.service import reindex
-from co_cli.tools.memory.manage import knowledge_manage
-from co_cli.tools.memory.recall import knowledge_search
+from co_cli.tools.memory.manage import memory_manage
+from co_cli.tools.memory.recall import memory_search
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _REPORT_PATH = _PROJECT_ROOT / "docs" / "REPORT-eval-memory.md"
@@ -92,7 +91,7 @@ def _make_ctx(
 
 def _find_fact_path(deps: CoDeps) -> Path | None:
     """Return the on-disk artifact saved by W3.A (slugified eval_W3_fact-XXXXXXXX.md)."""
-    for path in deps.knowledge_dir.glob(f"{_FACT_GLOB_PREFIX}*.md"):
+    for path in deps.memory_dir.glob(f"{_FACT_GLOB_PREFIX}*.md"):
         if path.is_file():
             return path
     return None
@@ -104,10 +103,10 @@ def _purge_fact_artifacts(deps: CoDeps) -> None:
     Ensures W3.A starts clean so the agent's save is the only matching file.
     Called once at the top of W3.A; idempotent across reruns.
     """
-    for path in deps.knowledge_dir.glob(f"{_FACT_GLOB_PREFIX}*.md"):
+    for path in deps.memory_dir.glob(f"{_FACT_GLOB_PREFIX}*.md"):
         try:
             if deps.memory_store is not None:
-                deps.memory_store.remove("knowledge", str(path))
+                deps.memory_store.remove(path)
             path.unlink(missing_ok=True)
         except OSError:
             continue
@@ -122,11 +121,11 @@ def _seed_dup_artifact(
 ) -> Path:
     """Write a knowledge .md file with canonical frontmatter and reindex into FTS.
 
-    Bypasses ``knowledge_manage`` so the filename_stem is exactly the one we
+    Bypasses ``memory_manage`` so the filename_stem is exactly the one we
     request — ``save_artifact`` slugifies the title and appends a random uuid
     suffix, which loses deterministic-stem semantics needed for W3.F's pair.
     """
-    knowledge_dir = deps.knowledge_dir
+    knowledge_dir = deps.memory_dir
     knowledge_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = knowledge_dir / f"{filename_stem}.md"
     artifact_id = str(uuid4())
@@ -154,27 +153,18 @@ def _seed_dup_artifact(
     artifact_path.write_text(markdown_content, encoding="utf-8")
 
     if deps.memory_store is not None:
-        reindex(
-            deps.memory_store,
-            artifact_path,
-            body,
-            markdown_content,
-            frontmatter,
-            artifact_path.stem,
-            chunk_tokens=deps.config.knowledge.chunk_tokens,
-            chunk_overlap_tokens=deps.config.knowledge.chunk_overlap_tokens,
-        )
+        deps.memory_store.reindex_one(artifact_path, body, markdown_content, frontmatter)
     return artifact_path
 
 
 def _purge_dup_pair(deps: CoDeps) -> None:
     """Remove any prior W3.F seeded pair from disk + FTS so W3.F can re-seed cleanly."""
     for stem in (_DUP_A_STEM, _DUP_B_STEM):
-        path = deps.knowledge_dir / f"{stem}.md"
+        path = deps.memory_dir / f"{stem}.md"
         if path.exists():
             try:
                 if deps.memory_store is not None:
-                    deps.memory_store.remove("knowledge", str(path))
+                    deps.memory_store.remove(path)
                 path.unlink(missing_ok=True)
             except OSError:
                 continue
@@ -190,14 +180,14 @@ def _fts_row_count_for(deps: CoDeps, artifact_path: Path) -> int:
     """
     if deps.memory_store is None:
         return 0
-    row = deps.memory_store._conn.execute(
+    row = deps.memory_store._index._conn.execute(
         "SELECT COUNT(*) AS n FROM chunks WHERE source = ? AND doc_path = ?",
-        ("knowledge", str(artifact_path)),
+        ("memory", str(artifact_path)),
     ).fetchone()
     return int(row["n"]) if row is not None else 0
 
 
-def _direct_knowledge_search_count(deps: CoDeps, query: str) -> int:
+def _direct_memory_search_count(deps: CoDeps, query: str) -> int:
     """Count knowledge-source FTS hits for ``query`` via the memory store.
 
     Used by W3.E to assert post-forget cleanup: a search for the unique
@@ -205,7 +195,7 @@ def _direct_knowledge_search_count(deps: CoDeps, query: str) -> int:
     """
     if deps.memory_store is None:
         return 0
-    hits = deps.memory_store.search(query, sources=["knowledge"], limit=10)
+    hits = deps.memory_store.search_artifacts(query, None, 10)
     return len(hits)
 
 
@@ -252,7 +242,7 @@ async def case_w3_a_agent_chooses_to_save(
     frontend: EvalFrontend,
     run: EvalRun,
 ) -> CaseResult:
-    """W3.A — agent calls knowledge_manage(create) for a clearly-durable fact.
+    """W3.A — agent calls memory_manage(create) for a clearly-durable fact.
 
     Cleans any prior W3.A artifact first so disk membership cleanly attributes
     to this run. Drives one ``run_turn`` and inspects the resulting tool-call
@@ -292,7 +282,7 @@ async def case_w3_a_agent_chooses_to_save(
         model_call_seconds = turn_trace.model_call_seconds
         token_usage = dict(turn_trace.token_usage)
 
-        manage_calls = _extract_tool_calls_by_name(turn_trace.tool_calls, "knowledge_manage")
+        manage_calls = _extract_tool_calls_by_name(turn_trace.tool_calls, "memory_manage")
         create_calls = [
             (args, result) for args, result in manage_calls if args.get("action") == "create"
         ]
@@ -300,7 +290,7 @@ async def case_w3_a_agent_chooses_to_save(
             passed = False
             tool_names = sorted({rec.tool_name for rec in turn_trace.tool_calls})
             reason = (
-                f"no knowledge_manage(action='create') tool call found; tools used: {tool_names!r}"
+                f"no memory_manage(action='create') tool call found; tools used: {tool_names!r}"
             )
         else:
             fact_path = _find_fact_path(deps)
@@ -308,7 +298,7 @@ async def case_w3_a_agent_chooses_to_save(
                 passed = False
                 reason = (
                     f"no on-disk artifact matched glob {_FACT_GLOB_PREFIX}*.md after "
-                    "knowledge_manage(create); save_artifact() may have failed silently"
+                    "memory_manage(create); save_artifact() may have failed silently"
                 )
             else:
                 body = fact_path.read_text(encoding="utf-8")
@@ -349,7 +339,7 @@ async def case_w3_a_agent_chooses_to_save(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -364,9 +354,9 @@ async def case_w3_b_recall_ranks_correct_artifact(
     frontend: EvalFrontend,
     run: EvalRun,
 ) -> CaseResult:
-    """W3.B — knowledge_search ranks the W3.A artifact #1 with the token in its snippet.
+    """W3.B — memory_search ranks the W3.A artifact #1 with the token in its snippet.
 
-    Drives a turn that prompts the agent to call ``knowledge_search``; falls
+    Drives a turn that prompts the agent to call ``memory_search``; falls
     back to a direct production search via ``RunContext`` for the rank
     assertion (the formatted ToolReturnPart string is rank-ordered, but
     parsing it back is brittle — the underlying SearchResult list is the
@@ -380,7 +370,7 @@ async def case_w3_b_recall_ranks_correct_artifact(
     if fact_path is None:
         return CaseResult(
             name=case_id,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason="W3.A artifact missing — case ordering broken",
             trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -411,18 +401,18 @@ async def case_w3_b_recall_ranks_correct_artifact(
         model_call_seconds = turn_trace.model_call_seconds
         token_usage = dict(turn_trace.token_usage)
 
-        search_calls = _extract_tool_calls_by_name(turn_trace.tool_calls, "knowledge_search")
+        search_calls = _extract_tool_calls_by_name(turn_trace.tool_calls, "memory_search")
         if not search_calls:
             passed = False
             tool_names = sorted({rec.tool_name for rec in turn_trace.tool_calls})
-            reason = f"agent did not call knowledge_search; tools used: {tool_names!r}"
+            reason = f"agent did not call memory_search; tools used: {tool_names!r}"
         else:
             ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
-            search_return = await knowledge_search(ctx, query=_FACT_TOKEN, limit=5)
+            search_return = await memory_search(ctx, query=_FACT_TOKEN, limit=5)
             results = (search_return.metadata or {}).get("results", []) or []
             if not results:
                 passed = False
-                reason = f"production knowledge_search for {_FACT_TOKEN!r} returned 0 results"
+                reason = f"production memory_search for {_FACT_TOKEN!r} returned 0 results"
             else:
                 # In a real ~/.co-cli/ workspace, other artifacts may share
                 # BM25 tokens with the W3.A fact (W1's "staging deploy id
@@ -470,7 +460,7 @@ async def case_w3_b_recall_ranks_correct_artifact(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -499,7 +489,7 @@ async def case_w3_c_session_search_finds_prior_turn(
     if session_path is None or not Path(session_path).exists():
         return CaseResult(
             name=case_id,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason="active session_path missing — prior turns not persisted",
             trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -511,7 +501,7 @@ async def case_w3_c_session_search_finds_prior_turn(
         except Exception as exc:
             return CaseResult(
                 name=case_id,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"index_session failed: {type(exc).__name__}: {exc}",
                 trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -585,7 +575,7 @@ async def case_w3_c_session_search_finds_prior_turn(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -617,7 +607,7 @@ async def case_w3_d_memory_list(
     if fact_path is None:
         return CaseResult(
             name=case_id,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason="W3.A artifact missing — case ordering broken",
             trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -633,7 +623,7 @@ async def case_w3_d_memory_list(
 
         from co_cli.memory.artifact import load_artifacts
 
-        artifacts = load_artifacts(deps.knowledge_dir)
+        artifacts = load_artifacts(deps.memory_dir)
         stems = {a.path.stem for a in artifacts}
         if fact_path.stem not in stems:
             passed = False
@@ -649,7 +639,7 @@ async def case_w3_d_memory_list(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         reason=reason or "ok",
         trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -666,7 +656,7 @@ async def case_w3_e_memory_forget(
 
     Drives `/memory forget <stem>` via ``dispatch``. ``EvalFrontend.prompt_confirm``
     returns True so the handler proceeds past its y/N gate. Asserts file
-    removal, chunks_fts cleanup, and that ``knowledge_search`` for the unique
+    removal, chunks_fts cleanup, and that ``memory_search`` for the unique
     token returns 0 hits.
     """
     case_id = "W3.E"
@@ -678,7 +668,7 @@ async def case_w3_e_memory_forget(
     if fact_path is None:
         return CaseResult(
             name=case_id,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason="W3.A artifact missing — case ordering broken",
             trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -706,7 +696,7 @@ async def case_w3_e_memory_forget(
                 f"{fact_path.name} — index cleanup skipped"
             )
         else:
-            # NOTE: a global ``knowledge_search(_FACT_TOKEN)`` check would be
+            # NOTE: a global ``memory_search(_FACT_TOKEN)`` check would be
             # too strict — other artifacts in the real workspace (W1 seed,
             # accumulated ``deploy-id-*`` saves from prior runs) legitimately
             # mention the same token. The artifact-specific signal — the
@@ -719,7 +709,7 @@ async def case_w3_e_memory_forget(
 
     return CaseResult(
         name=case_id,
-        passed=passed,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
         duration_s=time.monotonic() - t0,
         reason=reason or "ok",
         trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -739,8 +729,8 @@ async def case_w3_f_dream_decay_preserves_content(
     for the two tokens.
 
       Both tokens preserved  → PASS
-      Exactly one missing    → SOFT_FAIL (passed=True, soft_fail=True)
-                               LLM-merge may drop rare tokens — degradation, not regression.
+      Exactly one missing    → SOFT_PASS — gate passes; LLM-merge may drop rare
+                               tokens (degradation, not regression). Logged for review.
       Both missing           → FAIL
 
     The dream cycle drives sub-agent LLM calls and writes to the real
@@ -774,20 +764,19 @@ async def case_w3_f_dream_decay_preserves_content(
     except Exception as exc:
         return CaseResult(
             name=case_id,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=f"seed_dup_pair failed: {type(exc).__name__}: {exc}",
             trace_files=[str(trace_file.relative_to(run.dir.parent))],
         )
 
-    passed = True
-    soft_fail = False
+    verdict = Verdict.PASS
     reason = ""
     try:
         async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
             dream_result = await run_dream_cycle(
                 deps,
-                knowledge_manage,
+                memory_manage,
                 dry_run=False,
                 timeout_secs=float(DREAM_CYCLE_BUDGET_S),
             )
@@ -797,9 +786,9 @@ async def case_w3_f_dream_decay_preserves_content(
             if path.exists():
                 survivors_text.append(path.read_text(encoding="utf-8"))
 
-        archive_dir = deps.knowledge_dir / "_archive"
+        archive_dir = deps.memory_dir / "_archive"
         if archive_dir.exists():
-            for archived in archive_dir.glob("*.md"):
+            for archived in archive_dir.rglob("*.md"):
                 stem_lower = archived.stem.lower()
                 if _DUP_A_STEM.lower() in stem_lower or _DUP_B_STEM.lower() in stem_lower:
                     survivors_text.append(archived.read_text(encoding="utf-8"))
@@ -816,25 +805,24 @@ async def case_w3_f_dream_decay_preserves_content(
         if has_a and has_b:
             reason = f"both tokens preserved across survivors+archive; {cycle_summary}"
         elif has_a or has_b:
-            soft_fail = True
+            verdict = Verdict.SOFT_PASS
             missing = _DUP_B_TOKEN if has_a else _DUP_A_TOKEN
             reason = (
-                f"[SOFT_FAIL] merge dropped {missing!r}; LLM-merge degradation; {cycle_summary}"
+                f"[SOFT_PASS] merge dropped {missing!r}; LLM-merge degradation; {cycle_summary}"
             )
         else:
-            passed = False
+            verdict = Verdict.FAIL
             reason = f"both tokens missing after dream cycle; {cycle_summary}"
     except TimeoutError:
-        passed = False
+        verdict = Verdict.FAIL
         reason = f"asyncio.timeout({DREAM_CYCLE_BUDGET_S}s) fired before dream cycle completed"
     except Exception as exc:
-        passed = False
+        verdict = Verdict.FAIL
         reason = f"{type(exc).__name__}: {exc}"
 
     return CaseResult(
         name=case_id,
-        passed=passed,
-        soft_fail=soft_fail,
+        verdict=verdict,
         duration_s=time.monotonic() - t0,
         reason=reason or "ok",
         trace_files=[str(trace_file.relative_to(run.dir.parent))],
@@ -852,7 +840,7 @@ async def main() -> int:
     Case ordering is a hard contract (plan W3 header): A seeds, B/C/D read,
     E forgets, F uses its own pair. Failures don't abort the run — each case
     captures its verdict and the script continues; exit code is non-zero
-    iff any case failed (soft_fail counts as PASS).
+    iff any case failed (SOFT_PASS / SOFT_FAIL are review signals, not gate failures).
     """
     await ensure_ollama_warm()
     deps, agent, frontend, stack = await make_eval_deps()
@@ -873,21 +861,17 @@ async def main() -> int:
                 except Exception as exc:
                     cr = CaseResult(
                         name=case_fn.__name__,
-                        passed=False,
+                        verdict=Verdict.FAIL,
                         duration_s=0.0,
                         reason=f"{type(exc).__name__}: {exc}",
                     )
                 cases.append(cr)
                 run.append(cr)
                 if cr.skipped:
-                    verdict = f"SKIP:{cr.skip_category or '?'}"
-                elif cr.soft_fail:
-                    verdict = "SOFT_FAIL"
-                elif cr.passed:
-                    verdict = "PASS"
+                    label = f"SKIP:{cr.skip_category or '?'}"
                 else:
-                    verdict = "FAIL"
-                _print(f"[memory] {cr.name}: {verdict} — {cr.reason or 'ok'}")
+                    label = cr.verdict.value.upper()
+                _print(f"[memory] {cr.name}: {label} — {cr.reason or 'ok'}")
             prepend_report(
                 _REPORT_PATH,
                 "memory",

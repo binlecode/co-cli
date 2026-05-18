@@ -107,9 +107,9 @@ def test_session_reviewer_spec_tool_names() -> None:
     assert tools == {
         "skill_view",
         "skill_manage",
-        "knowledge_search",
-        "knowledge_view",
-        "knowledge_manage",
+        "memory_search",
+        "memory_view",
+        "memory_manage",
     }
     # Must NOT include terminal/file/web tools
     assert "shell" not in tools

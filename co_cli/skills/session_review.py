@@ -57,9 +57,9 @@ SESSION_REVIEW_SPEC = TaskAgentSpec(
     name="session_review",
     instructions=_session_review_instructions,
     tool_names=(
-        "knowledge_view",
-        "knowledge_search",
-        "knowledge_manage",
+        "memory_view",
+        "memory_search",
+        "memory_manage",
         "skill_view",
         "skill_manage",
     ),

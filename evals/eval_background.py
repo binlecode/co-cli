@@ -31,7 +31,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from evals._deps import make_eval_deps
-from evals._observability import CaseResult, open_eval_run
+from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._report import prepend_report
 from evals._timeouts import (
     BG_TASK_COMPLETION_TIMEOUT_SECS,
@@ -133,7 +133,7 @@ async def case_w5_a_background_command_runs(deps, agent, frontend) -> CaseResult
         if task_id is None:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason="no new task registered in deps.session.background_tasks",
             )
@@ -142,7 +142,7 @@ async def case_w5_a_background_command_runs(deps, agent, frontend) -> CaseResult
         if state.status != "running":
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"initial status was {state.status!r}, expected 'running'",
             )
@@ -156,7 +156,7 @@ async def case_w5_a_background_command_runs(deps, agent, frontend) -> CaseResult
         if final_status != "completed":
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"task did not complete cleanly: status={final_status!r}",
             )
@@ -166,7 +166,7 @@ async def case_w5_a_background_command_runs(deps, agent, frontend) -> CaseResult
         if not _EVAL_BG_OUT.exists():
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"side-effect file missing: {_EVAL_BG_OUT}",
             )
@@ -174,16 +174,16 @@ async def case_w5_a_background_command_runs(deps, agent, frontend) -> CaseResult
         if body != "done":
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"side-effect file content {body!r} != 'done'",
             )
 
-        return CaseResult(name=name, passed=True, duration_s=time.monotonic() - t0)
+        return CaseResult(name=name, verdict=Verdict.PASS, duration_s=time.monotonic() - t0)
     except Exception as exc:
         return CaseResult(
             name=name,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=f"{type(exc).__name__}: {exc}",
         )
@@ -210,7 +210,7 @@ async def case_w5_b_tasks_lists_running(deps, agent, frontend) -> CaseResult:
         if task_id is None:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason="no new task registered for /background sleep 5",
             )
@@ -222,7 +222,7 @@ async def case_w5_b_tasks_lists_running(deps, agent, frontend) -> CaseResult:
         if task_id not in listing:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"/tasks output missing task id {task_id!r}",
             )
@@ -234,16 +234,16 @@ async def case_w5_b_tasks_lists_running(deps, agent, frontend) -> CaseResult:
         if cmd not in detail:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"/tasks {task_id} detail missing command {cmd!r}",
             )
 
-        return CaseResult(name=name, passed=True, duration_s=time.monotonic() - t0)
+        return CaseResult(name=name, verdict=Verdict.PASS, duration_s=time.monotonic() - t0)
     except Exception as exc:
         return CaseResult(
             name=name,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=f"{type(exc).__name__}: {exc}",
         )
@@ -273,7 +273,7 @@ async def case_w5_c_cancel_kills_task(deps, agent, frontend) -> CaseResult:
         if task_id is None:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason="no new task registered for /background sleep 30",
             )
@@ -282,7 +282,7 @@ async def case_w5_c_cancel_kills_task(deps, agent, frontend) -> CaseResult:
         if state.process is None:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason="task has no process handle attached",
             )
@@ -290,7 +290,7 @@ async def case_w5_c_cancel_kills_task(deps, agent, frontend) -> CaseResult:
         if not isinstance(pid, int) or pid <= 0:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"invalid pid: {pid!r}",
             )
@@ -317,7 +317,7 @@ async def case_w5_c_cancel_kills_task(deps, agent, frontend) -> CaseResult:
         if not removed:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"task {task_id} still in registry after {BG_TASK_TEARDOWN_TIMEOUT_SECS}s",
             )
@@ -327,26 +327,26 @@ async def case_w5_c_cancel_kills_task(deps, agent, frontend) -> CaseResult:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            return CaseResult(name=name, passed=True, duration_s=time.monotonic() - t0)
+            return CaseResult(name=name, verdict=Verdict.PASS, duration_s=time.monotonic() - t0)
         except PermissionError:
             # PID recycled to another user's process — extremely unlikely on a
             # sub-2s teardown but flag explicitly rather than silently passing.
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"pid {pid} reassigned to another user post-cancel (likely recycled)",
             )
         return CaseResult(
             name=name,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=f"pid {pid} still alive after /cancel — orphaned subprocess",
         )
     except Exception as exc:
         return CaseResult(
             name=name,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=f"{type(exc).__name__}: {exc}",
         )
@@ -381,7 +381,7 @@ async def case_w5_d_output_capture_truncation(deps, agent, frontend) -> CaseResu
         if task_id is None:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason="no new task registered for the big-output command",
             )
@@ -395,7 +395,7 @@ async def case_w5_d_output_capture_truncation(deps, agent, frontend) -> CaseResu
         if final_status != "completed":
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"task did not complete cleanly: status={final_status!r}",
             )
@@ -405,14 +405,14 @@ async def case_w5_d_output_capture_truncation(deps, agent, frontend) -> CaseResu
         if state.log_path is None:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason="state.log_path is None — output not captured to a file",
             )
         if not state.log_path.exists():
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=f"log file missing on disk: {state.log_path}",
             )
@@ -437,7 +437,7 @@ async def case_w5_d_output_capture_truncation(deps, agent, frontend) -> CaseResu
             if isinstance(value, str) and len(value) > 10_000:
                 return CaseResult(
                     name=name,
-                    passed=False,
+                    verdict=Verdict.FAIL,
                     duration_s=time.monotonic() - t0,
                     reason=(
                         f"in-memory field {field_name!r} holds {len(value)} chars — "
@@ -452,7 +452,7 @@ async def case_w5_d_output_capture_truncation(deps, agent, frontend) -> CaseResu
         if log_size < target_bytes // 2:
             return CaseResult(
                 name=name,
-                passed=False,
+                verdict=Verdict.FAIL,
                 duration_s=time.monotonic() - t0,
                 reason=(
                     f"log file size {log_size} bytes is well below expected "
@@ -460,11 +460,11 @@ async def case_w5_d_output_capture_truncation(deps, agent, frontend) -> CaseResu
                 ),
             )
 
-        return CaseResult(name=name, passed=True, duration_s=time.monotonic() - t0)
+        return CaseResult(name=name, verdict=Verdict.PASS, duration_s=time.monotonic() - t0)
     except Exception as exc:
         return CaseResult(
             name=name,
-            passed=False,
+            verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=f"{type(exc).__name__}: {exc}",
         )

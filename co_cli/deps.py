@@ -12,7 +12,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
-    KNOWLEDGE_DIR,
+    MEMORY_DIR,
     SESSIONS_DIR,
     TOOL_RESULTS_DIR,
     USER_DIR,
@@ -23,8 +23,10 @@ from co_cli.tools.file_read_tracker import FileReadTracker
 if TYPE_CHECKING:
     from pydantic_ai.toolsets import AbstractToolset
 
+    from co_cli.index.store import IndexStore
     from co_cli.llm.factory import LlmModel
-    from co_cli.memory.memory_store import MemoryStore
+    from co_cli.memory.store import MemoryStore
+    from co_cli.session.store import SessionStore
     from co_cli.skills.skill_types import SkillInfo
     from co_cli.tools.background import BackgroundTaskState
     from co_cli.tools.resource_lock import ResourceLockStore
@@ -241,7 +243,7 @@ def _resource_lock_store_factory() -> ResourceLockStore:
 # skills_dir: co-bundled skills shipped with the package
 _DEFAULT_SKILLS_DIR = Path(__file__).parent / "skills"
 _DEFAULT_USER_SKILLS_DIR = USER_DIR / "skills"
-_DEFAULT_KNOWLEDGE_DIR = KNOWLEDGE_DIR
+_DEFAULT_MEMORY_DIR = MEMORY_DIR
 _DEFAULT_SESSIONS_DIR = SESSIONS_DIR
 _DEFAULT_TOOL_RESULTS_DIR = TOOL_RESULTS_DIR
 
@@ -266,8 +268,14 @@ class CoDeps:
     # File read tracker — shared across parent and delegation agents by reference for staleness detection
     file_tracker: FileReadTracker = field(default_factory=FileReadTracker, repr=False)
     # Service handles (optional, set during bootstrap)
+    index_store: IndexStore | None = field(default=None, repr=False)
     memory_store: MemoryStore | None = field(default=None, repr=False)
+    session_store: SessionStore | None = field(default=None, repr=False)
     model: LlmModel | None = field(default=None, repr=False)
+    # Optional pinned-distinct judge model (phase-2 evals). None → fall back to ``model``
+    # with [judge_model_same_as_agent] reason flag. Set in bootstrap from
+    # settings.llm.judge_model via build_judge_model().
+    judge_model: LlmModel | None = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, ToolInfo] = field(default_factory=dict)
     toolset: AbstractToolset[CoDeps] | None = field(default=None, repr=False)
@@ -279,7 +287,7 @@ class CoDeps:
     # Workspace paths — resolved from config at bootstrap, not from cwd
     workspace_dir: Path = field(default_factory=Path.cwd)
     obsidian_vault_path: Path | None = None
-    knowledge_dir: Path = field(default_factory=lambda: _DEFAULT_KNOWLEDGE_DIR)
+    memory_dir: Path = field(default_factory=lambda: _DEFAULT_MEMORY_DIR)
     skills_dir: Path = field(default_factory=lambda: _DEFAULT_SKILLS_DIR)
     user_skills_dir: Path = field(default_factory=lambda: _DEFAULT_USER_SKILLS_DIR)
     sessions_dir: Path = field(default_factory=lambda: _DEFAULT_SESSIONS_DIR)
@@ -325,7 +333,7 @@ def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
         "user_skills_dir": USER_DIR / "skills",
         "sessions_dir": SESSIONS_DIR,
         "tool_results_dir": TOOL_RESULTS_DIR,
-        "knowledge_dir": Path(config.knowledge_path) if config.knowledge_path else KNOWLEDGE_DIR,
+        "memory_dir": Path(config.memory_path) if config.memory_path else MEMORY_DIR,
     }
 
 
@@ -359,15 +367,18 @@ def fork_deps(base: CoDeps) -> CoDeps:
         config=base.config,
         resource_locks=base.resource_locks,
         file_tracker=base.file_tracker,
+        index_store=base.index_store,
         memory_store=base.memory_store,
+        session_store=base.session_store,
         model=base.model,
+        judge_model=base.judge_model,
         tool_index=base.tool_index,
         skill_index=base.skill_index,
         session=inherited_session,
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
         workspace_dir=base.workspace_dir,
         obsidian_vault_path=base.obsidian_vault_path,
-        knowledge_dir=base.knowledge_dir,
+        memory_dir=base.memory_dir,
         skills_dir=base.skills_dir,
         user_skills_dir=base.user_skills_dir,
         sessions_dir=base.sessions_dir,
