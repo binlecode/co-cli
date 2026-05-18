@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.8.222]
+
+### TUI status surface — `PromptSession` footer toolbar
+
+- **`StatusSnapshot`** frozen dataclass in `co_cli/display/core.py` — typed contract for footer content (`session_label`, `mode`, `context_pct`, `background_task_count`, `approval_count`)
+- **`Frontend.update_status(snapshot)`** added to the protocol; implemented in both `TerminalFrontend` and `HeadlessFrontend`
+- **`TerminalFrontend.render_footer_toolbar()`** produces plain-text compact footer (`a1b2c3d4 · idle · ctx 47% · 2 bg · 1 approval`); optional fields degrade when zero or `None`
+- **`_build_status_snapshot(deps, mode)`** helper in `co_cli/main.py` assembles snapshot from `CoDeps` at four lifecycle push points (startup, pre-prompt, turn-start active, post-turn idle)
+- **`PromptSession(bottom_toolbar=frontend.render_footer_toolbar)`** wired in `_chat_loop`; session label shows `"—"` before first persist
+- **15 new tests** in `tests/test_display.py` covering all render paths, degenerate inputs, and snapshot assembly from real `CoDeps`
+
 ## [0.8.220]
 
 ### Deferred-interaction regression coverage — `clarify` e2e + `prompt_question` contract
