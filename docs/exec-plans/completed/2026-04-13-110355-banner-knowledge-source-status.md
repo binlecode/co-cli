@@ -1,76 +1,57 @@
-# TODO: Startup banner — split knowledge status by source
+# TODO: Startup banner — rename Knowledge to Memory, add knowledge/session counts
 
 Task type: ux
 
 ## Context
 
-Current startup UI is backend-centric where it should be source-centric.
+Current startup banner has a single `Knowledge:` line derived from the active backend (`hybrid`, `fts5`, or `grep`) plus degradation text. The label is infrastructure-centric rather than user-centric.
 
 Inline current-state validation:
-- [co_cli/bootstrap/banner.py](/Users/binle/workspace_genai/co-cli/co_cli/bootstrap/banner.py#L61) renders a single `Knowledge:` line derived only from the active backend (`hybrid`, `fts5`, or `grep`) plus degradation text.
-- [co_cli/bootstrap/core.py](/Users/binle/workspace_genai/co-cli/co_cli/bootstrap/core.py#L166) bootstraps two local knowledge sources separately: `memory` and `library`.
-- [co_cli/tools/articles.py](/Users/binle/workspace_genai/co-cli/co_cli/tools/articles.py#L184) treats cross-source knowledge differently from memory: default `search_knowledge()` searches `library + obsidian + drive`, while memory is a separate tool path.
-
-Artifact hygiene: no existing TODO owns banner-level source status for memory, library, and external knowledge.
+- [co_cli/bootstrap/banner.py](/Users/binle/workspace_genai/co-cli/co_cli/bootstrap/banner.py#L61) renders `Knowledge:` from `deps.config.knowledge.search_backend` and `deps.degradations.get("knowledge")`.
+- [co_cli/bootstrap/core.py](/Users/binle/workspace_genai/co-cli/co_cli/bootstrap/core.py) — `_sync_memory_store()` returns the knowledge item count; `init_session_index()` syncs past sessions into the store. Both run before the banner is displayed.
+- The `MemoryStore` has two user-relevant sources: `knowledge` (personal artifacts in `~/.co-cli/knowledge/`) and `session` (past session transcripts). Obsidian, Drive, and web search are tool-shaped, not knowledge-shaped — they are not pre-loaded at startup and do not belong in the banner.
 
 ## Problem & Outcome
 
-**Problem:** The welcome banner collapses multiple user-visible knowledge domains into one infrastructure line:
+**Problem:** `Knowledge: fts5` is backend jargon. It hides the two things users actually care about: how many knowledge artifacts are indexed, and how many past sessions are available for recall.
+
+**Outcome:** replace the `Knowledge:` line with a `Memory:` line that shows the backend and item counts for both sources:
 
 ```text
-Knowledge: fts5
+Memory: fts5  knowledge: 42  sessions: 8
 ```
 
-That hides the distinctions users actually care about:
-- whether personal memory is available
-- whether saved articles/library content is indexed or grep-only
-- whether external knowledge surfaces are available at all
+With degradation:
 
-The result is misleading startup feedback. A user can have working memory tools, no indexed library, and no external knowledge connectors, yet the banner still reduces all of that to a single backend word.
+```text
+Memory: fts5  (hybrid → fts5 ...)  knowledge: 42  sessions: 8
+```
 
-**Failure cost:** users cannot tell, at startup, whether:
-- memory is available but grep-only
-- library indexing degraded
-- external knowledge is effectively off
+When the store is unavailable (grep backend):
 
-**Outcome:** replace the single backend-only `Knowledge:` summary with three source-oriented rows:
-- `Memory`
-- `Library`
-- `External`
-
-The banner should answer "what knowledge can I use right now?" rather than "what retrieval engine is under the hood?"
+```text
+Memory: grep (no index)
+```
 
 ## Scope
 
-This task is limited to the interactive startup banner and the minimum status assembly needed to support it.
-
 In scope:
 - `co_cli/bootstrap/banner.py`
-- small helper logic needed to derive source-centric status from `deps` and existing config
-- tests covering source status rendering
+- threading knowledge count and session count from bootstrap into the banner
+- tests covering the new Memory row rendering
 
 Out of scope:
 - changing memory or library retrieval behavior
-- redesigning `/status` output beyond shared helper reuse if needed
-- adding new remote probes at startup
-- generic MCP capability summaries
-
-For this task, **external knowledge** means non-local knowledge surfaces available during turns:
-- Obsidian
-- Google Drive
-- web search
-
-MCP is out of scope unless an existing MCP-specific signal is already being surfaced without extra probing.
+- external knowledge sources (Obsidian, Drive, web search) — tool-shaped, not knowledge-shaped
+- redesigning `/status` output
+- adding new startup network checks
 
 ## Behavioral Constraints
 
-- Do not add new startup network checks. Banner state must be derived from existing bootstrap state plus existing config gates.
-- Do not scan files just to show counts. This is a status split, not an inventory panel.
-- Keep the panel narrow enough to fit the current light-theme banner shape in standard terminal widths.
-- Do not reintroduce a misleading single `Knowledge:` line that hides source boundaries.
-- Memory status must reflect the actual runtime retrieval path, not the configured ideal. If runtime memory search is grep-only, show that.
-- Library status must reflect the actual runtime retrieval path, including degradation from `hybrid` to `fts5` or `grep`.
-- External status must report capability availability, not speculative remote liveness beyond the checks the app already performs today.
+- Do not add new startup IO. Counts must come from data already available at banner time. A lightweight `SELECT COUNT(*)` from the already-open `MemoryStore` database is acceptable — it is not file I/O or a network call.
+- Do not scan files just to show counts — use what bootstrap already produces.
+- Keep the panel narrow enough to fit the current banner shape in standard terminal widths.
+- When the store is None (grep backend), omit counts entirely — there is nothing to count.
 
 ## High-Level Design
 
@@ -86,118 +67,101 @@ Tools: 30  Skills: 1  MCP: 1  Commands: 16
 
 ```text
 Model: ollama-openai / qwen3.5:35b-a3b-think
-Memory: available (indexed)
-Library: fts5  (hybrid -> fts5 ...)
-External: obsidian off  drive off  web on
+Memory: fts5  (hybrid → fts5 ...)  knowledge: 42  sessions: 8
 Tools: 30  Skills: 1  MCP: 1  Commands: 16
 ```
 
-Suggested semantics:
-
-- `Memory`
-  - `available (indexed)` when runtime memory retrieval uses the knowledge store
-  - `available (grep-only)` when runtime memory retrieval does not use the store
-  - no item counts
-
-- `Library`
-  - `hybrid`, `fts5`, or `grep-only`
-  - degradation text stays here because backend degradation primarily describes library/article retrieval
-
-- `External`
-  - compact capability summary for `obsidian`, `drive`, and `web`
-  - use short `on` / `off` states to preserve width
-
-Implementation note:
-- prefer a small typed helper that returns banner-ready status strings from `deps`
-- keep display formatting in `banner.py`; avoid spreading string assembly across bootstrap code
-
 ## Implementation Plan
 
-### TASK-1 — Introduce source-centric banner status assembly
+### ✓ DONE TASK-1 — Thread counts into the banner and replace the Knowledge row
 
-Create a small helper inside `co_cli/bootstrap/banner.py` or a nearby private bootstrap helper module that derives three strings from existing runtime state:
-- memory status
-- library status
-- external status
+Bootstrap already has the knowledge item count from `_sync_memory_store()` (return value of `store.sync_dir("knowledge", ...)`) and session count is queryable from the store after `init_session_index()` runs. Thread these into `display_welcome_banner()` and replace the `Knowledge:` line with `Memory:`.
 
-The helper should use:
-- `deps.memory_store`
-- `deps.config`
-- `deps.degradations`
-- existing config presence gates for Obsidian, Google Drive, and web search
-
-Recommended output contract:
-
-```text
-memory_status = "available (indexed)" | "available (grep-only)"
-library_status = "hybrid" | "fts5" | "grep-only" + optional degradation suffix
-external_status = "obsidian on/off  drive on/off  web on/off"
-```
+Steps:
+1. Add `knowledge_count: int` and `session_count: int` parameters to `display_welcome_banner()` — or pass them via a small `MemoryStats` dataclass if cleaner.
+2. Add `count_docs(source: str) -> int` to `MemoryStore` (`SELECT COUNT(*) FROM docs WHERE source = ?`). `MemoryStore` has no existing count method — `list_titles_by_source` returns a full set and is wasteful for a count. Use `count_docs` for both sources.
+3. Knowledge count: already returned by `_sync_memory_store()` (return value of `store.sync_dir("knowledge", ...)`). Pass it through directly — no second query needed.
+4. Session count: call `store.count_docs("session")` after `init_session_index()` runs. This counts distinct indexed session documents (rows in `docs` where `source='session'`), not chunks — matching the `sessions: N` user-visible label.
+5. Build the `Memory:` line: backend label + optional degradation suffix + counts (omit counts when store is None).
+6. Remove the `Knowledge:` line. No other banner rows change.
 
 files:
 - `co_cli/bootstrap/banner.py`
-done_when: |
-  banner status assembly is no longer a single backend-only line;
-  source status strings are derived in one place from deps/config/degradations
-success_signal: a single helper owns banner-ready status for Memory, Library, and External
-prerequisites: []
+- `co_cli/bootstrap/core.py` or call site that invokes `display_welcome_banner()`
+- `co_cli/memory/memory_store.py` — add `count_docs(source: str) -> int`
 
-### TASK-2 — Replace the single `Knowledge:` row in the welcome banner
-
-Update the banner body to remove the single `Knowledge:` line and replace it with:
-- `Memory: ...`
-- `Library: ...`
-- `External: ...`
-
-Rules:
-- keep model/version/tools/dir/ready rows unchanged unless needed for spacing
-- keep degradation messaging attached to the library row
-- keep the final panel visually compact
-
-files:
-- `co_cli/bootstrap/banner.py`
 done_when: |
   grep -n 'Knowledge:' co_cli/bootstrap/banner.py returns no banner-row hit;
-  grep -n 'Memory:' co_cli/bootstrap/banner.py returns the new memory row;
-  grep -n 'Library:' co_cli/bootstrap/banner.py returns the new library row;
-  grep -n 'External:' co_cli/bootstrap/banner.py returns the new external row
-success_signal: startup banner shows source-level knowledge readiness instead of a single backend summary
-prerequisites: [TASK-1]
+  grep -n 'Memory:' co_cli/bootstrap/banner.py returns the new memory row
+success_signal: banner shows Memory: with backend + knowledge count + session count
+prerequisites: []
 
-### TASK-3 — Add banner rendering tests for the new source split
+### ✓ DONE TASK-2 — Add banner rendering tests for the Memory row
 
-Add focused tests around banner status formatting. Prefer testing a pure helper or a list-of-lines builder rather than snapshotting Rich panel output.
+Add focused tests for the new Memory row. Test a pure helper or a list-of-lines builder rather than snapshotting Rich panel output.
 
 Coverage must include:
-- indexed memory + degraded library (`hybrid -> fts5`)
-- grep-only fallback for both memory and library
-- external row with mixed availability states
-- width-safe short labels (`on` / `off`) rather than verbose prose
-
-Use real settings/deps objects, not mocks.
+- indexed backend (fts5 or hybrid) with non-zero knowledge and session counts
+- degradation suffix present alongside counts
+- grep backend — no counts shown
+- zero counts (empty knowledge dir, no past sessions)
 
 files:
-- `tests/test_bootstrap.py` or `tests/test_banner.py`
+- `tests/test_flow_bootstrap_banner.py` (new) or nearest existing bootstrap test file
+
 done_when: |
-  banner tests assert Memory/Library/External output under indexed and degraded scenarios;
-  uv run pytest <affected banner test file(s)> -x passes
-success_signal: banner status semantics are locked by tests and do not regress back to a single coarse knowledge line
-prerequisites: [TASK-2]
+  banner tests assert Memory row output under indexed and degraded scenarios;
+  uv run pytest <affected file> -x passes
+success_signal: Memory row semantics are locked by tests
+prerequisites: [TASK-1]
 
 ## Testing
 
-During implementation, scope to the affected tests first:
-
-- `mkdir -p .pytest-logs && uv run pytest tests/test_bootstrap.py -x 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-banner-knowledge-status.log`
-
-If a new dedicated banner test file is added:
-
-- `mkdir -p .pytest-logs && uv run pytest tests/test_banner.py -x 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-banner-knowledge-status.log`
+```
+mkdir -p .pytest-logs && uv run pytest tests/test_flow_bootstrap_banner.py -x 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-banner-memory-row.log
+```
 
 Before shipping:
 
-- `scripts/quality-gate.sh types`
+```
+scripts/quality-gate.sh types
+```
 
-## Open Questions
+## Delivery Summary — 2026-05-17
 
-None. For this task, external knowledge is explicitly defined as `obsidian + drive + web`, and MCP remains out of scope.
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | no `Knowledge:` banner-row hit; `Memory:` row present in banner.py | ✓ pass |
+| TASK-2 | banner tests assert Memory row under indexed and degraded scenarios; pytest passes | ✓ pass |
+
+**Tests:** scoped — 4 passed, 0 failed (`tests/test_flow_bootstrap_banner.py`)
+**Doc Sync:** fixed — `docs/specs/bootstrap.md` (banner description + `display_welcome_banner` signature); `docs/specs/memory.md` (added `count_docs` to MemoryStore methods table)
+
+**Overall: DELIVERED**
+`Knowledge:` banner row replaced with `Memory:` showing backend, optional degradation, and live knowledge/session counts; `MemoryStore.count_docs()` added; all four banner rendering scenarios locked by tests.
+
+## Implementation Review — 2026-05-17
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | no `Knowledge:` banner-row hit; `Memory:` row present in banner.py | ✓ pass | `banner.py:42` — `display_welcome_banner(deps, *, knowledge_count: int = 0, session_count: int = 0)`; `banner.py:33` — `Memory:` line built; `memory_store.py:1353` — `count_docs(source) -> int` with parameterized SQL |
+| TASK-2 | banner tests assert Memory row under indexed and degraded scenarios; pytest passes | ✓ pass | `tests/test_flow_bootstrap_banner.py:6,18,33,47` — all four scenarios (indexed, degradation, grep, zero counts); 4 passed in 0.03s |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| `_build_memory_line` imported outside `co_cli/bootstrap` package — `_prefix` visibility violation | `tests/test_flow_bootstrap_banner.py:3` | blocking | Renamed to `build_memory_line` in `banner.py` and updated import in test file |
+| Import block unsorted in `evals/_report.py` (pre-existing, in diff) | `evals/_report.py:12` | blocking | Fixed via `ruff check --fix` |
+
+### Tests
+- Command: `uv run pytest -x -v`
+- Result: 461 passed, 0 failed
+- Log: `.pytest-logs/20260517-*-review-impl.log`
+
+### Behavioral Verification
+- `uv run co chat` (piped exit): ✓ banner renders `Memory: hybrid · tei/embeddinggemma 1024d  knowledge: 48  sessions: 8` — no `Knowledge:` row present
+- `success_signal` verified: user sees `Memory:` with backend, knowledge count, and session count in the startup banner
+
+### Overall: PASS
+Two blocking issues found and fixed (private function name visibility violation + stale import sort); all spec requirements met, 461 tests green, banner behavioral output confirmed.

@@ -7,7 +7,7 @@ from typing import Any
 from co_cli.commands._utils import _confirm
 from co_cli.commands.types import CommandContext
 from co_cli.display.core import console
-from co_cli.memory.artifact import filter_artifacts, format_artifact_row, load_artifacts
+from co_cli.memory.item import filter_memory_items, format_memory_item_row, load_memory_items
 from co_cli.tools.memory.recall import _grep_recall as grep_recall
 
 _MEMORY_USAGE = (
@@ -20,7 +20,7 @@ _MEMORY_USAGE = (
 def _parse_memory_args(args: str) -> tuple[str | None, dict[str, Any]]:
     """Parse /memory subcommand args into (query, filters).
 
-    Flags: ``--older-than N`` (int days), ``--kind X`` (artifact_kind).
+    Flags: ``--older-than N`` (int days), ``--kind X`` (memory_kind).
     Remaining non-flag tokens are joined as the query string.
     Returns (None, filters) when no query tokens are present.
     """
@@ -52,18 +52,18 @@ async def _subcmd_memory_list(
 ) -> None:
     """Display matching knowledge artifacts — one line each, with a count footer."""
     kind_filter = filters.get("kind")
-    entries = load_artifacts(
+    entries = load_memory_items(
         ctx.deps.memory_dir,
-        artifact_kinds=[kind_filter] if kind_filter is not None else None,
+        memory_kinds=[kind_filter] if kind_filter is not None else None,
     )
-    entries = filter_artifacts(entries, filters)
+    entries = filter_memory_items(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
     if not entries:
         console.print("[dim]No memories found.[/dim]")
     else:
         for m in entries:
-            console.print(format_artifact_row(m))
+            console.print(format_memory_item_row(m))
     console.print(f"[dim]{len(entries)} memories[/dim]")
 
 
@@ -72,11 +72,11 @@ async def _subcmd_memory_count(
 ) -> None:
     """Print the count of matching artifacts."""
     kind_filter = filters.get("kind")
-    entries = load_artifacts(
+    entries = load_memory_items(
         ctx.deps.memory_dir,
-        artifact_kinds=[kind_filter] if kind_filter is not None else None,
+        memory_kinds=[kind_filter] if kind_filter is not None else None,
     )
-    entries = filter_artifacts(entries, filters)
+    entries = filter_memory_items(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
     console.print(f"{len(entries)} memories")
@@ -98,11 +98,11 @@ async def _subcmd_memory_forget(
         return None
 
     kind_filter = filters.get("kind")
-    entries = load_artifacts(
+    entries = load_memory_items(
         ctx.deps.memory_dir,
-        artifact_kinds=[kind_filter] if kind_filter is not None else None,
+        memory_kinds=[kind_filter] if kind_filter is not None else None,
     )
-    entries = filter_artifacts(entries, filters)
+    entries = filter_memory_items(entries, filters)
     if query is not None:
         entries = grep_recall(entries, query, max_results=len(entries) or 1)
 
@@ -111,7 +111,7 @@ async def _subcmd_memory_forget(
         return None
 
     for m in entries:
-        console.print(format_artifact_row(m))
+        console.print(format_memory_item_row(m))
 
     prompt_text = f"Delete {len(entries)} memories? [y/N] "
     confirmed = _confirm(ctx, prompt_text)
@@ -152,7 +152,7 @@ async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
 async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
     """List archived artifacts, or restore one whose filename starts with the given slug."""
     from co_cli.memory.archive import restore_artifact
-    from co_cli.memory.artifact import load_artifact
+    from co_cli.memory.item import load_memory_item
 
     tokens = [t for t in rest.split() if not t.startswith("--")]
     slug = tokens[0] if tokens else ""
@@ -169,7 +169,7 @@ async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
         for path in entries:
             slug_prefix = path.stem
             try:
-                artifact = load_artifact(path)
+                artifact = load_memory_item(path)
                 title = artifact.title or "(untitled)"
             except ValueError as exc:
                 title = f"[warning]unreadable: {exc}[/warning]"
@@ -225,12 +225,12 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     from co_cli.memory.dream import load_dream_state
 
     knowledge_dir = ctx.deps.memory_dir
-    artifacts = load_artifacts(knowledge_dir)
+    artifacts = load_memory_items(knowledge_dir)
     total = len(artifacts)
 
     kind_counts: dict[str, int] = {}
     for a in artifacts:
-        kind_counts[a.artifact_kind] = kind_counts.get(a.artifact_kind, 0) + 1
+        kind_counts[a.memory_kind] = kind_counts.get(a.memory_kind, 0) + 1
     kind_parts = ", ".join(f"{kind}: {count}" for kind, count in sorted(kind_counts.items()))
 
     protected = sum(1 for a in artifacts if a.decay_protected)

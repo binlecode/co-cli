@@ -103,9 +103,9 @@ established decision — or when you suspect relevant cross-session context exis
 `session_search` for past conversations before answering. Do not ask the user to repeat
 themselves when the answer may already be in memory.
 
-Load a memory artifact's full body with `memory_view(name)`; for verbatim past-session
+Load a memory item's full body with `memory_view(name)`; for verbatim past-session
 turns, `session_view(session_id, start, end)`. Don't reach for `file_read` to retrieve
-artifact bodies.
+memory item bodies.
 
 Triggers: past session references, user preferences, standing rules, prior decisions,
 anything the user might reasonably expect you to already know.
@@ -139,4 +139,4 @@ Don't save to memory:
 - Task progress, completed-work logs, session outcomes, or temporary TODO state — these are
   ephemeral; recall them later via `session_search`.
 - Procedures and reusable workflows — those belong in skills (`skill_manage(action='create')`),
-  not memory artifacts. Memory holds facts; skills hold procedures.
+  not memory items. Memory holds facts; skills hold procedures.

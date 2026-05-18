@@ -5,7 +5,7 @@ This spec owns the dream-cycle lifecycle. The broader persistent cognition model
 
 ## 1. What & How
 
-Dreaming is Co's bounded, local batch-maintenance pass for the knowledge layer. It is named "dream" because it happens outside the immediate foreground turn and looks across prior experience for durable patterns, but it is not hidden autonomous memory. It reads local transcripts and active knowledge artifacts, writes local markdown artifacts, archives originals into a local subdirectory, and records local JSON state.
+Dreaming is Co's bounded, local batch-maintenance pass for the memory layer. It is named "dream" because it happens outside the immediate foreground turn and looks across prior experience for durable patterns, but it is not hidden autonomous memory. It reads local transcripts and active memory items, writes local memory items, archives originals into a local subdirectory, and records local JSON state.
 
 Dreaming serves the core product mission:
 
@@ -23,9 +23,9 @@ flowchart TD
     end
 
     subgraph Cycle["Dream Cycle — mine → merge → decay"]
-        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ memory_manage via miner Agent\n→ new knowledge/*.md artifacts"]
-        Merge["Phase 2: Merge\nactive same-kind similar clusters\n→ llm_call() for consolidated body\n→ write consolidated artifact, archive originals"]
-        Decay["Phase 3: Decay\nold, unrecalled, non-protected artifacts\n→ archive to knowledge/_archive/"]
+        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ memory_manage via miner Agent\n→ new memory/*.md items"]
+        Merge["Phase 2: Merge\nactive same-kind similar clusters\n→ llm_call() for consolidated body\n→ write consolidated item, archive originals"]
+        Decay["Phase 3: Decay\nold, unrecalled, non-protected items\n→ archive to memory/_archive/"]
         State["Persist DreamState\n(processed_sessions, last_dream_at, cumulative stats)"]
     end
 
@@ -42,9 +42,9 @@ Source-of-truth files:
 
 | Path | Role |
 | --- | --- |
-| `knowledge/*.md` | Active reusable knowledge artifacts used by recall and search |
-| `knowledge/_archive/*.md` | Recoverable archived artifacts, excluded from normal active loads |
-| `knowledge/_dream_state.json` | Processed transcript names, last run timestamp, cumulative counters |
+| `memory/*.md` | Active memory items used by recall and search |
+| `memory/_archive/*.md` | Recoverable archived items, excluded from normal active loads |
+| `memory/_dream_state.json` | Processed transcript names, last run timestamp, cumulative counters |
 | `sessions/*.jsonl` | Raw append-only transcripts read by mining; never rewritten by dreaming |
 | `co-cli-search.db` | Derived index updated when dream writes or archives artifacts |
 
@@ -69,18 +69,18 @@ Automatic trigger:
 
 ```text
 session teardown
-  -> if knowledge.consolidation_enabled is true
-  -> if knowledge.consolidation_trigger is "session_end"
+  -> if memory.consolidation_enabled is true
+  -> if memory.consolidation_trigger is "session_end"
   -> run dream cycle (timeout managed internally by run_dream_cycle)
   -> log result
   -> never fail shutdown because dreaming failed
 ```
 
-Automatic dreaming is deliberately behind `knowledge.consolidation_enabled=false` by default. This matches the mission boundary: Co may become more useful through long-term adaptation, but that adaptation must remain explicit, local, and inspectable.
+Automatic dreaming is deliberately behind `memory.consolidation_enabled=false` by default. This matches the mission boundary: Co may become more useful through long-term adaptation, but that adaptation must remain explicit, local, and inspectable.
 
 ### 2.2 State
 
-`DreamState` persists at `knowledge/_dream_state.json`.
+`DreamState` persists at `memory/_dream_state.json`.
 
 | Field | Meaning |
 | --- | --- |
@@ -91,9 +91,9 @@ Automatic dreaming is deliberately behind `knowledge.consolidation_enabled=false
 | `stats.total_merged` | Cumulative merge clusters completed |
 | `stats.total_decayed` | Cumulative artifacts archived by decay |
 
-Load behavior is forgiving: missing or corrupt state returns a fresh state object and logs corrupt state as a warning. Save behavior creates the knowledge directory if needed and writes indented JSON.
+Load behavior is forgiving: missing or corrupt state returns a fresh state object and logs corrupt state as a warning. Save behavior creates the memory directory if needed and writes indented JSON.
 
-State is only the dream cursor and dashboard record. It is not the source of truth for knowledge content; markdown artifacts and archive files are.
+State is only the dream cursor and dashboard record. It is not the source of truth for memory content; markdown items and archive files are.
 
 ### 2.3 Phase 1: Transcript Mining
 
@@ -104,7 +104,7 @@ Execution order:
 ```text
 load dream state
 list recent sessions by reverse filename order
-limit to knowledge.consolidation_lookback_sessions
+limit to memory.consolidation_lookback_sessions
 for each unprocessed session:
   load transcript
   if load fails:
@@ -146,9 +146,9 @@ Merge reduces duplication in active knowledge without editing transcripts or ove
 Execution order:
 
 ```text
-load active knowledge artifacts from top-level knowledge/*.md
+load active memory items from top-level memory/*.md
 discard decay_protected artifacts
-group remaining artifacts by artifact_kind
+group remaining artifacts by memory_kind
 within each kind, cluster by token-Jaccard threshold
 cap clusters per cycle
 cap artifacts per cluster
@@ -163,7 +163,7 @@ for each cluster:
 
 Merge invariants:
 
-- Only artifacts of the same `artifact_kind` can merge.
+- Only artifacts of the same `memory_kind` can merge.
 - `decay_protected=true` blocks merge participation.
 - Original artifacts are archived only after the consolidated artifact is durably written.
 - If archiving fails after the consolidated artifact is written, the consolidated artifact remains; the failure is logged and the cycle continues.
@@ -191,9 +191,9 @@ for each active artifact:
 sort oldest created first
 ```
 
-The cutoff is `now - knowledge.decay_after_days`. A candidate is archived only if it is old enough and either has never been recalled or was last recalled outside the same age window.
+The cutoff is `now - memory.decay_after_days`. A candidate is archived only if it is old enough and either has never been recalled or was last recalled outside the same age window.
 
-Decay archives at most 20 artifacts per cycle. Archive moves files into `knowledge/_archive/`, removes active index rows when a `MemoryStore` is available, and resolves filename collisions by suffixing rather than clobbering existing files.
+Decay archives at most 20 items per cycle. Archive moves files into `memory/_archive/`, removes active index rows when a `MemoryStore` is available, and resolves filename collisions by suffixing rather than clobbering existing files.
 
 ### 2.6 Dry Run
 
@@ -263,14 +263,14 @@ The session-end wrapper logs completion counts when changes occurred and logs ti
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `knowledge.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enables dedup-on-write and dream-cycle maintenance |
-| `knowledge.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `session_end` | Automatic trigger mode: `session_end` or `manual` |
-| `knowledge.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Number of recent transcript files considered by mining |
-| `knowledge.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for dedup and merge clusters |
-| `knowledge.max_artifact_count` | `CO_MEMORY_MAX_ARTIFACT_COUNT` | `300` | Soft corpus-size setting; not directly enforced by the current dream cycle |
-| `knowledge.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Age and last-recall cutoff for decay candidacy |
-| `knowledge.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Chunk size used when indexing consolidated artifacts |
-| `knowledge.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Chunk overlap used when indexing consolidated artifacts |
+| `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enables dedup-on-write and dream-cycle maintenance |
+| `memory.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `session_end` | Automatic trigger mode: `session_end` or `manual` |
+| `memory.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Number of recent transcript files considered by mining |
+| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for dedup and merge clusters |
+| `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | Soft corpus-size setting; not directly enforced by the current dream cycle |
+| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Age and last-recall cutoff for decay candidacy |
+| `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Chunk size used when indexing consolidated items |
+| `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Chunk overlap used when indexing consolidated items |
 
 Internal caps:
 
@@ -303,9 +303,9 @@ Internal caps:
 | --- | --- | --- |
 | `DreamState` | `co_cli/memory/dream.py` | Pydantic model — `last_dream_at`, `processed_sessions`, `stats` |
 | `DreamStats` | `co_cli/memory/dream.py` | Pydantic model — `total_cycles`, `total_extracted`, `total_merged`, `total_decayed` |
-| `load_dream_state(knowledge_dir) -> DreamState` | `co_cli/memory/dream.py` | Forgiving loader — returns fresh state on missing/corrupt JSON |
-| `save_dream_state(knowledge_dir, state) -> None` | `co_cli/memory/dream.py` | Writes `_dream_state.json` with `mkdir -p` |
-| `dream_state_path(knowledge_dir) -> Path` | `co_cli/memory/dream.py` | Returns `<knowledge_dir>/_dream_state.json` |
+| `load_dream_state(memory_dir) -> DreamState` | `co_cli/memory/dream.py` | Forgiving loader — returns fresh state on missing/corrupt JSON |
+| `save_dream_state(memory_dir, state) -> None` | `co_cli/memory/dream.py` | Writes `_dream_state.json` with `mkdir -p` |
+| `dream_state_path(memory_dir) -> Path` | `co_cli/memory/dream.py` | Returns `<memory_dir>/_dream_state.json` |
 
 ### Dream miner agent
 
@@ -317,8 +317,8 @@ Internal caps:
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `archive_artifacts(paths, knowledge_dir) -> int` | `co_cli/memory/archive.py` | Moves artifacts into `knowledge/_archive/`; resolves filename collisions by suffix |
-| `restore_artifact(slug, knowledge_dir, store=None) -> bool` | `co_cli/memory/archive.py` | Restores an archived artifact by unambiguous filename prefix; reindexes if `store` provided |
+| `archive_artifacts(entries: list[MemoryItem], memory_dir, memory_store=None) -> int` | `co_cli/memory/archive.py` | Moves memory items into `memory/_archive/`; resolves filename collisions by suffix |
+| `restore_artifact(slug, memory_dir, memory_store=None) -> bool` | `co_cli/memory/archive.py` | Restores an archived item by unambiguous filename prefix; reindexes if `memory_store` provided |
 
 ## 5. Files
 
@@ -331,12 +331,12 @@ Internal caps:
 | `co_cli/memory/similarity.py` | Token-Jaccard similarity and clustering helpers |
 | `co_cli/memory/decay.py` | Decay candidate selection |
 | `co_cli/memory/archive.py` | Archive and restore mechanics |
-| `co_cli/memory/artifact.py` | Knowledge artifact schema and active top-level artifact loading |
-| `co_cli/memory/frontmatter.py` | Knowledge markdown rendering and frontmatter validation |
-| `co_cli/memory/memory_store.py` | Derived index updates for consolidated and archived artifacts |
+| `co_cli/memory/item.py` | Memory item schema and active top-level memory item loading |
+| `co_cli/memory/frontmatter.py` | Memory item markdown rendering and frontmatter validation |
+| `co_cli/memory/store.py` | `MemoryStore` — derived index updates for consolidated and archived items |
 | `co_cli/tools/memory/manage.py` | `memory_manage` tool used by dream mining |
 | `co_cli/main.py` | Session-end dream trigger (`_maybe_run_dream_cycle`) |
-| `co_cli/commands/knowledge.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, and `/memory stats` |
+| `co_cli/commands/memory.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, and `/memory stats` |
 
 ## 6. Test Gates
 

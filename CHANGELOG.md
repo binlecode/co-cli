@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.8.218]
+
+### `MemoryArtifact` → `MemoryItem` rename — artifact semantic layer removed from `co_cli/memory/`
+
+- **`co_cli/memory/artifact.py` → `item.py`** via `git mv`; class `MemoryArtifact` → `MemoryItem`, enum `ArtifactKindEnum` → `MemoryKindEnum`, functions `load_artifacts` / `load_memory_items`, `filter_artifacts` / `filter_memory_items`, `format_artifact_row` / `format_memory_item_row`.
+- **Frontmatter field** `artifact_kind:` → `memory_kind:` in all `.md` memory files; `render_artifact_file` → `render_memory_item_file`, `artifact_to_frontmatter` → `memory_item_to_frontmatter`.
+- **Config** `max_artifact_count` / `CO_MEMORY_MAX_ARTIFACT_COUNT` → `max_item_count` / `CO_MEMORY_MAX_ITEM_COUNT`.
+- **`MemoryStore`** methods `list_artifacts` → `list_memory_items`, `search_artifacts` → `search_memory_items`; **`IndexStore`** `list_artifacts` → `list_items`.
+- **`similarity.py`** `find_similar_artifacts` → `find_similar_memory_items`; **`decay.py`**, **`archive.py`**, **`dream.py`** all updated (imports, local vars, docstrings).
+- **Tool surface** (`recall.py`, `manage.py`, `view.py`): `_list_artifacts` → `_list_memory_items`, `_search_artifacts` → `_search_memory_items`; display strings updated.
+- **`commands/memory.py`**, **`commands/core.py`**, **`context/rules/04_tool_protocol.md`**, **`skills/session_review_prompts.py`**: "memory artifact(s)" → "memory item(s)".
+- **Tests** `test_flow_artifact_manage.py` → `test_flow_memory_item_manage.py`, `test_flow_memory_artifacts_waterfall_cap.py` → `test_flow_memory_items_waterfall_cap.py`; all test imports updated.
+- **Evals** fixtures directory `knowledge/` → `memory/`; `artifact_kind:` frontmatter updated in 6 fixture `.md` files; `_fixtures.py` path updated.
+- **Spec docs** (`memory.md`, `dream.md`, `observability.md`, `config.md`, `01-system.md`, `bootstrap.md`, `tui.md`, `prompt-assembly.md`, `core-loop.md`, `tools.md`): all `knowledge.*` config prefixes → `memory.*`, `knowledge/` paths → `memory/`, stale file paths updated, missing config rows added, duplicate phantom rows removed.
+- **`noreason` temperature=0** added to qwen3.5 Ollama settings — eliminates LLM output non-determinism in compaction summarization and judge calls.
+
 ## [0.8.216]
 
 ### Rename `co_cli/persistence/` → `co_cli/fileio/`

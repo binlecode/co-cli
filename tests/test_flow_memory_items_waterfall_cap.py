@@ -1,4 +1,4 @@
-"""Tests for MemoryStore.search_artifacts() two-pass cap (user priority + waterfall)."""
+"""Tests for MemoryStore.search_memory_items() two-pass cap (user priority + waterfall)."""
 
 from pathlib import Path
 
@@ -31,14 +31,14 @@ def _make_stores(tmp_path: Path) -> tuple[IndexStore, MemoryStore]:
     return index, memory
 
 
-def _write_artifact(directory: Path, name: str, artifact_kind: str, body: str) -> Path:
-    """Write a minimal memory artifact .md file with valid YAML frontmatter."""
+def _write_memory_item(directory: Path, name: str, memory_kind: str, body: str) -> Path:
+    """Write a minimal memory item .md file with valid YAML frontmatter."""
     content = (
         "---\n"
         f"id: {name}\n"
         f"created: 2025-01-01T00:00:00\n"
         "kind: memory\n"
-        f"artifact_kind: {artifact_kind}\n"
+        f"memory_kind: {memory_kind}\n"
         f"title: {name}\n"
         "---\n"
         f"{body}\n"
@@ -49,18 +49,18 @@ def _write_artifact(directory: Path, name: str, artifact_kind: str, body: str) -
 
 
 def test_waterfall_count_cap(tmp_path: Path) -> None:
-    """Waterfall pass stops at _WATERFALL_CHUNK_CAP even when more artifacts match."""
+    """Waterfall pass stops at _WATERFALL_CHUNK_CAP even when more memory items match."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
 
     short_body = f"{_KEYWORD} " + "x" * 90
     for i in range(_WATERFALL_CHUNK_CAP + 3):
-        _write_artifact(memory_dir, f"rule_{i:02d}", "rule", short_body)
+        _write_memory_item(memory_dir, f"rule_{i:02d}", "rule", short_body)
 
     index, memory = _make_stores(tmp_path)
     try:
         memory.sync_dir(memory_dir)
-        results = memory.search_artifacts(_KEYWORD, kinds=["rule"], limit=100)
+        results = memory.search_memory_items(_KEYWORD, kinds=["rule"], limit=100)
         assert len(results) <= _WATERFALL_CHUNK_CAP, (
             f"expected at most {_WATERFALL_CHUNK_CAP} waterfall results, got {len(results)}"
         )
@@ -69,18 +69,18 @@ def test_waterfall_count_cap(tmp_path: Path) -> None:
 
 
 def test_user_priority_cap(tmp_path: Path) -> None:
-    """User priority pass stops at _USER_PRIORITY_CAP even when more user artifacts match."""
+    """User priority pass stops at _USER_PRIORITY_CAP even when more user memory items match."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
 
     short_body = f"{_KEYWORD} " + "x" * 90
     for i in range(_USER_PRIORITY_CAP + 3):
-        _write_artifact(memory_dir, f"user_{i:02d}", "user", short_body)
+        _write_memory_item(memory_dir, f"user_{i:02d}", "user", short_body)
 
     index, memory = _make_stores(tmp_path)
     try:
         memory.sync_dir(memory_dir)
-        results = memory.search_artifacts(_KEYWORD, kinds=["user"], limit=100)
+        results = memory.search_memory_items(_KEYWORD, kinds=["user"], limit=100)
         assert len(results) <= _USER_PRIORITY_CAP, (
             f"expected at most {_USER_PRIORITY_CAP} user-priority results, got {len(results)}"
         )

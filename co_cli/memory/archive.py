@@ -3,7 +3,7 @@
 Archived artifacts live in ``memory_dir/_archive/`` and are removed from the
 FTS index. Restore moves a file back to the active directory and re-indexes it.
 The ``_archive/`` subdir is never traversed by the default top-level loaders
-(see ``load_artifacts``), so archived files are invisible to recall
+(see ``load_memory_items``), so archived files are invisible to recall
 but preserved on disk for later restore.
 
 Collisions on the destination filename are resolved by suffixing the stem with
@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.memory.artifact import MemoryArtifact
+from co_cli.memory.item import MemoryItem
 
 if TYPE_CHECKING:
     from co_cli.memory.store import MemoryStore
@@ -44,7 +44,7 @@ def _non_colliding_path(dest_dir: Path, filename: str) -> Path:
 
 
 def archive_artifacts(
-    entries: list[MemoryArtifact],
+    entries: list[MemoryItem],
     memory_dir: Path,
     memory_store: MemoryStore | None = None,
 ) -> int:

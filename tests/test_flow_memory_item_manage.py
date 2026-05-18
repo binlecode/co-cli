@@ -14,7 +14,7 @@ from tests._settings import SETTINGS
 
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.index.store import IndexStore
-from co_cli.memory.service import reindex, save_artifact
+from co_cli.memory.service import reindex, save_memory_item
 from co_cli.memory.store import MemoryStore
 from co_cli.tools.memory.manage import (
     _memory_manage_approval_subject,
@@ -60,20 +60,20 @@ async def test_artifact_manage_delete_removes_file(tmp_path: Path) -> None:
     persists and the artifact continues to appear in searches.
     """
     knowledge_dir = tmp_path / "memory"
-    saved = save_artifact(
+    saved = save_memory_item(
         knowledge_dir,
         content="content to be deleted",
-        artifact_kind="note",
+        memory_kind="note",
         title="delete me",
     )
-    assert saved.path.exists(), "precondition: artifact file must exist before delete"
+    assert saved.path.exists(), "precondition: memory item file must exist before delete"
 
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
     result = await memory_manage(ctx, action="delete", name=saved.filename_stem)
 
-    assert not saved.path.exists(), "artifact file must be removed after delete"
+    assert not saved.path.exists(), "memory item file must be removed after delete"
     assert result.metadata is not None
     assert result.metadata.get("error") is not True, "successful delete must not set error flag"
     assert result.metadata.get("action") == "deleted"
@@ -108,10 +108,10 @@ async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None
     knowledge_dir = tmp_path / "memory"
     store = _make_store(tmp_path)
     try:
-        saved = save_artifact(
+        saved = save_memory_item(
             knowledge_dir,
             content="uniquetoken_to_find_in_index",
-            artifact_kind="note",
+            memory_kind="note",
             title="indexed note",
         )
         reindex(
@@ -127,7 +127,7 @@ async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None
 
         hits_before = store.search("uniquetoken_to_find_in_index")
         assert any(saved.filename_stem in h.path for h in hits_before), (
-            "precondition: artifact must be findable in index before delete"
+            "precondition: memory item must be findable in index before delete"
         )
 
         deps = _make_deps(tmp_path, store=store)
@@ -136,7 +136,7 @@ async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None
 
         hits_after = store.search("uniquetoken_to_find_in_index")
         assert not any(saved.filename_stem in h.path for h in hits_after), (
-            "artifact must not appear in FTS5 index after delete"
+            "memory item must not appear in FTS5 index after delete"
         )
     finally:
         store.close()
@@ -148,10 +148,10 @@ async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_artifact_manage_create_rejects_canon_artifact_kind(tmp_path: Path) -> None:
-    """memory_manage(action='create') must reject artifact_kind='canon' — canon is read-only.
+async def test_artifact_manage_create_rejects_canon_memory_kind(tmp_path: Path) -> None:
+    """memory_manage(action='create') must reject memory_kind='canon' — canon is read-only.
 
-    Regression guard: adding CANON to ArtifactKindEnum would silently admit it as a writable
+    Regression guard: adding CANON to MemoryKindEnum would silently admit it as a writable
     kind without this check.
     """
     deps = CoDeps(

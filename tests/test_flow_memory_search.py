@@ -13,7 +13,7 @@ from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.index.store import IndexStore
-from co_cli.memory.service import reindex, save_artifact
+from co_cli.memory.service import reindex, save_memory_item
 from co_cli.memory.store import _USER_PRIORITY_CAP, MemoryStore
 from co_cli.observability import tracing
 from co_cli.tools.memory.manage import _handle_create
@@ -81,7 +81,7 @@ def _seed(
     kind: str,
     title: str,
 ) -> None:
-    r = save_artifact(memory_dir, content=content, artifact_kind=kind, title=title)
+    r = save_memory_item(memory_dir, content=content, memory_kind=kind, title=title)
     reindex(
         index,
         r.path,
@@ -241,7 +241,7 @@ async def test_memory_search_user_priority_pass_cap_honoured(tmp_path: Path) -> 
 
 def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> None:
     """memory_search falls back to disk scan when memory_store is None."""
-    from co_cli.tools.memory.recall import _list_artifacts
+    from co_cli.tools.memory.recall import _list_memory_items
 
     memory_dir = tmp_path / "memory"
     index_tmp, _memory_tmp = _make_stores(tmp_path)
@@ -267,7 +267,7 @@ def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> None:
 
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
 
-    results = _list_artifacts(ctx, kinds=None, limit=10, span=current_span())
+    results = _list_memory_items(ctx, kinds=None, limit=10, span=current_span())
 
     assert len(results) >= 1, f"expected disk fallback results, got {results}"
     for r in results:
@@ -301,5 +301,5 @@ async def test_memory_manage_create_emits_span(isolated_spans_log: Path, tmp_pat
     create_records = [r for r in records if r["name"] == "co.memory.memory_manage.create"]
     assert create_records, "expected a co.memory.memory_manage.create span record"
     attrs = create_records[0]["attributes"]
-    assert attrs.get("memory.artifact_kind") == "note"
+    assert attrs.get("memory.memory_kind") == "note"
     assert create_records[0]["status"] == "OK"

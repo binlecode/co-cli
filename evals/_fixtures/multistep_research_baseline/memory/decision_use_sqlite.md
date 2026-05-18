@@ -1,5 +1,5 @@
 ---
-artifact_kind: note
+memory_kind: note
 created: '2026-04-01T00:00:00+00:00'
 id: 5e6f7a8b-9c0d-5e1f-2a3b-4c5d6e7f8a9b
 kind: knowledge

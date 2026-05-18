@@ -81,11 +81,10 @@ def load_fixture(
         FileNotFoundError if the fixture dir doesn't exist.
         AttributeError if ``deps.memory_store`` is None (bootstrap incomplete).
     """
-    source = _FIXTURES_DIR / name / "knowledge"
+    source = _FIXTURES_DIR / name / "memory"
     if not source.exists():
         raise FileNotFoundError(
-            f"Fixture {name!r} not found at {source} — "
-            f"expected directory with knowledge/*.md inside."
+            f"Fixture {name!r} not found at {source} — expected directory with memory/*.md inside."
         )
 
     deps.memory_dir.mkdir(parents=True, exist_ok=True)

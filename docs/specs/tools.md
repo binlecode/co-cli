@@ -165,7 +165,7 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Required for `web_search` |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Registration gate for Obsidian tools |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google tools |
-| `knowledge_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | Unified knowledge artifact directory |
+| `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | Memory item directory |
 | `mcp_servers` | `CO_MCP_SERVERS` | 2 defaults | MCP server definitions |
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Default agent retry budget |
 | `max_requests` tool arg | — | 10 / 8 / 3 | Per-call delegation request cap (research / analysis / reasoning); defaults are function-local |

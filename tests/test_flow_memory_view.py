@@ -11,7 +11,7 @@ from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.index.store import IndexStore
-from co_cli.memory.service import reindex, save_artifact
+from co_cli.memory.service import reindex, save_memory_item
 from co_cli.tools.memory.view import memory_view
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -52,7 +52,7 @@ def _seed(
     title: str,
 ) -> str:
     """Seed an artifact and return its filename_stem."""
-    r = save_artifact(knowledge_dir, content=content, artifact_kind=kind, title=title)
+    r = save_memory_item(knowledge_dir, content=content, memory_kind=kind, title=title)
     reindex(
         store,
         r.path,
@@ -95,7 +95,7 @@ async def test_memory_view_returns_body_after_create(tmp_path: Path) -> None:
             f"body content missing from result: {result.return_value!r}"
         )
         # Frontmatter keys must not appear in the body
-        assert "artifact_kind:" not in result.return_value, (
+        assert "memory_kind:" not in result.return_value, (
             f"frontmatter must be stripped from body: {result.return_value!r}"
         )
     finally:

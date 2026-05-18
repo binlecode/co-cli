@@ -49,10 +49,9 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Agent loop | [core-loop.md](core-loop.md) | Turn orchestration, approval mechanics, retries |
 | Prompt assembly | [prompt-assembly.md](prompt-assembly.md) | Instruction layers, history processors, recall injection |
 | Compaction | [compaction.md](compaction.md) | Spill, proactive summarization, session JSONL rewrite |
-| Memory | [memory.md](memory.md) | Memory tier overview: knowledge + session channels, search surface |
-| Knowledge | [memory.md](memory.md) | Artifact storage, kind taxonomy, `memory_manage` |
+| Memory | [memory.md](memory.md) | Memory tier: item storage, kind taxonomy, two-pass recall, `memory_manage` |
 | Sessions | [sessions.md](sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
-| Dream cycle | [dream.md](dream.md) | Session-end mining, knowledge merge, decay, archive |
+| Dream cycle | [dream.md](dream.md) | Session-end mining, memory merge, decay, archive |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
 | Skills | [skills.md](skills.md) | Skill manifest, view/manage surface, dispatch |
 | Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
@@ -134,7 +133,7 @@ Recall is search-driven and on-demand — nothing is wholesale injected into eve
 
 Memory and session are peer operational tiers sharing one index (`co-cli-search.db`, FTS5 + optional vec):
 
-- **Memory** (`~/.co-cli/memory/*.md`) — long-term declarative artifacts: user preferences, rules, articles, notes. Model-writable via `memory_manage`. Mined and decayed by the dream cycle.
+- **Memory** (`~/.co-cli/memory/*.md`) — long-term declarative memory items: user preferences, rules, articles, notes. Model-writable via `memory_manage`. Mined and decayed by the dream cycle.
 - **Session** (`~/.co-cli/sessions/*.jsonl`) — past conversation transcripts. Append-only; chunked at write time. Recalled via BM25 chunk snippets with line citations; full turns fetched via `session_view`.
 
 Recall is always search-driven. Nothing is bulk-injected. Browse mode (empty query) returns recent-item metadata.
@@ -145,7 +144,7 @@ memory_search / session_search
   → snippet hits with line/path citations
 
 memory_view / session_view
-  → full artifact body / verbatim JSONL lines from disk
+  → full memory item body / verbatim JSONL lines from disk
 ```
 
 → [memory.md](memory.md) · [sessions.md](sessions.md)
@@ -237,8 +236,8 @@ Settings most relevant to system assembly:
 | `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-q4_k_m-agentic` | Primary model for the foreground agent |
 | `mcp_servers` | `CO_MCP_SERVERS` | bundled defaults | MCP server definitions attached during runtime assembly |
 | `personality` | `CO_PERSONALITY` | `tars` | Personality assets injected during prompt assembly |
-| `knowledge.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |
-| `knowledge_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | User-global knowledge artifact store |
+| `memory.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |
+| `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | User-global memory item store |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Terminal reasoning display mode for interactive turns |
 
 Full settings reference: [config.md](config.md).

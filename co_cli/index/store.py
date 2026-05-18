@@ -453,9 +453,7 @@ class IndexStore:
         ).fetchone()
         return row["path"] if row else None
 
-    def list_artifacts(
-        self, source: str, kinds: list[str] | None, limit: int
-    ) -> list[dict[str, Any]]:
+    def list_items(self, source: str, kinds: list[str] | None, limit: int) -> list[dict[str, Any]]:
         """Return inventory rows for a source, sorted by created DESC."""
         k_sql, k_params = kind_clause(kinds, "d.kind")
         rows = self._conn.execute(

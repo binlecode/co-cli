@@ -30,7 +30,7 @@ MEMORY_ENV_MAP: dict[str, str] = {
     "consolidation_trigger": "CO_MEMORY_CONSOLIDATION_TRIGGER",
     "consolidation_lookback_sessions": "CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS",
     "consolidation_similarity_threshold": "CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD",
-    "max_artifact_count": "CO_MEMORY_MAX_ARTIFACT_COUNT",
+    "max_item_count": "CO_MEMORY_MAX_ITEM_COUNT",
     "decay_after_days": "CO_MEMORY_DECAY_AFTER_DAYS",
     "session_chunk_tokens": "CO_MEMORY_SESSION_CHUNK_TOKENS",
     "session_chunk_overlap": "CO_MEMORY_SESSION_CHUNK_OVERLAP",
@@ -62,7 +62,7 @@ class MemorySettings(BaseModel):
     consolidation_trigger: Literal["session_end", "manual"] = Field(default="session_end")
     consolidation_lookback_sessions: int = Field(default=5, ge=1)
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
-    max_artifact_count: int = Field(default=300, ge=1)
+    max_item_count: int = Field(default=300, ge=1)
     decay_after_days: int = Field(default=90, ge=1)
     session_chunk_tokens: int = Field(default=400, ge=64)
     session_chunk_overlap: int = Field(default=80, ge=0)

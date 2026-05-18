@@ -2,19 +2,19 @@
 
 > Peer tier: [sessions.md](sessions.md) (past conversation transcripts). Sibling surfaces: [skills.md](skills.md) (procedural capability). Doctrine (auto-injected into static prompt; never queried as memory): [personality.md](personality.md). Tool registration and approval: [tools.md](tools.md). Dream-cycle mining, merge, decay, archive: [dream.md](dream.md). Prompt assembly: [prompt-assembly.md](prompt-assembly.md). Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md).
 
-Foundation spec for the memory tier — long-term declarative artifacts (user preferences, rules, articles, notes) that the agent accumulates and recalls.
+Foundation spec for the memory tier — long-term declarative memory items (user preferences, rules, articles, notes) that the agent accumulates and recalls.
 
 Memory is one of five operational tiers in the agent loop: **doctrine** ([personality.md](personality.md), identity), **tools** ([tools.md](tools.md), capability), **skills** ([skills.md](skills.md), procedure), **memory** (this file — long-term declarative artifacts), and **session** ([sessions.md](sessions.md) — past conversation transcripts). Memory and session are peer tiers sharing the same index infrastructure but with distinct domain logic, mutation models, and lifecycle policies.
 
 ## 1. Functional Architecture
 
-Memory holds long-term declarative artifacts: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_manage`), kind-typed (user / rule / article / note), and subject to lifecycle (decay, dream consolidation).
+Memory holds long-term declarative memory items: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_manage`), kind-typed (user / rule / article / note), and subject to lifecycle (decay, dream consolidation).
 
-Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, bundled skill manifest) is injected once at agent construction. Memory artifacts are loaded on-demand through the recall tool surface, keeping context bounded and recall purposeful.
+Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, bundled skill manifest) is injected once at agent construction. Memory items are loaded on-demand through the recall tool surface, keeping context bounded and recall purposeful.
 
 ```mermaid
 flowchart TD
-    MemoryFiles["memory artifacts\n(~/.co-cli/memory/*.md)"] -->|"source='memory'"| IndexDB["co-cli-search.db\n(IndexStore + FTS5 + optional vec)"]
+    MemoryFiles["memory items\n(~/.co-cli/memory/*.md)"] -->|"source='memory'"| IndexDB["co-cli-search.db\n(IndexStore + FTS5 + optional vec)"]
     IndexDB --> MemSearch["memory_search()"]
     IndexDB --> MemView["memory_view()"]
     MemManage["memory_manage()"] --> MemoryFiles
@@ -49,7 +49,7 @@ co_cli/index/            Infrastructure facade — IndexStore (public) + retriev
 | --- | --- | --- |
 | `hybrid` | FTS5 BM25 + sqlite-vec cosine, RRF merge (k=60) | Configured, TEI reranker reachable, embedding provider configured/reachable, and sqlite-vec available |
 | `fts5` | BM25 over chunked text only | Explicitly configured, or hybrid degrades before store construction |
-| `grep` | In-memory substring over artifact title+content | `memory_store` is `None`; sessions return `[]` in this state |
+| `grep` | In-memory substring over memory item title+content | `memory_store` is `None`; sessions return `[]` in this state |
 
 Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
 
@@ -63,10 +63,15 @@ Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross
 | `memory.embedding_dims` | `CO_MEMORY_EMBEDDING_DIMS` | `1024` | embedding vector dimensions |
 | `memory.embed_api_url` | `CO_MEMORY_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
 | `memory.cross_encoder_reranker_url` | `CO_MEMORY_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI cross-encoder reranker URL |
-| `memory.tei_rerank_batch_size` | *(no env var)* | `50` | batch size for TEI rerank HTTP requests |
-| `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory artifacts |
+| `memory.tei_rerank_batch_size` | `CO_MEMORY_TEI_RERANK_BATCH_SIZE` | `50` | batch size for TEI rerank HTTP requests |
+| `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory items |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | chunk overlap |
 | `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | dream-cycle consolidation |
+| `memory.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `session_end` | automatic trigger mode: `session_end` or `manual` |
+| `memory.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | number of recent transcript files considered by dream mining |
+| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for dedup and merge clusters |
+| `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | soft corpus-size cap; not directly enforced by the current dream cycle |
+| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | age and last-recall cutoff for decay candidacy |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | lifecycle setting; not currently consumed by recall ranking |
 
 Session chunking settings live alongside memory settings under `config.memory.session_chunk_*` since both tiers share the index infrastructure. See [sessions.md](sessions.md) for session-specific config.
@@ -75,7 +80,7 @@ Session chunking settings live alongside memory settings under `config.memory.se
 
 | Path | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | memory artifact source-of-truth directory |
+| `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | memory item source-of-truth directory |
 | `sessions_dir` | — | `~/.co-cli/sessions/` | transcript directory |
 | `tool_results_dir` | — | `~/.co-cli/tool-results/` | spill directory for oversized tool results |
 | `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (memory + session + canon) |
@@ -86,8 +91,8 @@ Session chunking settings live alongside memory settings under `config.memory.se
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `memory_search(ctx, query, kinds=None, limit=10)` | `co_cli/tools/memory/recall.py` | Async tool — two-pass ranked recall over memory artifacts; empty query → recent-artifact browse |
-| `memory_view(ctx, name)` | `co_cli/tools/memory/view.py` | Async tool — returns full artifact body by `filename_stem`; frontmatter stripped |
+| `memory_search(ctx, query, kinds=None, limit=10)` | `co_cli/tools/memory/recall.py` | Async tool — two-pass ranked recall over memory items; empty query → recent-item browse |
+| `memory_view(ctx, name)` | `co_cli/tools/memory/view.py` | Async tool — returns full memory item body by `filename_stem`; frontmatter stripped |
 
 Result fields for `memory_search`: `{kind, title, snippet, score, path, filename_stem}`. Two-pass policy in `co_cli/memory/store.py`: user-kind priority pass (cap `_USER_PRIORITY_CAP=3`) + waterfall over remaining kinds (cap `_WATERFALL_CHUNK_CAP=5`).
 
@@ -102,12 +107,12 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 | Symbol | Source | Contract |
 | --- | --- | --- |
 | `MemoryStore(index, config)` | `co_cli/memory/store.py` | Domain store composing IndexStore — owns memory kinds, two-pass search, decay hooks |
-| `MemoryStore.sync_dir(memory_dir)` | `co_cli/memory/store.py` | Hash-based directory indexer for memory artifacts |
-| `MemoryStore.search_artifacts(query, kinds, limit)` | `co_cli/memory/store.py` | Two-pass FTS recall with user-kind priority + kind waterfall |
-| `MemoryStore.list_artifacts(kinds, limit)` | `co_cli/memory/store.py` | Inventory rows for browse mode |
-| `MemoryArtifact` | `co_cli/memory/artifact.py` | Reusable artifact data model |
-| `ArtifactKindEnum` | `co_cli/memory/artifact.py` | USER / RULE / ARTICLE / NOTE (and CANON for the doctrine source) |
-| `save_artifact`, `mutate_artifact` | `co_cli/memory/service.py` | Pure write functions — no RunContext |
+| `MemoryStore.sync_dir(memory_dir)` | `co_cli/memory/store.py` | Hash-based directory indexer for memory items |
+| `MemoryStore.search_memory_items(query, kinds, limit)` | `co_cli/memory/store.py` | Two-pass FTS recall with user-kind priority + kind waterfall |
+| `MemoryStore.list_memory_items(kinds, limit)` | `co_cli/memory/store.py` | Inventory rows for browse mode |
+| `MemoryItem` | `co_cli/memory/item.py` | Reusable memory item data model — user / rule / article / note / canon items share this schema, differentiated by the `memory_kind` field |
+| `MemoryKindEnum` | `co_cli/memory/item.py` | USER / RULE / ARTICLE / NOTE (and CANON for the doctrine source) |
+| `save_memory_item`, `mutate_memory_item` | `co_cli/memory/service.py` | Pure write functions — no RunContext |
 
 ### Index API (cross-tier)
 
@@ -140,19 +145,19 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 | File | Purpose |
 | --- | --- |
 | `co_cli/memory/store.py` | `MemoryStore` — domain store composing IndexStore |
-| `co_cli/memory/service.py` | `save_artifact`, `mutate_artifact`, `reindex` |
+| `co_cli/memory/service.py` | `save_memory_item`, `mutate_memory_item`, `reindex` |
 | `co_cli/memory/chunker.py` | `chunk_text` — paragraph-aware chunking |
-| `co_cli/memory/artifact.py` | `MemoryArtifact`, `ArtifactKindEnum`, `IndexSourceEnum` |
+| `co_cli/memory/item.py` | `MemoryItem`, `MemoryKindEnum`, `IndexSourceEnum` |
 | `co_cli/memory/frontmatter.py` | YAML frontmatter parse/render |
 | `co_cli/memory/similarity.py` | Jaccard dedup for consolidation |
 | `co_cli/memory/decay.py` | Decay candidate identification |
 | `co_cli/memory/dream.py` | Dream-cycle orchestration |
-| `co_cli/memory/archive.py` | Archive / restore artifact files |
+| `co_cli/memory/archive.py` | Archive / restore memory item files |
 
 ### Tool surface (`co_cli/tools/memory/`)
 
 | File | Purpose |
 | --- | --- |
 | `co_cli/tools/memory/recall.py` | `memory_search` — ranked recall |
-| `co_cli/tools/memory/view.py` | `memory_view` — full artifact body reader |
+| `co_cli/tools/memory/view.py` | `memory_view` — full memory item body reader |
 | `co_cli/tools/memory/manage.py` | `memory_manage` — write surface |

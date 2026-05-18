@@ -7,8 +7,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
-from co_cli.memory.artifact import ArtifactKindEnum
-from co_cli.memory.service import mutate_artifact, reindex, save_artifact
+from co_cli.memory.item import MemoryKindEnum
+from co_cli.memory.service import mutate_memory_item, reindex, save_memory_item
 from co_cli.observability.tracing import current_span, trace
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.resource_lock import ResourceBusyError
@@ -91,7 +91,7 @@ async def _handle_create(
     if kind is None:
         return tool_error("kind is required for action='create'", ctx=ctx)
 
-    valid_kinds = {e.value for e in ArtifactKindEnum if e != ArtifactKindEnum.CANON}
+    valid_kinds = {e.value for e in MemoryKindEnum if e != MemoryKindEnum.CANON}
     if kind not in valid_kinds:
         return tool_error(
             f"Unknown kind: {kind!r}. Valid values: {sorted(valid_kinds)}",
@@ -101,12 +101,12 @@ async def _handle_create(
     memory_dir = ctx.deps.memory_dir
 
     span = current_span()
-    span.set_attribute("memory.artifact_kind", kind)
+    span.set_attribute("memory.memory_kind", kind)
 
-    result = save_artifact(
+    result = save_memory_item(
         memory_dir,
         content=content,
-        artifact_kind=kind,
+        memory_kind=kind,
         title=name,
         consolidation_enabled=ctx.deps.config.memory.consolidation_enabled,
         consolidation_similarity_threshold=ctx.deps.config.memory.consolidation_similarity_threshold,
@@ -168,7 +168,7 @@ async def _handle_mutate(
 
     try:
         async with ctx.deps.resource_locks.try_acquire(filename_stem):
-            result = mutate_artifact(
+            result = mutate_memory_item(
                 memory_dir,
                 filename_stem=filename_stem,
                 action=op,

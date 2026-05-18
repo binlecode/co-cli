@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from co_cli.config.memory import MemorySettings
-from co_cli.memory.artifact import MemoryArtifact, load_artifacts
+from co_cli.memory.item import MemoryItem, load_memory_items
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 def find_decay_candidates(
     memory_dir: Path,
     config: MemorySettings,
-) -> list[MemoryArtifact]:
-    """Return artifacts eligible for automated decay.
+) -> list[MemoryItem]:
+    """Return items eligible for automated decay.
 
     Filters applied in order:
     1. Exclude: ``decay_protected`` is True
@@ -32,23 +32,23 @@ def find_decay_candidates(
     Result is sorted by age descending (oldest ``created`` first).
     """
     cutoff = datetime.now(UTC) - timedelta(days=config.decay_after_days)
-    artifacts = load_artifacts(memory_dir)
+    items = load_memory_items(memory_dir)
 
-    candidates: list[MemoryArtifact] = []
-    for artifact in artifacts:
-        if artifact.decay_protected:
+    candidates: list[MemoryItem] = []
+    for item in items:
+        if item.decay_protected:
             continue
 
-        created_at = _parse_iso8601(artifact.created)
+        created_at = _parse_iso8601(item.created)
         if created_at is None or created_at >= cutoff:
             continue
 
-        if artifact.last_recalled is not None:
-            recalled_at = _parse_iso8601(artifact.last_recalled)
+        if item.last_recalled is not None:
+            recalled_at = _parse_iso8601(item.last_recalled)
             if recalled_at is not None and recalled_at >= cutoff:
                 continue
 
-        candidates.append(artifact)
+        candidates.append(item)
 
     candidates.sort(key=lambda art: _parse_iso8601(art.created) or cutoff)
     return candidates

@@ -12,8 +12,8 @@ does nothing is a missed learning opportunity, not a neutral outcome.
 Scope:
 - Skills: procedural knowledge (how to do tasks). Update loaded skills that had stale steps,
   create new skills for multi-step procedures that succeeded and are likely to recur.
-- Knowledge: user preferences, corrections, rules, decisions. Create or update knowledge
-  artifacts for anything the user explicitly corrected or that reflects a reusable insight.
+- Knowledge: user preferences, corrections, rules, decisions. Create or update memory
+  items for anything the user explicitly corrected or that reflects a reusable insight.
 
 Do NOT:
 - Call skill_manage(action='delete') or memory_manage(action='delete').
@@ -29,8 +29,8 @@ After completing all updates, return a SessionReviewOutput with:
 - summary: one sentence describing what changed (e.g. "Updated /foo + new preference: bar").
 - skills_patched: list of skill names you patched.
 - skills_created: list of skill names you created.
-- knowledge_created: list of knowledge artifact names you created.
-- knowledge_updated: list of knowledge artifact names you updated.
+- knowledge_created: list of memory item names you created.
+- knowledge_updated: list of memory item names you updated.
 If you made no changes, return an empty summary and empty lists.\
 """
 

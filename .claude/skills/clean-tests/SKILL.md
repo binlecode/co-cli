@@ -54,7 +54,7 @@ grep -h "^def test_" tests/test_*.py | sed 's/(.*$//' | sed 's/^def //' | \
   awk -F_ '{print $1"_"$2"_"$3}' | sort | uniq -c | sort -rn | head -20
 ```
 
-Flag any 3-part prefix with **count ≥ 3** (e.g., `test_blocks_*`, `test_fires_on_*`, `test_approval_subject_*`). During Pass 1, compare every test in the group side-by-side before assigning verdicts. The most common sub-patterns:
+Flag any 3-part prefix with **count ≥ 2** (e.g., `test_blocks_*`, `test_fires_on_*`, `test_approval_subject_*`). During Pass 1, compare every test in the group side-by-side before assigning verdicts. The most common sub-patterns:
 
 - **Enumerated-input negatives**: `test_blocks_X / _Y / _Z` all assert `is None` / `raises` for different inputs that activate the same branch. Keep the most representative input; delete the rest.
 - **Format-template variants**: `test_subject_create / _delete / _append` all verify the same substitution formula with different values. Two examples (a boundary pair) prove the pattern; delete the rest.
@@ -120,11 +120,13 @@ Process test files **in batches of 5**. For each batch:
    ```bash
    # Private symbols imported from co_cli modules
    grep -n "from co_cli" <file> | grep " _[a-z]"
-   # Private attribute access on co_cli module references
+   # Private function calls on co_cli module references
    grep -En "[a-z_]+\._[a-z][a-z_]*\(" <file> | grep -v "#"
+   # Private non-call attribute access (ContextVar, module-level state — note: no trailing '(')
+   grep -En "[a-z_]+\._[A-Z_][A-Z0-9_]+" <file> | grep -v "#"
    ```
 
-   For each unique private symbol found (e.g. `_repair_json_args`, `trace_view._build_tree`):
+   For each unique private symbol found (e.g. `_repair_json_args`, `trace_view._build_tree`, `tracing._SPAN_STACK`):
 
    a. Locate its definition: `grep -rn "def _symbol_name" co_cli/`
    b. Find all production callers: `grep -rn "_symbol_name" co_cli/` (production code only, not tests)
@@ -136,13 +138,12 @@ Process test files **in batches of 5**. For each batch:
 
    **Do not write any annotation row for a test calling a private co_cli symbol until its inventory entry is recorded.** A KEEP verdict without an inventory entry is a protocol violation.
 
-3. **For every `def test_*` function in each file**, produce an annotation row:
+3. **For every `def test_*` function in each file**, output an annotation row in a markdown table. Do not batch or defer — print the table for each batch before moving to the next:
 
-   ```
-   file | test_name | production_fn_called | verdict | rule (if violated)
-   ```
+   | file | test_name | production_fn_called | verdict | rule (if violated) |
+   |------|-----------|----------------------|---------|-------------------|
 
-   Verdict options: `KEEP`, `DELETE (rule N)`, `FIX (rule N)`.
+   Verdict options: `KEEP`, `DELETE (rule N)`, `FIX (rule N)`. Every row must be visible to the user — reasoning kept internal is not sufficient.
 
 4. Evaluate rules in order (1 → 16). Stop at the first Blocking violation per test — one is enough to act.
 5. After annotating all tests in the batch, execute the deletions/fixes for that batch before moving to the next. **Dependency check before each deletion (Rules 8–11):** verify the test you are relying on as the subsuming test is not itself flagged for deletion in this or a prior batch. If it is, keep the original.
@@ -232,14 +233,18 @@ Perform the file-level actions identified in Pass 0 that could not be done per-b
 
    Fix every issue. No `# noqa` without an explanatory comment.
 
-3. Run the suite:
+3. Run the suite — **project policy: skip**
+
+   The full suite is skipped by default in this project. Mark the verdict `PASS (conditional — suite skipped per project policy)` and note it in the terminal summary. Do not run `pytest` as part of this skill.
+
+   If the suite is explicitly requested by the user, run:
 
    ```bash
    mkdir -p .pytest-logs
    uv run pytest -x -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-clean-tests.log
    ```
 
-   **Suite failure protocol:**
+   **Suite failure protocol (only if suite was explicitly requested):**
    - Real-LLM test fails → rerun in isolation. Passes alone → LLM non-determinism; note in summary and restart suite without `-x`. Fails alone consistently (≥2 solo runs) → real failure; diagnose.
    - Non-LLM test fails → diagnose root cause, fix, re-run with `-x`. Never report PASS until suite is green.
 
@@ -247,8 +252,9 @@ Perform the file-level actions identified in Pass 0 that could not be done per-b
 
 ## Verdict + terminal summary
 
-- **PASS**: all Blocking resolved + lint clean + suite green.
-- **FAIL**: any unfixed Blocking, lint error, or red suite.
+- **PASS**: all Blocking resolved + lint clean. Suite skipped by default — note as `PASS (conditional — suite skipped per project policy)`.
+- **PASS (suite)**: all Blocking resolved + lint clean + suite green (only when suite explicitly requested).
+- **FAIL**: any unfixed Blocking or lint error. Red suite → FAIL only when suite was explicitly requested.
 
 ```
 ## clean-tests — <date>

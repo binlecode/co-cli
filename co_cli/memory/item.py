@@ -1,8 +1,8 @@
-"""Unified memory artifact data model.
+"""Unified memory item data model.
 
-MemoryArtifact is the single reusable-artifact model — user, rule, article,
-and note artifacts share this schema. Sessions (raw transcripts) live in the
-session/ module; memory artifacts (everything reusable) live in ``memory_dir/``.
+MemoryItem is the single reusable memory-item model — user, rule, article,
+and note items share this schema. Sessions (raw transcripts) live in the
+session/ module; memory items (everything reusable) live in ``memory_dir/``.
 See ``docs/specs/memory.md`` for the memory tier model and
 ``docs/specs/sessions.md`` for session recall.
 """
@@ -21,7 +21,7 @@ from co_cli.memory.frontmatter import parse_frontmatter
 logger = logging.getLogger(__name__)
 
 
-class ArtifactKindEnum(StrEnum):
+class MemoryKindEnum(StrEnum):
     USER = "user"
     RULE = "rule"
     ARTICLE = "article"
@@ -47,12 +47,12 @@ class IndexSourceEnum(StrEnum):
 
 
 @dataclass
-class MemoryArtifact:
-    """A single reusable memory artifact (preferences, rules, articles, notes, …)."""
+class MemoryItem:
+    """A single reusable memory item (preferences, rules, articles, notes, …)."""
 
     id: str
     path: Path
-    artifact_kind: str
+    memory_kind: str
     title: str | None
     content: str
     created: str
@@ -66,12 +66,12 @@ class MemoryArtifact:
     recall_count: int = 0
 
 
-def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> MemoryArtifact:
-    """Build a MemoryArtifact from canonical kind=memory frontmatter."""
-    return MemoryArtifact(
+def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> MemoryItem:
+    """Build a MemoryItem from canonical kind=memory frontmatter."""
+    return MemoryItem(
         id=str(frontmatter["id"]),
         path=path,
-        artifact_kind=frontmatter.get("artifact_kind", ArtifactKindEnum.NOTE.value),
+        memory_kind=frontmatter.get("memory_kind", MemoryKindEnum.NOTE.value),
         title=frontmatter.get("title"),
         content=body.strip(),
         created=frontmatter["created"],
@@ -86,8 +86,8 @@ def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> Memory
     )
 
 
-def load_artifact(path: Path) -> MemoryArtifact:
-    """Load a single .md file as a MemoryArtifact.
+def load_memory_item(path: Path) -> MemoryItem:
+    """Load a single .md file as a MemoryItem.
 
     Requires ``kind: memory`` frontmatter with ``id`` and ``created`` set.
     Raises ValueError on any missing required field or unexpected ``kind``.
@@ -103,12 +103,12 @@ def load_artifact(path: Path) -> MemoryArtifact:
     return _coerce_fields(frontmatter, body, path)
 
 
-def load_artifacts(
+def load_memory_items(
     memory_dir: Path,
     *,
-    artifact_kinds: list[str] | None = None,
-) -> list[MemoryArtifact]:
-    """Load all .md files under memory_dir as MemoryArtifacts.
+    memory_kinds: list[str] | None = None,
+) -> list[MemoryItem]:
+    """Load all .md files under memory_dir as MemoryItems.
 
     Files that fail to parse are skipped with a warning. Top-level glob only —
     subdirectories like ``_archive/`` are not traversed.
@@ -116,23 +116,21 @@ def load_artifacts(
     if not memory_dir.exists():
         return []
 
-    artifacts: list[MemoryArtifact] = []
+    items: list[MemoryItem] = []
     for path in memory_dir.glob("*.md"):
         try:
-            artifact = load_artifact(path)
+            item = load_memory_item(path)
         except Exception as exc:
             logger.warning("Failed to load %s: %s", path, exc)
             continue
-        if artifact_kinds is not None and artifact.artifact_kind not in artifact_kinds:
+        if memory_kinds is not None and item.memory_kind not in memory_kinds:
             continue
-        artifacts.append(artifact)
-    return artifacts
+        items.append(item)
+    return items
 
 
-def filter_artifacts(
-    entries: list[MemoryArtifact], filters: dict[str, Any]
-) -> list[MemoryArtifact]:
-    """Apply older_than_days filter to a loaded artifact list."""
+def filter_memory_items(entries: list[MemoryItem], filters: dict[str, Any]) -> list[MemoryItem]:
+    """Apply older_than_days filter to a loaded memory item list."""
     result = entries
     if "older_than_days" in filters:
         cutoff_days = filters["older_than_days"]
@@ -145,8 +143,8 @@ def filter_artifacts(
     return result
 
 
-def format_artifact_row(m: MemoryArtifact) -> str:
+def format_memory_item_row(m: MemoryItem) -> str:
     id_prefix = m.id[:8]
     created = m.created[:10]
     snippet = m.content[:80]
-    return f"{id_prefix}  {created}  [{m.artifact_kind}]  {snippet}"
+    return f"{id_prefix}  {created}  [{m.memory_kind}]  {snippet}"

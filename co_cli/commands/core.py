@@ -49,7 +49,7 @@ BUILTIN_COMMANDS["compact"] = SlashCommand(
 )
 BUILTIN_COMMANDS["memory"] = SlashCommand(
     "memory",
-    "Manage memory artifacts — /memory list|count|forget|dream|restore|decay-review|stats [args]",
+    "Manage memory items — /memory list|count|forget|dream|restore|decay-review|stats [args]",
     _cmd_memory,
 )
 BUILTIN_COMMANDS["approvals"] = SlashCommand(

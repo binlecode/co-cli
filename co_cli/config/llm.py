@@ -40,6 +40,7 @@ _LLM_SETTINGS: dict[str, Any] = {
                 },
             },
             "noreason": {
+                "temperature": 0,
                 "max_tokens": 4096,
                 "extra_body": {
                     "think": False,

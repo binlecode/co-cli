@@ -27,13 +27,13 @@ from co_cli.fileio.atomic import atomic_write_text
 from co_cli.llm.call import llm_call
 from co_cli.memory._window import build_transcript_window
 from co_cli.memory.archive import archive_artifacts
-from co_cli.memory.artifact import (
-    MemoryArtifact,
-    SourceTypeEnum,
-    load_artifacts,
-)
 from co_cli.memory.decay import find_decay_candidates
-from co_cli.memory.service import save_artifact
+from co_cli.memory.item import (
+    MemoryItem,
+    SourceTypeEnum,
+    load_memory_items,
+)
+from co_cli.memory.service import save_memory_item
 from co_cli.memory.similarity import token_jaccard
 from co_cli.observability.tracing import current_span, trace
 from co_cli.session.persistence import load_transcript
@@ -140,7 +140,7 @@ def _chunk_dream_window(
 async def _mine_transcripts(deps: CoDeps, state: DreamState, miner_tool: Any) -> int:
     """Mine recent unprocessed session transcripts for durable knowledge.
 
-    Returns the number of new artifacts written to ``deps.memory_dir`` during
+    Returns the number of new memory items written to ``deps.memory_dir`` during
     this cycle. Sessions already listed in ``state.processed_sessions`` are
     skipped.
     """
@@ -214,7 +214,7 @@ async def _mine_transcripts(deps: CoDeps, state: DreamState, miner_tool: Any) ->
 
 
 def _count_active_artifacts(memory_dir: Path) -> int:
-    """Count top-level ``*.md`` artifacts, excluding the ``_archive/`` subdir."""
+    """Count top-level ``*.md`` memory items, excluding the ``_archive/`` subdir."""
     if not memory_dir.exists():
         return 0
     return sum(1 for path in memory_dir.glob("*.md") if path.is_file())
@@ -228,13 +228,11 @@ def _count_active_artifacts(memory_dir: Path) -> int:
 _DREAM_MERGE_PROMPT: str = _DREAM_MERGE_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
-def _is_merge_immune(artifact: MemoryArtifact) -> bool:
+def _is_merge_immune(artifact: MemoryItem) -> bool:
     return artifact.decay_protected
 
 
-def _cluster_by_similarity(
-    members: list[MemoryArtifact], threshold: float
-) -> list[list[MemoryArtifact]]:
+def _cluster_by_similarity(members: list[MemoryItem], threshold: float) -> list[list[MemoryItem]]:
     """Union-find clustering by pairwise token-Jaccard similarity."""
     size = len(members)
     if size < 2:
@@ -260,34 +258,34 @@ def _cluster_by_similarity(
             if token_jaccard(members[i].content, members[j].content) >= threshold:
                 union(i, j)
 
-    grouped: dict[int, list[MemoryArtifact]] = defaultdict(list)
+    grouped: dict[int, list[MemoryItem]] = defaultdict(list)
     for idx, member in enumerate(members):
         grouped[find(idx)].append(member)
     return [cluster for cluster in grouped.values() if len(cluster) >= 2]
 
 
-def _render_merge_prompt(cluster: list[MemoryArtifact]) -> str:
+def _render_merge_prompt(cluster: list[MemoryItem]) -> str:
     parts: list[str] = []
     for index, artifact in enumerate(cluster, start=1):
         label = artifact.title or "untitled"
         parts.append(
-            f"[Entry {index}] kind={artifact.artifact_kind} title={label}\n{artifact.content.strip()}"
+            f"[Entry {index}] kind={artifact.memory_kind} title={label}\n{artifact.content.strip()}"
         )
     return "\n\n---\n\n".join(parts)
 
 
 def _write_consolidated_artifact(
     deps: CoDeps,
-    cluster: list[MemoryArtifact],
+    cluster: list[MemoryItem],
     merged_body: str,
 ) -> Path:
-    """Write a new consolidated artifact via save_artifact and index it."""
-    kind = cluster[0].artifact_kind
+    """Write a new consolidated memory item and index it."""
+    kind = cluster[0].memory_kind
     title = cluster[0].title or f"consolidated {kind}"
-    result = save_artifact(
+    result = save_memory_item(
         deps.memory_dir,
         content=merged_body.strip(),
-        artifact_kind=kind,
+        memory_kind=kind,
         title=title,
         source_type=SourceTypeEnum.CONSOLIDATED.value,
         index_store=deps.index_store,
@@ -304,8 +302,8 @@ def _write_consolidated_artifact(
     return result.path
 
 
-async def _merge_cluster(deps: CoDeps, cluster: list[MemoryArtifact]) -> Path | None:
-    """Invoke the consolidation sub-agent and write one merged artifact."""
+async def _merge_cluster(deps: CoDeps, cluster: list[MemoryItem]) -> Path | None:
+    """Invoke the consolidation sub-agent and write one merged memory item."""
     prompt = _render_merge_prompt(cluster)
     merged_body = (await llm_call(deps, prompt, instructions=_DREAM_MERGE_PROMPT) or "").strip()
     if len(merged_body) < _MERGED_BODY_MIN_CHARS:
@@ -317,20 +315,20 @@ async def _merge_cluster(deps: CoDeps, cluster: list[MemoryArtifact]) -> Path | 
     return _write_consolidated_artifact(deps, cluster, merged_body)
 
 
-def _identify_mergeable_clusters(deps: CoDeps) -> list[list[MemoryArtifact]]:
+def _identify_mergeable_clusters(deps: CoDeps) -> list[list[MemoryItem]]:
     """Identify same-kind, non-immune clusters above the similarity threshold."""
     threshold = deps.config.memory.consolidation_similarity_threshold
-    artifacts = load_artifacts(deps.memory_dir)
+    artifacts = load_memory_items(deps.memory_dir)
     if not artifacts:
         return []
 
-    groups: dict[str, list[MemoryArtifact]] = defaultdict(list)
+    groups: dict[str, list[MemoryItem]] = defaultdict(list)
     for artifact in artifacts:
         if _is_merge_immune(artifact):
             continue
-        groups[artifact.artifact_kind].append(artifact)
+        groups[artifact.memory_kind].append(artifact)
 
-    clusters: list[list[MemoryArtifact]] = []
+    clusters: list[list[MemoryItem]] = []
     for members in groups.values():
         clusters.extend(_cluster_by_similarity(members, threshold))
 

@@ -33,11 +33,10 @@ graph TD
 | `LlmSettings` | `llm.py` | Provider, model, inference defaults; `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` as instance methods |
 | `_LLM_SETTINGS` | `llm.py` | Provider→model→mode canonical inference knobs used by `LlmSettings._inference()` |
 | `DEFAULT_LLM_MODELS` | `llm.py` | Per-provider default model id (full id with variant tag) — used when `llm.model` is unset |
-| `MemorySettings` | `knowledge.py` | Search backend, embedding, chunking, and lifecycle settings |
+| `MemorySettings` | `memory.py` | Search backend, embedding, chunking, lifecycle, and recall settings |
 | `CompactionSettings` | `compaction.py` | Context compaction trigger ratios and anti-thrash knobs |
 | `WebSettings` | `web.py` | Domain allowlist/blocklist and HTTP retry policy |
 | `ShellSettings` | `shell.py` | Shell timeout limit and auto-approval safe command list |
-| `MemorySettings` | `memory.py` | Memory recall half-life |
 | `ObservabilitySettings` | `observability.py` | Log level, app-log + spans-log rotation, span-attribute redaction patterns |
 | `SkillsSettings` | `skills.py` | Skill review automation knobs (enable + per-N-tool-call nudge interval) |
 | `MCPServerSettings` | `mcp.py` | Per-server transport config (stdio or HTTP) |
@@ -61,7 +60,7 @@ load_config(path?, env?)
        → fill_from_env runs as model_validator(mode="before"):
            flat env vars injected directly into data dict
            nested env vars injected into data["llm"], data["web"], etc.
-           each sub-model owns its ENV_MAP (LLM_ENV_MAP, KNOWLEDGE_ENV_MAP, etc.)
+           each sub-model owns its ENV_MAP (LLM_ENV_MAP, MEMORY_ENV_MAP, etc.)
            provider-aware API key resolved via resolve_api_key_from_env()
            CO_MCP_SERVERS JSON decoded into data["mcp_servers"]
   6. _validate_personality(resolved.personality) — prints warnings, does not raise
@@ -78,7 +77,7 @@ USER_DIR          = CO_HOME env var | ~/.co-cli
 SETTINGS_FILE     = USER_DIR / settings.json
 SEARCH_DB         = USER_DIR / co-cli-search.db
 LOGS_DIR          = USER_DIR / logs
-MEMORY_DIR     = USER_DIR / knowledge
+MEMORY_DIR        = USER_DIR / memory
 SESSIONS_DIR      = USER_DIR / sessions
 TOOL_RESULTS_DIR  = USER_DIR / tool-results
 GOOGLE_TOKEN_PATH = USER_DIR / google_token.json
@@ -151,7 +150,7 @@ Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is)
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `None` | Absolute path to Obsidian vault for note search |
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `None` | Brave Search API key |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` | Path to Google OAuth credentials JSON |
-| `knowledge_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | Override for the knowledge artifacts directory |
+| `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | Override for the memory items directory |
 | `workspace_path` | `CO_WORKSPACE_PATH` | `None` | Path to the workspace root (used for workspace-relative resolution) |
 
 ### LLM (`llm.*`)
@@ -168,27 +167,27 @@ Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is)
 Inference knobs (temperature, top_p, max_tokens, extra_body, thinking_config) are not
 user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 
-### Knowledge (`knowledge.*`)
+### Memory (`memory.*`)
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `knowledge.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `"hybrid"` | Backend: `grep`, `fts5`, `hybrid` |
-| `knowledge.embedding_provider` | `CO_MEMORY_EMBEDDING_PROVIDER` | `"tei"` | Embedding provider: `ollama`, `gemini`, `tei`, `none` |
-| `knowledge.embedding_model` | `CO_MEMORY_EMBEDDING_MODEL` | `"embeddinggemma"` | Model name for embedding |
-| `knowledge.embedding_dims` | `CO_MEMORY_EMBEDDING_DIMS` | `1024` | Embedding vector dimensions |
-| `knowledge.embed_api_url` | `CO_MEMORY_EMBED_API_URL` | `"http://127.0.0.1:8283"` | TEI embedding server URL |
-| `knowledge.cross_encoder_reranker_url` | `CO_MEMORY_CROSS_ENCODER_RERANKER_URL` | `"http://127.0.0.1:8282"` | TEI cross-encoder reranker URL; `null` to disable |
-| `knowledge.tei_rerank_batch_size` | `CO_MEMORY_TEI_RERANK_BATCH_SIZE` | `50` | Reranker batch size (overridden by TEI `/info` response) |
-| `knowledge.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Token size per knowledge chunk |
-| `knowledge.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Token overlap between chunks |
-| `knowledge.session_chunk_tokens` | `CO_MEMORY_SESSION_CHUNK_TOKENS` | `400` | Token size per session chunk |
-| `knowledge.session_chunk_overlap` | `CO_MEMORY_SESSION_CHUNK_OVERLAP` | `80` | Token overlap between session chunks |
-| `knowledge.max_artifact_count` | `CO_MEMORY_MAX_ARTIFACT_COUNT` | `300` | Max artifacts before decay |
-| `knowledge.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Artifact inactivity days before decay |
-| `knowledge.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enable periodic artifact consolidation |
-| `knowledge.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `"session_end"` | When to consolidate: `session_end` or `manual` |
-| `knowledge.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Sessions to look back during consolidation |
-| `knowledge.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Cosine similarity threshold for consolidation |
+| `memory.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `"hybrid"` | Backend: `grep`, `fts5`, `hybrid` |
+| `memory.embedding_provider` | `CO_MEMORY_EMBEDDING_PROVIDER` | `"tei"` | Embedding provider: `ollama`, `gemini`, `tei`, `none` |
+| `memory.embedding_model` | `CO_MEMORY_EMBEDDING_MODEL` | `"embeddinggemma"` | Model name for embedding |
+| `memory.embedding_dims` | `CO_MEMORY_EMBEDDING_DIMS` | `1024` | Embedding vector dimensions |
+| `memory.embed_api_url` | `CO_MEMORY_EMBED_API_URL` | `"http://127.0.0.1:8283"` | TEI embedding server URL |
+| `memory.cross_encoder_reranker_url` | `CO_MEMORY_CROSS_ENCODER_RERANKER_URL` | `"http://127.0.0.1:8282"` | TEI cross-encoder reranker URL; `null` to disable |
+| `memory.tei_rerank_batch_size` | `CO_MEMORY_TEI_RERANK_BATCH_SIZE` | `50` | Reranker batch size (overridden by TEI `/info` response) |
+| `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Token size per memory chunk |
+| `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Token overlap between chunks |
+| `memory.session_chunk_tokens` | `CO_MEMORY_SESSION_CHUNK_TOKENS` | `400` | Token size per session chunk |
+| `memory.session_chunk_overlap` | `CO_MEMORY_SESSION_CHUNK_OVERLAP` | `80` | Token overlap between session chunks |
+| `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | Max memory items before decay |
+| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Item inactivity days before decay |
+| `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enable periodic item consolidation |
+| `memory.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `"session_end"` | When to consolidate: `session_end` or `manual` |
+| `memory.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Sessions to look back during consolidation |
+| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for consolidation |
 
 ### Compaction (`compaction.*`)
 
@@ -283,11 +282,10 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | Symbol | Source | Contract |
 |--------|--------|----------|
 | `LlmSettings` | `co_cli/config/llm.py` | LLM provider + model + inference knobs; exposes `validate_config()`, `reasoning_model_settings()`, `noreason_model_settings()` |
-| `MemorySettings` | `co_cli/config/knowledge.py` | Search backend, embedding, chunking, lifecycle knobs |
+| `MemorySettings` | `co_cli/config/memory.py` | Search backend, embedding, chunking, lifecycle, and recall settings |
 | `CompactionSettings` | `co_cli/config/compaction.py` | Compaction trigger ratios; `_validate_shape` enforces `tail_fraction < compaction_ratio` and `spill_ratio ≤ compaction_ratio` |
 | `WebSettings` | `co_cli/config/web.py` | Web fetch domain policy and HTTP retry knobs |
 | `ShellSettings` | `co_cli/config/shell.py` | Shell timeout and safe-command allowlist |
-| `MemorySettings` | `co_cli/config/memory.py` | Memory recall half-life |
 | `ObservabilitySettings` | `co_cli/config/observability.py` | Log level, rotation, span redaction patterns |
 | `SkillsSettings` | `co_cli/config/skills.py` | Skill review automation knobs |
 | `MCPServerSettings` | `co_cli/config/mcp.py` | Per-server transport config |
@@ -300,7 +298,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `SETTINGS_FILE` | `co_cli/config/core.py` | `USER_DIR / settings.json` |
 | `SEARCH_DB` | `co_cli/config/core.py` | `USER_DIR / co-cli-search.db` |
 | `LOGS_DIR` | `co_cli/config/core.py` | `USER_DIR / logs` (holds `co-cli.jsonl` and `co-cli-spans.jsonl`) |
-| `MEMORY_DIR` | `co_cli/config/core.py` | `USER_DIR / knowledge` |
+| `MEMORY_DIR` | `co_cli/config/core.py` | `USER_DIR / memory` |
 | `SESSIONS_DIR` | `co_cli/config/core.py` | `USER_DIR / sessions` |
 | `TOOL_RESULTS_DIR` | `co_cli/config/core.py` | `USER_DIR / tool-results` |
 | `GOOGLE_TOKEN_PATH` | `co_cli/config/core.py` | `USER_DIR / google_token.json` |
@@ -323,11 +321,10 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 |------|---------|
 | `co_cli/config/core.py` | `Settings`, `load_config()`, `get_settings()`, `fill_from_env`; path constants (`USER_DIR`, `SETTINGS_FILE`, `SEARCH_DB`, etc.) |
 | `co_cli/config/llm.py` | `LlmSettings` with `reasoning_model_settings()`, `noreason_model_settings()`, `validate_config()` methods; `_LLM_SETTINGS`, `DEFAULT_LLM_MODELS` |
-| `co_cli/config/knowledge.py` | `MemorySettings` — search backend, embedding, chunking, lifecycle |
+| `co_cli/config/memory.py` | `MemorySettings` — search backend, embedding, chunking, lifecycle, recall |
 | `co_cli/config/compaction.py` | `CompactionSettings` — trigger ratio, spill ratio, tail fraction, anti-thrash window |
 | `co_cli/config/web.py` | `WebSettings` — domain policy, HTTP retry and backoff |
 | `co_cli/config/shell.py` | `ShellSettings` — timeout, safe command list |
-| `co_cli/config/memory.py` | `MemorySettings` — recall half-life |
 | `co_cli/config/observability.py` | `ObservabilitySettings` — log level, rotation, redaction patterns |
 | `co_cli/config/skills.py` | `SkillsSettings` — background review enable flag and turn-boundary nudge interval |
 | `co_cli/config/mcp.py` | `MCPServerSettings`, `DEFAULT_MCP_SERVERS`, `parse_mcp_servers_from_env()` |

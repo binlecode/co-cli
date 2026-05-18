@@ -1,9 +1,9 @@
-"""Token-level Jaccard similarity for memory artifact dedup."""
+"""Token-level Jaccard similarity for memory item dedup."""
 
 from __future__ import annotations
 
 from co_cli.index.stopwords import STOPWORDS
-from co_cli.memory.artifact import MemoryArtifact
+from co_cli.memory.item import MemoryItem
 
 
 def token_jaccard(a: str, b: str) -> float:
@@ -22,27 +22,27 @@ def token_jaccard(a: str, b: str) -> float:
     return len(intersection) / len(union)
 
 
-def find_similar_artifacts(
+def find_similar_memory_items(
     content: str,
-    artifact_kind: str | None,
-    artifacts: list[MemoryArtifact],
+    memory_kind: str | None,
+    items: list[MemoryItem],
     threshold: float,
-) -> list[tuple[MemoryArtifact, float]]:
-    """Return artifacts whose content similarity to *content* exceeds *threshold*.
+) -> list[tuple[MemoryItem, float]]:
+    """Return items whose content similarity to *content* exceeds *threshold*.
 
-    Only compares artifacts with the same *artifact_kind* when one is supplied.
+    Only compares items with the same *memory_kind* when one is supplied.
     Results are sorted by similarity descending.
     """
     candidates = (
-        [a for a in artifacts if a.artifact_kind == artifact_kind]
-        if artifact_kind is not None
-        else list(artifacts)
+        [a for a in items if a.memory_kind == memory_kind]
+        if memory_kind is not None
+        else list(items)
     )
-    matches: list[tuple[MemoryArtifact, float]] = []
-    for artifact in candidates:
-        score = token_jaccard(content, artifact.content)
+    matches: list[tuple[MemoryItem, float]] = []
+    for item in candidates:
+        score = token_jaccard(content, item.content)
         if score >= threshold:
-            matches.append((artifact, score))
+            matches.append((item, score))
     matches.sort(key=lambda pair: pair[1], reverse=True)
     return matches
 

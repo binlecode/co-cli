@@ -7,8 +7,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.memory.artifact import ArtifactKindEnum
 from co_cli.memory.frontmatter import parse_frontmatter
+from co_cli.memory.item import MemoryKindEnum
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_error, tool_output
 
@@ -43,7 +43,7 @@ async def memory_view(
 
     raw = path.read_text(encoding="utf-8")
     frontmatter, body = parse_frontmatter(raw)
-    kind = frontmatter.get("artifact_kind", ArtifactKindEnum.NOTE.value)
+    kind = frontmatter.get("memory_kind", MemoryKindEnum.NOTE.value)
     return tool_output(
         body.strip(),
         ctx=ctx,

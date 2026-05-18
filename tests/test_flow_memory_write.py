@@ -1,4 +1,4 @@
-"""Behavioral tests for save_artifact and mutate_artifact write paths.
+"""Behavioral tests for save_memory_item and mutate_memory_item write paths.
 
 Exercises: dedup (URL-keyed, Jaccard), straight save, indexing, append,
 replace-uniqueness guard, and replace-frontmatter integrity. No LLM —
@@ -12,8 +12,8 @@ import yaml
 from tests._settings import SETTINGS
 
 from co_cli.index.store import IndexStore
-from co_cli.memory.artifact import load_artifact
-from co_cli.memory.service import mutate_artifact, reindex, save_artifact
+from co_cli.memory.item import load_memory_item
+from co_cli.memory.service import mutate_memory_item, reindex, save_memory_item
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,24 +29,24 @@ def _make_store(tmp_path, name="test-search.db") -> IndexStore:
 # ---------------------------------------------------------------------------
 
 
-def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
-    """save_artifact (straight path) must write a file AND index it in FTS5.
+def test_save_memory_item_straight_save_creates_file_and_indexes(tmp_path):
+    """save_memory_item (straight path) must write a file AND index it in FTS5.
 
     Failure mode: file written but not indexed → memory_search misses newly
-    created artifacts on the next turn.
+    created memory items on the next turn.
     """
     memory_dir = tmp_path / "memory"
     store = _make_store(tmp_path)
     try:
-        result = save_artifact(
+        result = save_memory_item(
             memory_dir,
             content="pytest is a testing framework",
-            artifact_kind="note",
+            memory_kind="note",
             title="pytest note",
         )
 
         assert result.action == "saved"
-        assert result.path.exists(), "artifact file was not written to disk"
+        assert result.path.exists(), "memory item file was not written to disk"
         assert len(result.artifact_id) >= 8, (
             f"artifact_id must be a non-empty slug string, got {result.artifact_id!r}"
         )
@@ -65,14 +65,14 @@ def test_save_artifact_straight_save_creates_file_and_indexes(tmp_path):
         hits = store.search("pytest testing")
         paths = [h.path for h in hits]
         assert any(str(result.path) in p for p in paths), (
-            f"artifact not found in FTS5 index after save; indexed paths: {paths}"
+            f"memory item not found in FTS5 index after save; indexed paths: {paths}"
         )
     finally:
         store.close()
 
 
-def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
-    """save_artifact with the same source_url must update, not create a duplicate.
+def test_save_memory_item_url_keyed_dedup_updates_existing(tmp_path):
+    """save_memory_item with the same source_url must update, not create a duplicate.
 
     Failure mode: duplicate articles accumulate silently → user gets stale
     content in search results.
@@ -80,18 +80,18 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
     memory_dir = tmp_path / "memory"
     url = "https://example.com/test-page"
 
-    save_artifact(
+    save_memory_item(
         memory_dir,
         content="original content",
-        artifact_kind="article",
+        memory_kind="article",
         title="test article",
         source_url=url,
     )
 
-    second = save_artifact(
+    second = save_memory_item(
         memory_dir,
         content="updated content",
-        artifact_kind="article",
+        memory_kind="article",
         title="test article",
         source_url=url,
     )
@@ -103,10 +103,10 @@ def test_save_artifact_url_keyed_dedup_updates_existing(tmp_path):
     )
 
 
-def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
-    """save_artifact with consolidation_enabled must skip near-identical content.
+def test_save_memory_item_jaccard_dedup_skips_near_identical(tmp_path):
+    """save_memory_item with consolidation_enabled must skip near-identical content.
 
-    Failure mode: near-duplicate artifacts pile up → search returns noisy,
+    Failure mode: near-duplicate memory items pile up → search returns noisy,
     redundant results.
 
     Uses a 20-word vocabulary repeated to form the base; adding one word
@@ -121,19 +121,19 @@ def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
         "kilo lima mike november oscar papa quebec romeo sierra tango "
     ) * 3
 
-    save_artifact(
+    save_memory_item(
         memory_dir,
         content=base,
-        artifact_kind="note",
+        memory_kind="note",
         title="nato note",
         consolidation_enabled=True,
     )
 
     # Adding one word: Jaccard = 20/21 ≈ 0.95 > 0.9 → triggers 'skipped'.
-    second = save_artifact(
+    second = save_memory_item(
         memory_dir,
         content=base + " ultraviolet",
-        artifact_kind="note",
+        memory_kind="note",
         title="nato note",
         consolidation_enabled=True,
     )
@@ -143,21 +143,21 @@ def test_save_artifact_jaccard_dedup_skips_near_identical(tmp_path):
     )
 
 
-def test_mutate_artifact_append_adds_content_at_end(tmp_path):
-    """mutate_artifact append must add new content to the end of the artifact body.
+def test_mutate_memory_item_append_adds_content_at_end(tmp_path):
+    """mutate_memory_item append must add new content to the end of the memory item body.
 
     Failure mode: append silently no-ops or overwrites → memory modification
     is lost on the next read.
     """
     memory_dir = tmp_path / "memory"
-    saved = save_artifact(
+    saved = save_memory_item(
         memory_dir,
         content="initial body",
-        artifact_kind="note",
+        memory_kind="note",
         title="my note",
     )
 
-    mutate_result = mutate_artifact(
+    mutate_result = mutate_memory_item(
         memory_dir,
         filename_stem=saved.filename_stem,
         action="append",
@@ -172,22 +172,22 @@ def test_mutate_artifact_append_adds_content_at_end(tmp_path):
     )
 
 
-def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
-    """mutate_artifact replace must raise ValueError when the target appears more than once.
+def test_mutate_memory_item_replace_rejects_non_unique_target(tmp_path):
+    """mutate_memory_item replace must raise ValueError when the target appears more than once.
 
-    Failure mode: replace picks wrong occurrence → artifact body silently
+    Failure mode: replace picks wrong occurrence → memory item body silently
     corrupted with no error surfaced to the caller.
     """
     memory_dir = tmp_path / "memory"
-    saved = save_artifact(
+    saved = save_memory_item(
         memory_dir,
         content="same line\nsame line\nother content",
-        artifact_kind="note",
+        memory_kind="note",
         title="dupe note",
     )
 
     with pytest.raises(ValueError, match="appears"):
-        mutate_artifact(
+        mutate_memory_item(
             memory_dir,
             filename_stem=saved.filename_stem,
             action="replace",
@@ -196,8 +196,8 @@ def test_mutate_artifact_replace_rejects_non_unique_target(tmp_path):
         )
 
 
-def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
-    """Second save_artifact with same source_url uses O(1) index path when memory_store is set.
+def test_save_memory_item_url_dedup_uses_index_when_store_provided(tmp_path):
+    """Second save_memory_item with same source_url uses O(1) index path when memory_store is set.
 
     Failure mode: without memory_store, dedup relies on O(n) file scan; with it, a single
     SQL lookup replaces the scan — this test confirms the index path produces action='merged'.
@@ -207,10 +207,10 @@ def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
     url = "https://example.com/index-dedup"
 
     try:
-        first = save_artifact(
+        first = save_memory_item(
             memory_dir,
             content="first version",
-            artifact_kind="article",
+            memory_kind="article",
             title="index dedup test",
             source_url=url,
         )
@@ -225,10 +225,10 @@ def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
             chunk_overlap_tokens=80,
         )
 
-        second = save_artifact(
+        second = save_memory_item(
             memory_dir,
             content="updated version",
-            artifact_kind="article",
+            memory_kind="article",
             title="index dedup test",
             source_url=url,
             index_store=store,
@@ -248,7 +248,7 @@ def test_save_artifact_url_dedup_uses_index_when_store_provided(tmp_path):
 def _write_seeded_artifact(path: Path, body: str) -> None:
     frontmatter = {
         "kind": "memory",
-        "artifact_kind": "note",
+        "memory_kind": "note",
         "id": "test-123",
         "created": "2026-01-01T00:00:00+00:00",
     }
@@ -258,14 +258,14 @@ def _write_seeded_artifact(path: Path, body: str) -> None:
     )
 
 
-def test_mutate_artifact_replace_preserves_frontmatter(tmp_path: Path) -> None:
-    """mutate_artifact action='replace' must update the body without corrupting frontmatter."""
+def test_mutate_memory_item_replace_preserves_frontmatter(tmp_path: Path) -> None:
+    """mutate_memory_item action='replace' must update the body without corrupting frontmatter."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
     artifact_path = memory_dir / "test-art.md"
     _write_seeded_artifact(artifact_path, "original body content")
 
-    mutate_artifact(
+    mutate_memory_item(
         memory_dir,
         filename_stem="test-art",
         action="replace",
@@ -273,7 +273,7 @@ def test_mutate_artifact_replace_preserves_frontmatter(tmp_path: Path) -> None:
         target="original body content",
     )
 
-    art = load_artifact(artifact_path)
-    assert art.content.strip() == "updated body content"
-    assert art.id == "test-123"
-    assert art.created == "2026-01-01T00:00:00+00:00"
+    item = load_memory_item(artifact_path)
+    assert item.content.strip() == "updated body content"
+    assert item.id == "test-123"
+    assert item.created == "2026-01-01T00:00:00+00:00"

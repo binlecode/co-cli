@@ -236,9 +236,9 @@ These settings most directly affect bootstrap behavior.
 | `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Host used by Ollama checks and runtime model calls |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
 | `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window; `deps.model_max_ctx = min(probe, max_ctx)` |
-| `knowledge.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
-| `knowledge.embedding_provider` | `CO_MEMORY_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
-| `knowledge_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | User-global knowledge artifact directory synced during bootstrap (extracted facts, articles, notes) |
+| `memory.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
+| `memory.embedding_provider` | `CO_MEMORY_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
+| `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | User-global memory item directory synced during bootstrap |
 | `mcp_servers` | `CO_MCP_SERVERS` | bundled defaults | MCP server definitions connected during startup |
 | `personality` | `CO_PERSONALITY` | `tars` | Personality selected before agent instruction assembly |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Default reasoning-display mode at startup; CLI flags can override it before REPL entry |

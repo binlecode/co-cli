@@ -19,7 +19,7 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.core import TerminalFrontend
 from co_cli.index.store import IndexStore
 from co_cli.memory.store import MemoryStore
-from co_cli.tools.memory.recall import _search_artifacts, memory_search
+from co_cli.tools.memory.recall import _search_memory_items, memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
 _FTS5_CONFIG = SETTINGS.memory.model_copy(
@@ -71,11 +71,11 @@ def test_canon_still_indexed_at_bootstrap_for_personality_system(tmp_path: Path)
         store.close()
 
 
-def test_search_artifacts_canon_kind_filter_returns_empty(tmp_path: Path) -> None:
-    """Even when callers request kinds=['canon'], _search_artifacts returns []."""
+def test_search_memory_items_canon_kind_filter_returns_empty(tmp_path: Path) -> None:
+    """Even when callers request kinds=['canon'], _search_memory_items returns []."""
     ctx = _make_ctx(tmp_path, personality="tars")
     try:
-        hits = _search_artifacts(ctx, "humor deadpan", kinds=["canon"], limit=10)
+        hits = _search_memory_items(ctx, "humor deadpan", kinds=["canon"], limit=10)
         assert hits == [], f"kinds=['canon'] must return empty; got: {hits}"
     finally:
         ctx.deps.index_store.close()
