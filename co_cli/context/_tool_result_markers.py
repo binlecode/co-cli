@@ -63,8 +63,8 @@ def _shell_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -
     cmd = _truncate(str(args.get("cmd", "")), _CMD_PREVIEW_MAX)
     match = _SHELL_EXIT_RE.match(content)
     if match:
-        return f"[shell] ran `{cmd}` → exit {match.group(1)}, {lines} lines"
-    return f"[shell] ran `{cmd}` → ok, {lines} lines"
+        return f"[shell_exec] ran `{cmd}` → exit {match.group(1)}, {lines} lines"
+    return f"[shell_exec] ran `{cmd}` → ok, {lines} lines"
 
 
 def _file_read_marker(args: dict[str, Any], _content: str, chars: int, _lines: int) -> str:
@@ -111,7 +111,7 @@ def _obsidian_read_marker(args: dict[str, Any], _content: str, chars: int, _line
 _MarkerFn = Callable[[dict[str, Any], str, int, int], str]
 
 _TOOL_MARKERS: dict[str, _MarkerFn] = {
-    "shell": _shell_marker,
+    "shell_exec": _shell_marker,
     "file_read": _file_read_marker,
     "file_search": _file_search_marker,
     "file_find": _file_find_marker,

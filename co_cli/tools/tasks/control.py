@@ -73,6 +73,7 @@ async def task_start(
         description=description,
         status="running",
         started_at=datetime.now(UTC).isoformat(),
+        skill_env=ctx.deps.runtime.active_skill_env or {},
     )
     ctx.deps.session.background_tasks[task_id] = state
     try:

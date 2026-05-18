@@ -21,6 +21,7 @@ from co_cli.tools.files.fs_guards import (
     is_recursive_pattern,
     safe_mtime,
 )
+from co_cli.tools.shell_env import build_subprocess_env
 from co_cli.tools.tool_io import tool_error, tool_output
 
 _READ_DEFAULT_LIMIT_LINES = 500
@@ -117,6 +118,7 @@ async def _glob_ripgrep(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=resolved,
+                env=build_subprocess_env(),
             )
             stdout, _ = await proc.communicate()
         except Exception:
@@ -267,6 +269,7 @@ async def _grep_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=build_subprocess_env(),
         )
         stdout, _stderr = await proc.communicate()
         if proc.returncode not in (0, 1):

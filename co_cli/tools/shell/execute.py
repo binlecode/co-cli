@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
-async def shell(
+async def shell_exec(
     ctx: RunContext[CoDeps], cmd: str, timeout: int = 120, workdir: str | None = None
 ) -> ToolReturn:
     """Execute a shell command and return combined stdout + stderr as text.
@@ -57,8 +57,8 @@ async def shell(
     if policy.decision == ShellDecisionEnum.DENY:
         logger.debug(
             "tool_denied tool_name=%s subject_kind=%s subject_value=%s",
-            "shell",
-            "shell",
+            "shell_exec",
+            "shell_exec",
             cmd.split()[0] if cmd.strip() else "",
         )
         return tool_error(policy.reason, ctx=ctx)
@@ -77,9 +77,10 @@ async def shell(
         resolved_cwd = None
 
     effective = min(timeout, ctx.deps.config.shell.max_timeout)
+    skill_env = ctx.deps.runtime.active_skill_env or None
     try:
         exit_code, output = await ctx.deps.shell.run_command(
-            cmd, timeout=effective, cwd=resolved_cwd
+            cmd, timeout=effective, cwd=resolved_cwd, extra_env=skill_env
         )
         if exit_code == 0:
             return tool_output(output, ctx=ctx)

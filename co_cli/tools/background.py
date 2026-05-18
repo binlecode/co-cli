@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.config.core import LOGS_DIR
+from co_cli.tools.shell_env import build_subprocess_env
 
 if TYPE_CHECKING:
     from co_cli.deps import CoSessionState
@@ -35,6 +36,7 @@ class BackgroundTaskState:
     started_at: str = ""
     completed_at: str | None = None
     exit_code: int | None = None
+    skill_env: dict[str, str] = field(default_factory=dict)
     cleanup_incomplete: bool = False
     cleanup_error: str | None = None
     # Internal: monitor task handle — awaited by kill_task to drain stdout before returning
@@ -76,6 +78,7 @@ async def spawn_task(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=state.cwd,
+            env=build_subprocess_env(extra_env=state.skill_env or None),
             start_new_session=True,
         )
     except Exception as e:

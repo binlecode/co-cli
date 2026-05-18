@@ -74,7 +74,7 @@ def resolve_approval_subject(
 
     # Shell branch: scope to the utility (first token of cmd) so "always" approval
     # covers all future invocations of the same utility, not just the exact command.
-    if tool_name == "shell":
+    if tool_name == "shell_exec":
         cmd = args.get("cmd", "")
         tokens = cmd.split()
         utility = tokens[0] if tokens else cmd
@@ -83,7 +83,7 @@ def resolve_approval_subject(
             tool_name=tool_name,
             kind=ApprovalKindEnum.SHELL,
             value=utility,
-            display=f"shell(cmd={cmd!r})\n  {hint}" if hint else f"shell(cmd={cmd!r})",
+            display=f"shell_exec(cmd={cmd!r})\n  {hint}" if hint else f"shell_exec(cmd={cmd!r})",
             can_remember=bool(utility),
         )
 

@@ -21,6 +21,7 @@ from co_cli.tools.files.fs_guards import (
     enforce_workspace_boundary,
     safe_mtime,
 )
+from co_cli.tools.shell_env import build_subprocess_env
 from co_cli.tools.tool_io import tool_error, tool_output
 
 _MAX_EDIT_BYTES = 10 * 1024 * 1024  # 10 MB hard block for patch
@@ -241,6 +242,7 @@ async def _run_lint_if_python(resolved: Path, display: str) -> str:
                 str(resolved),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=build_subprocess_env(),
             )
             stdout, _ = await proc.communicate()
             if proc.returncode != 0:
@@ -495,7 +497,7 @@ async def file_write(
     Creates parent directories as needed. Overwrites the file if it already exists.
 
     Direct write, follows symlinks; not atomic. For internal atomic writes,
-    use `co_cli.persistence.atomic.atomic_write_text`.
+    use `co_cli.fileio.atomic.atomic_write_text`.
 
     Args:
         path: File path relative to the workspace root.

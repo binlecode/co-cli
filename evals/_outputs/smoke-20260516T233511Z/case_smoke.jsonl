@@ -1,1 +1,0 @@
-{"case_id": "smoke", "turn_index": 0, "user_input": "Say hello in one word.", "assistant_text": "Greetings.", "tool_calls": [], "thinking": null, "token_usage": {"prompt": 12653, "completion": 20, "total": 12673}, "model_call_seconds": 16.087067500222474, "span_ids": [""], "prompt_snapshot": {}, "error": ""}

@@ -112,7 +112,7 @@ def test_session_reviewer_spec_tool_names() -> None:
         "memory_manage",
     }
     # Must NOT include terminal/file/web tools
-    assert "shell" not in tools
+    assert "shell_exec" not in tools
     assert "file_read" not in tools
     assert "web_fetch" not in tools
     assert "skill_search" not in tools

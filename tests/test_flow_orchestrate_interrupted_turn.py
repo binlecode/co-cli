@@ -24,7 +24,7 @@ def _resp_text(content: str) -> ModelResponse:
 
 
 def _resp_tool() -> ModelResponse:
-    return ModelResponse(parts=[ToolCallPart(tool_name="shell", args="{}")])
+    return ModelResponse(parts=[ToolCallPart(tool_name="shell_exec", args="{}")])
 
 
 def test_interrupted_result_drops_unanswered_tool_call_response() -> None:

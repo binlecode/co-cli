@@ -50,6 +50,9 @@ def ensure_google_credentials(
         return None  # caller handles error message
 
     scopes_str = ",".join(scopes)
+    # Deliberate bypass of build_subprocess_env: interactive OAuth needs the full
+    # host environment (DISPLAY for browser launch, HOME for ~/.config/gcloud,
+    # user's keyring) — the SAFE_ENV_VARS allowlist would break the auth flow.
     result = subprocess.run(
         [
             "gcloud",

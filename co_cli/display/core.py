@@ -26,7 +26,7 @@ _THEMES: dict[str, dict[str, str]] = {
         "status": "yellow",
         "info": "cyan",
         "accent": "bold cyan",
-        "shell": "dim",
+        "shell_exec": "dim",
         "error": "bold red",
         "success": "green",
         "warning": "orange3",
@@ -37,7 +37,7 @@ _THEMES: dict[str, dict[str, str]] = {
         "status": "dark_orange",
         "info": "blue",
         "accent": "bold blue",
-        "shell": "dim",
+        "shell_exec": "dim",
         "error": "bold red",
         "success": "green",
         "warning": "orange3",
@@ -408,7 +408,7 @@ class TerminalFrontend:
         Extracted so new result types (v2) require one edit here, not in on_tool_complete.
         """
         if isinstance(result, str) and result.strip():
-            console.print(Panel(result.rstrip(), title=label, border_style="shell"))
+            console.print(Panel(result.rstrip(), title=label, border_style="shell_exec"))
 
     def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
         """Tool lifecycle: tool invocation started."""

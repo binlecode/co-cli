@@ -56,7 +56,7 @@ def test_blocks_empty_parts() -> None:
 
 def test_blocks_tool_call_only() -> None:
     """Truncated tool call alone must not trigger retry (history would be poisoned)."""
-    result = _fake_result([ToolCallPart(tool_name="shell", args="{}")])
+    result = _fake_result([ToolCallPart(tool_name="shell_exec", args="{}")])
     settings = {"max_tokens": 4096, "extra_body": {"max_tokens": 4096}}
     assert _length_retry_settings(result, settings) is None
 

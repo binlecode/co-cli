@@ -123,12 +123,12 @@ async def test_spill_resolves_pressure_proactive_fast_paths(tmp_path: Path):
         _user("first turn"),
         _assistant_text("ok"),
         _user("now run things"),
-        _tool_call("shell", "tc1"),
-        _tool_return("shell", "tc1", content),
-        _tool_call("shell", "tc2"),
-        _tool_return("shell", "tc2", content),
-        _tool_call("shell", "tc3"),
-        _tool_return("shell", "tc3", content),
+        _tool_call("shell_exec", "tc1"),
+        _tool_return("shell_exec", "tc1", content),
+        _tool_call("shell_exec", "tc2"),
+        _tool_return("shell_exec", "tc2", content),
+        _tool_call("shell_exec", "tc3"),
+        _tool_return("shell_exec", "tc3", content),
     ]
     deps = _make_deps(tmp_path, spill_threshold_tokens=400, model_max_ctx=800)
 

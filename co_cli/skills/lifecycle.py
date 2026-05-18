@@ -56,3 +56,4 @@ def cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> N
         else:
             os.environ.pop(k, None)
     deps.runtime.active_skill_name = None
+    deps.runtime.active_skill_env = {}

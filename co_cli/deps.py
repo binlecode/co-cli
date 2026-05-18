@@ -64,7 +64,7 @@ class SessionApprovalRule:
 class ApprovalSubject:
     """Resolved representation of what is being approved.
 
-    tool_name:    the registered tool name (e.g. "shell")
+    tool_name:    the registered tool name (e.g. "shell_exec")
     kind:         category matching SessionApprovalRule.kind
     value:        the scoped key used for session rule matching
     display:      human-readable description shown in the approval prompt
@@ -195,6 +195,7 @@ class CoRuntimeState:
     # compaction) that run inside the agent loop without direct Frontend access.
     status_callback: Callable[[str], None] | None = field(default=None, repr=False)
     active_skill_name: str | None = None
+    active_skill_env: dict[str, str] = field(default_factory=dict)
     resume_tool_names: frozenset[str] | None = None
     # True when compaction ran this turn; drives both session-branching (main.py) and
     # stale-token suppression (compaction.py). Cleared by reset_for_turn().

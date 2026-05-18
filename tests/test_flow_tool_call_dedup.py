@@ -120,8 +120,8 @@ async def test_string_args_dedup_by_byte_identity():
     ctx = _ctx(_make_deps())
     node = _call_tools_node(
         [
-            ToolCallPart(tool_name="shell_execute", args='{"cmd": "ls"}', tool_call_id="c1"),
-            ToolCallPart(tool_name="shell_execute", args='{"cmd": "ls"}', tool_call_id="c2"),
+            ToolCallPart(tool_name="shell_exec", args='{"cmd": "ls"}', tool_call_id="c1"),
+            ToolCallPart(tool_name="shell_exec", args='{"cmd": "ls"}', tool_call_id="c2"),
         ]
     )
     result = await lc.before_node_run(ctx, node=node)

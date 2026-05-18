@@ -84,8 +84,8 @@ async def test_below_threshold_fast_path(tmp_path: Path):
     """Total tokens below threshold: no rewrite, no mutation."""
     messages: list[ModelMessage] = [
         _user_request("hi"),
-        _tool_response("shell", "tc1"),
-        _tool_request("shell", "tc1", "a" * 3_000),
+        _tool_response("shell_exec", "tc1"),
+        _tool_request("shell_exec", "tc1", "a" * 3_000),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=50_000)
 
@@ -107,12 +107,12 @@ async def test_force_spill_largest_first(tmp_path: Path):
 
     messages: list[ModelMessage] = [
         _user_request("do stuff"),
-        _tool_response("shell", "tc_small"),
-        _tool_request("shell", "tc_small", content_small),
-        _tool_response("shell", "tc_mid"),
-        _tool_request("shell", "tc_mid", content_mid),
-        _tool_response("shell", "tc_large"),
-        _tool_request("shell", "tc_large", content_large),
+        _tool_response("shell_exec", "tc_small"),
+        _tool_request("shell_exec", "tc_small", content_small),
+        _tool_response("shell_exec", "tc_mid"),
+        _tool_request("shell_exec", "tc_mid", content_mid),
+        _tool_response("shell_exec", "tc_large"),
+        _tool_request("shell_exec", "tc_large", content_large),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=5_000)
 
@@ -137,12 +137,12 @@ async def test_cross_batch_accumulation(tmp_path: Path):
     content = "x" * 24_000
     messages: list[ModelMessage] = [
         _user_request("multi-batch"),
-        _tool_response("shell", "tc1"),
-        _tool_request("shell", "tc1", content),
-        _tool_response("shell", "tc2"),
-        _tool_request("shell", "tc2", content),
-        _tool_response("shell", "tc3"),
-        _tool_request("shell", "tc3", content),
+        _tool_response("shell_exec", "tc1"),
+        _tool_request("shell_exec", "tc1", content),
+        _tool_response("shell_exec", "tc2"),
+        _tool_request("shell_exec", "tc2", content),
+        _tool_response("shell_exec", "tc3"),
+        _tool_request("shell_exec", "tc3", content),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=6_000)
 
@@ -159,8 +159,8 @@ async def test_uses_cached_threshold(tmp_path: Path):
     content = "t" * 52_000
     messages: list[ModelMessage] = [
         _user_request("cmd"),
-        _tool_response("shell", "tc1"),
-        _tool_request("shell", "tc1", content),
+        _tool_response("shell_exec", "tc1"),
+        _tool_request("shell_exec", "tc1", content),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=12_000)
 
@@ -183,10 +183,10 @@ async def test_all_spilled_bail_out(tmp_path: Path):
     )
     messages: list[ModelMessage] = [
         _user_request("cmd"),
-        _tool_response("shell", "tc1"),
-        _tool_request("shell", "tc1", stub),
-        _tool_response("shell", "tc2"),
-        _tool_request("shell", "tc2", stub),
+        _tool_response("shell_exec", "tc1"),
+        _tool_request("shell_exec", "tc1", stub),
+        _tool_response("shell_exec", "tc2"),
+        _tool_request("shell_exec", "tc2", stub),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=100)
 
@@ -230,10 +230,10 @@ async def test_already_spilled_excluded_but_counted(tmp_path: Path):
     fresh = "f" * 32_000
     messages: list[ModelMessage] = [
         _user_request("cmd"),
-        _tool_response("shell", "tc_stub"),
-        _tool_request("shell", "tc_stub", stub),
-        _tool_response("shell", "tc_fresh"),
-        _tool_request("shell", "tc_fresh", fresh),
+        _tool_response("shell_exec", "tc_stub"),
+        _tool_request("shell_exec", "tc_stub", stub),
+        _tool_response("shell_exec", "tc_fresh"),
+        _tool_request("shell_exec", "tc_fresh", fresh),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=4_000)
 
@@ -250,10 +250,10 @@ def test_high_reported_local_small_nothing_spilled(tmp_path: Path):
     messages: list[ModelMessage] = [
         _user_request("run"),
         ModelResponse(
-            parts=[ToolCallPart(tool_name="shell", args={}, tool_call_id="tc1")],
+            parts=[ToolCallPart(tool_name="shell_exec", args={}, tool_call_id="tc1")],
             usage=RequestUsage(input_tokens=20_000),
         ),
-        _tool_request("shell", "tc1", small_content),
+        _tool_request("shell_exec", "tc1", small_content),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
 
@@ -269,10 +269,10 @@ def test_high_reported_large_local_spills(tmp_path: Path):
     messages: list[ModelMessage] = [
         _user_request("run"),
         ModelResponse(
-            parts=[ToolCallPart(tool_name="shell", args={}, tool_call_id="tc1")],
+            parts=[ToolCallPart(tool_name="shell_exec", args={}, tool_call_id="tc1")],
             usage=RequestUsage(input_tokens=20_000),
         ),
-        _tool_request("shell", "tc1", big_content),
+        _tool_request("shell_exec", "tc1", big_content),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
 

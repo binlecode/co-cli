@@ -17,7 +17,7 @@ def _fresh_deps() -> CoDeps:
 
 def test_resolve_shell_scopes_to_utility():
     """Shell approval must scope to the first token (utility) so all git commands share one rule."""
-    subject = resolve_approval_subject("shell", {"cmd": "git status --porcelain"})
+    subject = resolve_approval_subject("shell_exec", {"cmd": "git status --porcelain"})
     assert subject.kind == ApprovalKindEnum.SHELL
     assert subject.value == "git"
     assert subject.can_remember is True
@@ -26,7 +26,7 @@ def test_resolve_shell_scopes_to_utility():
 
 def test_resolve_shell_empty_cmd_cannot_remember():
     """Empty shell command must produce can_remember=False since there is no utility to scope."""
-    subject = resolve_approval_subject("shell", {"cmd": ""})
+    subject = resolve_approval_subject("shell_exec", {"cmd": ""})
     assert subject.kind == ApprovalKindEnum.SHELL
     assert subject.can_remember is False
 
@@ -70,14 +70,14 @@ def test_resolve_unknown_tool_uses_tool_kind():
 def test_is_auto_approved_false_with_no_stored_rule():
     """is_auto_approved must return False when no matching rule exists in the session."""
     deps = _fresh_deps()
-    subject = resolve_approval_subject("shell", {"cmd": "git status"})
+    subject = resolve_approval_subject("shell_exec", {"cmd": "git status"})
     assert is_auto_approved(subject, deps) is False
 
 
 def test_remember_and_then_auto_approved():
     """remember_tool_approval must persist a rule that is_auto_approved subsequently matches."""
     deps = _fresh_deps()
-    subject = resolve_approval_subject("shell", {"cmd": "git status"})
+    subject = resolve_approval_subject("shell_exec", {"cmd": "git status"})
     remember_tool_approval(subject, deps)
     assert is_auto_approved(subject, deps) is True
 
@@ -85,7 +85,7 @@ def test_remember_and_then_auto_approved():
 def test_remember_no_op_when_cannot_remember():
     """remember_tool_approval must not store a rule when subject.can_remember is False."""
     deps = _fresh_deps()
-    subject = resolve_approval_subject("shell", {"cmd": ""})
+    subject = resolve_approval_subject("shell_exec", {"cmd": ""})
     remember_tool_approval(subject, deps)
     assert len(deps.session.session_approval_rules) == 0
 

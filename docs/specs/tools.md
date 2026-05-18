@@ -31,12 +31,12 @@ graph LR
 | Workspace & Files | `file_find`, `file_read`, `file_search`, `file_write`, `file_patch` | `file_write`/`file_patch` approval + lock |
 | Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_manage`, `skill_view`, `skill_manage` | `memory_manage`/`skill_manage` approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
-| Execution & Jobs | `shell`, `task_start`, `task_status`, `task_cancel`, `task_list`, `code_execute` | `shell`/`code_execute` hybrid approval |
+| Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list`, `code_execute` | `shell_exec`/`code_execute` hybrid approval |
 | Delegation | `web_research`, `knowledge_analyze`, `reason` | All DEFERRED; spawn task agents |
 | Obsidian | `obsidian_list`, `obsidian_search`, `obsidian_read` | Gate: `obsidian_vault_path` |
 | Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | Gate: `google_credentials_path`; `google_gmail_draft` approval |
 
-**Total: 37 native tools** (19 ALWAYS · 18 DEFERRED · 6 explicit approval-gated · 10 config-gated; `shell` and `code_execute` may also prompt dynamically based on the command path)
+**Total: 37 native tools** (19 ALWAYS · 18 DEFERRED · 6 explicit approval-gated · 10 config-gated; `shell_exec` and `code_execute` may also prompt dynamically based on the command path)
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 

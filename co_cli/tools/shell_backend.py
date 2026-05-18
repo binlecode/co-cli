@@ -6,7 +6,7 @@ Approval-gated subprocess with env-sanitized execution.
 import asyncio
 import os
 
-from co_cli.tools.shell_env import kill_process_tree, restricted_env
+from co_cli.tools.shell_env import build_subprocess_env, kill_process_tree
 
 
 class ShellBackend:
@@ -16,13 +16,24 @@ class ShellBackend:
         self.workspace_dir = workspace_dir or os.getcwd()
 
     async def run_command(
-        self, cmd: str, timeout: int = 120, cwd: str | None = None
+        self,
+        cmd: str,
+        timeout: int = 120,
+        cwd: str | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> tuple[int, str]:
         """Execute a command as a subprocess with sanitized environment.
 
         Uses start_new_session=True for process group killing on timeout.
         Returns (exit_code, combined_output). Raises RuntimeError only on timeout.
+
+        ``extra_env`` keys overlay the restricted base env (intended for the
+        active skill's ``skill_env``). Keys that would shadow the host
+        allowlist (PATH, HOME, etc.) are refused to keep the security
+        boundary intact — a model-authored skill must not be able to
+        redirect PATH or HOME.
         """
+        env = build_subprocess_env(extra_env=extra_env)
         proc = await asyncio.create_subprocess_exec(
             "sh",
             "-c",
@@ -30,7 +41,7 @@ class ShellBackend:
             cwd=cwd or self.workspace_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env=restricted_env(),
+            env=env,
             start_new_session=True,
         )
         try:

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 # Maps tool name → the args key whose value is shown in the tool-start annotation.
 TOOL_START_DISPLAY_ARG: dict[str, str] = {
-    "shell": "cmd",
+    "shell_exec": "cmd",
     "web_search": "query",
     "web_fetch": "url",
     "file_read": "path",

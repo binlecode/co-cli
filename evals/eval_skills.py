@@ -35,7 +35,7 @@ from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
-from evals._timeouts import CALL_TIMEOUT_S, TURN_BUDGET_S
+from evals._timeouts import CALL_TIMEOUT_S, TOOL_TURN_BUDGET_S
 from evals._trace import record_turn
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelResponse, TextPart
@@ -210,6 +210,7 @@ async def case_w4_a_dispatch_user_skill(
     saved_env = {k: os.environ.get(k) for k in outcome.skill_env}
     os.environ.update(outcome.skill_env)
     deps.runtime.active_skill_name = outcome.skill_name
+    deps.runtime.active_skill_env = dict(outcome.skill_env)
 
     turn_result = None
     if passed:
@@ -257,9 +258,9 @@ async def case_w4_a_dispatch_user_skill(
                     "response missing literal $ARGUMENTS value 'evaluating_arg1'; "
                     f"preview={text[:200]!r}"
                 )
-            elif model_call_seconds > TURN_BUDGET_S:
+            elif model_call_seconds > TOOL_TURN_BUDGET_S:
                 passed = False
-                reason = f"[slow] {model_call_seconds:.1f}s vs budget {TURN_BUDGET_S}.0s"
+                reason = f"[slow] {model_call_seconds:.1f}s vs budget {TOOL_TURN_BUDGET_S}.0s"
 
     if passed and turn_result is not None:
         try:

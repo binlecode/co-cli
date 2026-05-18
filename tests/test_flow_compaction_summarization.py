@@ -127,7 +127,7 @@ _SAMPLE_MESSAGES = [
     ModelResponse(
         parts=[
             ToolCallPart(
-                tool_name="shell",
+                tool_name="shell_exec",
                 args={"command": "pytest tests/test_auth.py -v"},
                 tool_call_id="tc3",
             )
@@ -136,7 +136,7 @@ _SAMPLE_MESSAGES = [
     ModelRequest(
         parts=[
             ToolReturnPart(
-                tool_name="shell",
+                tool_name="shell_exec",
                 content=(
                     "============================= test session starts ==============================\n"
                     "collected 4 items\n\n"
@@ -255,7 +255,7 @@ async def test_summarize_messages_from_scratch_returns_structured_text():
     # At least one real tool name from the fixture must appear somewhere in the
     # summary (any section). A hallucinated name like "code_generation" with no
     # mention of the real names would mean the model invented tool names.
-    assert any(tool in result for tool in ("file_read", "file_edit", "shell")), (
+    assert any(tool in result for tool in ("file_read", "file_edit", "shell_exec")), (
         f"Summary does not reference any fixture tool names anywhere:\n{result}"
     )
 

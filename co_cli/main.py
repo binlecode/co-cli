@@ -353,6 +353,7 @@ def _apply_command_outcome(
         saved_env: dict[str, str | None] = {k: os.environ.get(k) for k in outcome.skill_env}
         os.environ.update(outcome.skill_env)
         deps.runtime.active_skill_name = outcome.skill_name
+        deps.runtime.active_skill_env = dict(outcome.skill_env)
         return False, message_history, outcome.delegated_input, saved_env
     # LocalOnly
     return True, message_history, "", {}

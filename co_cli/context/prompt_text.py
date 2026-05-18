@@ -71,7 +71,7 @@ def _is_shell_error_return(part: ToolReturnPart) -> bool:
     else:
         str_is_error = False
     return (isinstance(part.metadata, dict) and bool(part.metadata.get("error"))) or (
-        isinstance(content, str) and part.tool_name == "shell" and str_is_error
+        isinstance(content, str) and part.tool_name == "shell_exec" and str_is_error
     )
 
 
@@ -87,7 +87,7 @@ def _count_consecutive_shell_errors(messages: list[ModelMessage]) -> int:
         for part in msg.parts:
             if not isinstance(part, ToolReturnPart):
                 continue
-            if _is_shell_error_return(part) and part.tool_name == "shell":
+            if _is_shell_error_return(part) and part.tool_name == "shell_exec":
                 count += 1
             else:
                 return count

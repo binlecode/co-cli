@@ -71,7 +71,7 @@ async def test_tool_selection_shell_git_status():
         if tool_name:
             break
 
-    assert tool_name == "bash" or tool_name == "shell", (
+    assert tool_name == "bash" or tool_name == "shell_exec", (
         f"Expected shell tool invocation, got {tool_name}"
     )
     assert "git status" in str(args)

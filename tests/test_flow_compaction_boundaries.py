@@ -107,7 +107,7 @@ def test_find_first_run_end_anchors_at_first_text_response() -> None:
     """
     messages = [
         _req("user turn 1"),
-        ModelResponse(parts=[ToolCallPart(tool_name="shell", args="{}")]),  # tool-only
+        ModelResponse(parts=[ToolCallPart(tool_name="shell_exec", args="{}")]),  # tool-only
         _resp("first real text response"),  # TextPart here
     ]
     idx = find_first_run_end(messages)

@@ -29,6 +29,7 @@ from co_cli.tools.background import (
     tail_log,
 )
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.shell_env import SAFE_ENV_VARS, build_subprocess_env
 from co_cli.tools.tasks.control import task_start
 
 
@@ -154,6 +155,65 @@ async def test_spawn_failure_sets_spawn_error_and_no_log_file(tmp_path: Path) ->
     assert "spawn failed" in state.spawn_error
     assert state.log_path is None
     assert not logs_dir.exists() or not any(logs_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# build_subprocess_env — unit coverage for the central env builder
+# ---------------------------------------------------------------------------
+
+
+def test_build_subprocess_env_merges_extra_keys() -> None:
+    env = build_subprocess_env(extra_env={"MY_SKILL_VAR": "hello"})
+    assert env["MY_SKILL_VAR"] == "hello"
+    assert "PATH" in env
+
+
+def test_build_subprocess_env_refuses_shadow_key() -> None:
+    original_path = build_subprocess_env()["PATH"]
+    env = build_subprocess_env(extra_env={"PATH": "/evil", "MY_SKILL_VAR": "ok"})
+    assert env["MY_SKILL_VAR"] == "ok"
+    assert env["PATH"] == original_path
+
+
+def test_build_subprocess_env_no_host_leakage() -> None:
+    import os
+
+    os.environ["_CO_TEST_SECRET"] = "should-not-leak"
+    try:
+        env = build_subprocess_env()
+        assert "_CO_TEST_SECRET" not in env
+        extra_keys = set(env) - SAFE_ENV_VARS - {"PYTHONUNBUFFERED", "PAGER", "GIT_PAGER"}
+        assert not extra_keys, f"unexpected keys leaked into subprocess env: {extra_keys}"
+    finally:
+        del os.environ["_CO_TEST_SECRET"]
+
+
+# ---------------------------------------------------------------------------
+# spawn_task env — background subprocess sees restricted env
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_spawn_task_uses_restricted_env(tmp_path: Path) -> None:
+    import os
+
+    os.environ["_CO_TEST_SECRET"] = "bg-should-not-leak"
+    try:
+        logs_dir = tmp_path / "logs"
+        session = CoSessionState()
+        task_id = make_task_id()
+        state = _make_state(task_id, "printenv", str(tmp_path))
+        session.background_tasks[task_id] = state
+
+        await spawn_task(state, session, logs_dir=logs_dir)
+        assert state._monitor_task is not None
+        async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+            await state._monitor_task
+
+        output = state.log_path.read_text()
+        assert "_CO_TEST_SECRET" not in output
+    finally:
+        del os.environ["_CO_TEST_SECRET"]
 
 
 # ---------------------------------------------------------------------------

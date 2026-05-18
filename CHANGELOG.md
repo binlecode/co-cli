@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.8.214]
+
+### Skill-env propagation + single subprocess env chokepoint + `shell` → `shell_exec` rename
+
+- **Skill-env now actually reaches `shell_exec` and `task_start` subprocesses.** `SkillInfo.skill_env` frontmatter was spec'd in `docs/specs/skills.md` but silently dropped by the host-allowlist (`SAFE_ENV_VARS`) — fixed end-to-end.
+- **`co_cli/tools/shell_env.py`**: `_SAFE_ENV_VARS` → public `SAFE_ENV_VARS`; new `build_subprocess_env(extra_env=...)` is the canonical env builder for every co-cli subprocess (refuses overlay keys that shadow host allowlist, logs `subprocess.env_shadow_refused`).
+- **`co_cli/deps.py`**: new `CoRuntimeState.active_skill_env` field — turn-scoped, mirrors `active_skill_name` lifecycle. Set at skill dispatch (`main.py`), cleared by `cleanup_skill_run_state` (`skills/lifecycle.py`).
+- **Subprocess chokepoint normalization**: `shell_backend.py`, `tools/background.py`, `tools/files/read.py` (rg + grep), `tools/files/write.py` (ruff lint) all route through `build_subprocess_env()`. Only deliberate bypass: `tools/google/_auth.py` (gcloud OAuth needs full host env — commented).
+- **`shell` tool renamed to `shell_exec`** for naming convention consistency (`<noun>_<verb>` matches every other tool: `file_read`, `web_fetch`, `knowledge_search`, …). Rename touched approvals, categories, display, tool-result markers, prompt_text, toolset, deps docstring, tools.md spec, and 12 test files.
+- **Eval fixes (`evals/eval_skills.py`)**: skill body references real tool name `shell_exec`; W4.A judged by `TOOL_TURN_BUDGET_S` (tool-call turn, ~60s) rather than `TURN_BUDGET_S` (no-tool turn, 35s) — matches `eval_memory.py` pattern.
+- **Cleanup**: `evals/_outputs/` added to `.gitignore`; stale tracked artifacts (`smoke-*` jsonl, `tmp/tmp_test.py`) untracked.
+
 ## [0.8.212]
 
 ### Memory module refactor — `knowledge` → `memory`, session tier promotion, IndexStore facade
