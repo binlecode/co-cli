@@ -37,9 +37,9 @@ See `docs/specs/01-system.md` for architecture, `CoDeps`, capability surface, an
 
 ### Memory and Session
 
-Five operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability), **memory** (long-term declarative artifacts: user preferences, rules, articles, notes), and **session** (past conversation transcripts; FTS5 chunk-cited on recall).
+Five operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability), **memory** (long-term declarative memory items: user preferences, rules, articles, notes), and **session** (past conversation transcripts; FTS5 chunk-cited on recall).
 
-Storage: flat `~/.co-cli/memory/*.md` files with YAML frontmatter for memory artifacts; JSONL transcripts in `~/.co-cli/sessions/`; FTS5 (BM25) search in `~/.co-cli/co-cli-search.db` indexed by the shared `IndexStore` infrastructure facade (memory + session + canon, source-discriminated). Canon is indexed there for personality auto-injection but never returned by any model-callable tool. Skills are discovered via the `<available_skills>` manifest injected into the static prompt.
+Storage: flat `~/.co-cli/memory/*.md` files with YAML frontmatter for memory items; JSONL transcripts in `~/.co-cli/sessions/`; FTS5 (BM25) search in `~/.co-cli/co-cli-search.db` indexed by the shared `IndexStore` infrastructure facade (memory + session + canon, source-discriminated). Canon is indexed there for personality auto-injection but never returned by any model-callable tool. Skills are discovered via the `<available_skills>` manifest injected into the static prompt.
 
 Architecture: `co_cli/index/` (infrastructure facade — `IndexStore` public; retrieval, embedding, providers private) sits below two domain modules `co_cli/memory/` (`MemoryStore` — kinds, decay, dream) and `co_cli/session/` (`SessionStore` — transcripts, append-only). Tool surface at `co_cli/tools/memory/` (`memory_search`, `memory_view`, `memory_manage`) and `co_cli/tools/session/` (`session_search`, `session_view`).
 
@@ -57,30 +57,30 @@ Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browse
 **Known Pitfall — DO NOT hardcode `~/.co-cli`**: use `USER_DIR` and derived constants from `co_cli/config/core.py`. Tests override `CO_HOME` to a temp dir — hardcoded paths bypass this and bleed state across test runs.
 
 <important if="you are writing or modifying Python code (naming, classes, display)">
-See `agent_docs/code-conventions.md` — class naming suffixes, variable naming, shared primitives, display
+See `.agent_docs/code-conventions.md` — class naming suffixes, variable naming, shared primitives, display
 </important>
 
 <important if="you are writing, modifying, or reviewing tools or agents">
-See `agent_docs/tools.md` — tool pattern, approval, return types, CoDeps, config, versioning, adding a tool
+See `.agent_docs/tools.md` — tool pattern, approval, return types, CoDeps, config, versioning, adding a tool
 </important>
 
 <important if="you are writing, modifying, or reviewing tests or evals">
-See `agent_docs/testing.md` — pytest and eval rules (enforced policy)
+See `.agent_docs/testing.md` — pytest and eval rules (enforced policy)
 </important>
 
 <important if="you are reviewing code or planning implementation changes">
-See `agent_docs/review.md` — review discipline and code change principles
+See `.agent_docs/review.md` — review discipline and code change principles
 </important>
 
 <important if="you are writing or modifying specs, or working with exec-plan artifacts">
-See `agent_docs/spec-conventions.md` — spec structure, section rules, artifact lifecycle
+See `.agent_docs/spec-conventions.md` — spec structure, section rules, artifact lifecycle
 </important>
 
 ## Workflow
 
 ### Working with Claude Code
 
-- **Subagents**: declare tool permissions upfront (Read, Edit, Bash, Grep). See `agent_docs/review.md` for cleanup and integration-review rules.
+- **Subagents**: declare tool permissions upfront (Read, Edit, Bash, Grep). See `.agent_docs/review.md` for cleanup and integration-review rules.
 
 ### Dev Workflow
 
@@ -115,7 +115,7 @@ Non-obvious nuances:
 
 ## Docs
 
-See `agent_docs/spec-conventions.md` for full spec structure and artifact lifecycle rules.
+See `.agent_docs/spec-conventions.md` for full spec structure and artifact lifecycle rules.
 
 Quick reference:
 - Exec-plans: `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` — archive to `completed/` on ship, never delete.

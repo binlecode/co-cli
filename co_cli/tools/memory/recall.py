@@ -8,7 +8,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.memory.artifact import MemoryArtifact, load_artifacts
+from co_cli.memory.item import MemoryItem, load_memory_items
 from co_cli.observability.tracing import current_span
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
@@ -20,15 +20,15 @@ _SNIPPET_DISPLAY_CHARS = 100
 
 
 def _grep_recall(
-    artifacts: list[MemoryArtifact],
+    items: list[MemoryItem],
     query: str,
     max_results: int,
-) -> list[MemoryArtifact]:
+) -> list[MemoryItem]:
     """Case-insensitive substring search across title and content."""
     query_lower = query.lower()
     matches = [
         m
-        for m in artifacts
+        for m in items
         if query_lower in m.content.lower() or query_lower in (m.title or "").lower()
     ]
     matches.sort(key=lambda m: m.updated or m.created, reverse=True)
@@ -56,24 +56,24 @@ def _result_dict(
     }
 
 
-def _list_artifacts(
+def _list_memory_items(
     ctx: RunContext[CoDeps],
     kinds: list[str] | None,
     limit: int,
     span: Any,
 ) -> list[dict]:
-    """Paginated inventory of memory artifacts, sorted by created descending."""
+    """Paginated inventory of memory items, sorted by created descending."""
     if ctx.deps.memory_store is not None:
-        rows = ctx.deps.memory_store.list_artifacts(kinds, limit)
-        span.set_attribute("memory.artifacts.count", len(rows))
+        rows = ctx.deps.memory_store.list_memory_items(kinds, limit)
+        span.set_attribute("memory.items.count", len(rows))
         return rows
-    artifacts = load_artifacts(ctx.deps.memory_dir, artifact_kinds=kinds)
-    artifacts.sort(key=lambda a: a.created, reverse=True)
-    page = artifacts[:limit]
-    span.set_attribute("memory.artifacts.count", len(page))
+    items = load_memory_items(ctx.deps.memory_dir, memory_kinds=kinds)
+    items.sort(key=lambda a: a.created, reverse=True)
+    page = items[:limit]
+    span.set_attribute("memory.items.count", len(page))
     return [
         _result_dict(
-            kind=a.artifact_kind,
+            kind=a.memory_kind,
             title=a.title,
             snippet=a.content[:_SNIPPET_DISPLAY_CHARS],
             score=0.0,
@@ -83,7 +83,7 @@ def _list_artifacts(
     ]
 
 
-def _search_artifacts(
+def _search_memory_items(
     ctx: RunContext[CoDeps],
     query: str,
     kinds: list[str] | None,
@@ -92,9 +92,9 @@ def _search_artifacts(
     """Two-pass FTS recall via MemoryStore; falls back to grep when store is None."""
     store = ctx.deps.memory_store
     if store is None:
-        return _grep_artifacts_fallback(ctx, query, kinds, limit)
+        return _grep_memory_items_fallback(ctx, query, kinds, limit)
 
-    hits = store.search_artifacts(query, kinds, limit)
+    hits = store.search_memory_items(query, kinds, limit)
     return [
         _result_dict(
             kind=r.kind,
@@ -107,21 +107,21 @@ def _search_artifacts(
     ]
 
 
-def _grep_artifacts_fallback(
+def _grep_memory_items_fallback(
     ctx: RunContext[CoDeps],
     query: str,
     kinds: list[str] | None,
     limit: int,
 ) -> list[dict]:
-    """Grep-based artifact search used when MemoryStore is unavailable."""
+    """Grep-based memory item search used when MemoryStore is unavailable."""
     grep_kinds = list(kinds or ["user", "rule", "article", "note"])
     if not grep_kinds:
         return []
-    artifacts = load_artifacts(ctx.deps.memory_dir, artifact_kinds=grep_kinds)
-    matches = _grep_recall(artifacts, query, limit)
+    items = load_memory_items(ctx.deps.memory_dir, memory_kinds=grep_kinds)
+    matches = _grep_recall(items, query, limit)
     return [
         _result_dict(
-            kind=m.artifact_kind,
+            kind=m.memory_kind,
             title=m.title,
             snippet=m.content[:_SNIPPET_DISPLAY_CHARS],
             score=0.0,
@@ -184,11 +184,11 @@ async def memory_search(
     query = query.strip() if query else ""
 
     if not query:
-        artifact_results = _list_artifacts(ctx, kinds, limit, span)
-        if not artifact_results:
-            return tool_output("No artifacts found.", ctx=ctx, count=0, results=[])
-        lines: list[str] = ["\n**Memory artifacts:**"]
-        for r in artifact_results:
+        item_results = _list_memory_items(ctx, kinds, limit, span)
+        if not item_results:
+            return tool_output("No memory items found.", ctx=ctx, count=0, results=[])
+        lines: list[str] = ["\n**Memory items:**"]
+        for r in item_results:
             kind_str = f" [{r['kind']}]" if r.get("kind") else ""
             path_str = f" @ {r['path']}" if r.get("path") else ""
             lines.append(
@@ -196,10 +196,10 @@ async def memory_search(
                 f"{(r.get('snippet') or '')[:_SNIPPET_DISPLAY_CHARS]}"
             )
         return tool_output(
-            "\n".join(lines), ctx=ctx, count=len(artifact_results), results=artifact_results
+            "\n".join(lines), ctx=ctx, count=len(item_results), results=item_results
         )
 
-    memory_results = _search_artifacts(ctx, query, kinds, limit)
+    memory_results = _search_memory_items(ctx, query, kinds, limit)
     if not memory_results:
         return tool_output(f"No results found for '{query}'.", ctx=ctx, count=0, results=[])
     return tool_output(

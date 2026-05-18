@@ -87,7 +87,7 @@ Check every file listed in `files:` against CLAUDE.md's Engineering Rules. Each 
 - **Over-engineering**: abstractions or helpers not required by the spec
 - **Display**: terminal output via the project's shared `console` — not `print()` or hardcoded color names
 - **Security**: command injection, path traversal, SQL injection, missing input validation at system boundaries
-- **Naming**: class naming suffixes, variable naming, shared display primitives — per `agent_docs/code-conventions.md`
+- **Naming**: class naming suffixes, variable naming, shared display primitives — per `.agent_docs/code-conventions.md`
 - **Visibility**: `_prefix` convention — leading-underscore modules must not be imported outside the package
 - **API shape**: parameter order, return types, signature width — consistent with existing callers and peer public APIs
 - **Modular structure**: logic placed in the wrong module or layer; cohesion/coupling violations
@@ -188,7 +188,7 @@ Then re-scan every changed file one more time:
 - Misplaced lazy imports
 - Any test using mocks or fakes introduced during fix (blocking — remove it)
 - Doc-code mismatches in changed file docstrings or inline comments
-- Naming violations from `agent_docs/code-conventions.md` introduced during fixes
+- Naming violations from `.agent_docs/code-conventions.md` introduced during fixes
 - `_prefix` visibility leaks — private helpers exposed outside their package by fix edits
 - API shape regressions — parameter order or return type inconsistencies introduced by fixes
 - Modular structure violations — new logic placed in wrong module during fixes

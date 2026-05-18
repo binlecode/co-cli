@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.index.store import SearchResult
-from co_cli.memory.artifact import ArtifactKindEnum, IndexSourceEnum
 from co_cli.memory.chunker import chunk_text
 from co_cli.memory.frontmatter import parse_frontmatter
+from co_cli.memory.item import IndexSourceEnum, MemoryKindEnum
 
 if TYPE_CHECKING:
     from co_cli.config.core import Settings
@@ -85,14 +85,14 @@ class MemoryStore:
                     continue
 
                 frontmatter, body = parse_frontmatter(raw)
-                artifact_kind = frontmatter.get("artifact_kind") or frontmatter.get("kind")
+                memory_kind = frontmatter.get("memory_kind")
                 title = frontmatter.get("title") or file_path.stem
                 mtime = file_path.stat().st_mtime
 
                 with self._index.transaction() as tx:
                     tx.upsert(
                         source=MEMORY_SOURCE,
-                        kind=artifact_kind,
+                        kind=memory_kind,
                         path=path_str,
                         title=title,
                         mtime=mtime,
@@ -128,11 +128,11 @@ class MemoryStore:
     ) -> None:
         """Re-index a single artifact file (used after write through service.py)."""
         content_hash = _sha256(markdown_content)
-        artifact_kind = frontmatter.get("artifact_kind", ArtifactKindEnum.NOTE.value)
+        memory_kind = frontmatter.get("memory_kind", MemoryKindEnum.NOTE.value)
         with self._index.transaction() as tx:
             tx.upsert(
                 source=MEMORY_SOURCE,
-                kind=artifact_kind,
+                kind=memory_kind,
                 path=str(path),
                 title=frontmatter.get("title") or path.stem,
                 mtime=path.stat().st_mtime,
@@ -157,13 +157,13 @@ class MemoryStore:
         self._index.rebuild_source(MEMORY_SOURCE)
         return self.sync_dir(memory_dir, glob)
 
-    def list_artifacts(self, kinds: list[str] | None, limit: int) -> list[dict]:
-        return self._index.list_artifacts(MEMORY_SOURCE, kinds, limit)
+    def list_memory_items(self, kinds: list[str] | None, limit: int) -> list[dict]:
+        return self._index.list_items(MEMORY_SOURCE, kinds, limit)
 
     def find_by_source_ref(self, source_ref: str) -> str | None:
         return self._index.find_by_source_ref(source_ref, MEMORY_SOURCE)
 
-    def search_artifacts(
+    def search_memory_items(
         self,
         query: str,
         kinds: list[str] | None,
