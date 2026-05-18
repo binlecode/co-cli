@@ -16,8 +16,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-KIND_MEMORY = "memory"
-
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter delimited by ``---`` lines. Returns ({}, content) on miss."""
@@ -58,11 +56,10 @@ def memory_item_to_frontmatter(item: MemoryItem) -> dict[str, Any]:
     """Serialize a MemoryItem to its frontmatter dict.
 
     Drops None, empty-list, and default-valued fields so files stay readable.
-    Always keeps id, kind, memory_kind, created (required identity).
+    Always keeps id, memory_kind, created (required identity).
     """
     frontmatter: dict[str, Any] = {
         "id": item.id,
-        "kind": KIND_MEMORY,
         "memory_kind": item.memory_kind,
         "created": item.created,
     }

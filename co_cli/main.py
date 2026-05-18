@@ -6,6 +6,7 @@ import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import typer
 from prompt_toolkit import PromptSession
@@ -33,7 +34,14 @@ from co_cli.config.core import (
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.deps import CoDeps
-from co_cli.display.core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
+from co_cli.display.core import (
+    PROMPT_CHAR,
+    Frontend,
+    StatusSnapshot,
+    TerminalFrontend,
+    console,
+    set_theme,
+)
 from co_cli.observability.file_logging import setup_file_logging
 from co_cli.observability.tracing import setup_log as setup_spans_log
 from co_cli.session.persistence import persist_session_history
@@ -445,6 +453,7 @@ async def _handle_one_input(
             deps=deps,
             frontend=frontend,
         )
+        frontend.update_status(_build_status_snapshot(deps, "idle"))
         return _IterationState(
             message_history=updated_history,
             last_interrupt_time=0.0,
@@ -460,10 +469,26 @@ async def _handle_one_input(
         deps=deps,
         frontend=frontend,
     )
+    frontend.update_status(_build_status_snapshot(deps, "idle"))
     return _IterationState(
         message_history=updated_history,
         last_interrupt_time=0.0,
         should_exit=False,
+    )
+
+
+def _build_status_snapshot(deps: CoDeps, mode: Literal["idle", "active"]) -> StatusSnapshot:
+    stem = deps.session.session_path.stem
+    session_label = stem[-8:] if stem else "—"
+    context_pct: float | None = None
+    if deps.runtime.turn_usage is not None and deps.model_max_ctx > 0:
+        context_pct = deps.runtime.turn_usage.input_tokens / deps.model_max_ctx
+    return StatusSnapshot(
+        session_label=session_label,
+        mode=mode,
+        context_pct=context_pct,
+        background_task_count=len(deps.session.background_tasks),
+        approval_count=len(deps.session.session_approval_rules),
     )
 
 
@@ -492,6 +517,7 @@ async def _chat_loop(
         completer=completer,
         complete_while_typing=True,
         style=_COMPLETION_STYLE,
+        bottom_toolbar=frontend.render_footer_toolbar,
     )
     stack = AsyncExitStack()
     deps: CoDeps | None = None
@@ -527,14 +553,17 @@ async def _chat_loop(
 
         render_security_findings(check_security())
         frontend.clear_status()
+        frontend.update_status(_build_status_snapshot(deps, "idle"))
 
         state = _IterationState(message_history=[], last_interrupt_time=0.0)
 
         while True:
             try:
+                frontend.update_status(_build_status_snapshot(deps, "idle"))
                 frontend.set_input_active(True)
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
                 frontend.set_input_active(False)
+                frontend.update_status(_build_status_snapshot(deps, "active"))
                 state = await _handle_one_input(
                     user_input=user_input,
                     eof=False,
@@ -547,6 +576,7 @@ async def _chat_loop(
                 )
             except EOFError:
                 frontend.set_input_active(False)
+                frontend.update_status(_build_status_snapshot(deps, "active"))
                 state = await _handle_one_input(
                     user_input=None,
                     eof=True,
@@ -559,6 +589,7 @@ async def _chat_loop(
                 )
             except (KeyboardInterrupt, asyncio.CancelledError):
                 frontend.set_input_active(False)
+                frontend.update_status(_build_status_snapshot(deps, "active"))
                 state = await _handle_one_input(
                     user_input=None,
                     eof=False,

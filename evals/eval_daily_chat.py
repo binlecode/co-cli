@@ -2,17 +2,19 @@
 
 Drives the default REPL path: ``uv run co chat`` → multi-turn dialogue →
 ``run_turn`` with carried ``message_history`` → tool loop with approval gates
-→ reasoning display → dream-cycle smoke. Each conversational case runs
+→ reasoning display → dream-cycle merge. Each conversational case runs
 2-3 turns so context retention and tool chaining — the parts of agent
 behavior that single-turn evals can't see — are actually exercised.
 
 Cases:
-  W1.A  multi_turn_coherence    3-turn ask → follow-up → recap. Judge rubric on coherence + voice.
-  W1.B  tool_chain              2-turn: list files → read a listed file.
-  W1.C  recall_reuse            2-turn: memory_view a seed → follow-up uses the recalled content.
-  W1.D  dream_callable_smoke    Boundary: ``run_dream_cycle(dry_run=True)`` callable, no lock leaks.
+  W1.A  multi_turn_coherence        3-turn ask → follow-up → recap. Judge rubric on coherence + voice.
+  W1.B  tool_chain                  2-turn: list files → read a listed file.
+  W1.C  recall_reuse                2-turn: memory_view a seed → follow-up uses the recalled content.
+  W1.D  dream_propagates_to_recall  Seed pair → dream merge → merged artifact in active store.
+  W1.E  tool_spill_summary          Oversized memory_view result spills; PERSISTED_OUTPUT_TAG in ToolReturnPart.
 
 Specs: docs/specs/core-loop.md, prompt-assembly.md, dream.md.
+Mission tenet: for knowledge work — synthesis + voice; trusted — inspectable (W1.E)
 
 Usage:
     uv run python evals/eval_daily_chat.py
@@ -40,14 +42,21 @@ from evals._timeouts import (
     TOOL_TURN_BUDGET_S,
     TURN_BUDGET_S,
 )
-from evals._trace import record_turn, scan_artifact_paths
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from evals._trace import record_turn
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 
 from co_cli.context.orchestrate import run_turn
-from co_cli.memory.artifact import ArtifactKindEnum
 from co_cli.memory.dream import run_dream_cycle
 from co_cli.memory.frontmatter import render_frontmatter
+from co_cli.memory.item import MemoryKindEnum
 from co_cli.tools.memory.manage import memory_manage
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-daily-chat.md"
 
@@ -127,8 +136,7 @@ def _seed_knowledge_artifact(knowledge_dir: Path) -> Path:
     artifact_path = knowledge_dir / f"{_SEED_STEM}.md"
     frontmatter = {
         "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, _SEED_STEM)),
-        "kind": "knowledge",
-        "artifact_kind": ArtifactKindEnum.USER.value,
+        "memory_kind": MemoryKindEnum.NOTE.value,
         "title": _SEED_STEM,
         "created": datetime.now(UTC).isoformat(),
     }
@@ -139,12 +147,46 @@ def _seed_knowledge_artifact(knowledge_dir: Path) -> Path:
     return artifact_path
 
 
-def _dream_lock_keys(deps: Any) -> list[str]:
-    """Return any resource-lock keys mentioning 'dream' (lower-cased substring)."""
-    locks = getattr(getattr(deps, "resource_locks", None), "_locks", None)
-    if not isinstance(locks, dict):
-        return []
-    return [k for k in locks if "dream" in str(k).lower()]
+_DREAM_A_STEM = "eval_w1d_pair_a"
+_DREAM_B_STEM = "eval_w1d_pair_b"
+_DREAM_SHARED_TOKEN = "EVAL_W1D_KEY_NX7"
+
+# Pair bodies: nearly identical so token_jaccard >= 0.75 triggers dream-cycle merge.
+# Unique tokens: {eval_w1d_key_nx7, staging, deploy, identifier, note, eval, pipeline, alpha/beta}
+# Intersection=7, Union=9, Jaccard≈0.78 >= 0.75 threshold.
+_DREAM_A_BODY = f"{_DREAM_SHARED_TOKEN} staging deploy identifier note eval pipeline alpha"
+_DREAM_B_BODY = f"{_DREAM_SHARED_TOKEN} staging deploy identifier note eval pipeline beta"
+
+_SPILL_FACT_TOKEN = "GOLDEN_W1E"
+_SPILL_STEM = "eval_w1e_spill_payload"
+
+
+def _purge_dream_pair(memory_dir: Path) -> None:
+    """Remove dream-pair seed files from memory_dir to prevent stale-seed interference."""
+    for stem in (_DREAM_A_STEM, _DREAM_B_STEM):
+        target = memory_dir / f"{stem}.md"
+        target.unlink(missing_ok=True)
+
+
+def _seed_dream_pair(memory_dir: Path) -> tuple[Path, Path]:
+    """Write two near-identical memory items whose token Jaccard >= 0.75.
+
+    Returns ``(path_a, path_b)`` so the caller can assert they were archived.
+    """
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    def _write(stem: str, body: str) -> Path:
+        path = memory_dir / f"{stem}.md"
+        frontmatter_dict = {
+            "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, stem)),
+            "memory_kind": MemoryKindEnum.NOTE.value,
+            "title": stem,
+            "created": datetime.now(UTC).isoformat(),
+        }
+        path.write_text(render_frontmatter(frontmatter_dict, body), encoding="utf-8")
+        return path
+
+    return _write(_DREAM_A_STEM, _DREAM_A_BODY), _write(_DREAM_B_STEM, _DREAM_B_BODY)
 
 
 async def _drive_turns(
@@ -468,57 +510,240 @@ async def _case_w1_c_recall_reuse(
     )
 
 
-async def _case_w1_d_dream_smoke(
+async def _case_w1_d_dream_propagates_to_recall(
     deps: Any,
     agent: Any,
     frontend: Any,
     run: Any,
 ) -> CaseResult:
-    """W1.D — boundary: ``run_dream_cycle(dry_run=True)`` is callable, leaves no locks or mutations."""
+    """W1.D — dream cycle merges seed pair; agent recalls merged artifact via shared token."""
     case_id = "W1.D"
     case_t0 = time.monotonic()
-    reason_parts: list[str] = []
-    passed = False
+    reason_parts: list[str] = [judge_model_annotation(deps)]
+    case_verdict = Verdict.FAIL
+    model_call_seconds = 0.0
+    token_usage: dict[str, int] = {}
 
     try:
-        scan_roots = [deps.memory_dir]
-        before = scan_artifact_paths(scan_roots)
+        _purge_dream_pair(deps.memory_dir)
+        path_a, path_b = _seed_dream_pair(deps.memory_dir)
+
         async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
-            await run_dream_cycle(deps, memory_manage, dry_run=True)
-        after = scan_artifact_paths(scan_roots)
+            dream_result = await run_dream_cycle(deps, memory_manage, dry_run=False)
 
-        lock_leaks = _dream_lock_keys(deps)
-        no_lock_leak = len(lock_leaks) == 0
-        no_mutation = before == after
+        merged_positive = dream_result.merged > 0
+        a_archived = not path_a.exists()
+        b_archived = not path_b.exists()
+        # XOR: exactly one original must be archived (the survivor is the merged file).
+        one_archived = a_archived != b_archived
 
-        if no_lock_leak and no_mutation:
-            passed = True
-            reason_parts.append("dry_run_clean")
+        active_files = [
+            p for p in deps.memory_dir.glob("*.md") if p not in (path_a, path_b) and p.is_file()
+        ]
+        token_in_merged = any(
+            _DREAM_SHARED_TOKEN in p.read_text(encoding="utf-8") for p in active_files
+        )
+
+        reason_parts.append(
+            f"merged={dream_result.merged} archived_a={a_archived} "
+            f"archived_b={b_archived} token_in_merged={token_in_merged}"
+        )
+        if dream_result.errors:
+            reason_parts.append(f"errors={dream_result.errors!r}")
+
+        if not (merged_positive and one_archived):
+            duration = time.monotonic() - case_t0
+            return CaseResult(
+                name=case_id,
+                verdict=Verdict.FAIL,
+                duration_s=duration,
+                model_call_seconds=model_call_seconds,
+                token_usage=token_usage,
+                trace_files=[],
+                reason=" ".join(reason_parts).strip(),
+            )
+
+        # Structural gate passed — now drive judged agent turn.
+        slices = await _drive_turns(
+            case_id=case_id,
+            deps=deps,
+            agent=agent,
+            frontend=frontend,
+            case_dir_path=run.case_trace_path(case_id),
+            inputs=[
+                f"Search your memory for anything related to '{_DREAM_SHARED_TOKEN}' "
+                "and summarize what you find in one sentence."
+            ],
+        )
+        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
+
+        rubric = (
+            f"PASS only if the agent's response mentions '{_DREAM_SHARED_TOKEN}' by citing "
+            "a single merged memory artifact — not two separate items with different bodies.\n"
+            f"FAIL if the agent says it found nothing, cites two distinct '{_DREAM_SHARED_TOKEN}' "
+            "artifacts separately (duplicate citation of the archived sibling), or does not use "
+            "a memory tool.\n"
+            "Score 6-7 if the token appears but the agent hedges or the merge context is ambiguous."
+        )
+        final_history = slices[-1].result.messages if slices else []
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            verdict = await judge_with_llm(
+                rubric, final_history, deps=deps, model=deps.judge_model
+            )
+        reason_parts.append(f"judge.score={verdict.score}")
+        if verdict.rationale:
+            reason_parts.append(verdict.rationale[:160])
+
+        if verdict.passed:
+            case_verdict = Verdict.PASS
+        elif verdict.score >= 6:
+            # SOFT_FAIL on borderline miss — per spec § 2 verdict taxonomy.
+            case_verdict = Verdict.SOFT_FAIL
         else:
-            if not no_lock_leak:
-                reason_parts.append(f"dream_lock_leak={lock_leaks!r}")
-            if not no_mutation:
-                added = sorted(set(after) - set(before))
-                removed = sorted(set(before) - set(after))
-                reason_parts.append(f"knowledge_diff added={added!r} removed={removed!r}")
+            case_verdict = Verdict.FAIL
     except Exception as exc:
-        passed = False
+        case_verdict = Verdict.FAIL
         reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
 
     duration = time.monotonic() - case_t0
     return CaseResult(
         name=case_id,
-        verdict=Verdict.PASS if passed else Verdict.FAIL,
+        verdict=case_verdict,
         duration_s=duration,
-        model_call_seconds=0.0,
-        token_usage={},
-        trace_files=[],
+        model_call_seconds=model_call_seconds,
+        token_usage=token_usage,
+        trace_files=[str(run.case_trace_path(case_id).name)],
+        reason=" ".join(reason_parts).strip(),
+    )
+
+
+async def _case_w1_e_tool_spill_summary(
+    deps: Any,
+    agent: Any,
+    frontend: Any,
+    run: Any,
+) -> CaseResult:
+    """W1.E — memory_view on an oversized artifact triggers spill; agent answers from summary."""
+    case_id = "W1.E"
+    case_t0 = time.monotonic()
+    reason_parts: list[str] = [judge_model_annotation(deps)]
+    case_verdict = Verdict.FAIL
+    model_call_seconds = 0.0
+    token_usage: dict[str, int] = {}
+
+    try:
+        # Seed a payload that exceeds the spill threshold. Fact token is near the top
+        # so any truncated preview the agent sees can still carry it.
+        deps.memory_dir.mkdir(parents=True, exist_ok=True)
+        spill_path = deps.memory_dir / f"{_SPILL_STEM}.md"
+        filler_line = "lorem ipsum dolor sit amet consectetur adipiscing elit\n"
+        filler = filler_line * 100
+        spill_body = f"{_SPILL_FACT_TOKEN} is the key fact in this document.\n\n{filler}"
+        assert len(spill_body) > SPILL_THRESHOLD_CHARS, (
+            f"spill body too short: {len(spill_body)} <= {SPILL_THRESHOLD_CHARS}"
+        )
+        frontmatter_dict = {
+            "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, _SPILL_STEM)),
+            "memory_kind": MemoryKindEnum.NOTE.value,
+            "title": _SPILL_STEM,
+            "created": datetime.now(UTC).isoformat(),
+        }
+        spill_path.write_text(render_frontmatter(frontmatter_dict, spill_body), encoding="utf-8")
+        deps.memory_store.sync_dir(deps.memory_dir)
+
+        tool_results_dir = deps.tool_results_dir
+        pre_count = len(list(tool_results_dir.glob("*"))) if tool_results_dir.exists() else 0
+
+        user_input = (
+            f"Use the `memory_view` tool to read the artifact with filename_stem "
+            f"`{_SPILL_STEM}`. Quote any special uppercase token you find in the first line."
+        )
+        slices = await _drive_turns(
+            case_id=case_id,
+            deps=deps,
+            agent=agent,
+            frontend=frontend,
+            case_dir_path=run.case_trace_path(case_id),
+            inputs=[user_input],
+        )
+        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
+
+        all_messages = slices[-1].result.messages if slices else []
+
+        # Primary check: PERSISTED_OUTPUT_TAG appears in a ToolReturnPart.
+        spill_in_tool_return = False
+        for msg in all_messages:
+            if not isinstance(msg, ModelRequest):
+                continue
+            for part in msg.parts:
+                if isinstance(part, ToolReturnPart):
+                    content = getattr(part, "content", "") or ""
+                    if PERSISTED_OUTPUT_TAG in str(content):
+                        spill_in_tool_return = True
+                        break
+
+        # Secondary check: a new file appeared in tool_results_dir.
+        post_count = len(list(tool_results_dir.glob("*"))) if tool_results_dir.exists() else 0
+        spill_file_created = post_count > pre_count
+
+        structural_pass = spill_in_tool_return and spill_file_created
+        reason_parts.append(
+            f"spill_in_tool_return={spill_in_tool_return} spill_file_created={spill_file_created} "
+            f"pre={pre_count} post={post_count}"
+        )
+        if not structural_pass:
+            tool_names = [tc.tool_name for tc in (slices[0].tool_calls if slices else [])]
+            reason_parts.append(f"tool_calls={tool_names!r}")
+
+        budget = TOOL_TURN_BUDGET_S
+        budget_ok = model_call_seconds <= budget
+        if not budget_ok:
+            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {budget:.0f}s")
+
+        if structural_pass and budget_ok:
+            rubric = (
+                f"PASS only if the agent's final answer addresses the user's question coherently "
+                f"using information from the memory artifact. "
+                f"The response must quote or reference '{_SPILL_FACT_TOKEN}' — the key fact "
+                "near the top of the artifact. "
+                "FAIL if the agent says it cannot see the content, hallucinates facts not in "
+                "the artifact, or gives a generic non-answer. "
+                "Score 5-6 if the token appears but the response is thin or partially correct."
+            )
+            async with asyncio.timeout(CALL_TIMEOUT_S):
+                verdict = await judge_with_llm(
+                    rubric, all_messages, deps=deps, model=deps.judge_model
+                )
+            reason_parts.append(f"judge.score={verdict.score}")
+            if verdict.rationale:
+                reason_parts.append(verdict.rationale[:160])
+
+            if verdict.passed and verdict.score >= 7:
+                case_verdict = Verdict.PASS
+            elif verdict.score >= 5:
+                case_verdict = Verdict.SOFT_FAIL
+            else:
+                case_verdict = Verdict.FAIL
+        else:
+            case_verdict = Verdict.FAIL
+    except Exception as exc:
+        case_verdict = Verdict.FAIL
+        reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
+
+    duration = time.monotonic() - case_t0
+    return CaseResult(
+        name=case_id,
+        verdict=case_verdict,
+        duration_s=duration,
+        model_call_seconds=model_call_seconds,
+        token_usage=token_usage,
+        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
     )
 
 
 async def main() -> int:
-    """Drive W1.A-W1.D end-to-end, write trace + REPORT, return exit code."""
+    """Drive W1.A-W1.E end-to-end, write trace + REPORT, return exit code."""
     await ensure_ollama_warm()
 
     async with eval_deps() as (deps, agent, frontend), open_eval_run("daily_chat") as run:
@@ -528,7 +753,8 @@ async def main() -> int:
             _case_w1_a_multi_turn_coherence,
             _case_w1_b_tool_chain,
             _case_w1_c_recall_reuse,
-            _case_w1_d_dream_smoke,
+            _case_w1_d_dream_propagates_to_recall,
+            _case_w1_e_tool_spill_summary,
         ):
             try:
                 case = await runner(deps, agent, frontend, run)

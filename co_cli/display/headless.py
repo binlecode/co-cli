@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from co_cli.deps import ApprovalSubject
-from co_cli.display.core import QuestionPrompt
+from co_cli.display.core import QuestionPrompt, StatusSnapshot
 
 
 class HeadlessFrontend:
@@ -25,6 +25,7 @@ class HeadlessFrontend:
         last_approval_subject:  most recent ApprovalSubject passed to prompt_approval
         last_question:          most recent QuestionPrompt passed to prompt_question
         question_call_count:    total prompt_question invocations
+        last_status_snapshot:   most recent StatusSnapshot pushed via update_status
     """
 
     def __init__(
@@ -47,6 +48,7 @@ class HeadlessFrontend:
         self.last_approval_subject: ApprovalSubject | None = None
         self.last_question: QuestionPrompt | None = None
         self.question_call_count: int = 0
+        self.last_status_snapshot: StatusSnapshot | None = None
 
     def on_text_delta(self, accumulated: str) -> None:
         pass
@@ -93,6 +95,9 @@ class HeadlessFrontend:
 
     def prompt_confirm(self, message: str) -> bool:
         return self._confirm_response
+
+    def update_status(self, snapshot: StatusSnapshot) -> None:
+        self.last_status_snapshot = snapshot
 
     def clear_status(self) -> None:
         pass

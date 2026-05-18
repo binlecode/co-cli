@@ -15,6 +15,7 @@ Per plan section W3, case ordering is a hard contract:
 Reruns overwrite in place via deterministic stems — no accumulation.
 
 Specs: docs/specs/memory.md, knowledge.md, dream.md
+Mission tenet: local — user-controlled storage; trusted — reversible (W3.E/G)
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from typing import Any
 from uuid import uuid4
 
 from evals._deps import EvalFrontend, make_eval_deps
+from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, EvalRun, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
@@ -63,6 +65,10 @@ _DUP_A_STEM = "eval_W3_dupA"
 _DUP_B_STEM = "eval_W3_dupB"
 _DUP_A_TOKEN = "TOKEN_A_ONLY"
 _DUP_B_TOKEN = "TOKEN_B_ONLY"
+
+_W3G_STEM = "eval_w3g_fact"
+_W3G_TITLE = "eval_W3G_fact"
+_W3G_TOKEN = "W3G_MARKER_XK42"
 
 
 # ---------------------------------------------------------------------------
@@ -132,16 +138,14 @@ def _seed_dup_artifact(
     created = datetime.now(UTC).isoformat()
     frontmatter = {
         "id": artifact_id,
-        "kind": "knowledge",
-        "artifact_kind": "note",
+        "memory_kind": "note",
         "title": title,
         "created": created,
     }
     yaml_lines = [
         "---",
         f"id: {artifact_id}",
-        "kind: knowledge",
-        "artifact_kind: note",
+        "memory_kind: note",
         f"title: {title}",
         f"created: '{created}'",
         "---",
@@ -195,7 +199,7 @@ def _direct_memory_search_count(deps: CoDeps, query: str) -> int:
     """
     if deps.memory_store is None:
         return 0
-    hits = deps.memory_store.search_artifacts(query, None, 10)
+    hits = deps.memory_store.search_memory_items(query, None, 10)
     return len(hits)
 
 
@@ -621,9 +625,9 @@ async def case_w3_d_memory_list(
         with contextlib.redirect_stdout(captured):
             await dispatch("/memory list", ctx)
 
-        from co_cli.memory.artifact import load_artifacts
+        from co_cli.memory.item import load_memory_items
 
-        artifacts = load_artifacts(deps.memory_dir)
+        artifacts = load_memory_items(deps.memory_dir)
         stems = {a.path.stem for a in artifacts}
         if fact_path.stem not in stems:
             passed = False
@@ -829,18 +833,182 @@ async def case_w3_f_dream_decay_preserves_content(
     )
 
 
+async def case_w3_g_forget_propagates_to_recall(
+    deps: CoDeps,
+    agent: Any,
+    frontend: EvalFrontend,
+    run: EvalRun,
+) -> CaseResult:
+    """W3.G — memory_manage(delete) propagates through FTS; re-search finds nothing.
+
+    Three turns with shared history: recall seed → agent-driven delete → re-recall
+    judged for absence. SOFT_FAIL when judge says agent still surfaces the token.
+    """
+    case_id = "W3.G"
+    t0 = time.monotonic()
+    trace_file = run.case_trace_path(case_id)
+
+    body = f"{_W3G_TOKEN} eval W3G memory item for forget-propagation test"
+    try:
+        seed_path = _seed_dup_artifact(deps, filename_stem=_W3G_STEM, title=_W3G_TITLE, body=body)
+    except Exception as exc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"seed failed: {type(exc).__name__}: {exc}",
+            trace_files=[str(trace_file.relative_to(run.dir.parent))],
+        )
+
+    passed = True
+    verdict = Verdict.PASS
+    reason = ""
+    model_call_seconds = 0.0
+    token_usage: dict[str, int] = {}
+    history: list[Any] = []
+    t2_result = None
+
+    try:
+        # Turn 0: recall — agent should call memory_search and surface the seed
+        t0_input = (
+            f"Use memory_search to find any memory item containing '{_W3G_TOKEN}'. "
+            "Report the filename_stem of any hits."
+        )
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            t0_result, t0_trace = await record_turn(
+                case_id=case_id,
+                turn_index=0,
+                user_input=t0_input,
+                run_turn_callable=lambda: run_turn(
+                    agent=agent,
+                    user_input=t0_input,
+                    deps=deps,
+                    message_history=history,
+                    frontend=frontend,
+                ),
+                case_dir_path=trace_file,
+                agent=agent,
+            )
+        model_call_seconds += t0_trace.model_call_seconds
+        for k, v in t0_trace.token_usage.items():
+            token_usage[k] = token_usage.get(k, 0) + v
+        history = list(t0_result.messages)
+
+        t0_tool_names = [rec.tool_name for rec in t0_trace.tool_calls]
+        if "memory_search" not in t0_tool_names:
+            passed = False
+            reason = f"turn 0: agent did not call memory_search; tools={t0_tool_names!r}"
+
+        # Turn 1: delete — agent should call memory_manage(delete) using the stem
+        if passed:
+            t1_input = (
+                f"Now delete the memory item with filename_stem `{_W3G_STEM}` "
+                "using memory_manage with action=delete."
+            )
+            async with asyncio.timeout(CALL_TIMEOUT_S):
+                t1_result, t1_trace = await record_turn(
+                    case_id=case_id,
+                    turn_index=1,
+                    user_input=t1_input,
+                    run_turn_callable=lambda: run_turn(
+                        agent=agent,
+                        user_input=t1_input,
+                        deps=deps,
+                        message_history=history,
+                        frontend=frontend,
+                    ),
+                    case_dir_path=trace_file,
+                    agent=agent,
+                )
+            model_call_seconds += t1_trace.model_call_seconds
+            for k, v in t1_trace.token_usage.items():
+                token_usage[k] = token_usage.get(k, 0) + v
+            history = list(t1_result.messages)
+
+            if seed_path.exists():
+                passed = False
+                reason = f"turn 1: seed {seed_path.name!r} still on disk after delete turn"
+
+        # Turn 2: re-recall — judge that agent does not surface the token
+        if passed:
+            t2_input = f"Search memory again for '{_W3G_TOKEN}'. What do you find?"
+            async with asyncio.timeout(CALL_TIMEOUT_S):
+                t2_result, _t2_trace = await record_turn(
+                    case_id=case_id,
+                    turn_index=2,
+                    user_input=t2_input,
+                    run_turn_callable=lambda: run_turn(
+                        agent=agent,
+                        user_input=t2_input,
+                        deps=deps,
+                        message_history=history,
+                        frontend=frontend,
+                    ),
+                    case_dir_path=trace_file,
+                    agent=agent,
+                )
+            model_call_seconds += _t2_trace.model_call_seconds
+            for k, v in _t2_trace.token_usage.items():
+                token_usage[k] = token_usage.get(k, 0) + v
+
+        # Judge turn 2 for absence of the deleted token
+        if passed and t2_result is not None:
+            rubric = (
+                f"The user deleted a memory item containing '{_W3G_TOKEN}' in turn 1. "
+                f"In turn 2, the user searched memory again for '{_W3G_TOKEN}'. "
+                "PASS only if the agent reports no results found or confirms the item is gone. "
+                f"FAIL if the agent successfully recalls or quotes '{_W3G_TOKEN}'."
+            )
+            try:
+                async with asyncio.timeout(CALL_TIMEOUT_S):
+                    jverdict = await judge_with_llm(
+                        rubric, t2_result.messages, deps=deps, model=deps.judge_model
+                    )
+                judge_note = f"judge.score={jverdict.score} {judge_model_annotation(deps)}"
+                if jverdict.rationale:
+                    judge_note += f" {jverdict.rationale[:120]}"
+                if not jverdict.passed:
+                    verdict = Verdict.SOFT_FAIL
+                reason = f"seed_deleted={not seed_path.exists()} | {judge_note}"
+            except Exception as jexc:
+                reason = (
+                    f"seed_deleted={not seed_path.exists()} | judge_error: {type(jexc).__name__}"
+                )
+
+        if not reason:
+            reason = "ok"
+    except Exception as exc:
+        passed = False
+        verdict = Verdict.FAIL
+        reason = f"{type(exc).__name__}: {exc}"
+
+    if not passed and verdict == Verdict.PASS:
+        verdict = Verdict.FAIL
+
+    return CaseResult(
+        name=case_id,
+        verdict=verdict,
+        duration_s=time.monotonic() - t0,
+        model_call_seconds=model_call_seconds,
+        token_usage=token_usage,
+        reason=reason,
+        trace_files=[str(trace_file.relative_to(run.dir.parent))],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
 
 async def main() -> int:
-    """Run W3.A through W3.F in fixed order and emit the REPORT.
+    """Run W3.A through W3.G in fixed order and emit the REPORT.
 
     Case ordering is a hard contract (plan W3 header): A seeds, B/C/D read,
-    E forgets, F uses its own pair. Failures don't abort the run — each case
-    captures its verdict and the script continues; exit code is non-zero
-    iff any case failed (SOFT_PASS / SOFT_FAIL are review signals, not gate failures).
+    E forgets, F uses its own pair, G uses its own seed. Failures don't abort
+    the run — each case captures its verdict and the script continues; exit code
+    is non-zero iff any case failed (SOFT_PASS / SOFT_FAIL are review signals,
+    not gate failures).
     """
     await ensure_ollama_warm()
     deps, agent, frontend, stack = await make_eval_deps()
@@ -854,6 +1022,7 @@ async def main() -> int:
                 case_w3_d_memory_list,
                 case_w3_e_memory_forget,
                 case_w3_f_dream_decay_preserves_content,
+                case_w3_g_forget_propagates_to_recall,
             )
             for case_fn in ordered_cases:
                 try:

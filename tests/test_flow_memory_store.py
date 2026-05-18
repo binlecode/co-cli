@@ -150,8 +150,7 @@ def test_hash_skip_produces_zero_writes_on_rerun(tmp_path: Path) -> None:
 def _write_memory_file(path: Path, *, body: str) -> None:
     fm = {
         "id": "test-1",
-        "kind": "memory",
-        "artifact_kind": "user",
+        "memory_kind": "user",
         "created": "2026-01-01T00:00:00+00:00",
     }
     path.write_text(

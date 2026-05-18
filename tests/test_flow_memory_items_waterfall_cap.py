@@ -37,7 +37,6 @@ def _write_memory_item(directory: Path, name: str, memory_kind: str, body: str) 
         "---\n"
         f"id: {name}\n"
         f"created: 2025-01-01T00:00:00\n"
-        "kind: memory\n"
         f"memory_kind: {memory_kind}\n"
         f"title: {name}\n"
         "---\n"

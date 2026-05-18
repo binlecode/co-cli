@@ -247,7 +247,6 @@ def test_save_memory_item_url_dedup_uses_index_when_store_provided(tmp_path):
 
 def _write_seeded_artifact(path: Path, body: str) -> None:
     frontmatter = {
-        "kind": "memory",
         "memory_kind": "note",
         "id": "test-123",
         "created": "2026-01-01T00:00:00+00:00",

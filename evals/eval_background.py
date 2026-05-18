@@ -19,6 +19,7 @@ which is the production-grade equivalent of the spill convention the plan
 text describes for tool returns.
 
 Specs: docs/specs/tui.md (slash command reference)
+Mission tenet: operator — async execution
 """
 
 from __future__ import annotations

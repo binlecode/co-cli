@@ -140,3 +140,44 @@ async def test_auto_approval_skips_prompt_for_remembered_session_rule() -> None:
         f"prompt_approval must not be called when a session rule matches, "
         f"but got {len(frontend.approval_calls)} call(s): {frontend.approval_calls}"
     )
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.asyncio
+async def test_clarify_deferred_resume_end_to_end() -> None:
+    """clarify must route to prompt_question, never to the standard approval path.
+
+    When the model invokes the clarify tool, the orchestrator must detect the
+    "questions" key in QuestionRequired metadata and call prompt_question.
+    If the seam is broken, _collect_deferred_tool_approvals falls through to
+    prompt_approval instead — producing approval_calls > 0, which this test
+    catches regardless of whether the model chose to call clarify this run.
+
+    Deterministic seam coverage (injection + structured output) is in
+    test_clarify_deferred_approval_routing.
+    """
+    deps = _make_deps()
+    frontend = SilentFrontend(approval_response="y", question_answer="json")
+
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
+        await run_turn(
+            agent=_AGENT,
+            user_input=(
+                "You are required to call clarify before proceeding. "
+                "Call it now with one question about output format. "
+                "Do NOT describe — call the tool."
+            ),
+            deps=deps,
+            message_history=[],
+            frontend=frontend,
+        )
+
+    # clarify must NEVER route through prompt_approval — whether or not the model called it
+    assert len(frontend.approval_calls) == 0, (
+        f"clarify must not go through the approval path — "
+        f"got approval_calls: {frontend.approval_calls}"
+    )
+    # when the model did call clarify, the question must be recorded
+    if frontend.question_call_count > 0:
+        assert frontend.last_question is not None

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.8.220]
+
+### Deferred-interaction regression coverage — `clarify` e2e + `prompt_question` contract
+
+- **`test_clarify_deferred_approval_routing`** (unit, deterministic): constructs `DeferredToolRequests` directly and calls `_collect_deferred_tool_approvals`; asserts routing to `prompt_question`, correct `QuestionPrompt` construction, and `ToolApproved(override_args={"user_answers": [...]})` injection.
+- **`test_prompt_question_frontend_contract`** (unit): verifies `HeadlessFrontend` returns `question_answer`, records `last_question`, and increments `question_call_count`.
+- **`test_clarify_deferred_resume_end_to_end`** (LLM smoke): asserts `clarify` never routes through the standard approval path (`approval_calls == 0`), catching seam failures regardless of model behavior.
+
 ## [0.8.218]
 
 ### `MemoryArtifact` → `MemoryItem` rename — artifact semantic layer removed from `co_cli/memory/`

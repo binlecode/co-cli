@@ -2,7 +2,7 @@
 
 import signal
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -187,6 +187,17 @@ class QuestionPrompt:
     multiple: bool = False
 
 
+@dataclass(frozen=True)
+class StatusSnapshot:
+    """Typed contract for bottom-toolbar footer content."""
+
+    session_label: str
+    mode: Literal["idle", "active"]
+    context_pct: float | None
+    background_task_count: int
+    approval_count: int
+
+
 @runtime_checkable
 class Frontend(Protocol):
     """Display and interaction contract for the orchestration layer."""
@@ -243,6 +254,10 @@ class Frontend(Protocol):
         """Prompt user for a yes/no confirmation. Returns True if confirmed."""
         ...
 
+    def update_status(self, snapshot: "StatusSnapshot") -> None:
+        """Push a status snapshot for the bottom-toolbar footer."""
+        ...
+
     def clear_status(self) -> None:
         """Dismiss the status surface so the next prompt starts on a clean line."""
         ...
@@ -283,6 +298,8 @@ class TerminalFrontend:
         self._input_active: bool = False
         # Status messages buffered while input is active; flushed when input ends
         self._pending_status: list[Text] = []
+        # Last pushed status snapshot; drives render_footer_toolbar
+        self._footer_snapshot: StatusSnapshot | None = None
 
     def active_surface(self) -> str:
         """Return the currently active public display surface name."""
@@ -303,6 +320,23 @@ class TerminalFrontend:
     def active_status_text(self) -> str | None:
         """Return the text currently shown in the status surface, or None if inactive."""
         return self._status_text
+
+    def update_status(self, snapshot: StatusSnapshot) -> None:
+        self._footer_snapshot = snapshot
+
+    def render_footer_toolbar(self) -> str:
+        if self._footer_snapshot is None:
+            return ""
+        s = self._footer_snapshot
+        parts: list[str] = [s.session_label, s.mode]
+        if s.context_pct is not None:
+            parts.append(f"ctx {int(s.context_pct * 100)}%")
+        if s.background_task_count > 0:
+            parts.append(f"{s.background_task_count} bg")
+        if s.approval_count > 0:
+            noun = "approval" if s.approval_count == 1 else "approvals"
+            parts.append(f"{s.approval_count} {noun}")
+        return " · ".join(parts)
 
     def clear_status(self) -> None:
         """Dismiss the status surface so the next prompt starts on a clean line."""

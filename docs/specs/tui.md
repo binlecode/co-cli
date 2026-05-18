@@ -146,11 +146,15 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `Frontend` (Protocol) | `co_cli/display/core.py` | Display contract — `on_status`, `clear_status`, `prompt_question`, `cleanup`, etc. |
+| `Frontend` (Protocol) | `co_cli/display/core.py` | Display contract — `on_status`, `clear_status`, `update_status`, `prompt_question`, `cleanup`, etc. |
 | `TerminalFrontend` | `co_cli/display/core.py` | Default terminal implementation using `rich.console` |
+| `HeadlessFrontend` | `co_cli/display/headless.py` | No-op frontend for evals and tests; stores `last_status_snapshot` for inspection |
 | `console`, `set_theme(name)`, `PROMPT_CHAR` | `co_cli/display/core.py` | Shared console instance, theme switcher, prompt glyph |
 | `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-segment text/thinking buffering and flush policy |
 | `QuestionPrompt(question, options, multiple)` | `co_cli/display/core.py` | Clarify-path approval prompt for tool-issued questions |
+| `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` |
+| `TerminalFrontend.render_footer_toolbar()` | `co_cli/display/core.py` | Plain-text footer string consumed by `PromptSession(bottom_toolbar=...)` |
+| `_build_status_snapshot(deps, mode)` | `co_cli/main.py` | Assembles a `StatusSnapshot` from `CoDeps` at lifecycle push points |
 
 ### Slash command reference
 
@@ -205,7 +209,8 @@ Delegation agent turns inherit the mode via `fork_deps()`, which copies
 | `co_cli/commands/core.py` | Slash-command registry and `dispatch()` |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, completer helpers |
 | `co_cli/commands/types.py` | `CommandContext`, `SlashOutcome`, `LocalOnly`, `ReplaceTranscript`, `DelegateToAgent`, `_confirm` |
-| `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `console`, `set_theme`, `PROMPT_CHAR` |
+| `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `StatusSnapshot`, `console`, `set_theme`, `PROMPT_CHAR` |
+| `co_cli/display/headless.py` | `HeadlessFrontend` — full `Frontend` protocol implementation for evals and tests |
 | `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy per segment |
 | `co_cli/deps.py` | `CoSessionState` (user-preference + tool-visible state), `CoRuntimeState` (orchestration state) |
 | `co_cli/config/core.py` | `VALID_REASONING_DISPLAY_MODES`, `DEFAULT_REASONING_DISPLAY`, mode constants |

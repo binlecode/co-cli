@@ -20,6 +20,7 @@ Eval-seeded artifacts (deterministic names; reruns overwrite in place):
     up** at case end (its presence would brick ``/help`` on future sessions).
 
 Specs: docs/specs/skills.md, tui.md
+Mission tenet: operator — procedural capability
 """
 
 from __future__ import annotations

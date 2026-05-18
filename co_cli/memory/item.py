@@ -67,7 +67,7 @@ class MemoryItem:
 
 
 def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> MemoryItem:
-    """Build a MemoryItem from canonical kind=memory frontmatter."""
+    """Build a MemoryItem from canonical memory frontmatter."""
     return MemoryItem(
         id=str(frontmatter["id"]),
         path=path,
@@ -89,8 +89,9 @@ def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> Memory
 def load_memory_item(path: Path) -> MemoryItem:
     """Load a single .md file as a MemoryItem.
 
-    Requires ``kind: memory`` frontmatter with ``id`` and ``created`` set.
-    Raises ValueError on any missing required field or unexpected ``kind``.
+    Requires ``id`` and ``created`` in frontmatter. Memory items live under
+    ``memory_dir/*.md`` and are peer-independent from sessions, so no tier
+    discriminator field is needed.
     """
     raw = path.read_text(encoding="utf-8")
     frontmatter, body = parse_frontmatter(raw)
@@ -98,8 +99,6 @@ def load_memory_item(path: Path) -> MemoryItem:
         raise ValueError(f"{path}: missing required field 'id'")
     if "created" not in frontmatter:
         raise ValueError(f"{path}: missing required field 'created'")
-    if frontmatter.get("kind") != "memory":
-        raise ValueError(f"{path}: expected kind='memory', got {frontmatter.get('kind')!r}")
     return _coerce_fields(frontmatter, body, path)
 
 

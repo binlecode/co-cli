@@ -5,6 +5,7 @@ session rotation, transcript clearing, picker-based resume with todo/plan
 rehydration, and LLM-driven compaction of long histories.
 
 Specs: docs/specs/sessions.md, compaction.md, self-planning.md
+Mission tenet: continuity across sessions
 
 Sub-cases
 ---------
@@ -41,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from evals._deps import make_eval_deps
+from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
@@ -429,11 +431,35 @@ async def case_w2_d_resume_helpers_rehydrate(
         passed = False
         reason = f"follow-up response missing 'DEPLOY_77' (got: {followup_text[:200]!r})"
 
+    verdict = Verdict.PASS if passed else Verdict.FAIL
+    judge_annotation = judge_model_annotation(deps)
+    if passed:
+        rubric = (
+            "The user asked their deploy id after resuming a prior session. "
+            "PASS only if the agent's answer recalls DEPLOY_77 as the deploy id "
+            "from the rehydrated session context. "
+            "FAIL if agent says it lacks that information or gives a different id."
+        )
+        followup_messages = followup_result.messages if passed else []
+        try:
+            async with asyncio.timeout(CALL_TIMEOUT_S):
+                jverdict = await judge_with_llm(
+                    rubric, followup_messages, deps=deps, model=deps.judge_model
+                )
+            judge_note = f"judge.score={jverdict.score} {judge_annotation}"
+            if jverdict.rationale:
+                judge_note += f" {jverdict.rationale[:120]}"
+            if not jverdict.passed:
+                verdict = Verdict.SOFT_FAIL
+            reason = (reason or "ok") + f" | {judge_note}"
+        except Exception as jexc:
+            reason = (reason or "ok") + f" | judge_error: {type(jexc).__name__}"
+
     trace_files = [f"{case_dir.parent.name}/{case_dir.name}"]
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
-        verdict=Verdict.PASS if passed else Verdict.FAIL,
+        verdict=verdict,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -469,6 +495,9 @@ async def case_w2_e_compact_replaces_with_summary(
 ) -> tuple[CaseResult, list[Any], int]:
     """Inflate history past compaction_ratio, then /compact.
 
+    Seeds a "Lighthouse" marker turn before inflation so the post-compact
+    follow-up judge can verify the summary preserved the project name.
+
     Returns ``(case_result, post_compact_history, pre_compact_len)`` so W2.F
     can drive a second /compact against the same compacted history and assert
     idempotence.
@@ -503,11 +532,35 @@ async def case_w2_e_compact_replaces_with_summary(
 
     try:
         async with asyncio.timeout(MULTI_TURN_COMPACT_BUDGET_S):
+            # Marker turn: seed "Lighthouse" before inflation so the compaction
+            # summary should preserve the project name.
+            marker_input = (
+                "The project I'm working on is called Lighthouse. Please remember this fact."
+            )
+            marker_result, marker_trace = await record_turn(
+                case_id=case_id,
+                turn_index=0,
+                user_input=marker_input,
+                run_turn_callable=lambda: run_turn(
+                    agent=agent,
+                    user_input=marker_input,
+                    deps=deps,
+                    message_history=history,
+                    frontend=frontend,
+                ),
+                case_dir_path=case_dir,
+                agent=agent,
+            )
+            model_call_seconds += marker_trace.model_call_seconds
+            for k, v in marker_trace.token_usage.items():
+                token_usage[k] = token_usage.get(k, 0) + v
+            history = list(marker_result.messages)
+
             for i in range(target_turns):
                 user_input = inflation_inputs[i % len(inflation_inputs)]
                 turn_result, turn_trace = await record_turn(
                     case_id=case_id,
-                    turn_index=i,
+                    turn_index=i + 1,
                     user_input=user_input,
                     run_turn_callable=lambda u=user_input, h=history: run_turn(
                         agent=agent,
@@ -545,18 +598,62 @@ async def case_w2_e_compact_replaces_with_summary(
         passed = False
         reason = f"inflation+compact failed: {type(exc).__name__}: {exc}"
 
-    # Reason logs the measured N for re-tuning.
+    verdict = Verdict.PASS if passed else Verdict.FAIL
+    judge_annotation = judge_model_annotation(deps)
+
+    # Base reason logs the measured N for re-tuning.
     if not reason:
         reason = (
             f"N={target_turns} compaction_ratio={compaction_ratio:.2f} "
             f"len {pre_compact_len}→{len(post_compact_history)}"
         )
 
+    # Post-compact follow-up: verify summary preserved the seeded project name.
+    if passed:
+        followup_input = "Remind me what project we've been discussing."
+        try:
+            async with asyncio.timeout(CALL_TIMEOUT_S):
+                followup_result, followup_trace = await record_turn(
+                    case_id=case_id,
+                    turn_index=target_turns + 1,
+                    user_input=followup_input,
+                    run_turn_callable=lambda: run_turn(
+                        agent=agent,
+                        user_input=followup_input,
+                        deps=deps,
+                        message_history=post_compact_history,
+                        frontend=frontend,
+                    ),
+                    case_dir_path=case_dir,
+                    agent=agent,
+                )
+            model_call_seconds += followup_trace.model_call_seconds
+            for k, v in followup_trace.token_usage.items():
+                token_usage[k] = token_usage.get(k, 0) + v
+            rubric = (
+                "The user seeded the fact that their project is called 'Lighthouse' "
+                "at the start of the session, before many inflation turns and /compact. "
+                "PASS only if the agent's post-compact response mentions 'Lighthouse'. "
+                "FAIL if the agent does not recall the project name or says it has no context."
+            )
+            async with asyncio.timeout(CALL_TIMEOUT_S):
+                jverdict = await judge_with_llm(
+                    rubric, followup_result.messages, deps=deps, model=deps.judge_model
+                )
+            judge_note = f"judge.score={jverdict.score} {judge_annotation}"
+            if jverdict.rationale:
+                judge_note += f" {jverdict.rationale[:120]}"
+            if not jverdict.passed:
+                verdict = Verdict.SOFT_FAIL
+            reason += f" | {judge_note}"
+        except Exception as jexc:
+            reason += f" | judge_error: {type(jexc).__name__}"
+
     trace_files = [f"{case_dir.parent.name}/{case_dir.name}"]
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
-        verdict=Verdict.PASS if passed else Verdict.FAIL,
+        verdict=verdict,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
