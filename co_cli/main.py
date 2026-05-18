@@ -515,7 +515,12 @@ async def _chat_loop(
         if deps.session.session_path.exists():
             console.print("[dim]Previous session available — /resume to continue[/dim]")
 
-        display_welcome_banner(deps)
+        knowledge_count = 0
+        session_count = 0
+        if deps.memory_store is not None:
+            knowledge_count = deps.memory_store.count_docs("knowledge")
+            session_count = deps.memory_store.count_docs("session")
+        display_welcome_banner(deps, knowledge_count=knowledge_count, session_count=session_count)
         from co_cli.bootstrap.security import check_security, render_security_findings
 
         render_security_findings(check_security())

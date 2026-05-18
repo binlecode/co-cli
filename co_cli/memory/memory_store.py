@@ -1350,6 +1350,11 @@ class MemoryStore:
         self._conn.commit()
         return self.sync_dir(source, directory, glob)
 
+    def count_docs(self, source: str) -> int:
+        """Return the number of indexed docs for the given source."""
+        row = self._conn.execute("SELECT COUNT(*) FROM docs WHERE source=?", (source,)).fetchone()
+        return row[0] if row else 0
+
     def list_titles_by_source(self, source: str) -> set[str]:
         """Return the set of doc titles currently indexed under the given source."""
         rows = self._conn.execute("SELECT title FROM docs WHERE source=?", (source,)).fetchall()

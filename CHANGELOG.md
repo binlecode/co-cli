@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.210]
+
+### Startup banner — Knowledge → Memory with counts
+
+- **`Memory:` row** replaces `Knowledge:` in the welcome banner; shows backend label, optional degradation suffix, and live knowledge/session counts
+- **`MemoryStore.count_docs(source)`** — new lightweight `SELECT COUNT(*)` method; used for both knowledge and session counts at startup
+- **`display_welcome_banner()`** — gains `knowledge_count` and `session_count` keyword parameters; counts omitted automatically when backend is `grep` (no index)
+- **4 banner rendering tests** in `tests/test_flow_bootstrap_banner.py` locking all scenarios (indexed, degraded, grep, zero counts)
+
 ## [0.8.208]
 
 ### Agent lifecycle / spec split

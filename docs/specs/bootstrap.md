@@ -209,7 +209,7 @@ Session data is derived and rebuildable: restarting re-syncs from `*.jsonl` file
 
 ### Step 13. Print startup status and enter the REPL boundary
 
-After session restore, `_chat_loop()` reports loaded skill count, optionally shows the resume hint when a transcript exists, calls `display_welcome_banner(deps)`, runs `render_security_findings(check_security())` to print any security posture warnings, then clears the transient status line. The banner and security warnings together form the boundary between bootstrap and normal interactive operation.
+After session restore, `_chat_loop()` reports loaded skill count, optionally shows the resume hint when a transcript exists, queries `deps.memory_store.count_docs("knowledge")` and `count_docs("session")` for the indexed item counts, then calls `display_welcome_banner(deps, knowledge_count=..., session_count=...)`. The banner shows a `Memory:` row with the backend label, optional degradation notice, and both counts (omitted when the store is `None`). After the banner, `render_security_findings(check_security())` prints any security posture warnings, then the transient status line clears. The banner and security warnings together form the boundary between bootstrap and normal interactive operation.
 
 Everything from `create_deps()` through banner display runs inside `_chat_loop()` cleanup guards. If startup exits early, the shell backend, background tasks, pending extraction work, and MCP stack still unwind.
 
@@ -253,7 +253,7 @@ These settings most directly affect bootstrap behavior.
 | `probe_ollama_model(host, model) -> ProbeResult` | `co_cli/bootstrap/check.py` | Posts to `/api/show`; returns `num_ctx` and capabilities for floor validation |
 | `check_security() -> list[SecurityFinding]` | `co_cli/bootstrap/security.py` | Runs the once-per-session security posture checks consumed by `render_security_findings()` |
 | `render_security_findings(findings) -> None` | `co_cli/bootstrap/security.py` | Prints any findings to the console at REPL handoff |
-| `display_welcome_banner(deps) -> None` | `co_cli/bootstrap/banner.py` | Renders the boundary banner between bootstrap and the interactive loop |
+| `display_welcome_banner(deps, *, knowledge_count, session_count) -> None` | `co_cli/bootstrap/banner.py` | Renders the boundary banner; `Memory:` row shows backend + degradation + indexed counts |
 
 ## 5. Files
 

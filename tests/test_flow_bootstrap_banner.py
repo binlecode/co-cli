@@ -1,0 +1,56 @@
+"""Banner Memory row rendering — pure string-building logic tests."""
+
+from co_cli.bootstrap.banner import build_memory_line
+
+
+def test_fts5_backend_with_nonzero_counts() -> None:
+    """fts5 backend renders label and counts; no degradation suffix."""
+    result = build_memory_line(
+        backend="fts5",
+        backend_label="fts5",
+        knowledge_degradation=None,
+        knowledge_count=42,
+        session_count=8,
+    )
+    assert result == "    Memory: [accent]fts5[/accent]  knowledge: 42  sessions: 8"
+
+
+def test_hybrid_backend_with_degradation_and_counts() -> None:
+    """hybrid backend with a degradation renders both degradation suffix and counts."""
+    backend_label = "hybrid · openai/text-embedding-3-small 1536d"
+    result = build_memory_line(
+        backend="hybrid",
+        backend_label=backend_label,
+        knowledge_degradation="hybrid → fts5",
+        knowledge_count=10,
+        session_count=3,
+    )
+    assert f"[accent]{backend_label}[/accent]" in result
+    assert "[yellow](hybrid → fts5)[/yellow]" in result
+    assert "knowledge: 10  sessions: 3" in result
+
+
+def test_grep_backend_omits_counts() -> None:
+    """grep backend renders label only — no knowledge/session counts."""
+    result = build_memory_line(
+        backend="grep",
+        backend_label="grep (no index)",
+        knowledge_degradation=None,
+        knowledge_count=99,
+        session_count=5,
+    )
+    assert result == "    Memory: [accent]grep (no index)[/accent]"
+    assert "knowledge:" not in result
+    assert "sessions:" not in result
+
+
+def test_fts5_backend_with_zero_counts() -> None:
+    """fts5 backend with zero counts still renders the counts (zero is valid)."""
+    result = build_memory_line(
+        backend="fts5",
+        backend_label="fts5",
+        knowledge_degradation=None,
+        knowledge_count=0,
+        session_count=0,
+    )
+    assert result == "    Memory: [accent]fts5[/accent]  knowledge: 0  sessions: 0"

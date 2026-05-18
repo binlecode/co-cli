@@ -138,6 +138,7 @@ Result fields for `session_search`: `{session_id, when, source, chunk_text, star
 | `MemoryStore.sync_dir(source, directory, glob, no_chunk=False)` | `co_cli/memory/memory_store.py` | Hash-based directory indexer; supports unchunked single-chunk mode (used by canon) |
 | `MemoryStore.index_session(session_path)` | `co_cli/memory/memory_store.py` | Indexes one JSONL transcript under `source='session'` |
 | `MemoryStore.sync_sessions(sessions_dir, exclude=None)` | `co_cli/memory/memory_store.py` | Hash-based sync of all transcripts; excludes the live session |
+| `MemoryStore.count_docs(source)` | `co_cli/memory/memory_store.py` | Returns the number of indexed docs for the given source (`SELECT COUNT(*) FROM docs WHERE source=?`) |
 | `MemoryStore.list_titles_by_source(source)` | `co_cli/memory/memory_store.py` | Generic helper — returns `(title, path)` rows for a source |
 | `MemoryStore.get_path_by_title(source, title)` | `co_cli/memory/memory_store.py` | Generic helper — resolves title back to absolute path |
 | `MemoryStore.get_chunk_content(source, path, chunk_index)` | `co_cli/memory/memory_store.py` | Returns a single chunk's body text (used by canon read path) |
