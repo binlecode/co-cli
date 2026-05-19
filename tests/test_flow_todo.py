@@ -7,6 +7,7 @@ No LLM — pure function over real CoDeps + CoSessionState.
 
 from pathlib import Path
 
+import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
@@ -34,7 +35,8 @@ def _make_ctx(deps: CoDeps) -> RunContext[CoDeps]:
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_write_accepts_well_formed_items_and_replaces_state(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_fresh_write_accepts_well_formed_items_and_replaces_state(tmp_path: Path) -> None:
     """todo_write with valid items replaces session_todos in full.
 
     Regression guard: if validation silently drops items or fails to assign state,
@@ -43,7 +45,7 @@ def test_fresh_write_accepts_well_formed_items_and_replaces_state(tmp_path: Path
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = todo_write(
+    result = await todo_write(
         ctx,
         [
             {"id": "1", "content": "Step one", "status": "pending", "priority": "high"},
@@ -63,7 +65,8 @@ def test_fresh_write_accepts_well_formed_items_and_replaces_state(tmp_path: Path
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_write_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_fresh_write_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -> None:
     """todo_write rejects any item without an id and leaves session_todos unchanged.
 
     Regression guard: if missing id is silently accepted, the compaction snapshot
@@ -76,7 +79,7 @@ def test_fresh_write_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -
         {"id": "existing", "content": "keep me", "status": "pending", "priority": "medium"}
     ]  # type: ignore[list-item]
 
-    result = todo_write(ctx, [{"content": "no id item", "status": "pending"}])
+    result = await todo_write(ctx, [{"content": "no id item", "status": "pending"}])
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -89,7 +92,8 @@ def test_fresh_write_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_write_rejects_duplicate_id_in_payload(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_fresh_write_rejects_duplicate_id_in_payload(tmp_path: Path) -> None:
     """todo_write rejects a payload with two items sharing the same id.
 
     Regression guard: duplicate ids make merge mode non-deterministic and
@@ -98,7 +102,7 @@ def test_fresh_write_rejects_duplicate_id_in_payload(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = todo_write(
+    result = await todo_write(
         ctx,
         [
             {"id": "dup", "content": "first", "status": "pending"},
@@ -116,12 +120,13 @@ def test_fresh_write_rejects_duplicate_id_in_payload(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_write_rejects_invalid_status(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_fresh_write_rejects_invalid_status(tmp_path: Path) -> None:
     """todo_write rejects items with an invalid status or priority value, leaving state unchanged."""
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = todo_write(ctx, [{"id": "x", "content": "task", "status": "DONE"}])
+    result = await todo_write(ctx, [{"id": "x", "content": "task", "status": "DONE"}])
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -133,12 +138,13 @@ def test_fresh_write_rejects_invalid_status(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_write_rejects_empty_content(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_fresh_write_rejects_empty_content(tmp_path: Path) -> None:
     """todo_write rejects items whose content is empty or whitespace-only."""
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = todo_write(ctx, [{"id": "x", "content": "   ", "status": "pending"}])
+    result = await todo_write(ctx, [{"id": "x", "content": "   ", "status": "pending"}])
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -150,7 +156,8 @@ def test_fresh_write_rejects_empty_content(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_merge_updates_single_field_without_touching_others(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_updates_single_field_without_touching_others(tmp_path: Path) -> None:
     """merge=True with only status in the payload updates status; content and priority unchanged.
 
     Regression guard: if merge overwrites non-present fields with defaults, the
@@ -159,14 +166,14 @@ def test_merge_updates_single_field_without_touching_others(tmp_path: Path) -> N
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(
+    await todo_write(
         ctx,
         [{"id": "a", "content": "Important task", "status": "pending", "priority": "high"}],
     )
     original_content = deps.session.session_todos[0]["content"]
     original_priority = deps.session.session_todos[0]["priority"]
 
-    todo_write(ctx, [{"id": "a", "status": "completed"}], merge=True)
+    await todo_write(ctx, [{"id": "a", "status": "completed"}], merge=True)
 
     assert deps.session.session_todos[0]["status"] == "completed"
     assert deps.session.session_todos[0]["content"] == original_content
@@ -178,7 +185,8 @@ def test_merge_updates_single_field_without_touching_others(tmp_path: Path) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_merge_preserves_unmentioned_items_in_order(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_preserves_unmentioned_items_in_order(tmp_path: Path) -> None:
     """merge=True only modifies items in the payload; all others are preserved in original order.
 
     Regression guard: if merge rebuilds the list without preserving unmentioned
@@ -187,7 +195,7 @@ def test_merge_preserves_unmentioned_items_in_order(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(
+    await todo_write(
         ctx,
         [
             {"id": "1", "content": "Alpha", "status": "pending"},
@@ -196,7 +204,7 @@ def test_merge_preserves_unmentioned_items_in_order(tmp_path: Path) -> None:
         ],
     )
 
-    todo_write(ctx, [{"id": "2", "status": "completed"}], merge=True)
+    await todo_write(ctx, [{"id": "2", "status": "completed"}], merge=True)
 
     todos = deps.session.session_todos
     assert len(todos) == 3
@@ -213,7 +221,8 @@ def test_merge_preserves_unmentioned_items_in_order(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_merge_appends_unknown_id_as_new_item(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_appends_unknown_id_as_new_item(tmp_path: Path) -> None:
     """merge=True with an unknown id treats it as a new item appended after existing ones.
 
     Regression guard: if unknown ids are silently dropped or rejected, the model
@@ -222,9 +231,9 @@ def test_merge_appends_unknown_id_as_new_item(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(ctx, [{"id": "a", "content": "First task", "status": "pending"}])
+    await todo_write(ctx, [{"id": "a", "content": "First task", "status": "pending"}])
 
-    todo_write(ctx, [{"id": "b", "content": "New task", "status": "pending"}], merge=True)
+    await todo_write(ctx, [{"id": "b", "content": "New task", "status": "pending"}], merge=True)
 
     todos = deps.session.session_todos
     assert len(todos) == 2
@@ -238,15 +247,16 @@ def test_merge_appends_unknown_id_as_new_item(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_merge_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -> None:
     """merge=True with a missing id rejects the whole payload; state unchanged."""
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(ctx, [{"id": "x", "content": "Keep me", "status": "pending"}])
+    await todo_write(ctx, [{"id": "x", "content": "Keep me", "status": "pending"}])
     original = list(deps.session.session_todos)
 
-    result = todo_write(ctx, [{"content": "no id", "status": "completed"}], merge=True)
+    result = await todo_write(ctx, [{"content": "no id", "status": "completed"}], merge=True)
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -258,15 +268,18 @@ def test_merge_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_merge_rejects_invalid_field_on_existing_id_leaves_state_unchanged(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_rejects_invalid_field_on_existing_id_leaves_state_unchanged(
+    tmp_path: Path,
+) -> None:
     """merge=True with an invalid status on a known id rejects the payload; state unchanged."""
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(ctx, [{"id": "a", "content": "Task", "status": "pending"}])
+    await todo_write(ctx, [{"id": "a", "content": "Task", "status": "pending"}])
     original = list(deps.session.session_todos)
 
-    result = todo_write(ctx, [{"id": "a", "status": "INVALID_STATUS"}], merge=True)
+    result = await todo_write(ctx, [{"id": "a", "status": "INVALID_STATUS"}], merge=True)
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -278,7 +291,8 @@ def test_merge_rejects_invalid_field_on_existing_id_leaves_state_unchanged(tmp_p
 # ---------------------------------------------------------------------------
 
 
-def test_todo_read_returns_id_in_each_item_dict(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_todo_read_returns_id_in_each_item_dict(tmp_path: Path) -> None:
     """todo_read's todos metadata includes id in every item dict.
 
     Regression guard: if id is absent from todo_read output, the model cannot
@@ -287,7 +301,7 @@ def test_todo_read_returns_id_in_each_item_dict(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(
+    await todo_write(
         ctx,
         [
             {"id": "task-1", "content": "Alpha", "status": "pending"},
@@ -295,7 +309,7 @@ def test_todo_read_returns_id_in_each_item_dict(tmp_path: Path) -> None:
         ],
     )
 
-    result = todo_read(ctx)
+    result = await todo_read(ctx)
 
     assert result.metadata is not None
     todos = result.metadata.get("todos", [])
@@ -311,7 +325,8 @@ def test_todo_read_returns_id_in_each_item_dict(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_todo_write_metadata_todos_has_all_keys_on_success(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_todo_write_metadata_todos_has_all_keys_on_success(tmp_path: Path) -> None:
     """todo_write success response carries metadata.todos with id/content/status/priority.
 
     Regression guard: if metadata.todos is absent or missing keys, resume
@@ -320,7 +335,7 @@ def test_todo_write_metadata_todos_has_all_keys_on_success(tmp_path: Path) -> No
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = todo_write(
+    result = await todo_write(
         ctx,
         [
             {"id": "r1", "content": "Research", "status": "pending", "priority": "high"},
@@ -342,12 +357,13 @@ def test_todo_write_metadata_todos_has_all_keys_on_success(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_write_rejects_id_with_period(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_fresh_write_rejects_id_with_period(tmp_path: Path) -> None:
     """todo_write rejects ids containing a period — the snapshot parser uses '. ' as separator."""
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = todo_write(ctx, [{"id": "task.1", "content": "Bad id", "status": "pending"}])
+    result = await todo_write(ctx, [{"id": "task.1", "content": "Bad id", "status": "pending"}])
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -359,7 +375,8 @@ def test_fresh_write_rejects_id_with_period(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_write_two_in_progress_rejects_and_names_both_ids(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_fresh_write_two_in_progress_rejects_and_names_both_ids(tmp_path: Path) -> None:
     """Fresh write with 2 in_progress items is rejected all-or-nothing; error names both ids.
 
     Regression guard: if the aggregate check is missing, the model can claim parallel
@@ -371,7 +388,7 @@ def test_fresh_write_two_in_progress_rejects_and_names_both_ids(tmp_path: Path) 
         {"id": "pre", "content": "pre-existing", "status": "pending", "priority": "medium"}
     ]
 
-    result = todo_write(
+    result = await todo_write(
         ctx,
         [
             {"id": "x", "content": "Task X", "status": "in_progress"},
@@ -390,12 +407,13 @@ def test_fresh_write_two_in_progress_rejects_and_names_both_ids(tmp_path: Path) 
     assert deps.session.session_todos[0]["id"] == "pre"
 
 
-def test_merge_existing_one_in_progress_unrelated_update_accepts(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_existing_one_in_progress_unrelated_update_accepts(tmp_path: Path) -> None:
     """Merge that doesn't touch status of the in_progress item → accepted (count stays 1)."""
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(
+    await todo_write(
         ctx,
         [
             {"id": "a", "content": "Active task", "status": "in_progress"},
@@ -403,7 +421,7 @@ def test_merge_existing_one_in_progress_unrelated_update_accepts(tmp_path: Path)
         ],
     )
 
-    result = todo_write(ctx, [{"id": "b", "priority": "high"}], merge=True)
+    result = await todo_write(ctx, [{"id": "b", "priority": "high"}], merge=True)
 
     assert result.metadata is not None
     assert not result.metadata.get("errors")
@@ -411,7 +429,8 @@ def test_merge_existing_one_in_progress_unrelated_update_accepts(tmp_path: Path)
     assert deps.session.session_todos[1]["priority"] == "high"
 
 
-def test_merge_adds_second_in_progress_rejects(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_adds_second_in_progress_rejects(tmp_path: Path) -> None:
     """Merge: existing has A=in_progress; payload sets B=in_progress → rejected; state unchanged.
 
     Regression guard: without the final-state aggregate check in merge mode, the
@@ -420,7 +439,7 @@ def test_merge_adds_second_in_progress_rejects(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(
+    await todo_write(
         ctx,
         [
             {"id": "a", "content": "Active", "status": "in_progress"},
@@ -429,14 +448,15 @@ def test_merge_adds_second_in_progress_rejects(tmp_path: Path) -> None:
     )
     original = list(deps.session.session_todos)
 
-    result = todo_write(ctx, [{"id": "b", "status": "in_progress"}], merge=True)
+    result = await todo_write(ctx, [{"id": "b", "status": "in_progress"}], merge=True)
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
     assert deps.session.session_todos == original
 
 
-def test_merge_swaps_in_progress_in_same_call_accepts(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_swaps_in_progress_in_same_call_accepts(tmp_path: Path) -> None:
     """Merge: A=completed AND B=in_progress in one call when A was in_progress → accepted (final count=1).
 
     Regression guard: if the check runs on the payload rather than the final merged
@@ -445,7 +465,7 @@ def test_merge_swaps_in_progress_in_same_call_accepts(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    todo_write(
+    await todo_write(
         ctx,
         [
             {"id": "a", "content": "Done now", "status": "in_progress"},
@@ -453,7 +473,7 @@ def test_merge_swaps_in_progress_in_same_call_accepts(tmp_path: Path) -> None:
         ],
     )
 
-    result = todo_write(
+    result = await todo_write(
         ctx,
         [{"id": "a", "status": "completed"}, {"id": "b", "status": "in_progress"}],
         merge=True,
@@ -466,7 +486,8 @@ def test_merge_swaps_in_progress_in_same_call_accepts(tmp_path: Path) -> None:
     assert todos[1]["status"] == "in_progress"
 
 
-def test_merge_legacy_two_in_progress_rejects(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_merge_legacy_two_in_progress_rejects(tmp_path: Path) -> None:
     """Merge on legacy state with 2 in_progress items (accepted under old contract) → rejected.
 
     The model must clean up legacy state before any further mutation will succeed.
@@ -480,7 +501,7 @@ def test_merge_legacy_two_in_progress_rejects(tmp_path: Path) -> None:
         {"id": "b", "content": "Task B", "status": "in_progress", "priority": "medium"},
     ]
 
-    result = todo_write(ctx, [{"id": "a", "priority": "high"}], merge=True)
+    result = await todo_write(ctx, [{"id": "a", "priority": "high"}], merge=True)
 
     assert result.metadata is not None
     errors = result.metadata.get("errors") or []
@@ -493,7 +514,8 @@ def test_merge_legacy_two_in_progress_rejects(tmp_path: Path) -> None:
     assert all(t["status"] == "in_progress" for t in deps.session.session_todos)
 
 
-def test_per_item_error_short_circuits_aggregate_check(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_per_item_error_short_circuits_aggregate_check(tmp_path: Path) -> None:
     """Per-item validation failure suppresses the aggregate check entirely.
 
     Regression guard: if the aggregate check ran before the per-item guard,
@@ -504,7 +526,7 @@ def test_per_item_error_short_circuits_aggregate_check(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = todo_write(
+    result = await todo_write(
         ctx,
         [
             {"id": "a", "content": "Task A", "status": "in_progress"},
@@ -523,7 +545,8 @@ def test_per_item_error_short_circuits_aggregate_check(tmp_path: Path) -> None:
     assert deps.session.session_todos == []
 
 
-def test_aggregate_rejection_is_all_or_nothing(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_aggregate_rejection_is_all_or_nothing(tmp_path: Path) -> None:
     """Aggregate rejection on fresh write: errors reported; session_todos unchanged in full.
 
     Verifies no partial application — the entire write is discarded, not just the
@@ -536,7 +559,7 @@ def test_aggregate_rejection_is_all_or_nothing(tmp_path: Path) -> None:
     ]
     before = list(deps.session.session_todos)
 
-    result = todo_write(
+    result = await todo_write(
         ctx,
         [
             {"id": "p", "content": "Passes validation", "status": "in_progress"},

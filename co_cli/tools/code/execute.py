@@ -9,7 +9,8 @@ from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED)
+# Interpreter shares CWD and process state; interleaved invocations corrupt output.
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=False)
 async def code_execute(ctx: RunContext[CoDeps], cmd: str, timeout: int = 60) -> ToolReturn:
     """Run a code interpreter command and return combined stdout + stderr.
 

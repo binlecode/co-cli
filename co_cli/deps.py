@@ -240,6 +240,11 @@ def _resource_lock_store_factory() -> ResourceLockStore:
     return ResourceLockStore()
 
 
+# Maximum parallel tool calls per session. Enforced by CoDeps.tool_dispatch_sem.
+# Forked agents (reviewer, curator) share the parent's semaphore by reference so
+# total session concurrency across all agents is bounded by this single cap.
+MAX_TOOL_DISPATCH_WORKERS: int = 10
+
 # Path defaults — all user-global; resolved from USER_DIR constants at runtime
 # skills_dir: co-bundled skills shipped with the package
 _DEFAULT_SKILLS_DIR = Path(__file__).parent / "skills"
@@ -265,6 +270,12 @@ class CoDeps:
     # Resource lock store (shared across parent and delegation agents)
     resource_locks: ResourceLockStore = field(
         default_factory=_resource_lock_store_factory, repr=False
+    )
+    # Dispatch backstop — caps concurrent tool calls to MAX_TOOL_DISPATCH_WORKERS per session.
+    # Shared by reference across fork_deps forks (reviewer, curator) so total session
+    # concurrency is bounded by a single cap regardless of how many agents are active.
+    tool_dispatch_sem: asyncio.Semaphore = field(
+        default_factory=lambda: asyncio.Semaphore(MAX_TOOL_DISPATCH_WORKERS), repr=False
     )
     # File read tracker — shared across parent and delegation agents by reference for staleness detection
     file_tracker: FileReadTracker = field(default_factory=FileReadTracker, repr=False)
@@ -368,6 +379,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         config=base.config,
         resource_locks=base.resource_locks,
         file_tracker=base.file_tracker,
+        tool_dispatch_sem=base.tool_dispatch_sem,
         index_store=base.index_store,
         memory_store=base.memory_store,
         session_store=base.session_store,

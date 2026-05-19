@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.8.226]
+
+### Concurrent-safe default + dispatch backstop
+
+- **Default flipped** — `@agent_tool` now defaults `is_concurrent_safe=True`; 33 redundant explicit annotations are now accurate-but-optional (cleanup deferred)
+- **Explicit opt-out** — `code_execute`, `file_write`, `file_patch` each carry `is_concurrent_safe=False` with an above-line comment explaining why
+- **`is_read_only` shortcut** — `is_read_only=True` silently coerces `is_concurrent_safe=True`; no longer an error to omit the flag alongside it
+- **Dispatch backstop** — `tool_dispatch_sem: asyncio.Semaphore(10)` on `CoDeps`; `_dispatch_capped` wrapper acquires it before every tool invocation; forked agents (reviewer, curator) share by reference so session-wide cap is bounded
+- **Production bug fixed** — `_dispatch_capped` now uses `inspect.iscoroutinefunction(fn)` to branch; unconditional `await fn(...)` would have raised `TypeError` for all sync tools at pydantic-ai dispatch time
+- **Tests** — 8 new behavioral tests in `test_flow_agent_tool_concurrent_default.py`; 20 tests in `test_flow_todo.py` converted to async (`@pytest.mark.asyncio` + `await`) after tool functions became async-wrapped
+
 ## [0.8.224]
 
 ### UAT evals phase-1 refactor — mission-tenet alignment

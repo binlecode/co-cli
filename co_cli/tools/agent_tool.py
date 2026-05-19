@@ -4,7 +4,9 @@ Import isolation (Behavioral Constraint 9): this module imports ONLY from co_cli
 Never import CoDeps, agent internals, or tool implementations here.
 """
 
+import inspect
 from collections.abc import Callable
+from functools import wraps
 from typing import TypeVar
 
 from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
@@ -25,7 +27,7 @@ def agent_tool(
     visibility: VisibilityPolicyEnum,
     approval: bool = False,
     is_read_only: bool = False,
-    is_concurrent_safe: bool = False,
+    is_concurrent_safe: bool = True,
     integration: str | None = None,
     requires_config: str | None = None,
     retries: int | None = None,
@@ -36,12 +38,18 @@ def agent_tool(
 ) -> Callable[[F], F]:
     """Decorator that attaches ToolInfo policy metadata to a native tool function.
 
-    Validates invariants at import time. The decorated function is returned unchanged —
-    pydantic-ai introspects __signature__, __doc__, and type hints directly.
+    Validates invariants at import time. The returned wrapper acquires
+    deps.tool_dispatch_sem before each invocation (dispatch backstop:
+    MAX_TOOL_DISPATCH_WORKERS concurrent calls per session). pydantic-ai
+    introspects the wrapper via inspect.signature(follow_wrapped=True) —
+    functools.wraps preserves __signature__, __doc__, and type hints.
     Pass register=False to attach metadata without adding to TOOL_REGISTRY.
     """
-    if is_read_only and not is_concurrent_safe:
-        raise ValueError("@agent_tool: is_read_only=True requires is_concurrent_safe=True")
+    # is_read_only implies is_concurrent_safe: read-only tools have no shared
+    # mutable state to race on. Coerce rather than error so the author does
+    # not need to repeat is_concurrent_safe=True alongside is_read_only=True.
+    if is_read_only:
+        is_concurrent_safe = True
     if is_read_only and approval:
         raise ValueError("@agent_tool: is_read_only=True is incompatible with approval=True")
 
@@ -63,10 +71,18 @@ def agent_tool(
             check_fn=check_fn,
             approval_subject_fn=approval_subject_fn,
         )
-        setattr(fn, AGENT_TOOL_ATTR, info)
+
+        @wraps(fn)
+        async def _dispatch_capped(ctx, *args, **kwargs):
+            async with ctx.deps.tool_dispatch_sem:
+                if inspect.iscoroutinefunction(fn):
+                    return await fn(ctx, *args, **kwargs)
+                return fn(ctx, *args, **kwargs)
+
+        setattr(_dispatch_capped, AGENT_TOOL_ATTR, info)
         if register:
-            TOOL_REGISTRY.append(fn)
-            TOOL_REGISTRY_BY_NAME[name] = fn
-        return fn
+            TOOL_REGISTRY.append(_dispatch_capped)
+            TOOL_REGISTRY_BY_NAME[name] = _dispatch_capped
+        return _dispatch_capped  # type: ignore[return-value]
 
     return decorator

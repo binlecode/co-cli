@@ -134,10 +134,19 @@ Resume segments skip `ModelRequestNode` — no new model prompt is sent just to 
 
 ### Concurrency Safety
 
+Most tools run concurrently by default (`is_concurrent_safe=True`). Three tools opt out
+explicitly because they cannot tolerate interleaved invocations: `file_write`, `file_patch`,
+`code_execute`. A per-session semaphore caps total concurrent tool calls at
+`MAX_TOOL_DISPATCH_WORKERS = 10`; the 11th+ call queues until a slot frees. Forked agents
+(reviewer, curator) share the parent's semaphore so the cap is session-wide.
+
 ```
 tool call dispatched
       │
-      ├─ is_concurrent_safe=False?  (file_write, file_patch, code_execute)
+      ├─ acquire deps.tool_dispatch_sem  (MAX_TOOL_DISPATCH_WORKERS = 10 per session)
+      │       blocked? ──► queue until slot frees
+      │
+      ├─ is_concurrent_safe=False?  (file_write, file_patch, code_execute — explicit opt-out)
       │       yes ──► force sequential order in multi-tool batch
       │
       ├─ path locked by another agent?  (resource_locks)
@@ -149,6 +158,9 @@ tool call dispatched
       └─ file_write/patch: disk mtime changed since last read?  (file_tracker.is_stale / is_read_and_stale)
               yes ──► tool_error("file changed on disk")
 ```
+
+`is_concurrent_safe=True` means "safe to dispatch in parallel." `ResourceLockStore` fail-fast
+on shared mutation keys is a complementary guard — both layers apply.
 
 ### Delegation Agents
 
@@ -176,7 +188,7 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 
 | Symbol | Source | Contract |
 |--------|--------|----------|
-| `@agent_tool(name=..., description=..., approval=..., spill_threshold_chars=..., is_concurrent_safe=...)` | `co_cli/tools/agent_tool.py` | Decorator — self-registers a function into both `TOOL_REGISTRY` (list) and `TOOL_REGISTRY_BY_NAME` (dict) at import time |
+| `@agent_tool(visibility=..., approval=..., is_read_only=..., is_concurrent_safe=True, spill_threshold_chars=..., ...)` | `co_cli/tools/agent_tool.py` | Decorator — self-registers a function into both `TOOL_REGISTRY` (list) and `TOOL_REGISTRY_BY_NAME` (dict) at import time. Default: `is_concurrent_safe=True` (concurrent). Set `is_concurrent_safe=False` only when the tool truly cannot tolerate concurrent invocation. `is_read_only=True` automatically implies `is_concurrent_safe=True`. |
 | `TOOL_REGISTRY` | `co_cli/tools/agent_tool.py` | Module-level list populated at import time; read by `build_native_toolset()` |
 | `build_native_toolset(config) -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | `co_cli/agent/core.py` | Pure-config helper. Returns the unfiltered native toolset and a fresh `tool_index` |
 | `build_mcp_entries(config, tool_index) -> list[MCPToolsetEntry]` | `co_cli/agent/core.py` | Builds MCP entries wrapped with sequential-flag propagation; not yet connected |
