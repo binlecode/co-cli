@@ -4,7 +4,7 @@ import json
 
 from pydantic_ai.exceptions import ModelHTTPError
 
-from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context.compaction import is_context_overflow
 
 
 def _err(status_code: int, body: object) -> ModelHTTPError:

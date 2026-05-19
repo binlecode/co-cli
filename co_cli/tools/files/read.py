@@ -8,6 +8,9 @@ import re
 import shlex
 import shutil
 from pathlib import Path
+from typing import Literal
+
+SearchOutputMode = Literal["content", "files_with_matches", "count"]
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
@@ -539,7 +542,7 @@ async def file_search(
     path: str = ".",
     glob: str = "**/*",
     case_insensitive: bool = False,
-    output_mode: str = "content",
+    output_mode: SearchOutputMode = "content",
     context_lines: int = 0,
     head_limit: int = 250,
     offset: int = 0,
@@ -571,13 +574,6 @@ async def file_search(
         head_limit: Maximum output lines/entries to return; 0 means unlimited (default: 250).
         offset: Skip the first N output lines/entries for pagination (default: 0).
     """
-    _VALID_MODES = {"content", "files_with_matches", "count"}
-    if output_mode not in _VALID_MODES:
-        return tool_error(
-            f"Invalid output_mode {output_mode!r} — use 'content', 'files_with_matches', or 'count'",
-            ctx=ctx,
-        )
-
     flags = re.IGNORECASE if case_insensitive else 0
     try:
         re.compile(pattern, flags)

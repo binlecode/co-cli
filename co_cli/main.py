@@ -142,7 +142,7 @@ async def _run_foreground_turn(
     finally:
         cleanup_skill_run_state(saved_env, deps)
     next_history = await _finalize_turn(turn_result, message_history, deps, frontend)
-    _post_turn_hook(deps, next_history, turn_result.tool_iterations)
+    _post_turn_hook(deps, next_history, turn_result.llm_iterations)
     return next_history
 
 

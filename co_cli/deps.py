@@ -152,8 +152,8 @@ class CoSessionState:
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
-    # Tool-iteration counter driving the turn-boundary skill-review trigger.
-    # Bumped by _post_turn_hook with TurnResult.tool_iterations; reset to 0
+    # Iteration counter driving the turn-boundary session-review trigger.
+    # Bumped by _post_turn_hook with TurnResult.llm_iterations; reset to 0
     # when a review task is spawned. Not reset on single-in-flight skip.
     iterations_since_review: int = 0
     # Handle to the most recently spawned background session-review task.

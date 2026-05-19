@@ -16,7 +16,7 @@ from co_cli.index.store import IndexStore
 from co_cli.memory.service import reindex, save_memory_item
 from co_cli.memory.store import _USER_PRIORITY_CAP, MemoryStore
 from co_cli.observability import tracing
-from co_cli.tools.memory.manage import _handle_create
+from co_cli.tools.memory.manage import memory_manage
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -239,10 +239,9 @@ async def test_memory_search_user_priority_pass_cap_honoured(tmp_path: Path) -> 
         index.close()
 
 
-def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> None:
     """memory_search falls back to disk scan when memory_store is None."""
-    from co_cli.tools.memory.recall import _list_memory_items
-
     memory_dir = tmp_path / "memory"
     index_tmp, _memory_tmp = _make_stores(tmp_path)
     try:
@@ -263,12 +262,12 @@ def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) -> None:
         memory_dir=memory_dir,
         memory_store=None,
     )
-    from co_cli.observability.tracing import current_span
-
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
 
-    results = _list_memory_items(ctx, kinds=None, limit=10, span=current_span())
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await memory_search(ctx, query="")
 
+    results = result.metadata.get("results", [])
     assert len(results) >= 1, f"expected disk fallback results, got {results}"
     for r in results:
         assert "channel" not in r, f"disk fallback result must not have channel: {r}"
@@ -286,8 +285,12 @@ async def test_memory_manage_create_emits_span(isolated_spans_log: Path, tmp_pat
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            await _handle_create(
-                ctx, name="span test artifact", content="test content", kind="note"
+            await memory_manage(
+                ctx,
+                action="create",
+                name="span test artifact",
+                content="test content",
+                kind="note",
             )
     finally:
         index.close()

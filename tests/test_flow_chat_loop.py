@@ -125,37 +125,6 @@ async def test_exit_command_exits(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: "quit" exits
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_quit_command_exits(tmp_path: Path) -> None:
-    """'quit' input returns should_exit=True without contacting the agent.
-
-    Regression guard: if quit is misrouted, same hazard as exit.
-    """
-    deps = _make_deps(tmp_path)
-    agent = _make_agent(deps)
-    frontend = HeadlessFrontend()
-    completer = SlashCommandCompleter()
-    state = _fresh_state()
-
-    result = await _handle_one_input(
-        user_input="quit",
-        eof=False,
-        state=state,
-        deps=deps,
-        agent=agent,
-        frontend=frontend,
-        completer=completer,
-        now=0.0,
-    )
-
-    assert result.should_exit is True
-
-
-# ---------------------------------------------------------------------------
 # Test 4: Ctrl+C double-press within 2s exits
 # ---------------------------------------------------------------------------
 

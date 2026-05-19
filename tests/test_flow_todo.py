@@ -8,13 +8,14 @@ No LLM — pure function over real CoDeps + CoSessionState.
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
 
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.todo.rw import todo_read, todo_write
+from co_cli.tools.todo.rw import TodoItemInput, todo_read, todo_write
 
 
 def _make_deps(tmp_path: Path) -> CoDeps:
@@ -48,8 +49,8 @@ async def test_fresh_write_accepts_well_formed_items_and_replaces_state(tmp_path
     result = await todo_write(
         ctx,
         [
-            {"id": "1", "content": "Step one", "status": "pending", "priority": "high"},
-            {"id": "2", "content": "Step two", "status": "in_progress"},
+            TodoItemInput(id="1", content="Step one", status="pending", priority="high"),
+            TodoItemInput(id="2", content="Step two", status="in_progress", priority="medium"),
         ],
     )
 
@@ -79,7 +80,9 @@ async def test_fresh_write_rejects_missing_id_leaves_state_unchanged(tmp_path: P
         {"id": "existing", "content": "keep me", "status": "pending", "priority": "medium"}
     ]  # type: ignore[list-item]
 
-    result = await todo_write(ctx, [{"content": "no id item", "status": "pending"}])
+    result = await todo_write(
+        ctx, [TodoItemInput(id="", content="no id item", status="pending", priority="medium")]
+    )
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -105,28 +108,10 @@ async def test_fresh_write_rejects_duplicate_id_in_payload(tmp_path: Path) -> No
     result = await todo_write(
         ctx,
         [
-            {"id": "dup", "content": "first", "status": "pending"},
-            {"id": "dup", "content": "second", "status": "pending"},
+            TodoItemInput(id="dup", content="first", status="pending", priority="medium"),
+            TodoItemInput(id="dup", content="second", status="pending", priority="medium"),
         ],
     )
-
-    assert result.metadata is not None
-    assert result.metadata.get("errors")
-    assert deps.session.session_todos == []
-
-
-# ---------------------------------------------------------------------------
-# 4. Fresh write — invalid status / priority
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_fresh_write_rejects_invalid_status(tmp_path: Path) -> None:
-    """todo_write rejects items with an invalid status or priority value, leaving state unchanged."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-
-    result = await todo_write(ctx, [{"id": "x", "content": "task", "status": "DONE"}])
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -144,7 +129,9 @@ async def test_fresh_write_rejects_empty_content(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = await todo_write(ctx, [{"id": "x", "content": "   ", "status": "pending"}])
+    result = await todo_write(
+        ctx, [TodoItemInput(id="x", content="   ", status="pending", priority="medium")]
+    )
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -158,26 +145,28 @@ async def test_fresh_write_rejects_empty_content(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_merge_updates_single_field_without_touching_others(tmp_path: Path) -> None:
-    """merge=True with only status in the payload updates status; content and priority unchanged.
+    """merge=True updates the specified fields; fields sent with unchanged values remain the same.
 
-    Regression guard: if merge overwrites non-present fields with defaults, the
-    model's carefully-set priorities and descriptions are silently discarded.
+    Regression guard: if merge blindly overwrites fields regardless of the provided values,
+    the model's carefully-set priorities and descriptions are silently corrupted.
     """
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
     await todo_write(
         ctx,
-        [{"id": "a", "content": "Important task", "status": "pending", "priority": "high"}],
+        [TodoItemInput(id="a", content="Important task", status="pending", priority="high")],
     )
-    original_content = deps.session.session_todos[0]["content"]
-    original_priority = deps.session.session_todos[0]["priority"]
 
-    await todo_write(ctx, [{"id": "a", "status": "completed"}], merge=True)
+    await todo_write(
+        ctx,
+        [TodoItemInput(id="a", content="Important task", status="completed", priority="high")],
+        merge=True,
+    )
 
     assert deps.session.session_todos[0]["status"] == "completed"
-    assert deps.session.session_todos[0]["content"] == original_content
-    assert deps.session.session_todos[0]["priority"] == original_priority
+    assert deps.session.session_todos[0]["content"] == "Important task"
+    assert deps.session.session_todos[0]["priority"] == "high"
 
 
 # ---------------------------------------------------------------------------
@@ -198,13 +187,17 @@ async def test_merge_preserves_unmentioned_items_in_order(tmp_path: Path) -> Non
     await todo_write(
         ctx,
         [
-            {"id": "1", "content": "Alpha", "status": "pending"},
-            {"id": "2", "content": "Beta", "status": "pending"},
-            {"id": "3", "content": "Gamma", "status": "pending"},
+            TodoItemInput(id="1", content="Alpha", status="pending", priority="medium"),
+            TodoItemInput(id="2", content="Beta", status="pending", priority="medium"),
+            TodoItemInput(id="3", content="Gamma", status="pending", priority="medium"),
         ],
     )
 
-    await todo_write(ctx, [{"id": "2", "status": "completed"}], merge=True)
+    await todo_write(
+        ctx,
+        [TodoItemInput(id="2", content="Beta", status="completed", priority="medium")],
+        merge=True,
+    )
 
     todos = deps.session.session_todos
     assert len(todos) == 3
@@ -231,9 +224,15 @@ async def test_merge_appends_unknown_id_as_new_item(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    await todo_write(ctx, [{"id": "a", "content": "First task", "status": "pending"}])
+    await todo_write(
+        ctx, [TodoItemInput(id="a", content="First task", status="pending", priority="medium")]
+    )
 
-    await todo_write(ctx, [{"id": "b", "content": "New task", "status": "pending"}], merge=True)
+    await todo_write(
+        ctx,
+        [TodoItemInput(id="b", content="New task", status="pending", priority="medium")],
+        merge=True,
+    )
 
     todos = deps.session.session_todos
     assert len(todos) == 2
@@ -253,10 +252,16 @@ async def test_merge_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    await todo_write(ctx, [{"id": "x", "content": "Keep me", "status": "pending"}])
+    await todo_write(
+        ctx, [TodoItemInput(id="x", content="Keep me", status="pending", priority="medium")]
+    )
     original = list(deps.session.session_todos)
 
-    result = await todo_write(ctx, [{"content": "no id", "status": "completed"}], merge=True)
+    result = await todo_write(
+        ctx,
+        [TodoItemInput(id="", content="no id", status="completed", priority="medium")],
+        merge=True,
+    )
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -268,22 +273,15 @@ async def test_merge_rejects_missing_id_leaves_state_unchanged(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_merge_rejects_invalid_field_on_existing_id_leaves_state_unchanged(
-    tmp_path: Path,
-) -> None:
-    """merge=True with an invalid status on a known id rejects the payload; state unchanged."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
+def test_merge_rejects_invalid_status_at_schema_level() -> None:
+    """TodoItemInput schema rejects invalid status on merge items at construction time.
 
-    await todo_write(ctx, [{"id": "a", "content": "Task", "status": "pending"}])
-    original = list(deps.session.session_todos)
-
-    result = await todo_write(ctx, [{"id": "a", "status": "INVALID_STATUS"}], merge=True)
-
-    assert result.metadata is not None
-    assert result.metadata.get("errors")
-    assert deps.session.session_todos == original
+    Regression guard: without the Literal constraint, the model may send arbitrary
+    status strings that reach the session store and corrupt status-based filtering
+    (compaction snapshot, TUI display, resume rehydration).
+    """
+    with pytest.raises(ValidationError):
+        TodoItemInput(id="a", content="Task", status="INVALID_STATUS", priority="medium")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -304,8 +302,8 @@ async def test_todo_read_returns_id_in_each_item_dict(tmp_path: Path) -> None:
     await todo_write(
         ctx,
         [
-            {"id": "task-1", "content": "Alpha", "status": "pending"},
-            {"id": "task-2", "content": "Beta", "status": "in_progress"},
+            TodoItemInput(id="task-1", content="Alpha", status="pending", priority="medium"),
+            TodoItemInput(id="task-2", content="Beta", status="in_progress", priority="medium"),
         ],
     )
 
@@ -338,8 +336,8 @@ async def test_todo_write_metadata_todos_has_all_keys_on_success(tmp_path: Path)
     result = await todo_write(
         ctx,
         [
-            {"id": "r1", "content": "Research", "status": "pending", "priority": "high"},
-            {"id": "r2", "content": "Write", "status": "pending"},
+            TodoItemInput(id="r1", content="Research", status="pending", priority="high"),
+            TodoItemInput(id="r2", content="Write", status="pending", priority="medium"),
         ],
     )
 
@@ -363,7 +361,9 @@ async def test_fresh_write_rejects_id_with_period(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = await todo_write(ctx, [{"id": "task.1", "content": "Bad id", "status": "pending"}])
+    result = await todo_write(
+        ctx, [TodoItemInput(id="task.1", content="Bad id", status="pending", priority="medium")]
+    )
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -391,8 +391,8 @@ async def test_fresh_write_two_in_progress_rejects_and_names_both_ids(tmp_path: 
     result = await todo_write(
         ctx,
         [
-            {"id": "x", "content": "Task X", "status": "in_progress"},
-            {"id": "y", "content": "Task Y", "status": "in_progress"},
+            TodoItemInput(id="x", content="Task X", status="in_progress", priority="medium"),
+            TodoItemInput(id="y", content="Task Y", status="in_progress", priority="medium"),
         ],
     )
 
@@ -416,12 +416,16 @@ async def test_merge_existing_one_in_progress_unrelated_update_accepts(tmp_path:
     await todo_write(
         ctx,
         [
-            {"id": "a", "content": "Active task", "status": "in_progress"},
-            {"id": "b", "content": "Other task", "status": "pending"},
+            TodoItemInput(id="a", content="Active task", status="in_progress", priority="medium"),
+            TodoItemInput(id="b", content="Other task", status="pending", priority="medium"),
         ],
     )
 
-    result = await todo_write(ctx, [{"id": "b", "priority": "high"}], merge=True)
+    result = await todo_write(
+        ctx,
+        [TodoItemInput(id="b", content="Other task", status="pending", priority="high")],
+        merge=True,
+    )
 
     assert result.metadata is not None
     assert not result.metadata.get("errors")
@@ -442,13 +446,17 @@ async def test_merge_adds_second_in_progress_rejects(tmp_path: Path) -> None:
     await todo_write(
         ctx,
         [
-            {"id": "a", "content": "Active", "status": "in_progress"},
-            {"id": "b", "content": "Next", "status": "pending"},
+            TodoItemInput(id="a", content="Active", status="in_progress", priority="medium"),
+            TodoItemInput(id="b", content="Next", status="pending", priority="medium"),
         ],
     )
     original = list(deps.session.session_todos)
 
-    result = await todo_write(ctx, [{"id": "b", "status": "in_progress"}], merge=True)
+    result = await todo_write(
+        ctx,
+        [TodoItemInput(id="b", content="Next", status="in_progress", priority="medium")],
+        merge=True,
+    )
 
     assert result.metadata is not None
     assert result.metadata.get("errors")
@@ -468,14 +476,17 @@ async def test_merge_swaps_in_progress_in_same_call_accepts(tmp_path: Path) -> N
     await todo_write(
         ctx,
         [
-            {"id": "a", "content": "Done now", "status": "in_progress"},
-            {"id": "b", "content": "Up next", "status": "pending"},
+            TodoItemInput(id="a", content="Done now", status="in_progress", priority="medium"),
+            TodoItemInput(id="b", content="Up next", status="pending", priority="medium"),
         ],
     )
 
     result = await todo_write(
         ctx,
-        [{"id": "a", "status": "completed"}, {"id": "b", "status": "in_progress"}],
+        [
+            TodoItemInput(id="a", content="Done now", status="completed", priority="medium"),
+            TodoItemInput(id="b", content="Up next", status="in_progress", priority="medium"),
+        ],
         merge=True,
     )
 
@@ -501,7 +512,11 @@ async def test_merge_legacy_two_in_progress_rejects(tmp_path: Path) -> None:
         {"id": "b", "content": "Task B", "status": "in_progress", "priority": "medium"},
     ]
 
-    result = await todo_write(ctx, [{"id": "a", "priority": "high"}], merge=True)
+    result = await todo_write(
+        ctx,
+        [TodoItemInput(id="a", content="Task A", status="in_progress", priority="high")],
+        merge=True,
+    )
 
     assert result.metadata is not None
     errors = result.metadata.get("errors") or []
@@ -529,9 +544,11 @@ async def test_per_item_error_short_circuits_aggregate_check(tmp_path: Path) -> 
     result = await todo_write(
         ctx,
         [
-            {"id": "a", "content": "Task A", "status": "in_progress"},
-            {"id": "b", "content": "Task B", "status": "in_progress"},
-            {"id": "c", "content": "Task C", "status": "running"},  # invalid status
+            TodoItemInput(id="a", content="Task A", status="in_progress", priority="medium"),
+            TodoItemInput(id="b", content="Task B", status="in_progress", priority="medium"),
+            TodoItemInput(
+                id="", content="Task C", status="pending", priority="medium"
+            ),  # empty id triggers per-item error
         ],
     )
 
@@ -540,7 +557,7 @@ async def test_per_item_error_short_circuits_aggregate_check(tmp_path: Path) -> 
     assert errors, "expected per-item error"
     # only per-item error — no aggregate error about multiple in_progress
     assert not any("Multiple items marked" in e for e in errors)
-    assert any("running" in e for e in errors)
+    assert any("id" in e for e in errors)
     # state unchanged
     assert deps.session.session_todos == []
 
@@ -562,9 +579,13 @@ async def test_aggregate_rejection_is_all_or_nothing(tmp_path: Path) -> None:
     result = await todo_write(
         ctx,
         [
-            {"id": "p", "content": "Passes validation", "status": "in_progress"},
-            {"id": "q", "content": "Also in_progress", "status": "in_progress"},
-            {"id": "r", "content": "Pending one", "status": "pending"},
+            TodoItemInput(
+                id="p", content="Passes validation", status="in_progress", priority="medium"
+            ),
+            TodoItemInput(
+                id="q", content="Also in_progress", status="in_progress", priority="medium"
+            ),
+            TodoItemInput(id="r", content="Pending one", status="pending", priority="medium"),
         ],
     )
 

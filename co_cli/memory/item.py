@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from co_cli.memory.frontmatter import parse_frontmatter
 
@@ -27,6 +27,14 @@ class MemoryKindEnum(StrEnum):
     ARTICLE = "article"
     NOTE = "note"
     CANON = "canon"
+
+
+MemoryKind = Literal[
+    MemoryKindEnum.USER,
+    MemoryKindEnum.RULE,
+    MemoryKindEnum.ARTICLE,
+    MemoryKindEnum.NOTE,
+]
 
 
 class SourceTypeEnum(StrEnum):

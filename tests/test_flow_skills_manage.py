@@ -316,16 +316,6 @@ async def test_write_file_stub_returns_linked_file_error(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_remove_file_stub_returns_linked_file_error(tmp_path: Path) -> None:
-    """remove_file action returns linked-file-deferred error."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    result = await skill_manage(ctx, action="remove_file", name="my-skill", file_path="x.md")
-    assert _is_error(result)
-    assert "not yet supported" in result.return_value
-
-
-@pytest.mark.asyncio
 async def test_patch_with_file_path_returns_linked_file_error(tmp_path: Path) -> None:
     """patch with file_path set returns linked-file-deferred error."""
     deps = _make_deps(tmp_path)

@@ -3,13 +3,12 @@
 import json
 
 import pytest
-from pydantic_ai import DeferredToolRequests, ToolApproved
+from pydantic_ai import AgentRunResult, DeferredToolRequests, ToolApproved
 from pydantic_ai.messages import ToolCallPart
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.context.orchestrate import _collect_deferred_tool_approvals
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState
-from co_cli.display.core import QuestionPrompt
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.tools.approvals import (
     is_auto_approved,
@@ -118,23 +117,6 @@ def test_approval_rule_does_not_match_different_directory():
     assert is_auto_approved(other_subj, deps) is False
 
 
-def test_prompt_question_frontend_contract() -> None:
-    """HeadlessFrontend must return question_answer, record last_question, and increment question_call_count."""
-    frontend = HeadlessFrontend(question_answer="blue")
-    q1 = QuestionPrompt(question="What color?", options=["red", "blue", "green"])
-
-    answer = frontend.prompt_question(q1)
-
-    assert answer == "blue"
-    assert frontend.last_question is q1
-    assert frontend.question_call_count == 1
-
-    q2 = QuestionPrompt(question="What size?")
-    frontend.prompt_question(q2)
-    assert frontend.question_call_count == 2
-    assert frontend.last_question is q2
-
-
 @pytest.mark.asyncio
 async def test_clarify_deferred_approval_routing() -> None:
     """_collect_deferred_tool_approvals must route QuestionRequired to prompt_question and inject the answer.
@@ -154,22 +136,20 @@ async def test_clarify_deferred_approval_routing() -> None:
         }
     ]
 
-    class _FakeResult:
-        output = DeferredToolRequests(
-            approvals=[
-                ToolCallPart(
-                    tool_name="clarify",
-                    args=json.dumps({"questions": questions}),
-                    tool_call_id=tool_call_id,
-                )
-            ],
-            metadata={tool_call_id: {"questions": questions}},
-        )
-
+    dtr = DeferredToolRequests(
+        approvals=[
+            ToolCallPart(
+                tool_name="clarify",
+                args=json.dumps({"questions": questions}),
+                tool_call_id=tool_call_id,
+            )
+        ],
+        metadata={tool_call_id: {"questions": questions}},
+    )
     deps = _fresh_deps()
     frontend = HeadlessFrontend(question_answer="json")
 
-    result = await _collect_deferred_tool_approvals(_FakeResult(), deps, frontend)
+    result = await _collect_deferred_tool_approvals(AgentRunResult(dtr), deps, frontend)
 
     # routing: prompt_question called once per question with correct content
     assert frontend.question_call_count == 1

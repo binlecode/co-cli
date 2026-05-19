@@ -2,6 +2,9 @@
 
 import re
 from importlib.metadata import version as _pkg_version
+from typing import Literal
+
+FetchFormat = Literal["markdown", "html", "text"]
 from urllib.parse import urlparse
 
 import html2text
@@ -113,7 +116,7 @@ def _build_fetch_headers(hostname: str | None) -> dict[str, str]:
 async def web_fetch(
     ctx: RunContext[CoDeps],
     url: str,
-    format: str = "markdown",
+    format: FetchFormat = "markdown",
     timeout: int = _FETCH_TIMEOUT,
 ) -> ToolReturn:
     """Fetch a web page and return its content as readable markdown text.

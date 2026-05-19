@@ -47,6 +47,7 @@ from co_cli.context._compaction_markers import (
     summary_marker,
 )
 from co_cli.context._http_error_classifier import is_context_overflow
+from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.history_processors import strip_all_tool_returns
 from co_cli.context.summarization import (
     estimate_message_tokens,
@@ -72,6 +73,7 @@ __all__ = [
     "gather_compaction_context",
     "group_by_turn",
     "groups_to_messages",
+    "is_cleared_marker",
     "is_compaction_marker",
     "is_context_overflow",
     "latest_response_input_tokens",

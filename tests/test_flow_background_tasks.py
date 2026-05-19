@@ -30,7 +30,7 @@ from co_cli.tools.background import (
 )
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.shell_env import SAFE_ENV_VARS, build_subprocess_env
-from co_cli.tools.tasks.control import task_start
+from co_cli.tools.tasks.control import task_list, task_start
 
 
 def _make_task_ctx(tmp_path: Path) -> RunContext[CoDeps]:
@@ -227,3 +227,43 @@ async def test_task_start_denies_rm_rf(tmp_path: Path) -> None:
     result = await task_start(ctx, command="rm -rf /", description="should be denied")
     assert _is_error(result)
     assert "task_start blocked" in result.return_value
+
+
+# ---------------------------------------------------------------------------
+# task_list status_filter (TaskStatus Literal constraint)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_task_list_status_filter_returns_only_matching_tasks(tmp_path: Path) -> None:
+    """task_list(status_filter='running') must exclude completed tasks."""
+    session = CoSessionState()
+    running_id = make_task_id()
+    completed_id = make_task_id()
+    session.background_tasks[running_id] = BackgroundTaskState(
+        task_id=running_id,
+        command="sleep 999",
+        cwd=str(tmp_path),
+        description="long running",
+        status="running",
+        started_at="",
+    )
+    session.background_tasks[completed_id] = BackgroundTaskState(
+        task_id=completed_id,
+        command="echo done",
+        cwd=str(tmp_path),
+        description="already done",
+        status="completed",
+        started_at="",
+    )
+    deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=session)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_list")
+
+    result = await task_list(ctx, status_filter="running")
+
+    assert result.metadata is not None
+    tasks = result.metadata.get("tasks", [])
+    assert all(t["status"] == "running" for t in tasks), f"unexpected non-running tasks: {tasks}"
+    assert result.metadata.get("count") == 1
+    assert running_id in result.return_value
+    assert completed_id not in result.return_value

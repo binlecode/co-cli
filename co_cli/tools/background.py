@@ -14,13 +14,15 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from co_cli.config.core import LOGS_DIR
 from co_cli.tools.shell_env import build_subprocess_env
 
 if TYPE_CHECKING:
     from co_cli.deps import CoSessionState
+
+TaskStatus = Literal["running", "completed", "failed", "cancelled"]
 
 
 @dataclass
@@ -29,7 +31,7 @@ class BackgroundTaskState:
     command: str
     cwd: str
     description: str
-    status: str  # "running" | "completed" | "failed" | "cancelled"
+    status: TaskStatus
     log_path: Path | None = None
     spawn_error: str | None = None
     process: asyncio.subprocess.Process | None = None

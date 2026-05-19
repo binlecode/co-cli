@@ -123,7 +123,7 @@ def test_below_threshold_counter_accumulates_no_spawn(tmp_path: Path) -> None:
 
 
 def test_zero_iteration_turn_does_not_advance(tmp_path: Path) -> None:
-    """A turn with no tool-producing ModelResponses (text-only) does not advance the counter."""
+    """A turn with turn_iteration_count=0 does not advance the counter."""
     from co_cli.main import _post_turn_hook
 
     deps = _make_deps(tmp_path, review_enabled=True, interval=5)
@@ -219,7 +219,7 @@ async def test_after_task_completes_next_trigger_fires(tmp_path: Path) -> None:
 async def test_error_or_interrupted_turn_iters_still_advance(tmp_path: Path) -> None:
     """Per BC5, counter advances on turns that returned a TurnResult, even if outcome=error.
 
-    The hook receives an integer tool_iterations from TurnResult; the source of that
+    The hook receives an integer llm_iterations from TurnResult; the source of that
     value (success/error/interrupted) is opaque to the hook. Verify the hook treats
     any positive count identically.
     """
@@ -227,7 +227,7 @@ async def test_error_or_interrupted_turn_iters_still_advance(tmp_path: Path) -> 
 
     deps = _make_deps(tmp_path, review_enabled=True, interval=10)
 
-    # Simulate two error/interrupted turns each contributing 3 tool iters.
+    # Simulate two error/interrupted turns each contributing 3 iterations.
     _post_turn_hook(deps, [], turn_iteration_count=3)
     _post_turn_hook(deps, [], turn_iteration_count=3)
 

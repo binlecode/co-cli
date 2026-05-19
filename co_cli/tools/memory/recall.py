@@ -8,7 +8,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
-from co_cli.memory.item import MemoryItem, load_memory_items
+from co_cli.memory.item import MemoryItem, MemoryKind, load_memory_items
 from co_cli.observability.tracing import current_span
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
@@ -151,7 +151,7 @@ def _format_memory_results(query: str, results: list[dict]) -> str:
 async def memory_search(
     ctx: RunContext[CoDeps],
     query: str = "",
-    kinds: list[str] | None = None,
+    kinds: list[MemoryKind] | None = None,
     limit: int = 10,
 ) -> ToolReturn:
     """Search memory artifacts by keyword, or browse recent artifacts.

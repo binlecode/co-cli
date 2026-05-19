@@ -4,6 +4,9 @@ import asyncio
 import difflib
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
+
+PatchMode = Literal["replace", "patch"]
 
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
@@ -540,7 +543,7 @@ async def file_write(
 )
 async def file_patch(
     ctx: RunContext[CoDeps],
-    mode: str = "replace",
+    mode: PatchMode = "replace",
     path: str | None = None,
     old_string: str | None = None,
     new_string: str | None = None,
@@ -582,10 +585,6 @@ async def file_patch(
         show_diff: Prepend a unified diff to output (replace mode only).
         patch: V4A format patch string (required for patch mode).
     """
-    _VALID_MODES = {"replace", "patch"}
-    if mode not in _VALID_MODES:
-        return tool_error(f"Invalid mode {mode!r} — use 'replace' or 'patch'", ctx=ctx)
-
     if mode == "patch":
         if not patch:
             return tool_error("patch argument is required in patch mode", ctx=ctx)

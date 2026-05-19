@@ -6,7 +6,7 @@ required for snapshot-based resume rehydration. No LLM — pure function over to
 
 import re
 
-from co_cli.context._compaction_markers import (
+from co_cli.context.compaction import (
     TODO_SNAPSHOT_PREFIX,
     build_todo_snapshot,
 )

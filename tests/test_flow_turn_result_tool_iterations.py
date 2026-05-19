@@ -1,6 +1,6 @@
-"""Behavioral tests for TurnResult.tool_iterations (plan 3.5c TASK-4).
+"""Behavioral tests for TurnResult.iterations (plan 3.5c TASK-4, simplified plan 2026-05-19).
 
-The post-turn skill-review hook consumes turn_result.tool_iterations to gate
+The post-turn skill-review hook consumes turn_result.llm_iterations to gate
 background firing. This file verifies orchestrate.py populates that field
 correctly at the three build sites (success / error / interrupted).
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelResponse
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM
@@ -50,8 +50,8 @@ _AGENT = build_orchestrator(ORCHESTRATOR_SPEC, _make_deps())
 
 
 @pytest.mark.asyncio
-async def test_real_turn_with_tool_call_populates_tool_iterations() -> None:
-    """A turn that emits at least one tool call must report tool_iterations >= 1."""
+async def test_real_turn_with_tool_call_populates_iterations() -> None:
+    """A turn that emits at least one tool call must report iterations >= 1."""
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
     deps = _make_deps()
@@ -70,24 +70,25 @@ async def test_real_turn_with_tool_call_populates_tool_iterations() -> None:
         )
 
     # Cross-check the accumulator against direct inspection of the messages.
-    direct_count = sum(
-        1
-        for m in turn.messages
-        if isinstance(m, ModelResponse) and any(isinstance(p, ToolCallPart) for p in m.parts)
+    # The counter now counts every ModelResponse, regardless of tool calls.
+    direct_count = sum(1 for m in turn.messages if isinstance(m, ModelResponse))
+    assert turn.llm_iterations >= 1, (
+        f"expected at least one ModelResponse, got iterations="
+        f"{turn.llm_iterations} (direct count over full history={direct_count})"
     )
-    assert turn.tool_iterations >= 1, (
-        f"expected at least one tool-producing ModelResponse, got tool_iterations="
-        f"{turn.tool_iterations} (direct count over full history={direct_count})"
-    )
-    assert turn.tool_iterations == direct_count, (
-        f"accumulator ({turn.tool_iterations}) disagrees with direct count "
+    assert turn.llm_iterations == direct_count, (
+        f"accumulator ({turn.llm_iterations}) disagrees with direct count "
         f"({direct_count}) over turn-local messages"
     )
 
 
 @pytest.mark.asyncio
-async def test_real_turn_text_only_response_has_zero_tool_iterations() -> None:
-    """A turn whose response carries no ToolCallPart contributes 0 to the accumulator."""
+async def test_real_turn_text_only_response_contributes_one_iteration() -> None:
+    """A text-only turn (no ToolCallPart) contributes >= 1 to the accumulator.
+
+    Previously the filter excluded text-only responses and returned 0.
+    With the simplified counter, every ModelResponse counts.
+    """
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
     deps = _make_deps()
@@ -104,13 +105,10 @@ async def test_real_turn_text_only_response_has_zero_tool_iterations() -> None:
             frontend=frontend,
         )
 
-    direct_count = sum(
-        1
-        for m in turn.messages
-        if isinstance(m, ModelResponse) and any(isinstance(p, ToolCallPart) for p in m.parts)
+    direct_count = sum(1 for m in turn.messages if isinstance(m, ModelResponse))
+    assert turn.llm_iterations >= 1, (
+        f"text-only turn must contribute >= 1 iteration, got {turn.llm_iterations}"
     )
-    # If the model defied the prompt and tool-called anyway, accept that the accumulator
-    # still equals the direct count. The strict contract is parity, not zero-ness.
-    assert turn.tool_iterations == direct_count, (
-        f"accumulator ({turn.tool_iterations}) disagrees with direct count ({direct_count})"
+    assert turn.llm_iterations == direct_count, (
+        f"accumulator ({turn.llm_iterations}) disagrees with direct count ({direct_count})"
     )

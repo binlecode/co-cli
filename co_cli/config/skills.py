@@ -25,7 +25,7 @@ class SkillsSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     review_enabled: bool = Field(default=False)
-    review_nudge_interval: int = Field(default=5, ge=1)
+    review_nudge_interval: int = Field(default=10, ge=1)
     usage_tracking_enabled: bool = Field(default=True)
     curator_enabled: bool = Field(default=False)
     curator_interval_hours: int = Field(default=168, ge=1)

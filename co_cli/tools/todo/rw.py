@@ -10,14 +10,23 @@ touching the rest. todo_read surfaces current state for completeness verificatio
 """
 
 import re
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import BaseModel
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, TodoItem, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output
+
+
+class TodoItemInput(BaseModel):
+    id: str
+    content: str
+    status: Literal["pending", "in_progress", "completed", "cancelled"]
+    priority: Literal["high", "medium", "low"]
+
 
 _VALID_STATUS = {"pending", "in_progress", "completed", "cancelled"}
 _VALID_PRIORITY = {"high", "medium", "low"}
@@ -199,7 +208,7 @@ def _run_merge(
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 def todo_write(
     ctx: RunContext[CoDeps],
-    todos: list[dict[str, Any]],
+    todos: list[TodoItemInput],
     merge: bool = False,
 ) -> ToolReturn:
     """Replace or merge-update the session todo list for tracking multi-step work.
@@ -228,8 +237,8 @@ def todo_write(
     Each item must have:
     - id (str): model-assigned; unique within session; no '.' or whitespace
     - content (str): task description — must be non-empty
-    - status (str, optional): "pending" | "in_progress" | "completed" | "cancelled" — defaults to "pending"
-    - priority (str, optional): "high" | "medium" | "low" — defaults to "medium"
+    - status (str): "pending" | "in_progress" | "completed" | "cancelled"
+    - priority (str): "high" | "medium" | "low"
 
     Returns a dict with:
     - display: summary of the todo list after the operation — show directly to user
@@ -242,11 +251,12 @@ def todo_write(
         todos: Items to write or merge. Fresh mode replaces the list. Merge mode updates by id.
         merge: If True, merge-update by id instead of replacing the full list.
     """
+    todos_dicts = [t.model_dump() for t in todos]
     if merge:
-        final, errors = _run_merge(todos, ctx.deps.session.session_todos)
+        final, errors = _run_merge(todos_dicts, ctx.deps.session.session_todos)
         reject_msg = "Todo list NOT updated — validation errors:\n"
     else:
-        final, errors = _run_fresh(todos)
+        final, errors = _run_fresh(todos_dicts)
         reject_msg = "Todo list NOT saved — validation errors:\n"
 
     if errors:

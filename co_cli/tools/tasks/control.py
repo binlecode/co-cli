@@ -19,6 +19,7 @@ from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.background import (
     BackgroundCleanupError,
     BackgroundTaskState,
+    TaskStatus,
     kill_task,
     make_task_id,
     spawn_task,
@@ -199,7 +200,7 @@ async def task_cancel(
 @agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_read_only=True, is_concurrent_safe=True)
 async def task_list(
     ctx: RunContext[CoDeps],
-    status_filter: str | None = None,
+    status_filter: TaskStatus | None = None,
 ) -> ToolReturn:
     """List all background tasks to discover active work or recover a task ID.
 

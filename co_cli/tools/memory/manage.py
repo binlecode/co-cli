@@ -7,7 +7,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
-from co_cli.memory.item import MemoryKindEnum
+from co_cli.memory.item import MemoryKind, MemoryKindEnum
 from co_cli.memory.service import mutate_memory_item, reindex, save_memory_item
 from co_cli.observability.tracing import current_span, trace
 from co_cli.tools.agent_tool import agent_tool
@@ -41,7 +41,7 @@ async def memory_manage(
     action: Literal["create", "append", "replace", "delete"],
     name: str,
     content: str | None = None,
-    kind: str | None = None,
+    kind: MemoryKind | None = None,
     section: str | None = None,
 ) -> ToolReturn:
     """Create, update, or delete a memory artifact.
