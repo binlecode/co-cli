@@ -13,10 +13,16 @@ from pydantic_ai.settings import ModelSettings
 # ---------------------------------------------------------------------------
 
 DEFAULT_LLM_PROVIDER = "ollama"
-DEFAULT_LLM_HOST = "http://localhost:11434"
+# Point at the multi-instance Ollama router (snippets-genai/llm_ollama/ollama_router.py),
+# which fans requests across two Ollama processes (:11434, :11435) to bypass the
+# qwen35moe Parallel=1 lock and yield true concurrent throughput. The router is
+# application-protocol transparent — same OpenAI-compatible HTTP API as direct
+# Ollama, identical JSON in/out, identical SSE streaming. Set to "http://localhost:11434"
+# to bypass the router and talk to the primary Ollama directly.
+DEFAULT_LLM_HOST = "http://localhost:11433"
 
 DEFAULT_LLM_MODELS: dict[str, str] = {
-    "ollama": "qwen3.5:35b-a3b-q4_k_m-agentic",
+    "ollama": "qwen3.6:35b-a3b-agentic",
     "gemini": "gemini-3-flash-preview",
 }
 
@@ -32,20 +38,54 @@ DEFAULT_MAX_CTX = 65_536
 
 _LLM_SETTINGS: dict[str, Any] = {
     "ollama": {
-        "qwen3.5": {
+        # All Qwen variants (qwen3.6:35b-a3b-agentic, etc.) share this entry via
+        # model.split(":")[0]. The -agentic Modelfile is the only Modelfile used —
+        # think on/off and all sampling params are overridden at call time.
+        "qwen3.6": {
+            # Reasoning: agentic turns with thinking enabled.
+            # temperature=0.6, top_p=0.95, top_k=20: Modelfile values made explicit
+            #   so behavior is deterministic regardless of Modelfile changes.
+            # think=True: explicit API override (Modelfile default, but stated clearly).
+            # max_tokens=4096 caps each agentic turn; num_ctx must match Modelfile
+            #   exactly (65536) to avoid triggering a model reload.
             "reasoning": {
+                "temperature": 0.6,
+                "top_p": 0.95,
                 "max_tokens": 4096,
                 "extra_body": {
-                    "options": {"num_ctx": 65_536},
+                    "think": True,
+                    "options": {
+                        "num_ctx": 65_536,
+                        "top_k": 20,
+                    },
                 },
             },
+            # Noreason: used by summarization (context/summarization.py),
+            # memory merge (memory/dream.py), and judge calls (evals/_judge.py).
+            # think=False + reasoning_effort=none suppresses thinking on the
+            # OpenAI-compat path — validated in production via the OpenAI SDK.
+            # temperature=0.3: enough entropy for fluent multi-section prose
+            #   (summarization can produce 5000+ tokens); 0 causes flat/repetitive
+            #   output on long structured summaries. Judge/merge calls are short
+            #   enough that 0 vs 0.3 produces no observable difference.
+            # top_p=0.8: tighter nucleus than the agentic Modelfile default (0.95).
+            # max_tokens=8192: multi-section compaction summaries can exceed 4096;
+            #   8192 matches the nothink Modelfile ceiling. Judge/merge calls never
+            #   approach this limit.
+            # presence_penalty=1.5: loop-breaker for multi-section structured output;
+            #   must go in options (not top-level) — _scalar_settings() does not
+            #   extract it, so top-level placement would be silently ignored.
             "noreason": {
-                "temperature": 0,
-                "max_tokens": 4096,
+                "temperature": 0.3,
+                "top_p": 0.8,
+                "max_tokens": 8192,
                 "extra_body": {
                     "think": False,
                     "reasoning_effort": "none",
-                    "options": {"num_ctx": 65_536},
+                    "options": {
+                        "num_ctx": 65_536,
+                        "presence_penalty": 1.5,
+                    },
                 },
             },
         },
