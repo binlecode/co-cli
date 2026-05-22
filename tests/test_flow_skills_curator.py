@@ -16,7 +16,7 @@ from co_cli.config.skills import (
 )
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.skills.curator import (
-    apply_state_transitions,
+    apply_state_transition_one,
     archive_skill,
     read_curator_state,
     restore_skill,
@@ -63,180 +63,109 @@ def _ago(days: float = 0, hours: float = 0, seconds: float = 0) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _make_records(**skill_overrides: dict) -> dict:
-    return {"version": 1, "skills": skill_overrides}
-
-
 # ---------------------------------------------------------------------------
-# apply_state_transitions — state transition matrix
+# apply_state_transition_one — state transition matrix
 # ---------------------------------------------------------------------------
 
 
 def test_active_to_stale_when_idle_exceeds_stale_threshold() -> None:
-    records = _make_records(
-        **{
-            "my-skill": {
-                "state": "active",
-                "pinned": False,
-                "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 1),
-                "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 2),
-            }
-        }
-    )
-    transitions = apply_state_transitions(records, SkillsSettings(), _now())
-    assert len(transitions) == 1
-    t = transitions[0]
+    record = {
+        "state": "active",
+        "pinned": False,
+        "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 1),
+        "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 2),
+    }
+    t = apply_state_transition_one("my-skill", record, SkillsSettings(), _now())
+    assert t is not None
     assert (t.name, t.from_state, t.to_state) == ("my-skill", "active", "stale")
 
 
 def test_active_no_transition_when_recently_used() -> None:
-    records = _make_records(
-        **{
-            "my-skill": {
-                "state": "active",
-                "pinned": False,
-                "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS - 5),
-                "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 10),
-            }
-        }
-    )
-    assert apply_state_transitions(records, SkillsSettings(), _now()) == []
+    record = {
+        "state": "active",
+        "pinned": False,
+        "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS - 5),
+        "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 10),
+    }
+    assert apply_state_transition_one("my-skill", record, SkillsSettings(), _now()) is None
 
 
 def test_stale_to_archived_when_idle_exceeds_archive_threshold() -> None:
-    records = _make_records(
-        **{
-            "old-skill": {
-                "state": "stale",
-                "pinned": False,
-                "last_used_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 1),
-                "created_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 5),
-            }
-        }
-    )
-    transitions = apply_state_transitions(records, SkillsSettings(), _now())
-    assert len(transitions) == 1
-    assert (transitions[0].from_state, transitions[0].to_state) == ("stale", "archived")
+    record = {
+        "state": "stale",
+        "pinned": False,
+        "last_used_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 1),
+        "created_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 5),
+    }
+    t = apply_state_transition_one("old-skill", record, SkillsSettings(), _now())
+    assert t is not None
+    assert (t.from_state, t.to_state) == ("stale", "archived")
 
 
 def test_stale_to_active_when_recently_used() -> None:
-    records = _make_records(
-        **{
-            "revived-skill": {
-                "state": "stale",
-                "pinned": False,
-                "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS - 1),
-                "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 30),
-            }
-        }
-    )
-    transitions = apply_state_transitions(records, SkillsSettings(), _now())
-    assert len(transitions) == 1
-    assert (transitions[0].from_state, transitions[0].to_state) == ("stale", "active")
+    record = {
+        "state": "stale",
+        "pinned": False,
+        "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS - 1),
+        "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 30),
+    }
+    t = apply_state_transition_one("revived-skill", record, SkillsSettings(), _now())
+    assert t is not None
+    assert (t.from_state, t.to_state) == ("stale", "active")
 
 
 def test_pinned_skill_skips_all_transitions() -> None:
-    records = _make_records(
-        **{
-            "pinned-skill": {
-                "state": "active",
-                "pinned": True,
-                "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 10),
-                "created_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 5),
-            }
-        }
-    )
-    assert apply_state_transitions(records, SkillsSettings(), _now()) == []
+    record = {
+        "state": "active",
+        "pinned": True,
+        "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 10),
+        "created_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 5),
+    }
+    assert apply_state_transition_one("pinned-skill", record, SkillsSettings(), _now()) is None
 
 
 def test_archived_skill_is_skipped() -> None:
-    records = _make_records(
-        **{
-            "dead-skill": {
-                "state": "archived",
-                "pinned": False,
-                "last_used_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 10),
-                "created_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 20),
-            }
-        }
-    )
-    assert apply_state_transitions(records, SkillsSettings(), _now()) == []
+    record = {
+        "state": "archived",
+        "pinned": False,
+        "last_used_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 10),
+        "created_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 20),
+    }
+    assert apply_state_transition_one("dead-skill", record, SkillsSettings(), _now()) is None
 
 
 def test_none_last_used_at_falls_back_to_created_at() -> None:
-    records = _make_records(
-        **{
-            "new-skill": {
-                "state": "active",
-                "pinned": False,
-                "last_used_at": None,
-                "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 2),
-            }
-        }
-    )
-    transitions = apply_state_transitions(records, SkillsSettings(), _now())
-    assert len(transitions) == 1
-    assert transitions[0].to_state == "stale"
+    record = {
+        "state": "active",
+        "pinned": False,
+        "last_used_at": None,
+        "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 2),
+    }
+    t = apply_state_transition_one("new-skill", record, SkillsSettings(), _now())
+    assert t is not None
+    assert t.to_state == "stale"
 
 
 def test_both_timestamps_none_skill_is_skipped() -> None:
-    records = _make_records(
-        **{
-            "ghost-skill": {
-                "state": "active",
-                "pinned": False,
-                "last_used_at": None,
-                "created_at": None,
-            }
-        }
-    )
-    assert apply_state_transitions(records, SkillsSettings(), _now()) == []
+    record = {
+        "state": "active",
+        "pinned": False,
+        "last_used_at": None,
+        "created_at": None,
+    }
+    assert apply_state_transition_one("ghost-skill", record, SkillsSettings(), _now()) is None
 
 
-def test_apply_state_transitions_does_not_mutate_records() -> None:
-    records = _make_records(
-        **{
-            "my-skill": {
-                "state": "active",
-                "pinned": False,
-                "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
-                "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 6),
-            }
-        }
-    )
-    original_state = records["skills"]["my-skill"]["state"]
-    apply_state_transitions(records, SkillsSettings(), _now())
-    assert records["skills"]["my-skill"]["state"] == original_state
-
-
-def test_multiple_skills_transitions_computed_independently() -> None:
-    records = _make_records(
-        **{
-            "skill-a": {
-                "state": "active",
-                "pinned": False,
-                "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
-                "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 6),
-            },
-            "skill-b": {
-                "state": "stale",
-                "pinned": False,
-                "last_used_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 5),
-                "created_at": _ago(days=CURATOR_ARCHIVE_AFTER_DAYS + 6),
-            },
-            "skill-c": {
-                "state": "active",
-                "pinned": True,
-                "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
-                "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 6),
-            },
-        }
-    )
-    transitions = apply_state_transitions(records, SkillsSettings(), _now())
-    names_and_targets = {(t.name, t.to_state) for t in transitions}
-    assert ("skill-a", "stale") in names_and_targets
-    assert ("skill-b", "archived") in names_and_targets
-    assert all(t.name != "skill-c" for t in transitions)
+def test_apply_state_transition_one_does_not_mutate_record() -> None:
+    record = {
+        "state": "active",
+        "pinned": False,
+        "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
+        "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 6),
+    }
+    original_state = record["state"]
+    apply_state_transition_one("my-skill", record, SkillsSettings(), _now())
+    assert record["state"] == original_state
 
 
 # ---------------------------------------------------------------------------

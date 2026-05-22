@@ -56,65 +56,75 @@ def _days_since(dt: datetime, now: datetime) -> float:
     return (now - dt).total_seconds() / 86400.0
 
 
-def apply_state_transitions(
-    records: dict[str, Any],
+def apply_state_transition_one(
+    name: str,
+    record: dict[str, Any],
     settings: SkillsSettings,
     now: datetime,
-) -> list[StateTransition]:
-    """Pure function: compute state transitions from usage records.
+) -> StateTransition | None:
+    """Pure function: compute the state transition for a single skill record.
 
-    Returns a list of StateTransition objects. Does not mutate records,
-    does not touch disk.
+    Returns a StateTransition or None. Does not mutate the record, does not
+    touch disk.
 
     State machine:
       active  → stale    if last_used_at > CURATOR_STALE_AFTER_DAYS ago
       stale   → archived if last activity > CURATOR_ARCHIVE_AFTER_DAYS ago
       stale   → active   if recently used (within CURATOR_STALE_AFTER_DAYS)
 
-    Pinned skills and already-archived skills are skipped.
-    If last_used_at is None, created_at is used as the proxy. If both are
-    None, the skill is skipped.
+    Pinned skills and already-archived skills are skipped. If last_used_at
+    is None, created_at is used as the proxy. If both are None, the skill
+    is skipped.
     """
     del settings
+    state = record["state"]
+    pinned = record["pinned"]
+
+    if pinned:
+        return None
+    if state == "archived":
+        return None
+
+    last_used_at_str = record["last_used_at"]
+    created_at_str = record["created_at"]
+
+    if last_used_at_str is not None:
+        reference_dt = _parse_iso(last_used_at_str)
+    elif created_at_str is not None:
+        reference_dt = _parse_iso(created_at_str)
+    else:
+        return None
+
+    days_idle = _days_since(reference_dt, now)
+
+    if state == "active":
+        if days_idle > CURATOR_STALE_AFTER_DAYS:
+            return StateTransition(name=name, from_state="active", to_state="stale")
+    elif state == "stale":
+        if days_idle > CURATOR_ARCHIVE_AFTER_DAYS:
+            return StateTransition(name=name, from_state="stale", to_state="archived")
+        if days_idle <= CURATOR_STALE_AFTER_DAYS:
+            return StateTransition(name=name, from_state="stale", to_state="active")
+
+    return None
+
+
+def compute_pending_transitions(
+    deps: CoDeps,
+    settings: SkillsSettings,
+    now: datetime,
+) -> list[StateTransition]:
+    """Iterate per-skill sidecars and collect state transitions.
+
+    Convenience wrapper used by curator phase 1 and /skills curator status.
+    """
+    from co_cli.skills.usage import iter_records
+
     transitions: list[StateTransition] = []
-    skills = records.get("skills", {})
-
-    for name, record in skills.items():
-        state = record.get("state", "active")
-        pinned = record.get("pinned", False)
-
-        if pinned:
-            continue
-        if state == "archived":
-            continue
-
-        last_used_at_str = record.get("last_used_at")
-        created_at_str = record.get("created_at")
-
-        if last_used_at_str is not None:
-            reference_dt = _parse_iso(last_used_at_str)
-        elif created_at_str is not None:
-            reference_dt = _parse_iso(created_at_str)
-        else:
-            continue
-
-        days_idle = _days_since(reference_dt, now)
-
-        if state == "active":
-            if days_idle > CURATOR_STALE_AFTER_DAYS:
-                transitions.append(
-                    StateTransition(name=name, from_state="active", to_state="stale")
-                )
-        elif state == "stale":
-            if days_idle > CURATOR_ARCHIVE_AFTER_DAYS:
-                transitions.append(
-                    StateTransition(name=name, from_state="stale", to_state="archived")
-                )
-            elif days_idle <= CURATOR_STALE_AFTER_DAYS:
-                transitions.append(
-                    StateTransition(name=name, from_state="stale", to_state="active")
-                )
-
+    for name, record in iter_records(deps):
+        t = apply_state_transition_one(name, record, settings, now)
+        if t is not None:
+            transitions.append(t)
     return transitions
 
 
@@ -217,14 +227,13 @@ CURATOR_SPEC = TaskAgentSpec(
 
 def _summarize_skill_inventory(deps: CoDeps) -> str:
     """Build a text inventory of agent-created, non-archived, non-pinned skills."""
-    from co_cli.skills.usage import is_agent_created, read_records
+    from co_cli.skills.usage import is_agent_created, iter_records
 
-    records = read_records(deps).get("skills", {})
     lines: list[str] = []
-    for name, record in records.items():
-        if record.get("state") == "archived":
+    for name, record in iter_records(deps):
+        if record["state"] == "archived":
             continue
-        if record.get("pinned"):
+        if record["pinned"]:
             continue
         if not is_agent_created(name, deps):
             continue
@@ -234,9 +243,9 @@ def _summarize_skill_inventory(deps: CoDeps) -> str:
         body = skill_path.read_text(encoding="utf-8")[:1000]
         lines.append(
             f"## {name}\n"
-            f"state={record.get('state', 'active')}  "
-            f"use_count={record.get('use_count', 0)}  "
-            f"last_used_at={record.get('last_used_at') or 'never'}\n\n"
+            f"state={record['state']}  "
+            f"use_count={record['use_count']}  "
+            f"last_used_at={record['last_used_at'] or 'never'}\n\n"
             f"{body}"
         )
     if not lines:
@@ -307,7 +316,7 @@ async def run_curator(deps: CoDeps) -> None:
     """
     await asyncio.sleep(0)
 
-    from co_cli.skills.usage import read_records, write_records
+    from co_cli.skills.usage import iter_records, write_record
 
     try:
         now = datetime.now(UTC)
@@ -315,11 +324,14 @@ async def run_curator(deps: CoDeps) -> None:
         seen_last_run_at = curator_state.get("last_run_at")
 
         # Phase 1 — state transitions
-        sidecar_data = read_records(deps)
-        transitions = apply_state_transitions(sidecar_data, deps.config.skills, now)
-        for t in transitions:
-            sidecar_data.setdefault("skills", {}).setdefault(t.name, {})["state"] = t.to_state
-        write_records(deps, sidecar_data)
+        transitions: list[StateTransition] = []
+        for name, record in iter_records(deps):
+            t = apply_state_transition_one(name, record, deps.config.skills, now)
+            if t is None:
+                continue
+            transitions.append(t)
+            record["state"] = t.to_state
+            write_record(deps, name, record)
 
         for t in transitions:
             if t.to_state == "archived":

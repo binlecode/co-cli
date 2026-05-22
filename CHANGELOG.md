@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.232]
+
+### Per-skill usage sidecars + backward-compat smell purge
+
+- **Per-skill sidecars** — skill usage tracking moves from one shared `~/.co-cli/skills/.usage.json` to per-skill `<name>.usage.json` next to each skill. Bounds the blast radius of concurrent writes to a single skill; eliminates whole-library rewrites on every bump
+- **New `usage.py` API** — `read_record(deps, name)`, `write_record(deps, name, record)`, `iter_records(deps)` replace shared-dict `read_records` / `write_records`. Public `bump_*` / `record_create` / `forget` / `set_pinned` signatures unchanged
+- **Curator refactor** — `apply_state_transitions(records, ...)` split into pure `apply_state_transition_one(name, record, ...)` + `compute_pending_transitions(deps, ...)` orchestrator; phase 1 iterates per-skill, writes per-skill
+- **Zero-backward-compat purge** — removed `.setdefault(...)` backfills (`recall_days`, `version`) in `read_record` / `iter_records` / `write_record` / `bump_recall`; replaced `.get(field, default)` patterns with direct field access across curator + `/skills usage` display. Dead canon-frontmatter `artifact_kind or kind` fallback in `bootstrap/core.py` stripped to `kind="canon"`
+
 ## [0.8.230]
 
 ### Online reviewer + dream daemon MVP

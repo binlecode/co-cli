@@ -62,25 +62,23 @@ def test_bump_recall_adds_today_iso_date(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     skill_usage.bump_recall(deps, "test-recall-skill")
 
-    records = skill_usage.read_records(deps)
-    recall_days = records["skills"]["test-recall-skill"]["recall_days"]
+    record = skill_usage.read_record(deps, "test-recall-skill")
+    assert record is not None
     today = date.today().isoformat()
-    assert today in recall_days
+    assert today in record["recall_days"]
 
 
 def test_bump_recall_starts_from_empty_list(tmp_path: Path) -> None:
-    """Before any bump_recall call, recall_days is empty."""
+    """Before any bump_recall call, no sidecar exists."""
     deps = _make_deps(tmp_path)
 
-    records = skill_usage.read_records(deps)
-    # No record yet — empty sidecar
-    assert "test-recall-skill" not in records.get("skills", {})
+    assert skill_usage.read_record(deps, "test-recall-skill") is None
 
     skill_usage.bump_recall(deps, "test-recall-skill")
 
-    records = skill_usage.read_records(deps)
-    assert "test-recall-skill" in records["skills"]
-    assert len(records["skills"]["test-recall-skill"]["recall_days"]) == 1
+    record = skill_usage.read_record(deps, "test-recall-skill")
+    assert record is not None
+    assert len(record["recall_days"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +93,10 @@ def test_bump_recall_deduplicates_same_day(tmp_path: Path) -> None:
     skill_usage.bump_recall(deps, "test-recall-skill")
     skill_usage.bump_recall(deps, "test-recall-skill")
 
-    records = skill_usage.read_records(deps)
+    record = skill_usage.read_record(deps, "test-recall-skill")
+    assert record is not None
     today = date.today().isoformat()
-    recall_days = records["skills"]["test-recall-skill"]["recall_days"]
-    assert recall_days.count(today) == 1
+    assert record["recall_days"].count(today) == 1
 
 
 def test_bump_recall_does_not_duplicate_when_already_present(tmp_path: Path) -> None:
@@ -106,19 +104,17 @@ def test_bump_recall_does_not_duplicate_when_already_present(tmp_path: Path) -> 
     deps = _make_deps(tmp_path)
     today = date.today().isoformat()
 
-    # Seed sidecar with today already present
+    # Seed per-skill sidecar with today already present
     now_iso = skill_usage._utcnow_iso()
-    records = skill_usage._empty_records()
     record = skill_usage._new_record(now_iso)
     record["recall_days"] = [today]
-    records["skills"]["test-recall-skill"] = record
-    skill_usage.write_records(deps, records)
+    skill_usage.write_record(deps, "test-recall-skill", record)
 
     skill_usage.bump_recall(deps, "test-recall-skill")
 
-    records = skill_usage.read_records(deps)
-    recall_days = records["skills"]["test-recall-skill"]["recall_days"]
-    assert recall_days.count(today) == 1
+    record = skill_usage.read_record(deps, "test-recall-skill")
+    assert record is not None
+    assert record["recall_days"].count(today) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +144,8 @@ def test_bump_recall_no_op_when_usage_tracking_disabled(tmp_path: Path) -> None:
 
     skill_usage.bump_recall(deps, "test-recall-skill")
 
-    # Sidecar should not have been written
-    sidecar = user_skills_dir / ".usage.json"
+    # Per-skill sidecar should not have been written
+    sidecar = user_skills_dir / "test-recall-skill.usage.json"
     assert not sidecar.exists()
 
 
@@ -165,5 +161,4 @@ def test_bump_recall_skips_skill_not_in_user_skills_dir(tmp_path: Path) -> None:
     # Call with a name that has no .md in user_skills_dir
     skill_usage.bump_recall(deps, "no-such-skill")
 
-    records = skill_usage.read_records(deps)
-    assert "no-such-skill" not in records.get("skills", {})
+    assert skill_usage.read_record(deps, "no-such-skill") is None

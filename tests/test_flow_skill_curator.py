@@ -72,31 +72,28 @@ async def test_run_curator_applies_state_transitions(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path, curator_enabled=True)
     (deps.user_skills_dir / "old-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
 
-    # Seed sidecar so apply_state_transitions sees an idle-active record
-    skill_usage.write_records(
+    # Seed per-skill sidecar so apply_state_transition_one sees an idle-active record
+    skill_usage.write_record(
         deps,
+        "old-skill",
         {
-            "version": 1,
-            "skills": {
-                "old-skill": {
-                    "use_count": 1,
-                    "view_count": 1,
-                    "patch_count": 0,
-                    "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
-                    "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
-                    "last_viewed_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
-                    "last_patched_at": None,
-                    "state": "active",
-                    "pinned": False,
-                }
-            },
+            "use_count": 1,
+            "view_count": 1,
+            "patch_count": 0,
+            "created_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
+            "last_used_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
+            "last_viewed_at": _ago(days=CURATOR_STALE_AFTER_DAYS + 5),
+            "last_patched_at": None,
+            "state": "active",
+            "pinned": False,
         },
     )
 
     await run_curator(deps)
 
-    records = skill_usage.read_records(deps)
-    assert records["skills"]["old-skill"]["state"] == "stale"
+    record = skill_usage.read_record(deps, "old-skill")
+    assert record is not None
+    assert record["state"] == "stale"
 
 
 @pytest.mark.asyncio

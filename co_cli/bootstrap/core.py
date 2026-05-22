@@ -216,7 +216,6 @@ def _sync_canon_dir(index_store: IndexStore, canon_dir: Path) -> int:
                 continue
 
             frontmatter, body = parse_frontmatter(raw)
-            artifact_kind = frontmatter.get("artifact_kind") or frontmatter.get("kind") or "canon"
             title = frontmatter.get("title") or file_path.stem
             body_stripped = body.strip()
             chunk = Chunk(
@@ -228,7 +227,7 @@ def _sync_canon_dir(index_store: IndexStore, canon_dir: Path) -> int:
             with index_store.transaction() as tx:
                 tx.upsert(
                     source="canon",
-                    kind=artifact_kind,
+                    kind="canon",
                     path=path_str,
                     title=title,
                     mtime=file_path.stat().st_mtime,

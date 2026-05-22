@@ -172,12 +172,11 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
 
 
 def _cmd_skills_usage(ctx: CommandContext, args: str) -> None:
-    """Print the usage sidecar — table for all skills, full record for one."""
+    """Print the usage sidecars — table for all skills, full record for one."""
     name = args.strip()
-    records = skill_usage.read_records(ctx.deps).get("skills", {})
 
     if name:
-        record = records.get(name)
+        record = skill_usage.read_record(ctx.deps, name)
         if record is None:
             console.print(f"[dim]No usage record for skill '{name}'.[/dim]")
             return
@@ -193,10 +192,11 @@ def _cmd_skills_usage(ctx: CommandContext, args: str) -> None:
             "state",
             "pinned",
         ):
-            table.add_row(key, str(record.get(key)))
+            table.add_row(key, str(record[key]))
         console.print(table)
         return
 
+    records = dict(skill_usage.iter_records(ctx.deps))
     if not records:
         console.print("[dim]No skill usage records yet.[/dim]")
         return
@@ -206,12 +206,12 @@ def _cmd_skills_usage(ctx: CommandContext, args: str) -> None:
         rec = records[skill_name]
         table.add_row(
             skill_name,
-            str(rec.get("use_count", 0)),
-            str(rec.get("view_count", 0)),
-            str(rec.get("patch_count", 0)),
-            str(rec.get("last_used_at") or "-"),
-            str(rec.get("state", "active")),
-            "✓" if rec.get("pinned") else "",
+            str(rec["use_count"]),
+            str(rec["view_count"]),
+            str(rec["patch_count"]),
+            str(rec["last_used_at"] or "-"),
+            str(rec["state"]),
+            "✓" if rec["pinned"] else "",
         )
     console.print(table)
 
@@ -256,12 +256,11 @@ async def _cmd_skills_curator(ctx: CommandContext, args: str) -> None:
 
     from co_cli.skills.curator import (
         _parse_iso,
-        apply_state_transitions,
+        compute_pending_transitions,
         read_curator_state,
         restore_skill,
         run_curator,
     )
-    from co_cli.skills.usage import read_records
 
     sub = args.strip().split(maxsplit=1)
     action = sub[0].lower() if sub else "status"
@@ -283,8 +282,7 @@ async def _cmd_skills_curator(ctx: CommandContext, args: str) -> None:
         else:
             next_str = "eligible now"
 
-        sidecar = read_records(ctx.deps)
-        transitions = apply_state_transitions(sidecar, ctx.deps.config.skills, now)
+        transitions = compute_pending_transitions(ctx.deps, ctx.deps.config.skills, now)
         pending = len(transitions)
 
         table = make_table("Field", "Value")

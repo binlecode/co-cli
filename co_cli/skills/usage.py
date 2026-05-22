@@ -1,30 +1,30 @@
-"""Per-skill usage tracking sidecar (~/.co-cli/skills/.usage.json).
+"""Per-skill usage tracking sidecars (~/.co-cli/skills/<name>.usage.json).
 
 Tracks counters and timestamps only for agent-created skills (any user skill
 file under user_skills_dir). Bundled skills (under co_cli/skills/) are
 upstream-managed and excluded.
 
+Each agent-created skill has its own sidecar file next to its <name>.md.
+This bounds the blast radius of concurrent writes to a single skill and
+avoids whole-library rewrites on every bump.
+
 Sidecar I/O is best-effort: exceptions are logged and swallowed so usage
 tracking never blocks the underlying skill operation. Atomic writes via
-co_cli.persistence.atomic.atomic_write_text.
+co_cli.fileio.atomic.atomic_write_text.
 
-Schema:
+Per-skill file schema:
     {
       "version": 1,
-      "skills": {
-        "<name>": {
-          "use_count": int,
-          "view_count": int,
-          "patch_count": int,
-          "created_at": ISO8601,
-          "last_used_at": ISO8601 | null,
-          "last_viewed_at": ISO8601 | null,
-          "last_patched_at": ISO8601 | null,
-          "state": "active",
-          "pinned": bool,
-          "recall_days": [ISO8601-date, ...]
-        }
-      }
+      "use_count": int,
+      "view_count": int,
+      "patch_count": int,
+      "created_at": ISO8601,
+      "last_used_at": ISO8601 | null,
+      "last_viewed_at": ISO8601 | null,
+      "last_patched_at": ISO8601 | null,
+      "state": "active",
+      "pinned": bool,
+      "recall_days": [ISO8601-date, ...]
     }
 """
 
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SIDECAR_FILENAME = ".usage.json"
+SIDECAR_SUFFIX = ".usage.json"
 SIDECAR_VERSION = 1
 STATE_ACTIVE = "active"
 
@@ -52,8 +53,8 @@ def _utcnow_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _sidecar_path(deps: CoDeps) -> Path:
-    return deps.user_skills_dir / SIDECAR_FILENAME
+def _sidecar_path(deps: CoDeps, name: str) -> Path:
+    return deps.user_skills_dir / f"{name}{SIDECAR_SUFFIX}"
 
 
 def _enabled(deps: CoDeps) -> bool:
@@ -70,37 +71,9 @@ def is_agent_created(name: str, deps: CoDeps) -> bool:
     return skill_path.exists()
 
 
-def _empty_records() -> dict[str, Any]:
-    return {"version": SIDECAR_VERSION, "skills": {}}
-
-
-def read_records(deps: CoDeps) -> dict[str, Any]:
-    """Load sidecar. Returns empty structure on missing file or parse error."""
-    path = _sidecar_path(deps)
-    if not path.exists():
-        return _empty_records()
-    try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.debug("skill usage sidecar unreadable at %s: %s — starting fresh", path, exc)
-        return _empty_records()
-    if not isinstance(data, dict) or "skills" not in data:
-        return _empty_records()
-    for record in data["skills"].values():
-        record.setdefault("recall_days", [])
-    return data
-
-
-def write_records(deps: CoDeps, data: dict[str, Any]) -> None:
-    """Atomically write the full sidecar."""
-    path = _sidecar_path(deps)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(path, json.dumps(data, indent=2))
-
-
 def _new_record(now: str) -> dict[str, Any]:
     return {
+        "version": SIDECAR_VERSION,
         "use_count": 0,
         "view_count": 0,
         "patch_count": 0,
@@ -114,13 +87,50 @@ def _new_record(now: str) -> dict[str, Any]:
     }
 
 
-def _get_or_init_record(records: dict[str, Any], name: str, now: str) -> dict[str, Any]:
-    skills = records.setdefault("skills", {})
-    record = skills.get(name)
-    if record is None:
-        record = _new_record(now)
-        skills[name] = record
-    return record
+def read_record(deps: CoDeps, name: str) -> dict[str, Any] | None:
+    """Load one skill's record. Returns None if absent."""
+    path = _sidecar_path(deps, name)
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("skill usage sidecar unreadable at %s: %s — treating as absent", path, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def write_record(deps: CoDeps, name: str, record: dict[str, Any]) -> None:
+    """Atomically write a single skill's sidecar."""
+    path = _sidecar_path(deps, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(record, indent=2))
+
+
+def iter_records(deps: CoDeps) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Yield (name, record) for every per-skill sidecar.
+
+    Skips sidecars that fail to parse — they're treated as absent.
+    """
+    skills_dir = deps.user_skills_dir
+    if not skills_dir.exists():
+        return
+    for path in sorted(skills_dir.glob(f"*{SIDECAR_SUFFIX}")):
+        name = path.name.removesuffix(SIDECAR_SUFFIX)
+        if not name:
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug("skill usage sidecar unreadable at %s: %s — skipping", path, exc)
+            continue
+        if not isinstance(data, dict):
+            continue
+        yield name, data
 
 
 def _bump(deps: CoDeps, name: str, counter_field: str, timestamp_field: str) -> None:
@@ -130,11 +140,10 @@ def _bump(deps: CoDeps, name: str, counter_field: str, timestamp_field: str) -> 
         return
     try:
         now = _utcnow_iso()
-        records = read_records(deps)
-        record = _get_or_init_record(records, name, now)
-        record[counter_field] = int(record.get(counter_field, 0)) + 1
+        record = read_record(deps, name) or _new_record(now)
+        record[counter_field] = int(record[counter_field]) + 1
         record[timestamp_field] = now
-        write_records(deps, records)
+        write_record(deps, name, record)
     except Exception as exc:
         logger.debug("skill usage bump (%s, %s) failed: %s", name, counter_field, exc)
 
@@ -162,41 +171,37 @@ def bump_recall(deps: CoDeps, name: str) -> None:
         return
     try:
         today = date.today().isoformat()
-        records = read_records(deps)
-        record = _get_or_init_record(records, name, _utcnow_iso())
-        recall_days: list[str] = record.setdefault("recall_days", [])
+        record = read_record(deps, name) or _new_record(_utcnow_iso())
+        recall_days: list[str] = record["recall_days"]
         if today not in recall_days:
             recall_days.append(today)
-            write_records(deps, records)
+            write_record(deps, name, record)
     except Exception as exc:
         logger.debug("skill usage bump_recall (%s) failed: %s", name, exc)
 
 
 def record_create(deps: CoDeps, name: str) -> None:
-    """Initialize a fresh record for a newly-created agent skill. Best-effort."""
+    """Initialize a fresh record for a newly-created agent skill. Best-effort.
+
+    Overwrites any existing record (matches pre-refactor behavior).
+    """
     if not _enabled(deps):
         return
     if not is_agent_created(name, deps):
         return
     try:
-        records = read_records(deps)
-        skills = records.setdefault("skills", {})
-        skills[name] = _new_record(_utcnow_iso())
-        write_records(deps, records)
+        write_record(deps, name, _new_record(_utcnow_iso()))
     except Exception as exc:
         logger.debug("skill usage record_create (%s) failed: %s", name, exc)
 
 
 def forget(deps: CoDeps, name: str) -> None:
-    """Remove a skill's entry from the sidecar. Best-effort."""
+    """Remove a skill's sidecar. Best-effort. No-op if absent."""
     if not _enabled(deps):
         return
     try:
-        records = read_records(deps)
-        skills = records.get("skills", {})
-        if name in skills:
-            del skills[name]
-            write_records(deps, records)
+        path = _sidecar_path(deps, name)
+        path.unlink(missing_ok=True)
     except Exception as exc:
         logger.debug("skill usage forget (%s) failed: %s", name, exc)
 
@@ -207,7 +212,6 @@ def set_pinned(deps: CoDeps, name: str, pinned: bool) -> None:
     Not best-effort: callers (CLI) expect a definitive success/failure signal,
     so I/O errors propagate.
     """
-    records = read_records(deps)
-    record = _get_or_init_record(records, name, _utcnow_iso())
+    record = read_record(deps, name) or _new_record(_utcnow_iso())
     record["pinned"] = bool(pinned)
-    write_records(deps, records)
+    write_record(deps, name, record)
