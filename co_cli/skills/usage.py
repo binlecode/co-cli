@@ -21,7 +21,8 @@ Schema:
           "last_viewed_at": ISO8601 | null,
           "last_patched_at": ISO8601 | null,
           "state": "active",
-          "pinned": bool
+          "pinned": bool,
+          "recall_days": [ISO8601-date, ...]
         }
       }
     }
@@ -31,7 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -86,6 +87,8 @@ def read_records(deps: CoDeps) -> dict[str, Any]:
         return _empty_records()
     if not isinstance(data, dict) or "skills" not in data:
         return _empty_records()
+    for record in data["skills"].values():
+        record.setdefault("recall_days", [])
     return data
 
 
@@ -107,6 +110,7 @@ def _new_record(now: str) -> dict[str, Any]:
         "last_patched_at": None,
         "state": STATE_ACTIVE,
         "pinned": False,
+        "recall_days": [],
     }
 
 
@@ -148,6 +152,24 @@ def bump_use(deps: CoDeps, name: str) -> None:
 def bump_patch(deps: CoDeps, name: str) -> None:
     """Increment patch_count and update last_patched_at. Best-effort."""
     _bump(deps, name, "patch_count", "last_patched_at")
+
+
+def bump_recall(deps: CoDeps, name: str) -> None:
+    """Append today's ISO date to recall_days (deduped). Best-effort."""
+    if not _enabled(deps):
+        return
+    if not is_agent_created(name, deps):
+        return
+    try:
+        today = date.today().isoformat()
+        records = read_records(deps)
+        record = _get_or_init_record(records, name, _utcnow_iso())
+        recall_days: list[str] = record.setdefault("recall_days", [])
+        if today not in recall_days:
+            recall_days.append(today)
+            write_records(deps, records)
+    except Exception as exc:
+        logger.debug("skill usage bump_recall (%s) failed: %s", name, exc)
 
 
 def record_create(deps: CoDeps, name: str) -> None:

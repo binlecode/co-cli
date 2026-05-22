@@ -183,7 +183,7 @@ Dream runs are idempotent. The trigger is `session_end` by default; `manual` tri
 
 Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest. Slash commands in the REPL dispatch to installed skills via the `skill_index` map on `CoDeps`.
 
-Two background passes run after each turn. Pass 1 (**session reviewer**) scans the transcript for drift and promotes reusable procedures to new skills. Pass 2 (**skill curator**, gated by `skills.curator_enabled` and a time interval) applies lifecycle transitions (active → stale → archived) and consolidates narrow skills into class-level umbrellas. Both passes run in forked `CoDeps` with scoped write permissions. Usage counters and lifecycle state are persisted in `~/.co-cli/skills/.usage.json`.
+The REPL writes KICK files to `$CO_HOME/daemons/dream/queue/` at threshold-based intervals (configurable per domain: memory and skill). The dream daemon dequeues these and runs the appropriate reviewer agent out-of-process. The **skill curator** (Pass 2, gated by `skills.curator_enabled` and a time interval) applies lifecycle transitions (active → stale → archived) and consolidates narrow skills into class-level umbrellas. Usage counters, lifecycle state, and `recall_days` are persisted in `~/.co-cli/skills/.usage.json`.
 
 → [skills.md](skills.md) · [tui.md](tui.md)
 
@@ -255,8 +255,8 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | `build_task_agent(spec, deps, model) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Constructs a focused task agent from a `TaskAgentSpec`; resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME`, filtered by `_config_requirement_met`; fails loud on unknown names |
 | `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async single-turn entrypoint: assembly → segment stream → approval loop → output checks |
 | `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_index`, excludes `toolset`, increments `agent_depth` |
-| `fork_deps_for_reviewer(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the session-reviewer agent; grants skill and knowledge write access (`auto_approve_skill_ops` + `auto_approve_knowledge_ops`) |
-| `fork_deps_for_curator(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the skill-curator agent; grants skill write access only (`auto_approve_skill_ops`); no knowledge writes |
+| `fork_deps_for_reviewer(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the dream daemon reviewer agent; delegates to `fork_deps` |
+| `fork_deps_for_curator(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the skill-curator agent; delegates to `fork_deps` |
 | `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async slash-command router; returns `LocalOnly`, `ReplaceTranscript`, or `DelegateToAgent` |
 
 

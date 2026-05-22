@@ -51,7 +51,7 @@ The agent reads the `<available_skills>` manifest injected into the static syste
 **Path 3 — Model write.**
 The agent calls `skill_manage(action=...)` to create, edit, patch, or delete a user skill. Used for drift fixes (stale steps), promoting a reusable procedure to a new skill, or removing an obsolete one. `skill_manage` requires approval, runs the security scan, and calls `refresh_skills(deps)` on success so the change is live immediately.
 
-Background passes (session reviewer, curator) also write via `skill_manage` but run in forked `CoDeps` with auto-approved skill ops — they are extensions of Path 3, not separate paths.
+The dream daemon's domain reviewers also write via `skill_manage` and `memory_manage` — they run in daemon-built `CoDeps` via `build_task_agent` with `requires_approval=False`. They are extensions of Path 3, not separate paths.
 
 ### Skill Model
 
@@ -153,7 +153,6 @@ main.py — per-turn
 | `/skills check` | compare available files vs loaded skills across both tiers; report skip reasons |
 | `/skills lint [<name>\|--all]` | run R1–R4 advisory lint rules; exit 1 on any finding |
 | `/skills reload` | rescan user-global directory and reload into live session |
-| `/skills review run` | manually trigger one session-review pass against current transcript |
 | `/skills usage [<name>]` | print the per-skill usage sidecar (table for all; full record for one) |
 | `/skills pin <name>` | pin an agent-created skill — exempt from curator lifecycle transitions |
 | `/skills unpin <name>` | clear the pinned flag |
@@ -239,30 +238,32 @@ Three in-session reflexes govern skill quality during a task:
 - **Create**: after completing a multi-step task (3+ coherent steps), if the procedure is class-level reusable, promote it to a skill. Bar: "would I run this again for the same kind of task" — not one-offs.
 - **Offer-to-save**: after iterative work where no skill was loaded, briefly offer skill creation before invoking `skill_manage(action='create')`.
 
-**Background session reviewer.** After approximately every `review_nudge_interval` LLM iterations, a `session_reviewer` agent runs in the background with the serialized session transcript and applies improvements the in-flight reflexes may have missed. A text-only user turn contributes 1 iteration, so chat-only sessions eventually trigger review (previously: never).
+**Dream daemon reviewers.** After every `review_memory_nudge_interval` turns (memory domain) or `review_skill_nudge_interval` LLM iterations (skill domain), the REPL writes a KICK file to `$CO_HOME/daemons/dream/queue/` and nudges the dream daemon over a Unix socket. The daemon dequeues work, loads the session transcript up to the queued message count, and runs the appropriate domain reviewer agent via `build_task_agent` with `requires_approval=False`.
 
 ```
-session_reviewer (pass 1 — every nudge)
-  ├─ scan for drift in skills loaded during session → patch or edit
-  ├─ create new class-level skills for reusable procedures not in library
-  ├─ create or update knowledge artifacts for user preferences and corrections
-  └─ never deletes skills or creates session-specific skills
+memory_reviewer (KICK: domain=memory)
+  ├─ extract user preferences, rules, and references from transcript
+  ├─ create or update memory items for durable user facts
+  └─ does not write skills
 
-skill_curator (pass 2 — runs when curator_enabled and interval elapsed)
+skill_reviewer (KICK: domain=skill)
+  ├─ scan transcript for skill drift, corrections, and new reusable procedures
+  ├─ patch or create skills as appropriate
+  └─ does not write memory persona items
+
+skill_curator (runs when curator_enabled and interval elapsed)
   ├─ Phase 1: apply lifecycle transitions (active → stale → archived)
   ├─ Phase 2: consolidate prefix-clustered narrow skills into class-level umbrellas
   └─ Phase 3: write per-run report + persist curator state
 ```
 
-Output per session-reviewer run at `~/.co-cli/session-reviews/<timestamp>-<run_id_suffix>/`:
-- `run.json` — structured: `run_id`, `summary`, `skills_patched`, `skills_created`, `knowledge_created`, `knowledge_updated`, `transcript_length`, `usage`
-- `run.md` — human-readable summary
+Both reviewer domains are triggered at session end regardless of counter state. KICK files are durable — the daemon picks them up on next start if it was down. Failed reviews (after `max_retry_attempts` timeouts) move to `$CO_HOME/daemons/dream/queue/failed/`.
 
-Output per curator run at `~/.co-cli/curator-runs/<timestamp>-<run_id_suffix>/`:
+Output per curator run at `~/.co-cli/curator-runs/<timestamp>-<run_id>/`:
 - `run.json` — structured: `run_id`, `summary`, `skills_merged`, `skills_created`, `skills_updated`, `usage`
 - `run.md` — human-readable summary
 
-The reviewer runs in a forked `CoDeps` via `fork_deps_for_reviewer`; the curator uses `fork_deps_for_curator` (skill writes only, no knowledge writes). Both reload skills from disk before their pass so successive passes within the same session see prior writes.
+The skill reviewer reloads skills from disk before its pass so it sees prior writes within the session.
 
 Curation preference order: update a skill loaded in the current session → update an existing umbrella skill → create a new class-level skill only if nothing applicable exists.
 
@@ -275,19 +276,19 @@ Curation preference order: update a skill loaded in the current session → upda
 
 Pinned skills (`/skills pin <name>`) are exempt from all state transitions.
 
-**Usage sidecar.** `~/.co-cli/skills/.usage.json` tracks per-skill counters (`use_count`, `view_count`, `patch_count`) and timestamps (`created_at`, `last_used_at`, `last_viewed_at`, `last_patched_at`). Counters update on every `skill_view` and `skill_manage` call. Sidecar I/O is best-effort: failures are logged and swallowed so usage tracking never blocks the underlying tool. Counters are populated only for skills in `user_skills_dir` — bundled skills are excluded.
+**Usage sidecar.** `~/.co-cli/skills/.usage.json` tracks per-skill counters (`use_count`, `view_count`, `patch_count`), timestamps (`created_at`, `last_used_at`, `last_viewed_at`, `last_patched_at`), and `recall_days` (list of ISO-date strings recording which days the skill was recalled — deduped, updated by `skill_view` and slash dispatch). Sidecar I/O is best-effort: failures are logged and swallowed so tracking never blocks the underlying tool. Populated only for skills in `user_skills_dir` — bundled skills are excluded.
 
 ## 3. Config
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable background session reviewer |
-| `skills.review_nudge_interval` | `CO_SKILLS_REVIEW_NUDGE_INTERVAL` | `10` | LLM iteration count between review triggers |
-| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill counters/timestamps to `.usage.json` |
-| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable curator second-pass after the session reviewer |
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable dream daemon reviewer KICKs |
+| `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | User-turn count between memory-domain KICK triggers |
+| `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | LLM-iteration count between skill-domain KICK triggers |
+| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill counters/timestamps/recall_days to `.usage.json` |
+| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable curator second-pass (state transitions + consolidation) |
 | `skills.curator_interval_hours` | `CO_SKILLS_CURATOR_INTERVAL_HOURS` | `168` | Minimum hours between curator runs (7 days) |
 | `REVIEW_MAX_ITERATIONS` | — | `8` | Max LLM request budget per reviewer pass (code constant in `co_cli/config/skills.py`) |
-| `REVIEW_TIMEOUT_SECONDS` | — | `120` | Wall-clock timeout for the reviewer pass |
 | `CURATOR_MAX_ITERATIONS` | — | `100` | Max LLM request budget per curator consolidation pass |
 | `CURATOR_TIMEOUT_SECONDS` | — | `600` | Wall-clock timeout for the curator pass |
 | `CURATOR_STALE_AFTER_DAYS` | — | `30` | Idle days before `active → stale` |
@@ -361,14 +362,15 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | `co_cli/commands/skills.py` | `/skills` command family (list/check/lint/reload/review/usage/pin/unpin/curator) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass |
 | `co_cli/bootstrap/core.py` | `create_deps()` — skill loading at startup |
-| `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection; `_maybe_run_session_review` (pass 1), `_maybe_run_curator` and `_curator_gate_passes` (pass 2) |
+| `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection; `_post_turn_hook` (two-counter KICK dispatch), `_fire_session_end_kicks` |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_index`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer`, `fork_deps_for_curator` |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` — both call into `co_cli/skills/usage.py` on success |
-| `co_cli/skills/session_review.py` | `SESSION_REVIEW_SPEC`, `run_session_review()` — pass 1 (skill+knowledge reviewer) |
+| `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review()` — daemon domain reviewers |
+| `co_cli/daemons/dream/prompts/memory_review.md` | memory reviewer instructions |
+| `co_cli/daemons/dream/prompts/skill_review.md` | skill reviewer instructions |
 | `co_cli/skills/curator.py` | `CURATOR_SPEC`, `run_curator()` — pass 2 (state transitions + consolidation + report); state machine (`apply_state_transitions`, `archive_skill`, `restore_skill`, `read_curator_state`, `write_curator_state`) |
-| `co_cli/skills/usage.py` | usage sidecar I/O (`bump_view`, `bump_use`, `bump_patch`, `record_create`, `forget`, `set_pinned`) |
-| `co_cli/skills/session_review_prompts.py` | reviewer agent instructions and prompt template |
+| `co_cli/skills/usage.py` | usage sidecar I/O (`bump_view`, `bump_use`, `bump_patch`, `bump_recall`, `record_create`, `forget`, `set_pinned`) |
 | `co_cli/skills/curator_prompts.py` | curator agent instructions and prompt template |
 | `co_cli/context/rules/06_skill_protocol.md` | dispatch discipline injected into the static system prompt |
 | `co_cli/skills/` | package-default shipped skills |
@@ -426,8 +428,6 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | curator gate: blocks within interval | `tests/test_flow_skill_curator.py` |
 | curator gate: blocks when paused even if interval elapsed | `tests/test_flow_skill_curator.py` |
 | curator gate: tolerates unparseable last_run_at | `tests/test_flow_skill_curator.py` |
-| _maybe_run_curator short-circuits when disabled or no model | `tests/test_flow_skill_curator.py` |
-| _maybe_run_curator blocked by recent run (run_count unchanged) | `tests/test_flow_skill_curator.py` |
 | run_curator applies Phase 1 state transitions (active → stale) | `tests/test_flow_skill_curator.py` |
 | run_curator writes Phase 3 state even when Phase 2 agent fails | `tests/test_flow_skill_curator.py` |
 | usage sidecar read/write roundtrip; returns empty when missing or corrupt | `tests/test_flow_skill_usage.py` |

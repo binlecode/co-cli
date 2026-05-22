@@ -160,14 +160,12 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         _cmd_skills_pin(ctx, subargs, pinned=False)
     elif subcmd == "curator":
         await _cmd_skills_curator(ctx, subargs)
-    elif subcmd == "review":
-        await _cmd_skills_review(ctx, subargs)
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
         console.print(
             "[dim]Usage: /skills [list|check|lint [<name>|--all]|reload|"
             "usage [<name>]|pin <name>|unpin <name>|"
-            "curator [status|run|restore <name>]|review run][/dim]"
+            "curator [status|run|restore <name>]][/dim]"
         )
 
     return None
@@ -324,25 +322,3 @@ async def _cmd_skills_curator(ctx: CommandContext, args: str) -> None:
     else:
         console.print(f"[bold red]Unknown curator subcommand:[/bold red] {action}")
         console.print("[dim]Usage: /skills curator [status|run|restore <name>][/dim]")
-
-
-async def _cmd_skills_review(ctx: CommandContext, args: str) -> None:
-    """Trigger a session review run manually."""
-    sub = args.strip().lower()
-    if sub not in ("run", ""):
-        console.print("[bold red]Usage:[/bold red] /skills review run")
-        return
-
-    if ctx.deps.model is None:
-        console.print("[bold red]No model configured — cannot run session review.[/bold red]")
-        return
-
-    from co_cli.skills.session_review import run_session_review
-
-    console.print("[dim]Running session review…[/dim]")
-    try:
-        result = await run_session_review(ctx.deps, ctx.message_history)
-        summary = result.summary or "(no changes)"
-        console.print(f"[success]✓ Review done:[/success] {summary}")
-    except Exception as exc:
-        console.print(f"[bold red]Review failed:[/bold red] {exc}")

@@ -140,6 +140,7 @@ async def _handle_create(
         "appended": "Appended to",
     }.get(result.action, result.action.capitalize())
 
+    ctx.deps.session.turns_since_memory_review = 0
     return tool_output(
         f"✓ {action_label} artifact: {result.path.name}",
         ctx=ctx,
@@ -187,6 +188,7 @@ async def _handle_mutate(
                     chunk_overlap_tokens=ctx.deps.config.memory.chunk_overlap_tokens,
                 )
 
+            ctx.deps.session.turns_since_memory_review = 0
             return tool_output(
                 f"✓ {result.action.capitalize()} artifact '{filename_stem}'.",
                 ctx=ctx,

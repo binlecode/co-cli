@@ -72,6 +72,7 @@ def memory_item_to_frontmatter(item: MemoryItem) -> dict[str, Any]:
         ("source_ref", item.source_ref),
         ("last_recalled", item.last_recalled),
         ("recall_count", item.recall_count),
+        ("recall_days", item.recall_days),
     ]
     for key, value in optional:
         if value:

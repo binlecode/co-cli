@@ -62,10 +62,11 @@ async def skill_view(
         return tool_error(f"skill_view: skill {name!r} is not model-invocable.", ctx=ctx)
     if file_path is not None:
         return tool_error(f"skill_view: skill {name!r} has no linked files.", ctx=ctx)
-    from co_cli.skills.usage import bump_use, bump_view
+    from co_cli.skills.usage import bump_recall, bump_use, bump_view
 
     bump_view(ctx.deps, lookup)
     bump_use(ctx.deps, lookup)
+    bump_recall(ctx.deps, lookup)
     return tool_output(skill.body, ctx=ctx, name=lookup, linked_files={})
 
 
@@ -167,6 +168,7 @@ def _skill_create(
             f"Skill count is now {len(ctx.deps.skill_index)}; "
             "consider reviewing and pruning unused skills."
         )
+    ctx.deps.session.iters_since_skill_review = 0
     return tool_output(json.dumps(result), ctx=ctx)
 
 
@@ -196,6 +198,7 @@ def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str | None) -> Tool
     warnings = _lint_warnings(content)
     if warnings:
         result["lint_warnings"] = warnings
+    ctx.deps.session.iters_since_skill_review = 0
     return tool_output(json.dumps(result), ctx=ctx)
 
 
@@ -255,6 +258,7 @@ def _skill_patch(
     warnings = _lint_warnings(new_content)
     if warnings:
         result["lint_warnings"] = warnings
+    ctx.deps.session.iters_since_skill_review = 0
     return tool_output(json.dumps(result), ctx=ctx)
 
 

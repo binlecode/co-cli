@@ -1,11 +1,13 @@
 import asyncio
-import contextlib
+import json
 import logging
 import os
+import socket
 import time
+import uuid
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Literal
 
 import typer
@@ -18,7 +20,12 @@ from pydantic_ai.messages import ModelMessage
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.bootstrap.banner import display_welcome_banner
-from co_cli.bootstrap.core import create_deps, init_session_index, restore_session
+from co_cli.bootstrap.core import (
+    create_deps,
+    init_session_index,
+    maybe_autospawn_dream,
+    restore_session,
+)
 from co_cli.bootstrap.project_info import project_info
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.commands.core import dispatch as dispatch_command
@@ -26,6 +33,8 @@ from co_cli.commands.registry import build_completer_entries
 from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
+    DREAM_QUEUE_DIR,
+    DREAM_SOCK,
     LOGS_DIR,
     REASONING_DISPLAY_FULL,
     USER_DIR,
@@ -42,6 +51,7 @@ from co_cli.display.core import (
     console,
     set_theme,
 )
+from co_cli.fileio.atomic import atomic_write_text
 from co_cli.observability.file_logging import setup_file_logging
 from co_cli.observability.tracing import setup_log as setup_spans_log
 from co_cli.session.persistence import persist_session_history
@@ -50,6 +60,34 @@ from co_cli.tools.tool_io import sweep_tool_result_orphans
 
 _VERSION = project_info().version
 _SUPPRESS_LOGGERS = ["openai", "httpx", "anthropic", "hpack"]
+
+
+def _send_review_kick(deps: CoDeps, *, domain: str, persisted_message_count: int) -> None:
+    """Write a KICK file to the dream queue and nudge the daemon socket.
+
+    Writes JSON atomically to DREAM_QUEUE_DIR/<ts>-<uuid>.json.
+    Then best-effort sends REVIEW <domain> <session_id> <count>\n to dream.sock.
+    All socket errors are swallowed.
+    """
+    session_id = deps.session.session_path.stem
+    created_at = datetime.now(UTC).isoformat()
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%S.%f")
+    file_name = f"{ts}-{uuid.uuid4()}.json"
+    kick_path = DREAM_QUEUE_DIR / file_name
+    payload = {
+        "domain": domain,
+        "session_id": session_id,
+        "persisted_message_count": persisted_message_count,
+        "created_at": created_at,
+    }
+    atomic_write_text(kick_path, json.dumps(payload))
+    # Best-effort socket nudge — all errors swallowed
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.connect(str(DREAM_SOCK))
+            sock.sendall(f"REVIEW {domain} {session_id} {persisted_message_count}\n".encode())
+    except Exception:
+        pass
 
 
 def _setup_observability() -> None:
@@ -69,11 +107,14 @@ def _setup_observability() -> None:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
+from co_cli.commands.dream import dream_app
+
 app = typer.Typer(
     help="Co — personal AI operator · local-first · approval-first",
     context_settings={"help_option_names": ["--help", "-h"]},
     invoke_without_command=True,
 )
+app.add_typer(dream_app, name="dream")
 
 
 @app.callback()
@@ -146,25 +187,29 @@ async def _run_foreground_turn(
     return next_history
 
 
+def _fire_session_end_kicks(deps: CoDeps) -> None:
+    """Fire memory and skill review KICKs at session end.
+
+    Both KICKs fire unconditionally (no counter check) so that the daemon
+    has a chance to review the session regardless of how many turns ran.
+    Guard: only fires when review is enabled and a model is configured.
+    """
+    if not deps.config.skills.review_enabled:
+        return
+    if deps.model is None:
+        return
+    persisted = deps.runtime.persisted_message_count
+    _send_review_kick(deps, domain="memory", persisted_message_count=persisted)
+    _send_review_kick(deps, domain="skill", persisted_message_count=persisted)
+
+
 async def _drain_and_cleanup(
     deps: CoDeps | None,
     stack: AsyncExitStack,
 ) -> None:
-    """Cancel pending review, run dream cycle, release resources.
-
-    Plan 3.5c: turn-boundary firing is the only review path; no inline
-    session-end review fires here. A still-pending background review is
-    cancelled and bounded-drained for ≤2s. Atomic-write atomicity makes
-    the cancel safe regardless of drain outcome.
-    """
+    """Fire session-end review KICKs and release resources."""
     if deps is not None:
-        review_task = deps.session.background_review_task
-        if review_task is not None and not review_task.done():
-            review_task.cancel()
-            with contextlib.suppress(Exception):
-                await asyncio.wait([review_task], timeout=2.0)
-
-        await _maybe_run_dream_cycle(deps)
+        _fire_session_end_kicks(deps)
 
         from co_cli.tools.background import kill_task
 
@@ -188,82 +233,28 @@ def _sweep_tool_results(deps: CoDeps) -> None:
         logging.getLogger(__name__).debug("Swept %d stale tool-result tmp file(s)", swept)
 
 
-async def _maybe_run_session_review(deps: CoDeps, message_history: list[ModelMessage]) -> None:
-    """Run the combined skill+knowledge session review when enabled.
-
-    Used both as an awaited inline call (legacy) and as the body of a background
-    asyncio.Task spawned by _post_turn_hook. Yields at entry so spawning code
-    returns to the REPL before any sync setup (fork, build, serialize).
-    """
-    await asyncio.sleep(0)
-    if not deps.config.skills.review_enabled:
-        return
-    if not deps.model:
-        return
-
-    from co_cli.config.skills import REVIEW_TIMEOUT_SECONDS
-    from co_cli.skills.session_review import run_session_review
-
-    logger = logging.getLogger(__name__)
-    try:
-        result = await asyncio.wait_for(
-            run_session_review(deps, message_history),
-            timeout=REVIEW_TIMEOUT_SECONDS,
+def _maybe_kick_memory_review(deps: CoDeps) -> None:
+    """Fire a memory KICK when the turn counter reaches the configured interval."""
+    skill_settings = deps.config.skills
+    if deps.session.turns_since_memory_review >= skill_settings.review_memory_nudge_interval:
+        deps.session.turns_since_memory_review = 0
+        _send_review_kick(
+            deps,
+            domain="memory",
+            persisted_message_count=deps.runtime.persisted_message_count,
         )
-        cb = deps.runtime.background_status_callback
-        if result.summary and cb is not None:
-            cb(f"\U0001f4be {result.summary}")
-    except TimeoutError:
-        logger.warning("Session review timed out")
-    except asyncio.CancelledError:
-        logger.info("Session review cancelled")
-        raise
-    except Exception:
-        logger.warning("Session review failed", exc_info=True)
-
-    await _maybe_run_curator(deps)
 
 
-def _curator_gate_passes(curator_state: dict, interval_hours: int, now: datetime) -> bool:
-    """Curator runs if it has never run, or interval_hours elapsed since last_run_at."""
-    last_run_str = curator_state.get("last_run_at")
-    if last_run_str is None:
-        return True
-    if curator_state.get("paused"):
-        return False
-    from co_cli.skills.curator import _parse_iso
-
-    try:
-        last_run = _parse_iso(last_run_str)
-    except (ValueError, TypeError):
-        return True
-    return (now - last_run) > timedelta(hours=interval_hours)
-
-
-async def _maybe_run_curator(deps: CoDeps) -> None:
-    """Run the skill curator second pass if enabled and time-gate passed."""
-    if not deps.config.skills.curator_enabled:
-        return
-    if not deps.model:
-        return
-
-    from co_cli.config.skills import CURATOR_TIMEOUT_SECONDS
-    from co_cli.skills.curator import read_curator_state, run_curator
-
-    logger = logging.getLogger(__name__)
-    now = datetime.now(UTC)
-    state = read_curator_state(deps)
-    if not _curator_gate_passes(state, deps.config.skills.curator_interval_hours, now):
-        return
-    try:
-        await asyncio.wait_for(run_curator(deps), timeout=CURATOR_TIMEOUT_SECONDS)
-    except TimeoutError:
-        logger.warning("Curator pass timed out")
-    except asyncio.CancelledError:
-        logger.info("Curator pass cancelled")
-        raise
-    except Exception:
-        logger.warning("Curator pass failed", exc_info=True)
+def _maybe_kick_skill_review(deps: CoDeps) -> None:
+    """Fire a skill KICK when the iteration counter reaches the configured interval."""
+    skill_settings = deps.config.skills
+    if deps.session.iters_since_skill_review >= skill_settings.review_skill_nudge_interval:
+        deps.session.iters_since_skill_review = 0
+        _send_review_kick(
+            deps,
+            domain="skill",
+            persisted_message_count=deps.runtime.persisted_message_count,
+        )
 
 
 def _post_turn_hook(
@@ -271,62 +262,23 @@ def _post_turn_hook(
     message_history: list[ModelMessage],
     turn_iteration_count: int,
 ) -> None:
-    """Bump the iteration counter; spawn background review when threshold tripped.
+    """Bump per-domain counters and fire review KICKs when thresholds are reached.
 
-    Constant-time: counter check + threshold compare + at-most-one create_task.
-    Single in-flight on deps.session.background_review_task — on skip, the
-    counter is not reset so the next eligible turn re-fires once the
-    in-flight task completes.
+    Constant-time: counter bumps + threshold compares + at-most-two atomic file writes.
+    No single-in-flight guard — the queue is the back-pressure layer.
     """
     if deps is None:
         return
-    settings = deps.config.skills
-    if not settings.review_enabled:
+    skill_settings = deps.config.skills
+    if not skill_settings.review_enabled:
         return
     if deps.model is None:
         return
 
-    deps.session.iterations_since_review += turn_iteration_count
-    if deps.session.iterations_since_review < settings.review_nudge_interval:
-        return
-
-    task = deps.session.background_review_task
-    if task is not None and not task.done():
-        return
-
-    deps.session.iterations_since_review = 0
-    deps.session.background_review_task = asyncio.create_task(
-        _maybe_run_session_review(deps, list(message_history))
-    )
-
-
-async def _maybe_run_dream_cycle(deps: CoDeps) -> None:
-    """Run the dream cycle on session end when enabled via knowledge config.
-
-    Errors are logged and never propagated — session shutdown must not fail
-    because consolidation hit a snag.
-    """
-    memory_config = deps.config.memory
-    if not memory_config.consolidation_enabled:
-        return
-    if memory_config.consolidation_trigger != "session_end":
-        return
-
-    from co_cli.memory.dream import run_dream_cycle
-    from co_cli.tools.memory.manage import memory_manage
-
-    logger = logging.getLogger(__name__)
-    try:
-        result = await run_dream_cycle(deps, memory_manage)
-        if result.any_changes:
-            logger.info(
-                "Dream cycle: %d extracted, %d merged, %d archived",
-                result.extracted,
-                result.merged,
-                result.decayed,
-            )
-    except Exception:
-        logger.warning("Dream cycle failed", exc_info=True)
+    deps.session.turns_since_memory_review += 1
+    deps.session.iters_since_skill_review += turn_iteration_count
+    _maybe_kick_memory_review(deps)
+    _maybe_kick_skill_review(deps)
 
 
 def _apply_command_outcome(
@@ -548,6 +500,7 @@ async def _chat_loop(
             memory_count = deps.memory_store.count()
         if deps.session_store is not None:
             session_count = deps.session_store.count()
+        maybe_autospawn_dream(deps, frontend)
         display_welcome_banner(deps, memory_count=memory_count, session_count=session_count)
         from co_cli.bootstrap.security import check_security, render_security_findings
 

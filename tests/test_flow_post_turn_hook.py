@@ -1,14 +1,15 @@
-"""Behavioral tests for the turn-boundary post-turn hook (plan 3.5c TASK-1).
+"""Behavioral tests for the turn-boundary post-turn hook.
 
-Calls _post_turn_hook directly and asserts on observable state — counter on
-deps.session.iterations_since_review and the spawned task handle on
-deps.session.background_review_task. No monkeypatching. Spawned tasks are
-cancelled immediately to avoid LLM calls in the unit-test path.
+Calls _post_turn_hook directly and asserts on observable state:
+- turns_since_memory_review counter (bumped +1 per call)
+- iters_since_skill_review counter (bumped +turn_iteration_count per call)
+- Counter resets to 0 when KICK fires (threshold crossed)
+
+No monkeypatching. No LLM calls.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import Generator
 from pathlib import Path
@@ -31,15 +32,11 @@ def _make_deps(
     tmp_path: Path,
     *,
     review_enabled: bool,
-    interval: int = 5,
+    memory_interval: int = 5,
+    skill_interval: int = 5,
     with_model: bool = True,
 ):
-    """Real CoDeps with CO_HOME pointed at tmp_path.
-
-    with_model=True attaches a real LlmModel object (cheap to construct; no
-    network calls until invoked). Tests that exercise the spawn path use
-    task.cancel() immediately after the hook to prevent any LLM traffic.
-    """
+    """Real CoDeps with CO_HOME pointed at tmp_path."""
     os.environ["CO_HOME"] = str(tmp_path)
     import importlib
 
@@ -55,7 +52,8 @@ def _make_deps(
             "skills": SETTINGS_NO_MCP.skills.model_copy(
                 update={
                     "review_enabled": review_enabled,
-                    "review_nudge_interval": interval,
+                    "review_memory_nudge_interval": memory_interval,
+                    "review_skill_nudge_interval": skill_interval,
                 }
             )
         }
@@ -72,167 +70,133 @@ def _make_deps(
     return deps
 
 
-async def _cancel_pending_task(deps) -> None:
-    task = deps.session.background_review_task
-    if task is None:
-        return
-    if not task.done():
-        task.cancel()
-    try:
-        await task
-    except (asyncio.CancelledError, Exception):
-        pass
-
-
 def test_review_disabled_short_circuits_no_state_mutation(tmp_path: Path) -> None:
-    """review_enabled=False — hook returns without bumping counter or spawning task."""
+    """review_enabled=False — hook returns without bumping counters."""
     from co_cli.main import _post_turn_hook
 
-    deps = _make_deps(tmp_path, review_enabled=False, interval=5)
+    deps = _make_deps(tmp_path, review_enabled=False)
     _post_turn_hook(deps, [], turn_iteration_count=10)
 
-    assert deps.session.iterations_since_review == 0
-    assert deps.session.background_review_task is None
+    assert deps.session.turns_since_memory_review == 0
+    assert deps.session.iters_since_skill_review == 0
 
 
 def test_no_model_short_circuits_no_state_mutation(tmp_path: Path) -> None:
-    """deps.model is None — hook returns without bumping counter or spawning task."""
+    """deps.model is None — hook returns without bumping counters."""
     from co_cli.main import _post_turn_hook
 
-    deps = _make_deps(tmp_path, review_enabled=True, interval=5, with_model=False)
+    deps = _make_deps(tmp_path, review_enabled=True, with_model=False)
     assert deps.model is None
 
     _post_turn_hook(deps, [], turn_iteration_count=10)
 
-    assert deps.session.iterations_since_review == 0
-    assert deps.session.background_review_task is None
+    assert deps.session.turns_since_memory_review == 0
+    assert deps.session.iters_since_skill_review == 0
 
 
-def test_below_threshold_counter_accumulates_no_spawn(tmp_path: Path) -> None:
-    """Three sub-threshold turns accumulate; no task spawned."""
+def test_below_threshold_counters_accumulate_no_reset(tmp_path: Path) -> None:
+    """Three sub-threshold turns accumulate both counters without reset."""
     from co_cli.main import _post_turn_hook
 
-    deps = _make_deps(tmp_path, review_enabled=True, interval=10)
+    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=10, skill_interval=10)
 
     _post_turn_hook(deps, [], turn_iteration_count=2)
     _post_turn_hook(deps, [], turn_iteration_count=3)
     _post_turn_hook(deps, [], turn_iteration_count=4)
 
-    assert deps.session.iterations_since_review == 9
-    assert deps.session.background_review_task is None
+    # Memory counter bumps +1 per call = 3
+    assert deps.session.turns_since_memory_review == 3
+    # Skill counter bumps +N per call = 2+3+4 = 9
+    assert deps.session.iters_since_skill_review == 9
 
 
-def test_zero_iteration_turn_does_not_advance(tmp_path: Path) -> None:
-    """A turn with turn_iteration_count=0 does not advance the counter."""
+def test_zero_iteration_turn_advances_memory_counter_only(tmp_path: Path) -> None:
+    """A turn with turn_iteration_count=0 advances turns_since_memory_review but not skill."""
     from co_cli.main import _post_turn_hook
 
-    deps = _make_deps(tmp_path, review_enabled=True, interval=5)
+    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=5, skill_interval=5)
 
     _post_turn_hook(deps, [], turn_iteration_count=0)
     _post_turn_hook(deps, [], turn_iteration_count=0)
 
-    assert deps.session.iterations_since_review == 0
-    assert deps.session.background_review_task is None
+    assert deps.session.turns_since_memory_review == 2
+    assert deps.session.iters_since_skill_review == 0
 
 
-@pytest.mark.asyncio
-async def test_at_threshold_spawns_task_and_resets_counter(tmp_path: Path) -> None:
-    """Counter reaching threshold — task spawned, counter reset to 0."""
+def test_memory_threshold_resets_memory_counter(tmp_path: Path) -> None:
+    """Counter reaching memory threshold resets turns_since_memory_review to 0."""
     from co_cli.main import _post_turn_hook
 
-    deps = _make_deps(tmp_path, review_enabled=True, interval=5)
+    # memory_interval=1 means every turn triggers a memory KICK
+    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=1, skill_interval=100)
 
-    _post_turn_hook(deps, [], turn_iteration_count=5)
+    _post_turn_hook(deps, [], turn_iteration_count=1)
 
-    task = deps.session.background_review_task
-    assert task is not None
-    assert isinstance(task, asyncio.Task)
-    assert deps.session.iterations_since_review == 0
-
-    await _cancel_pending_task(deps)
+    # Counter reset to 0 after KICK
+    assert deps.session.turns_since_memory_review == 0
 
 
-@pytest.mark.asyncio
-async def test_threshold_overshoot_spawns_once(tmp_path: Path) -> None:
-    """A single turn with iter_count > threshold spawns exactly one task."""
+def test_skill_threshold_resets_skill_counter(tmp_path: Path) -> None:
+    """Counter reaching skill threshold resets iters_since_skill_review to 0."""
     from co_cli.main import _post_turn_hook
 
-    deps = _make_deps(tmp_path, review_enabled=True, interval=5)
+    # skill_interval=3, memory_interval=100 so only skill KICK fires
+    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=100, skill_interval=3)
+
+    _post_turn_hook(deps, [], turn_iteration_count=3)
+
+    # Counter reset to 0 after KICK
+    assert deps.session.iters_since_skill_review == 0
+
+
+def test_both_thresholds_reached_resets_both_counters(tmp_path: Path) -> None:
+    """Both memory and skill thresholds reached in one turn — both counters reset."""
+    from co_cli.main import _post_turn_hook
+
+    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=1, skill_interval=1)
+
+    _post_turn_hook(deps, [], turn_iteration_count=1)
+
+    assert deps.session.turns_since_memory_review == 0
+    assert deps.session.iters_since_skill_review == 0
+
+
+def test_counter_reset_allows_next_trigger(tmp_path: Path) -> None:
+    """After a KICK fires, counter resets and subsequent turns can re-accumulate."""
+    from co_cli.main import _post_turn_hook
+
+    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=1, skill_interval=100)
+
+    # First call triggers KICK and resets counter
+    _post_turn_hook(deps, [], turn_iteration_count=1)
+    assert deps.session.turns_since_memory_review == 0
+
+    # Second call accumulates again (interval=1 so resets immediately again)
+    _post_turn_hook(deps, [], turn_iteration_count=1)
+    assert deps.session.turns_since_memory_review == 0
+
+
+def test_skill_threshold_overshoot_resets_counter(tmp_path: Path) -> None:
+    """A single turn with iter_count > skill threshold fires KICK and resets counter."""
+    from co_cli.main import _post_turn_hook
+
+    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=100, skill_interval=5)
 
     _post_turn_hook(deps, [], turn_iteration_count=12)
 
-    assert deps.session.iterations_since_review == 0
-    assert isinstance(deps.session.background_review_task, asyncio.Task)
-
-    await _cancel_pending_task(deps)
+    assert deps.session.iters_since_skill_review == 0
 
 
-@pytest.mark.asyncio
-async def test_single_in_flight_skip_does_not_reset_counter(tmp_path: Path) -> None:
-    """In-flight task — new trigger is skipped; counter NOT reset so future turns retry."""
+def test_error_or_interrupted_turn_iters_still_advance(tmp_path: Path) -> None:
+    """Counter advances for turns with any positive iteration count (error/interrupted too)."""
     from co_cli.main import _post_turn_hook
 
-    deps = _make_deps(tmp_path, review_enabled=True, interval=5)
+    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=100, skill_interval=10)
 
-    # First trigger spawns the task and resets counter to 0.
-    _post_turn_hook(deps, [], turn_iteration_count=5)
-    first_task = deps.session.background_review_task
-    assert first_task is not None
-    assert not first_task.done()
-    assert deps.session.iterations_since_review == 0
-
-    # Second trigger while task is still pending. Counter accumulates from 0 to 5+.
-    _post_turn_hook(deps, [], turn_iteration_count=6)
-
-    # Single-in-flight: still the same task object, no replacement.
-    assert deps.session.background_review_task is first_task
-    # Counter NOT reset on skip — it carries the post-skip accumulation.
-    assert deps.session.iterations_since_review == 6
-
-    await _cancel_pending_task(deps)
-
-
-@pytest.mark.asyncio
-async def test_after_task_completes_next_trigger_fires(tmp_path: Path) -> None:
-    """Once the in-flight task is done, the next eligible trigger spawns a new task."""
-    from co_cli.main import _post_turn_hook
-
-    deps = _make_deps(tmp_path, review_enabled=True, interval=5)
-
-    _post_turn_hook(deps, [], turn_iteration_count=5)
-    first_task = deps.session.background_review_task
-    assert first_task is not None
-    await _cancel_pending_task(deps)
-    assert first_task.done()
-
-    _post_turn_hook(deps, [], turn_iteration_count=5)
-    second_task = deps.session.background_review_task
-
-    assert second_task is not None
-    assert second_task is not first_task
-    assert deps.session.iterations_since_review == 0
-
-    await _cancel_pending_task(deps)
-
-
-@pytest.mark.asyncio
-async def test_error_or_interrupted_turn_iters_still_advance(tmp_path: Path) -> None:
-    """Per BC5, counter advances on turns that returned a TurnResult, even if outcome=error.
-
-    The hook receives an integer llm_iterations from TurnResult; the source of that
-    value (success/error/interrupted) is opaque to the hook. Verify the hook treats
-    any positive count identically.
-    """
-    from co_cli.main import _post_turn_hook
-
-    deps = _make_deps(tmp_path, review_enabled=True, interval=10)
-
-    # Simulate two error/interrupted turns each contributing 3 iterations.
     _post_turn_hook(deps, [], turn_iteration_count=3)
     _post_turn_hook(deps, [], turn_iteration_count=3)
 
-    assert deps.session.iterations_since_review == 6
-    assert deps.session.background_review_task is None
+    assert deps.session.iters_since_skill_review == 6
 
 
 def test_none_deps_short_circuits(tmp_path: Path) -> None:

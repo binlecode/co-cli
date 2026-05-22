@@ -62,8 +62,16 @@ def persist_session_history(
     return session_path
 
 
-def load_transcript(path: Path) -> list[ModelMessage]:
-    """Load a transcript from a session's JSONL file."""
+def load_transcript(
+    path: Path,
+    *,
+    max_message_count: int | None = None,
+) -> list[ModelMessage]:
+    """Load a transcript from a session's JSONL file.
+
+    When max_message_count is provided, return only the first N messages that
+    parse successfully. Existing callers use the default None and are unaffected.
+    """
     if not path.exists():
         return []
 
@@ -98,6 +106,9 @@ def load_transcript(path: Path) -> list[ModelMessage]:
                         line_num,
                         path.name,
                     )
+                if max_message_count is not None and len(messages) >= max_message_count:
+                    messages = messages[:max_message_count]
+                    break
     except OSError as e:
         logger.warning("Transcript read failed for session %s: %s", short_id, e)
 

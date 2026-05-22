@@ -47,7 +47,7 @@ class TaskAgentSpec:
     run_standalone — daemons propagate plain exceptions.
 
     include_skill_manifest=True prepends the rendered skill manifest to the
-    instructions string (currently only SESSION_REVIEW_SPEC).
+    instructions string (used by SKILL_REVIEW_SPEC in daemons/dream/_reviewer.py).
     """
 
     name: str

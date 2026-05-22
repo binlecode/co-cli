@@ -234,7 +234,7 @@ L0 caps how many tool calls a single `ModelResponse` can issue (the first row of
   "error": "max_tool_calls_per_turn_exceeded",
   "max": 6,
   "issued": <N>,
-  "guidance": "Issued <N> tool calls in one model turn; cap is 6. Pick the 6 most important calls and try again."
+  "guidance": "Issued <N> tool calls in one llm_iteration; cap is 6. Pick the 6 most important calls and try again."
 }
 ```
 

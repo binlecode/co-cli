@@ -21,6 +21,33 @@ _ASCII_ART = {
 }
 
 
+def build_dream_line(deps: "CoDeps") -> str:
+    """Build the Dream: status line for the welcome banner."""
+    # Lazy import to avoid circular import at module load time
+    from co_cli.commands.dream import _socket_status
+    from co_cli.config.core import DREAM_QUEUE_DIR
+
+    if not deps.config.dream.enabled:
+        return "    Dream: [dim]disabled[/dim]"
+
+    def _queue_depth() -> int:
+        if not DREAM_QUEUE_DIR.exists():
+            return 0
+        return len([f for f in DREAM_QUEUE_DIR.glob("*.json") if not f.name.endswith(".tmp")])
+
+    try:
+        status = _socket_status(timeout_ms=200)
+    except Exception:
+        status = None
+
+    if isinstance(status, dict):
+        queue_n = status.get("queue_depth", 0)
+        return f"    Dream: [accent]✓ running[/accent]  queue: {queue_n}"
+
+    n = _queue_depth()
+    return f"    Dream: [yellow]enabled but daemon not running[/yellow]  queue: {n} (on disk)"
+
+
 def build_memory_line(
     *,
     backend: str,
@@ -85,11 +112,14 @@ def display_welcome_banner(
         session_count=session_count,
     )
 
+    dream_line = build_dream_line(deps)
+
     lines = [
         f"\n[accent]{art}[/accent]\n",
         f"    v{info.version} — CLI Assistant",
         f"    Model: [accent]{llm_provider}[/accent]",
         memory_line,
+        dream_line,
         f"    Tools: {tool_count}  Skills: {skill_count}  MCP: {mcp_count}  Commands: {cmd_count}",
         f"    Dir: {str(deps.workspace_dir) if deps.config.workspace_path else deps.workspace_dir.name}"
         + (f"  ({info.git_branch})" if info.git_branch else ""),

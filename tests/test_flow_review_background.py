@@ -1,28 +1,17 @@
-"""Behavioral tests for turn-boundary background review (plan 3.5c TASK-1).
+"""Behavioral tests for reviewer child-deps isolation (B3 contract).
 
-Real CoDeps, real asyncio, no monkeypatching. Three coverage areas:
-
-1. Pass-A-then-pass-B manifest visibility (B3 fix) — verifies that
-   refresh_skills(child_deps) followed by render_skill_manifest against the
-   child's index surfaces disk-current skills, even when the parent's
-   skill_index is stale. This is the contract run_session_review now
-   relies on after the reorder.
-2. Cancellation atomicity — the spawned background task cancels cleanly
-   via the explicit `except asyncio.CancelledError` block.
-3. End-to-end fire — one real Ollama-backed review pass triggered via
-   _post_turn_hook with review_nudge_interval=1; await the task and assert
-   a session-review report was written to disk.
+Real CoDeps, no monkeypatching. Verifies the daemon reviewer contract:
+fork_deps_for_reviewer + refresh_skills(child) surfaces disk-current skills
+while leaving the parent's registry unchanged.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP
 
 
@@ -36,7 +25,7 @@ def _restore_co_home() -> Generator[None, None, None]:
         os.environ["CO_HOME"] = original
 
 
-def _make_deps(tmp_path: Path, *, review_enabled: bool = True, interval: int = 5):
+def _make_deps(tmp_path: Path, *, review_enabled: bool = True):
     os.environ["CO_HOME"] = str(tmp_path)
     import importlib
 
@@ -53,7 +42,6 @@ def _make_deps(tmp_path: Path, *, review_enabled: bool = True, interval: int = 5
             "skills": SETTINGS_NO_MCP.skills.model_copy(
                 update={
                     "review_enabled": review_enabled,
-                    "review_nudge_interval": interval,
                 }
             )
         }
@@ -89,7 +77,7 @@ def _write_skill_to_disk(user_skills_dir: Path, name: str, description: str) -> 
 def test_child_deps_refresh_surfaces_disk_skill_when_parent_registry_stale(
     tmp_path: Path,
 ) -> None:
-    """The reorder in run_session_review depends on this contract:
+    """The daemon reviewer depends on this contract:
     fork → refresh_skills(child_deps) → render_skill_manifest(child_deps.skill_index)
     surfaces skills written to disk after parent's index was last loaded.
     """
@@ -136,83 +124,3 @@ def test_child_refresh_does_not_mutate_parent_registry(tmp_path: Path) -> None:
     # Child got a fresh dict.
     assert child.skill_index is not parent_initial_index
     assert "pass-a-skill" in child.skill_index
-
-
-# ---------------------------------------------------------------------------
-# Cancellation — the spawned background task cancels cleanly
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_background_task_cancels_cleanly(tmp_path: Path) -> None:
-    """Cancelling the spawned task surfaces CancelledError out of the body."""
-    from co_cli.main import _post_turn_hook
-
-    deps = _make_deps(tmp_path, interval=1)
-    _post_turn_hook(deps, [], turn_iteration_count=1)
-    task = deps.session.background_review_task
-    assert task is not None
-    assert not task.done()
-
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert task.cancelled()
-
-
-# ---------------------------------------------------------------------------
-# End-to-end — one real review pass fires via the hook
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_post_turn_hook_fires_real_review_writes_report(tmp_path: Path) -> None:
-    """Threshold=1; await the spawned task; assert a session-review report exists.
-
-    Uses real Ollama. Calls ensure_ollama_warm OUTSIDE the asyncio.timeout block
-    per project policy (cold-model load must not count against the call budget).
-    """
-    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
-
-    from co_cli.config.skills import REVIEW_TIMEOUT_SECONDS
-    from co_cli.main import _post_turn_hook
-
-    # Cold-start warm-up — outside any per-call timeout budget.
-    await ensure_ollama_warm(SETTINGS_NO_MCP.llm.model, SETTINGS_NO_MCP.llm.host)
-
-    deps = _make_deps(tmp_path, interval=1)
-
-    # Minimal but plausible transcript for the reviewer to scan.
-    transcript = [
-        ModelRequest(parts=[UserPromptPart(content="hi")]),
-        ModelResponse(parts=[TextPart(content="hello — how can I help?")], model_name="test"),
-    ]
-
-    _post_turn_hook(deps, transcript, turn_iteration_count=1)
-
-    task = deps.session.background_review_task
-    assert task is not None
-
-    # The review's wait_for already bounds the inner agent at REVIEW_TIMEOUT_SECONDS.
-    # Add a small outer cushion for cancellation finalizers / sync setup.
-    async with asyncio.timeout(REVIEW_TIMEOUT_SECONDS + 30):
-        await task
-
-    # On success the task swallows internal errors via the inner except blocks;
-    # the observable signal is either a status callback (not wired here) or a
-    # report directory written to ~/.co-cli/session-reviews/.
-    import co_cli.config.core as core_mod
-
-    reviews_dir = core_mod.SESSION_REVIEWS_DIR
-    # The reviewer may produce no run dir if the LLM declines to call any tools
-    # (the report write happens inside run_standalone path). Accept either
-    # a written report OR a cleanly-completed task as the success signal — both
-    # prove the spawn-and-run path executed end-to-end without crashing.
-    assert task.done()
-    assert task.exception() is None
-    if reviews_dir.exists():
-        run_dirs = list(reviews_dir.iterdir())
-        # If a run dir was created, it must contain at least run.json or run.md.
-        for d in run_dirs:
-            entries = {p.name for p in d.iterdir()}
-            assert entries & {"run.json", "run.md"}, f"empty review dir: {d}"

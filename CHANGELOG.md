@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.8.230]
+
+### Online reviewer + dream daemon MVP
+
+- **Dream daemon** — per-`CO_HOME` out-of-process daemon (`co dream start/status/stop`); POSIX double-fork detach; Unix socket IPC; SIGTERM grace; PID + provenance file
+- **KICK-based reviewer dispatch** — two domain counters (`turns_since_memory_review`, `iters_since_skill_review`) in `CoSessionState`; mid-session threshold trips and session-end always-fire both send durable KICK files to `$CO_HOME/daemons/dream/queue/`
+- **Domain reviewer agents** — `MEMORY_REVIEW_SPEC` (memory_search + memory_manage) and `SKILL_REVIEW_SPEC` (skill_view + skill_manage + memory_search); domain-specific prompts; both run via `run_standalone` with `requires_approval=False`
+- **Retry/backoff** — per-call `asyncio.timeout`; failed retries increment attempt counter on queue file; after `max_retry_attempts` file moves to `queue/failed/`; counter survives daemon restart
+- **Recall metrics** — `MemoryItem.recall_days` (deduped ISO-date list); skill usage sidecar extended with `recall_days` + `bump_recall`; updated on `memory_search`, `skill_view`, and `/skill-name` slash
+- **Inline counter resets** — `memory_manage(create|append|replace)` resets memory counter; `skill_manage(create|edit|patch)` resets skill counter; no crossover
+- **Auto-spawn + inspectability** — bootstrap auto-spawns daemon when `dream.enabled=true`; first-spawn notice; `Dream:` banner line (3 states); `/dream` slash read-only inspection
+- **Dead code removed** — `session_review.py`, `session_review_prompts.py`, in-process `background_review_task`, `_maybe_run_session_review`, `auto_approve_skill_ops`/`auto_approve_knowledge_ops` flags
+- **Stale tests migrated** — 5 stale flow test files updated; deleted symbols fully purged
+- **`dream.md` spec** — fully rewritten to document both the daemon reviewer layer and the batch cycle
+
 ## [0.8.228]
 
 ### Agent loop caps — iteration cap + tool-call hard-stop

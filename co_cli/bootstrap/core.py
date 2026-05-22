@@ -431,6 +431,54 @@ async def create_deps(
     return deps
 
 
+def maybe_autospawn_dream(deps: CoDeps, frontend: TerminalFrontend) -> None:
+    """Spawn the dream daemon in the background if not already running.
+
+    No-op when dream.enabled is False or CO_DREAM_NO_AUTOSPAWN is set.
+    Uses an advisory flock to prevent concurrent REPLs from double-spawning.
+    Emits a one-shot notice to frontend on first spawn.
+    """
+    import os
+
+    from co_cli.config.core import DREAM_LOCK, DREAM_PID_FILE
+    from co_cli.daemons.dream.process import (
+        acquire_start_lock,
+        double_fork_detach,
+        is_pid_live,
+        read_pid,
+    )
+
+    if not deps.config.dream.enabled:
+        return
+    if os.environ.get("CO_DREAM_NO_AUTOSPAWN"):
+        return
+
+    try:
+        with acquire_start_lock(DREAM_LOCK):
+            pid = read_pid(DREAM_PID_FILE)
+            if pid is not None and is_pid_live(pid):
+                return
+            session_id = deps.session.session_path.stem
+            double_fork_detach(
+                [
+                    "co",
+                    "dream",
+                    "start",
+                    "--foreground",
+                    "--origin=repl-autospawn",
+                    f"--session-id={session_id}",
+                ]
+            )
+            frontend.on_status(
+                "[dream] daemon started in background."
+                " 'co dream status' to inspect; 'co dream stop' to stop."
+            )
+    except BlockingIOError:
+        pass
+    except Exception as exc:
+        logger.warning("dream auto-spawn failed: %s", exc)
+
+
 def init_session_index(
     deps: CoDeps,
     current_session_path: Path,

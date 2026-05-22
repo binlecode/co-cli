@@ -20,31 +20,28 @@ def _make_deps() -> CoDeps:
     )
 
 
-def test_fork_deps_resets_approval_flags() -> None:
-    """Plain fork_deps always resets approval flags to False."""
+def test_fork_deps_increments_agent_depth() -> None:
+    """fork_deps increments agent_depth on the child runtime."""
     parent = _make_deps()
-    parent.runtime.auto_approve_skill_ops = True
-    parent.runtime.auto_approve_knowledge_ops = True
+    assert parent.runtime.agent_depth == 0
 
     child = fork_deps(parent)
-    assert child.runtime.auto_approve_skill_ops is False
-    assert child.runtime.auto_approve_knowledge_ops is False
+    assert child.runtime.agent_depth == 1
 
 
-def test_fork_deps_for_reviewer_sets_both_flags() -> None:
-    """fork_deps_for_reviewer grants both skill and knowledge write access."""
+def test_fork_deps_for_reviewer_increments_agent_depth() -> None:
+    """fork_deps_for_reviewer delegates to fork_deps — agent_depth is incremented."""
     parent = _make_deps()
     child = fork_deps_for_reviewer(parent)
-    assert child.runtime.auto_approve_skill_ops is True
-    assert child.runtime.auto_approve_knowledge_ops is True
+    assert child.runtime.agent_depth == 1
 
 
 def test_fork_deps_does_not_share_runtime() -> None:
     """Child runtime is a fresh CoRuntimeState — mutations don't bleed into parent."""
     parent = _make_deps()
     child = fork_deps(parent)
-    child.runtime.auto_approve_skill_ops = True
-    assert parent.runtime.auto_approve_skill_ops is False
+    child.runtime.compaction_skip_count = 99
+    assert parent.runtime.compaction_skip_count == 0
 
 
 def test_background_status_callback_not_cleared_by_reset_for_turn() -> None:

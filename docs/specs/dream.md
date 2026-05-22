@@ -1,19 +1,305 @@
 # Co CLI — Dream
 
+This spec owns the dream subsystem — co's self-learning path. It covers two coupled layers:
 
-This spec owns the dream-cycle lifecycle. The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [01-system.md](01-system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for dream miner and merge calls lives in [config.md](config.md).
+1. **In-session reviewer (daemon layer)** — a per-`CO_HOME` daemon that processes KICK payloads queued by the REPL. It runs domain-specific review agents (memory + skill) against recent session transcripts. Ships as Plan 1 of the dream roadmap.
+2. **Batch maintenance cycle** — mine → merge → decay against the full memory corpus, triggered manually or at session end. Lives in `co_cli/memory/dream.py`. Deferred absorption into the daemon is Plan 2 territory.
 
-## 1. What & How
+The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [01-system.md](01-system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for daemon and batch review calls lives in [config.md](config.md).
 
-Dreaming is Co's bounded, local batch-maintenance pass for the memory layer. It is named "dream" because it happens outside the immediate foreground turn and looks across prior experience for durable patterns, but it is not hidden autonomous memory. It reads local transcripts and active memory items, writes local memory items, archives originals into a local subdirectory, and records local JSON state.
+---
 
-Dreaming serves the core product mission:
+## 1. In-Session Reviewer — Daemon Layer
 
-- **Trusted:** automatic mutations are gated by config or an explicit slash command, bounded by caps and timeouts, and recoverable through the archive.
-- **Local:** transcripts, artifacts, archive files, state, and indexes live under the user-controlled Co home.
-- **Personal:** retrospective mining looks for stable user preferences, feedback, rules, decisions, and references that were not obvious in a single turn.
-- **Operator:** the system performs maintenance work on the user's behalf while preserving operator control through dry runs, stats, and restore commands.
-- **Knowledge work:** the active corpus is kept coherent enough for future synthesis, planning, writing, and technical execution.
+### 1.1 Architecture Overview
+
+```
+                  ┌──────────┐
+                  │   User   │  ─── submits turns, sees output ──┐
+                  └──────────┘                                    │
+                                                                  ▼
+   ┌──────────────────────────────────────────────────────────────────────┐
+   │                  Ollama  (per-model serializer)                       │
+   │     No coordination API. No priority. No queue introspection.         │
+   └──▲────────────────────────────────────────────────────────▲──────────┘
+      │ fires on demand; surfaces                              │ asyncio.timeout(review_timeout_s);
+      │ latency to user as normal variance                     │ TimeoutError → retry with backoff
+      │                                                         │
+┌─────┴─────────────────────────┐         ┌────────────────────┴──────────────────┐
+│  REPL  (co chat)               │         │  dream daemon  (co dream start)       │
+│                                │         │                                        │
+│  _post_turn_hook               │         │  main_loop                             │
+│    turns_since_memory_review   │         │    initial_drain(queue/)  (cold start) │
+│      += 1                      │         │    while True:                         │
+│    iters_since_skill_review    │         │      msg = socket.recv()               │
+│      += turn_iteration_count   │         │      STATUS → return JSON              │
+│    if ≥ threshold:             │         │      STOP   → drain current, exit      │
+│      _send_review_kick(domain) │         │      REVIEW → _drain_queue()           │
+│      counter = 0               │         │                                        │
+│                                │         │  _drain_queue                          │
+│  inline tool-write resets      │         │    while files: pick oldest            │
+│    memory_manage(create|       │         │      try:                              │
+│      append|replace)           │         │        async with asyncio.timeout(T):  │
+│      → memory ctr = 0          │         │          load_transcript(              │
+│    skill_manage(create|        │         │            sessions/<id>.jsonl,        │
+│      edit|patch)               │         │            max_message_count=N)        │
+│      → skill ctr = 0           │         │          run_standalone(domain_spec)   │
+│                                │         │        move file → done/               │
+│  _drain_and_cleanup (end)      │         │      except Exception:                 │
+│    fire both KICKs             │         │        attempts += 1                   │
+│    unconditionally             │         │        if attempts ≥ MAX:              │
+│                                │         │          move file → failed/           │
+│  bootstrap.maybe_autospawn     │         │        else:                           │
+│    flock dream.lock            │         │          sleep(retry_backoff_s)        │
+│    if not pid_live: Popen(     │         │                                        │
+│      co dream start            │         │                                        │
+│      --origin=repl-autospawn)  │         │                                        │
+│    frontend.on_status(notice)  │         │                                        │
+└────────────┬───────────────────┘         └──────────────────┬─────────────────────┘
+             │  all coupling is filesystem-mediated            │
+             ▼                                                 ▼
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│                                    $CO_HOME                                        │
+│   daemons/                                                                         │
+│     dream.pid     pid + spawn_origin + spawn_session_id + started_at               │
+│     dream.sock    Unix domain socket                                               │
+│     dream.lock    advisory flock (POSIX-only) — auto-spawn race guard             │
+│     dream/                                                                         │
+│       queue/                                                                       │
+│         <ts>-<uuid>.json   payload: domain, session_id,                            │
+│                                     persisted_message_count, created_at, attempts  │
+│         done/<ts>-<uuid>.json   successful reviews (audit retention)               │
+│         failed/<ts>-<uuid>.json  exhausted retries (inspect via co dream status)  │
+│   sessions/<id>.jsonl   REPL appends; daemon reads up to persisted_message_count  │
+│   memory/*.md           both REPL and daemon write; recall metrics updated on hit  │
+│   skills/.usage.json    both REPL and daemon update recall_days on read paths      │
+│   logs/dream/<ts>.log   daemon stdout/stderr                                       │
+└───────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key properties:
+
+- **No process-state coupling.** REPL never asks "is daemon busy?" Daemon never asks "is REPL busy?".
+- **Filesystem is the only durable channel.** Socket is a best-effort nudge — if it is down, daemon picks up queue files on next start.
+- **Ollama is the only shared external resource.** Daemon copes via timeout + retry + backoff; REPL copes by being interactive.
+- **Two domain counters, two domain specs.** Memory and skill review are fully independent — own counters, own KICKs, own queue items, own agents.
+- **Approval bypass via `build_task_agent`.** Daemon tools are registered with `requires_approval=False`. Dead REPL-side flags (`auto_approve_skill_ops`, `auto_approve_knowledge_ops`) were removed.
+
+### 1.2 REPL-Side Counters and KICK Dispatch
+
+`CoSessionState` carries two domain counters:
+
+| Field | Unit | Increment source |
+|---|---|---|
+| `turns_since_memory_review: int` | turns (1/turn) | `_post_turn_hook` |
+| `iters_since_skill_review: int` | iterations (`turn_iteration_count`/turn) | `_post_turn_hook` |
+
+**Unit rationale:** memory tracks user-intent signal (~1 per turn); skill tracks agent-action signal (~tool + reasoning steps per turn). Conflating the units would over-fire skill reviews on chatty users or under-fire memory reviews on tool-heavy turns.
+
+Counter flow in `_post_turn_hook` (guarded by `review_enabled` and `deps.model is not None`):
+
+```python
+deps.session.turns_since_memory_review += 1
+deps.session.iters_since_skill_review += turn_iteration_count
+_maybe_kick_memory_review(deps)
+_maybe_kick_skill_review(deps)
+```
+
+Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, resets the counter to 0, and calls `_send_review_kick(deps, domain=..., persisted_message_count=...)`.
+
+**Inline tool-write resets** (domain-scoped):
+
+| Tool call | Effect |
+|---|---|
+| `memory_manage(action ∈ {create, append, replace})` | `turns_since_memory_review = 0` |
+| `skill_manage(action ∈ {create, edit, patch})` | `iters_since_skill_review = 0` |
+| `delete`, `write_file`, `remove_file` | no reset |
+| No crossover | memory tool never touches skill counter; skill tool never touches memory counter |
+
+**Session-end always-fire** in `_drain_and_cleanup`: both KICKs (memory + skill) fire regardless of counter state at REPL shutdown. This replaces the former in-process `background_review_task` and `_maybe_run_dream_cycle` call.
+
+**`_send_review_kick`** performs two steps:
+1. Atomic-write a KICK JSON file to `$CO_HOME/daemons/dream/queue/<ts>-<uuid>.json` (write to `<name>.tmp` sibling → fsync → `os.replace` into `<name>.json`) so the daemon never observes a torn file.
+2. Best-effort send `REVIEW <domain> <session_id> <persisted_message_count>\n` over `dream.sock`. Socket errors are swallowed — the file is durable.
+
+### 1.3 KICK File Queue
+
+Queue file payload:
+
+```jsonc
+{
+  "domain": "memory" | "skill",
+  "session_id": "<session-stem>",
+  "persisted_message_count": 42,
+  "created_at": "2026-05-22T...",
+  "attempts": 0
+}
+```
+
+`persisted_message_count` is a JSONL record index, not a turn count. The daemon truncates the transcript at this index to get a consistent view even while the REPL is still appending. Naming this `turn_index` would invite truncation bugs.
+
+Queue directories under `$CO_HOME/daemons/dream/`:
+
+| Path | Content |
+|---|---|
+| `queue/*.json` | Pending KICK files |
+| `queue/done/*.json` | Successfully processed (audit retention) |
+| `queue/failed/*.json` | Exhausted `max_retry_attempts`; inspect via `co dream status` |
+
+The daemon's `_queue.py` scanner skips any `*.tmp` files (in-flight REPL writes).
+
+### 1.4 Daemon Process Model
+
+**Lifecycle:**
+
+```text
+co dream start
+  → check PID liveness (DREAM_PID_FILE)
+  → acquire advisory flock on DREAM_LOCK (POSIX-only)
+  → double_fork_detach: subprocess.Popen(co dream start --foreground, start_new_session=True)
+  → child writes DREAM_PID_FILE (pid, origin, session_id, started_at)
+  → child binds DREAM_SOCK
+  → child runs main_loop
+  → on SIGTERM or STOP command: close IPC, unlink pid + sock, exit
+
+co dream stop
+  → connect socket, send STOP\n; daemon drains current item and exits
+  → if socket unreachable or --force: SIGTERM fallback
+
+Stale PID cleanup: next start checks kill -0; if dead, proceeds to spawn.
+```
+
+POSIX-only boundary: `fcntl.flock`, Unix sockets, `start_new_session=True`. Marked with `# POSIX-only` comment block in `_process.py`. No Windows path.
+
+**Worker loop:**
+
+On startup, the daemon drains any queue files that accumulated while it was down (`_initial_drain`). Then it loops on `ipc.receive_one()`:
+
+| Message | Daemon response |
+|---|---|
+| `STATUS` | Reply JSON: `{running, pid, uptime_seconds, queue_depth, current_item, spawn_origin, spawn_session_id}` |
+| `STOP` | Reply `ACK`; exit cleanly |
+| `REVIEW <domain> <session_id> <n>` | Reply `ACK`; call `_drain_queue()` |
+
+`REVIEW` is a wake-up nudge — the work data lives in the queue file. The daemon scans the queue dir, not the IPC line, for work.
+
+**Queue drain loop:**
+
+```python
+while True:
+    files = sorted(queue_dir.glob("*.json"))
+    if not files: break
+    item = files[0]                         # process in chronological order
+    try:
+        async with asyncio.timeout(cfg.review_timeout_seconds):
+            await _process_kick_file(deps, item, state)
+        move_to_done(item)
+    except Exception as exc:
+        payload["attempts"] += 1
+        write_queue_item(item, payload)     # persist attempt counter to survive restart
+        if attempts >= cfg.max_retry_attempts:
+            move_to_failed(item, last_error=str(exc))
+        else:
+            await asyncio.sleep(cfg.retry_backoff_seconds)
+```
+
+`CancelledError` is `BaseException` and is not caught by `except Exception`, so SIGTERM/task-cancel propagates cleanly.
+
+### 1.5 Domain Reviewers
+
+Two specs in `co_cli/daemons/dream/_reviewer.py`:
+
+| Spec | Tool surface | Prompt |
+|---|---|---|
+| `MEMORY_REVIEW_SPEC` | `memory_search`, `memory_manage` | `daemons/dream/prompts/memory_review.md` |
+| `SKILL_REVIEW_SPEC` | `skill_view`, `skill_manage`, `memory_search`; `include_skill_manifest=True` | `daemons/dream/prompts/skill_review.md` |
+
+**Memory review** — focused on persona, preferences, and references extracted from the transcript.
+
+**Skill review** — focused on corrections, techniques, and umbrella discipline patterns extracted from the transcript. The skill manifest is injected so the reviewer can reference and patch existing skills by name.
+
+Both specs route through `run_standalone(SPEC, child_deps, prompt)` which uses `build_task_agent` with `requires_approval=False`. **Daemon code must never call a REPL-toolset-built agent** — it would block waiting for an approval that no frontend can answer.
+
+`_deps.py` builds a minimal `CoDeps` for the daemon: settings, model, shell backend, memory/session paths. No frontend, no REPL state.
+
+**Transcript loading:** `load_transcript(path, max_message_count=N)` truncates the JSONL at record index N — consistent view even while REPL appends. Default `max_message_count=None` returns the full list unchanged (existing callers unaffected).
+
+### 1.6 Recall Metrics
+
+Recall signals flow back into items at query time, providing data for Plan 2's housekeeping.
+
+**Memory items** — three fields on `MemoryItem`:
+
+| Field | Status | Type | Semantics |
+|---|---|---|---|
+| `recall_count: int` | existing | int | Total hit count |
+| `last_recalled: str \| None` | existing | ISO-8601 string | Most recent recall timestamp |
+| `recall_days: list[str]` | new | deduped ISO-date strings | Cadence signal; more robust to lost-update than raw count |
+
+Side-effect in `memory_search` after building results, before returning `ToolReturn`:
+
+```python
+for each returned hit:
+    item = load_memory_item(path)
+    item.recall_count += 1
+    item.last_recalled = now.isoformat()
+    if today_iso not in item.recall_days:
+        item.recall_days.append(today_iso)
+    atomic_write_text(path, render_memory_item_file(item))
+```
+
+Lazy-default on load: items without `recall_days` in frontmatter read back `[]`.
+
+**Skill items** — extend the existing `co_cli/skills/usage.py` sidecar:
+
+```jsonc
+{
+  "version": 1,
+  "skills": {
+    "<name>": {
+      "use_count": 0,
+      "view_count": 0,
+      "patch_count": 0,
+      "recall_days": ["2026-05-20"],   // new field
+      "last_used_at": null,
+      "last_viewed_at": null,
+      "last_patched_at": null
+    }
+  }
+}
+```
+
+`bump_recall(deps, name)` appends today's ISO date to `recall_days` (deduped), without touching existing counters. Called from:
+- `skill_view` — alongside existing `bump_view`
+- `/skill-name` slash dispatch (`commands/core.py`) — before `DelegateToAgent`
+
+Lazy migration: sidecars without `recall_days` default to `[]` on `setdefault` read.
+
+**Concurrency model:** recall writes are best-effort with possible lost updates under concurrent REPL sessions or REPL + daemon. `recall_days` deduplication (day strings collide rather than increment) makes lost-update degrade gracefully. Torn writes are prevented by `atomic_write_text`; lost updates are accepted. Plan 2 housekeeping consumes `recall_count`/`recall_days` as order-of-magnitude signals, not exact ledgers.
+
+### 1.7 REPL Auto-Spawn
+
+`maybe_autospawn_dream(deps, frontend)` in `co_cli/bootstrap/core.py`:
+
+```text
+if dream.enabled is False: return
+if CO_DREAM_NO_AUTOSPAWN is set: return
+acquire advisory flock on DREAM_LOCK (POSIX-only)
+if pid_live(read_pid(DREAM_PID_FILE)): return   # already running
+Popen(co dream start --origin=repl-autospawn --session-id=<id>)
+if first spawn for this CO_HOME:
+    frontend.on_status("[dream] daemon started in background. ...")
+```
+
+The `--origin` and `--session-id` are persisted to `dream.pid` so `co dream status` can report provenance. Concurrent REPL bootstraps serialize via `fcntl.flock` — exactly one daemon spawns.
+
+Current default: `dream.enabled = false`. Opt-in via `CO_DREAM_ENABLED=true` or settings file.
+
+---
+
+## 2. Batch Maintenance Cycle
+
+The batch cycle (`co_cli/memory/dream.py`) performs mine → merge → decay against the full memory corpus. It runs inside `asyncio.timeout()` and isolates phase failures.
 
 ```mermaid
 flowchart TD
@@ -36,70 +322,51 @@ flowchart TD
     Decay --> State
 ```
 
-The cycle has three ordered phases. Each phase is independently try/except'd; one failure does not block the others. The whole cycle runs under an `asyncio.timeout()` bound.
-
-Source-of-truth files:
-
-| Path | Role |
-| --- | --- |
-| `memory/*.md` | Active memory items used by recall and search |
-| `memory/_archive/*.md` | Recoverable archived items, excluded from normal active loads |
-| `memory/_dream_state.json` | Processed transcript names, last run timestamp, cumulative counters |
-| `sessions/*.jsonl` | Raw append-only transcripts read by mining; never rewritten by dreaming |
-| `co-cli-search.db` | Derived index updated when dream writes or archives artifacts |
-
-## 2. Core Logic
-
 ### 2.1 Entry Points
 
 Manual trigger:
 
 ```text
 /memory dream
-  -> run_dream_cycle(dry_run=false)
-  -> print extracted, merged, decayed, and errors
+  → run_dream_cycle(dry_run=false)
+  → print extracted, merged, decayed, and errors
 
 /memory dream --dry
-  -> run_dream_cycle(dry_run=true)
-  -> report merge and decay counts only
-  -> do not write files, archive artifacts, mine transcripts, or persist state
+  → run_dream_cycle(dry_run=true)
+  → report merge and decay counts only
+  → no file writes, no archive, no state persistence
 ```
 
 Automatic trigger:
 
 ```text
 session teardown
-  -> if memory.consolidation_enabled is true
-  -> if memory.consolidation_trigger is "session_end"
-  -> run dream cycle (timeout managed internally by run_dream_cycle)
-  -> log result
-  -> never fail shutdown because dreaming failed
+  → if memory.consolidation_enabled is true
+  → if memory.consolidation_trigger is "session_end"
+  → run dream cycle (timeout managed by run_dream_cycle)
+  → log result; never fail shutdown because dreaming failed
 ```
 
-Automatic dreaming is deliberately behind `memory.consolidation_enabled=false` by default. This matches the mission boundary: Co may become more useful through long-term adaptation, but that adaptation must remain explicit, local, and inspectable.
+Automatic dreaming is behind `memory.consolidation_enabled=false` by default.
 
 ### 2.2 State
 
 `DreamState` persists at `memory/_dream_state.json`.
 
 | Field | Meaning |
-| --- | --- |
+|---|---|
 | `last_dream_at` | ISO timestamp for the last completed non-dry run |
-| `processed_sessions` | Transcript filenames already mined successfully or intentionally skipped as empty |
+| `processed_sessions` | Transcript filenames already mined or intentionally skipped |
 | `stats.total_cycles` | Count of completed non-dry cycles |
 | `stats.total_extracted` | Cumulative artifacts created by mining |
 | `stats.total_merged` | Cumulative merge clusters completed |
 | `stats.total_decayed` | Cumulative artifacts archived by decay |
 
-Load behavior is forgiving: missing or corrupt state returns a fresh state object and logs corrupt state as a warning. Save behavior creates the memory directory if needed and writes indented JSON.
-
-State is only the dream cursor and dashboard record. It is not the source of truth for memory content; markdown items and archive files are.
+Load is forgiving: missing or corrupt state returns a fresh state object.
 
 ### 2.3 Phase 1: Transcript Mining
 
-Mining turns raw episodic memory into reusable knowledge by looking across prior experience for durable cross-turn signals.
-
-Execution order:
+Mining turns raw episodic memory into reusable knowledge by looking across prior sessions for durable cross-turn signals.
 
 ```text
 load dream state
@@ -107,247 +374,275 @@ list recent sessions by reverse filename order
 limit to memory.consolidation_lookback_sessions
 for each unprocessed session:
   load transcript
-  if load fails:
-    leave unprocessed for later retry
-  if empty or no extractable window:
-    mark processed
-  build transcript window with wider text/tool caps
+  if empty or no extractable window: mark processed
+  build transcript window (wider text/tool caps)
   split oversized window into overlapping chunks
-  build dream miner agent (once per session)
-  run agent.run(chunk, deps=deps) over each chunk
-  stop after per-session save cap is reached
-  count new active artifacts
+  run dream miner agent over each chunk
+  stop after per-session save cap
   mark session processed
 ```
 
-Mining uses the shared transcript-window builder (`_window.py`). It keeps user and assistant text plus selected tool calls/results, skips file-read style output, and drops large non-prose tool returns. Dream mining uses wider caps than agent-explicit knowledge saves because its purpose is cross-turn pattern discovery.
-
-The dream miner is a **tool-using pydantic-ai Agent** equipped with the `memory_manage` tool. It is instructed to save only durable artifacts, especially:
-
-- cross-turn patterns
-- implicit preferences
-- corrections whose meaning only becomes clear later
-- stable decisions
-
-It must avoid:
-
-- ephemeral task state
-- secrets and sensitive personal data
-- codebase facts derivable by reading the repo
-- unsupported speculation
-- facts already obvious from a single recent slice
-
-Mining marks a session processed only after the miner completes for that session. If the agent fails, the session remains unprocessed so a future cycle can retry.
+The dream miner is a **tool-using Agent** with `memory_manage`. It is instructed to save only durable artifacts — cross-turn patterns, implicit preferences, stable decisions — and avoid ephemeral state, secrets, and codebase facts derivable by reading the repo.
 
 ### 2.4 Phase 2: Merge
 
-Merge reduces duplication in active knowledge without editing transcripts or overwriting source artifacts.
-
-Execution order:
+Merge reduces duplication by clustering active same-kind items above a token-Jaccard threshold and consolidating each cluster into one artifact.
 
 ```text
-load active memory items from top-level memory/*.md
-discard decay_protected artifacts
-group remaining artifacts by memory_kind
-within each kind, cluster by token-Jaccard threshold
-cap clusters per cycle
-cap artifacts per cluster
-for each cluster:
-  call llm_call(deps, prompt) with merge instructions for one consolidated body
-  if body is too short or empty:
-    skip cluster (no write, no archive)
-  write a new consolidated artifact
-  index the new artifact
-  archive the original artifacts
+load active memory/*.md
+discard decay_protected items
+group by memory_kind
+cluster by token-Jaccard threshold
+for each cluster (capped per cycle):
+  llm_call() → consolidated body
+  write consolidated artifact (source_type: consolidated)
+  archive originals (os.replace into memory/_archive/)
 ```
 
-Merge invariants:
-
-- Only artifacts of the same `memory_kind` can merge.
-- `decay_protected=true` blocks merge participation.
-- Original artifacts are archived only after the consolidated artifact is durably written.
-- If archiving fails after the consolidated artifact is written, the consolidated artifact remains; the failure is logged and the cycle continues.
-- The merge prompt may combine and deduplicate existing facts, but must not invent new facts.
-
-The merge call is a **direct `llm_call`** (no tool access, body text only) — in contrast with the mining phase which uses a tool-equipped Agent that calls `memory_manage` to write artifacts.
-
-The consolidated artifact uses `source_type: consolidated` and inherits the union of tags from the originals. The active index is updated for the consolidated artifact, and archived originals are removed from the index.
+The merge call is a **direct `llm_call`** (no tool access, body text only). Original artifacts are archived only after the consolidated artifact is durably written.
 
 ### 2.5 Phase 3: Decay
 
 Decay removes stale, low-use knowledge from active recall while preserving it for restore.
 
-Candidate selection:
-
 ```text
 for each active artifact:
-  if decay_protected:
-    skip
-  if created is missing, invalid, or newer than decay cutoff:
-    skip
-  if last_recalled exists and is newer than decay cutoff:
-    skip
-  include candidate
-sort oldest created first
+  skip if decay_protected
+  skip if newer than decay cutoff
+  skip if last_recalled newer than decay cutoff
+include candidate
+sort oldest first
+archive up to 20 per cycle
 ```
 
-The cutoff is `now - memory.decay_after_days`. A candidate is archived only if it is old enough and either has never been recalled or was last recalled outside the same age window.
-
-Decay archives at most 20 items per cycle. Archive moves files into `memory/_archive/`, removes active index rows when a `MemoryStore` is available, and resolves filename collisions by suffixing rather than clobbering existing files.
+Cutoff is `now - memory.decay_after_days`.
 
 ### 2.6 Dry Run
 
-Dry run is a preview mode for the destructive parts of dreaming.
+- Mining is skipped (predicting artifacts requires LLM writes).
+- Merge reports mergeable cluster count (capped to per-cycle limit).
+- Decay reports eligible artifact count (capped to per-cycle archive limit).
+- No files written; no state persisted.
 
-Behavior:
+### 2.7 Failure and Timeout Semantics
 
-- Mining is skipped because predicting extracted artifacts requires LLM writes.
-- Merge reports the number of currently mergeable clusters (capped to per-cycle limit).
-- Decay reports the number of currently decay-eligible artifacts, capped to the per-cycle archive limit.
-- No files are written.
-- No artifacts are archived.
-- Dream state is not persisted.
+Each phase is independently try/except'd. On `asyncio.timeout`, `timed_out=True` is set, a timeout error is appended, and partial result counts are returned. Timeout does not roll back completed file writes.
 
-Dry run is therefore a maintenance preview, not a full simulation of transcript mining.
+Session shutdown catches all dream errors — dreaming never prevents terminal cleanup.
 
-### 2.7 Failure And Timeout Semantics
-
-The cycle returns a `DreamResult` with extracted, merged, decayed, errors, and timeout status.
-
-Each non-dry phase is isolated:
-
-```text
-try mining
-  record "mine: ..." error on failure
-try merge
-  record "merge: ..." error on failure
-try decay
-  record "decay: ..." error on failure
-persist completed-cycle state
-```
-
-The whole cycle runs under an `asyncio.timeout()` bound. On timeout, the result is marked `timed_out=true`, a timeout error string is appended, and partial result counts are returned. Timeout does not roll back any file writes that completed before cancellation.
-
-Session shutdown catches all dream errors. Dreaming must never prevent terminal cleanup, shell cleanup, or async resource closure.
-
-### 2.8 User Inspection And Recovery
-
-Dreaming is inspectable through slash commands:
+### 2.8 User Inspection and Recovery
 
 | Command | Purpose |
-| --- | --- |
+|---|---|
 | `/memory dream --dry` | Preview merge and decay counts |
 | `/memory dream` | Run the cycle now |
-| `/memory stats` | Show active counts, archive count, last dream timestamp, cumulative dream stats, and decay candidates |
-| `/memory restore [slug]` | List archived artifacts or restore one archived file by unambiguous filename prefix |
-| `/memory decay-review --dry` | Preview decay candidates directly |
+| `/memory stats` | Active counts, archive count, last dream timestamp, cumulative stats, decay candidates |
+| `/memory restore [slug]` | List archived artifacts or restore one by unambiguous filename prefix |
+| `/memory decay-review --dry` | Preview decay candidates |
 | `/memory decay-review` | Archive decay candidates after confirmation |
-
-Archive restore moves an archived markdown file back to the active knowledge directory and reindexes the active directory when a store is available. Ambiguous restore slugs fail rather than guessing.
 
 ### 2.9 Observability
 
-Dreaming emits structured span records via the `@trace` decorator (see [observability.md](observability.md)):
-
 | Span | Source | Purpose |
-| --- | --- | --- |
-| `co.dream.cycle` | `@trace` on `run_dream_cycle` | Whole-cycle envelope with dry-run, timeout, count, error, and timeout attributes |
+|---|---|---|
+| `co.dream.cycle` | `@trace` on `run_dream_cycle` | Whole-cycle envelope with dry-run, timeout, count, error |
 | `co.dream.mine` | `@trace` on `_mine_transcripts` | Mining phase count |
-| `invoke_agent _dream_miner_agent` | `ObservabilityCapability` | Each `miner_agent.run()` iteration; `co.agent.role=dream_miner` carried via `agent.run(metadata={"role": "dream_miner"})` |
-| `co.dream.merge.preview` / `co.dream.merge.apply` | `@trace` on preview vs apply helpers | Merge phase count (dry-run vs apply paths emit distinct spans) |
-| `co.dream.decay.preview` / `co.dream.decay.apply` | `@trace` on preview vs apply helpers | Decay phase count (dry-run vs apply paths emit distinct spans) |
+| `invoke_agent _dream_miner_agent` | `ObservabilityCapability` | Each miner agent iteration; `co.agent.role=dream_miner` |
+| `co.dream.merge.preview` / `.apply` | `@trace` | Merge phase count (dry-run vs apply) |
+| `co.dream.decay.preview` / `.apply` | `@trace` | Decay phase count (dry-run vs apply) |
 
-The session-end wrapper logs completion counts when changes occurred and logs timeout or failure warnings without surfacing them as foreground turn failures.
+---
 
-## 3. Config
+## 3. Inspectability
+
+Auto-spawn and daemon existence are visible across four surfaces (mission §"Trusted"):
+
+| Surface | Description |
+|---|---|
+| **First-spawn notice** | On first auto-spawn of a `CO_HOME`, REPL prints: `[dream] daemon started in background. 'co dream status' to inspect; 'co dream stop' to stop.` |
+| **Welcome banner** | `Dream:` row alongside `Memory:` / `Tools:` / `Dir:`. Three states: `✓ running  queue: N` (accent), `disabled` (dim), `enabled but daemon not running  queue: N (on disk)` (yellow). Reads queue dir + best-effort socket `STATUS` with 200ms timeout — never stalls startup. |
+| **`/dream` slash** | Read-only inspection in the REPL. Queries daemon over socket (500ms timeout); never spawns a process. When daemon is down: prints state + on-disk queue depth + guidance. |
+| **`co dream status`** | Full JSON: `pid`, `uptime_seconds`, `queue_depth`, `current_item`, `attempts_pending`, `failed_count`, `spawn_origin`, `spawn_session_id`. Authoritative source of truth. |
+
+CLI subcommands (MVP surface):
+
+```text
+co dream start [--foreground] [--origin=<str>] [--session-id=<str>]
+co dream status
+co dream stop [--force]
+```
+
+`tail` and `config` are deferred to Plan 2. For log streaming: `tail -f $CO_HOME/logs/dream/*.log`.
+
+---
+
+## 4. Config
+
+### Daemon settings (`dream.*`)
 
 | Setting | Env Var | Default | Description |
-| --- | --- | --- | --- |
-| `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enables dedup-on-write and dream-cycle maintenance |
-| `memory.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `session_end` | Automatic trigger mode: `session_end` or `manual` |
-| `memory.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Number of recent transcript files considered by mining |
-| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for dedup and merge clusters |
-| `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | Soft corpus-size setting; not directly enforced by the current dream cycle |
+|---|---|---|---|
+| `dream.enabled` | `CO_DREAM_ENABLED` | `false` | Master switch; REPL auto-spawn only fires when true |
+| `dream.review_timeout_seconds` | `CO_DREAM_REVIEW_TIMEOUT_SECONDS` | `120` | Per-review LLM call timeout; `asyncio.timeout` in worker loop |
+| `dream.retry_backoff_seconds` | `CO_DREAM_RETRY_BACKOFF_SECONDS` | `30` | Sleep between retry attempts on timeout or error |
+| `dream.max_retry_attempts` | `CO_DREAM_MAX_RETRY_ATTEMPTS` | `3` | After this many failures, move queue file to `failed/` |
+
+### Reviewer trigger settings (`skills.*`)
+
+| Setting | Env Var | Default | Description |
+|---|---|---|---|
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | (existing) | Master switch for the reviewer subsystem |
+| `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | Turns between mid-session memory KICKs |
+| `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | Iterations between mid-session skill KICKs |
+
+### Batch cycle settings (`memory.*`)
+
+| Setting | Env Var | Default | Description |
+|---|---|---|---|
+| `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enables batch dream cycle at session end |
+| `memory.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `session_end` | `session_end` or `manual` |
+| `memory.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Recent transcript files considered by mining |
+| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for merge clusters |
 | `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Age and last-recall cutoff for decay candidacy |
-| `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Chunk size used when indexing consolidated items |
-| `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Chunk overlap used when indexing consolidated items |
 
-Internal caps:
+Internal caps (batch cycle):
 
-| Constant | Current Value | Purpose |
-| --- | --- | --- |
-| dream window text cap | `50` | Maximum text lines included in a mining window |
-| dream window tool cap | `50` | Maximum tool lines included in a mining window |
-| soft mining window limit | `16000` chars | Threshold before transcript windows are chunked |
-| mining chunk size | `12000` chars | Chunk length for oversized windows |
-| mining chunk overlap | `2000` chars | Overlap between oversized-window chunks |
-| max mining saves per session | `5` | Per-session cap on new artifacts from mining |
-| max merge clusters per cycle | `10` | Per-cycle merge cap |
-| max artifacts per merge cluster | `5` | Cluster size cap |
-| minimum merged body length | `20` chars | Guard against empty or unusable merge outputs |
-| max decay archives per cycle | `20` | Per-cycle decay archive cap |
-| default cycle timeout | `60` seconds | Timeout used by `run_dream_cycle()` |
+| Constant | Value | Purpose |
+|---|---|---|
+| dream window text cap | 50 | Max text lines in a mining window |
+| dream window tool cap | 50 | Max tool lines in a mining window |
+| soft mining window limit | 16000 chars | Threshold before chunking |
+| mining chunk size | 12000 chars | Chunk length for oversized windows |
+| mining chunk overlap | 2000 chars | Overlap between chunks |
+| max mining saves per session | 5 | Per-session artifact cap from mining |
+| max merge clusters per cycle | 10 | Per-cycle merge cap |
+| max artifacts per merge cluster | 5 | Cluster size cap |
+| minimum merged body length | 20 chars | Guard against empty merge outputs |
+| max decay archives per cycle | 20 | Per-cycle decay archive cap |
+| default cycle timeout | 60 seconds | `run_dream_cycle()` timeout |
 
-## 4. Public Interface
+---
 
-### Cycle entry
+## 5. Public Interface
 
-| Symbol | Source | Contract |
-| --- | --- | --- |
-| `run_dream_cycle(deps, miner_tool, dry_run=False, *, timeout_secs=60) -> DreamResult` | `co_cli/memory/dream.py` | Async — orchestrates mining → merge → decay phases under `asyncio.timeout(timeout_secs)`; isolates phase failures |
-| `DreamResult` | `co_cli/memory/dream.py` | Frozen dataclass — `extracted`, `merged`, `decayed`, `errors: list[str]`, `timed_out: bool` |
-
-### State persistence
+### Daemon layer
 
 | Symbol | Source | Contract |
-| --- | --- | --- |
-| `DreamState` | `co_cli/memory/dream.py` | Pydantic model — `last_dream_at`, `processed_sessions`, `stats` |
-| `DreamStats` | `co_cli/memory/dream.py` | Pydantic model — `total_cycles`, `total_extracted`, `total_merged`, `total_decayed` |
-| `load_dream_state(memory_dir) -> DreamState` | `co_cli/memory/dream.py` | Forgiving loader — returns fresh state on missing/corrupt JSON |
-| `save_dream_state(memory_dir, state) -> None` | `co_cli/memory/dream.py` | Writes `_dream_state.json` with `mkdir -p` |
-| `dream_state_path(memory_dir) -> Path` | `co_cli/memory/dream.py` | Returns `<memory_dir>/_dream_state.json` |
+|---|---|---|
+| `start_daemon(co_home, *, foreground, origin, session_id)` | `co_cli/daemons/dream/process.py` | Start daemon; no-op if already running |
+| `stop_daemon(co_home, *, force)` | `co_cli/daemons/dream/process.py` | Send STOP over socket; SIGTERM fallback |
+| `status_daemon(co_home, timeout_ms) -> dict` | `co_cli/daemons/dream/process.py` | Return status dict; `running: False` if socket unreachable |
+| `_socket_status(timeout_ms) -> dict \| None` | `co_cli/commands/dream.py` | Shared sync socket helper; returns None on any error |
+| `build_codeps_for_daemon(co_home) -> CoDeps` | `co_cli/daemons/dream/_deps.py` | Minimal deps builder for daemon process |
+| `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Domain reviewer task specs |
+| `process_review(deps, domain, session_id, persisted_message_count)` | `co_cli/daemons/dream/_reviewer.py` | Load transcript + dispatch to domain reviewer |
+| `maybe_autospawn_dream(deps, frontend)` | `co_cli/bootstrap/core.py` | REPL auto-spawn hook |
+| `build_dream_line(deps) -> str` | `co_cli/bootstrap/banner.py` | Banner `Dream:` line builder |
+| `handle_dream_slash(ctx, args)` | `co_cli/commands/dream.py` | `/dream` slash handler |
 
-### Dream miner agent
+### Recall metrics
 
 | Symbol | Source | Contract |
-| --- | --- | --- |
-| `build_dream_miner_agent(miner_tool) -> Agent[CoDeps, str]` | `co_cli/memory/dream.py` | Constructs the tool-using sub-agent equipped with `memory_manage` used during mining |
+|---|---|---|
+| `bump_recall(deps, name)` | `co_cli/skills/usage.py` | Append today's ISO date to `recall_days` in sidecar (deduped, best-effort) |
+| `MemoryItem.recall_days` | `co_cli/memory/item.py` | `list[str]` — deduped ISO-date strings; lazy-default `[]` on load |
 
-### Archive and decay helpers (used by `/memory` commands)
+### Batch cycle
 
 | Symbol | Source | Contract |
-| --- | --- | --- |
-| `archive_artifacts(entries: list[MemoryItem], memory_dir, memory_store=None) -> int` | `co_cli/memory/archive.py` | Moves memory items into `memory/_archive/`; resolves filename collisions by suffix |
-| `restore_artifact(slug, memory_dir, memory_store=None) -> bool` | `co_cli/memory/archive.py` | Restores an archived item by unambiguous filename prefix; reindexes if `memory_store` provided |
+|---|---|---|
+| `run_dream_cycle(deps, miner_tool, dry_run, *, timeout_secs) -> DreamResult` | `co_cli/memory/dream.py` | Async — mine → merge → decay under `asyncio.timeout` |
+| `DreamResult` | `co_cli/memory/dream.py` | Frozen dataclass — `extracted`, `merged`, `decayed`, `errors`, `timed_out` |
+| `DreamState` / `DreamStats` | `co_cli/memory/dream.py` | Pydantic models for state persistence |
+| `load_dream_state(memory_dir)` | `co_cli/memory/dream.py` | Forgiving loader — fresh state on missing/corrupt |
+| `save_dream_state(memory_dir, state)` | `co_cli/memory/dream.py` | Writes `_dream_state.json` |
+| `archive_artifacts(entries, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Move items into `memory/_archive/` |
+| `restore_artifact(slug, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Restore archived item by unambiguous filename prefix |
 
-## 5. Files
+### Transcript loading
+
+| Symbol | Source | Contract |
+|---|---|---|
+| `load_transcript(path, *, max_message_count=None)` | `co_cli/session/persistence.py` | Load JSONL; truncate at `max_message_count` when provided |
+
+---
+
+## 6. Files
+
+### Daemon layer
 
 | File | Purpose |
-| --- | --- |
-| `co_cli/memory/dream.py` | Dream state, mining, merge, decay, dry-run, timeout, and orchestration |
-| `co_cli/memory/prompts/dream_miner.md` | Instructions for retrospective transcript mining |
-| `co_cli/memory/prompts/dream_merge.md` | Instructions for same-kind artifact consolidation |
-| `co_cli/memory/_window.py` | Shared transcript-window builder used by dream mining |
-| `co_cli/memory/similarity.py` | Token-Jaccard similarity and clustering helpers |
+|---|---|
+| `co_cli/daemons/dream/__init__.py` | Docstring-only package marker |
+| `co_cli/daemons/dream/_deps.py` | Minimal `CoDeps` builder for daemon process |
+| `co_cli/daemons/dream/_ipc.py` | `DaemonIPC` server + `send_command` client helper |
+| `co_cli/daemons/dream/_queue.py` | Queue file read/write/move helpers |
+| `co_cli/daemons/dream/_loop.py` | Main event loop and queue drain logic |
+| `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
+| `co_cli/daemons/dream/_process.py` | PID file, advisory flock, double-fork detach (POSIX-only) |
+| `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader |
+| `co_cli/daemons/dream/process.py` | Public re-export: `start_daemon`, `stop_daemon`, `status_daemon` |
+| `co_cli/daemons/dream/prompts/memory_review.md` | Memory reviewer instructions |
+| `co_cli/daemons/dream/prompts/skill_review.md` | Skill reviewer instructions |
+| `co_cli/commands/dream.py` | `co dream` CLI group + `handle_dream_slash` + `_socket_status` |
+| `co_cli/config/dream.py` | `DreamSettings` Pydantic model + `DREAM_ENV_MAP` |
+| `co_cli/bootstrap/banner.py` | `build_dream_line` — `Dream:` banner row |
+| `co_cli/bootstrap/core.py` | `maybe_autospawn_dream` — REPL auto-spawn hook |
+| `co_cli/main.py` | `_send_review_kick`, `_maybe_kick_memory_review`, `_maybe_kick_skill_review`, `_fire_session_end_kicks` |
+| `co_cli/deps.py` | `CoSessionState.turns_since_memory_review` / `iters_since_skill_review` |
+| `co_cli/skills/usage.py` | `bump_recall` + `recall_days` sidecar field |
+| `co_cli/memory/item.py` | `MemoryItem.recall_days` field |
+
+### Batch cycle
+
+| File | Purpose |
+|---|---|
+| `co_cli/memory/dream.py` | Dream state, mining, merge, decay, dry-run, timeout, orchestration |
+| `co_cli/memory/prompts/dream_miner.md` | Retrospective transcript mining instructions |
+| `co_cli/memory/prompts/dream_merge.md` | Same-kind artifact consolidation instructions |
+| `co_cli/memory/_window.py` | Transcript-window builder for mining |
+| `co_cli/memory/similarity.py` | Token-Jaccard similarity and clustering |
 | `co_cli/memory/decay.py` | Decay candidate selection |
 | `co_cli/memory/archive.py` | Archive and restore mechanics |
-| `co_cli/memory/item.py` | Memory item schema and active top-level memory item loading |
-| `co_cli/memory/frontmatter.py` | Memory item markdown rendering and frontmatter validation |
-| `co_cli/memory/store.py` | `MemoryStore` — derived index updates for consolidated and archived items |
-| `co_cli/tools/memory/manage.py` | `memory_manage` tool used by dream mining |
-| `co_cli/main.py` | Session-end dream trigger (`_maybe_run_dream_cycle`) |
-| `co_cli/commands/memory.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, and `/memory stats` |
+| `co_cli/session/persistence.py` | `load_transcript` with `max_message_count` |
+| `co_cli/commands/memory.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, `/memory stats` |
 
-## 6. Test Gates
+---
+
+## 7. Test Gates
+
+### Daemon layer
 
 | Property | Test file |
-| --- | --- |
+|---|---|
+| Counter delta correctness; domain-independent KICK firing | `tests/main/test_post_turn_hook.py` |
+| `_send_review_kick` writes file + socket nudge; socket failure non-fatal | `tests/main/test_send_review_kick.py` |
+| `memory_manage` reset — no crossover; `delete` does not reset | `tests/tools/memory/test_manage_resets.py` |
+| `skill_manage` reset — no crossover; `write_file`/`remove_file` do not reset | `tests/tools/system/test_skill_manage_resets.py` |
+| Memory recall updates on `memory_search`; backward-compat load | `tests/tools/memory/test_recall_metrics.py` |
+| Skill recall sidecar `recall_days`; deduplication; backward-compat | `tests/skills/test_usage_recall_days.py` |
+| Queue file write/read/move roundtrip; `.tmp` skip | `tests/daemons/dream/test_queue.py` |
+| Worker drains in chronological order; per-call timeout; attempt counter; `failed/` | `tests/daemons/dream/test_loop.py`, `test_timeout_retry.py` |
+| Daemon process lifecycle: start/stop/PID/SIGTERM/stale-PID cleanup | `tests/daemons/dream/test_process.py` |
+| `process_review` truncates transcript at `persisted_message_count`; domain routing | `tests/daemons/dream/test_reviewer.py` |
+| Session-end always-fires both KICKs; end-to-end KICK → queue file | `tests/integration/test_review_kick_end_to_end.py` |
+| Full daemon lifecycle integration | `tests/integration/test_daemon_lifecycle.py` |
+| Auto-spawn race: exactly one daemon spawns under concurrent REPL bootstraps | `tests/integration/test_auto_spawn_race.py` |
+| First-spawn notice + `co dream status` provenance fields | `tests/integration/test_autospawn_notice.py` |
+| Multi-REPL: N + M KICKs → N + M queue files (no coalescing) | `tests/integration/test_multi_repl_kick.py` |
+| Crash mid-process → restart re-processes file (idempotent) | `tests/integration/test_daemon_crash_recovery.py` |
+| Banner three states (running / disabled / enabled-but-down); ≤500ms on hung socket | `tests/bootstrap/test_banner_dream_line.py` |
+| `/dream` slash three rendering paths; never spawns process | `tests/commands/test_dream_slash.py` |
+| Per-prompt extraction quality (real model + real stores) | `evals/eval_domain_review.py` |
+
+### Batch cycle
+
+| Property | Test file |
+|---|---|
 | Dream state load/save and forgiving corrupt-state recovery | `tests/memory/test_knowledge_dream.py` |
-| Dream cycle orchestration: mine → merge → decay ordering, phase isolation | `tests/memory/test_knowledge_dream_cycle.py` |
-| Dry-run counts, no-write guarantee, and state non-persistence | `tests/memory/test_knowledge_dream_cycle.py` |
-| Cycle timeout: partial result, `timed_out=True`, errors list | `tests/memory/test_knowledge_dream_cycle.py` |
-| Live full-cycle coverage (local, LLM) | `tests/memory/test_knowledge_dream_cycle.py` |
+| Cycle orchestration: phase ordering, phase isolation, timeout | `tests/memory/test_knowledge_dream_cycle.py` |
+| Dry-run counts, no-write guarantee, state non-persistence | `tests/memory/test_knowledge_dream_cycle.py` |
 | Decay candidate selection: cutoff, `decay_protected`, `last_recalled` | `tests/memory/test_knowledge_decay.py` |
 | Archive move and filename collision resolution | `tests/memory/test_knowledge_archive.py` |
-| Restore: unambiguous slug succeeds; ambiguous or missing slug returns False | `tests/memory/test_knowledge_archive.py` |
+| Restore: unambiguous slug succeeds; ambiguous or missing returns False | `tests/memory/test_knowledge_archive.py` |
 | Token-Jaccard similarity and union-find clustering | `tests/memory/test_knowledge_similarity.py` |

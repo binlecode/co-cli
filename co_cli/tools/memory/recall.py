@@ -131,6 +131,28 @@ def _grep_memory_items_fallback(
     ]
 
 
+def _record_memory_recall(deps: CoDeps, item_paths: list[Path]) -> None:
+    """Update recall metrics (count, last_recalled, recall_days) for each memory item path."""
+    from datetime import UTC, datetime
+
+    from co_cli.fileio.atomic import atomic_write_text
+    from co_cli.memory.frontmatter import render_memory_item_file
+    from co_cli.memory.item import load_memory_item
+
+    now = datetime.now(UTC)
+    today_iso = now.date().isoformat()
+    for path in item_paths:
+        try:
+            item = load_memory_item(path)
+        except Exception:
+            continue
+        item.recall_count += 1
+        item.last_recalled = now.isoformat().replace("+00:00", "Z")
+        if today_iso not in item.recall_days:
+            item.recall_days.append(today_iso)
+        atomic_write_text(path, render_memory_item_file(item))
+
+
 def _format_memory_results(query: str, results: list[dict]) -> str:
     lines: list[str] = [f"Found {len(results)} memory result(s) for '{query}':\n"]
     for r in results:
@@ -202,6 +224,8 @@ async def memory_search(
     memory_results = _search_memory_items(ctx, query, kinds, limit)
     if not memory_results:
         return tool_output(f"No results found for '{query}'.", ctx=ctx, count=0, results=[])
+    item_paths = [Path(r["path"]) for r in memory_results if r.get("path")]
+    _record_memory_recall(ctx.deps, item_paths)
     return tool_output(
         _format_memory_results(query, memory_results),
         ctx=ctx,

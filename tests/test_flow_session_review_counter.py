@@ -1,12 +1,13 @@
-"""Behavioral tests for the session-review iteration counter in _post_turn_hook.
+"""Behavioral tests for the two-counter model in _post_turn_hook.
 
-Covers: tick-by-one, tick-by-N, threshold trip, counter reset on spawn,
-and single-in-flight gate (no double-spawn while a task is running).
+Covers: memory-turn counter tick, skill-iter counter tick, threshold trip
+(counter reset after KICK fires), and repeated threshold trips producing
+independent KICKs per crossing (queue provides back-pressure, no in-flight gate).
 """
 
 from __future__ import annotations
 
-import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -19,11 +20,32 @@ from co_cli.main import _post_turn_hook
 from co_cli.tools.shell_backend import ShellBackend
 
 
-def _make_deps(tmp_path: Path, *, review_nudge_interval: int = 10) -> CoDeps:
-    """Minimal CoDeps with review enabled, pointed at tmp_path."""
+@pytest.fixture(autouse=True)
+def _restore_co_home(tmp_path: Path):
+    original = os.environ.get("CO_HOME")
+    os.environ["CO_HOME"] = str(tmp_path)
+    import importlib
+
+    import co_cli.config.core as core_mod
+
+    importlib.reload(core_mod)
+    yield
+    if original is None:
+        os.environ.pop("CO_HOME", None)
+    else:
+        os.environ["CO_HOME"] = original
+
+
+def _make_deps(
+    *,
+    memory_nudge_interval: int = 10,
+    skill_nudge_interval: int = 10,
+) -> CoDeps:
+    """Minimal CoDeps with review enabled."""
     skills_settings = SkillsSettings(
         review_enabled=True,
-        review_nudge_interval=review_nudge_interval,
+        review_memory_nudge_interval=memory_nudge_interval,
+        review_skill_nudge_interval=skill_nudge_interval,
     )
     config = SETTINGS_NO_MCP.model_copy(update={"skills": skills_settings})
     deps = CoDeps(shell=ShellBackend(), config=config, session=CoSessionState())
@@ -34,132 +56,89 @@ def _make_deps(tmp_path: Path, *, review_nudge_interval: int = 10) -> CoDeps:
 
 
 # ---------------------------------------------------------------------------
-# Test 1: text-only turn ticks the counter by 1
+# Test 1: memory counter bumps +1 per turn regardless of iteration count
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_single_iteration_increments_by_one(tmp_path: Path) -> None:
-    """One iteration increments iterations_since_review by exactly 1.
-
-    Verifies that _post_turn_hook accepts turn_iteration_count=1 and adds it
-    to iterations_since_review when the threshold has not been reached.
-    """
-    deps = _make_deps(tmp_path)
+def test_single_turn_increments_memory_counter_by_one() -> None:
+    """One call increments turns_since_memory_review by exactly 1."""
+    deps = _make_deps()
 
     _post_turn_hook(deps, [], 1)
 
-    assert deps.session.iterations_since_review == 1
+    assert deps.session.turns_since_memory_review == 1
 
 
 # ---------------------------------------------------------------------------
-# Test 2: multi-iteration turn ticks by N
+# Test 2: skill counter bumps +N per call
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_multi_iteration_increments_by_n(tmp_path: Path) -> None:
-    """turn_iteration_count=3 increments the counter by 3.
-
-    Verifies that the hook passes the full iteration count through to the
-    counter, not just 1 regardless of how many iterations the turn contained.
-    """
-    deps = _make_deps(tmp_path)
+def test_multi_iteration_increments_skill_counter_by_n() -> None:
+    """turn_iteration_count=3 increments iters_since_skill_review by 3."""
+    deps = _make_deps()
 
     _post_turn_hook(deps, [], 3)
 
-    assert deps.session.iterations_since_review == 3
+    assert deps.session.iters_since_skill_review == 3
 
 
 # ---------------------------------------------------------------------------
-# Test 3: reaching the threshold spawns a background review task
+# Test 3: memory threshold trip resets memory counter
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_threshold_trip_spawns_review_task(tmp_path: Path) -> None:
-    """Accumulating iterations equal to review_nudge_interval spawns a task.
+def test_memory_threshold_trip_resets_counter() -> None:
+    """Accumulating turns equal to review_memory_nudge_interval resets the counter."""
+    deps = _make_deps(memory_nudge_interval=5, skill_nudge_interval=100)
 
-    Calls the hook enough times to reach the threshold (10 by default) and
-    asserts that background_review_task is set afterward.
-    """
-    deps = _make_deps(tmp_path, review_nudge_interval=10)
+    # Five turns of 1 = reaches threshold
+    for _ in range(5):
+        _post_turn_hook(deps, [], 1)
 
-    # Accumulate to threshold in two calls: 7 + 3 = 10
-    _post_turn_hook(deps, [], 7)
-    _post_turn_hook(deps, [], 3)
-
-    task = deps.session.background_review_task
-    assert task is not None
-    # Clean up to avoid ResourceWarning
-    task.cancel()
-    try:
-        await task
-    except (asyncio.CancelledError, Exception):
-        pass
+    # Counter reset to 0 (KICK fired)
+    assert deps.session.turns_since_memory_review == 0
 
 
 # ---------------------------------------------------------------------------
-# Test 4: counter resets to 0 after spawn
+# Test 4: counter resets to 0 after KICK fires
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_counter_reset_after_spawn(tmp_path: Path) -> None:
-    """iterations_since_review is reset to 0 when a review task is spawned.
+def test_memory_counter_reset_after_kick() -> None:
+    """turns_since_memory_review is reset to 0 when memory KICK fires."""
+    deps = _make_deps(memory_nudge_interval=5, skill_nudge_interval=100)
 
-    After the threshold is crossed the counter must be zeroed so the next
-    window starts fresh.
-    """
-    deps = _make_deps(tmp_path, review_nudge_interval=10)
+    for _ in range(5):
+        _post_turn_hook(deps, [], 1)
+
+    assert deps.session.turns_since_memory_review == 0
+
+
+def test_skill_counter_reset_after_kick() -> None:
+    """iters_since_skill_review is reset to 0 when skill KICK fires."""
+    deps = _make_deps(memory_nudge_interval=100, skill_nudge_interval=10)
 
     _post_turn_hook(deps, [], 10)
 
-    assert deps.session.iterations_since_review == 0
-    # Clean up
-    task = deps.session.background_review_task
-    if task is not None:
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+    assert deps.session.iters_since_skill_review == 0
 
 
 # ---------------------------------------------------------------------------
-# Test 5: in-flight gate — no double-spawn while previous task is running
+# Test 5: no in-flight gate — each threshold trip fires independently
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_inflight_gate_blocks_new_spawn(tmp_path: Path) -> None:
-    """A second threshold trip while a review task is running does not spawn.
+def test_repeated_threshold_trips_each_reset_counter() -> None:
+    """Each time the threshold is crossed, the counter resets independently.
 
-    The single-in-flight contract: when background_review_task is not None and
-    not done(), the hook returns early without resetting the counter or
-    creating a new task.
+    Unlike the old single-in-flight model, the queue provides back-pressure —
+    there is no guard blocking a second KICK if the threshold is hit again.
     """
-    deps = _make_deps(tmp_path, review_nudge_interval=10)
-
-    # Inject a never-completing task to simulate an in-flight review.
-    in_flight = asyncio.get_event_loop().create_task(asyncio.sleep(9999))
-    deps.session.background_review_task = in_flight
-    # Pre-set the counter to just below threshold so one more call trips it.
-    deps.session.iterations_since_review = 9
+    deps = _make_deps(memory_nudge_interval=1, skill_nudge_interval=100)
 
     _post_turn_hook(deps, [], 1)
+    assert deps.session.turns_since_memory_review == 0
 
-    # Counter reached threshold (9 + 1 = 10) but in-flight gate must block spawn.
-    assert deps.session.background_review_task is in_flight, (
-        "background_review_task must not be replaced while the previous task is running"
-    )
-    assert deps.session.iterations_since_review == 10, (
-        "counter must not be reset when the spawn is skipped due to in-flight gate"
-    )
-
-    # Cancel the synthetic task to avoid ResourceWarning.
-    in_flight.cancel()
-    try:
-        await in_flight
-    except (asyncio.CancelledError, Exception):
-        pass
+    _post_turn_hook(deps, [], 1)
+    assert deps.session.turns_since_memory_review == 0

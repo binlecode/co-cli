@@ -1,4 +1,4 @@
-"""Behavioral tests for the skill curator runner and the session-review gate.
+"""Behavioral tests for the skill curator runner.
 
 Phase 2 (the consolidation agent) is exercised only at the wiring level:
 without a real model in deps, build_task_agent fails inside run_curator's
@@ -9,7 +9,7 @@ a real LLM.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,9 +18,8 @@ from tests._settings import SETTINGS
 from co_cli.agent.core import build_native_toolset
 from co_cli.config.skills import CURATOR_STALE_AFTER_DAYS
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.main import _curator_gate_passes, _maybe_run_curator
 from co_cli.skills import usage as skill_usage
-from co_cli.skills.curator import read_curator_state, write_curator_state
+from co_cli.skills.curator import read_curator_state
 from co_cli.skills.loader import load_skills
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -55,82 +54,9 @@ def _make_deps(tmp_path: Path, *, curator_enabled: bool = True) -> CoDeps:
 
 
 def _ago(days: float) -> str:
+    from datetime import datetime
+
     return (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-# ---------------------------------------------------------------------------
-# _curator_gate_passes (pure)
-# ---------------------------------------------------------------------------
-
-
-def test_gate_passes_when_never_run() -> None:
-    assert _curator_gate_passes({"run_count": 0, "paused": False}, 168, datetime.now(UTC)) is True
-
-
-def test_gate_blocks_within_interval() -> None:
-    now = datetime.now(UTC)
-    state = {"last_run_at": _ago(days=1), "paused": False}
-    assert _curator_gate_passes(state, 168, now) is False
-
-
-def test_gate_passes_after_interval() -> None:
-    now = datetime.now(UTC)
-    state = {"last_run_at": _ago(days=14), "paused": False}
-    assert _curator_gate_passes(state, 168, now) is True
-
-
-def test_gate_blocks_when_paused_even_if_eligible() -> None:
-    now = datetime.now(UTC)
-    state = {"last_run_at": _ago(days=14), "paused": True}
-    assert _curator_gate_passes(state, 168, now) is False
-
-
-def test_gate_tolerates_unparseable_last_run_at() -> None:
-    now = datetime.now(UTC)
-    state = {"last_run_at": "not-a-timestamp", "paused": False}
-    assert _curator_gate_passes(state, 168, now) is True
-
-
-# ---------------------------------------------------------------------------
-# _maybe_run_curator wiring
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_maybe_run_curator_short_circuits_when_disabled(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path, curator_enabled=False)
-    await _maybe_run_curator(deps)
-    state = read_curator_state(deps)
-    assert state.get("last_run_at") is None
-    assert state.get("run_count", 0) == 0
-
-
-@pytest.mark.asyncio
-async def test_maybe_run_curator_short_circuits_when_no_model(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path, curator_enabled=True)
-    assert deps.model is None
-    await _maybe_run_curator(deps)
-    state = read_curator_state(deps)
-    assert state.get("last_run_at") is None
-
-
-@pytest.mark.asyncio
-async def test_maybe_run_curator_blocked_by_recent_run(tmp_path: Path) -> None:
-    """A curator state with a fresh last_run_at suppresses the next firing."""
-    deps = _make_deps(tmp_path, curator_enabled=True)
-    write_curator_state(
-        deps,
-        {
-            "version": 1,
-            "last_run_at": _ago(days=1),
-            "run_count": 1,
-            "paused": False,
-        },
-    )
-    await _maybe_run_curator(deps)
-    state = read_curator_state(deps)
-    # Still showing prior run_count, not bumped
-    assert state["run_count"] == 1
 
 
 # ---------------------------------------------------------------------------

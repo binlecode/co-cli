@@ -44,6 +44,7 @@ class SourceTypeEnum(StrEnum):
     OBSIDIAN = "obsidian"
     DRIVE = "drive"
     CONSOLIDATED = "consolidated"
+    SESSION_REVIEW = "session_review"
 
 
 class IndexSourceEnum(StrEnum):
@@ -72,6 +73,7 @@ class MemoryItem:
     decay_protected: bool = False
     last_recalled: str | None = None
     recall_count: int = 0
+    recall_days: list[str] = field(default_factory=list)
 
 
 def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> MemoryItem:
@@ -91,6 +93,7 @@ def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> Memory
         decay_protected=bool(frontmatter.get("decay_protected", False)),
         last_recalled=frontmatter.get("last_recalled"),
         recall_count=int(frontmatter.get("recall_count", 0) or 0),
+        recall_days=list(frontmatter.get("recall_days") or []),
     )
 
 

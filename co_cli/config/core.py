@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from co_cli.config.compaction import COMPACTION_ENV_MAP, CompactionSettings
+from co_cli.config.dream import DREAM_ENV_MAP, DreamSettings
 from co_cli.config.llm import LLM_ENV_MAP, LlmSettings, resolve_api_key_from_env
 from co_cli.config.mcp import DEFAULT_MCP_SERVERS, MCPServerSettings, parse_mcp_servers_from_env
 from co_cli.config.memory import MEMORY_ENV_MAP, MemorySettings
@@ -37,8 +38,14 @@ LOGS_DIR = USER_DIR / "logs"
 MEMORY_DIR = USER_DIR / "memory"
 SESSIONS_DIR = USER_DIR / "sessions"
 TOOL_RESULTS_DIR = USER_DIR / "tool-results"
-SESSION_REVIEWS_DIR = USER_DIR / "session-reviews"
 CURATOR_RUNS_DIR = USER_DIR / "curator-runs"
+DREAM_DAEMON_DIR = USER_DIR / "daemons" / "dream"
+DREAM_PID_FILE = USER_DIR / "daemons" / "dream.pid"
+DREAM_SOCK = USER_DIR / "daemons" / "dream.sock"
+DREAM_LOCK = USER_DIR / "daemons" / "dream.lock"
+DREAM_QUEUE_DIR = DREAM_DAEMON_DIR / "queue"
+DREAM_QUEUE_DONE_DIR = DREAM_QUEUE_DIR / "done"
+DREAM_QUEUE_FAILED_DIR = DREAM_QUEUE_DIR / "failed"
 # Flat defaults (Settings-level, not grouped)
 DEFAULT_THEME = "light"
 DEFAULT_PERSONALITY = "tars"
@@ -65,7 +72,6 @@ def _ensure_dirs() -> None:
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    SESSION_REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
     CURATOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -87,6 +93,7 @@ class Settings(BaseModel):
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     compaction: CompactionSettings = Field(default_factory=CompactionSettings)
     skills: SkillsSettings = Field(default_factory=SkillsSettings)
+    dream: DreamSettings = Field(default_factory=DreamSettings)
 
     # Flat — integration paths
     obsidian_vault_path: str | None = Field(default=None)
@@ -158,6 +165,7 @@ class Settings(BaseModel):
             "observability": OBSERVABILITY_ENV_MAP,
             "compaction": COMPACTION_ENV_MAP,
             "skills": SKILLS_ENV_MAP,
+            "dream": DREAM_ENV_MAP,
         }
         for group, fields in nested_env_map.items():
             for field, env_var in fields.items():

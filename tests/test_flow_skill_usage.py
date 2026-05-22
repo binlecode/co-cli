@@ -65,7 +65,12 @@ def test_write_then_read_roundtrip(tmp_path: Path) -> None:
     }
     skill_usage.write_records(deps, data)
     assert (tmp_path / ".usage.json").exists()
-    assert skill_usage.read_records(deps) == data
+    # read_records normalizes missing recall_days to [] for backward compat
+    expected = {
+        "version": 1,
+        "skills": {"foo": {"use_count": 3, "pinned": True, "state": "active", "recall_days": []}},
+    }
+    assert skill_usage.read_records(deps) == expected
 
 
 def test_read_records_returns_empty_on_corrupt_json(tmp_path: Path) -> None:

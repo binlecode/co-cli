@@ -9,6 +9,7 @@ from co_cli.commands.background import _cmd_background
 from co_cli.commands.cancel import _cmd_cancel
 from co_cli.commands.clear import _cmd_clear
 from co_cli.commands.compact import _cmd_compact
+from co_cli.commands.dream import handle_dream_slash
 from co_cli.commands.help import _cmd_help
 from co_cli.commands.history import _cmd_history
 from co_cli.commands.memory import _cmd_memory
@@ -52,6 +53,7 @@ BUILTIN_COMMANDS["memory"] = SlashCommand(
     "Manage memory items — /memory list|count|forget|dream|restore|decay-review|stats [args]",
     _cmd_memory,
 )
+BUILTIN_COMMANDS["dream"] = SlashCommand("dream", "Show dream daemon status", handle_dream_slash)
 BUILTIN_COMMANDS["approvals"] = SlashCommand(
     "approvals", "Manage session approval rules", _cmd_approvals
 )
@@ -106,6 +108,9 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
     # Check skill index after built-in commands (skills cannot shadow builtins)
     skill = ctx.deps.skill_index.get(name)
     if skill is not None:
+        from co_cli.skills.usage import bump_recall
+
+        bump_recall(ctx.deps, name)
         body = skill.body
         if args and "$ARGUMENTS" in body:
             args_list = args.split()
