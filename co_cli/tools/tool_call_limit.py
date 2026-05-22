@@ -3,6 +3,7 @@
 from typing import Literal, TypedDict
 
 MAX_TOOL_CALLS_PER_MODEL_TURN = 6  # 6 non-spilling calls fit the 64K-floor tail; see Sizing
+TOOL_CAP_HARD_STOP_CONSECUTIVE: int = 3
 
 
 class MaxToolCallsExceededPayload(TypedDict):
@@ -18,7 +19,7 @@ def make_exceeded_payload(issued: int) -> MaxToolCallsExceededPayload:
         max=MAX_TOOL_CALLS_PER_MODEL_TURN,
         issued=issued,
         guidance=(
-            f"Issued {issued} tool calls in one model turn; cap is {MAX_TOOL_CALLS_PER_MODEL_TURN}. "
+            f"Issued {issued} tool calls in one llm_iteration; cap is {MAX_TOOL_CALLS_PER_MODEL_TURN}. "
             f"Pick the {MAX_TOOL_CALLS_PER_MODEL_TURN} most important calls and try again."
         ),
     )

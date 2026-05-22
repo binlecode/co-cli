@@ -23,7 +23,10 @@ from pydantic_ai.tools import ToolDefinition
 from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.observability.tracing import current_span
 from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
-from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
+from co_cli.tools.tool_call_limit import (
+    MAX_TOOL_CALLS_PER_MODEL_TURN,
+    make_exceeded_payload,
+)
 from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS, spill_with_span
 
 logger = logging.getLogger(__name__)
@@ -210,6 +213,11 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
             return result
 
         issued = ctx.deps.runtime.tool_calls_in_model_turn
+        if issued > MAX_TOOL_CALLS_PER_MODEL_TURN:
+            ctx.deps.runtime.consecutive_tool_cap_violations += 1
+        else:
+            ctx.deps.runtime.consecutive_tool_cap_violations = 0
+
         allowed = min(issued, MAX_TOOL_CALLS_PER_MODEL_TURN)
         rejected = max(0, issued - MAX_TOOL_CALLS_PER_MODEL_TURN)
 

@@ -152,14 +152,14 @@ class CoSessionState:
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
-    # Iteration counter driving the turn-boundary session-review trigger.
-    # Bumped by _post_turn_hook with TurnResult.llm_iterations; reset to 0
-    # when a review task is spawned. Not reset on single-in-flight skip.
-    iterations_since_review: int = 0
-    # Handle to the most recently spawned background session-review task.
-    # Single-in-flight gate: a new trigger fires only when this is None or done().
-    # Cancelled (with bounded drain) by _drain_and_cleanup at REPL exit.
-    background_review_task: asyncio.Task | None = field(default=None, repr=False)
+    # Memory-domain turn counter: bumped +1 per turn by _post_turn_hook.
+    # Tracks user-intent signal (one per turn, regardless of tool calls).
+    # Reset to 0 when a memory KICK fires or memory_manage(create|append|replace) runs.
+    turns_since_memory_review: int = 0
+    # Skill-domain iteration counter: bumped +turn_iteration_count per turn by _post_turn_hook.
+    # Tracks agent-action signal (tool + reasoning steps, not just turns).
+    # Reset to 0 when a skill KICK fires or skill_manage(create|edit|patch) runs.
+    iters_since_skill_review: int = 0
 
 
 @dataclass
@@ -183,6 +183,10 @@ class CoRuntimeState:
     # Per-model-turn brake counter; resets implicitly on ctx.run_step transition.
     tool_call_limit_run_step: int = -1
     tool_calls_in_model_turn: int = 0
+    # Consecutive llm_iterations where tool_calls_in_model_turn exceeded the cap.
+    # Reset to 0 per turn by reset_for_turn(); also reset to 0 when a non-violating
+    # CallToolsNode fires (so only unbroken consecutive violations trigger the hard-stop).
+    consecutive_tool_cap_violations: int = 0
     # Written by enforce_request_size (all exit paths); read by proactive_window_processor
     # for OTEL diagnostics only (no logic branches on it).
     current_request_tokens_estimate: int | None = None
@@ -216,11 +220,6 @@ class CoRuntimeState:
     # Count of messages durably persisted to session_path; accumulates across the session.
     # Not reset per-turn — append-only persistence requires this to grow monotonically.
     persisted_message_count: int = 0
-    # Approval bypass flags for background sub-agents (session_reviewer).
-    # Set True only inside fork_deps_for_reviewer factory.
-    # NOT cleared by reset_for_turn — they live for the lifetime of the forked deps.
-    auto_approve_skill_ops: bool = False
-    auto_approve_knowledge_ops: bool = False
     # Wired in bootstrap/core.py:create_deps to frontend.on_status. Not cleared per-turn.
     background_status_callback: Callable[[str], None] | None = field(default=None, repr=False)
 
@@ -232,6 +231,7 @@ class CoRuntimeState:
         self.resume_tool_names = None
         self.compaction_applied_this_turn = False
         self.current_request_tokens_estimate = None
+        self.consecutive_tool_cap_violations = 0
 
 
 def _resource_lock_store_factory() -> ResourceLockStore:
@@ -318,18 +318,13 @@ class CoDeps:
 
 
 def fork_deps_for_reviewer(parent: CoDeps) -> CoDeps:
-    """Fork deps for the session_reviewer agent — grants both skill and knowledge write access."""
-    child = fork_deps(parent)
-    child.runtime.auto_approve_skill_ops = True
-    child.runtime.auto_approve_knowledge_ops = True
-    return child
+    """Fork deps for a domain reviewer agent (memory or skill)."""
+    return fork_deps(parent)
 
 
 def fork_deps_for_curator(parent: CoDeps) -> CoDeps:
-    """Fork deps for the skill_curator consolidation agent — grants skill write access only."""
-    child = fork_deps(parent)
-    child.runtime.auto_approve_skill_ops = True
-    return child
+    """Fork deps for the skill_curator consolidation agent."""
+    return fork_deps(parent)
 
 
 def resolve_workspace_paths(config: Settings) -> dict[str, Any]:

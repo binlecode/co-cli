@@ -82,6 +82,7 @@ from co_cli.tools.approvals import (
     resolve_approval_subject,
 )
 from co_cli.tools.display import format_for_display, get_tool_start_args_display
+from co_cli.tools.tool_call_limit import TOOL_CAP_HARD_STOP_CONSECUTIVE
 
 type SessionAgent = Agent[CoDeps, str | DeferredToolRequests]
 type SessionRunResult = AgentRunResult[str | DeferredToolRequests]
@@ -158,6 +159,9 @@ class _TurnState:
     # regardless of whether it contains tool calls. Compaction (which replaces
     # current_history) does not reset this; the accumulator is segment-level state.
     llm_iterations: int = 0
+    # Set by _run_approval_loop when consecutive_tool_cap_violations crosses the threshold.
+    # Read by run_turn to drive the hard-stop exit.
+    tool_cap_hard_stop: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +453,31 @@ async def _run_approval_loop(
         turn_state.current_history = latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
         await _execute_stream_segment(turn_state, agent, deps, model_settings, frontend)
+        if deps.runtime.consecutive_tool_cap_violations >= TOOL_CAP_HARD_STOP_CONSECUTIVE:
+            turn_state.tool_cap_hard_stop = True
+            break
     deps.runtime.resume_tool_names = None
+
+
+def _check_turn_caps(
+    turn_state: _TurnState,
+    deps: CoDeps,
+    frontend: Frontend,
+) -> TurnResult | None:
+    """Return an error TurnResult if the hard-stop or iteration cap fired, else None."""
+    if turn_state.tool_cap_hard_stop:
+        frontend.on_status(
+            f"Tool-call cap exceeded {TOOL_CAP_HARD_STOP_CONSECUTIVE} consecutive"
+            " llm_iterations — stopping."
+        )
+        turn_state.outcome = "error"
+        return _build_error_turn_result(turn_state)
+    cap = deps.config.llm.max_iterations_per_turn
+    if cap > 0 and turn_state.llm_iterations >= cap:
+        frontend.on_status(f"Iteration cap reached ({cap} LLM calls this turn) — stopping.")
+        turn_state.outcome = "error"
+        return _build_error_turn_result(turn_state)
+    return None
 
 
 def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
@@ -619,6 +647,15 @@ def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessag
     ]
 
 
+def _transient_error_message(e: Exception) -> str:
+    if isinstance(e, TimeoutError):
+        return (
+            "LLM call timed out — model did not respond in time."
+            " Try a shorter prompt, or ask Co 'what can you do right now?' or run /doctor."
+        )
+    return f"Network error: {e}"
+
+
 def _apply_400_reformulation(
     turn_state: _TurnState,
     error: ModelHTTPError,
@@ -698,6 +735,8 @@ async def run_turn(
                 )
 
                 await _run_approval_loop(turn_state, agent, deps, active_settings, frontend)
+                if cap_result := _check_turn_caps(turn_state, deps, frontend):
+                    return cap_result
                 latest_result = turn_state.latest_result
                 assert latest_result is not None
                 turn_state.current_history = latest_result.all_messages()
@@ -761,15 +800,8 @@ async def run_turn(
                 )
                 return _build_error_turn_result(turn_state)
 
-            except (ModelAPIError, httpx.ReadError) as e:
-                frontend.on_status(f"Network error: {e}")
-                turn_state.outcome = "error"
-                return _build_error_turn_result(turn_state)
-
-            except TimeoutError:
-                frontend.on_status(
-                    "LLM call timed out — model did not respond in time. Try a shorter prompt, or ask Co 'what can you do right now?' or run /doctor."
-                )
+            except (ModelAPIError, httpx.ReadError, TimeoutError) as e:
+                frontend.on_status(_transient_error_message(e))
                 turn_state.outcome = "error"
                 return _build_error_turn_result(turn_state)
 
@@ -793,4 +825,5 @@ async def run_turn(
             "turn.output_tokens",
             turn_state.latest_usage.output_tokens if turn_state.latest_usage else 0,
         )
+        span.set_attribute("turn.llm_iterations", turn_state.llm_iterations)
         deps.runtime.tool_progress_callback = None

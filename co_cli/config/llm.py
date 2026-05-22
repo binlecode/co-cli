@@ -28,6 +28,8 @@ DEFAULT_LLM_MODELS: dict[str, str] = {
 
 DEFAULT_MAX_CTX = 65_536
 
+DEFAULT_MAX_ITERATIONS_PER_TURN: int = 90
+
 
 # ---------------------------------------------------------------------------
 # Per-model inference settings — canonical knobs per provider/model/mode.
@@ -135,6 +137,7 @@ LLM_ENV_MAP: dict[str, str] = {
     "provider": "CO_LLM_PROVIDER",
     "host": "CO_LLM_HOST",
     "model": "CO_LLM_MODEL",
+    "max_iterations_per_turn": "CO_LLM_MAX_ITERATIONS_PER_TURN",
 }
 
 _PROVIDER_API_KEY_VARS: dict[str, str] = {
@@ -201,6 +204,8 @@ class LlmSettings(BaseModel):
     # (ceiling check); probed Modelfile num_ctx must be >= max_ctx (floor check).
     # Both checks use max_ctx as the reference — they do not compare against each other.
     max_ctx: int = Field(default=DEFAULT_MAX_CTX)
+    # 0 = disabled (no cap on iterations per turn).
+    max_iterations_per_turn: int = Field(default=DEFAULT_MAX_ITERATIONS_PER_TURN, ge=0)
 
     @model_validator(mode="after")
     def _default_model_per_provider(self) -> LlmSettings:

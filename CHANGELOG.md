@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.8.228]
+
+### Agent loop caps — iteration cap + tool-call hard-stop
+
+- **Iteration cap** — `LlmSettings.max_iterations_per_turn` (default 90, `0` disables); `CO_LLM_MAX_ITERATIONS_PER_TURN` env override; hard ceiling on total LLM calls per user turn
+- **Tool-call hard-stop** — `TOOL_CAP_HARD_STOP_CONSECUTIVE = 3`; after 3 consecutive tool-cap-violating llm_iterations, the turn is killed (not looped indefinitely)
+- **Consecutive tracking** — `CoRuntimeState.consecutive_tool_cap_violations`; incremented by `CoToolLifecycle.after_node_run` on each violating `CallToolsNode`, reset to 0 on any clean step; cleared by `reset_for_turn()`
+- **Exit paths** — `_check_turn_caps()` in `run_turn` checks both flags after `_run_approval_loop`, before `_length_retry_settings`; both emit `frontend.on_status()` with human-readable reason
+- **Tests** — `test_flow_tool_call_limit.py` extended (3 new tests); `test_flow_iteration_cap.py` new (5 tests: 3 unit + 2 integration via real `FunctionModel` stub agents)
+
 ## [0.8.226]
 
 ### Concurrent-safe default + dispatch backstop

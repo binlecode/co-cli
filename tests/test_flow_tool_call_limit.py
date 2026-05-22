@@ -13,7 +13,11 @@ from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.observability import tracing
 from co_cli.tools.lifecycle import CoToolLifecycle
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN, make_exceeded_payload
+from co_cli.tools.tool_call_limit import (
+    MAX_TOOL_CALLS_PER_MODEL_TURN,
+    TOOL_CAP_HARD_STOP_CONSECUTIVE,
+    make_exceeded_payload,
+)
 
 
 def _make_deps() -> CoDeps:
@@ -74,6 +78,7 @@ def test_reset_for_turn_resets_all_per_turn_fields():
     rt.resume_tool_names = frozenset(["some_tool"])
     rt.compaction_applied_this_turn = True
     rt.current_request_tokens_estimate = 42
+    rt.consecutive_tool_cap_violations = 5
 
     rt.reset_for_turn()
 
@@ -83,6 +88,7 @@ def test_reset_for_turn_resets_all_per_turn_fields():
     assert rt.resume_tool_names is None
     assert rt.compaction_applied_this_turn is False
     assert rt.current_request_tokens_estimate is None
+    assert rt.consecutive_tool_cap_violations == 0
 
 
 @pytest.mark.asyncio
@@ -296,3 +302,42 @@ async def test_enforce_tool_call_limit_event_skipped_for_non_call_tools_node(lif
     assert _find_event(parent_span, "tool_budget.enforce_tool_call_limit") is None, (
         f"Event must not fire for non-CallToolsNode; got events: {[e['name'] for e in parent_span['events']]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Consecutive violation tracking (hard-stop accumulator)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consecutive_violations_accumulate_to_threshold(lifecycle_with_span):
+    """Three successive over-cap CallToolsNodes must raise consecutive_tool_cap_violations to TOOL_CAP_HARD_STOP_CONSECUTIVE."""
+    lifecycle, _ = lifecycle_with_span
+    deps = _make_deps()
+
+    for step in range(1, TOOL_CAP_HARD_STOP_CONSECUTIVE + 1):
+        ctx = _ctx(deps, run_step=step)
+        deps.runtime.tool_calls_in_model_turn = MAX_TOOL_CALLS_PER_MODEL_TURN + 1
+        await lifecycle.after_node_run(ctx, node=_call_tools_node(), result=None)
+
+    assert deps.runtime.consecutive_tool_cap_violations == TOOL_CAP_HARD_STOP_CONSECUTIVE
+
+
+@pytest.mark.asyncio
+async def test_consecutive_violations_reset_on_clean_node(lifecycle_with_span):
+    """Two over-cap nodes followed by one under-cap node resets consecutive_tool_cap_violations to 0."""
+    lifecycle, _ = lifecycle_with_span
+    deps = _make_deps()
+
+    for step in range(1, 3):
+        ctx = _ctx(deps, run_step=step)
+        deps.runtime.tool_calls_in_model_turn = MAX_TOOL_CALLS_PER_MODEL_TURN + 1
+        await lifecycle.after_node_run(ctx, node=_call_tools_node(), result=None)
+
+    assert deps.runtime.consecutive_tool_cap_violations == 2
+
+    ctx_clean = _ctx(deps, run_step=3)
+    deps.runtime.tool_calls_in_model_turn = MAX_TOOL_CALLS_PER_MODEL_TURN
+    await lifecycle.after_node_run(ctx_clean, node=_call_tools_node(), result=None)
+
+    assert deps.runtime.consecutive_tool_cap_violations == 0

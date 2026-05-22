@@ -90,7 +90,7 @@ ADC_PATH          = ~/.config/gcloud/application_default_credentials.json
 
 `_LLM_SETTINGS` is the central table of per-provider, per-model inference knobs —
 the canonical source of truth, not user-overridable. `model_key` is derived from
-`llm.model` by splitting on `:` (`"qwen3.5:35b-a3b-q4_k_m-agentic"` → `"qwen3.5"`).
+`llm.model` by splitting on `:` (`"qwen3.6:35b-a3b-agentic"` → `"qwen3.6"`).
 
 ```
 LlmSettings._inference(mode):
@@ -105,7 +105,7 @@ Defined entries:
 
 | Provider | Model key | Modes | Key noreason knob |
 |----------|-----------|-------|-------------------|
-| `ollama` | `qwen3.5` | reasoning, noreason | `extra_body: {think: false, reasoning_effort: "none"}` |
+| `ollama` | `qwen3.6` | reasoning, noreason | `extra_body: {think: false, reasoning_effort: "none"}` |
 | `gemini` | `gemini-3-flash-preview` | reasoning, noreason | `thinking_config: {thinking_level: "MINIMAL"}` |
 | `gemini` | `gemini-2.5-flash` | noreason only | `thinking_config: {thinking_budget: 0}` |
 | `gemini` | `gemini-2.5-flash-lite` | noreason only | `thinking_config: {thinking_budget: 0}` |
@@ -159,9 +159,10 @@ Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is)
 |---------|---------|---------|-------------|
 | `llm.provider` | `CO_LLM_PROVIDER` | `"ollama"` | Provider: `ollama` or `gemini` |
 | `llm.host` | `CO_LLM_HOST` | `"http://localhost:11434"` | Ollama server base URL |
-| `llm.model` | `CO_LLM_MODEL` | `"qwen3.5:35b-a3b-q4_k_m-agentic"` (Ollama default) | Single model name for all tasks; falls back to `DEFAULT_LLM_MODELS[provider]` when unset |
+| `llm.model` | `CO_LLM_MODEL` | `"qwen3.6:35b-a3b-agentic"` (Ollama default) | Single model name for all tasks; falls back to `DEFAULT_LLM_MODELS[provider]` when unset |
 | `llm.judge_model` | — | `None` | Optional pinned-distinct judge model name. Used by phase-1 judge cases (W1.A coherence, W4.A skill body) AND all phase-2 behavioral evals. Inherits provider/host/api_key from `llm.*`; only the model name differs. When unset, the judge falls back to `llm.model` and `CaseResult.reason` carries `[judge_model_same_as_agent]` — a single-model regression can mask itself in the judge. Pick a model with comparable capability but a different family/training data than `model` when possible (e.g. `qwen` agent + `llama` judge) so single-family regressions don't mask. |
 | `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window |
+| `llm.max_iterations_per_turn` | `CO_LLM_MAX_ITERATIONS_PER_TURN` | `90` | Max LLM calls (ModelResponses) per user turn; `0` disables the cap |
 | `llm.api_key` | `GEMINI_API_KEY` (gemini), else `CO_LLM_API_KEY` | `None` | Provider API key |
 
 Inference knobs (temperature, top_p, max_tokens, extra_body, thinking_config) are not
@@ -245,11 +246,21 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable background session-review firing on the turn-boundary cadence |
-| `skills.review_nudge_interval` | `CO_SKILLS_REVIEW_NUDGE_INTERVAL` | `5` | Tool-iteration count that triggers a background review fire (min `1`) |
-| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill usage counters and timestamps to `.usage.json` |
-| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable curator second-pass (state transitions + consolidation) after the session reviewer |
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable dream daemon reviewer KICKs at turn-boundary cadence |
+| `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | User-turn count between memory-domain KICK triggers |
+| `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | LLM-iteration count between skill-domain KICK triggers |
+| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill usage counters, timestamps, and recall_days to `.usage.json` |
+| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable curator second-pass (state transitions + consolidation) |
 | `skills.curator_interval_hours` | `CO_SKILLS_CURATOR_INTERVAL_HOURS` | `168` | Minimum hours between curator runs (7 days) |
+
+### Dream daemon (`dream.*`)
+
+| Setting | Env Var | Default | Description |
+|---------|---------|---------|-------------|
+| `dream.enabled` | `CO_DREAM_ENABLED` | `false` | Enable dream daemon auto-spawn and KICK dispatch |
+| `dream.review_timeout_seconds` | `CO_DREAM_REVIEW_TIMEOUT_SECONDS` | `120` | Per-review LLM call timeout; on expiry the worker retries with backoff |
+| `dream.retry_backoff_seconds` | `CO_DREAM_RETRY_BACKOFF_SECONDS` | `30` | Sleep between retry attempts after a timeout |
+| `dream.max_retry_attempts` | `CO_DREAM_MAX_RETRY_ATTEMPTS` | `3` | After this many timeouts, move the KICK file to `queue/failed/` |
 
 ### MCP servers (`mcp_servers.*`)
 
