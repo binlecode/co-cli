@@ -685,6 +685,37 @@ def _apply_400_reformulation(
     return True
 
 
+async def _attempt_overflow_recovery(
+    turn_state: "_TurnState",
+    agent: "SessionAgent",
+    deps: "CoDeps",
+    frontend: "Frontend",
+) -> bool:
+    """Try to compact history after a context-overflow error.
+
+    Returns True if recovery succeeded and the caller should retry the turn,
+    False if recovery is impossible.
+    """
+    if turn_state.overflow_recovery_attempted:
+        frontend.on_status("Context overflow — unrecoverable.")
+        return False
+    turn_state.overflow_recovery_attempted = True
+    recovery_ctx = RunContext(
+        deps=deps,
+        model=agent.model,
+        usage=turn_state.latest_usage or RunUsage(),
+    )
+    recovery_history = _history_with_pending_user_input(turn_state)
+    compacted = await recover_overflow_history(recovery_ctx, recovery_history)
+    if compacted is None:
+        frontend.on_status("Context overflow — unrecoverable.")
+        return False
+    turn_state.current_history = compacted
+    turn_state.current_input = None
+    frontend.on_status("Context overflow — compacting and retrying...")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
@@ -745,7 +776,11 @@ async def run_turn(
                 boosted_settings = _length_retry_settings(latest_result, active_settings)
                 if boosted_settings is not None:
                     active_settings = boosted_settings
-                    turn_state.current_input = None
+                    # Do NOT set current_input=None here. Keeping the original user prompt
+                    # ensures the retry sends a proper user turn instead of a bare continuation
+                    # request (conversation ending with an assistant message). qwen3.6 enters
+                    # thinking mode on bare continuations regardless of think=False, exhausting
+                    # any token budget before producing text.
                     frontend.on_status(
                         f"Response truncated — retrying with {active_settings['max_tokens']:,} output tokens…"
                     )
@@ -768,21 +803,8 @@ async def run_turn(
                 # Context overflow — must resolve completely (compact+retry OR terminal).
                 # Design invariant: NEVER falls through to the 400 reformulation handler.
                 if is_context_overflow(e):
-                    if not turn_state.overflow_recovery_attempted:
-                        turn_state.overflow_recovery_attempted = True
-                        recovery_ctx = RunContext(
-                            deps=deps,
-                            model=agent.model,
-                            usage=turn_state.latest_usage or RunUsage(),
-                        )
-                        recovery_history = _history_with_pending_user_input(turn_state)
-                        compacted = await recover_overflow_history(recovery_ctx, recovery_history)
-                        if compacted is not None:
-                            turn_state.current_history = compacted
-                            turn_state.current_input = None
-                            frontend.on_status("Context overflow — compacting and retrying...")
-                            continue
-                    frontend.on_status("Context overflow — unrecoverable.")
+                    if await _attempt_overflow_recovery(turn_state, agent, deps, frontend):
+                        continue
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)
                 if code == 400 and _apply_400_reformulation(turn_state, e):

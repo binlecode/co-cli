@@ -50,12 +50,17 @@ _LLM_SETTINGS: dict[str, Any] = {
             # think=True: explicit API override (Modelfile default, but stated clearly).
             # max_tokens=4096 caps each agentic turn; num_ctx must match Modelfile
             #   exactly (65536) to avoid triggering a model reload.
+            # extra_body.max_tokens MUST mirror the scalar: pydantic-ai maps the
+            #   scalar max_tokens to OpenAI's max_completion_tokens which Ollama
+            #   ignores. Only max_tokens at the request root (merged from
+            #   extra_body) actually caps Ollama output. Keep both in lockstep.
             "reasoning": {
                 "temperature": 0.6,
                 "top_p": 0.95,
                 "max_tokens": 4096,
                 "extra_body": {
                     "think": True,
+                    "max_tokens": 4096,
                     "options": {
                         "num_ctx": 65_536,
                         "top_k": 20,
@@ -74,6 +79,9 @@ _LLM_SETTINGS: dict[str, Any] = {
             # max_tokens=8192: multi-section compaction summaries can exceed 4096;
             #   8192 matches the nothink Modelfile ceiling. Judge/merge calls never
             #   approach this limit.
+            # extra_body.max_tokens MUST mirror the scalar: see reasoning entry
+            #   above — Ollama only honors max_tokens at the JSON root via
+            #   extra_body, not OpenAI's max_completion_tokens.
             # presence_penalty=1.5: loop-breaker for multi-section structured output;
             #   must go in options (not top-level) — _scalar_settings() does not
             #   extract it, so top-level placement would be silently ignored.
@@ -84,6 +92,7 @@ _LLM_SETTINGS: dict[str, Any] = {
                 "extra_body": {
                     "think": False,
                     "reasoning_effort": "none",
+                    "max_tokens": 8192,
                     "options": {
                         "num_ctx": 65_536,
                         "presence_penalty": 1.5,

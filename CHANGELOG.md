@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.8.249]
+
+### Length-retry wire-level fix: bare-continuation + dead max_tokens cap
+
+Two latent wire-level bugs surfaced while auditing LLM call sites. Both manifest as the length-retry path failing in production on Ollama.
+
+- **`co_cli/context/orchestrate.py`** — length-retry no longer sets `current_input = None`. The old behavior built a `ModelRequest` with empty parts, so the conversation sent to Ollama ended with the truncated assistant message. qwen3.6 enters thinking mode on this "bare continuation" shape regardless of `think=False`, exhausting any token budget on `<think>` content before producing text. The retry now preserves the original user prompt, giving the model a proper user turn that respects `think=False`.
+- **`co_cli/config/llm.py`** — `extra_body.max_tokens` mirrors the scalar `max_tokens` in both `reasoning` (4096) and `noreason` (8192) settings for qwen3.6. Pydantic-ai maps the scalar to OpenAI's `max_completion_tokens`, which Ollama ignores. Only `extra_body.max_tokens` (merged at the JSON root) actually caps Ollama output. Before this fix, the cap was dead on the wire and `finish_reason='length'` never fired in production — so the length-retry path was unreachable. Comments explain the duplication.
+
+Combined effect: the length-retry safety net documented at `docs/specs/compaction.md:269` ("Generation budget (max_tokens) | 4,096") is now real on Ollama. Reasoning turns cap at 4096 with automatic doubling on truncation; noreason summaries cap at 8192 (well above the typical ~5000-token ceiling).
+
 ## [0.8.248]
 
 ### Circuit breaker for embed + rerank (task 12.1)
