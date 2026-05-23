@@ -115,7 +115,7 @@ Two boundary rules keep the loop legible:
 | `output` | final model output object |
 | `usage` | latest segment usage payload |
 | `streamed_text` | whether visible assistant text was streamed live |
-| `llm_iterations` | count of `ModelResponse`s across all segments this turn |
+| `model_requests` | count of `ModelResponse`s across all segments this turn |
 
 Turn-scoped mutable state is explicit in `_TurnState`:
 
@@ -129,7 +129,7 @@ Turn-scoped mutable state is explicit in `_TurnState`:
 | `latest_usage` | last-segment usage payload |
 | `tool_approval_decisions` | `DeferredToolResults` consumed by the next resume hop |
 | `outcome` / `interrupted` | final turn outcome flags |
-| `llm_iterations` | `ModelResponse` count accumulator across all segments this turn |
+| `model_requests` | `ModelResponse` count accumulator across all segments this turn |
 | `tool_cap_hard_stop` | set by `_run_approval_loop` when consecutive violations reach threshold; drives hard-stop exit in `run_turn` |
 
 Cross-cutting turn state that lives on `deps.runtime` instead:
@@ -142,7 +142,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
 | `compaction_skip_count` | cross-turn circuit breaker for inline compaction (>= 3 trips breaker; every 10 skips a probe is attempted) |
 | `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
-| `consecutive_tool_cap_violations` | incremented by `CoToolLifecycle.after_node_run` each time a `CallToolsNode` exceeds `MAX_TOOL_CALLS_PER_MODEL_TURN`; reset to 0 on a clean node or by `reset_for_turn()` |
+| `consecutive_tool_cap_violations` | incremented by `CoToolLifecycle.after_node_run` each time a `CallToolsNode` exceeds `MAX_TOOL_CALLS_PER_MODEL_REQUEST`; reset to 0 on a clean node or by `reset_for_turn()` |
 
 ### 2.2 Stream Segment Contract
 
@@ -375,7 +375,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Per-tool retry count baked into agent/tool registration |
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
-| `llm.max_iterations_per_turn` | `CO_LLM_MAX_ITERATIONS_PER_TURN` | `90` | Max `ModelResponse`s per turn; `0` disables the cap |
+| `llm.max_model_requests_per_turn` | `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN` | `90` | Max `ModelResponse`s per turn; `0` disables the cap |
 | `ctx_warn_threshold` | `CO_LLM_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio warning threshold |
 | `ctx_overflow_threshold` | `CO_LLM_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |

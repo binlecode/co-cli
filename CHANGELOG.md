@@ -1,6 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.250]
+
+### Terminology rename: `llm_iteration` / `model_turn` → `model_request`
+
+Disambiguates the user-level loop (`turn`) from the model-level LLM call. Three synonyms (`llm_iteration`, `model_turn`, bare `iteration`) collapse onto one term — `model_request` — matching pydantic-ai's `ModelRequestNode`. `turn` is reserved exclusively for the user-level `run_turn()` loop.
+
+- **Identifiers**: `TurnResult.llm_iterations` / `_TurnState.llm_iterations` → `model_requests`; `MAX_TOOL_CALLS_PER_MODEL_TURN` → `MAX_TOOL_CALLS_PER_MODEL_REQUEST`; `tool_calls_in_model_turn` → `tool_calls_in_model_request`; `iters_since_skill_review` → `model_requests_since_skill_review`; `_post_turn_hook(turn_iteration_count=...)` → `_post_turn_hook(model_request_count=...)`.
+- **Config + env var**: `llm.max_iterations_per_turn` → `llm.max_model_requests_per_turn`; `CO_LLM_MAX_ITERATIONS_PER_TURN` → `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN`. The old env var is **deleted** (zero-back-compat) — shells exporting the old name will silently fall back to the default.
+- **Error literal**: tool-cap rejection payload `{"error": "max_tool_calls_per_turn_exceeded"}` → `{"error": "max_tool_calls_per_model_request_exceeded"}`.
+- **Span attribute**: `turn.llm_iterations` → `turn.model_requests` on the `co.turn` root span.
+- **Specs**: `compaction.md`, `core-loop.md`, `config.md`, `observability.md`, `dream.md` updated to the new vocabulary.
+- **Tests**: `tests/test_flow_iteration_cap.py` → `tests/test_flow_model_request_cap.py`; `tests/test_flow_turn_result_tool_iterations.py` → `tests/test_flow_turn_result_model_requests.py`; assertion strings + function names migrated.
 
 ## [0.8.249]
 

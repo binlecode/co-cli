@@ -2,7 +2,7 @@
 
 Calls _post_turn_hook directly and asserts on observable state:
 - turns_since_memory_review counter (bumped +1 per call)
-- iters_since_skill_review counter (bumped +turn_iteration_count per call)
+- model_requests_since_skill_review counter (bumped +model_request_count per call)
 - Counter resets to 0 when KICK fires (threshold crossed)
 
 No monkeypatching. No LLM calls.
@@ -75,10 +75,10 @@ def test_review_disabled_short_circuits_no_state_mutation(tmp_path: Path) -> Non
     from co_cli.main import _post_turn_hook
 
     deps = _make_deps(tmp_path, review_enabled=False)
-    _post_turn_hook(deps, [], turn_iteration_count=10)
+    _post_turn_hook(deps, [], model_request_count=10)
 
     assert deps.session.turns_since_memory_review == 0
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 def test_no_model_short_circuits_no_state_mutation(tmp_path: Path) -> None:
@@ -88,10 +88,10 @@ def test_no_model_short_circuits_no_state_mutation(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path, review_enabled=True, with_model=False)
     assert deps.model is None
 
-    _post_turn_hook(deps, [], turn_iteration_count=10)
+    _post_turn_hook(deps, [], model_request_count=10)
 
     assert deps.session.turns_since_memory_review == 0
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 def test_below_threshold_counters_accumulate_no_reset(tmp_path: Path) -> None:
@@ -100,27 +100,27 @@ def test_below_threshold_counters_accumulate_no_reset(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path, review_enabled=True, memory_interval=10, skill_interval=10)
 
-    _post_turn_hook(deps, [], turn_iteration_count=2)
-    _post_turn_hook(deps, [], turn_iteration_count=3)
-    _post_turn_hook(deps, [], turn_iteration_count=4)
+    _post_turn_hook(deps, [], model_request_count=2)
+    _post_turn_hook(deps, [], model_request_count=3)
+    _post_turn_hook(deps, [], model_request_count=4)
 
     # Memory counter bumps +1 per call = 3
     assert deps.session.turns_since_memory_review == 3
     # Skill counter bumps +N per call = 2+3+4 = 9
-    assert deps.session.iters_since_skill_review == 9
+    assert deps.session.model_requests_since_skill_review == 9
 
 
 def test_zero_iteration_turn_advances_memory_counter_only(tmp_path: Path) -> None:
-    """A turn with turn_iteration_count=0 advances turns_since_memory_review but not skill."""
+    """A turn with model_request_count=0 advances turns_since_memory_review but not skill."""
     from co_cli.main import _post_turn_hook
 
     deps = _make_deps(tmp_path, review_enabled=True, memory_interval=5, skill_interval=5)
 
-    _post_turn_hook(deps, [], turn_iteration_count=0)
-    _post_turn_hook(deps, [], turn_iteration_count=0)
+    _post_turn_hook(deps, [], model_request_count=0)
+    _post_turn_hook(deps, [], model_request_count=0)
 
     assert deps.session.turns_since_memory_review == 2
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 def test_memory_threshold_resets_memory_counter(tmp_path: Path) -> None:
@@ -130,23 +130,23 @@ def test_memory_threshold_resets_memory_counter(tmp_path: Path) -> None:
     # memory_interval=1 means every turn triggers a memory KICK
     deps = _make_deps(tmp_path, review_enabled=True, memory_interval=1, skill_interval=100)
 
-    _post_turn_hook(deps, [], turn_iteration_count=1)
+    _post_turn_hook(deps, [], model_request_count=1)
 
     # Counter reset to 0 after KICK
     assert deps.session.turns_since_memory_review == 0
 
 
 def test_skill_threshold_resets_skill_counter(tmp_path: Path) -> None:
-    """Counter reaching skill threshold resets iters_since_skill_review to 0."""
+    """Counter reaching skill threshold resets model_requests_since_skill_review to 0."""
     from co_cli.main import _post_turn_hook
 
     # skill_interval=3, memory_interval=100 so only skill KICK fires
     deps = _make_deps(tmp_path, review_enabled=True, memory_interval=100, skill_interval=3)
 
-    _post_turn_hook(deps, [], turn_iteration_count=3)
+    _post_turn_hook(deps, [], model_request_count=3)
 
     # Counter reset to 0 after KICK
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 def test_both_thresholds_reached_resets_both_counters(tmp_path: Path) -> None:
@@ -155,10 +155,10 @@ def test_both_thresholds_reached_resets_both_counters(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path, review_enabled=True, memory_interval=1, skill_interval=1)
 
-    _post_turn_hook(deps, [], turn_iteration_count=1)
+    _post_turn_hook(deps, [], model_request_count=1)
 
     assert deps.session.turns_since_memory_review == 0
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 def test_counter_reset_allows_next_trigger(tmp_path: Path) -> None:
@@ -168,11 +168,11 @@ def test_counter_reset_allows_next_trigger(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path, review_enabled=True, memory_interval=1, skill_interval=100)
 
     # First call triggers KICK and resets counter
-    _post_turn_hook(deps, [], turn_iteration_count=1)
+    _post_turn_hook(deps, [], model_request_count=1)
     assert deps.session.turns_since_memory_review == 0
 
     # Second call accumulates again (interval=1 so resets immediately again)
-    _post_turn_hook(deps, [], turn_iteration_count=1)
+    _post_turn_hook(deps, [], model_request_count=1)
     assert deps.session.turns_since_memory_review == 0
 
 
@@ -182,9 +182,9 @@ def test_skill_threshold_overshoot_resets_counter(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path, review_enabled=True, memory_interval=100, skill_interval=5)
 
-    _post_turn_hook(deps, [], turn_iteration_count=12)
+    _post_turn_hook(deps, [], model_request_count=12)
 
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 def test_error_or_interrupted_turn_iters_still_advance(tmp_path: Path) -> None:
@@ -193,14 +193,14 @@ def test_error_or_interrupted_turn_iters_still_advance(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path, review_enabled=True, memory_interval=100, skill_interval=10)
 
-    _post_turn_hook(deps, [], turn_iteration_count=3)
-    _post_turn_hook(deps, [], turn_iteration_count=3)
+    _post_turn_hook(deps, [], model_request_count=3)
+    _post_turn_hook(deps, [], model_request_count=3)
 
-    assert deps.session.iters_since_skill_review == 6
+    assert deps.session.model_requests_since_skill_review == 6
 
 
 def test_none_deps_short_circuits(tmp_path: Path) -> None:
     """Defensive guard — hook handles deps=None without raising."""
     from co_cli.main import _post_turn_hook
 
-    _post_turn_hook(None, [], turn_iteration_count=5)  # type: ignore[arg-type]
+    _post_turn_hook(None, [], model_request_count=5)  # type: ignore[arg-type]

@@ -1,4 +1,4 @@
-"""Unit tests: skill_manage create/edit/patch reset iters_since_skill_review to 0.
+"""Unit tests: skill_manage create/edit/patch reset model_requests_since_skill_review to 0.
 
 No LLM. Real filesystem writes.
 Verifies that each mutating action resets the session counter to 0.
@@ -56,7 +56,7 @@ def _make_deps(tmp_path: Path, initial_iters: int = 8) -> CoDeps:
     skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
     _, tool_index = build_native_toolset(SETTINGS)
     session = CoSessionState()
-    session.iters_since_skill_review = initial_iters
+    session.model_requests_since_skill_review = initial_iters
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
@@ -83,15 +83,15 @@ def _is_error(result) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_create_resets_iters_since_skill_review(tmp_path: Path) -> None:
-    """skill_manage(action='create') resets iters_since_skill_review to 0 on success."""
+async def test_create_resets_model_requests_since_skill_review(tmp_path: Path) -> None:
+    """skill_manage(action='create') resets model_requests_since_skill_review to 0 on success."""
     deps = _make_deps(tmp_path, initial_iters=8)
     ctx = _make_ctx(deps)
 
     result = await skill_manage(ctx, action="create", name="test-skill", content=_VALID_SKILL)
 
     assert not _is_error(result), f"Expected success, got error: {result}"
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +100,8 @@ async def test_create_resets_iters_since_skill_review(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_edit_resets_iters_since_skill_review(tmp_path: Path) -> None:
-    """skill_manage(action='edit') resets iters_since_skill_review to 0 on success."""
+async def test_edit_resets_model_requests_since_skill_review(tmp_path: Path) -> None:
+    """skill_manage(action='edit') resets model_requests_since_skill_review to 0 on success."""
     deps = _make_deps(tmp_path, initial_iters=6)
     user_skills_dir = deps.user_skills_dir
     skill_path = user_skills_dir / "test-skill.md"
@@ -114,7 +114,7 @@ async def test_edit_resets_iters_since_skill_review(tmp_path: Path) -> None:
     result = await skill_manage(ctx, action="edit", name="test-skill", content=_VALID_SKILL_V2)
 
     assert not _is_error(result), f"Expected success, got error: {result}"
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +123,8 @@ async def test_edit_resets_iters_since_skill_review(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_patch_resets_iters_since_skill_review(tmp_path: Path) -> None:
-    """skill_manage(action='patch') resets iters_since_skill_review to 0 on success."""
+async def test_patch_resets_model_requests_since_skill_review(tmp_path: Path) -> None:
+    """skill_manage(action='patch') resets model_requests_since_skill_review to 0 on success."""
     deps = _make_deps(tmp_path, initial_iters=4)
     user_skills_dir = deps.user_skills_dir
     skill_path = user_skills_dir / "test-skill.md"
@@ -143,7 +143,7 @@ async def test_patch_resets_iters_since_skill_review(tmp_path: Path) -> None:
     )
 
     assert not _is_error(result), f"Expected success, got error: {result}"
-    assert deps.session.iters_since_skill_review == 0
+    assert deps.session.model_requests_since_skill_review == 0
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +152,8 @@ async def test_patch_resets_iters_since_skill_review(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_does_not_reset_iters_since_skill_review(tmp_path: Path) -> None:
-    """skill_manage(action='delete') does not reset iters_since_skill_review."""
+async def test_delete_does_not_reset_model_requests_since_skill_review(tmp_path: Path) -> None:
+    """skill_manage(action='delete') does not reset model_requests_since_skill_review."""
     deps = _make_deps(tmp_path, initial_iters=5)
     user_skills_dir = deps.user_skills_dir
     skill_path = user_skills_dir / "test-skill.md"
@@ -166,4 +166,4 @@ async def test_delete_does_not_reset_iters_since_skill_review(tmp_path: Path) ->
 
     assert not _is_error(result), f"Expected success, got error: {result}"
     # delete does not reset the counter
-    assert deps.session.iters_since_skill_review == 5
+    assert deps.session.model_requests_since_skill_review == 5

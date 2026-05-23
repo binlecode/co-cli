@@ -8,7 +8,7 @@ import pytest
 
 from co_cli.bootstrap.core import _emit_tool_budget_span
 from co_cli.observability import tracing
-from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
 
@@ -56,6 +56,6 @@ def test_tool_budget_resolved_span_emits_all_attrs(tmp_path: Path) -> None:
     attrs = rec["attributes"]
     assert attrs["budget.context_window_tokens"] == model_max_ctx
     assert attrs["budget.spill_ratio"] == spill_ratio
-    assert attrs["budget.tool_call_limit"] == MAX_TOOL_CALLS_PER_MODEL_TURN
+    assert attrs["budget.tool_call_limit"] == MAX_TOOL_CALLS_PER_MODEL_REQUEST
     assert attrs["budget.spill_threshold_chars"] == SPILL_THRESHOLD_CHARS
     assert attrs["budget.spill_threshold_tokens"] == spill_threshold_tokens

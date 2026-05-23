@@ -168,7 +168,7 @@ def _skill_create(
             f"Skill count is now {len(ctx.deps.skill_index)}; "
             "consider reviewing and pruning unused skills."
         )
-    ctx.deps.session.iters_since_skill_review = 0
+    ctx.deps.session.model_requests_since_skill_review = 0
     return tool_output(json.dumps(result), ctx=ctx)
 
 
@@ -198,7 +198,7 @@ def _skill_edit(ctx: RunContext[CoDeps], name: str, content: str | None) -> Tool
     warnings = _lint_warnings(content)
     if warnings:
         result["lint_warnings"] = warnings
-    ctx.deps.session.iters_since_skill_review = 0
+    ctx.deps.session.model_requests_since_skill_review = 0
     return tool_output(json.dumps(result), ctx=ctx)
 
 
@@ -258,7 +258,7 @@ def _skill_patch(
     warnings = _lint_warnings(new_content)
     if warnings:
         result["lint_warnings"] = warnings
-    ctx.deps.session.iters_since_skill_review = 0
+    ctx.deps.session.model_requests_since_skill_review = 0
     return tool_output(json.dumps(result), ctx=ctx)
 
 

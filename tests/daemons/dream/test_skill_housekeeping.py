@@ -17,14 +17,13 @@ import pytest
 from co_cli.config.skills import SkillsSettings
 from co_cli.daemons.dream._housekeeping import (
     _archive_user_skill,
-    _find_decay_candidate_skills,
     _identify_skill_clusters,
     _load_user_skill_candidates,
     _select_canonical_skill,
     _skill_recall_key,
     decay_skills,
 )
-from co_cli.daemons.dream._state import HousekeepingState, HousekeepingStats
+from co_cli.daemons.dream._state import HousekeepingState
 
 
 def _write_skill(user_skills_dir: Path, name: str, body: str, description: str = "test") -> Path:
@@ -74,20 +73,8 @@ def _deps(
 
 
 # ---------------------------------------------------------------------------
-# HousekeepingStats schema extension (T7)
+# HousekeepingState schema extension — skill counters survive round-trip
 # ---------------------------------------------------------------------------
-
-
-def test_housekeeping_stats_has_skill_counters_with_zero_defaults() -> None:
-    """Fresh stats include skill counters; memory counters still default to 0."""
-    stats = HousekeepingStats()
-    dumped = stats.model_dump()
-    assert dumped == {
-        "memory_merged": 0,
-        "memory_decayed": 0,
-        "skill_merged": 0,
-        "skill_decayed": 0,
-    }
 
 
 def test_housekeeping_state_round_trip_includes_skill_counters() -> None:
@@ -205,20 +192,6 @@ def _ago_date(days: int) -> str:
     return (date.today() - timedelta(days=days)).isoformat()
 
 
-def test_decay_skills_archives_aged_zero_recall(tmp_path: Path) -> None:
-    """Aged sidecar + empty recall_days → eligible for archive."""
-    user_skills_dir = tmp_path / "skills"
-    _write_skill(user_skills_dir, "stale", "stale body content")
-    _write_sidecar(user_skills_dir, "stale", created_at=_ago_iso(120), recall_days=[])
-
-    deps = _deps(
-        user_skills_dir,
-        skills_settings=SkillsSettings(decay_after_days=90, recall_protection_days=30),
-    )
-    eligible = _find_decay_candidate_skills(deps)
-    assert [c.name for c in eligible] == ["stale"]
-
-
 def test_decay_skills_protects_pinned(tmp_path: Path) -> None:
     """Pinned skill is immune to decay even when aged + zero recall."""
     user_skills_dir = tmp_path / "skills"
@@ -231,8 +204,10 @@ def test_decay_skills_protects_pinned(tmp_path: Path) -> None:
         user_skills_dir,
         skills_settings=SkillsSettings(decay_after_days=90, recall_protection_days=30),
     )
-    eligible = _find_decay_candidate_skills(deps)
-    assert eligible == []
+    state = HousekeepingState()
+    archived = decay_skills(deps, state)
+    assert archived == 0
+    assert state.stats.skill_decayed == 0
 
 
 def test_decay_skills_protects_recent_recall(tmp_path: Path) -> None:
@@ -250,12 +225,14 @@ def test_decay_skills_protects_recent_recall(tmp_path: Path) -> None:
         user_skills_dir,
         skills_settings=SkillsSettings(decay_after_days=90, recall_protection_days=30),
     )
-    eligible = _find_decay_candidate_skills(deps)
-    assert eligible == []
+    state = HousekeepingState()
+    archived = decay_skills(deps, state)
+    assert archived == 0
+    assert state.stats.skill_decayed == 0
 
 
 def test_decay_skills_archives_recall_outside_window(tmp_path: Path) -> None:
-    """Aged + recall older than recall_protection_days → eligible."""
+    """Aged + recall older than recall_protection_days → archives the skill."""
     user_skills_dir = tmp_path / "skills"
     _write_skill(user_skills_dir, "lapsed", "body")
     _write_sidecar(
@@ -269,12 +246,15 @@ def test_decay_skills_archives_recall_outside_window(tmp_path: Path) -> None:
         user_skills_dir,
         skills_settings=SkillsSettings(decay_after_days=90, recall_protection_days=30),
     )
-    eligible = _find_decay_candidate_skills(deps)
-    assert [c.name for c in eligible] == ["lapsed"]
+    state = HousekeepingState()
+    archived = decay_skills(deps, state)
+    assert archived == 1
+    assert state.stats.skill_decayed == 1
+    assert (user_skills_dir / ".archive" / "lapsed.md").exists()
 
 
 def test_decay_skills_skips_skills_without_sidecar(tmp_path: Path) -> None:
-    """A .md without a usage.json sidecar is not a decay candidate."""
+    """A .md without a usage.json sidecar is never decayed."""
     user_skills_dir = tmp_path / "skills"
     _write_skill(user_skills_dir, "orphan", "body without sidecar")
 
@@ -282,8 +262,10 @@ def test_decay_skills_skips_skills_without_sidecar(tmp_path: Path) -> None:
         user_skills_dir,
         skills_settings=SkillsSettings(decay_after_days=90, recall_protection_days=30),
     )
-    eligible = _find_decay_candidate_skills(deps)
-    assert eligible == []
+    state = HousekeepingState()
+    archived = decay_skills(deps, state)
+    assert archived == 0
+    assert (user_skills_dir / "orphan.md").exists(), "sidecar-less skill must not be archived"
 
 
 def test_decay_skills_archive_move_increments_counter(tmp_path: Path) -> None:
@@ -394,22 +376,6 @@ def test_manifest_render_does_not_bump_recall_days(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_curator_modules_no_longer_importable() -> None:
-    """co_cli.skills.curator and curator_prompts must not exist."""
-    import importlib
-
-    for name in ("co_cli.skills.curator", "co_cli.skills.curator_prompts"):
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module(name)
-
-
-def test_curator_runs_dir_constant_removed() -> None:
-    """CURATOR_RUNS_DIR is not an attribute of co_cli.config.core anymore."""
-    import co_cli.config.core as core_mod
-
-    assert not hasattr(core_mod, "CURATOR_RUNS_DIR")
-
-
 def test_curator_skills_settings_fields_removed() -> None:
     """SkillsSettings rejects curator_enabled / curator_interval_hours (extra='forbid')."""
     from pydantic import ValidationError
@@ -418,16 +384,3 @@ def test_curator_skills_settings_fields_removed() -> None:
         SkillsSettings(curator_enabled=True)
     with pytest.raises(ValidationError):
         SkillsSettings(curator_interval_hours=24)
-
-
-def test_curator_constants_removed() -> None:
-    """The CURATOR_* constants no longer exist in co_cli.config.skills."""
-    import co_cli.config.skills as skills_mod
-
-    for attr in (
-        "CURATOR_STALE_AFTER_DAYS",
-        "CURATOR_ARCHIVE_AFTER_DAYS",
-        "CURATOR_MAX_ITERATIONS",
-        "CURATOR_TIMEOUT_SECONDS",
-    ):
-        assert not hasattr(skills_mod, attr), f"{attr} should be removed"

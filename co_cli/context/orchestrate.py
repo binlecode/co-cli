@@ -107,7 +107,7 @@ class TurnResult:
     # Count of ModelResponses across all segments in this turn.
     # Sourced from the per-segment accumulator on _TurnState; consumed by the
     # post-turn skill-review hook to gate background firing.
-    llm_iterations: int = 0
+    model_requests: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ class _TurnState:
     # Accumulator across all segments in this turn — counts every ModelResponse,
     # regardless of whether it contains tool calls. Compaction (which replaces
     # current_history) does not reset this; the accumulator is segment-level state.
-    llm_iterations: int = 0
+    model_requests: int = 0
     # Set by _run_approval_loop when consecutive_tool_cap_violations crosses the threshold.
     # Read by run_turn to drive the hard-stop exit.
     tool_cap_hard_stop: bool = False
@@ -416,7 +416,7 @@ async def _execute_stream_segment(
             "_execute_stream_segment: stream ended without AgentRunResultEvent — segment contract violated"
         )
     turn_state.latest_result = result
-    turn_state.llm_iterations += sum(
+    turn_state.model_requests += sum(
         1 for m in result.new_messages() if isinstance(m, ModelResponse)
     )
     turn_state.latest_streamed_text = renderer.streamed_text
@@ -464,17 +464,17 @@ def _check_turn_caps(
     deps: CoDeps,
     frontend: Frontend,
 ) -> TurnResult | None:
-    """Return an error TurnResult if the hard-stop or iteration cap fired, else None."""
+    """Return an error TurnResult if the hard-stop or model-request cap fired, else None."""
     if turn_state.tool_cap_hard_stop:
         frontend.on_status(
             f"Tool-call cap exceeded {TOOL_CAP_HARD_STOP_CONSECUTIVE} consecutive"
-            " llm_iterations — stopping."
+            " model requests — stopping."
         )
         turn_state.outcome = "error"
         return _build_error_turn_result(turn_state)
-    cap = deps.config.llm.max_iterations_per_turn
-    if cap > 0 and turn_state.llm_iterations >= cap:
-        frontend.on_status(f"Iteration cap reached ({cap} LLM calls this turn) — stopping.")
+    cap = deps.config.llm.max_model_requests_per_turn
+    if cap > 0 and turn_state.model_requests >= cap:
+        frontend.on_status(f"Model-request cap reached ({cap} LLM calls this turn) — stopping.")
         turn_state.outcome = "error"
         return _build_error_turn_result(turn_state)
     return None
@@ -493,7 +493,7 @@ def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
         interrupted=False,
         streamed_text=turn_state.latest_streamed_text,
         outcome="error",
-        llm_iterations=turn_state.llm_iterations,
+        model_requests=turn_state.model_requests,
     )
 
 
@@ -535,7 +535,7 @@ def _build_interrupted_turn_result(turn_state: _TurnState) -> TurnResult:
         interrupted=True,
         streamed_text=turn_state.latest_streamed_text,
         outcome="continue",
-        llm_iterations=turn_state.llm_iterations,
+        model_requests=turn_state.model_requests,
     )
 
 
@@ -795,7 +795,7 @@ async def run_turn(
                     interrupted=False,
                     streamed_text=turn_state.latest_streamed_text,
                     outcome="continue",
-                    llm_iterations=turn_state.llm_iterations,
+                    model_requests=turn_state.model_requests,
                 )
 
             except ModelHTTPError as e:
@@ -847,5 +847,5 @@ async def run_turn(
             "turn.output_tokens",
             turn_state.latest_usage.output_tokens if turn_state.latest_usage else 0,
         )
-        span.set_attribute("turn.llm_iterations", turn_state.llm_iterations)
+        span.set_attribute("turn.model_requests", turn_state.model_requests)
         deps.runtime.tool_progress_callback = None

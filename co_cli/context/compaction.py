@@ -515,9 +515,9 @@ async def proactive_window_processor(
             "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn
         )
 
-        from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+        from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
-        span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
+        span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_REQUEST)
         span.set_attribute(
             "compaction.request_tokens_estimate",
             ctx.deps.runtime.current_request_tokens_estimate or -1,

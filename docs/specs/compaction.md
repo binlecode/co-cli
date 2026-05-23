@@ -34,7 +34,7 @@ run_turn() (orchestrate.py:run_turn)
           ┌── CallToolsNode (post-response) ──────────────────────────────────┐
           │   CoToolLifecycle hooks:                                          │
           │     before_node_run:    dedup ToolCallParts in one ModelResponse  │
-          │     wrap_tool_execute:  L0 cap (MAX_TOOL_CALLS_PER_MODEL_TURN=6)  │
+          │     wrap_tool_execute:  L0 cap (MAX_TOOL_CALLS_PER_MODEL_REQUEST=6)  │
           │     before_tool_validate: JSON repair                             │
           │     before_tool_execute: path normalization                       │
           │     [tool runs]                                                   │
@@ -63,7 +63,7 @@ _finalize_turn()  (main.py)
 
 | Layer | Where | Trigger | Effect | LLM? |
 |---|---|---|---|---|
-| **L0** | `lifecycle.wrap_tool_execute` per `ToolCallPart` | `tool_calls_in_model_turn > MAX_TOOL_CALLS_PER_MODEL_TURN` (= 6) | Reject excess; structured `max_tool_calls_per_turn_exceeded` payload returned as tool result | No |
+| **L0** | `lifecycle.wrap_tool_execute` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 6) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
 | **L1** | `tool_output()` in native tools, `lifecycle.after_tool_execute` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
 | **L2** | `enforce_request_size` history processor | `max(estimate_message_tokens, latest_response_input_tokens) > deps.spill_threshold_tokens` | Force-spill largest unspilled string `ToolReturnPart`s, largest-first, until aggregate ≤ threshold | No |
 | **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND not anti-thrash-tripped AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | [search breadcrumbs] | tail` | Yes (static marker fallback) |
@@ -207,7 +207,7 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Five fields are p
 |---|---|---|---|
 | `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `proactive_window_processor` (zeros `reported`); `_finalize_turn` (drives transcript rewrite) | `reset_for_turn` |
 | `current_request_tokens_estimate` | `enforce_request_size` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch) | `reset_for_turn` |
-| `tool_call_limit_run_step`, `tool_calls_in_model_turn` | `lifecycle.wrap_tool_execute` per call | L0 cap check + telemetry span | `lifecycle.wrap_tool_execute` on `ctx.run_step` change |
+| `tool_call_limit_run_step`, `tool_calls_in_model_request` | `lifecycle.wrap_tool_execute` per call | L0 cap check + telemetry span | `lifecycle.wrap_tool_execute` on `ctx.run_step` change |
 | `post_compaction_token_estimate` | `commit_compaction` (sole writer) | `proactive_window_processor` (cross-turn stale guard) | `/new`, `/clear`; proactive on observed fresh `ModelResponse` |
 | `message_count_at_last_compaction` | `commit_compaction` (sole writer) | `proactive_window_processor` (guard-clear test) | `/new`, `/clear`; proactive on observed fresh `ModelResponse` |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
@@ -219,22 +219,22 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Five fields are p
 
 ## 2. Core Logic
 
-### 2.1 L0 admission cap — `MAX_TOOL_CALLS_PER_MODEL_TURN`
+### 2.1 L0 admission cap — `MAX_TOOL_CALLS_PER_MODEL_REQUEST`
 
 L0 caps how many tool calls a single `ModelResponse` can issue (the first row of §1.2). Calls beyond the cap never execute and never produce a `ToolReturnPart` for the lower layers to handle.
 
-**Constant.** `MAX_TOOL_CALLS_PER_MODEL_TURN = 6` in `co_cli/tools/tool_call_limit.py`; non-configurable. Sized so 6 non-spilling (≤ 4K char) tool returns aggregate inside the per-request spill threshold.
+**Constant.** `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 6` in `co_cli/tools/tool_call_limit.py`; non-configurable. Sized so 6 non-spilling (≤ 4K char) tool returns aggregate inside the per-request spill threshold.
 
 **Trigger surface.** `CoToolLifecycle.before_tool_execute` — runs inside `CallToolsNode`, before each tool handler is invoked, on every `ToolCallPart` in the model response.
 
-**Counter mechanics.** `ctx.run_step` increments once per `ModelRequestNode`, so all tool calls from one assistant message share the same `run_step`. When `run_step` changes, `runtime.tool_calls_in_model_turn` resets to 0; each call increments before the cap check. The first 6 calls execute normally; calls 7+ are **rejected without running** — the rejection payload is returned as the tool's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
+**Counter mechanics.** `ctx.run_step` increments once per `ModelRequestNode`, so all tool calls from one assistant message share the same `run_step`. When `run_step` changes, `runtime.tool_calls_in_model_request` resets to 0; each call increments before the cap check. The first 6 calls execute normally; calls 7+ are **rejected without running** — the rejection payload is returned as the tool's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
 
 ```json
 {
-  "error": "max_tool_calls_per_turn_exceeded",
+  "error": "max_tool_calls_per_model_request_exceeded",
   "max": 6,
   "issued": <N>,
-  "guidance": "Issued <N> tool calls in one llm_iteration; cap is 6. Pick the 6 most important calls and try again."
+  "guidance": "Issued <N> tool calls in one model request; cap is 6. Pick the 6 most important calls and try again."
 }
 ```
 
@@ -665,7 +665,7 @@ On a non-`None` result, `run_turn` sets `current_history = compacted`, clears pe
 | `COMPACTABLE_KEEP_RECENT` | `co_cli/context/history_processors.py` | `5` | `evict_old_tool_results`: most-recent returns per tool to keep |
 | `_COMPACTION_BREAKER_TRIP` | `co_cli/context/compaction.py` | `3` | Consecutive failures that trip the circuit breaker |
 | `_COMPACTION_BREAKER_PROBE_EVERY` | `co_cli/context/compaction.py` | `10` | Skips between probe attempts when circuit breaker is tripped |
-| `MAX_TOOL_CALLS_PER_MODEL_TURN` | `co_cli/tools/tool_call_limit.py` | `6` | L0 admission cap on tool calls per `ModelResponse` (see §2.1) |
+| `MAX_TOOL_CALLS_PER_MODEL_REQUEST` | `co_cli/tools/tool_call_limit.py` | `6` | L0 admission cap on tool calls per `ModelResponse` (see §2.1) |
 
 **Spill / request-budget constants** (module-level; not user-configurable):
 
@@ -718,7 +718,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 |---|---|---|
 | `spill_if_oversized(content, tool_results_dir, tool_name, force=False, threshold=SPILL_THRESHOLD_CHARS) -> str` | `co_cli/tools/tool_io.py` | Persist oversized content to `tool-results/<sha16>.txt`; returns inline `<persisted-output>` placeholder |
 | `SPILL_THRESHOLD_CHARS = 4_000`, `TOOL_RESULT_PREVIEW_CHARS = 1_500` | `co_cli/tools/tool_io.py` | Module constants (non-configurable) |
-| `MAX_TOOL_CALLS_PER_MODEL_TURN = 6` | `co_cli/tools/tool_call_limit.py` | L0 admission cap; non-configurable |
+| `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 6` | `co_cli/tools/tool_call_limit.py` | L0 admission cap; non-configurable |
 
 ### Error classification
 
@@ -746,7 +746,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/tools/categories.py` | `COMPACTABLE_TOOLS`, `FILE_TOOLS`, `PATH_NORMALIZATION_TOOLS`. |
 | `co_cli/tools/tool_io.py` | `spill_if_oversized`: `spill_if_oversized`, `tool_output`, `check_tool_results_size`; `SPILL_THRESHOLD_CHARS`, `TOOL_RESULT_PREVIEW_CHARS`. |
 | `co_cli/tools/files/read.py` | `file_read` per-tool `spill_threshold_chars=math.inf` override (never spills). |
-| `co_cli/tools/tool_call_limit.py` | `MAX_TOOL_CALLS_PER_MODEL_TURN`, `MaxToolCallsExceededPayload`, `make_exceeded_payload`. |
+| `co_cli/tools/tool_call_limit.py` | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `MaxToolCallsExceededPayload`, `make_exceeded_payload`. |
 | `co_cli/config/llm.py` | `max_ctx` (Ollama probe ceiling). |
 | `co_cli/context/assembly.py` | Prompt assembly: `build_static_instructions`; static `RECENCY_CLEARING_ADVISORY` recency-clearing paragraph. |
 | `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |
@@ -764,7 +764,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `CoToolLifecycle.after_tool_execute`: MCP results above threshold spilled to disk; below-threshold pass through; native results not coerced (their tools call the helper themselves) | `tests/test_flow_spill.py` |
 | `enforce_request_size`: below-threshold fast path; largest-first spill across full message list; cross-batch accumulation (multiple `ModelRequest`s); already-spilled exclusion; OTEL span `tool_budget.enforce_request_size` | `tests/test_flow_compaction_enforce_request_size.py` |
 | `enforce_request_size` cached threshold: `spill_threshold_tokens` from `CoDeps` used without recompute | `tests/test_flow_compaction_enforce_request_size.py` |
-| L0 tool-call cap: `MAX_TOOL_CALLS_PER_MODEL_TURN` constant pinned; allow up to cap; reject above cap with JSON payload | `tests/test_flow_tool_call_limit.py` |
+| L0 tool-call cap: `MAX_TOOL_CALLS_PER_MODEL_REQUEST` constant pinned; allow up to cap; reject above cap with JSON payload | `tests/test_flow_tool_call_limit.py` |
 | L0 run_step counter: resets on `ctx.run_step` transition | `tests/test_flow_tool_call_limit.py` |
 | `dedup_tool_results`: identical return collapses to back-reference; short content and distinct content pass through | `tests/test_flow_compaction_history_processors.py` |
 | `evict_old_tool_results`: clears oldest when over keep limit; keeps all at limit; protects last-turn returns | `tests/test_flow_compaction_history_processors.py` |

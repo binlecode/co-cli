@@ -51,7 +51,7 @@ Key properties:
 | Field | Unit | Increment source |
 |---|---|---|
 | `turns_since_memory_review: int` | turns (1/turn) | `_post_turn_hook` |
-| `iters_since_skill_review: int` | iterations (`turn_iteration_count`/turn) | `_post_turn_hook` |
+| `model_requests_since_skill_review: int` | model requests (`model_request_count`/turn) | `_post_turn_hook` |
 
 **Unit rationale:** memory tracks user-intent signal (~1 per turn); skill tracks agent-action signal (~tool + reasoning steps per turn). Conflating the units would over-fire skill reviews on chatty users or under-fire memory reviews on tool-heavy turns.
 
@@ -59,7 +59,7 @@ Counter flow in `_post_turn_hook` (guarded by `review_enabled` and `deps.model i
 
 ```python
 deps.session.turns_since_memory_review += 1
-deps.session.iters_since_skill_review += turn_iteration_count
+deps.session.model_requests_since_skill_review += model_request_count
 _maybe_kick_memory_review(deps)
 _maybe_kick_skill_review(deps)
 ```
@@ -71,7 +71,7 @@ Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, 
 | Tool call | Effect |
 |---|---|
 | `memory_manage(action ∈ {create, append, replace})` | `turns_since_memory_review = 0` |
-| `skill_manage(action ∈ {create, edit, patch})` | `iters_since_skill_review = 0` |
+| `skill_manage(action ∈ {create, edit, patch})` | `model_requests_since_skill_review = 0` |
 | `delete`, `write_file`, `remove_file` | no reset |
 | No crossover | memory tool never touches skill counter; skill tool never touches memory counter |
 
@@ -611,7 +611,7 @@ Internal caps (housekeeping — apply to both domains):
 | `co_cli/bootstrap/banner.py` | `build_dream_line` — `Dream:` banner row |
 | `co_cli/bootstrap/core.py` | `maybe_autospawn_dream` — REPL auto-spawn hook |
 | `co_cli/main.py` | `_send_review_kick`, `_maybe_kick_memory_review`, `_maybe_kick_skill_review`, `_fire_session_end_kicks` |
-| `co_cli/deps.py` | `CoSessionState.turns_since_memory_review` / `iters_since_skill_review` |
+| `co_cli/deps.py` | `CoSessionState.turns_since_memory_review` / `model_requests_since_skill_review` |
 | `co_cli/skills/usage.py` | `bump_recall` + `recall_days` sidecar field |
 | `co_cli/memory/item.py` | `MemoryItem.recall_days` field |
 

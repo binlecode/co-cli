@@ -1,4 +1,4 @@
-"""Tests for the per-model-turn tool-call brake (L0 cap) — behavior + recorded events."""
+"""Tests for the per-model-request tool-call brake (L0 cap) — behavior + recorded events."""
 
 import asyncio
 import json
@@ -14,7 +14,7 @@ from co_cli.observability import tracing
 from co_cli.tools.lifecycle import CoToolLifecycle
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_call_limit import (
-    MAX_TOOL_CALLS_PER_MODEL_TURN,
+    MAX_TOOL_CALLS_PER_MODEL_REQUEST,
     TOOL_CAP_HARD_STOP_CONSECUTIVE,
     make_exceeded_payload,
 )
@@ -99,7 +99,7 @@ async def test_brake_allows_up_to_cap():
     ctx = _ctx(deps, run_step=1)
 
     results = []
-    for _ in range(MAX_TOOL_CALLS_PER_MODEL_TURN):
+    for _ in range(MAX_TOOL_CALLS_PER_MODEL_REQUEST):
         result = await lifecycle.wrap_tool_execute(
             ctx,
             call=None,
@@ -110,7 +110,7 @@ async def test_brake_allows_up_to_cap():
         results.append(result)
 
     assert all(r == "ok" for r in results), (
-        f"All {MAX_TOOL_CALLS_PER_MODEL_TURN} calls must reach handler; got: {results}"
+        f"All {MAX_TOOL_CALLS_PER_MODEL_REQUEST} calls must reach handler; got: {results}"
     )
 
 
@@ -133,18 +133,18 @@ async def test_brake_rejects_above_cap():
         results.append(result)
 
     # First 6 allowed
-    assert all(r == "ok" for r in results[:MAX_TOOL_CALLS_PER_MODEL_TURN])
+    assert all(r == "ok" for r in results[:MAX_TOOL_CALLS_PER_MODEL_REQUEST])
 
     # Last 2 rejected
-    for rejected in results[MAX_TOOL_CALLS_PER_MODEL_TURN:]:
+    for rejected in results[MAX_TOOL_CALLS_PER_MODEL_REQUEST:]:
         payload = json.loads(rejected)
-        assert payload["error"] == "max_tool_calls_per_turn_exceeded"
+        assert payload["error"] == "max_tool_calls_per_model_request_exceeded"
         assert "guidance" in payload
         guidance = payload["guidance"]
-        assert str(MAX_TOOL_CALLS_PER_MODEL_TURN) in guidance
+        assert str(MAX_TOOL_CALLS_PER_MODEL_REQUEST) in guidance
         # issued count (7 or 8) must appear in guidance
         issued_in_guidance = any(
-            str(i) in guidance for i in range(MAX_TOOL_CALLS_PER_MODEL_TURN + 1, 9)
+            str(i) in guidance for i in range(MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1, 9)
         )
         assert issued_in_guidance, f"guidance must contain the issued count; got: {guidance!r}"
 
@@ -157,7 +157,7 @@ async def test_run_step_transition_resets_counter():
 
     # run_step=1: 6 calls, all should pass
     ctx1 = _ctx(deps, run_step=1)
-    for _ in range(MAX_TOOL_CALLS_PER_MODEL_TURN):
+    for _ in range(MAX_TOOL_CALLS_PER_MODEL_REQUEST):
         result = await lifecycle.wrap_tool_execute(
             ctx1,
             call=None,
@@ -169,7 +169,7 @@ async def test_run_step_transition_resets_counter():
 
     # run_step=2: counter must reset — 6 calls should all pass again
     ctx2 = _ctx(deps, run_step=2)
-    for _ in range(MAX_TOOL_CALLS_PER_MODEL_TURN):
+    for _ in range(MAX_TOOL_CALLS_PER_MODEL_REQUEST):
         result = await lifecycle.wrap_tool_execute(
             ctx2,
             call=None,
@@ -207,11 +207,11 @@ async def test_concurrency_exactly_cap_dispatched():
         ]
     )
 
-    assert handler_call_count == MAX_TOOL_CALLS_PER_MODEL_TURN, (
-        f"Expected exactly {MAX_TOOL_CALLS_PER_MODEL_TURN} handler calls, got {handler_call_count}"
+    assert handler_call_count == MAX_TOOL_CALLS_PER_MODEL_REQUEST, (
+        f"Expected exactly {MAX_TOOL_CALLS_PER_MODEL_REQUEST} handler calls, got {handler_call_count}"
     )
     ok_count = sum(1 for r in results if r == "ok")
-    assert ok_count == MAX_TOOL_CALLS_PER_MODEL_TURN
+    assert ok_count == MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
 
 def test_guidance_contains_interpolated_values():
@@ -219,8 +219,8 @@ def test_guidance_contains_interpolated_values():
     issued = 9
     payload = make_exceeded_payload(issued)
     guidance = payload["guidance"]
-    assert str(MAX_TOOL_CALLS_PER_MODEL_TURN) in guidance, (
-        f"guidance must contain cap={MAX_TOOL_CALLS_PER_MODEL_TURN}; got: {guidance!r}"
+    assert str(MAX_TOOL_CALLS_PER_MODEL_REQUEST) in guidance, (
+        f"guidance must contain cap={MAX_TOOL_CALLS_PER_MODEL_REQUEST}; got: {guidance!r}"
     )
     assert str(issued) in guidance, f"guidance must contain issued={issued}; got: {guidance!r}"
 
@@ -257,10 +257,10 @@ async def test_enforce_tool_call_limit_event_on_saturation(lifecycle_with_span):
     )
     attrs = event["attributes"]
     assert attrs["tool_calls.issued"] == 8
-    assert attrs["tool_calls.allowed"] == MAX_TOOL_CALLS_PER_MODEL_TURN
-    assert attrs["tool_calls.rejected"] == 8 - MAX_TOOL_CALLS_PER_MODEL_TURN
+    assert attrs["tool_calls.allowed"] == MAX_TOOL_CALLS_PER_MODEL_REQUEST
+    assert attrs["tool_calls.rejected"] == 8 - MAX_TOOL_CALLS_PER_MODEL_REQUEST
     assert attrs["tool_calls.limit_exceeded"] is True
-    assert attrs["tool_calls.limit"] == MAX_TOOL_CALLS_PER_MODEL_TURN
+    assert attrs["tool_calls.limit"] == MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
 
 @pytest.mark.asyncio
@@ -317,7 +317,7 @@ async def test_consecutive_violations_accumulate_to_threshold(lifecycle_with_spa
 
     for step in range(1, TOOL_CAP_HARD_STOP_CONSECUTIVE + 1):
         ctx = _ctx(deps, run_step=step)
-        deps.runtime.tool_calls_in_model_turn = MAX_TOOL_CALLS_PER_MODEL_TURN + 1
+        deps.runtime.tool_calls_in_model_request = MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1
         await lifecycle.after_node_run(ctx, node=_call_tools_node(), result=None)
 
     assert deps.runtime.consecutive_tool_cap_violations == TOOL_CAP_HARD_STOP_CONSECUTIVE
@@ -331,13 +331,13 @@ async def test_consecutive_violations_reset_on_clean_node(lifecycle_with_span):
 
     for step in range(1, 3):
         ctx = _ctx(deps, run_step=step)
-        deps.runtime.tool_calls_in_model_turn = MAX_TOOL_CALLS_PER_MODEL_TURN + 1
+        deps.runtime.tool_calls_in_model_request = MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1
         await lifecycle.after_node_run(ctx, node=_call_tools_node(), result=None)
 
     assert deps.runtime.consecutive_tool_cap_violations == 2
 
     ctx_clean = _ctx(deps, run_step=3)
-    deps.runtime.tool_calls_in_model_turn = MAX_TOOL_CALLS_PER_MODEL_TURN
+    deps.runtime.tool_calls_in_model_request = MAX_TOOL_CALLS_PER_MODEL_REQUEST
     await lifecycle.after_node_run(ctx_clean, node=_call_tools_node(), result=None)
 
     assert deps.runtime.consecutive_tool_cap_violations == 0

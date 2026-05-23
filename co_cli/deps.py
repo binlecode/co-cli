@@ -156,10 +156,10 @@ class CoSessionState:
     # Tracks user-intent signal (one per turn, regardless of tool calls).
     # Reset to 0 when a memory KICK fires or memory_manage(create|append|replace) runs.
     turns_since_memory_review: int = 0
-    # Skill-domain iteration counter: bumped +turn_iteration_count per turn by _post_turn_hook.
+    # Skill-domain model-request counter: bumped +model_request_count per turn by _post_turn_hook.
     # Tracks agent-action signal (tool + reasoning steps, not just turns).
     # Reset to 0 when a skill KICK fires or skill_manage(create|edit|patch) runs.
-    iters_since_skill_review: int = 0
+    model_requests_since_skill_review: int = 0
 
 
 @dataclass
@@ -180,10 +180,10 @@ class CoRuntimeState:
       persisted_message_count
     """
 
-    # Per-model-turn brake counter; resets implicitly on ctx.run_step transition.
+    # Per-model-request brake counter; resets implicitly on ctx.run_step transition.
     tool_call_limit_run_step: int = -1
-    tool_calls_in_model_turn: int = 0
-    # Consecutive llm_iterations where tool_calls_in_model_turn exceeded the cap.
+    tool_calls_in_model_request: int = 0
+    # Consecutive model requests where tool_calls_in_model_request exceeded the cap.
     # Reset to 0 per turn by reset_for_turn(); also reset to 0 when a non-violating
     # CallToolsNode fires (so only unbroken consecutive violations trigger the hard-stop).
     consecutive_tool_cap_violations: int = 0

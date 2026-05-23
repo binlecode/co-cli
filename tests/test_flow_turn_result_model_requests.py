@@ -1,6 +1,6 @@
-"""Behavioral tests for TurnResult.iterations (plan 3.5c TASK-4, simplified plan 2026-05-19).
+"""Behavioral tests for TurnResult.model_requests.
 
-The post-turn skill-review hook consumes turn_result.llm_iterations to gate
+The post-turn skill-review hook consumes turn_result.model_requests to gate
 background firing. This file verifies orchestrate.py populates that field
 correctly at the three build sites (success / error / interrupted).
 """
@@ -50,8 +50,8 @@ _AGENT = build_orchestrator(ORCHESTRATOR_SPEC, _make_deps())
 
 
 @pytest.mark.asyncio
-async def test_real_turn_with_tool_call_populates_iterations() -> None:
-    """A turn that emits at least one tool call must report iterations >= 1."""
+async def test_real_turn_with_tool_call_populates_model_requests() -> None:
+    """A turn that emits at least one tool call must report model_requests >= 1."""
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
     deps = _make_deps()
@@ -72,18 +72,18 @@ async def test_real_turn_with_tool_call_populates_iterations() -> None:
     # Cross-check the accumulator against direct inspection of the messages.
     # The counter now counts every ModelResponse, regardless of tool calls.
     direct_count = sum(1 for m in turn.messages if isinstance(m, ModelResponse))
-    assert turn.llm_iterations >= 1, (
-        f"expected at least one ModelResponse, got iterations="
-        f"{turn.llm_iterations} (direct count over full history={direct_count})"
+    assert turn.model_requests >= 1, (
+        f"expected at least one ModelResponse, got model_requests="
+        f"{turn.model_requests} (direct count over full history={direct_count})"
     )
-    assert turn.llm_iterations == direct_count, (
-        f"accumulator ({turn.llm_iterations}) disagrees with direct count "
+    assert turn.model_requests == direct_count, (
+        f"accumulator ({turn.model_requests}) disagrees with direct count "
         f"({direct_count}) over turn-local messages"
     )
 
 
 @pytest.mark.asyncio
-async def test_real_turn_text_only_response_contributes_one_iteration() -> None:
+async def test_real_turn_text_only_response_contributes_one_model_request() -> None:
     """A text-only turn (no ToolCallPart) contributes >= 1 to the accumulator.
 
     Previously the filter excluded text-only responses and returned 0.
@@ -106,9 +106,9 @@ async def test_real_turn_text_only_response_contributes_one_iteration() -> None:
         )
 
     direct_count = sum(1 for m in turn.messages if isinstance(m, ModelResponse))
-    assert turn.llm_iterations >= 1, (
-        f"text-only turn must contribute >= 1 iteration, got {turn.llm_iterations}"
+    assert turn.model_requests >= 1, (
+        f"text-only turn must contribute >= 1 model request, got {turn.model_requests}"
     )
-    assert turn.llm_iterations == direct_count, (
-        f"accumulator ({turn.llm_iterations}) disagrees with direct count ({direct_count})"
+    assert turn.model_requests == direct_count, (
+        f"accumulator ({turn.model_requests}) disagrees with direct count ({direct_count})"
     )

@@ -286,13 +286,13 @@ def _emit_tool_budget_span(
     spill_ratio: float,
     spill_threshold_tokens: int,
 ) -> None:
-    from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+    from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     span = current_span()
     span.set_attribute("budget.context_window_tokens", model_max_ctx)
     span.set_attribute("budget.spill_ratio", spill_ratio)
-    span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_TURN)
+    span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_REQUEST)
     span.set_attribute("budget.spill_threshold_chars", SPILL_THRESHOLD_CHARS)
     span.set_attribute("budget.spill_threshold_tokens", spill_threshold_tokens)
 
@@ -331,7 +331,7 @@ async def create_deps(
 
     model_max_ctx = _probe_model_ctx(config)
 
-    from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_TURN
+    from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     spill_ratio = config.compaction.spill_ratio
@@ -346,7 +346,7 @@ async def create_deps(
     logger.info(
         "tool-budget bounds: context_window=%d tool_call_limit=%d spill=%dc spill_threshold=%d tokens",
         model_max_ctx,
-        MAX_TOOL_CALLS_PER_MODEL_TURN,
+        MAX_TOOL_CALLS_PER_MODEL_REQUEST,
         SPILL_THRESHOLD_CHARS,
         spill_threshold_tokens,
     )

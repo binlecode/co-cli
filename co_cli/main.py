@@ -172,7 +172,7 @@ async def _run_foreground_turn(
     finally:
         cleanup_skill_run_state(saved_env, deps)
     next_history = await _finalize_turn(turn_result, message_history, deps, frontend)
-    _post_turn_hook(deps, next_history, turn_result.llm_iterations)
+    _post_turn_hook(deps, next_history, turn_result.model_requests)
     return next_history
 
 
@@ -235,10 +235,13 @@ def _maybe_kick_memory_review(deps: CoDeps) -> None:
 
 
 def _maybe_kick_skill_review(deps: CoDeps) -> None:
-    """Fire a skill KICK when the iteration counter reaches the configured interval."""
+    """Fire a skill KICK when the model-request counter reaches the configured interval."""
     skill_settings = deps.config.skills
-    if deps.session.iters_since_skill_review >= skill_settings.review_skill_nudge_interval:
-        deps.session.iters_since_skill_review = 0
+    if (
+        deps.session.model_requests_since_skill_review
+        >= skill_settings.review_skill_nudge_interval
+    ):
+        deps.session.model_requests_since_skill_review = 0
         _send_review_kick(
             deps,
             domain="skill",
@@ -249,7 +252,7 @@ def _maybe_kick_skill_review(deps: CoDeps) -> None:
 def _post_turn_hook(
     deps: CoDeps | None,
     message_history: list[ModelMessage],
-    turn_iteration_count: int,
+    model_request_count: int,
 ) -> None:
     """Bump per-domain counters and fire review KICKs when thresholds are reached.
 
@@ -265,7 +268,7 @@ def _post_turn_hook(
         return
 
     deps.session.turns_since_memory_review += 1
-    deps.session.iters_since_skill_review += turn_iteration_count
+    deps.session.model_requests_since_skill_review += model_request_count
     _maybe_kick_memory_review(deps)
     _maybe_kick_skill_review(deps)
 

@@ -86,7 +86,7 @@ def test_memory_kick_file_created_when_threshold_reached(tmp_path: Path) -> None
 
     # Trigger memory KICK: 3 turns at interval=3
     for _ in range(3):
-        _post_turn_hook(deps, [], turn_iteration_count=1)
+        _post_turn_hook(deps, [], model_request_count=1)
 
     queue_dir = main_mod.DREAM_QUEUE_DIR
     kick_files = list(queue_dir.glob("*.json"))
@@ -110,7 +110,7 @@ def test_skill_kick_file_created_when_threshold_reached(tmp_path: Path) -> None:
     _post_turn_hook = main_mod._post_turn_hook
 
     # Trigger skill KICK: one turn with iter_count=5
-    _post_turn_hook(deps, [], turn_iteration_count=5)
+    _post_turn_hook(deps, [], model_request_count=5)
 
     queue_dir = main_mod.DREAM_QUEUE_DIR
     kick_files = list(queue_dir.glob("*.json"))
@@ -129,7 +129,7 @@ def test_kick_file_has_all_required_fields(tmp_path: Path) -> None:
     import co_cli.main as main_mod
 
     _post_turn_hook = main_mod._post_turn_hook
-    _post_turn_hook(deps, [], turn_iteration_count=1)
+    _post_turn_hook(deps, [], model_request_count=1)
 
     queue_dir = main_mod.DREAM_QUEUE_DIR
     kick_files = sorted(queue_dir.glob("*.json"))
@@ -168,7 +168,7 @@ def test_no_kick_file_when_review_disabled(tmp_path: Path) -> None:
 
     _post_turn_hook = main_mod._post_turn_hook
     for _ in range(5):
-        _post_turn_hook(deps, [], turn_iteration_count=5)
+        _post_turn_hook(deps, [], model_request_count=5)
 
     queue_dir = main_mod.DREAM_QUEUE_DIR
     kick_files = list(queue_dir.glob("*.json")) if queue_dir.exists() else []

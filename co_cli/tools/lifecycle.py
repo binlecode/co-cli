@@ -24,7 +24,7 @@ from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.observability.tracing import current_span
 from co_cli.tools.categories import PATH_NORMALIZATION_TOOLS
 from co_cli.tools.tool_call_limit import (
-    MAX_TOOL_CALLS_PER_MODEL_TURN,
+    MAX_TOOL_CALLS_PER_MODEL_REQUEST,
     make_exceeded_payload,
 )
 from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS, spill_with_span
@@ -191,15 +191,15 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         handler: WrapToolExecuteHandler,
     ) -> Any:
         runtime = ctx.deps.runtime
-        # Per-model-turn reset: ctx.run_step increments once per LLM call;
+        # Per-model-request reset: ctx.run_step increments once per LLM call;
         # all tools from one assistant message share the same run_step.
         if ctx.run_step != runtime.tool_call_limit_run_step:
             runtime.tool_call_limit_run_step = ctx.run_step
-            runtime.tool_calls_in_model_turn = 0
-        runtime.tool_calls_in_model_turn += 1
+            runtime.tool_calls_in_model_request = 0
+        runtime.tool_calls_in_model_request += 1
 
-        if runtime.tool_calls_in_model_turn > MAX_TOOL_CALLS_PER_MODEL_TURN:
-            return json.dumps(make_exceeded_payload(runtime.tool_calls_in_model_turn))
+        if runtime.tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST:
+            return json.dumps(make_exceeded_payload(runtime.tool_calls_in_model_request))
         return await handler(args)
 
     async def after_node_run(
@@ -212,20 +212,20 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         if not isinstance(node, CallToolsNode):
             return result
 
-        issued = ctx.deps.runtime.tool_calls_in_model_turn
-        if issued > MAX_TOOL_CALLS_PER_MODEL_TURN:
+        issued = ctx.deps.runtime.tool_calls_in_model_request
+        if issued > MAX_TOOL_CALLS_PER_MODEL_REQUEST:
             ctx.deps.runtime.consecutive_tool_cap_violations += 1
         else:
             ctx.deps.runtime.consecutive_tool_cap_violations = 0
 
-        allowed = min(issued, MAX_TOOL_CALLS_PER_MODEL_TURN)
-        rejected = max(0, issued - MAX_TOOL_CALLS_PER_MODEL_TURN)
+        allowed = min(issued, MAX_TOOL_CALLS_PER_MODEL_REQUEST)
+        rejected = max(0, issued - MAX_TOOL_CALLS_PER_MODEL_REQUEST)
 
         current_span().add_event(
             "tool_budget.enforce_tool_call_limit",
             {
                 "budget.context_window_tokens": ctx.deps.model_max_ctx,
-                "tool_calls.limit": MAX_TOOL_CALLS_PER_MODEL_TURN,
+                "tool_calls.limit": MAX_TOOL_CALLS_PER_MODEL_REQUEST,
                 "tool_calls.issued": issued,
                 "tool_calls.allowed": allowed,
                 "tool_calls.rejected": rejected,
