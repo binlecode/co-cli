@@ -1,7 +1,7 @@
 """Dream daemon process management helpers.
 
-# POSIX-only: fcntl.flock, Unix sockets, double-fork detach.
-# co-cli is darwin/linux-first; no Windows path is provided.
+POSIX-only: fcntl.flock, double-fork detach, POSIX signals (SIGTERM/SIGKILL).
+co-cli is darwin/linux-first; no Windows path is provided.
 """
 
 from __future__ import annotations

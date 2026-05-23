@@ -6,7 +6,6 @@ import asyncio
 import logging
 from pathlib import Path
 
-from co_cli.daemons.dream._ipc import DaemonIPC
 from co_cli.daemons.dream._queue import (
     list_queue_files,
     move_to_done,
@@ -22,47 +21,48 @@ logger = logging.getLogger(__name__)
 async def main_loop(
     deps,
     queue_dir: Path,
-    ipc: DaemonIPC,
     state: DaemonState,
     cfg,
+    shutdown: asyncio.Event,
 ) -> None:
-    """Run the daemon main loop: initial drain then process IPC commands."""
-    await _initial_drain(deps, queue_dir, cfg, state)
+    """Run the daemon main loop: initial drain then poll-and-drain until shutdown is set.
 
-    while True:
-        msg = await ipc.receive_one()
-        if msg.startswith("STATUS"):
-            import json
-            import time
+    The shutdown event is owned by the caller (_run_foreground) so signal handlers
+    can be registered before bootstrap. If shutdown is already set on entry,
+    the loop exits without running any drains.
+    """
+    if shutdown.is_set():
+        logger.info("Dream daemon: shutdown requested before main_loop start")
+        return
 
-            status = {
-                "running": True,
-                "pid": __import__("os").getpid(),
-                "uptime_seconds": time.time() - state.start_time,
-                "current_item": state.current_item,
-                "spawn_origin": state.spawn_origin,
-                "spawn_session_id": state.spawn_session_id,
-                "queue_depth": len(list_queue_files(queue_dir)),
-            }
-            await ipc.send_ack(json.dumps(status))
-        elif msg.startswith("STOP"):
-            await ipc.send_ack("ACK")
-            break
-        elif msg.startswith("REVIEW"):
-            await ipc.send_ack("ACK")
-            await _drain_queue(deps, queue_dir, cfg, state)
-        else:
-            await ipc.send_ack("UNKNOWN")
+    await _initial_drain(deps, queue_dir, cfg, state, shutdown)
+
+    while not shutdown.is_set():
+        if list_queue_files(queue_dir):
+            await _drain_queue(deps, queue_dir, cfg, state, shutdown=shutdown)
+            continue
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=cfg.poll_interval_seconds)
+        except TimeoutError:
+            pass
+
+    logger.info("Dream daemon shutting down")
 
 
-async def _initial_drain(deps, queue_dir: Path, cfg, state: DaemonState) -> None:
+async def _initial_drain(
+    deps, queue_dir: Path, cfg, state: DaemonState, shutdown: asyncio.Event
+) -> None:
     """Drain the queue once at startup."""
-    await _drain_queue(deps, queue_dir, cfg, state)
+    await _drain_queue(deps, queue_dir, cfg, state, shutdown=shutdown)
 
 
-async def _drain_queue(deps, queue_dir: Path, cfg, state: DaemonState) -> None:
-    """Process queue files one by one until the queue is empty."""
+async def _drain_queue(
+    deps, queue_dir: Path, cfg, state: DaemonState, *, shutdown: asyncio.Event
+) -> None:
+    """Process queue files one by one until the queue is empty or shutdown is requested."""
     while True:
+        if shutdown.is_set():
+            return
         files = list_queue_files(queue_dir)
         if not files:
             break

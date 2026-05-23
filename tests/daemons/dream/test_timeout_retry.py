@@ -12,6 +12,7 @@ No LLM or asyncio timing tricks — pure exception propagation.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -77,7 +78,7 @@ async def test_drain_queue_exhausts_retries_and_moves_to_failed(tmp_path: Path) 
     state = _make_state()
     cfg = DreamSettings(review_timeout_seconds=30, retry_backoff_seconds=1, max_retry_attempts=1)
 
-    await _loop._drain_queue(deps, queue_dir, cfg, state)
+    await _loop._drain_queue(deps, queue_dir, cfg, state, shutdown=asyncio.Event())
 
     assert not item_path.exists(), "queue file must be removed after exhausting retries"
     failed_path = queue_dir / "failed" / "2024-01-01T00-00-00.json"
@@ -108,7 +109,7 @@ async def test_drain_queue_attempt_counter_written_on_penultimate_failure(
     state = _make_state()
     cfg = DreamSettings(review_timeout_seconds=30, retry_backoff_seconds=1, max_retry_attempts=2)
 
-    await _loop._drain_queue(deps, queue_dir, cfg, state)
+    await _loop._drain_queue(deps, queue_dir, cfg, state, shutdown=asyncio.Event())
 
     failed_path = queue_dir / "failed" / "2024-01-01T00-00-00.json"
     assert failed_path.exists(), "file must be in failed/ when attempts == max_retry_attempts"

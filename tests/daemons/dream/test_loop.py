@@ -1,12 +1,16 @@
 """Behavioral tests for the dream daemon event loop and queue drain logic.
 
-Verifies: list_queue_files chronological sort, drain moves file to done on success.
-No LLM — success path uses a nonexistent session_id so process_review returns
+Covers invariants NOT exercised by the integration drain path:
+- _drain_queue stops between items when shutdown is set (clean-shutdown bound)
+- _drain_queue processes every item in a populated queue (loop iteration)
+
+No LLM — kicks use a nonexistent session_id so process_review returns
 immediately (transcript file absent → early return, no exception).
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -15,7 +19,7 @@ from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.config.dream import DreamSettings
 from co_cli.daemons.dream import _loop
-from co_cli.daemons.dream._queue import list_queue_files, write_queue_item
+from co_cli.daemons.dream._queue import write_queue_item
 from co_cli.daemons.dream._state import DaemonState
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
@@ -45,37 +49,10 @@ def _make_deps(tmp_path: Path) -> CoDeps:
     )
 
 
-def test_list_queue_files_chronological_order(tmp_path: Path) -> None:
-    """list_queue_files returns files sorted oldest-first by filename."""
-    queue_dir = tmp_path / "queue"
-    queue_dir.mkdir()
-    (queue_dir / "2024-01-03T12-00-00.json").write_text("{}")
-    (queue_dir / "2024-01-01T08-00-00.json").write_text("{}")
-    (queue_dir / "2024-01-02T10-00-00.json").write_text("{}")
-
-    result = list_queue_files(queue_dir)
-
-    names = [p.name for p in result]
-    assert names == [
-        "2024-01-01T08-00-00.json",
-        "2024-01-02T10-00-00.json",
-        "2024-01-03T12-00-00.json",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_drain_queue_moves_file_to_done_on_success(tmp_path: Path) -> None:
-    """_drain_queue moves the queue file to done/ when processing succeeds.
-
-    Uses a session_id with no matching session file. process_review checks
-    transcript_path.exists() → False → logs warning and returns without error.
-    _drain_queue then moves the kick file to done/.
-    """
-    queue_dir = tmp_path / "queue"
-    queue_dir.mkdir()
-    item_path = queue_dir / "2024-01-01T00-00-00.json"
+def _write_kick(queue_dir: Path, name: str) -> Path:
+    path = queue_dir / name
     write_queue_item(
-        item_path,
+        path,
         {
             "session_id": "no-such-session",
             "domain": "memory",
@@ -83,13 +60,48 @@ async def test_drain_queue_moves_file_to_done_on_success(tmp_path: Path) -> None
             "attempts": 0,
         },
     )
+    return path
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_stops_immediately_when_shutdown_is_set(tmp_path: Path) -> None:
+    """_drain_queue returns without processing any items when shutdown is pre-set.
+
+    The between-items shutdown check fires at the top of the drain loop before
+    picking up the first item — no processing occurs when shutdown is already set.
+    """
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    item_path = _write_kick(queue_dir, "2024-01-01T00-00-00.json")
+
+    deps = _make_deps(tmp_path)
+    state = _make_state()
+    cfg = _make_cfg()
+    shutdown = asyncio.Event()
+    shutdown.set()
+
+    await _loop._drain_queue(deps, queue_dir, cfg, state, shutdown=shutdown)
+
+    assert item_path.exists(), "queue file must remain when shutdown is pre-set"
+    done_path = queue_dir / "done" / "2024-01-01T00-00-00.json"
+    assert not done_path.exists(), "done/ must be empty when shutdown is pre-set"
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_drains_multiple_items(tmp_path: Path) -> None:
+    """_drain_queue processes all items in the queue when shutdown is not set."""
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    items = [_write_kick(queue_dir, f"2024-01-01T0000-0{i}.json") for i in range(3)]
 
     deps = _make_deps(tmp_path)
     state = _make_state()
     cfg = _make_cfg()
 
-    await _loop._drain_queue(deps, queue_dir, cfg, state)
+    await _loop._drain_queue(deps, queue_dir, cfg, state, shutdown=asyncio.Event())
 
-    assert not item_path.exists(), "queue file must be removed after successful processing"
-    done_path = queue_dir / "done" / "2024-01-01T00-00-00.json"
-    assert done_path.exists(), "queue file must be moved to done/"
+    for item_path in items:
+        assert not item_path.exists(), f"{item_path.name} must be removed from queue"
+        assert (queue_dir / "done" / item_path.name).exists(), (
+            f"{item_path.name} must appear in done/"
+        )

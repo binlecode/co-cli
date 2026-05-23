@@ -1,65 +1,54 @@
-"""Behavioral tests for the dream daemon process management helpers.
+"""Behavioral tests for the dream daemon's file-based status/stop surface.
 
-Verifies: is_pid_live for live and nonexistent PIDs, read_pid returns None
-when file is absent, write_pid + read_pid round-trip, and acquire_start_lock
-exclusive locking semantics.
-No LLM, no network — OS primitives only.
+Covers behavior NOT exercised by integration tests:
+- acquire_start_lock contention (BlockingIOError when held)
+- status_daemon for no-PID / stale-PID / live-PID branches
+- stop_daemon's stale PID cleanup path
+
+Process lifecycle (start/stop/singleton/stale-pid-overwrite) is covered
+end-to-end by tests/integration/test_daemon_lifecycle.py via real subprocess.
 """
 
 import fcntl
+import importlib
+import json
 import os
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 
-from co_cli.daemons.dream._process import (
-    acquire_start_lock,
-    is_pid_live,
-    read_pid,
-    write_pid,
-)
+from co_cli.daemons.dream._process import acquire_start_lock, write_pid
 
 
-def test_is_pid_live_returns_true_for_current_process() -> None:
-    """is_pid_live must return True for the running process itself."""
-    assert is_pid_live(os.getpid()) is True
+@pytest.fixture(autouse=True)
+def _restore_co_home() -> Generator[None, None, None]:
+    original = os.environ.get("CO_HOME")
+    yield
+    if original is None:
+        os.environ.pop("CO_HOME", None)
+    else:
+        os.environ["CO_HOME"] = original
+    import co_cli.config.core as core_mod
+    import co_cli.daemons.dream.process as process_mod
+
+    importlib.reload(core_mod)
+    importlib.reload(process_mod)
 
 
-def test_is_pid_live_returns_false_for_nonexistent_pid() -> None:
-    """is_pid_live must return False for a PID that cannot exist."""
-    assert is_pid_live(99999999) is False
+def _setup_co_home(co_home: Path):
+    os.environ["CO_HOME"] = str(co_home)
+    import co_cli.config.core as core_mod
+    import co_cli.daemons.dream.process as process_mod
 
-
-def test_read_pid_returns_none_when_file_missing(tmp_path: Path) -> None:
-    """read_pid must return None when the PID file does not exist."""
-    result = read_pid(tmp_path / "daemon.pid")
-
-    assert result is None
-
-
-def test_write_pid_then_read_pid_round_trip(tmp_path: Path) -> None:
-    """write_pid followed by read_pid must return the same pid."""
-    pid_file = tmp_path / "daemon.pid"
-    pid = os.getpid()
-
-    write_pid(pid_file, pid, origin="test", session_id="sess-abc")
-    result = read_pid(pid_file)
-
-    assert result == pid
-
-
-def test_acquire_start_lock_succeeds_when_no_contention(tmp_path: Path) -> None:
-    """acquire_start_lock context manager acquires without raising when no other holder."""
-    lock_path = tmp_path / "daemon.lock"
-
-    with acquire_start_lock(lock_path):
-        assert lock_path.exists()
+    importlib.reload(core_mod)
+    importlib.reload(process_mod)
+    return core_mod, process_mod
 
 
 def test_acquire_start_lock_raises_when_already_locked(tmp_path: Path) -> None:
     """acquire_start_lock raises BlockingIOError when the lock file is already held."""
     lock_path = tmp_path / "daemon.lock"
-    # Open and flock the lock file ourselves to simulate an existing holder.
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -68,3 +57,51 @@ def test_acquire_start_lock_raises_when_already_locked(tmp_path: Path) -> None:
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+def test_status_daemon_no_pid_file_returns_not_running(tmp_path: Path) -> None:
+    """status_daemon returns running=False when no PID file exists."""
+    _core_mod, process_mod = _setup_co_home(tmp_path)
+
+    result = process_mod.status_daemon(tmp_path)
+
+    assert result["running"] is False
+
+
+def test_status_daemon_stale_pid_returns_not_running(tmp_path: Path) -> None:
+    """status_daemon returns running=False when PID file points at a dead process."""
+    core_mod, process_mod = _setup_co_home(tmp_path)
+    pid_file = core_mod.DREAM_PID_FILE
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(json.dumps({"pid": 99999999, "origin": "test", "session_id": ""}))
+
+    result = process_mod.status_daemon(tmp_path)
+
+    assert result["running"] is False
+
+
+def test_status_daemon_live_pid_returns_running(tmp_path: Path) -> None:
+    """status_daemon returns running=True with full payload when PID is live."""
+    core_mod, process_mod = _setup_co_home(tmp_path)
+    pid_file = core_mod.DREAM_PID_FILE
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    write_pid(pid_file, os.getpid(), origin="test", session_id="sess-xyz")
+
+    result = process_mod.status_daemon(tmp_path)
+
+    assert result["running"] is True
+    assert result["pid"] == os.getpid()
+    assert result.get("spawn_origin") == "test"
+    assert result.get("spawn_session_id") == "sess-xyz"
+
+
+def test_stop_daemon_cleans_up_stale_pid_file(tmp_path: Path) -> None:
+    """stop_daemon unlinks a stale PID file when the recorded PID is dead."""
+    core_mod, process_mod = _setup_co_home(tmp_path)
+    pid_file = core_mod.DREAM_PID_FILE
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(json.dumps({"pid": 99999999, "origin": "test", "session_id": ""}))
+
+    process_mod.stop_daemon(tmp_path)
+
+    assert not pid_file.exists(), "stale PID file must be removed by stop_daemon"

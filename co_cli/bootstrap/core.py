@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from pathlib import Path
 from types import MappingProxyType
@@ -60,7 +61,7 @@ def _resolve_reranker(
 
 def _discover_index_backend(
     config: Settings,
-    frontend: TerminalFrontend,
+    on_status: Callable[[str], None],
     degradations: dict[str, str],
 ) -> IndexStore | None:
     """Discover which memory backend is available and construct IndexStore.
@@ -102,7 +103,7 @@ def _discover_index_backend(
                 resolved_backend = "hybrid"
 
     for status in statuses:
-        frontend.on_status(status)
+        on_status(status)
 
     if resolved_backend != configured:
         reason = "TEI reranker unavailable" if not reranker_ok else "embedder unavailable"
@@ -120,7 +121,7 @@ def _discover_index_backend(
     except Exception as exc:
         if resolved_backend == "hybrid":
             logger.warning("Hybrid backend unavailable: %s", exc)
-            frontend.on_status(
+            on_status(
                 f"  Memory degraded — hybrid unavailable "
                 f"({_summarize_backend_error(exc)}); trying fts5"
             )
@@ -130,7 +131,7 @@ def _discover_index_backend(
             except Exception as exc2:
                 detail = _summarize_backend_error(exc2)
                 logger.error("FTS5 backend unavailable: %s", exc2)
-                frontend.on_status(f"  Memory error — fts5 unavailable ({detail})")
+                on_status(f"  Memory error — fts5 unavailable ({detail})")
                 raise RuntimeError(
                     f"FTS5 memory backend failed to initialise ({detail}). "
                     "FTS5 is the minimum required backend for session recall. "
@@ -139,7 +140,7 @@ def _discover_index_backend(
         else:
             detail = _summarize_backend_error(exc)
             logger.error("FTS5 backend unavailable: %s", exc)
-            frontend.on_status(f"  Memory error — fts5 unavailable ({detail})")
+            on_status(f"  Memory error — fts5 unavailable ({detail})")
             raise RuntimeError(
                 f"FTS5 memory backend failed to initialise ({detail}). "
                 "FTS5 is the minimum required backend for session recall. "
@@ -151,12 +152,12 @@ def _discover_index_backend(
 def _sync_memory_domain(
     memory_store: MemoryStore | None,
     config: Settings,
-    frontend: TerminalFrontend,
+    on_status: Callable[[str], None],
     memory_dir: Path,
 ) -> None:
     """Reconcile memory artifacts with current files on disk."""
     if memory_store is None:
-        frontend.on_status("  Memory store not available — skipped")
+        on_status("  Memory store not available — skipped")
         return
 
     span = current_span()
@@ -167,10 +168,10 @@ def _sync_memory_domain(
             span.set_attribute("count", count)
             span.set_attribute("backend", backend)
             span.set_attribute("status", "ok")
-            frontend.on_status(f"  Memory synced — {count} item(s) ({backend})")
+            on_status(f"  Memory synced — {count} item(s) ({backend})")
         else:
             span.set_attribute("status", "skipped")
-            frontend.on_status("  Memory store empty — no memory dir")
+            on_status("  Memory store empty — no memory dir")
     except Exception as e:
         span.set_attribute("status", "error")
         span.set_attribute("error", str(e))
@@ -180,7 +181,7 @@ def _sync_memory_domain(
 def _sync_canon_store(
     index_store: IndexStore | None,
     config: Settings,
-    frontend: TerminalFrontend,
+    on_status: Callable[[str], None],
 ) -> None:
     """Index canon scene files into the shared FTS pipeline under source='canon'."""
     if index_store is None or not config.personality:
@@ -194,7 +195,7 @@ def _sync_canon_store(
         logger.debug("Canon synced — %d file(s) for role=%s", count, config.personality)
     except Exception as exc:
         logger.warning("Canon store sync failed: %s", exc)
-        frontend.on_status(f"  Canon sync failed — {exc}")
+        on_status(f"  Canon sync failed — {exc}")
 
 
 def _sync_canon_dir(index_store: IndexStore, canon_dir: Path) -> int:
@@ -297,15 +298,17 @@ def _emit_tool_budget_span(
 
 
 async def create_deps(
-    frontend: TerminalFrontend,
-    stack: AsyncExitStack,
+    *,
+    on_status: Callable[[str], None],
+    stack: AsyncExitStack | None = None,
     theme_override: str | None = None,
 ) -> CoDeps:
     """Assemble CoDeps from settings: config, registries, MCP, memory, skills.
 
-    MCP servers are entered on the provided stack so they stay alive for the
-    session and are cleaned up when the stack closes. Memory backend is
-    resolved with three-tier fallback (hybrid → fts5 → grep) and files synced.
+    on_status is the status-message sink (REPL: frontend.on_status; daemon: logger.info).
+    stack is the MCP lifecycle stack — when None, MCP servers are not connected
+    (headless callers like the dream daemon). Memory backend is resolved with
+    three-tier fallback (hybrid → fts5 → grep) and files synced.
 
     Raises ValueError on provider/model hard errors.
     """
@@ -314,7 +317,7 @@ async def create_deps(
         build_mcp_entries,
         build_native_toolset,
     )
-    from co_cli.agent.mcp import discover_mcp_tools
+    from co_cli.agent.mcp import MCPToolsetEntry, discover_mcp_tools
     from co_cli.llm.factory import build_judge_model, build_model
 
     config = copy.deepcopy(get_settings())
@@ -351,27 +354,26 @@ async def create_deps(
     llm_model = build_model(config.llm)
     judge_llm_model = build_judge_model(config.llm)
     native_toolset, tool_index = build_native_toolset(config)
-    mcp_entries = build_mcp_entries(config, tool_index)
 
     degradations: dict[str, str] = {}
-    from co_cli.agent.mcp import MCPToolsetEntry
-
     connected: list[MCPToolsetEntry] = []
-    for entry in mcp_entries:
-        try:
-            async with asyncio.timeout(entry.timeout):
-                await stack.enter_async_context(entry.toolset)
-            connected.append(entry)
-        except Exception as e:
-            frontend.on_status(f"MCP server failed to connect: {e}")
-    if connected:
-        _, discovery_errors, mcp_index = await discover_mcp_tools(
-            connected, exclude=set(tool_index.keys())
-        )
-        for prefix, err in discovery_errors.items():
-            frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err}")
-            degradations[f"mcp.{prefix}"] = err[:120]
-        tool_index.update(mcp_index)
+    if stack is not None:
+        mcp_entries = build_mcp_entries(config, tool_index)
+        for entry in mcp_entries:
+            try:
+                async with asyncio.timeout(entry.timeout):
+                    await stack.enter_async_context(entry.toolset)
+                connected.append(entry)
+            except Exception as e:
+                on_status(f"MCP server failed to connect: {e}")
+        if connected:
+            _, discovery_errors, mcp_index = await discover_mcp_tools(
+                connected, exclude=set(tool_index.keys())
+            )
+            for prefix, err in discovery_errors.items():
+                on_status(f"MCP server {prefix!r} failed to list tools: {err}")
+                degradations[f"mcp.{prefix}"] = err[:120]
+            tool_index.update(mcp_index)
 
     toolset = assemble_routing_toolset(native_toolset, [entry.toolset for entry in connected])
 
@@ -388,9 +390,9 @@ async def create_deps(
         loaded_skills, set(BUILTIN_COMMANDS.keys()), skill_errors
     )
     for msg in skill_errors:
-        frontend.on_status(msg)
+        on_status(msg)
 
-    index_store = _discover_index_backend(config, frontend, degradations)
+    index_store = _discover_index_backend(config, on_status, degradations)
 
     memory_store: MemoryStore | None = None
     session_store: SessionStore | None = None
@@ -401,12 +403,12 @@ async def create_deps(
         memory_store = _MS(index=index_store, config=config)
         session_store = _SS(index=index_store, config=config)
         try:
-            _sync_memory_domain(memory_store, config, frontend, paths["memory_dir"])
+            _sync_memory_domain(memory_store, config, on_status, paths["memory_dir"])
         except RuntimeError:
             index_store.close()
             raise
 
-    _sync_canon_store(index_store, config, frontend)
+    _sync_canon_store(index_store, config, on_status)
 
     runtime = CoRuntimeState()
     deps = CoDeps(
@@ -426,7 +428,7 @@ async def create_deps(
         degradations=MappingProxyType(degradations),
         **paths,
     )
-    deps.runtime.background_status_callback = frontend.on_status
+    deps.runtime.background_status_callback = on_status
     return deps
 
 

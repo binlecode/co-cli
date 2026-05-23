@@ -28,41 +28,40 @@ The broader persistent cognition model lives in [memory.md](memory.md). Startup 
 ┌─────┴─────────────────────────┐         ┌────────────────────┴──────────────────┐
 │  REPL  (co chat)               │         │  dream daemon  (co dream start)       │
 │                                │         │                                        │
-│  _post_turn_hook               │         │  main_loop                             │
+│  _post_turn_hook               │         │  main_loop  (signal-driven shutdown)   │
 │    turns_since_memory_review   │         │    initial_drain(queue/)  (cold start) │
-│      += 1                      │         │    while True:                         │
-│    iters_since_skill_review    │         │      msg = socket.recv()               │
-│      += turn_iteration_count   │         │      STATUS → return JSON              │
-│    if ≥ threshold:             │         │      STOP   → drain current, exit      │
-│      _send_review_kick(domain) │         │      REVIEW → _drain_queue()           │
-│      counter = 0               │         │                                        │
-│                                │         │  _drain_queue                          │
-│  inline tool-write resets      │         │    while files: pick oldest            │
-│    memory_manage(create|       │         │      try:                              │
-│      append|replace)           │         │        async with asyncio.timeout(T):  │
-│      → memory ctr = 0          │         │          load_transcript(              │
-│    skill_manage(create|        │         │            sessions/<id>.jsonl,        │
-│      edit|patch)               │         │            max_message_count=N)        │
-│      → skill ctr = 0           │         │          run_standalone(domain_spec)   │
-│                                │         │        move file → done/               │
-│  _drain_and_cleanup (end)      │         │      except Exception:                 │
-│    fire both KICKs             │         │        attempts += 1                   │
-│    unconditionally             │         │        if attempts ≥ MAX:              │
-│                                │         │          move file → failed/           │
-│  bootstrap.maybe_autospawn     │         │        else:                           │
-│    flock dream.lock            │         │          sleep(retry_backoff_s)        │
-│    if not pid_live: Popen(     │         │                                        │
-│      co dream start            │         │                                        │
-│      --origin=repl-autospawn)  │         │                                        │
+│      += 1                      │         │    while not shutdown.is_set():        │
+│    iters_since_skill_review    │         │      if queue not empty:               │
+│      += turn_iteration_count   │         │        _drain_queue()                  │
+│    if ≥ threshold:             │         │        continue   (skip-sleep-busy)    │
+│      _send_review_kick(domain) │         │      await wait_for(                   │
+│      counter = 0               │         │        shutdown.wait(),                │
+│                                │         │        poll_interval_seconds)          │
+│  inline tool-write resets      │         │                                        │
+│    memory_manage(create|       │         │  _drain_queue                          │
+│      append|replace)           │         │    while files: pick oldest            │
+│      → memory ctr = 0          │         │      if shutdown.is_set(): return      │
+│    skill_manage(create|        │         │      try:                              │
+│      edit|patch)               │         │        async with asyncio.timeout(T):  │
+│      → skill ctr = 0           │         │          load_transcript(              │
+│                                │         │            sessions/<id>.jsonl,        │
+│  _drain_and_cleanup (end)      │         │            max_message_count=N)        │
+│    fire both KICKs             │         │          run_standalone(domain_spec)   │
+│    unconditionally             │         │        move file → done/               │
+│                                │         │      except Exception:                 │
+│  bootstrap.maybe_autospawn     │         │        attempts += 1                   │
+│    flock dream.lock            │         │        if attempts ≥ MAX:              │
+│    if not pid_live: Popen(     │         │          move file → failed/           │
+│      co dream start            │         │        else:                           │
+│      --origin=repl-autospawn)  │         │          sleep(retry_backoff_s)        │
 │    frontend.on_status(notice)  │         │                                        │
 └────────────┬───────────────────┘         └──────────────────┬─────────────────────┘
-             │  all coupling is filesystem-mediated            │
+             │  filesystem is the SOLE cross-process bridge    │
              ▼                                                 ▼
 ┌───────────────────────────────────────────────────────────────────────────────────┐
 │                                    $CO_HOME                                        │
 │   daemons/                                                                         │
 │     dream.pid     pid + spawn_origin + spawn_session_id + started_at               │
-│     dream.sock    Unix domain socket                                               │
 │     dream.lock    advisory flock (POSIX-only) — auto-spawn race guard             │
 │     dream/                                                                         │
 │       queue/                                                                       │
@@ -80,7 +79,8 @@ The broader persistent cognition model lives in [memory.md](memory.md). Startup 
 Key properties:
 
 - **No process-state coupling.** REPL never asks "is daemon busy?" Daemon never asks "is REPL busy?".
-- **Filesystem is the only durable channel.** Socket is a best-effort nudge — if it is down, daemon picks up queue files on next start.
+- **Filesystem is the sole cross-process bridge.** Producer (REPL) writes queue files; consumer (daemon) polls the queue directory. No socket, no realtime signaling, no side channels — the daemon discovers work on its next poll iteration.
+- **Daemon control is POSIX-native.** Stop is `SIGTERM` with `SIGKILL` fallback. Status is direct PID-file + queue-directory inspection by the CLI — no daemon round-trip.
 - **Ollama is the only shared external resource.** Daemon copes via timeout + retry + backoff; REPL copes by being interactive.
 - **Two domain counters, two domain specs.** Memory and skill review are fully independent — own counters, own KICKs, own queue items, own agents.
 - **Approval bypass via `build_task_agent`.** Daemon tools are registered with `requires_approval=False`. Dead REPL-side flags (`auto_approve_skill_ops`, `auto_approve_knowledge_ops`) were removed.
@@ -118,9 +118,7 @@ Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, 
 
 **Session-end always-fire** in `_drain_and_cleanup`: both KICKs (memory + skill) fire regardless of counter state at REPL shutdown. This replaces the former in-process `background_review_task` and `_maybe_run_dream_cycle` call.
 
-**`_send_review_kick`** performs two steps:
-1. Atomic-write a KICK JSON file to `$CO_HOME/daemons/dream/queue/<ts>-<uuid>.json` (write to `<name>.tmp` sibling → fsync → `os.replace` into `<name>.json`) so the daemon never observes a torn file.
-2. Best-effort send `REVIEW <domain> <session_id> <persisted_message_count>\n` over `dream.sock`. Socket errors are swallowed — the file is durable.
+**`_send_review_kick`** is fire-and-forget against the filesystem: atomic-write a KICK JSON file to `$CO_HOME/daemons/dream/queue/<ts>-<uuid>.json` (write to `<name>.tmp` sibling → fsync → `os.replace` into `<name>.json`) so the daemon never observes a torn file. The producer never touches the daemon's address space — daemon picks the file up on its next polling iteration (default 5 s).
 
 ### 1.3 KICK File Queue
 
@@ -154,34 +152,44 @@ The daemon's `_queue.py` scanner skips any `*.tmp` files (in-flight REPL writes)
 
 ```text
 co dream start
-  → check PID liveness (DREAM_PID_FILE)
-  → acquire advisory flock on DREAM_LOCK (POSIX-only)
+  → singleton check: read DREAM_PID_FILE
+      if PID is live  → print "daemon already running" → SystemExit(1)
+      if PID is stale → log "overwriting stale PID file" → unlink → proceed
+  → acquire advisory flock on dream.lock (POSIX-only)
   → double_fork_detach: subprocess.Popen(co dream start --foreground, start_new_session=True)
+  → child registers SIGTERM/SIGINT handlers (set shutdown asyncio.Event)
   → child writes DREAM_PID_FILE (pid, origin, session_id, started_at)
-  → child binds DREAM_SOCK
-  → child runs main_loop
-  → on SIGTERM or STOP command: close IPC, unlink pid + sock, exit
+  → child calls create_deps(on_status=logger.info, stack=None)  [headless bootstrap]
+  → child runs main_loop(deps, queue_dir, state, cfg, shutdown)
+  → on shutdown.set(): main_loop exits; finally-block unlinks DREAM_PID_FILE
 
 co dream stop
-  → connect socket, send STOP\n; daemon drains current item and exits
-  → if socket unreachable or --force: SIGTERM fallback
+  → read DREAM_PID_FILE; if missing or PID is dead, clean up and print "not running"
+  → send SIGTERM to PID
+  → poll up to 10s (20 × 0.5s) for process death; on timeout, send SIGKILL
 
-Stale PID cleanup: next start checks kill -0; if dead, proceeds to spawn.
+Stale PID cleanup: every entry point (start / stop / status) probes the recorded PID
+with os.kill(pid, 0). Dead PID → file is treated as stale and removed.
 ```
 
-POSIX-only boundary: `fcntl.flock`, Unix sockets, `start_new_session=True`. Marked with `# POSIX-only` comment block in `_process.py`. No Windows path.
+POSIX-only boundary: `fcntl.flock`, `start_new_session=True`, POSIX signals (`SIGTERM`/`SIGKILL`). Marked in `_process.py` module docstring. No Windows path.
 
 **Worker loop:**
 
-On startup, the daemon drains any queue files that accumulated while it was down (`_initial_drain`). Then it loops on `ipc.receive_one()`:
+The main loop is signal-driven and polling-based — no IPC. On startup the daemon installs SIGTERM/SIGINT handlers (each sets a shared `asyncio.Event`), then runs `_initial_drain` against any queue files that accumulated while it was down. After that:
 
-| Message | Daemon response |
-|---|---|
-| `STATUS` | Reply JSON: `{running, pid, uptime_seconds, queue_depth, current_item, spawn_origin, spawn_session_id}` |
-| `STOP` | Reply `ACK`; exit cleanly |
-| `REVIEW <domain> <session_id> <n>` | Reply `ACK`; call `_drain_queue()` |
+```
+while not shutdown.is_set():
+    if queue not empty:
+        await _drain_queue()
+        continue                                    # skip-sleep-when-busy
+    await asyncio.wait_for(shutdown.wait(),
+                           timeout=poll_interval_seconds)
+```
 
-`REVIEW` is a wake-up nudge — the work data lives in the queue file. The daemon scans the queue dir, not the IPC line, for work.
+The `continue` after a drain rescans immediately — sustained pressure means catch-up at drain speed with no inter-drain idle gaps. When the queue is empty the loop blocks on `wait_for(shutdown.wait(), ...)` and wakes on either the poll interval or the shutdown event being set.
+
+**Clean-shutdown bound.** `_drain_queue` checks `shutdown.is_set()` at the top of each iteration, *between* items. The in-flight item is always allowed to finish (its LLM call + queue-file finalize complete); remaining queue files stay in `queue/` and are picked up by the next startup `_initial_drain`. Worst-case shutdown latency is one reviewer call (~10 s) — inside the 10 s SIGTERM → SIGKILL budget.
 
 **Queue drain loop:**
 
@@ -220,7 +228,7 @@ Two specs in `co_cli/daemons/dream/_reviewer.py`:
 
 Both specs route through `run_standalone(SPEC, child_deps, prompt)` which uses `build_task_agent` with `requires_approval=False`. **Daemon code must never call a REPL-toolset-built agent** — it would block waiting for an approval that no frontend can answer.
 
-`_deps.py` builds a minimal `CoDeps` for the daemon: settings, model, shell backend, memory/session paths. No frontend, no REPL state.
+**Deps bootstrap is shared with the REPL.** `_run_foreground` calls `create_deps(on_status=logger.info, stack=None)` — the same bootstrap path used by `co chat`. The two daemon-specific differences are: status messages route to the daemon log instead of a terminal, and no MCP servers are connected (reviewer tools are all native). All stores (`index_store`, `memory_store`, `session_store`, `skill_index`) are built identically to the REPL.
 
 **Transcript loading:** `load_transcript(path, max_message_count=N)` truncates the JSONL at record index N — consistent view even while REPL appends. Default `max_message_count=None` returns the full list unchanged (existing callers unaffected).
 
@@ -460,16 +468,16 @@ Auto-spawn and daemon existence are visible across four surfaces (mission §"Tru
 | Surface | Description |
 |---|---|
 | **First-spawn notice** | On first auto-spawn of a `CO_HOME`, REPL prints: `[dream] daemon started in background. 'co dream status' to inspect; 'co dream stop' to stop.` |
-| **Welcome banner** | `Dream:` row alongside `Memory:` / `Tools:` / `Dir:`. Three states: `✓ running  queue: N` (accent), `disabled` (dim), `enabled but daemon not running  queue: N (on disk)` (yellow). Reads queue dir + best-effort socket `STATUS` with 200ms timeout — never stalls startup. |
-| **`/dream` slash** | Read-only inspection in the REPL. Queries daemon over socket (500ms timeout); never spawns a process. When daemon is down: prints state + on-disk queue depth + guidance. |
-| **`co dream status`** | Full JSON: `pid`, `uptime_seconds`, `queue_depth`, `current_item`, `attempts_pending`, `failed_count`, `spawn_origin`, `spawn_session_id`. Authoritative source of truth. |
+| **Welcome banner** | `Dream:` row alongside `Memory:` / `Tools:` / `Dir:`. Three states: `✓ running  queue: N` (accent), `disabled` (dim), `enabled but daemon not running  queue: N (on disk)` (yellow). Built from local PID-file + queue-directory reads — instantaneous, never stalls startup. |
+| **`/dream` slash** | Read-only inspection in the REPL. Calls `status_daemon` (file-based; no daemon round-trip). When daemon is down: prints state + on-disk queue depth + guidance. |
+| **`co dream status`** | Full JSON: `running`, `pid`, `uptime_seconds`, `queue_depth`, `failed_count`, `spawn_origin`, `spawn_session_id`. Authoritative source of truth — read directly from PID file + queue directory. |
 
 CLI subcommands (MVP surface):
 
 ```text
 co dream start [--foreground] [--origin=<str>] [--session-id=<str>]
 co dream status
-co dream stop [--force]
+co dream stop
 ```
 
 `tail` and `config` are deferred to Plan 2. For log streaming: `tail -f $CO_HOME/logs/dream/*.log`.
@@ -486,6 +494,7 @@ co dream stop [--force]
 | `dream.review_timeout_seconds` | `CO_DREAM_REVIEW_TIMEOUT_SECONDS` | `120` | Per-review LLM call timeout; `asyncio.timeout` in worker loop |
 | `dream.retry_backoff_seconds` | `CO_DREAM_RETRY_BACKOFF_SECONDS` | `30` | Sleep between retry attempts on timeout or error |
 | `dream.max_retry_attempts` | `CO_DREAM_MAX_RETRY_ATTEMPTS` | `3` | After this many failures, move queue file to `failed/` |
+| `dream.poll_interval_seconds` | `CO_DREAM_POLL_INTERVAL_SECONDS` | `5` | Idle queue-scan interval (range 1–60); only fires when queue is empty |
 
 ### Reviewer trigger settings (`skills.*`)
 
@@ -529,11 +538,10 @@ Internal caps (batch cycle):
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `start_daemon(co_home, *, foreground, origin, session_id)` | `co_cli/daemons/dream/process.py` | Start daemon; no-op if already running |
-| `stop_daemon(co_home, *, force)` | `co_cli/daemons/dream/process.py` | Send STOP over socket; SIGTERM fallback |
-| `status_daemon(co_home, timeout_ms) -> dict` | `co_cli/daemons/dream/process.py` | Return status dict; `running: False` if socket unreachable |
-| `_socket_status(timeout_ms) -> dict \| None` | `co_cli/commands/dream.py` | Shared sync socket helper; returns None on any error |
-| `build_codeps_for_daemon(co_home) -> CoDeps` | `co_cli/daemons/dream/_deps.py` | Minimal deps builder for daemon process |
+| `start_daemon(co_home, *, foreground, origin, session_id)` | `co_cli/daemons/dream/process.py` | Start daemon; live PID → `SystemExit(1)`; stale PID → overwrite |
+| `stop_daemon(co_home, *, force=False)` | `co_cli/daemons/dream/process.py` | SIGTERM, poll 10 s for exit, SIGKILL fallback; cleans stale PID files |
+| `status_daemon(co_home, timeout_ms=2000) -> dict` | `co_cli/daemons/dream/process.py` | File-based status: reads PID file + probes liveness + scans queue directory |
+| `create_deps(*, on_status, stack=None, theme_override=None) -> CoDeps` | `co_cli/bootstrap/core.py` | Shared bootstrap for REPL and daemon; daemon passes `stack=None` to skip MCP |
 | `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Domain reviewer task specs |
 | `process_review(deps, domain, session_id, persisted_message_count)` | `co_cli/daemons/dream/_reviewer.py` | Load transcript + dispatch to domain reviewer |
 | `maybe_autospawn_dream(deps, frontend)` | `co_cli/bootstrap/core.py` | REPL auto-spawn hook |
@@ -574,17 +582,15 @@ Internal caps (batch cycle):
 | File | Purpose |
 |---|---|
 | `co_cli/daemons/dream/__init__.py` | Docstring-only package marker |
-| `co_cli/daemons/dream/_deps.py` | Minimal `CoDeps` builder for daemon process |
-| `co_cli/daemons/dream/_ipc.py` | `DaemonIPC` server + `send_command` client helper |
 | `co_cli/daemons/dream/_queue.py` | Queue file read/write/move helpers |
-| `co_cli/daemons/dream/_loop.py` | Main event loop and queue drain logic |
+| `co_cli/daemons/dream/_loop.py` | Polling main loop and queue drain logic |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
-| `co_cli/daemons/dream/_process.py` | PID file, advisory flock, double-fork detach (POSIX-only) |
+| `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, double-fork detach (POSIX-only) |
 | `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader |
-| `co_cli/daemons/dream/process.py` | Public re-export: `start_daemon`, `stop_daemon`, `status_daemon` |
+| `co_cli/daemons/dream/process.py` | Public surface: `start_daemon`, `stop_daemon`, `status_daemon`, `_run_foreground` |
 | `co_cli/daemons/dream/prompts/memory_review.md` | Memory reviewer instructions |
 | `co_cli/daemons/dream/prompts/skill_review.md` | Skill reviewer instructions |
-| `co_cli/commands/dream.py` | `co dream` CLI group + `handle_dream_slash` + `_socket_status` |
+| `co_cli/commands/dream.py` | `co dream` CLI group + `handle_dream_slash` |
 | `co_cli/config/dream.py` | `DreamSettings` Pydantic model + `DREAM_ENV_MAP` |
 | `co_cli/bootstrap/banner.py` | `build_dream_line` — `Dream:` banner row |
 | `co_cli/bootstrap/core.py` | `maybe_autospawn_dream` — REPL auto-spawn hook |
@@ -615,24 +621,20 @@ Internal caps (batch cycle):
 
 | Property | Test file |
 |---|---|
-| Counter delta correctness; domain-independent KICK firing | `tests/main/test_post_turn_hook.py` |
-| `_send_review_kick` writes file + socket nudge; socket failure non-fatal | `tests/main/test_send_review_kick.py` |
 | `memory_manage` reset — no crossover; `delete` does not reset | `tests/tools/memory/test_manage_resets.py` |
 | `skill_manage` reset — no crossover; `write_file`/`remove_file` do not reset | `tests/tools/system/test_skill_manage_resets.py` |
 | Memory recall updates on `memory_search`; backward-compat load | `tests/tools/memory/test_recall_metrics.py` |
 | Skill recall sidecar `recall_days`; deduplication; backward-compat | `tests/skills/test_usage_recall_days.py` |
-| Queue file write/read/move roundtrip; `.tmp` skip | `tests/daemons/dream/test_queue.py` |
-| Worker drains in chronological order; per-call timeout; attempt counter; `failed/` | `tests/daemons/dream/test_loop.py`, `test_timeout_retry.py` |
-| Daemon process lifecycle: start/stop/PID/SIGTERM/stale-PID cleanup | `tests/daemons/dream/test_process.py` |
-| `process_review` truncates transcript at `persisted_message_count`; domain routing | `tests/daemons/dream/test_reviewer.py` |
+| `.tmp` skip filter and FIFO drain order; `last_error` injection on `failed/` move | `tests/daemons/dream/test_queue.py` |
+| Polling drain: multi-item drain; between-items shutdown bound | `tests/daemons/dream/test_loop.py` |
+| Retry exhaustion → `failed/`; attempt counter persists across restarts | `tests/daemons/dream/test_timeout_retry.py` |
+| `acquire_start_lock` contention; file-based `status_daemon` (no/stale/live PID); `stop_daemon` stale-PID cleanup | `tests/daemons/dream/test_process.py` |
+| Full daemon process lifecycle: start, SIGTERM stop, singleton, stale-PID overwrite | `tests/integration/test_daemon_lifecycle.py` |
 | Session-end always-fires both KICKs; end-to-end KICK → queue file | `tests/integration/test_review_kick_end_to_end.py` |
-| Full daemon lifecycle integration | `tests/integration/test_daemon_lifecycle.py` |
 | Auto-spawn race: exactly one daemon spawns under concurrent REPL bootstraps | `tests/integration/test_auto_spawn_race.py` |
 | First-spawn notice + `co dream status` provenance fields | `tests/integration/test_autospawn_notice.py` |
-| Multi-REPL: N + M KICKs → N + M queue files (no coalescing) | `tests/integration/test_multi_repl_kick.py` |
+| Multi-REPL: N + M KICKs → N + M queue files (no coalescing); UUID-distinct filenames | `tests/integration/test_multi_repl_kick.py` |
 | Crash mid-process → restart re-processes file (idempotent) | `tests/integration/test_daemon_crash_recovery.py` |
-| Banner three states (running / disabled / enabled-but-down); ≤500ms on hung socket | `tests/bootstrap/test_banner_dream_line.py` |
-| `/dream` slash three rendering paths; never spawns process | `tests/commands/test_dream_slash.py` |
 | Per-prompt extraction quality (real model + real stores) | `evals/eval_domain_review.py` |
 
 ### Batch cycle

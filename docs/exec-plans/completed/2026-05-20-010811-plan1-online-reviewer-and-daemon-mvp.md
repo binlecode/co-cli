@@ -20,9 +20,9 @@ This plan ships **both** the reviewer counter/prompt/recall-metric refactor AND 
 
 **Builds on** `docs/exec-plans/completed/2026-05-19-080633-session-review-counter-simplify.md` (already shipped), which dropped the `ToolCallPart` filter from the counter (verified: `_post_turn_hook` at `main.py:289` already bumps by `turn_iteration_count`), renamed `tool_iterations` → `llm_iterations`, and raised the default `review_nudge_interval` from 5 → 10. This plan's two-counter split is the per-tier follow-up the simplify plan flagged as deferred.
 
-**Companion:** `docs/exec-plans/active/2026-05-20-010811-dream-housekeeping.md` (Plan 2) extends this daemon with merge/decay/curator absorption and the 24h scheduled tick.
+**Companion:** `docs/exec-plans/active/2026-05-20-010811-plan2a-dream-housekeeping.md` (Plan 2) extends this daemon with merge/decay/curator absorption and the 24h scheduled tick.
 
-**Predecessor daemon plans withdrawn (2026-05-21).** The earlier SQLite-jobs daemon design (`2026-03-31-171615-24x7-daemon.md` + `2026-04-01-163505-daemon-util-{1,2,3,4}*.md`) was deleted per `feedback_plans_withdrawn_delete`. Util-1 (knowledge compaction) is genuinely superseded by Plan 2 (`2026-05-20-010811-dream-housekeeping.md`). 24x7-daemon + util-2/3/4 (deferred-task, async-poller, heavy-batch) were user-facing job-execution features and are now actively withdrawn — not deferred. The dream daemon is single-purpose (self-improvement reviewer + housekeeping) and does not subsume user-submitted background jobs.
+**Predecessor daemon plans withdrawn (2026-05-21).** The earlier SQLite-jobs daemon design (`2026-03-31-171615-24x7-daemon.md` + `2026-04-01-163505-daemon-util-{1,2,3,4}*.md`) was deleted per `feedback_plans_withdrawn_delete`. Util-1 (knowledge compaction) is genuinely superseded by Plan 2 (`2026-05-20-010811-plan2a-dream-housekeeping.md`). 24x7-daemon + util-2/3/4 (deferred-task, async-poller, heavy-batch) were user-facing job-execution features and are now actively withdrawn — not deferred. The dream daemon is single-purpose (self-improvement reviewer + housekeeping) and does not subsume user-submitted background jobs.
 
 ### Current state — verified against source
 

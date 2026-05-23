@@ -1,25 +1,20 @@
-"""Integration test: auto-spawn race — only one daemon spawns under concurrent attempts.
+"""Integration test: auto-spawn race — lock-hold prevents concurrent spawn.
 
-Tests:
-1. Sequential idempotency: second autospawn call is a no-op when daemon is live.
-2. Lock-hold prevention: when the advisory flock is held, autospawn skips spawn.
-POSIX-only (fcntl.flock, double-fork, Unix sockets).
+POSIX-only (fcntl.flock, double-fork detach, POSIX signals).
 
-Note: fcntl.flock has process-level semantics — two threads in the same process
-share the file-descriptor table and would not contend on the same open FD. Tests
-here use a lock-hold fixture (holds the flock from the same process) to verify
-the BlockingIOError path, and a sequential second-call test to verify PID-live
-idempotency. A full cross-process race is covered by the daemon lifecycle tests.
+fcntl.flock has process-level semantics — two threads in the same process
+share the file-descriptor table and would not contend on the same open FD.
+This test holds the flock from the same process to verify the BlockingIOError
+path. The PID-live singleton-on-start contract is covered by
+tests/integration/test_daemon_lifecycle.py::test_start_daemon_singleton_second_call_exits_nonzero.
 """
 
 from __future__ import annotations
 
 import importlib
 import os
-import signal
 import sys
 import tempfile
-import time
 from collections.abc import Generator
 from pathlib import Path
 
@@ -55,67 +50,6 @@ def _setup_co_home(co_home: Path) -> tuple:
     importlib.reload(core_mod)
     importlib.reload(process_mod)
     return core_mod, process_mod
-
-
-def _read_pid(pid_file: Path) -> int | None:
-    import json
-
-    if not pid_file.exists():
-        return None
-    try:
-        data = json.loads(pid_file.read_text())
-        return int(data["pid"])
-    except (KeyError, ValueError, json.JSONDecodeError, OSError):
-        return None
-
-
-def _is_pid_live(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
-        return False
-
-
-def _wait_for_path(path: Path, *, timeout: float = 10.0, interval: float = 0.1) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.exists():
-            return True
-        time.sleep(interval)
-    return False
-
-
-def test_second_autospawn_is_noop_when_daemon_live() -> None:
-    """Calling start_daemon twice leaves exactly one running process.
-
-    The second call reads the PID file, detects a live process, and returns
-    without spawning. The PID recorded in the PID file is unchanged.
-    """
-    co_home = _short_co_home()
-    core_mod, process_mod = _setup_co_home(co_home)
-
-    pid: int | None = None
-    try:
-        process_mod.start_daemon(co_home, origin="test-run-1", session_id="s1")
-        pid_file = core_mod.DREAM_PID_FILE
-        assert _wait_for_path(pid_file, timeout=10.0), "PID file not created after first spawn"
-
-        pid = _read_pid(pid_file)
-        assert pid is not None, "PID not readable after first spawn"
-        assert _is_pid_live(pid), "daemon not live after first spawn"
-
-        process_mod.start_daemon(co_home, origin="test-run-2", session_id="s2")
-
-        pid_after = _read_pid(pid_file)
-        assert pid_after == pid, "second spawn must not replace the running daemon's PID"
-        assert _is_pid_live(pid), "original daemon must still be live"
-    finally:
-        if pid is not None and _is_pid_live(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (OSError, ProcessLookupError):
-                pass
 
 
 def test_autospawn_skipped_while_lock_held() -> None:

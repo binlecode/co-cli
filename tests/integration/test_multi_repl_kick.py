@@ -73,22 +73,6 @@ def test_different_domains_produce_separate_kick_files(tmp_path: Path) -> None:
     assert domains == {"memory", "skill"}
 
 
-def test_same_domain_twice_produces_two_files(tmp_path: Path) -> None:
-    """Two _send_review_kick calls with the same domain produce two distinct files (no overwrite)."""
-    deps, main_mod = _setup_and_make_deps(tmp_path)
-    _send_review_kick = main_mod._send_review_kick
-
-    _send_review_kick(deps, domain="memory", persisted_message_count=1)
-    _send_review_kick(deps, domain="memory", persisted_message_count=2)
-
-    queue_dir = main_mod.DREAM_QUEUE_DIR
-    kick_files = sorted(queue_dir.glob("*.json"))
-    assert len(kick_files) == 2, f"Expected 2 KICK files for same domain, got {len(kick_files)}"
-
-    counts = {json.loads(f.read_text())["persisted_message_count"] for f in kick_files}
-    assert counts == {1, 2}, "Both kicks must be preserved with their own payload"
-
-
 def test_kick_files_have_unique_names(tmp_path: Path) -> None:
     """Each KICK file has a unique filename (UUID-based) even for rapid successive calls."""
     deps, main_mod = _setup_and_make_deps(tmp_path)

@@ -4,7 +4,7 @@ Verifies that a kick file written to the queue while the daemon is stopped is
 picked up and processed by the daemon on the next start via initial_drain.
 This covers both crash recovery (daemon killed) and clean-restart scenarios.
 
-POSIX-only (double-fork, Unix sockets).
+POSIX-only (double-fork, POSIX signals).
 
 Success path: the kick file has session_id with no matching session file.
 process_review detects transcript_path.exists() == False, logs a warning, and
@@ -133,14 +133,12 @@ def test_queued_kick_processed_after_daemon_restart() -> None:
             env=env,
         )
 
-        sock_path = core_mod.DREAM_SOCK
-        sock_found = _wait_for_path(sock_path, timeout=15.0)
-        assert sock_found, f"daemon socket never appeared at {sock_path}"
-
-        process_mod.stop_daemon(co_home, force=False)
         pid_file = core_mod.DREAM_PID_FILE
+        pid_found = _wait_for_path(pid_file, timeout=15.0)
+        assert pid_found, "PID file never appeared — daemon did not start"
+
+        process_mod.stop_daemon(co_home)
         assert _wait_for_path_gone(pid_file, timeout=10.0), "PID file not removed after stop"
-        assert _wait_for_path_gone(sock_path, timeout=10.0), "socket not removed after stop"
 
         proc_retcode = proc.wait(timeout=5)
         assert proc_retcode is not None
@@ -173,7 +171,7 @@ def test_queued_kick_processed_after_daemon_restart() -> None:
         )
         assert not kick_file.exists(), "original kick file must be gone from queue/"
 
-        process_mod.stop_daemon(co_home, force=False)
+        process_mod.stop_daemon(co_home)
         _wait_for_path_gone(core_mod.DREAM_PID_FILE, timeout=10.0)
         proc_retcode2 = proc2.wait(timeout=5)
         assert proc_retcode2 is not None

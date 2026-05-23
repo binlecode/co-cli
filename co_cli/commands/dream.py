@@ -3,17 +3,11 @@
 from __future__ import annotations
 
 import json
-import socket
 from typing import TYPE_CHECKING
 
 import typer
 
-from co_cli.config.core import (
-    DREAM_QUEUE_DIR,
-    DREAM_QUEUE_FAILED_DIR,
-    DREAM_SOCK,
-    USER_DIR,
-)
+from co_cli.config.core import USER_DIR
 
 if TYPE_CHECKING:
     from co_cli.commands.types import CommandContext
@@ -25,39 +19,14 @@ dream_app = typer.Typer(
 )
 
 
-def _socket_status(timeout_ms: int = 2000) -> dict | None:
-    """Connect to the dream daemon socket and return the parsed STATUS response.
-
-    Returns ``None`` on any error (socket unreachable, timeout, bad JSON).
-    Never raises into the caller.
-    """
-    try:
-        timeout_s = timeout_ms / 1000.0
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(timeout_s)
-            sock.connect(str(DREAM_SOCK))
-            sock.sendall(b"STATUS\n")
-            data = b""
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-                if b"\n" in data:
-                    break
-        line = data.split(b"\n", 1)[0].decode()
-        return json.loads(line)
-    except Exception:
-        return None
-
-
 async def handle_dream_slash(ctx: CommandContext, args: str) -> None:
     """Handle the /dream slash command — read-only daemon inspection."""
+    from co_cli.daemons.dream.process import status_daemon
     from co_cli.display.core import console
 
-    status = _socket_status(timeout_ms=500)
+    status = status_daemon(USER_DIR)
 
-    if isinstance(status, dict):
+    if status.get("running"):
         console.print("[info]Dream daemon:[/info]  [accent]running[/accent]")
         for key, value in status.items():
             console.print(f"  [dim]{key}:[/dim] {value}")
@@ -65,11 +34,7 @@ async def handle_dream_slash(ctx: CommandContext, args: str) -> None:
 
     deps = ctx.deps
     if deps.config.dream.enabled:
-        queue_depth = (
-            len([f for f in DREAM_QUEUE_DIR.glob("*.json") if not f.name.endswith(".tmp")])
-            if DREAM_QUEUE_DIR.exists()
-            else 0
-        )
+        queue_depth = status.get("queue_depth", 0)
         console.print("[info]Dream daemon:[/info]  [yellow]not running[/yellow]")
         console.print(f"  [dim]queue (on disk):[/dim] {queue_depth}")
         console.print("  [dim]hint:[/dim] 'co dream start' to start manually")
@@ -107,61 +72,12 @@ def dream_status() -> None:
     from co_cli.daemons.dream.process import status_daemon
 
     raw = status_daemon(USER_DIR)
-    running = raw.get("running", False)
-
-    if not running:
-        queue_depth = len(list(DREAM_QUEUE_DIR.glob("*.json"))) if DREAM_QUEUE_DIR.exists() else 0
-        failed_count = (
-            len(list(DREAM_QUEUE_FAILED_DIR.glob("*.json")))
-            if DREAM_QUEUE_FAILED_DIR.exists()
-            else 0
-        )
-        typer.echo(
-            json.dumps(
-                {"running": False, "queue_depth": queue_depth, "failed_count": failed_count},
-                indent=2,
-            )
-        )
-        return
-
-    # Daemon is running — enrich with socket status
-    socket_data = _socket_status()
-    if socket_data is None:
-        socket_data = raw
-
-    queue_depth = socket_data.get("queue_depth", 0)
-    failed_count = socket_data.get("failed_count", 0)
-
-    # Count attempts_pending: queue files that have attempts > 0
-    attempts_pending = 0
-    if DREAM_QUEUE_DIR.exists():
-        for queue_file in DREAM_QUEUE_DIR.glob("*.json"):
-            try:
-                payload = json.loads(queue_file.read_text())
-                if payload.get("attempts", 0) > 0:
-                    attempts_pending += 1
-            except (json.JSONDecodeError, OSError):
-                pass
-
-    output = {
-        "running": True,
-        "pid": socket_data.get("pid"),
-        "uptime_seconds": socket_data.get("uptime_seconds"),
-        "queue_depth": queue_depth,
-        "current_item": socket_data.get("current_item"),
-        "attempts_pending": attempts_pending,
-        "failed_count": failed_count,
-        "spawn_origin": socket_data.get("spawn_origin"),
-        "spawn_session_id": socket_data.get("spawn_session_id"),
-    }
-    typer.echo(json.dumps(output, indent=2))
+    typer.echo(json.dumps(raw, indent=2))
 
 
 @dream_app.command("stop")
-def dream_stop(
-    force: bool = typer.Option(False, "--force/--no-force", help="Force-kill via SIGTERM"),
-) -> None:
+def dream_stop() -> None:
     """Stop the dream daemon."""
     from co_cli.daemons.dream.process import stop_daemon
 
-    stop_daemon(USER_DIR, force=force)
+    stop_daemon(USER_DIR)

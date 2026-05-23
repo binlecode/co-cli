@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.8.234]
+
+### Dream daemon decouple + unified bootstrap
+
+- **Filesystem-only IPC** — Unix socket IPC removed (`_ipc.py` deleted). Daemon main loop is now pure polling: drain queue, sleep `poll_interval_seconds` (default 5s, range 1–60), skip-sleep-when-busy. Producer `_send_review_kick` collapses to a single atomic file write — no socket nudge, no best-effort signaling
+- **POSIX-native daemon control** — `co dream stop` sends SIGTERM with 10s SIGKILL fallback (no socket round-trip). `co dream status` reads the PID file + queue directory directly. `co dream start` exits non-zero on a live PID and overwrites stale PID files. Signal handlers register in `_run_foreground` *before* `create_deps` so SIGTERM during bootstrap still terminates cleanly
+- **Unified deps bootstrap** — daemon and REPL now share `create_deps(*, on_status, stack=None, theme_override=None)`. `_deps.py` deleted entirely. Daemon passes `on_status=logger.info, stack=None` to skip MCP; REPL passes `on_status=frontend.on_status, stack=stack`. Fixes a latent bug where the daemon's `CoDeps` was missing `index_store` / `memory_store` / `skill_index` — production reviewer agents would have crashed on the first `memory_search` / `skill_view` call
+- **Spec sync** — `docs/specs/dream.md` rewritten: polling architecture diagram, no-socket key properties, file-based inspectability surfaces, `poll_interval_seconds` config row, `create_deps` public-interface entry
+- **Test cleanup** — clean-tests pass purged 15 redundant unit tests subsumed by integration coverage; 20 behavioral tests remain. Stale singleton-no-op test in `test_auto_spawn_race.py` removed (replaced by SystemExit-on-conflict contract verified by `test_daemon_lifecycle.py`)
+
 ## [0.8.232]
 
 ### Per-skill usage sidecars + backward-compat smell purge

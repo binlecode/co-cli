@@ -37,8 +37,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.config.core import USER_DIR
-from co_cli.daemons.dream._deps import build_codeps_for_daemon
+from co_cli.bootstrap.core import create_deps
 from co_cli.daemons.dream._reviewer import process_review
 from co_cli.session.persistence import append_messages
 
@@ -132,7 +131,7 @@ async def case_dr_a_memory_review_extracts_persona(
     trace_file = run.case_trace_path(case_id)
     trace_file.touch(exist_ok=True)
 
-    deps = build_codeps_for_daemon(USER_DIR)
+    deps = await create_deps(on_status=print, stack=None)
 
     session_path = _build_fixture_session(deps.sessions_dir)
     count_before = _count_memory_items(deps.memory_dir)
@@ -204,7 +203,7 @@ async def case_dr_b_skill_review_no_memory_persona_bleed(
     trace_file = run.case_trace_path(case_id)
     trace_file.touch(exist_ok=True)
 
-    deps = build_codeps_for_daemon(USER_DIR)
+    deps = await create_deps(on_status=print, stack=None)
 
     # Rebuild the fixture session in case DR.A's session file was not found.
     _build_fixture_session(deps.sessions_dir)

@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import socket
 import time
 import uuid
 from contextlib import AsyncExitStack
@@ -34,7 +33,6 @@ from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTransc
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
     DREAM_QUEUE_DIR,
-    DREAM_SOCK,
     LOGS_DIR,
     REASONING_DISPLAY_FULL,
     USER_DIR,
@@ -63,17 +61,15 @@ _SUPPRESS_LOGGERS = ["openai", "httpx", "anthropic", "hpack"]
 
 
 def _send_review_kick(deps: CoDeps, *, domain: str, persisted_message_count: int) -> None:
-    """Write a KICK file to the dream queue and nudge the daemon socket.
+    """Write a kick file to the dream queue.
 
-    Writes JSON atomically to DREAM_QUEUE_DIR/<ts>-<uuid>.json.
-    Then best-effort sends REVIEW <domain> <session_id> <count>\n to dream.sock.
-    All socket errors are swallowed.
+    Fire-and-forget against the filesystem. Daemon picks up the file on its
+    next polling iteration. Producer never touches the daemon's address space.
     """
     session_id = deps.session.session_path.stem
     created_at = datetime.now(UTC).isoformat()
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%S.%f")
-    file_name = f"{ts}-{uuid.uuid4()}.json"
-    kick_path = DREAM_QUEUE_DIR / file_name
+    kick_path = DREAM_QUEUE_DIR / f"{ts}-{uuid.uuid4()}.json"
     payload = {
         "domain": domain,
         "session_id": session_id,
@@ -81,13 +77,6 @@ def _send_review_kick(deps: CoDeps, *, domain: str, persisted_message_count: int
         "created_at": created_at,
     }
     atomic_write_text(kick_path, json.dumps(payload))
-    # Best-effort socket nudge — all errors swallowed
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.connect(str(DREAM_SOCK))
-            sock.sendall(f"REVIEW {domain} {session_id} {persisted_message_count}\n".encode())
-    except Exception:
-        pass
 
 
 def _setup_observability() -> None:
@@ -475,7 +464,11 @@ async def _chat_loop(
     deps: CoDeps | None = None
     try:
         try:
-            deps = await create_deps(frontend, stack, theme_override=theme)
+            deps = await create_deps(
+                on_status=frontend.on_status,
+                stack=stack,
+                theme_override=theme,
+            )
         except ValueError as e:
             console.print(f"[bold red]Startup error:[/bold red] {e}")
             raise SystemExit(1) from e
