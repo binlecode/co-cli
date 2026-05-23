@@ -14,6 +14,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from co_cli.index._circuit import CircuitBreaker
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +42,7 @@ class EmbeddingService:
         self._model = model
         self._embed_fn = embed_fn
         self._conn = conn
+        self._breaker: CircuitBreaker | None = CircuitBreaker() if provider != "none" else None
 
     @property
     def provider(self) -> str:
@@ -63,9 +66,23 @@ class EmbeddingService:
             n = len(blob) // 4
             return list(struct.unpack(f"{n}f", blob))
 
-        embedding = self._embed_fn(text)
+        if self._breaker is not None and self._breaker.is_open():
+            logger.debug("embed circuit breaker open — skipping %s call", self._provider)
+            return None
+
+        try:
+            embedding = self._embed_fn(text)
+        except Exception as e:
+            if self._breaker is not None:
+                self._breaker.on_failure(e)
+            logger.warning("Embedding generation failed (%s): %s", self._provider, e)
+            return None
+
         if embedding is None:
             return None
+
+        if self._breaker is not None:
+            self._breaker.on_success()
 
         blob = struct.pack(f"{len(embedding)}f", *embedding)
         self._conn.execute(

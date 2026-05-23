@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from co_cli.index._circuit import CircuitBreaker
 from co_cli.index._embedding import EmbeddingService
 from co_cli.index.schema import (
     CHUNK_DEDUP_FETCH_MULTIPLIER,
@@ -170,6 +171,9 @@ class RetrievalService:
         self._cross_encoder_url = cross_encoder_url
         self._tei_batch_size = tei_batch_size
         self._reranker_provider = "tei" if cross_encoder_url is not None else "none"
+        self._rerank_breaker: CircuitBreaker | None = (
+            CircuitBreaker() if cross_encoder_url is not None else None
+        )
 
     def search(
         self,
@@ -471,9 +475,17 @@ class RetrievalService:
     ) -> list[SearchResult]:
         if self._reranker_provider == "none" or not candidates:
             return candidates[:limit]
+        if self._rerank_breaker is not None and self._rerank_breaker.is_open():
+            logger.debug("rerank circuit breaker open — skipping TEI call")
+            return candidates[:limit]
         try:
-            return self._tei_rerank(query, candidates, limit)
+            result = self._tei_rerank(query, candidates, limit)
+            if self._rerank_breaker is not None:
+                self._rerank_breaker.on_success()
+            return result
         except Exception as e:
+            if self._rerank_breaker is not None:
+                self._rerank_breaker.on_failure(e)
             logger.warning(f"Reranking failed (tei), using unranked: {e}")
             return candidates[:limit]
 

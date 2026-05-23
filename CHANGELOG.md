@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.8.248]
+
+### Circuit breaker for embed + rerank (task 12.1)
+
+Prevents repeated 30s timeout penalties when the local TEI embed or rerank service is down.
+
+- **`co_cli/index/_circuit.py`** — new `CircuitBreaker`: opens after 3 consecutive failures, exponential cooldown (5s → 10s cap), half-open probe on expiry, resets fully on success
+- **`co_cli/index/_embedding.py`** — `EmbeddingService` owns an embed breaker (skipped for `provider="none"`); `embed()` short-circuits when open, signals success/failure on each real call
+- **`co_cli/index/_providers.py`** — `_embed` closure now propagates exceptions instead of swallowing them; `embed()` is the sole error boundary
+- **`co_cli/index/_retrieval.py`** — `RetrievalService` owns a rerank breaker; `_rerank()` skips the TEI call when open and signals success/failure on each attempt
+- **Tests** — 7 unit tests covering threshold, exponential doubling, cap, half-open, and reset
+
 ## [0.8.246]
 
 ### Dream daemon: absorbs skill lifecycle — merge + decay (plan2b)
