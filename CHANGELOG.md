@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.8.236]
+
+### Memory chunker: structure-aware sentence-split + heading boundaries
+
+- **Sentence-split fallback in `_split_para_into_chunks`** — when a paragraph contains a single line that exceeds `chunk_tokens`, the chunker now splits on `[.!?]\s+(?=[A-Z])` and packs sentences up to budget before falling through to character split. Closes the gap where externally-ingested content (Obsidian notes, Drive docs, wall-of-text web articles) produced mid-sentence / mid-word chunk boundaries
+- **ATX heading as hard section boundary** — `^#{1,6}\s` lines force flush of the current accumulator AND suppress overlap into the heading-starting chunk. Previously a chunk could span the tail of section A + `# Section B` + the head of section B, mixing unrelated topics in one embedding. Strict ATX form only — `#hashtag` / `#1234` (no space) are correctly NOT treated as headings
+- **New `tests/test_memory_chunker.py`** — 8 unit tests covering: short-circuit, sentence-split, char-split fallback, heading boundary + overlap suppression, multi-level headings (`##` / `###`), non-heading hash variants, line-number citation metadata, intra-section overlap correctness
+- **Clean-tests pass on `tests/test_flow_memory_store.py`** — removed 2 schema-only tests (`test_nochunk_produces_one_chunk_per_file`, `test_nochunk_chunk_index_is_zero`) that accessed `index._conn` for shape-only assertions already covered by `test_get_chunk_content_returns_full_body`
+
 ## [0.8.234]
 
 ### Dream daemon decouple + unified bootstrap

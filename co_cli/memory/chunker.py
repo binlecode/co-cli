@@ -4,9 +4,13 @@ Returns the canonical ``Chunk`` write contract directly. ``start_line`` /
 ``end_line`` carry 0-indexed file line numbers.
 """
 
+import re
 from dataclasses import dataclass, field
 
 from co_cli.index.chunk import Chunk
+
+_HEADING_RE = re.compile(r"^#{1,6}\s")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 
 
 @dataclass
@@ -54,8 +58,57 @@ def _emit_chunk(ctx: _ChunkCtx, content: str, start_line: int, end_line: int) ->
         ctx.overlap_prefix = content
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split text on sentence terminators followed by whitespace + capital letter."""
+    parts = _SENTENCE_SPLIT_RE.split(text)
+    return [p for p in (s.strip() for s in parts) if p]
+
+
+def _split_long_line(ctx: _ChunkCtx, abs_line: int, line: str) -> None:
+    """Pack an over-budget single line by sentence, falling back to char-split.
+
+    Greedy: pack sentences up to budget, emit when next sentence would overflow.
+    If a single sentence still exceeds budget (no usable boundary, long URL,
+    code blob), char-split that sentence as final fallback.
+    """
+    chunk_chars = ctx.chunk_tokens * 4
+    sentences = _split_sentences(line)
+    if len(sentences) <= 1:
+        pos = 0
+        while pos < len(line):
+            _emit_chunk(
+                ctx, ctx.overlap_prefix + line[pos : pos + chunk_chars], abs_line, abs_line
+            )
+            pos += chunk_chars
+        return
+
+    buf = ""
+    for sentence in sentences:
+        if len(sentence) > chunk_chars:
+            if buf:
+                _emit_chunk(ctx, ctx.overlap_prefix + buf, abs_line, abs_line)
+                buf = ""
+            pos = 0
+            while pos < len(sentence):
+                _emit_chunk(
+                    ctx, ctx.overlap_prefix + sentence[pos : pos + chunk_chars], abs_line, abs_line
+                )
+                pos += chunk_chars
+            continue
+
+        candidate = f"{buf} {sentence}" if buf else sentence
+        if len(candidate) > chunk_chars and buf:
+            _emit_chunk(ctx, ctx.overlap_prefix + buf, abs_line, abs_line)
+            buf = sentence
+        else:
+            buf = candidate
+
+    if buf:
+        _emit_chunk(ctx, ctx.overlap_prefix + buf, abs_line, abs_line)
+
+
 def _split_para_into_chunks(ctx: _ChunkCtx, para_start: int, para_lines: list[str]) -> None:
-    """Split a paragraph at line boundaries (and char boundaries if needed)."""
+    """Split a paragraph at line, then sentence, then character boundaries."""
     buf_lines: list[str] = []
     buf_start = para_start
     for rel_idx, line in enumerate(para_lines):
@@ -68,11 +121,7 @@ def _split_para_into_chunks(ctx: _ChunkCtx, para_start: int, para_lines: list[st
                 )
                 buf_lines = []
                 buf_start = abs_line
-            step = ctx.chunk_tokens * 4
-            pos = 0
-            while pos < len(line):
-                _emit_chunk(ctx, ctx.overlap_prefix + line[pos : pos + step], abs_line, abs_line)
-                pos += step
+            _split_long_line(ctx, abs_line, line)
             buf_start = abs_line + 1
             continue
         buf_tokens = sum(len(ln) / 4 for ln in buf_lines)
@@ -108,8 +157,10 @@ def chunk_text(
 ) -> list[Chunk]:
     """Split text into overlapping chunks using token estimation (len/4).
 
-    Split priority: paragraph boundaries > line boundaries > character split.
-    Overlap prepends the last `overlap_tokens` tokens of the previous chunk.
+    Split priority: ATX heading (`^#{1,6}\\s`) > paragraph > line > sentence >
+    character. Headings force a hard chunk boundary and suppress overlap into
+    the chunk that starts with the heading. Overlap prepends the last
+    `overlap_tokens` tokens of the previous chunk within a section.
     """
     text = text.replace("\r\n", "\n")
 
@@ -128,6 +179,12 @@ def chunk_text(
     paragraphs = _build_paragraphs(lines)
 
     for para_start, para_lines in paragraphs:
+        is_heading = bool(_HEADING_RE.match(para_lines[0]))
+        if is_heading:
+            if ctx.acc_paragraphs:
+                _flush_acc(ctx)
+            ctx.overlap_prefix = ""
+
         para_text = "\n".join(para_lines)
         para_tokens = len(para_text) / 4
 

@@ -14,11 +14,6 @@ TARS humor is tactical: front-loaded, delivered flat, never announced.
 The setup arrives before the weight. Reverse the sequence and sincerity becomes relief.
 """
 
-_CANON_BODY_2 = """\
-Deference without servility: TARS endorses the structure because the structure earns it.
-Operator owns the override. Unit executes within that boundary — no passive-aggressive drag.
-"""
-
 _FTS5_CONFIG = SETTINGS.memory.model_copy(
     update={
         "search_backend": "fts5",
@@ -59,45 +54,6 @@ def _index_canon_file(index: IndexStore, path: Path, body: str) -> None:
             hash=hashlib.sha256(path.read_text().encode()).hexdigest(),
         )
         tx.index_chunks("canon", str(path), [chunk])
-
-
-def test_nochunk_produces_one_chunk_per_file(tmp_path: Path) -> None:
-    """Canon indexing writes exactly one chunk row per file."""
-    canon_dir = tmp_path / "canon"
-    canon_dir.mkdir()
-    a = canon_dir / "scene-a.md"
-    b = canon_dir / "scene-b.md"
-    _write_canon_file(a, _CANON_BODY)
-    _write_canon_file(b, _CANON_BODY_2)
-
-    index = _make_index(tmp_path)
-    try:
-        _index_canon_file(index, a, _CANON_BODY)
-        _index_canon_file(index, b, _CANON_BODY_2)
-        row = index._conn.execute(
-            "SELECT COUNT(*) AS cnt FROM chunks WHERE source='canon'"
-        ).fetchone()
-        assert row["cnt"] == 2, f"expected 2 chunk rows (one per file), got {row['cnt']}"
-    finally:
-        index.close()
-
-
-def test_nochunk_chunk_index_is_zero(tmp_path: Path) -> None:
-    """Canon indexing assigns chunk_index=0."""
-    canon_dir = tmp_path / "canon"
-    canon_dir.mkdir()
-    a = canon_dir / "scene-a.md"
-    _write_canon_file(a, _CANON_BODY)
-
-    index = _make_index(tmp_path)
-    try:
-        _index_canon_file(index, a, _CANON_BODY)
-        rows = index._conn.execute(
-            "SELECT chunk_index FROM chunks WHERE source='canon'"
-        ).fetchall()
-        assert all(r["chunk_index"] == 0 for r in rows), "all canon chunks must have chunk_index=0"
-    finally:
-        index.close()
 
 
 def test_get_chunk_content_returns_full_body(tmp_path: Path) -> None:
