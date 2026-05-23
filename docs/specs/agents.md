@@ -41,8 +41,7 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
 | `WEB_RESEARCH_SPEC` | `co_cli/tools/agents/delegation.py` | `web_research` tool | `_run_attempt` ×2 in own span (retry-on-empty) |
 | `KNOWLEDGE_ANALYZE_SPEC` | `co_cli/tools/agents/delegation.py` | `knowledge_analyze` tool | `run_in_turn` |
 | `REASON_SPEC` | `co_cli/tools/agents/delegation.py` | `reason` tool | `run_in_turn` |
-| `SESSION_REVIEW_SPEC` | `co_cli/skills/session_review.py` | `_maybe_run_session_review` (post-turn) | `run_standalone` |
-| `CURATOR_SPEC` | `co_cli/skills/curator.py` | `_maybe_run_curator` (post-turn) | `run_standalone` |
+| `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | `process_review` (dream daemon, queue-driven) | `run_standalone` |
 
 **Curation rule.** Specs live with the caller that owns the agent's purpose — delegation specs sit alongside their tool wrappers; daemon specs sit alongside their daemon orchestration. The `co_cli/agent/` package owns lifecycle (build + run) and the orchestrator spec only.
 
@@ -61,7 +60,7 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
 ```
 1. Pick the caller module that owns the agent's purpose:
      delegation tool → co_cli/tools/agents/delegation.py
-     daemon          → co_cli/skills/<domain>.py
+     daemon          → co_cli/daemons/dream/_reviewer.py
 2. Define the spec record next to the caller:
      SPEC = TaskAgentSpec(
        name="my_agent",                # span name + role tag (carried via agent.run metadata)
@@ -152,7 +151,7 @@ otel_span(spec.name, role=spec.name, request_limit=...):
     return result.output, copy(result.usage()), result.run_id
 ```
 
-Daemons differ from in-turn delegation in three ways: (1) **no depth check** — daemons are top-level, never nested inside an orchestrator turn; (2) **no usage merge** — no parent turn exists; (3) **plain exceptions** — `run_standalone` does not consult `spec.error_message`, exceptions propagate to the daemon-specific handler (typically `asyncio.wait_for` timeout + report-on-fail). The caller is responsible for forking deps before invocation (`fork_deps_for_reviewer`, `fork_deps_for_curator`).
+Daemons differ from in-turn delegation in three ways: (1) **no depth check** — daemons are top-level, never nested inside an orchestrator turn; (2) **no usage merge** — no parent turn exists; (3) **plain exceptions** — `run_standalone` does not consult `spec.error_message`, exceptions propagate to the daemon-specific handler (typically `asyncio.wait_for` timeout + report-on-fail). The caller is responsible for forking deps before invocation (`fork_deps_for_reviewer`).
 
 ### `web_research` — single-span retry topology
 
@@ -174,13 +173,10 @@ otel_span("web_research"):                                 # outer span owns bot
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | `retries=` for orchestrator and task agents |
-| `skills.review_enabled` | — | `True` | Gates `SESSION_REVIEW_SPEC` daemon |
-| `skills.curator_enabled` | — | `True` | Gates `CURATOR_SPEC` daemon |
+| `skills.review_enabled` | — | `false` | Gates the dream-daemon reviewer KICK dispatch |
 | `MAX_AGENT_DEPTH` | — | `2` | Hard cap on nesting depth enforced by `run_in_turn`; module constant |
-| `REVIEW_MAX_ITERATIONS` | — | `8` | `SESSION_REVIEW_SPEC.default_budget` |
-| `CURATOR_MAX_ITERATIONS` | — | `100` | `CURATOR_SPEC.default_budget` |
-| `REVIEW_TIMEOUT_SECONDS` | — | configured in `co_cli/config/skills.py` | `asyncio.wait_for` wrapping `run_session_review` |
-| `CURATOR_TIMEOUT_SECONDS` | — | configured in `co_cli/config/skills.py` | `asyncio.wait_for` wrapping `run_curator` |
+| `REVIEW_MAX_ITERATIONS` | — | `8` | `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` `default_budget` |
+| `dream.review_timeout_seconds` | — | `120` | `asyncio.timeout` wrapping each reviewer call inside the daemon worker loop |
 
 ## 4. Public Interface
 
@@ -192,7 +188,7 @@ otel_span("web_research"):                                 # outer span owns bot
 | `TaskAgentSpec` | `co_cli/agent/spec.py` | Frozen dataclass — fields: `name`, `instructions`, `tool_names`, `output_type`, `default_budget`, `error_message`, `include_skill_manifest=False` |
 | `ORCHESTRATOR_SPEC` | `co_cli/agent/orchestrator.py` | Singleton — 5 static-instruction builders, 2 per-turn instructions, 5 history processors |
 | `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`, `REASON_SPEC` | `co_cli/tools/agents/delegation.py` | In-turn task specs; budgets 10 / 8 / 3 |
-| `SESSION_REVIEW_SPEC`, `CURATOR_SPEC` | `co_cli/skills/session_review.py`, `co_cli/skills/curator.py` | Daemon task specs; budgets `REVIEW_MAX_ITERATIONS` / `CURATOR_MAX_ITERATIONS` |
+| `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Dream-daemon task specs; budget `REVIEW_MAX_ITERATIONS` |
 
 ### Builders
 
@@ -222,8 +218,8 @@ otel_span("web_research"):                                 # outer span owns bot
 | `co_cli/agent/core.py` | `build_native_toolset`, `build_mcp_entries`, `assemble_routing_toolset` (toolset helpers; see [tools.md](tools.md)) |
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator; `TOOL_REGISTRY`, `TOOL_REGISTRY_BY_NAME` |
 | `co_cli/tools/agents/delegation.py` | In-turn task specs (`WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`, `REASON_SPEC`) + tool wrappers |
-| `co_cli/skills/session_review.py` | `SESSION_REVIEW_SPEC` + `run_session_review` daemon |
-| `co_cli/skills/curator.py` | `CURATOR_SPEC` + `run_curator` daemon + skill state machinery |
+| `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` + `process_review` dispatcher (dream daemon) |
+| `co_cli/daemons/dream/_housekeeping.py` | `run_housekeeping` + memory/skill merge & decay phases (no agent — direct `llm_call` for cluster merges) |
 
 ## 6. Test Gates
 
@@ -238,9 +234,6 @@ otel_span("web_research"):                                 # outer span owns bot
 | `fork_deps` starts child with fresh `runtime` state | `tests/test_flow_delegation_agent.py` |
 | `run_in_turn` raises `ModelRetry` at `MAX_AGENT_DEPTH` | `tests/test_flow_delegation_agent.py` |
 | Orchestrator serves a real prompt-response turn end-to-end | `tests/test_flow_chat_loop.py::test_plain_text_routes_to_foreground_turn` |
-| `SESSION_REVIEW_SPEC.tool_names` matches the documented set | `tests/test_flow_session_review.py::test_session_reviewer_spec_tool_names` |
-| Session review writes `run.json` and `run.md` reports | `tests/test_flow_session_review.py::test_write_review_report_creates_json_and_md` |
-| Session review instructions include the skill manifest | `tests/test_flow_session_review.py::test_session_review_instructions_include_skills_manifest` |
+| Dream-daemon reviewer process_review dispatch + reviewer specs | `tests/daemons/dream/` (see [dream.md](dream.md) §7) |
 | `refresh_skills` makes pass-B see pass-A's skill writes | `tests/test_flow_review_background.py::test_child_deps_refresh_surfaces_disk_skill_when_parent_registry_stale` |
 | Child-deps skill refresh does not mutate parent registry | `tests/test_flow_review_background.py::test_child_refresh_does_not_mutate_parent_registry` |
-| Post-turn hook spawns the real session-review daemon and writes a report | `tests/test_flow_review_background.py::test_post_turn_hook_fires_real_review_writes_report` |

@@ -268,7 +268,7 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/config/core.py` | Defines `Settings`, layered config loading, and env override mapping |
 | `co_cli/skills/loader.py` | `load_skills` — two-tier skill file loading used during bootstrap and `/skills reload` |
 | `co_cli/commands/core.py` | Slash-command `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` REPL command family (list/check/lint/reload/review/usage/pin/unpin/curator) |
+| `co_cli/commands/skills.py` | `/skills` REPL command family (list/check/lint/reload/usage/pin/unpin) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
 | `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
 | `co_cli/memory/memory_store.py` | Implements the `MemoryStore` used when bootstrap enables indexed retrieval |

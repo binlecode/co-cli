@@ -247,9 +247,10 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 | `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable dream daemon reviewer KICKs at turn-boundary cadence |
 | `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | User-turn count between memory-domain KICK triggers |
 | `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | LLM-iteration count between skill-domain KICK triggers |
-| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill usage counters, timestamps, and recall_days to `.usage.json` |
-| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable curator second-pass (state transitions + consolidation) |
-| `skills.curator_interval_hours` | `CO_SKILLS_CURATOR_INTERVAL_HOURS` | `168` | Minimum hours between curator runs (7 days) |
+| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill usage counters, timestamps, and recall_days sidecars |
+| `skills.recall_protection_days` | `CO_SKILLS_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged skill from dream-daemon decay |
+| `skills.decay_after_days` | `CO_SKILLS_DECAY_AFTER_DAYS` | `90` | Minimum sidecar age before a skill is eligible for dream-daemon decay |
+| `skills.consolidation_similarity_threshold` | `CO_SKILLS_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for dream-daemon skill merge clusters |
 
 ### Dream daemon (`dream.*`)
 

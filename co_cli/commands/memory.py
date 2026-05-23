@@ -222,7 +222,8 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     if hk.last_housekeeping_at:
         last_pass = (
             f"{hk.last_housekeeping_at}"
-            f" (total: {hk.stats.memory_merged} merged, {hk.stats.memory_decayed} archived)"
+            f" (memory: {hk.stats.memory_merged} merged, {hk.stats.memory_decayed} archived; "
+            f"skill: {hk.stats.skill_merged} merged, {hk.stats.skill_decayed} archived)"
         )
     else:
         last_pass = "never"

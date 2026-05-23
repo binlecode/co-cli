@@ -267,7 +267,7 @@ Current default: `dream.enabled = false`. Opt-in via `CO_DREAM_ENABLED=true` or 
 
 ## 2. Clock-Driven Housekeeping
 
-Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay against the full memory corpus. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream run`). It reads the memory item store + recall metrics — never transcripts (that is the reviewer's job).
+Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream run`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies — never transcripts (that is the reviewer's job).
 
 ```mermaid
 flowchart TD
@@ -277,15 +277,19 @@ flowchart TD
     end
 
     subgraph Pass["Housekeeping pass — merge → decay"]
-        Merge["Phase 1: Merge\nsame-kind similar clusters (≥ threshold)\nkind=article excluded\nrecall-aware canonical (highest recall_count)\n→ llm_call() consolidates body\n→ archive originals"]
-        Decay["Phase 2: Decay\naged > decay_after_days\nAND no recall in recall_protection_days\nAND not decay_protected\n→ archive to memory/_archive/"]
-        State["Persist HousekeepingState\n(last_housekeeping_at, memory_merged, memory_decayed)"]
+        MemMerge["Phase 1a: Memory merge\nsame-kind similar clusters (≥ threshold)\nkind=article excluded\nrecall-aware canonical (highest recall_count)\n→ llm_call() consolidates body\n→ archive originals"]
+        SkillMerge["Phase 1b: Skill merge\ntoken-Jaccard clusters of user-skill bodies\npinned skills excluded\ncanonical = max (len(recall_days), use_count)\n→ llm_call() consolidates body\n→ archive non-anchor originals to skills/.archive/"]
+        MemDecay["Phase 2a: Memory decay\naged > decay_after_days\nAND no recall in recall_protection_days\nAND not decay_protected\n→ archive to memory/_archive/"]
+        SkillDecay["Phase 2b: Skill decay\nsidecar age > skills.decay_after_days\nAND no recall in skills.recall_protection_days\nAND not pinned\n→ archive to user_skills_dir/.archive/"]
+        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged/decayed,\n skill_merged/decayed)"]
     end
 
-    Manual --> Merge
-    Auto --> Merge
-    Merge --> Decay
-    Decay --> State
+    Manual --> MemMerge
+    Auto --> MemMerge
+    MemMerge --> SkillMerge
+    SkillMerge --> MemDecay
+    MemDecay --> SkillDecay
+    SkillDecay --> State
 ```
 
 ### 2.1 Entry Points
@@ -333,12 +337,14 @@ Never-run state returns `True` so a freshly-installed daemon does a baseline pas
 | Field | Meaning |
 |---|---|
 | `last_housekeeping_at` | ISO timestamp for the most recent pass (set after timeout too) |
-| `stats.memory_merged` | Cumulative merge clusters completed |
-| `stats.memory_decayed` | Cumulative items archived by decay |
+| `stats.memory_merged` | Cumulative memory-merge clusters completed |
+| `stats.memory_decayed` | Cumulative memory items archived by decay |
+| `stats.skill_merged` | Cumulative skill-merge clusters completed |
+| `stats.skill_decayed` | Cumulative skills archived by decay |
 
-Load is forgiving: missing or corrupt state returns a fresh state object. The schema is additive — the companion skill-lifecycle plan extends `HousekeepingStats` with `skill_*` counters without breaking memory counters.
+Load is forgiving: missing or corrupt state returns a fresh state object. The schema is additive — counters default to `0` so older payloads stay readable.
 
-### 2.3 Phase 1: Merge
+### 2.3 Phase 1a: Memory Merge
 
 Merge reduces duplication by clustering same-kind, non-pinned items above a token-Jaccard threshold and consolidating each cluster into one canonical artifact.
 
@@ -365,7 +371,7 @@ The merge call is a **direct `llm_call`** (no tool access, body text only). Orig
 
 **Article exclusion.** `kind=article` items are external source content. LLM-merging two articles produces synthesized text that mixes two sources, violating RAG integrity. Article redundancy is handled via decay (recall-driven drop) plus agent curation distilling important articles into `kind=note` / `kind=rule` items — those derived items merge normally.
 
-### 2.4 Phase 2: Decay
+### 2.4 Phase 2a: Memory Decay
 
 Decay removes stale, low-use knowledge from active recall while preserving it for restore.
 
@@ -382,11 +388,60 @@ state.stats.memory_decayed += archived
 
 The `recall_protection_days` window is **separate from** `decay_after_days`. Default: an item must be >90 days old AND not recalled within the last 30 days to decay. Items that never recalled (`last_recalled_at is None`) fall straight through to decay once past the age cutoff.
 
-### 2.5 Failure and Timeout Semantics
+### 2.5 Skill Housekeeping Phases
 
-`run_housekeeping` wraps the **merge phase** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Decay is synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping it in the same timeout would let a slow merge starve decay, so decay runs unconditionally after merge regardless of whether merge completed or timed out. On merge timeout, partial merge counters are still persisted, decay still runs, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
+Skill merge and decay run inside the same `run_housekeeping` pass: skill merge follows memory merge under the shared `asyncio.timeout(cfg.max_pass_seconds)` cap; skill decay follows memory decay outside the timeout. Both operate on user-installed skills only — bundled skills under `co_cli/skills/` are upstream-managed and never considered.
 
-### 2.6 User Inspection and Recovery
+**Phase 1b: skill merge.** Recall-informed, cluster-scoped:
+
+```text
+load user_skills_dir/*.md (frontmatter stripped, body retained)
+discard pinned skills (sidecar.pinned == True)
+cluster by token-Jaccard ≥ skills.consolidation_similarity_threshold (body text)
+truncate each cluster to ≤ MAX_CLUSTER_SIZE (5)
+keep ≤ MAX_MERGES_PER_CYCLE (10) clusters
+
+for each cluster:
+  anchor = max(cluster, key=(len(sidecar.recall_days), sidecar.use_count))
+  prompt = render(anchor first, then siblings)
+  body = llm_call(prompt, instructions=skill_merge.md)
+  if len(body) < MERGED_BODY_MIN_CHARS (20): skip
+  rewrite anchor.md with merged body (frontmatter preserved)
+  archive each non-anchor sibling into user_skills_dir/.archive/
+  state.stats.skill_merged += 1
+
+if any clusters merged: refresh_skills(deps)
+```
+
+Cluster-scoped, NOT full-library. The LLM sees at most five similar skills per call, so prompts stay tractable and merge decisions are auditable. Skills without a sidecar (never invoked) score `(0, 0)` and lose the canonical pick to anything tracked.
+
+**Phase 2b: skill decay.** Sync, bounded — same shape as memory decay:
+
+```text
+for each user-skill candidate with a sidecar:
+  skip if sidecar.pinned
+  skip if not sidecar.created_at (no anchor for age)
+  age_days = now - parse(sidecar.created_at)
+  skip if age_days < skills.decay_after_days
+  recall_days = sidecar.recall_days  (list of ISO date strings)
+  if recall_days:
+    last_recall_date = parse(recall_days[-1])
+    skip if (today - last_recall_date).days < skills.recall_protection_days
+  candidate
+sort candidates implicitly (filesystem order); archive up to MAX_DECAY_PER_CYCLE (20)
+state.stats.skill_decayed += archived
+if any archived: refresh_skills(deps)
+```
+
+Skills without a sidecar are never decay candidates — bundled skills don't have one, and an agent-created skill without a sidecar means usage tracking is disabled, so `created_at` and `recall_days` are unknown. Recall age is read from `recall_days[-1]` (the most recent ISO date the skill was invoked), not from a separate `last_recalled` field — the sidecar deliberately does not carry one because cadence (distinct days) is the load-bearing signal, not the most recent moment.
+
+Both phases call `refresh_skills(deps)` after writes so `deps.skill_index` stays in sync with disk.
+
+### 2.6 Failure and Timeout Semantics
+
+`run_housekeeping` wraps the **merge phases** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Decay phases are synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping them in the same timeout would let a slow merge starve decay, so both decay phases run unconditionally after merge regardless of whether merge completed or timed out. On merge timeout, partial merge counters are still persisted, decay still runs, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
+
+### 2.7 User Inspection and Recovery
 
 | Command | Purpose |
 |---|---|
@@ -397,13 +452,15 @@ The `recall_protection_days` window is **separate from** `decay_after_days`. Def
 | `/memory decay-review --dry` | Preview decay candidates |
 | `/memory decay-review` | Archive decay candidates after confirmation |
 
-### 2.7 Observability
+### 2.8 Observability
 
 | Span | Source | Purpose |
 |---|---|---|
 | `co.housekeeping.pass` | `@trace` on `run_housekeeping` | Whole-pass envelope; phase counters and timeout outcome |
-| `co.housekeeping.merge` | `@trace` on `merge_memory` | Merge phase count |
-| `co.housekeeping.decay` | `@trace` on `decay_memory` | Decay phase count |
+| `co.housekeeping.merge` | `@trace` on `merge_memory` | Memory merge phase count |
+| `co.housekeeping.decay` | `@trace` on `decay_memory` | Memory decay phase count |
+| `co.housekeeping.skill_merge` | `@trace` on `merge_skills` | Skill merge phase count |
+| `co.housekeeping.skill_decay` | `@trace` on `decay_skills` | Skill decay phase count |
 
 ---
 
@@ -458,18 +515,26 @@ For log streaming: `tail -f $CO_HOME/logs/dream/*.log`.
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for merge clusters and write-time dedup |
-| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Minimum age before an item is eligible for decay |
-| `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged item from decay |
+| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for memory merge clusters and write-time dedup |
+| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Minimum age before a memory item is eligible for decay |
+| `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged memory item from decay |
 
-Internal caps (housekeeping):
+### Skill housekeeping settings (`skills.*`)
+
+| Setting | Env Var | Default | Description |
+|---|---|---|---|
+| `skills.consolidation_similarity_threshold` | `CO_SKILLS_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for skill merge clusters |
+| `skills.decay_after_days` | `CO_SKILLS_DECAY_AFTER_DAYS` | `90` | Minimum sidecar `created_at` age before a skill is eligible for decay |
+| `skills.recall_protection_days` | `CO_SKILLS_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged skill from decay |
+
+Internal caps (housekeeping — apply to both domains):
 
 | Constant | Value | Purpose |
 |---|---|---|
-| `MAX_CLUSTER_SIZE` | 5 | Cap on items per merge cluster |
-| `MAX_MERGES_PER_CYCLE` | 10 | Cap on clusters merged per pass |
+| `MAX_CLUSTER_SIZE` | 5 | Cap on items/skills per merge cluster |
+| `MAX_MERGES_PER_CYCLE` | 10 | Cap on clusters merged per pass per domain |
 | `MERGED_BODY_MIN_CHARS` | 20 chars | Guard against empty/degenerate merge outputs |
-| `MAX_DECAY_PER_CYCLE` | 20 | Cap on items archived per decay phase |
+| `MAX_DECAY_PER_CYCLE` | 20 | Cap on items/skills archived per decay phase |
 
 ---
 
@@ -502,8 +567,10 @@ Internal caps (housekeeping):
 | Symbol | Source | Contract |
 |---|---|---|
 | `run_housekeeping(deps, cfg, state) -> HousekeepingState` | `co_cli/daemons/dream/_housekeeping.py` | Async — merge under `asyncio.timeout(cfg.max_pass_seconds)`, then decay unconditionally; caller owns the `HousekeepingState` load, this function mutates + persists it |
-| `merge_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of same-kind clusters; articles excluded; returns clusters merged |
-| `decay_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled candidates; returns count archived |
+| `merge_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of same-kind memory clusters; articles excluded; returns clusters merged |
+| `decay_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled memory candidates; returns count archived |
+| `merge_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of user-skill clusters; pinned excluded; rewrites anchor in-place, archives siblings to `user_skills_dir/.archive/`; returns clusters merged |
+| `decay_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled user skills with a sidecar; pinned and sidecar-less skills protected; returns count archived |
 | `scheduled_tick_due(state, cfg) -> bool` | `co_cli/daemons/dream/_loop.py` | Returns True when ≥ `run_interval_hours` since last pass AND past today's `run_at` boundary |
 | `HousekeepingState` / `HousekeepingStats` | `co_cli/daemons/dream/_state.py` | Pydantic models for housekeeping state persistence |
 | `load_housekeeping_state(daemon_dir)` | `co_cli/daemons/dream/_state.py` | Forgiving loader — fresh state on missing/corrupt |
@@ -533,8 +600,9 @@ Internal caps (housekeeping):
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
 | `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, `spawn_detached` (Popen + setsid, POSIX-only) |
 | `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader + `HousekeepingState` / `HousekeepingStats` |
-| `co_cli/daemons/dream/_housekeeping.py` | Memory merge + decay phases; `run_housekeeping`, `merge_memory`, `decay_memory` |
-| `co_cli/daemons/dream/prompts/memory_merge.md` | Same-kind item consolidation prompt |
+| `co_cli/daemons/dream/_housekeeping.py` | Memory + skill merge and decay phases; `run_housekeeping`, `merge_memory`, `decay_memory`, `merge_skills`, `decay_skills` |
+| `co_cli/daemons/dream/prompts/memory_merge.md` | Same-kind memory consolidation prompt |
+| `co_cli/daemons/dream/prompts/skill_merge.md` | Cluster-scoped skill umbrella consolidation prompt |
 | `co_cli/daemons/dream/process.py` | Public surface: `start_daemon`, `stop_daemon`, `status_daemon`, `_run_foreground` |
 | `co_cli/daemons/dream/prompts/memory_review.md` | Memory reviewer instructions |
 | `co_cli/daemons/dream/prompts/skill_review.md` | Skill reviewer instructions |
@@ -557,6 +625,7 @@ Internal caps (housekeeping):
 | `co_cli/session/persistence.py` | `load_transcript` — reviewer-only |
 | `co_cli/commands/memory.py` | `/memory restore`, `/memory decay-review`, `/memory stats` |
 | `co_cli/commands/dream.py` | `co dream run` subcommand — writes the sentinel file |
+| `co_cli/commands/memory.py` | `/memory stats` (now reports both memory + skill housekeeping counters) |
 
 ---
 
@@ -587,10 +656,18 @@ Internal caps (housekeeping):
 | Property | Test file |
 |---|---|
 | Scheduled tick boundaries: never-run, within interval, past interval ± run_at | `tests/daemons/dream/test_housekeeping.py` |
-| Merge canonical pick: highest `recall_count` wins; tiebreaker by recency | `tests/daemons/dream/test_housekeeping.py` |
-| Merge article exclusion: only notes/rules cluster | `tests/daemons/dream/test_housekeeping.py` |
-| Decay candidacy: aged + never-recalled → archive | `tests/daemons/dream/test_housekeeping.py` |
-| Decay recall protection: aged but recalled within `recall_protection_days` → protect | `tests/daemons/dream/test_housekeeping.py` |
-| `decay_protected` pin overrides age + recall | `tests/daemons/dream/test_housekeeping.py` |
+| Memory merge canonical pick: highest `recall_count` wins; tiebreaker by recency | `tests/daemons/dream/test_housekeeping.py` |
+| Memory merge article exclusion: only notes/rules cluster | `tests/daemons/dream/test_housekeeping.py` |
+| Memory decay candidacy: aged + never-recalled → archive | `tests/daemons/dream/test_housekeeping.py` |
+| Memory decay recall protection: aged but recalled within `recall_protection_days` → protect | `tests/daemons/dream/test_housekeeping.py` |
+| Memory `decay_protected` pin overrides age + recall | `tests/daemons/dream/test_housekeeping.py` |
+| Decay phases run after merge timeout (memory + skill) | `tests/daemons/dream/test_housekeeping.py` |
+| Skill canonical pick: highest `(len(recall_days), use_count)` wins | `tests/daemons/dream/test_skill_housekeeping.py` |
+| Skill cluster: similar bodies grouped; pinned excluded | `tests/daemons/dream/test_skill_housekeeping.py` |
+| Skill decay candidacy: aged + never-recalled → archive; recent recall protects; pinned protects; no sidecar → not eligible | `tests/daemons/dream/test_skill_housekeeping.py` |
+| Skill archive move increments counter and lands in `user_skills_dir/.archive/` | `tests/daemons/dream/test_skill_housekeeping.py` |
+| Manifest assembly does NOT mutate sidecar `recall_days` | `tests/daemons/dream/test_skill_housekeeping.py` |
+| `HousekeepingStats` carries skill counters; state JSON round-trips | `tests/daemons/dream/test_skill_housekeeping.py` |
+| Curator modules / `CURATOR_RUNS_DIR` / curator config fields are gone | `tests/daemons/dream/test_skill_housekeeping.py` |
 | `co dream run` errors cleanly when daemon down; no sentinel written | `tests/daemons/dream/test_housekeeping.py` |
-| End-to-end merge against real memory + real LLM | `evals/eval_memory.py` (W3.F), `evals/eval_daily_chat.py` (W1.D) |
+| End-to-end memory merge against real memory + real LLM | `evals/eval_memory.py` (W3.F), `evals/eval_daily_chat.py` (W1.D) |

@@ -261,11 +261,15 @@ def test_run_housekeeping_decay_runs_after_merge_timeout(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(housekeeping_mod, "merge_memory", _merge_timeout)
 
+    from co_cli.config.skills import SkillsSettings
+
     deps = SimpleNamespace(
         memory_dir=memory_dir,
         memory_store=None,
+        user_skills_dir=tmp_path / "user-skills",
         config=SimpleNamespace(
-            memory=MemorySettings(decay_after_days=90, recall_protection_days=30)
+            memory=MemorySettings(decay_after_days=90, recall_protection_days=30),
+            skills=SkillsSettings(),
         ),
     )
     state = HousekeepingState()
@@ -277,6 +281,7 @@ def test_run_housekeeping_decay_runs_after_merge_timeout(tmp_path: Path, monkeyp
     assert result.stats.memory_decayed == 1, "decay must run even when merge times out"
     assert (memory_dir / "_archive").exists(), "archive dir must be created by decay"
     assert result.last_housekeeping_at is not None, "scheduled-tick clock must advance"
+    assert result.stats.skill_decayed == 0, "no user skills present → no skill decay"
 
 
 def test_dream_run_errors_when_daemon_not_running(tmp_path: Path, monkeypatch) -> None:

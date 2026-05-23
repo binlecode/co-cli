@@ -241,8 +241,8 @@ def _resource_lock_store_factory() -> ResourceLockStore:
 
 
 # Maximum parallel tool calls per session. Enforced by CoDeps.tool_dispatch_sem.
-# Forked agents (reviewer, curator) share the parent's semaphore by reference so
-# total session concurrency across all agents is bounded by this single cap.
+# Forked agents (reviewer) share the parent's semaphore by reference so total
+# session concurrency across all agents is bounded by this single cap.
 MAX_TOOL_DISPATCH_WORKERS: int = 10
 
 # Path defaults — all user-global; resolved from USER_DIR constants at runtime
@@ -272,7 +272,7 @@ class CoDeps:
         default_factory=_resource_lock_store_factory, repr=False
     )
     # Dispatch backstop — caps concurrent tool calls to MAX_TOOL_DISPATCH_WORKERS per session.
-    # Shared by reference across fork_deps forks (reviewer, curator) so total session
+    # Shared by reference across fork_deps forks (reviewer) so total session
     # concurrency is bounded by a single cap regardless of how many agents are active.
     tool_dispatch_sem: asyncio.Semaphore = field(
         default_factory=lambda: asyncio.Semaphore(MAX_TOOL_DISPATCH_WORKERS), repr=False
@@ -319,11 +319,6 @@ class CoDeps:
 
 def fork_deps_for_reviewer(parent: CoDeps) -> CoDeps:
     """Fork deps for a domain reviewer agent (memory or skill)."""
-    return fork_deps(parent)
-
-
-def fork_deps_for_curator(parent: CoDeps) -> CoDeps:
-    """Fork deps for the skill_curator consolidation agent."""
     return fork_deps(parent)
 
 

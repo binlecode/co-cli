@@ -158,14 +158,11 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         _cmd_skills_pin(ctx, subargs, pinned=True)
     elif subcmd == "unpin":
         _cmd_skills_pin(ctx, subargs, pinned=False)
-    elif subcmd == "curator":
-        await _cmd_skills_curator(ctx, subargs)
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
         console.print(
             "[dim]Usage: /skills [list|check|lint [<name>|--all]|reload|"
-            "usage [<name>]|pin <name>|unpin <name>|"
-            "curator [status|run|restore <name>]][/dim]"
+            "usage [<name>]|pin <name>|unpin <name>][/dim]"
         )
 
     return None
@@ -248,75 +245,3 @@ def _cmd_skills_pin(ctx: CommandContext, args: str, *, pinned: bool) -> None:
     skill_usage.set_pinned(ctx.deps, name, pinned)
     state = "pinned" if pinned else "unpinned"
     console.print(f"[success]✓ Skill '{name}' {state}.[/success]")
-
-
-async def _cmd_skills_curator(ctx: CommandContext, args: str) -> None:
-    """Curator control surface: status | run | restore <name>."""
-    from datetime import UTC, datetime, timedelta
-
-    from co_cli.skills.curator import (
-        _parse_iso,
-        compute_pending_transitions,
-        read_curator_state,
-        restore_skill,
-        run_curator,
-    )
-
-    sub = args.strip().split(maxsplit=1)
-    action = sub[0].lower() if sub else "status"
-    rest = sub[1] if len(sub) > 1 else ""
-
-    state = read_curator_state(ctx.deps)
-
-    if action in ("", "status"):
-        now = datetime.now(UTC)
-        last_run = state.get("last_run_at") or "never"
-        run_count = state.get("run_count", 0)
-        interval_h = ctx.deps.config.skills.curator_interval_hours
-        last_run_summary = state.get("last_run_summary") or ""
-
-        if state.get("last_run_at"):
-            last_dt = _parse_iso(state["last_run_at"])
-            next_dt = last_dt + timedelta(hours=interval_h)
-            next_str = next_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        else:
-            next_str = "eligible now"
-
-        transitions = compute_pending_transitions(ctx.deps, ctx.deps.config.skills, now)
-        pending = len(transitions)
-
-        table = make_table("Field", "Value")
-        table.add_row("enabled", str(ctx.deps.config.skills.curator_enabled))
-        table.add_row("last_run_at", last_run)
-        table.add_row("run_count", str(run_count))
-        table.add_row("next_eligible_at", next_str)
-        table.add_row("interval_hours", str(interval_h))
-        table.add_row("pending_transitions", str(pending))
-        if last_run_summary:
-            table.add_row("last_summary", last_run_summary)
-        console.print(table)
-
-    elif action == "run":
-        if ctx.deps.model is None:
-            console.print("[bold red]No model configured — cannot run curator.[/bold red]")
-            return
-        console.print("[dim]Running curator…[/dim]")
-        await run_curator(ctx.deps)
-        updated = read_curator_state(ctx.deps)
-        summary = updated.get("last_run_summary") or "(no changes)"
-        console.print(f"[success]✓ Curator done:[/success] {summary}")
-
-    elif action == "restore":
-        name = rest.strip()
-        if not name:
-            console.print("[bold red]Usage:[/bold red] /skills curator restore <name>")
-            return
-        try:
-            restore_skill(ctx.deps, name)
-            console.print(f"[success]✓ Skill '{name}' restored from archive.[/success]")
-        except FileNotFoundError as exc:
-            console.print(f"[bold red]Restore failed:[/bold red] {exc}")
-
-    else:
-        console.print(f"[bold red]Unknown curator subcommand:[/bold red] {action}")
-        console.print("[dim]Usage: /skills curator [status|run|restore <name>][/dim]")

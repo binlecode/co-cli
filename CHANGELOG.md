@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.8.246]
+
+### Dream daemon: absorbs skill lifecycle — merge + decay (plan2b)
+
+Plan2b `skill-lifecycle-absorption`. Folds skill consolidation and decay into `run_housekeeping()` alongside memory; deletes the orphaned curator subsystem.
+
+- **`merge_skills`** — recall-anchored canonical pick, token-Jaccard clustering (threshold configurable), cluster-scoped LLM merge prompt at `daemons/dream/prompts/skill_merge.md`; `MAX_CLUSTER_SIZE=5`, `MAX_MERGES_PER_CYCLE=10`
+- **`decay_skills`** — sidecar-anchored age + recall-window protection; archives via collision-safe rename; `_MAX_DECAY_PER_CYCLE=20`
+- **`run_housekeeping` ordering** — `merge_skills` runs inside `asyncio.timeout(max_pass_seconds)` after `merge_memory`; `decay_skills` runs after `decay_memory` outside the timeout
+- **Skill recall wiring** — `bump_recall` called at both invocation surfaces (slash dispatch and `skill_view` tool); skill manifest emits descriptions only
+- **New config knobs** — `skills.recall_protection_days` (default 30), `skills.decay_after_days` (default 90), `skills.consolidation_similarity_threshold` (default 0.75)
+- **`HousekeepingStats` extended** — `skill_merged`, `skill_decayed` counters; `co knowledge stats` and `_dream_state.json` surface them
+- **Curator deleted** — `co_cli/skills/curator.py`, `curator_prompts.py`, `fork_deps_for_curator`, `CURATOR_RUNS_DIR`, all `curator_enabled`/`curator_interval_hours` config knobs removed
+- **Spec sync** — `dream.md` §2.5 Skill Housekeeping; `skills.md` lifecycle moved to dream; `config.md` new knobs; `01-system.md`, `agents.md`, `bootstrap.md`, `tools.md` curator references purged
+
 ## [0.8.244]
 
 ### Dream daemon: absorbs memory housekeeping (merge + decay)

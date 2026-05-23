@@ -44,6 +44,8 @@ class HousekeepingStats(BaseModel):
 
     memory_merged: int = 0
     memory_decayed: int = 0
+    skill_merged: int = 0
+    skill_decayed: int = 0
 
 
 class HousekeepingState(BaseModel):
@@ -51,8 +53,6 @@ class HousekeepingState(BaseModel):
 
     Distinct from the in-memory DaemonState — survives daemon restarts and
     drives the scheduled-tick cadence (last_housekeeping_at + run_interval_hours).
-    The companion skill-lifecycle plan extends HousekeepingStats with
-    skill counters; new fields are additive and don't break old payloads.
     """
 
     last_housekeeping_at: str | None = None

@@ -154,11 +154,8 @@ main.py — per-turn
 | `/skills lint [<name>\|--all]` | run R1–R4 advisory lint rules; exit 1 on any finding |
 | `/skills reload` | rescan user-global directory and reload into live session |
 | `/skills usage [<name>]` | print the per-skill usage sidecar (table for all; full record for one) |
-| `/skills pin <name>` | pin an agent-created skill — exempt from curator lifecycle transitions |
+| `/skills pin <name>` | pin an agent-created skill — exempt from dream-daemon skill decay/merge |
 | `/skills unpin <name>` | clear the pinned flag |
-| `/skills curator status` | show curator gate state — `enabled`, `last_run_at`, `next_eligible_at`, `interval_hours`, `pending_transitions`, `run_count`, `last_summary` |
-| `/skills curator run` | run the curator immediately (skips the interval gate; still respects `curator_enabled`) |
-| `/skills curator restore <name>` | move an archived skill back from `.archive/` into the active library |
 
 `/skills reload` rescans only the user-global directory. `/skills check` covers both tiers.
 
@@ -250,33 +247,17 @@ skill_reviewer (KICK: domain=skill)
   ├─ scan transcript for skill drift, corrections, and new reusable procedures
   ├─ patch or create skills as appropriate
   └─ does not write memory persona items
-
-skill_curator (runs when curator_enabled and interval elapsed)
-  ├─ Phase 1: apply lifecycle transitions (active → stale → archived)
-  ├─ Phase 2: consolidate prefix-clustered narrow skills into class-level umbrellas
-  └─ Phase 3: write per-run report + persist curator state
 ```
 
 Both reviewer domains are triggered at session end regardless of counter state. KICK files are durable — the daemon picks them up on next start if it was down. Failed reviews (after `max_retry_attempts` timeouts) move to `$CO_HOME/daemons/dream/queue/failed/`.
-
-Output per curator run at `~/.co-cli/curator-runs/<timestamp>-<run_id>/`:
-- `run.json` — structured: `run_id`, `summary`, `skills_merged`, `skills_created`, `skills_updated`, `usage`
-- `run.md` — human-readable summary
 
 The skill reviewer reloads skills from disk before its pass so it sees prior writes within the session.
 
 Curation preference order: update a skill loaded in the current session → update an existing umbrella skill → create a new class-level skill only if nothing applicable exists.
 
-**Curator gate.** The curator pass runs after the session reviewer completes. It is suppressed unless all of the following hold: `skills.curator_enabled=True`, a model is configured (`deps.model is not None`), the curator state is not `paused`, and either `last_run_at` is absent OR the elapsed time since `last_run_at` exceeds `curator_interval_hours` (default 168h = 7 days). Manual `/skills curator run` skips the time gate but still requires a model and respects `curator_enabled`.
+**Dream-daemon skill housekeeping.** The dream daemon also runs scheduled-tick `merge_skills` and `decay_skills` phases against `user_skills_dir` — full mechanics in [dream.md §2.5](dream.md). Skill merge clusters similar user-skill bodies (token-Jaccard ≥ `skills.consolidation_similarity_threshold`), picks the highest-recall canonical, and LLM-merges the cluster into the anchor; siblings move to `user_skills_dir/.archive/`. Skill decay archives user skills whose sidecar `created_at` is older than `skills.decay_after_days` AND whose most recent `recall_days` entry is older than `skills.recall_protection_days` (or whose `recall_days` is empty). Pinned skills (`/skills pin <name>`) and skills without a sidecar are exempt. Restoration from `.archive/` is a manual `mv` for now — there is no slash-command surface.
 
-**Lifecycle states.** Each agent-created skill carries a `state` field in the usage sidecar (`~/.co-cli/skills/.usage.json`):
-- `active` — default; eligible for dispatch and consolidation.
-- `stale` — idle longer than `CURATOR_STALE_AFTER_DAYS` (30 days). Skill remains in `user_skills_dir`; consolidation candidate. Recovers to `active` automatically if used again within the stale threshold.
-- `archived` — was `stale` and idle longer than `CURATOR_ARCHIVE_AFTER_DAYS` (90 days). File moves to `user_skills_dir/.archive/`; excluded from the manifest. Restored manually via `/skills curator restore <name>`.
-
-Pinned skills (`/skills pin <name>`) are exempt from all state transitions.
-
-**Usage sidecar.** `~/.co-cli/skills/.usage.json` tracks per-skill counters (`use_count`, `view_count`, `patch_count`), timestamps (`created_at`, `last_used_at`, `last_viewed_at`, `last_patched_at`), and `recall_days` (list of ISO-date strings recording which days the skill was recalled — deduped, updated by `skill_view` and slash dispatch). Sidecar I/O is best-effort: failures are logged and swallowed so tracking never blocks the underlying tool. Populated only for skills in `user_skills_dir` — bundled skills are excluded.
+**Usage sidecar.** `~/.co-cli/skills/<name>.usage.json` (one file per agent-created skill) tracks per-skill counters (`use_count`, `view_count`, `patch_count`), timestamps (`created_at`, `last_used_at`, `last_viewed_at`, `last_patched_at`), `pinned`, and `recall_days` (list of ISO-date strings recording which days the skill was recalled — deduped, updated by `skill_view` and `/<skill>` slash dispatch). Sidecar I/O is best-effort: failures are logged and swallowed so tracking never blocks the underlying tool. Populated only for skills in `user_skills_dir` — bundled skills are excluded.
 
 ## 3. Config
 
@@ -285,14 +266,11 @@ Pinned skills (`/skills pin <name>`) are exempt from all state transitions.
 | `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable dream daemon reviewer KICKs |
 | `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | User-turn count between memory-domain KICK triggers |
 | `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | LLM-iteration count between skill-domain KICK triggers |
-| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill counters/timestamps/recall_days to `.usage.json` |
-| `skills.curator_enabled` | `CO_SKILLS_CURATOR_ENABLED` | `false` | Enable curator second-pass (state transitions + consolidation) |
-| `skills.curator_interval_hours` | `CO_SKILLS_CURATOR_INTERVAL_HOURS` | `168` | Minimum hours between curator runs (7 days) |
+| `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill counters/timestamps/recall_days sidecars |
+| `skills.recall_protection_days` | `CO_SKILLS_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged skill from dream-daemon decay |
+| `skills.decay_after_days` | `CO_SKILLS_DECAY_AFTER_DAYS` | `90` | Minimum sidecar age before a skill is eligible for dream-daemon decay |
+| `skills.consolidation_similarity_threshold` | `CO_SKILLS_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for skill merge clusters |
 | `REVIEW_MAX_ITERATIONS` | — | `8` | Max LLM request budget per reviewer pass (code constant in `co_cli/config/skills.py`) |
-| `CURATOR_MAX_ITERATIONS` | — | `100` | Max LLM request budget per curator consolidation pass |
-| `CURATOR_TIMEOUT_SECONDS` | — | `600` | Wall-clock timeout for the curator pass |
-| `CURATOR_STALE_AFTER_DAYS` | — | `30` | Idle days before `active → stale` |
-| `CURATOR_ARCHIVE_AFTER_DAYS` | — | `90` | Idle days before `stale → archived` |
 
 ### Paths
 
@@ -300,10 +278,8 @@ Pinned skills (`/skills pin <name>`) are exempt from all state transitions.
 |------|--------|-------------|
 | `deps.skills_dir` | package directory `co_cli/skills/` | bundled skills (lowest priority) |
 | `deps.user_skills_dir` | `~/.co-cli/skills/` | user-global skills (overrides bundled on name collision) |
-| `~/.co-cli/skills/.usage.json` | `co_cli/skills/usage.py` | per-skill usage sidecar (counters, timestamps, state, pinned) |
-| `~/.co-cli/skills/.curator_state.json` | `co_cli/skills/curator.py` | curator run state (`last_run_at`, `run_count`, `paused`) |
-| `~/.co-cli/skills/.archive/` | `co_cli/skills/curator.py` | archived skills moved here; restored via `/skills curator restore` |
-| `~/.co-cli/curator-runs/<timestamp>-<run_id>/` | `co_cli/skills/curator.py` | per-run curator reports (`run.json`, `run.md`) |
+| `~/.co-cli/skills/<name>.usage.json` | `co_cli/skills/usage.py` | per-skill usage sidecar (counters, timestamps, `pinned`, `recall_days`) |
+| `~/.co-cli/skills/.archive/` | `co_cli/daemons/dream/_housekeeping.py` | archived skills moved here by dream-daemon skill merge/decay |
 
 ## 4. Public Interface
 
@@ -359,19 +335,18 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` |
 | `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
-| `co_cli/commands/skills.py` | `/skills` command family (list/check/lint/reload/review/usage/pin/unpin/curator) |
+| `co_cli/commands/skills.py` | `/skills` command family (list/check/lint/reload/usage/pin/unpin) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass |
 | `co_cli/bootstrap/core.py` | `create_deps()` — skill loading at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection; `_post_turn_hook` (two-counter KICK dispatch), `_fire_session_end_kicks` |
-| `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_index`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer`, `fork_deps_for_curator` |
+| `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_index`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer` |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` — both call into `co_cli/skills/usage.py` on success |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review()` — daemon domain reviewers |
 | `co_cli/daemons/dream/prompts/memory_review.md` | memory reviewer instructions |
 | `co_cli/daemons/dream/prompts/skill_review.md` | skill reviewer instructions |
-| `co_cli/skills/curator.py` | `CURATOR_SPEC`, `run_curator()` — pass 2 (state transitions + consolidation + report); state machine (`apply_state_transitions`, `archive_skill`, `restore_skill`, `read_curator_state`, `write_curator_state`) |
 | `co_cli/skills/usage.py` | usage sidecar I/O (`bump_view`, `bump_use`, `bump_patch`, `bump_recall`, `record_create`, `forget`, `set_pinned`) |
-| `co_cli/skills/curator_prompts.py` | curator agent instructions and prompt template |
+| `co_cli/daemons/dream/_housekeeping.py` | `merge_skills` / `decay_skills` — dream-daemon skill housekeeping; see [dream.md §2.5](dream.md) |
 | `co_cli/context/rules/06_skill_protocol.md` | dispatch discipline injected into the static system prompt |
 | `co_cli/skills/` | package-default shipped skills |
 
@@ -414,22 +389,7 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | skill_view returns body inline regardless of size | `tests/test_flow_skills_tools.py` |
 | skill_view resolves plugin-qualified names | `tests/test_flow_skills_tools.py` |
 | skill_view errors on unknown name, hidden skill, or file_path | `tests/test_flow_skills_tools.py` |
-| active → stale transition when idle exceeds stale threshold | `tests/test_flow_skills_curator.py` |
-| stale → active recovery when recently used within threshold | `tests/test_flow_skills_curator.py` |
-| stale → archived transition when idle exceeds archive threshold | `tests/test_flow_skills_curator.py` |
-| pinned skill skips all state transitions | `tests/test_flow_skills_curator.py` |
-| archived skill is skipped by transition scan | `tests/test_flow_skills_curator.py` |
-| fallback to created_at when last_used_at is absent | `tests/test_flow_skills_curator.py` |
-| archive_skill moves file to .archive/; restore_skill reverses it | `tests/test_flow_skills_curator.py` |
-| archive_skill idempotent when already archived | `tests/test_flow_skills_curator.py` |
-| read_curator_state returns defaults when file absent or corrupt | `tests/test_flow_skills_curator.py` |
-| write_curator_state is atomic (write + read roundtrip) | `tests/test_flow_skills_curator.py` |
-| curator gate: passes when never run | `tests/test_flow_skill_curator.py` |
-| curator gate: blocks within interval | `tests/test_flow_skill_curator.py` |
-| curator gate: blocks when paused even if interval elapsed | `tests/test_flow_skill_curator.py` |
-| curator gate: tolerates unparseable last_run_at | `tests/test_flow_skill_curator.py` |
-| run_curator applies Phase 1 state transitions (active → stale) | `tests/test_flow_skill_curator.py` |
-| run_curator writes Phase 3 state even when Phase 2 agent fails | `tests/test_flow_skill_curator.py` |
+| Dream-daemon skill merge/decay coverage | `tests/daemons/dream/test_skill_housekeeping.py` (see [dream.md §7](dream.md)) |
 | usage sidecar read/write roundtrip; returns empty when missing or corrupt | `tests/test_flow_skill_usage.py` |
 | write_records is atomic | `tests/test_flow_skill_usage.py` |
 | is_agent_created: true for user skill, false for bundled or nonexistent | `tests/test_flow_skill_usage.py` |

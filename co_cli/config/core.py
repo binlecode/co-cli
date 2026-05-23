@@ -38,7 +38,6 @@ LOGS_DIR = USER_DIR / "logs"
 MEMORY_DIR = USER_DIR / "memory"
 SESSIONS_DIR = USER_DIR / "sessions"
 TOOL_RESULTS_DIR = USER_DIR / "tool-results"
-CURATOR_RUNS_DIR = USER_DIR / "curator-runs"
 DREAM_DAEMON_DIR = USER_DIR / "daemons" / "dream"
 DREAM_PID_FILE = USER_DIR / "daemons" / "dream.pid"
 DREAM_LOCK = USER_DIR / "daemons" / "dream.lock"
@@ -73,7 +72,6 @@ def _ensure_dirs() -> None:
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    CURATOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _validate_personality(personality: str) -> list[str]:

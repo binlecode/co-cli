@@ -138,7 +138,7 @@ Most tools run concurrently by default (`is_concurrent_safe=True`). Three tools 
 explicitly because they cannot tolerate interleaved invocations: `file_write`, `file_patch`,
 `code_execute`. A per-session semaphore caps total concurrent tool calls at
 `MAX_TOOL_DISPATCH_WORKERS = 10`; the 11th+ call queues until a slot frees. Forked agents
-(reviewer, curator) share the parent's semaphore so the cap is session-wide.
+(reviewer) share the parent's semaphore so the cap is session-wide.
 
 ```
 tool call dispatched

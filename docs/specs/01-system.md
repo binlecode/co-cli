@@ -51,7 +51,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Compaction | [compaction.md](compaction.md) | Spill, proactive summarization, session JSONL rewrite |
 | Memory | [memory.md](memory.md) | Memory tier: item storage, kind taxonomy, two-pass recall, `memory_manage` |
 | Sessions | [sessions.md](sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
-| Dream | [dream.md](dream.md) | Daemon reviewer + clock-driven housekeeping (memory merge, decay, archive) |
+| Dream | [dream.md](dream.md) | Daemon reviewer + clock-driven housekeeping (memory + skill merge, decay, archive) |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
 | Skills | [skills.md](skills.md) | Skill manifest, view/manage surface, dispatch |
 | Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
@@ -185,7 +185,7 @@ Dream runs are idempotent. The trigger is `session_end` by default; `manual` tri
 
 Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest. Slash commands in the REPL dispatch to installed skills via the `skill_index` map on `CoDeps`.
 
-The REPL writes KICK files to `$CO_HOME/daemons/dream/queue/` at threshold-based intervals (configurable per domain: memory and skill). The dream daemon dequeues these and runs the appropriate reviewer agent out-of-process. The **skill curator** (Pass 2, gated by `skills.curator_enabled` and a time interval) applies lifecycle transitions (active → stale → archived) and consolidates narrow skills into class-level umbrellas. Usage counters, lifecycle state, and `recall_days` are persisted in `~/.co-cli/skills/.usage.json`.
+The REPL writes KICK files to `$CO_HOME/daemons/dream/queue/` at threshold-based intervals (configurable per domain: memory and skill). The dream daemon dequeues these and runs the appropriate reviewer agent out-of-process. The same daemon also runs scheduled-tick housekeeping over both the memory store and the user skill library (`merge_skills` + `decay_skills`) — see [dream.md](dream.md) for the full mechanics. Usage counters, `pinned`, and `recall_days` are persisted in per-skill sidecars at `~/.co-cli/skills/<name>.usage.json`.
 
 → [skills.md](skills.md) · [tui.md](tui.md)
 
@@ -258,7 +258,6 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async single-turn entrypoint: assembly → segment stream → approval loop → output checks |
 | `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_index`, excludes `toolset`, increments `agent_depth` |
 | `fork_deps_for_reviewer(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the dream daemon reviewer agent; delegates to `fork_deps` |
-| `fork_deps_for_curator(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the skill-curator agent; delegates to `fork_deps` |
 | `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async slash-command router; returns `LocalOnly`, `ReplaceTranscript`, or `DelegateToAgent` |
 
 

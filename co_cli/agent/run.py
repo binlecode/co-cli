@@ -135,7 +135,7 @@ async def run_standalone(
 
     Args:
         spec: The task agent spec.
-        deps: Already-forked deps (caller did fork_deps_for_reviewer / fork_deps_for_curator).
+        deps: Already-forked deps (caller did fork_deps_for_reviewer).
         prompt: User prompt.
         budget: Request limit override (defaults to spec.default_budget).
         model_settings: Optional override; defaults to deps.model.settings.
