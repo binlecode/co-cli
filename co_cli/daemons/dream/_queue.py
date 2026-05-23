@@ -13,8 +13,15 @@ def read_queue_item(path: Path) -> dict:
 
 
 def write_queue_item(path: Path, payload: dict) -> None:
-    """Write JSON payload to a queue file (plain write, no atomicity needed for in-place updates)."""
-    path.write_text(json.dumps(payload))
+    """Atomically write JSON payload to a queue file.
+
+    Writes to a sibling tmp file then os.replace into place so a crash
+    mid-write never leaves a truncated queue file. list_queue_files skips
+    *.tmp so in-flight writes are invisible to the daemon scanner.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload))
+    os.replace(tmp, path)
 
 
 def list_queue_files(queue_dir: Path) -> list[Path]:
@@ -38,5 +45,5 @@ def move_to_failed(path: Path, failed_dir: Path, last_error: str) -> None:
     except (json.JSONDecodeError, OSError):
         payload = {}
     payload["last_error"] = last_error
-    path.write_text(json.dumps(payload))
+    write_queue_item(path, payload)
     os.replace(path, failed_dir / path.name)

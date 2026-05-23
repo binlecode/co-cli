@@ -121,7 +121,13 @@ async def process_review(
     session_id: str,
     persisted_message_count: int,
 ) -> None:
-    """Load transcript and dispatch to the appropriate domain reviewer."""
+    """Load transcript and dispatch to the appropriate domain reviewer.
+
+    Raises ValueError on unknown domain — corruption in the queue payload that
+    should land the kick in failed/, not done/. Missing transcript is treated
+    as a benign no-op (graceful degrade for the race where REPL deletes the
+    session before the daemon processes its kick).
+    """
     transcript_path = deps.sessions_dir / f"{session_id}.jsonl"
     if not transcript_path.exists():
         logger.warning("review: session file missing %s", session_id)
@@ -132,4 +138,4 @@ async def process_review(
     elif domain == "skill":
         await _run_skill_review(deps, messages)
     else:
-        logger.warning("review: unknown domain %s", domain)
+        raise ValueError(f"unknown review domain: {domain!r}")

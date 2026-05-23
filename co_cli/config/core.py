@@ -45,6 +45,7 @@ DREAM_LOCK = USER_DIR / "daemons" / "dream.lock"
 DREAM_QUEUE_DIR = DREAM_DAEMON_DIR / "queue"
 DREAM_QUEUE_DONE_DIR = DREAM_QUEUE_DIR / "done"
 DREAM_QUEUE_FAILED_DIR = DREAM_QUEUE_DIR / "failed"
+DREAM_LOG_DIR = LOGS_DIR / "dream"
 # Flat defaults (Settings-level, not grouped)
 DEFAULT_THEME = "light"
 DEFAULT_PERSONALITY = "tars"

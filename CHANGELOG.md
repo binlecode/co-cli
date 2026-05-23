@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+## [0.8.239]
+
+### Dream daemon: latent-bug sweep (10 fixes)
+
+- **`process_review` raises on unknown domain** — `_reviewer.py` was silently returning on bad domain payloads, causing the main loop to archive corrupt kicks as `done/`. Now raises `ValueError`, which the loop catches and routes to `failed/`. New regression test `test_main_loop_unknown_domain_lands_in_failed`
+- **`stop_daemon` honors `force=True`** — was accepting the parameter but always SIGTERM-then-SIGKILL. Now SIGKILL directly when force=True (no 10s grace), polls briefly for exit, unlinks PID file
+- **`stop_daemon` always unlinks PID file** — graceful and SIGKILL paths both clean up. SIGKILL bypasses the daemon's own finally cleanup, so stop_daemon is the only path that can guarantee the PID file is gone
+- **Signal handlers install before `write_pid`** — `_run_foreground` order was write_pid → install handlers; SIGTERM in that window left a stale PID file. Now: handlers → write_pid
+- **Daemon file logging wired up** — `_install_daemon_log_handler` attaches a FileHandler to the root logger writing to `$CO_HOME/logs/dream/<ts>.log`. Previously the spec promised this file but Popen used `stderr=DEVNULL` and no handler was configured. Added `DREAM_LOG_DIR` constant
+- **`is_pid_live` returns True on EPERM** — `os.kill(pid, 0)` raising PermissionError means the process exists but is owned by another user; the old broad `except OSError` wrongly reported dead
+- **`status_daemon` drops dead `timeout_ms` parameter** — function does only local FS reads, never had a remote round-trip
+- **`double_fork_detach` → `spawn_detached`** — the name implied the classic POSIX double-fork pattern; reality is single Popen + `start_new_session=True` (setsid). Renamed to match behavior. Callers in `process.py` and `bootstrap/core.py` updated
+- **`write_queue_item` is now atomic** — was bare `path.write_text` for in-place attempt-counter updates; a crash mid-write would truncate the queue file. Now writes to `<name>.json.tmp` and `os.replace`-s into place, matching the REPL's KICK-write pattern
+- **`_process_kick_file` accepts payload as arg** — was re-reading the queue file (already read by main_loop). Avoids one redundant FS syscall per item
+
+Spec sync (`docs/specs/dream.md`): §1.4 lifecycle reflects new spawn/stop semantics + log-file wiring; §5 public-interface table updated with `spawn_detached`, refined `stop_daemon` semantics, dropped `timeout_ms` from `status_daemon`.
+
+## [0.8.240]
+
+### Timestamp fields renamed to `_at` suffix
+
+All persisted timestamp identifiers normalized to `_at` suffix across all stores (zero backward-compat).
+
+**Renamed fields:**
+- `MemoryItem`: `created` → `created_at`, `updated` → `updated_at`, `last_recalled` → `last_recalled_at`
+- Memory YAML frontmatter: `created:` → `created_at:`, `updated:` → `updated_at:`, `last_recalled:` → `last_recalled_at:`
+- Session YAML frontmatter: `created:` → `created_at:`, `updated:` → `updated_at:`
+- IndexStore `docs` SQLite columns: `created` → `created_at`, `updated` → `updated_at`
+- IndexStore `embedding_cache` SQLite column: `created` → `created_at`
+- IndexStore `upsert` / `upsert_skill` / `upsert_canon` kwargs: `created=` → `created_at=`, `updated=` → `updated_at=`
+- `SearchResult` dataclass fields: `created` → `created_at`, `updated` → `updated_at`
+
+**One-time data migration required** — run before starting co after this upgrade:
+
+```bash
+# Memory frontmatter
+find ~/.co-cli/memory -name '*.md' -exec sed -i '' \
+  -e 's/^created: /created_at: /' \
+  -e 's/^updated: /updated_at: /' \
+  -e 's/^last_recalled: /last_recalled_at: /' {} \;
+
+# Session frontmatter
+find ~/.co-cli/sessions -name '*.md' -exec sed -i '' \
+  -e 's/^created: /created_at: /' \
+  -e 's/^updated: /updated_at: /' {} \;
+
+# Search index — drop and let next run rebuild
+rm ~/.co-cli/co-cli-search.db
+```
+
 ## [0.8.238]
 
 ### Dream daemon: flatten two-layer loop + interruptible retry backoff

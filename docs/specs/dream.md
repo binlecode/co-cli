@@ -115,17 +115,24 @@ co dream start
       if PID is live  → print "daemon already running" → SystemExit(1)
       if PID is stale → log "overwriting stale PID file" → unlink → proceed
   → acquire advisory flock on dream.lock (POSIX-only)
-  → double_fork_detach: subprocess.Popen(co dream start --foreground, start_new_session=True)
-  → child registers SIGTERM/SIGINT handlers (set shutdown asyncio.Event)
+  → spawn_detached: subprocess.Popen(co dream start --foreground, start_new_session=True)
+  → child installs SIGTERM/SIGINT handlers (set shutdown asyncio.Event) FIRST
+  → child attaches FileHandler to root logger → $CO_HOME/logs/dream/<ts>.log
   → child writes DREAM_PID_FILE (pid, origin, session_id, started_at)
   → child calls create_deps(on_status=logger.info, stack=None)  [headless bootstrap]
   → child runs main_loop(deps, queue_dir, state, cfg, shutdown)
   → on shutdown.set(): main_loop exits; finally-block unlinks DREAM_PID_FILE
 
-co dream stop
+co dream stop          (default: graceful)
   → read DREAM_PID_FILE; if missing or PID is dead, clean up and print "not running"
   → send SIGTERM to PID
   → poll up to 10s (20 × 0.5s) for process death; on timeout, send SIGKILL
+  → unlink DREAM_PID_FILE (covers both graceful exit and SIGKILL path —
+    SIGKILL bypasses daemon's own finally cleanup)
+
+co dream stop --force  (immediate)
+  → SIGKILL directly, no SIGTERM grace period
+  → poll up to 2s for exit, unlink DREAM_PID_FILE
 
 Stale PID cleanup: every entry point (start / stop / status) probes the recorded PID
 with os.kill(pid, 0). Dead PID → file is treated as stale and removed.
@@ -194,7 +201,7 @@ Recall signals flow back into items at query time, providing data for Plan 2's h
 | Field | Status | Type | Semantics |
 |---|---|---|---|
 | `recall_count: int` | existing | int | Total hit count |
-| `last_recalled: str \| None` | existing | ISO-8601 string | Most recent recall timestamp |
+| `last_recalled_at: str \| None` | existing | ISO-8601 string | Most recent recall timestamp |
 | `recall_days: list[str]` | new | deduped ISO-date strings | Cadence signal; more robust to lost-update than raw count |
 
 Side-effect in `memory_search` after building results, before returning `ToolReturn`:
@@ -203,7 +210,7 @@ Side-effect in `memory_search` after building results, before returning `ToolRet
 for each returned hit:
     item = load_memory_item(path)
     item.recall_count += 1
-    item.last_recalled = now.isoformat()
+    item.last_recalled_at = now.isoformat()
     if today_iso not in item.recall_days:
         item.recall_days.append(today_iso)
     atomic_write_text(path, render_memory_item_file(item))
@@ -370,7 +377,7 @@ Decay removes stale, low-use knowledge from active recall while preserving it fo
 for each active artifact:
   skip if decay_protected
   skip if newer than decay cutoff
-  skip if last_recalled newer than decay cutoff
+  skip if last_recalled_at newer than decay cutoff
 include candidate
 sort oldest first
 archive up to 20 per cycle
@@ -492,8 +499,9 @@ Internal caps (batch cycle):
 | Symbol | Source | Contract |
 |---|---|---|
 | `start_daemon(co_home, *, foreground, origin, session_id)` | `co_cli/daemons/dream/process.py` | Start daemon; live PID → `SystemExit(1)`; stale PID → overwrite |
-| `stop_daemon(co_home, *, force=False)` | `co_cli/daemons/dream/process.py` | SIGTERM, poll 10 s for exit, SIGKILL fallback; cleans stale PID files |
-| `status_daemon(co_home, timeout_ms=2000) -> dict` | `co_cli/daemons/dream/process.py` | File-based status: reads PID file + probes liveness + scans queue directory |
+| `stop_daemon(co_home, *, force=False)` | `co_cli/daemons/dream/process.py` | force=False: SIGTERM, poll 10 s for exit, SIGKILL fallback. force=True: SIGKILL directly. Always unlinks DREAM_PID_FILE. |
+| `status_daemon(co_home) -> dict` | `co_cli/daemons/dream/process.py` | File-based status: reads PID file + probes liveness + scans queue directory |
+| `spawn_detached(cmd, env=None) -> int` | `co_cli/daemons/dream/_process.py` | Popen with start_new_session=True (setsid). Returns child PID. Not a classic POSIX double-fork — setsid alone gives the needed detachment on modern Linux/macOS. |
 | `create_deps(*, on_status, stack=None, theme_override=None) -> CoDeps` | `co_cli/bootstrap/core.py` | Shared bootstrap for REPL and daemon; daemon passes `stack=None` to skip MCP |
 | `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Domain reviewer task specs |
 | `process_review(deps, domain, session_id, persisted_message_count)` | `co_cli/daemons/dream/_reviewer.py` | Load transcript + dispatch to domain reviewer |
@@ -597,7 +605,7 @@ Internal caps (batch cycle):
 | Dream state load/save and forgiving corrupt-state recovery | `tests/memory/test_knowledge_dream.py` |
 | Cycle orchestration: phase ordering, phase isolation, timeout | `tests/memory/test_knowledge_dream_cycle.py` |
 | Dry-run counts, no-write guarantee, state non-persistence | `tests/memory/test_knowledge_dream_cycle.py` |
-| Decay candidate selection: cutoff, `decay_protected`, `last_recalled` | `tests/memory/test_knowledge_decay.py` |
+| Decay candidate selection: cutoff, `decay_protected`, `last_recalled_at` | `tests/memory/test_knowledge_decay.py` |
 | Archive move and filename collision resolution | `tests/memory/test_knowledge_archive.py` |
 | Restore: unambiguous slug succeeds; ambiguous or missing returns False | `tests/memory/test_knowledge_archive.py` |
 | Token-Jaccard similarity and union-find clustering | `tests/memory/test_knowledge_similarity.py` |

@@ -152,6 +152,48 @@ async def test_main_loop_attempt_counter_written_on_penultimate_failure(
 
 
 @pytest.mark.asyncio
+async def test_main_loop_unknown_domain_lands_in_failed(tmp_path: Path) -> None:
+    """A kick with an unknown domain → failed/ (not done/).
+
+    process_review raises ValueError on unknown domain, main_loop catches via
+    `except Exception` and applies retry/fail logic. With max_retry_attempts=1
+    the first failure moves the file straight to failed/ with last_error set.
+    """
+    deps = _make_deps(tmp_path)
+    _write_session_file(deps.sessions_dir, "sess-bad-domain")
+
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    item_path = queue_dir / "2024-01-01T00-00-00.json"
+    write_queue_item(
+        item_path,
+        {
+            "session_id": "sess-bad-domain",
+            "domain": "weather",
+            "persisted_message_count": 0,
+            "attempts": 0,
+        },
+    )
+
+    state = _make_state()
+    cfg = DreamSettings(
+        review_timeout_seconds=30,
+        retry_backoff_seconds=1,
+        max_retry_attempts=1,
+        poll_interval_seconds=1,
+    )
+
+    await _run_until_failed(deps, queue_dir, state, cfg, "2024-01-01T00-00-00.json")
+
+    done_path = queue_dir / "done" / "2024-01-01T00-00-00.json"
+    failed_path = queue_dir / "failed" / "2024-01-01T00-00-00.json"
+    assert not done_path.exists(), "unknown-domain kick must NOT be archived as done"
+    assert failed_path.exists(), "unknown-domain kick must land in failed/"
+    result = read_queue_item(failed_path)
+    assert "unknown review domain" in result.get("last_error", "")
+
+
+@pytest.mark.asyncio
 async def test_main_loop_shutdown_interrupts_retry_backoff(tmp_path: Path) -> None:
     """Shutdown during retry backoff wakes the loop immediately.
 

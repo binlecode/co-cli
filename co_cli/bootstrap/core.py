@@ -233,8 +233,8 @@ def _sync_canon_dir(index_store: IndexStore, canon_dir: Path) -> int:
                     title=title,
                     mtime=file_path.stat().st_mtime,
                     hash=file_hash,
-                    created=frontmatter.get("created"),
-                    updated=frontmatter.get("updated"),
+                    created_at=frontmatter.get("created_at"),
+                    updated_at=frontmatter.get("updated_at"),
                     description=frontmatter.get("description"),
                 )
                 tx.index_chunks("canon", path_str, [chunk])
@@ -444,9 +444,9 @@ def maybe_autospawn_dream(deps: CoDeps, frontend: TerminalFrontend) -> None:
     from co_cli.config.core import DREAM_LOCK, DREAM_PID_FILE
     from co_cli.daemons.dream.process import (
         acquire_start_lock,
-        double_fork_detach,
         is_pid_live,
         read_pid,
+        spawn_detached,
     )
 
     if not deps.config.dream.enabled:
@@ -460,7 +460,7 @@ def maybe_autospawn_dream(deps: CoDeps, frontend: TerminalFrontend) -> None:
             if pid is not None and is_pid_live(pid):
                 return
             session_id = deps.session.session_path.stem
-            double_fork_detach(
+            spawn_detached(
                 [
                     "co",
                     "dream",

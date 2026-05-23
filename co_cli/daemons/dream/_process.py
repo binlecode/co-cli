@@ -16,12 +16,19 @@ from pathlib import Path
 
 
 def is_pid_live(pid: int) -> bool:
-    """Return True if the process with the given PID is running."""
+    """Return True if the process with the given PID is running.
+
+    PermissionError (EPERM) means the process exists but is owned by a user we
+    cannot signal — still alive, so we return True. Only ProcessLookupError
+    (ESRCH) means the process is gone.
+    """
     try:
         os.kill(pid, 0)
         return True
-    except (OSError, ProcessLookupError):
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        return True
 
 
 def read_pid(pid_file: Path) -> int | None:
@@ -63,11 +70,13 @@ def acquire_start_lock(lock_path: Path):
         os.close(fd)
 
 
-def double_fork_detach(cmd: list[str], env: dict | None = None) -> int:
-    """Launch cmd in a fully detached child process via double-fork semantics.
+def spawn_detached(cmd: list[str], env: dict | None = None) -> int:
+    """Launch cmd in a fully detached child process.
 
-    Uses start_new_session=True to create a new process group and session so the
-    child survives the parent exiting. Returns the child PID.
+    Uses start_new_session=True (setsid) so the child gets its own session and
+    survives the parent exiting and any controlling-terminal SIGHUP. Returns
+    the child PID. This is not the classic POSIX double-fork — setsid achieves
+    the same detachment in a single step for modern Linux/macOS.
     """
     proc = subprocess.Popen(
         cmd,

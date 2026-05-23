@@ -52,7 +52,7 @@ async def main_loop(
 
         try:
             async with asyncio.timeout(cfg.review_timeout_seconds):
-                await _process_kick_file(deps, item_path, state)
+                await _process_kick_file(deps, item_path, payload, state)
             move_to_done(item_path, queue_dir / "done")
         except Exception as exc:
             attempts = payload.get("attempts", 0) + 1
@@ -67,9 +67,8 @@ async def main_loop(
     logger.info("Dream daemon shutting down")
 
 
-async def _process_kick_file(deps, path: Path, state: DaemonState) -> None:
-    """Load a queue file and dispatch the review."""
-    payload = read_queue_item(path)
+async def _process_kick_file(deps, path: Path, payload: dict, state: DaemonState) -> None:
+    """Dispatch a review for an already-loaded queue payload."""
     state.current_item = path.name
     try:
         domain = payload["domain"]
