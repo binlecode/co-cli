@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import typer
 
-from co_cli.config.core import USER_DIR
+from co_cli.config.core import DREAM_RUN_TAG, USER_DIR
+from co_cli.fileio.atomic import atomic_write_text
 
 if TYPE_CHECKING:
     from co_cli.commands.types import CommandContext
@@ -87,3 +88,22 @@ def dream_stop(
     from co_cli.daemons.dream.process import stop_daemon
 
     stop_daemon(USER_DIR, force=force)
+
+
+@dream_app.command("run")
+def dream_run() -> None:
+    """Request a one-shot housekeeping pass from the running daemon.
+
+    Writes a sentinel file the daemon picks up on its next polling iteration;
+    worst-case latency is ``dream.poll_interval_seconds``. Errors if the daemon
+    is not running — does NOT spawn an ad-hoc pass.
+    """
+    from co_cli.daemons.dream.process import status_daemon
+
+    status = status_daemon(USER_DIR)
+    if not status.get("running"):
+        typer.echo("dream daemon not running; start with `co dream start`.", err=True)
+        raise typer.Exit(code=1)
+
+    atomic_write_text(DREAM_RUN_TAG, "")
+    typer.echo("Housekeeping requested. Check `co dream status` for results.")

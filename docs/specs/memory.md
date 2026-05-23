@@ -1,6 +1,6 @@
 # Co CLI — Memory
 
-> Peer tier: [sessions.md](sessions.md) (past conversation transcripts). Sibling surfaces: [skills.md](skills.md) (procedural capability). Doctrine (auto-injected into static prompt; never queried as memory): [personality.md](personality.md). Tool registration and approval: [tools.md](tools.md). Dream-cycle mining, merge, decay, archive: [dream.md](dream.md). Prompt assembly: [prompt-assembly.md](prompt-assembly.md). Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md).
+> Peer tier: [sessions.md](sessions.md) (past conversation transcripts). Sibling surfaces: [skills.md](skills.md) (procedural capability). Doctrine (auto-injected into static prompt; never queried as memory): [personality.md](personality.md). Tool registration and approval: [tools.md](tools.md). Daemon reviewer + clock-driven housekeeping (merge, decay, archive): [dream.md](dream.md). Prompt assembly: [prompt-assembly.md](prompt-assembly.md). Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md).
 
 Foundation spec for the memory tier — long-term declarative memory items (user preferences, rules, articles, notes) that the agent accumulates and recalls.
 
@@ -8,7 +8,7 @@ Memory is one of five operational tiers in the agent loop: **doctrine** ([person
 
 ## 1. Functional Architecture
 
-Memory holds long-term declarative memory items: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_manage`), kind-typed (user / rule / article / note), and subject to lifecycle (decay, dream consolidation).
+Memory holds long-term declarative memory items: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_manage`), kind-typed (user / rule / article / note), and subject to lifecycle (decay, daemon housekeeping merge).
 
 Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, bundled skill manifest) is injected once at agent construction. Memory items are loaded on-demand through the recall tool surface, keeping context bounded and recall purposeful.
 
@@ -34,7 +34,7 @@ Canon scenes (`souls/{role}/canon/*.md`) coexist in the same DB under `source='c
 ```
 co_cli/tools/memory/     Agent surface — memory_search, memory_view, memory_manage
         ↓
-co_cli/memory/           Domain — MemoryStore (kinds, decay, dream, two-pass search)
+co_cli/memory/           Domain — MemoryStore (kinds, decay, two-pass search)
         ↓
 co_cli/index/            Infrastructure facade — IndexStore (public) + retrieval, embedding, providers (private)
         ↓
@@ -66,12 +66,10 @@ Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross
 | `memory.tei_rerank_batch_size` | `CO_MEMORY_TEI_RERANK_BATCH_SIZE` | `50` | batch size for TEI rerank HTTP requests |
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory items |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | chunk overlap |
-| `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | dream-cycle consolidation |
-| `memory.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `session_end` | automatic trigger mode: `session_end` or `manual` |
-| `memory.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | number of recent transcript files considered by dream mining |
-| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for dedup and merge clusters |
-| `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | soft corpus-size cap; not directly enforced by the current dream cycle |
-| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | age and last-recall cutoff for decay candidacy |
+| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for write-time dedup and daemon merge clusters |
+| `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | soft corpus-size cap; not directly enforced |
+| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | minimum age before an item is eligible for decay |
+| `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | recent-recall window that protects an aged item from decay |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | lifecycle setting; not currently consumed by recall ranking |
 
 Session chunking settings live alongside memory settings under `config.memory.session_chunk_*` since both tiers share the index infrastructure. See [sessions.md](sessions.md) for session-specific config.
@@ -149,9 +147,8 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 | `co_cli/memory/chunker.py` | `chunk_text` — paragraph-aware chunking |
 | `co_cli/memory/item.py` | `MemoryItem`, `MemoryKindEnum`, `IndexSourceEnum` |
 | `co_cli/memory/frontmatter.py` | YAML frontmatter parse/render |
-| `co_cli/memory/similarity.py` | Jaccard dedup for consolidation |
-| `co_cli/memory/decay.py` | Decay candidate identification |
-| `co_cli/memory/dream.py` | Dream-cycle orchestration |
+| `co_cli/memory/similarity.py` | Jaccard dedup for write-time consolidation and daemon merge |
+| `co_cli/memory/decay.py` | Decay candidate identification (consumed by daemon housekeeping) |
 | `co_cli/memory/archive.py` | Archive / restore memory item files |
 
 ### Tool surface (`co_cli/tools/memory/`)

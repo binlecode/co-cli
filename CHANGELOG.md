@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.8.244]
+
+### Dream daemon: absorbs memory housekeeping (merge + decay)
+
+Plan2a `dream-housekeeping`. Folds memory consolidation into the daemon's scheduled tick — the legacy `run_dream_cycle` orchestrator is retired and the memory-side `dream.py` module is deleted entirely. Housekeeping now runs on a wall-clock cap inside the same polling loop that drains the review queue.
+
+- **Scheduled tick + sentinel-file manual trigger** — `_loop.py` runs `run_housekeeping` when `now ≥ last_housekeeping_at + run_interval_hours` (clamped to `run_at` time-of-day) and when `DREAM_RUN_TAG` sentinel is present. `co dream run` checks daemon liveness then atomic-writes the sentinel; clean error exit when daemon is down
+- **`run_housekeeping(deps, cfg, state)`** — wraps `merge_memory → decay_memory` under `asyncio.timeout(max_pass_seconds)`; persists partial counters on TimeoutError; updates `last_housekeeping_at` on every path
+- **`merge_memory`** — recall-anchored canonical pick (`max(cluster, key=(recall_count, created_at))`), excludes `article` kind, cluster-scoped LLM merge prompt moved to `daemons/dream/prompts/memory_merge.md`
+- **`decay_memory`** — extends `find_decay_candidates` with separate `recall_protection_days` window (skills/memories recalled within the window are protected even if past `decay_after_days`)
+- **Persisted housekeeping state** — new `HousekeepingState` + `HousekeepingStats` pydantic models at `DREAM_DAEMON_DIR/_dream_state.json` (distinct from the in-memory `DaemonState`); `co dream status` and `/memory stats` read from it
+- **Config knob churn** — `dream.run_interval_hours`, `dream.run_at`, `dream.max_pass_seconds` added; `memory.recall_protection_days` added; `memory.consolidation_enabled`, `consolidation_trigger`, `consolidation_lookback_sessions` dropped. Jaccard write-time dedup is now always-on (parameter removed from `save_memory_item`)
+- **Deleted** — `co_cli/memory/dream.py`, `co_cli/memory/_window.py`, `co_cli/memory/prompts/dream_miner.md`, `/memory dream` slash subcommand. Eval imports point at `merge_memory` from `daemons/dream/_housekeeping`
+- **Spec sync** — `dream.md` §2 rewritten; `memory.md`, `config.md`, `observability.md`, `01-system.md` cleaned of consolidation-* knob references and `run_dream_cycle` mentions
+
 ## [0.8.241]
 
 ### Dream daemon: spec sync + banner/CLI follow-up fixes

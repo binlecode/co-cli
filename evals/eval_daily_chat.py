@@ -52,10 +52,10 @@ from pydantic_ai.messages import (
 )
 
 from co_cli.context.orchestrate import run_turn
-from co_cli.memory.dream import run_dream_cycle
+from co_cli.daemons.dream._housekeeping import merge_memory
+from co_cli.daemons.dream._state import HousekeepingState
 from co_cli.memory.frontmatter import render_frontmatter
 from co_cli.memory.item import MemoryKindEnum
-from co_cli.tools.memory.manage import memory_manage
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-daily-chat.md"
@@ -529,12 +529,12 @@ async def _case_w1_d_dream_propagates_to_recall(
         path_a, path_b = _seed_dream_pair(deps.memory_dir)
 
         async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
-            dream_result = await run_dream_cycle(deps, memory_manage, dry_run=False)
+            hk_state = HousekeepingState()
+            merged_count = await merge_memory(deps, hk_state)
 
-        merged_positive = dream_result.merged > 0
+        merged_positive = merged_count > 0
         a_archived = not path_a.exists()
         b_archived = not path_b.exists()
-        # XOR: exactly one original must be archived (the survivor is the merged file).
         one_archived = a_archived != b_archived
 
         active_files = [
@@ -545,11 +545,9 @@ async def _case_w1_d_dream_propagates_to_recall(
         )
 
         reason_parts.append(
-            f"merged={dream_result.merged} archived_a={a_archived} "
+            f"merged={merged_count} archived_a={a_archived} "
             f"archived_b={b_archived} token_in_merged={token_in_merged}"
         )
-        if dream_result.errors:
-            reason_parts.append(f"errors={dream_result.errors!r}")
 
         if not (merged_positive and one_archived):
             duration = time.monotonic() - case_t0

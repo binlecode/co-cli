@@ -184,11 +184,9 @@ user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 | `memory.session_chunk_tokens` | `CO_MEMORY_SESSION_CHUNK_TOKENS` | `400` | Token size per session chunk |
 | `memory.session_chunk_overlap` | `CO_MEMORY_SESSION_CHUNK_OVERLAP` | `80` | Token overlap between session chunks |
 | `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | Max memory items before decay |
-| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Item inactivity days before decay |
-| `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enable periodic item consolidation |
-| `memory.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `"session_end"` | When to consolidate: `session_end` or `manual` |
-| `memory.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Sessions to look back during consolidation |
-| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for consolidation |
+| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Minimum item age before decay eligibility |
+| `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged item from decay |
+| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for write-time dedup and daemon merge |
 
 ### Compaction (`compaction.*`)
 
@@ -261,6 +259,10 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 | `dream.review_timeout_seconds` | `CO_DREAM_REVIEW_TIMEOUT_SECONDS` | `120` | Per-review LLM call timeout; on expiry the worker retries with backoff |
 | `dream.retry_backoff_seconds` | `CO_DREAM_RETRY_BACKOFF_SECONDS` | `30` | Sleep between retry attempts after a timeout |
 | `dream.max_retry_attempts` | `CO_DREAM_MAX_RETRY_ATTEMPTS` | `3` | After this many timeouts, move the KICK file to `queue/failed/` |
+| `dream.poll_interval_seconds` | `CO_DREAM_POLL_INTERVAL_SECONDS` | `5` | Idle queue-scan interval; only fires when queue is empty (range 1–60) |
+| `dream.run_interval_hours` | `CO_DREAM_RUN_INTERVAL_HOURS` | `24` | Minimum hours between housekeeping passes (range 1–720) |
+| `dream.run_at` | `CO_DREAM_RUN_AT` | `"03:00"` | Preferred local time-of-day boundary for the scheduled housekeeping tick |
+| `dream.max_pass_seconds` | `CO_DREAM_MAX_PASS_SECONDS` | `600` | Wall-clock cap on the merge phase of a housekeeping pass (≥ 60); decay runs unconditionally after merge |
 
 ### MCP servers (`mcp_servers.*`)
 

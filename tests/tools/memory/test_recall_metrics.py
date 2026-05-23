@@ -154,8 +154,8 @@ def test_recall_days_deduplicates_same_day(tmp_path: Path) -> None:
 def test_multiple_items_all_updated(tmp_path: Path) -> None:
     """_record_memory_recall updates all paths passed in the list."""
     deps = _make_deps(tmp_path)
-    path_a = _save_item(deps.memory_dir, "Multi A", "Content multi A")
-    path_b = _save_item(deps.memory_dir, "Multi B", "Content multi B")
+    path_a = _save_item(deps.memory_dir, "Multi A", "alpha bravo charlie delta")
+    path_b = _save_item(deps.memory_dir, "Multi B", "echo foxtrot golf hotel")
 
     _record_memory_recall(deps, [path_a, path_b])
 

@@ -174,10 +174,9 @@ One JSON object per closed span, one line per record. Schema version 1:
 | `tool_budget.resolved` | `co` | `budget.context_window_tokens`, `budget.spill_ratio`, `budget.tool_call_limit`, `budget.spill_threshold_chars`, `budget.spill_threshold_tokens` — emitted once at bootstrap by `@trace("tool_budget.resolved")` on `_emit_tool_budget_span()`. |
 | `sync_memory` | `co` | `count`, `backend`, `status` — `@trace("sync_memory")` on `_sync_memory_domain()`. |
 | `restore_session` | `co` | `status` (`restored`/`new`), `session_id` — `@trace("restore_session")` on `restore_session()`. |
-| `co.dream.cycle` | `co` | `dream.dry_run`, `dream.extracted`, `dream.merged`, `dream.decayed`, `dream.errors`, `dream.timed_out` — `@trace("co.dream.cycle")` on `run_dream_cycle()`. |
-| `co.dream.mine` | `co` | mine attributes — `@trace("co.dream.mine")` on `_mine_transcripts()`. |
-| `co.dream.merge.apply` / `co.dream.merge.preview` | `co` | merge attributes — split by dry-run/apply path. |
-| `co.dream.decay.apply` / `co.dream.decay.preview` | `co` | decay attributes — split by dry-run/apply path. |
+| `co.housekeeping.pass` | `co` | whole-pass envelope — `@trace("co.housekeeping.pass")` on `run_housekeeping()`. Wraps merge + decay under `asyncio.timeout(max_pass_seconds)`. |
+| `co.housekeeping.merge` | `co` | merge phase — `@trace("co.housekeeping.merge")` on `merge_memory()`. |
+| `co.housekeeping.decay` | `co` | decay phase — `@trace("co.housekeeping.decay")` on `decay_memory()`. |
 | `co.memory.memory_manage.{create,mutate,delete}` | `co` | `memory.memory_kind`, `memory.filename_stem`, `memory.action` — `@trace(...)` on `_handle_{create,mutate,delete}()`. |
 | `co.web_research.retry_loop` | `co` | `agent.role`, `agent.model`, `agent.request_limit`, `agent.requests_used` — `@trace("co.web_research.retry_loop")` on `web_research()` retry-on-empty wrapper. |
 | `compaction.proactive_check` | `co` | `compaction.msgs`, `compaction.token_count`, `compaction.threshold`, `compaction.budget`, `compaction.fired` (bool), `compaction.skip_reason`, `compaction.tokens_after`, `compaction.savings_pct`, etc. — `@trace("compaction.proactive_check")` on `proactive_window_processor()`. |

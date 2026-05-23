@@ -2,8 +2,8 @@
 
 This spec owns the dream subsystem — co's self-learning path. It covers two coupled layers:
 
-1. **In-session reviewer (daemon layer)** — a per-`CO_HOME` daemon that processes KICK payloads queued by the REPL. It runs domain-specific review agents (memory + skill) against recent session transcripts. Ships as Plan 1 of the dream roadmap.
-2. **Batch maintenance cycle** — mine → merge → decay against the full memory corpus, triggered manually or at session end. Lives in `co_cli/memory/dream.py`. Deferred absorption into the daemon is Plan 2 territory.
+1. **In-session reviewer (daemon layer)** — a per-`CO_HOME` daemon that processes KICK payloads queued by the REPL. It runs domain-specific review agents (memory + skill) against recent session transcripts.
+2. **Clock-driven housekeeping** — merge → decay against the full memory corpus, fired on a 24h scheduled tick inside the same daemon loop, or on demand via `co dream run`. Lives in `co_cli/daemons/dream/_housekeeping.py`. There is no transcript mining outside the reviewer — housekeeping operates only on the durable memory item store + recall metrics.
 
 The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [01-system.md](01-system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for daemon and batch review calls lives in [config.md](config.md).
 
@@ -75,7 +75,7 @@ Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, 
 | `delete`, `write_file`, `remove_file` | no reset |
 | No crossover | memory tool never touches skill counter; skill tool never touches memory counter |
 
-**Session-end always-fire** in `_drain_and_cleanup`: both KICKs (memory + skill) fire regardless of counter state at REPL shutdown. This replaces the former in-process `background_review_task` and `_maybe_run_dream_cycle` call.
+**Session-end always-fire** in `_drain_and_cleanup`: both KICKs (memory + skill) fire regardless of counter state at REPL shutdown.
 
 **`_send_review_kick`** is fire-and-forget against the filesystem: atomic-write a KICK JSON file to `$CO_HOME/daemons/dream/queue/<ts>-<uuid>.json` (write to `<name>.tmp` sibling → fsync → `os.replace` into `<name>.json`) so the daemon never observes a torn file. The producer never touches the daemon's address space — daemon picks the file up on its next polling iteration (default 5 s).
 
@@ -265,159 +265,145 @@ Current default: `dream.enabled = false`. Opt-in via `CO_DREAM_ENABLED=true` or 
 
 ---
 
-## 2. Batch Maintenance Cycle
+## 2. Clock-Driven Housekeeping
 
-The batch cycle (`co_cli/memory/dream.py`) performs mine → merge → decay against the full memory corpus. It runs inside `asyncio.timeout()` and isolates phase failures.
+Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay against the full memory corpus. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream run`). It reads the memory item store + recall metrics — never transcripts (that is the reviewer's job).
 
 ```mermaid
 flowchart TD
     subgraph Entry["Entry Points"]
-        Manual["/memory dream\n(manual trigger)"]
-        Auto["session teardown\n(if consolidation_enabled=true)"]
+        Manual["co dream run\n(writes ~/.co-cli/daemons/dream/run.tag)"]
+        Auto["scheduled tick\n(now ≥ last + run_interval_hours,\nclamped to next run_at)"]
     end
 
-    subgraph Cycle["Dream Cycle — mine → merge → decay"]
-        Mine["Phase 1: Transcript Mining\nrecent unprocessed sessions\n→ memory_manage via miner Agent\n→ new memory/*.md items"]
-        Merge["Phase 2: Merge\nactive same-kind similar clusters\n→ llm_call() for consolidated body\n→ write consolidated item, archive originals"]
-        Decay["Phase 3: Decay\nold, unrecalled, non-protected items\n→ archive to memory/_archive/"]
-        State["Persist DreamState\n(processed_sessions, last_dream_at, cumulative stats)"]
+    subgraph Pass["Housekeeping pass — merge → decay"]
+        Merge["Phase 1: Merge\nsame-kind similar clusters (≥ threshold)\nkind=article excluded\nrecall-aware canonical (highest recall_count)\n→ llm_call() consolidates body\n→ archive originals"]
+        Decay["Phase 2: Decay\naged > decay_after_days\nAND no recall in recall_protection_days\nAND not decay_protected\n→ archive to memory/_archive/"]
+        State["Persist HousekeepingState\n(last_housekeeping_at, memory_merged, memory_decayed)"]
     end
 
-    Manual --> Mine
-    Auto --> Mine
-    Mine --> Merge
+    Manual --> Merge
+    Auto --> Merge
     Merge --> Decay
     Decay --> State
 ```
 
 ### 2.1 Entry Points
 
+Inside the daemon's polling main loop, on every empty-queue iteration (before the idle sleep), two checks fire in order:
+
+```python
+if DREAM_RUN_TAG.exists():
+    DREAM_RUN_TAG.unlink(missing_ok=True)
+    await run_housekeeping(deps, cfg)
+elif scheduled_tick_due(state, cfg):
+    await run_housekeeping(deps, cfg)
+```
+
 Manual trigger:
 
 ```text
-/memory dream
-  → run_dream_cycle(dry_run=false)
-  → print extracted, merged, decayed, and errors
-
-/memory dream --dry
-  → run_dream_cycle(dry_run=true)
-  → report merge and decay counts only
-  → no file writes, no archive, no state persistence
+co dream run
+  → checks daemon liveness via PID file
+  → if daemon down: stderr "dream daemon not running; start with `co dream start`." + exit 1
+  → atomic-write empty sentinel at ~/.co-cli/daemons/dream/run.tag
+  → print "Housekeeping requested. Check `co dream status` for results."
 ```
 
-Automatic trigger:
+Worst-case latency from `co dream run` to housekeeping start is `dream.poll_interval_seconds` (default 5 s). There is no ad-hoc spawn — the daemon must be running.
+
+Scheduled tick:
 
 ```text
-session teardown
-  → if memory.consolidation_enabled is true
-  → if memory.consolidation_trigger is "session_end"
-  → run dream cycle (timeout managed by run_dream_cycle)
-  → log result; never fail shutdown because dreaming failed
+scheduled_tick_due(state, cfg):
+  if state.last_housekeeping_at is None: return True
+  earliest = last + run_interval_hours
+  if now < earliest: return False
+  target = earliest.replace(hour=run_at_hh, minute=run_at_mm)
+  if target < earliest: target += one day
+  return now ≥ target
 ```
 
-Automatic dreaming is behind `memory.consolidation_enabled=false` by default.
+Never-run state returns `True` so a freshly-installed daemon does a baseline pass on its first idle tick.
 
 ### 2.2 State
 
-`DreamState` persists at `memory/_dream_state.json`.
+`HousekeepingState` persists at `~/.co-cli/daemons/dream/_dream_state.json` (distinct from the in-memory `DaemonState` in `_state.py`).
 
 | Field | Meaning |
 |---|---|
-| `last_dream_at` | ISO timestamp for the last completed non-dry run |
-| `processed_sessions` | Transcript filenames already mined or intentionally skipped |
-| `stats.total_cycles` | Count of completed non-dry cycles |
-| `stats.total_extracted` | Cumulative artifacts created by mining |
-| `stats.total_merged` | Cumulative merge clusters completed |
-| `stats.total_decayed` | Cumulative artifacts archived by decay |
+| `last_housekeeping_at` | ISO timestamp for the most recent pass (set after timeout too) |
+| `stats.memory_merged` | Cumulative merge clusters completed |
+| `stats.memory_decayed` | Cumulative items archived by decay |
 
-Load is forgiving: missing or corrupt state returns a fresh state object.
+Load is forgiving: missing or corrupt state returns a fresh state object. The schema is additive — the companion skill-lifecycle plan extends `HousekeepingStats` with `skill_*` counters without breaking memory counters.
 
-### 2.3 Phase 1: Transcript Mining
+### 2.3 Phase 1: Merge
 
-Mining turns raw episodic memory into reusable knowledge by looking across prior sessions for durable cross-turn signals.
+Merge reduces duplication by clustering same-kind, non-pinned items above a token-Jaccard threshold and consolidating each cluster into one canonical artifact.
 
 ```text
-load dream state
-list recent sessions by reverse filename order
-limit to memory.consolidation_lookback_sessions
-for each unprocessed session:
-  load transcript
-  if empty or no extractable window: mark processed
-  build transcript window (wider text/tool caps)
-  split oversized window into overlapping chunks
-  run dream miner agent over each chunk
-  stop after per-session save cap
-  mark session processed
-```
-
-The dream miner is a **tool-using Agent** with `memory_manage`. It is instructed to save only durable artifacts — cross-turn patterns, implicit preferences, stable decisions — and avoid ephemeral state, secrets, and codebase facts derivable by reading the repo.
-
-### 2.4 Phase 2: Merge
-
-Merge reduces duplication by clustering active same-kind items above a token-Jaccard threshold and consolidating each cluster into one artifact.
-
-```text
-load active memory/*.md
-discard decay_protected items
+load active memory items
+discard decay_protected items (pins)
+discard kind=article items (RAG-integrity — articles decay or stay)
 group by memory_kind
-cluster by token-Jaccard threshold
-for each cluster (capped per cycle):
-  llm_call() → consolidated body
-  write consolidated artifact (source_type: consolidated)
-  archive originals (os.replace into memory/_archive/)
+cluster by token-Jaccard ≥ memory.consolidation_similarity_threshold
+truncate each cluster to ≤ MAX_CLUSTER_SIZE (5)
+keep ≤ MAX_MERGES_PER_CYCLE (10) clusters
+
+for each cluster:
+  anchor = max(cluster, key=(recall_count, created_at))   # recall-aware
+  prompt = render(anchor first, then siblings)
+  body = llm_call(prompt, instructions=memory_merge.md)
+  if len(body) < MERGED_BODY_MIN_CHARS (20): skip
+  write consolidated item (source_type=consolidated)
+  archive originals into memory/_archive/
+  state.stats.memory_merged += 1
 ```
 
-The merge call is a **direct `llm_call`** (no tool access, body text only). Original artifacts are archived only after the consolidated artifact is durably written.
+The merge call is a **direct `llm_call`** (no tool access, body text only). Originals are archived only after the consolidated artifact is durably written. The anchor's `recall_count` ties to the canonical body — high-recall items survive merge intact; LLM-driven consolidation pulls in the siblings' distinct facts.
 
-### 2.5 Phase 3: Decay
+**Article exclusion.** `kind=article` items are external source content. LLM-merging two articles produces synthesized text that mixes two sources, violating RAG integrity. Article redundancy is handled via decay (recall-driven drop) plus agent curation distilling important articles into `kind=note` / `kind=rule` items — those derived items merge normally.
+
+### 2.4 Phase 2: Decay
 
 Decay removes stale, low-use knowledge from active recall while preserving it for restore.
 
 ```text
-for each active artifact:
-  skip if decay_protected
-  skip if newer than decay cutoff
-  skip if last_recalled_at newer than decay cutoff
+for each active item:
+  skip if decay_protected (pin)
+  skip if (now - created_at) < memory.decay_after_days
+  skip if last_recalled_at AND (now - last_recalled_at) < memory.recall_protection_days
 include candidate
-sort oldest first
-archive up to 20 per cycle
+sort by created_at ascending (oldest first)
+archive up to MAX_DECAY_PER_CYCLE (20) per pass
+state.stats.memory_decayed += archived
 ```
 
-Cutoff is `now - memory.decay_after_days`.
+The `recall_protection_days` window is **separate from** `decay_after_days`. Default: an item must be >90 days old AND not recalled within the last 30 days to decay. Items that never recalled (`last_recalled_at is None`) fall straight through to decay once past the age cutoff.
 
-### 2.6 Dry Run
+### 2.5 Failure and Timeout Semantics
 
-- Mining is skipped (predicting artifacts requires LLM writes).
-- Merge reports mergeable cluster count (capped to per-cycle limit).
-- Decay reports eligible artifact count (capped to per-cycle archive limit).
-- No files written; no state persisted.
+`run_housekeeping` wraps the **merge phase** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Decay is synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping it in the same timeout would let a slow merge starve decay, so decay runs unconditionally after merge regardless of whether merge completed or timed out. On merge timeout, partial merge counters are still persisted, decay still runs, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
 
-### 2.7 Failure and Timeout Semantics
-
-Each phase is independently try/except'd. On `asyncio.timeout`, `timed_out=True` is set, a timeout error is appended, and partial result counts are returned. Timeout does not roll back completed file writes.
-
-Session shutdown catches all dream errors — dreaming never prevents terminal cleanup.
-
-### 2.8 User Inspection and Recovery
+### 2.6 User Inspection and Recovery
 
 | Command | Purpose |
 |---|---|
-| `/memory dream --dry` | Preview merge and decay counts |
-| `/memory dream` | Run the cycle now |
-| `/memory stats` | Active counts, archive count, last dream timestamp, cumulative stats, decay candidates |
+| `co dream run` | Request a one-shot housekeeping pass from the running daemon |
+| `co dream status` | Daemon state + queue/failed counts (post-pass effects show via `/memory stats`) |
+| `/memory stats` | Active counts, archive count, last housekeeping timestamp + cumulative stats, decay candidates |
 | `/memory restore [slug]` | List archived artifacts or restore one by unambiguous filename prefix |
 | `/memory decay-review --dry` | Preview decay candidates |
 | `/memory decay-review` | Archive decay candidates after confirmation |
 
-### 2.9 Observability
+### 2.7 Observability
 
 | Span | Source | Purpose |
 |---|---|---|
-| `co.dream.cycle` | `@trace` on `run_dream_cycle` | Whole-cycle envelope with dry-run, timeout, count, error |
-| `co.dream.mine` | `@trace` on `_mine_transcripts` | Mining phase count |
-| `invoke_agent _dream_miner_agent` | `ObservabilityCapability` | Each miner agent iteration; `co.agent.role=dream_miner` |
-| `co.dream.merge.preview` / `.apply` | `@trace` | Merge phase count (dry-run vs apply) |
-| `co.dream.decay.preview` / `.apply` | `@trace` | Decay phase count (dry-run vs apply) |
+| `co.housekeeping.pass` | `@trace` on `run_housekeeping` | Whole-pass envelope; phase counters and timeout outcome |
+| `co.housekeeping.merge` | `@trace` on `merge_memory` | Merge phase count |
+| `co.housekeeping.decay` | `@trace` on `decay_memory` | Decay phase count |
 
 ---
 
@@ -432,15 +418,16 @@ Auto-spawn and daemon existence are visible across four surfaces (mission §"Tru
 | **`/dream` slash** | Read-only inspection in the REPL. Calls `status_daemon` (file-based; no daemon round-trip). When daemon is down: prints state + on-disk queue depth + guidance. |
 | **`co dream status`** | Full JSON: `running`, `pid`, `uptime_seconds`, `queue_depth`, `failed_count`, `spawn_origin`, `spawn_session_id`. Authoritative source of truth — read directly from PID file + queue directory. |
 
-CLI subcommands (MVP surface):
+CLI subcommands:
 
 ```text
 co dream start [--foreground] [--origin=<str>] [--session-id=<str>]
 co dream status
 co dream stop [--force]
+co dream run                # request a one-shot housekeeping pass
 ```
 
-`tail` and `config` are deferred to Plan 2. For log streaming: `tail -f $CO_HOME/logs/dream/*.log`.
+For log streaming: `tail -f $CO_HOME/logs/dream/*.log`.
 
 ---
 
@@ -455,6 +442,9 @@ co dream stop [--force]
 | `dream.retry_backoff_seconds` | `CO_DREAM_RETRY_BACKOFF_SECONDS` | `30` | Sleep between retry attempts on timeout or error |
 | `dream.max_retry_attempts` | `CO_DREAM_MAX_RETRY_ATTEMPTS` | `3` | After this many failures, move queue file to `failed/` |
 | `dream.poll_interval_seconds` | `CO_DREAM_POLL_INTERVAL_SECONDS` | `5` | Idle queue-scan interval (range 1–60); only fires when queue is empty |
+| `dream.run_interval_hours` | `CO_DREAM_RUN_INTERVAL_HOURS` | `24` | Minimum hours between housekeeping passes (range 1–720) |
+| `dream.run_at` | `CO_DREAM_RUN_AT` | `"03:00"` | Preferred local time-of-day boundary for the scheduled tick (`HH:MM`) |
+| `dream.max_pass_seconds` | `CO_DREAM_MAX_PASS_SECONDS` | `600` | Wall-clock cap on the merge phase of a housekeeping pass (≥ 60); decay runs unconditionally after merge |
 
 ### Reviewer trigger settings (`skills.*`)
 
@@ -464,31 +454,22 @@ co dream stop [--force]
 | `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | Turns between mid-session memory KICKs |
 | `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | Iterations between mid-session skill KICKs |
 
-### Batch cycle settings (`memory.*`)
+### Housekeeping settings (`memory.*`)
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `memory.consolidation_enabled` | `CO_MEMORY_CONSOLIDATION_ENABLED` | `false` | Enables batch dream cycle at session end |
-| `memory.consolidation_trigger` | `CO_MEMORY_CONSOLIDATION_TRIGGER` | `session_end` | `session_end` or `manual` |
-| `memory.consolidation_lookback_sessions` | `CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS` | `5` | Recent transcript files considered by mining |
-| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for merge clusters |
-| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Age and last-recall cutoff for decay candidacy |
+| `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for merge clusters and write-time dedup |
+| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Minimum age before an item is eligible for decay |
+| `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged item from decay |
 
-Internal caps (batch cycle):
+Internal caps (housekeeping):
 
 | Constant | Value | Purpose |
 |---|---|---|
-| dream window text cap | 50 | Max text lines in a mining window |
-| dream window tool cap | 50 | Max tool lines in a mining window |
-| soft mining window limit | 16000 chars | Threshold before chunking |
-| mining chunk size | 12000 chars | Chunk length for oversized windows |
-| mining chunk overlap | 2000 chars | Overlap between chunks |
-| max mining saves per session | 5 | Per-session artifact cap from mining |
-| max merge clusters per cycle | 10 | Per-cycle merge cap |
-| max artifacts per merge cluster | 5 | Cluster size cap |
-| minimum merged body length | 20 chars | Guard against empty merge outputs |
-| max decay archives per cycle | 20 | Per-cycle decay archive cap |
-| default cycle timeout | 60 seconds | `run_dream_cycle()` timeout |
+| `MAX_CLUSTER_SIZE` | 5 | Cap on items per merge cluster |
+| `MAX_MERGES_PER_CYCLE` | 10 | Cap on clusters merged per pass |
+| `MERGED_BODY_MIN_CHARS` | 20 chars | Guard against empty/degenerate merge outputs |
+| `MAX_DECAY_PER_CYCLE` | 20 | Cap on items archived per decay phase |
 
 ---
 
@@ -516,23 +497,27 @@ Internal caps (batch cycle):
 | `bump_recall(deps, name)` | `co_cli/skills/usage.py` | Append today's ISO date to `recall_days` in sidecar (deduped, best-effort) |
 | `MemoryItem.recall_days` | `co_cli/memory/item.py` | `list[str]` — deduped ISO-date strings; lazy-default `[]` on load |
 
-### Batch cycle
+### Housekeeping
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `run_dream_cycle(deps, miner_tool, dry_run, *, timeout_secs) -> DreamResult` | `co_cli/memory/dream.py` | Async — mine → merge → decay under `asyncio.timeout` |
-| `DreamResult` | `co_cli/memory/dream.py` | Frozen dataclass — `extracted`, `merged`, `decayed`, `errors`, `timed_out` |
-| `DreamState` / `DreamStats` | `co_cli/memory/dream.py` | Pydantic models for state persistence |
-| `load_dream_state(memory_dir)` | `co_cli/memory/dream.py` | Forgiving loader — fresh state on missing/corrupt |
-| `save_dream_state(memory_dir, state)` | `co_cli/memory/dream.py` | Writes `_dream_state.json` |
+| `run_housekeeping(deps, cfg, state) -> HousekeepingState` | `co_cli/daemons/dream/_housekeeping.py` | Async — merge under `asyncio.timeout(cfg.max_pass_seconds)`, then decay unconditionally; caller owns the `HousekeepingState` load, this function mutates + persists it |
+| `merge_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of same-kind clusters; articles excluded; returns clusters merged |
+| `decay_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled candidates; returns count archived |
+| `scheduled_tick_due(state, cfg) -> bool` | `co_cli/daemons/dream/_loop.py` | Returns True when ≥ `run_interval_hours` since last pass AND past today's `run_at` boundary |
+| `HousekeepingState` / `HousekeepingStats` | `co_cli/daemons/dream/_state.py` | Pydantic models for housekeeping state persistence |
+| `load_housekeeping_state(daemon_dir)` | `co_cli/daemons/dream/_state.py` | Forgiving loader — fresh state on missing/corrupt |
+| `save_housekeeping_state(daemon_dir, state)` | `co_cli/daemons/dream/_state.py` | Atomic write of `_dream_state.json` under `daemons/dream/` |
+| `find_decay_candidates(memory_dir, config)` | `co_cli/memory/decay.py` | Pure candidate filter — applies `decay_after_days`, `recall_protection_days`, and `decay_protected` |
 | `archive_artifacts(entries, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Move items into `memory/_archive/` |
 | `restore_artifact(slug, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Restore archived item by unambiguous filename prefix |
+| `DREAM_RUN_TAG` | `co_cli/config/core.py` | Path to the sentinel file written by `co dream run` |
 
-### Transcript loading
+### Transcript loading (reviewer only)
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `load_transcript(path, *, max_message_count=None)` | `co_cli/session/persistence.py` | Load JSONL; truncate at `max_message_count` when provided |
+| `load_transcript(path, *, max_message_count=None)` | `co_cli/session/persistence.py` | Load JSONL; truncate at `max_message_count` when provided. Housekeeping never reads transcripts. |
 
 ---
 
@@ -547,7 +532,9 @@ Internal caps (batch cycle):
 | `co_cli/daemons/dream/_loop.py` | Polling main loop and queue drain logic |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
 | `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, `spawn_detached` (Popen + setsid, POSIX-only) |
-| `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader |
+| `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader + `HousekeepingState` / `HousekeepingStats` |
+| `co_cli/daemons/dream/_housekeeping.py` | Memory merge + decay phases; `run_housekeeping`, `merge_memory`, `decay_memory` |
+| `co_cli/daemons/dream/prompts/memory_merge.md` | Same-kind item consolidation prompt |
 | `co_cli/daemons/dream/process.py` | Public surface: `start_daemon`, `stop_daemon`, `status_daemon`, `_run_foreground` |
 | `co_cli/daemons/dream/prompts/memory_review.md` | Memory reviewer instructions |
 | `co_cli/daemons/dream/prompts/skill_review.md` | Skill reviewer instructions |
@@ -560,19 +547,16 @@ Internal caps (batch cycle):
 | `co_cli/skills/usage.py` | `bump_recall` + `recall_days` sidecar field |
 | `co_cli/memory/item.py` | `MemoryItem.recall_days` field |
 
-### Batch cycle
+### Housekeeping support modules
 
 | File | Purpose |
 |---|---|
-| `co_cli/memory/dream.py` | Dream state, mining, merge, decay, dry-run, timeout, orchestration |
-| `co_cli/memory/prompts/dream_miner.md` | Retrospective transcript mining instructions |
-| `co_cli/memory/prompts/dream_merge.md` | Same-kind artifact consolidation instructions |
-| `co_cli/memory/_window.py` | Transcript-window builder for mining |
 | `co_cli/memory/similarity.py` | Token-Jaccard similarity and clustering |
-| `co_cli/memory/decay.py` | Decay candidate selection |
+| `co_cli/memory/decay.py` | Decay candidate selection — applies `decay_after_days` + `recall_protection_days` |
 | `co_cli/memory/archive.py` | Archive and restore mechanics |
-| `co_cli/session/persistence.py` | `load_transcript` with `max_message_count` |
-| `co_cli/commands/memory.py` | `/memory dream`, `/memory restore`, `/memory decay-review`, `/memory stats` |
+| `co_cli/session/persistence.py` | `load_transcript` — reviewer-only |
+| `co_cli/commands/memory.py` | `/memory restore`, `/memory decay-review`, `/memory stats` |
+| `co_cli/commands/dream.py` | `co dream run` subcommand — writes the sentinel file |
 
 ---
 
@@ -598,14 +582,15 @@ Internal caps (batch cycle):
 | Crash mid-process → restart re-processes file (idempotent) | `tests/integration/test_daemon_crash_recovery.py` |
 | Per-prompt extraction quality (real model + real stores) | `evals/eval_domain_review.py` |
 
-### Batch cycle
+### Housekeeping
 
 | Property | Test file |
 |---|---|
-| Dream state load/save and forgiving corrupt-state recovery | `tests/memory/test_knowledge_dream.py` |
-| Cycle orchestration: phase ordering, phase isolation, timeout | `tests/memory/test_knowledge_dream_cycle.py` |
-| Dry-run counts, no-write guarantee, state non-persistence | `tests/memory/test_knowledge_dream_cycle.py` |
-| Decay candidate selection: cutoff, `decay_protected`, `last_recalled_at` | `tests/memory/test_knowledge_decay.py` |
-| Archive move and filename collision resolution | `tests/memory/test_knowledge_archive.py` |
-| Restore: unambiguous slug succeeds; ambiguous or missing returns False | `tests/memory/test_knowledge_archive.py` |
-| Token-Jaccard similarity and union-find clustering | `tests/memory/test_knowledge_similarity.py` |
+| Scheduled tick boundaries: never-run, within interval, past interval ± run_at | `tests/daemons/dream/test_housekeeping.py` |
+| Merge canonical pick: highest `recall_count` wins; tiebreaker by recency | `tests/daemons/dream/test_housekeeping.py` |
+| Merge article exclusion: only notes/rules cluster | `tests/daemons/dream/test_housekeeping.py` |
+| Decay candidacy: aged + never-recalled → archive | `tests/daemons/dream/test_housekeeping.py` |
+| Decay recall protection: aged but recalled within `recall_protection_days` → protect | `tests/daemons/dream/test_housekeeping.py` |
+| `decay_protected` pin overrides age + recall | `tests/daemons/dream/test_housekeeping.py` |
+| `co dream run` errors cleanly when daemon down; no sentinel written | `tests/daemons/dream/test_housekeeping.py` |
+| End-to-end merge against real memory + real LLM | `evals/eval_memory.py` (W3.F), `evals/eval_daily_chat.py` (W1.D) |

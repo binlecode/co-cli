@@ -68,11 +68,11 @@ expected baseline (~20-30s on warm 35B). Recalibrate from first-run
 """
 
 DREAM_CYCLE_BUDGET_S: int = 240
-"""End-to-end ceiling for ``run_dream_cycle()`` on a real session.
+"""End-to-end ceiling for one dream housekeeping pass on a real session.
 
-Dream cycle drives multiple sub-agent calls (mine, dedup, merge, decay)
-plus knowledge-dir mutations. 240s covers a four-stage cycle with warm
-sub-agents; longer means a sub-agent stalled.
+Wraps ``merge_memory()`` calls in eval_memory.py / eval_daily_chat.py;
+covers the LLM sub-agent calls and memory-dir mutations of one merge
+phase with warm sub-agents. Longer means a sub-agent stalled.
 """
 
 MULTI_TURN_COMPACT_BUDGET_S: int = 180

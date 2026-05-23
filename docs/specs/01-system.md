@@ -51,7 +51,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Compaction | [compaction.md](compaction.md) | Spill, proactive summarization, session JSONL rewrite |
 | Memory | [memory.md](memory.md) | Memory tier: item storage, kind taxonomy, two-pass recall, `memory_manage` |
 | Sessions | [sessions.md](sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
-| Dream cycle | [dream.md](dream.md) | Session-end mining, memory merge, decay, archive |
+| Dream | [dream.md](dream.md) | Daemon reviewer + clock-driven housekeeping (memory merge, decay, archive) |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
 | Skills | [skills.md](skills.md) | Skill manifest, view/manage surface, dispatch |
 | Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
@@ -108,7 +108,7 @@ run_turn(user_input)
   → agent run        (LLM + tool loop with approval gates)
   → compaction check (spill → proactive → emit-time)
   → session persist  (append to JSONL)
-  → dream trigger    (session-end: mines + merges knowledge)
+  → review KICK      (session-end: REPL fires memory + skill review KICKs onto the daemon queue)
 ```
 
 Approval gates run per-tool-call; retries wrap individual tool failures. The agent is not re-instantiated between turns.
@@ -135,7 +135,7 @@ Recall is search-driven and on-demand — nothing is wholesale injected into eve
 
 Memory and session are peer operational tiers sharing one index (`co-cli-search.db`, FTS5 + optional vec):
 
-- **Memory** (`~/.co-cli/memory/*.md`) — long-term declarative memory items: user preferences, rules, articles, notes. Model-writable via `memory_manage`. Mined and decayed by the dream cycle.
+- **Memory** (`~/.co-cli/memory/*.md`) — long-term declarative memory items: user preferences, rules, articles, notes. Model-writable via `memory_manage`. Extracted by the dream reviewer (in-session) and merged + decayed by the dream daemon's clock-driven housekeeping.
 - **Session** (`~/.co-cli/sessions/*.jsonl`) — past conversation transcripts. Append-only; chunked at write time. Recalled via BM25 chunk snippets with line citations; full turns fetched via `session_view`.
 
 Recall is always search-driven. Nothing is bulk-injected. Browse mode (empty query) returns recent-item metadata.

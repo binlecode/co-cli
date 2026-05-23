@@ -11,7 +11,7 @@ from co_cli.memory.item import filter_memory_items, format_memory_item_row, load
 from co_cli.tools.memory.recall import _grep_recall as grep_recall
 
 _MEMORY_USAGE = (
-    "[bold]Usage:[/bold] /memory list|count|forget|dream|restore|decay-review|stats "
+    "[bold]Usage:[/bold] /memory list|count|forget|restore|decay-review|stats "
     "[query] [--older-than N] "
     "[--kind preference|feedback|rule|decision|article|reference|note] [--dry]"
 )
@@ -128,27 +128,6 @@ async def _subcmd_memory_forget(
     return None
 
 
-async def _subcmd_knowledge_dream(ctx: CommandContext, rest: str) -> None:
-    """Manually trigger a dream cycle; honour ``--dry`` for a non-destructive preview."""
-    from co_cli.memory.dream import run_dream_cycle
-    from co_cli.tools.memory.manage import memory_manage
-
-    tokens = rest.split()
-    dry_run = "--dry" in tokens
-
-    result = await run_dream_cycle(ctx.deps, memory_manage, dry_run=dry_run)
-
-    header = "Dream cycle — dry run — no changes written" if dry_run else "Dream cycle complete"
-    console.print(f"[info]{header}[/info]")
-    console.print(
-        f"  extracted: {result.extracted}  merged: {result.merged}  decayed: {result.decayed}"
-    )
-    if result.errors:
-        console.print(f"[warning]errors ({len(result.errors)}):[/warning]")
-        for err in result.errors:
-            console.print(f"  - {err}")
-
-
 async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
     """List archived artifacts, or restore one whose filename starts with the given slug."""
     from co_cli.memory.archive import restore_artifact
@@ -220,9 +199,10 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
 
 
 async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
-    """Display knowledge health dashboard: artifact counts, archive size, dream state, decay."""
+    """Display knowledge health dashboard: artifact counts, archive size, housekeeping state, decay."""
+    from co_cli.config.core import DREAM_DAEMON_DIR
+    from co_cli.daemons.dream._state import load_housekeeping_state
     from co_cli.memory.decay import find_decay_candidates
-    from co_cli.memory.dream import load_dream_state
 
     knowledge_dir = ctx.deps.memory_dir
     artifacts = load_memory_items(knowledge_dir)
@@ -238,16 +218,14 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     archive_dir = knowledge_dir / "_archive"
     archived = len(list(archive_dir.glob("*.md"))) if archive_dir.exists() else 0
 
-    state = load_dream_state(knowledge_dir)
-    if state.last_dream_at:
-        s = state.stats
-        last_dream = (
-            f"{state.last_dream_at}"
-            f" (total: {s.total_extracted} extracted, {s.total_merged} merged,"
-            f" {s.total_decayed} archived)"
+    hk = load_housekeeping_state(DREAM_DAEMON_DIR)
+    if hk.last_housekeeping_at:
+        last_pass = (
+            f"{hk.last_housekeeping_at}"
+            f" (total: {hk.stats.memory_merged} merged, {hk.stats.memory_decayed} archived)"
         )
     else:
-        last_dream = "never"
+        last_pass = "never"
 
     candidates = find_decay_candidates(knowledge_dir, ctx.deps.config.memory)
 
@@ -256,12 +234,13 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
         console.print(f"  {kind_parts}")
     console.print(f"  decay-protected: {protected}")
     console.print(f"Archived: {archived}")
-    console.print(f"Last dream: {last_dream}")
+    console.print(f"Last housekeeping: {last_pass}")
     console.print(f"Decay candidates: {len(candidates)}")
+    console.print("[dim]hint:[/dim] `co dream run` to request a one-shot housekeeping pass")
 
 
 async def _cmd_memory(ctx: CommandContext, args: str) -> None:
-    """Dispatch /memory subcommands: list, count, forget, dream, restore, decay-review, stats."""
+    """Dispatch /memory subcommands: list, count, forget, restore, decay-review, stats."""
     parts = args.strip().split(maxsplit=1)
     if not parts:
         console.print(_MEMORY_USAGE)
@@ -277,8 +256,6 @@ async def _cmd_memory(ctx: CommandContext, args: str) -> None:
     elif subcommand == "forget":
         query, filters = _parse_memory_args(rest)
         await _subcmd_memory_forget(ctx, query, filters)
-    elif subcommand == "dream":
-        await _subcmd_knowledge_dream(ctx, rest)
     elif subcommand == "restore":
         await _subcmd_knowledge_restore(ctx, rest)
     elif subcommand == "decay-review":

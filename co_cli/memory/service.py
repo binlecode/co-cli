@@ -142,16 +142,14 @@ def save_memory_item(
     source_url: str | None = None,
     source_type: str = SourceTypeEnum.DETECTED.value,
     decay_protected: bool = False,
-    consolidation_enabled: bool = False,
     consolidation_similarity_threshold: float = 0.75,
     index_store: "IndexStore | None" = None,
 ) -> SaveResult:
     """Save or consolidate a memory item. Pure — no RunContext.
 
-    Three dispatch paths:
+    Two dispatch paths:
     - source_url set → URL-keyed dedup (web articles); decay_protected forced True.
-    - consolidation_enabled → Jaccard dedup; near-identical skipped, overlapping merged.
-    - else → straight create.
+    - else → Jaccard dedup; near-identical skipped, overlapping merged, else create.
     """
     memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -220,45 +218,44 @@ def save_memory_item(
             filename_stem=file_path.stem,
         )
 
-    if consolidation_enabled:
-        threshold = consolidation_similarity_threshold
-        existing = load_memory_items(
-            memory_dir,
-            memory_kinds=[memory_kind] if memory_kind is not None else None,
-        )
-        matches = find_similar_memory_items(content, memory_kind, existing, threshold)
-        if matches:
-            best_item, best_score = matches[0]
-            if best_score > 0.9:
-                return SaveResult(
-                    path=best_item.path,
-                    artifact_id=best_item.id,
-                    action="skipped",
-                    content=content,
-                    frontmatter_dict={},
-                    markdown_content="",
-                    filename_stem=best_item.path.stem,
-                )
-            if is_content_superset(content, best_item.content):
-                dedup_action: Literal["merged", "appended"] = "merged"
-                merged_body = content
-            else:
-                dedup_action = "appended"
-                merged_body = best_item.content.rstrip() + "\n" + content
-            raw = best_item.path.read_text(encoding="utf-8")
-            frontmatter, _ = parse_frontmatter(raw)
-            frontmatter["updated_at"] = datetime.now(UTC).isoformat()
-            markdown_content = render_frontmatter(frontmatter, merged_body)
-            atomic_write_text(best_item.path, markdown_content)
+    threshold = consolidation_similarity_threshold
+    existing = load_memory_items(
+        memory_dir,
+        memory_kinds=[memory_kind] if memory_kind is not None else None,
+    )
+    matches = find_similar_memory_items(content, memory_kind, existing, threshold)
+    if matches:
+        best_item, best_score = matches[0]
+        if best_score > 0.9:
             return SaveResult(
                 path=best_item.path,
                 artifact_id=best_item.id,
-                action=dedup_action,
-                content=merged_body,
-                frontmatter_dict=frontmatter,
-                markdown_content=markdown_content,
+                action="skipped",
+                content=content,
+                frontmatter_dict={},
+                markdown_content="",
                 filename_stem=best_item.path.stem,
             )
+        if is_content_superset(content, best_item.content):
+            dedup_action: Literal["merged", "appended"] = "merged"
+            merged_body = content
+        else:
+            dedup_action = "appended"
+            merged_body = best_item.content.rstrip() + "\n" + content
+        raw = best_item.path.read_text(encoding="utf-8")
+        frontmatter, _ = parse_frontmatter(raw)
+        frontmatter["updated_at"] = datetime.now(UTC).isoformat()
+        markdown_content = render_frontmatter(frontmatter, merged_body)
+        atomic_write_text(best_item.path, markdown_content)
+        return SaveResult(
+            path=best_item.path,
+            artifact_id=best_item.id,
+            action=dedup_action,
+            content=merged_body,
+            frontmatter_dict=frontmatter,
+            markdown_content=markdown_content,
+            filename_stem=best_item.path.stem,
+        )
 
     artifact_id = str(uuid4())
     slug = slugify(title) if title else slugify(content[:50])

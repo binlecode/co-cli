@@ -26,12 +26,10 @@ MEMORY_ENV_MAP: dict[str, str] = {
     "embed_api_url": "CO_MEMORY_EMBED_API_URL",
     "chunk_tokens": "CO_MEMORY_CHUNK_TOKENS",
     "chunk_overlap_tokens": "CO_MEMORY_CHUNK_OVERLAP_TOKENS",
-    "consolidation_enabled": "CO_MEMORY_CONSOLIDATION_ENABLED",
-    "consolidation_trigger": "CO_MEMORY_CONSOLIDATION_TRIGGER",
-    "consolidation_lookback_sessions": "CO_MEMORY_CONSOLIDATION_LOOKBACK_SESSIONS",
     "consolidation_similarity_threshold": "CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD",
     "max_item_count": "CO_MEMORY_MAX_ITEM_COUNT",
     "decay_after_days": "CO_MEMORY_DECAY_AFTER_DAYS",
+    "recall_protection_days": "CO_MEMORY_RECALL_PROTECTION_DAYS",
     "session_chunk_tokens": "CO_MEMORY_SESSION_CHUNK_TOKENS",
     "session_chunk_overlap": "CO_MEMORY_SESSION_CHUNK_OVERLAP",
     "recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
@@ -58,12 +56,10 @@ class MemorySettings(BaseModel):
     embed_api_url: str = Field(default=DEFAULT_MEMORY_EMBED_API_URL)
     chunk_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_TOKENS, ge=0)
     chunk_overlap_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_OVERLAP_TOKENS, ge=0)
-    consolidation_enabled: bool = Field(default=False)
-    consolidation_trigger: Literal["session_end", "manual"] = Field(default="session_end")
-    consolidation_lookback_sessions: int = Field(default=5, ge=1)
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     max_item_count: int = Field(default=300, ge=1)
     decay_after_days: int = Field(default=90, ge=1)
+    recall_protection_days: int = Field(default=30, ge=1)
     session_chunk_tokens: int = Field(default=400, ge=64)
     session_chunk_overlap: int = Field(default=80, ge=0)
     recall_half_life_days: int = Field(default=DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS, ge=1)

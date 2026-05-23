@@ -49,9 +49,9 @@ from pydantic_ai.usage import RunUsage
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext
 from co_cli.context.orchestrate import run_turn
+from co_cli.daemons.dream._housekeeping import merge_memory
+from co_cli.daemons.dream._state import HousekeepingState
 from co_cli.deps import CoDeps
-from co_cli.memory.dream import run_dream_cycle
-from co_cli.tools.memory.manage import memory_manage
 from co_cli.tools.memory.recall import memory_search
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -778,12 +778,8 @@ async def case_w3_f_dream_decay_preserves_content(
     reason = ""
     try:
         async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
-            dream_result = await run_dream_cycle(
-                deps,
-                memory_manage,
-                dry_run=False,
-                timeout_secs=float(DREAM_CYCLE_BUDGET_S),
-            )
+            hk_state = HousekeepingState()
+            merged_count = await merge_memory(deps, hk_state)
 
         survivors_text: list[str] = []
         for path in (path_a, path_b):
@@ -801,10 +797,7 @@ async def case_w3_f_dream_decay_preserves_content(
         has_a = _DUP_A_TOKEN in searchable
         has_b = _DUP_B_TOKEN in searchable
 
-        cycle_summary = (
-            f"extracted={dream_result.extracted} merged={dream_result.merged} "
-            f"decayed={dream_result.decayed} errors={len(dream_result.errors)}"
-        )
+        cycle_summary = f"merged={merged_count}"
 
         if has_a and has_b:
             reason = f"both tokens preserved across survivors+archive; {cycle_summary}"
@@ -816,10 +809,10 @@ async def case_w3_f_dream_decay_preserves_content(
             )
         else:
             verdict = Verdict.FAIL
-            reason = f"both tokens missing after dream cycle; {cycle_summary}"
+            reason = f"both tokens missing after merge; {cycle_summary}"
     except TimeoutError:
         verdict = Verdict.FAIL
-        reason = f"asyncio.timeout({DREAM_CYCLE_BUDGET_S}s) fired before dream cycle completed"
+        reason = f"asyncio.timeout({DREAM_CYCLE_BUDGET_S}s) fired before merge completed"
     except Exception as exc:
         verdict = Verdict.FAIL
         reason = f"{type(exc).__name__}: {exc}"

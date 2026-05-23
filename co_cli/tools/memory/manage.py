@@ -108,7 +108,6 @@ async def _handle_create(
         content=content,
         memory_kind=kind,
         title=name,
-        consolidation_enabled=ctx.deps.config.memory.consolidation_enabled,
         consolidation_similarity_threshold=ctx.deps.config.memory.consolidation_similarity_threshold,
         index_store=ctx.deps.index_store,
     )

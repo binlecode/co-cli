@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from co_cli.config.core import DREAM_DAEMON_DIR, DREAM_RUN_TAG
+from co_cli.config.dream import DreamSettings
 from co_cli.daemons.dream._queue import (
     list_queue_files,
     move_to_done,
@@ -14,9 +18,53 @@ from co_cli.daemons.dream._queue import (
     read_queue_item,
     write_queue_item,
 )
-from co_cli.daemons.dream._state import DaemonState
+from co_cli.daemons.dream._state import (
+    DaemonState,
+    HousekeepingState,
+    load_housekeeping_state,
+)
+
+if TYPE_CHECKING:
+    from co_cli.deps import CoDeps
 
 logger = logging.getLogger(__name__)
+
+
+def scheduled_tick_due(state: HousekeepingState, cfg: DreamSettings) -> bool:
+    """Return True when the next housekeeping pass is due.
+
+    Cadence: at least ``cfg.run_interval_hours`` since the last pass, then
+    clamped to the next ``cfg.run_at`` time-of-day boundary in local time.
+    Never-run state (``last_housekeeping_at is None``) returns True so a
+    fresh daemon gets a baseline pass on the first idle tick.
+    """
+    if state.last_housekeeping_at is None:
+        return True
+    last_utc = datetime.fromisoformat(state.last_housekeeping_at)
+    if last_utc.tzinfo is None:
+        last_utc = last_utc.replace(tzinfo=UTC)
+    now_local = datetime.now().astimezone()
+    earliest = (last_utc + timedelta(hours=cfg.run_interval_hours)).astimezone()
+    if now_local < earliest:
+        return False
+    hh, mm = (int(x) for x in cfg.run_at.split(":"))
+    target = earliest.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if target < earliest:
+        target += timedelta(days=1)
+    return now_local >= target
+
+
+async def _maybe_housekeep(deps: CoDeps, cfg: DreamSettings) -> None:
+    """Manual-trigger first, then scheduled-tick. Runs on empty-queue branch only."""
+    from co_cli.daemons.dream._housekeeping import run_housekeeping
+
+    state = load_housekeeping_state(DREAM_DAEMON_DIR)
+    if DREAM_RUN_TAG.exists():
+        DREAM_RUN_TAG.unlink(missing_ok=True)
+        await run_housekeeping(deps, cfg, state)
+        return
+    if scheduled_tick_due(state, cfg):
+        await run_housekeeping(deps, cfg, state)
 
 
 async def main_loop(
@@ -38,6 +86,7 @@ async def main_loop(
     while not shutdown.is_set():
         files = list_queue_files(queue_dir)
         if not files:
+            await _maybe_housekeep(deps, cfg)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(shutdown.wait(), timeout=cfg.poll_interval_seconds)
             continue

@@ -104,7 +104,7 @@ def test_save_memory_item_url_keyed_dedup_updates_existing(tmp_path):
 
 
 def test_save_memory_item_jaccard_dedup_skips_near_identical(tmp_path):
-    """save_memory_item with consolidation_enabled must skip near-identical content.
+    """save_memory_item must skip near-identical content at write time.
 
     Failure mode: near-duplicate memory items pile up → search returns noisy,
     redundant results.
@@ -115,7 +115,6 @@ def test_save_memory_item_jaccard_dedup_skips_near_identical(tmp_path):
     fires regardless of superset status.
     """
     memory_dir = tmp_path / "memory"
-    # 20 distinct meaningful tokens (no stopwords, all len > 1).
     base = (
         "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
         "kilo lima mike november oscar papa quebec romeo sierra tango "
@@ -126,16 +125,13 @@ def test_save_memory_item_jaccard_dedup_skips_near_identical(tmp_path):
         content=base,
         memory_kind="note",
         title="nato note",
-        consolidation_enabled=True,
     )
 
-    # Adding one word: Jaccard = 20/21 ≈ 0.95 > 0.9 → triggers 'skipped'.
     second = save_memory_item(
         memory_dir,
         content=base + " ultraviolet",
         memory_kind="note",
         title="nato note",
-        consolidation_enabled=True,
     )
 
     assert second.action == "skipped", (
