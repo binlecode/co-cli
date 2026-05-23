@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.8.238]
+
+### Dream daemon: flatten two-layer loop + interruptible retry backoff
+
+- **Single `main_loop` in `co_cli/daemons/dream/_loop.py`** — collapsed the outer poll-or-drain loop and inner `_drain_queue` into one while-loop with three branches (idle-poll, process-item, retry-backoff). Deleted `_drain_queue` and `_initial_drain` — cold-start drain is now implicit (first iterations process pending files before any sleep). FIFO order, skip-sleep-when-busy, and between-items shutdown checks are all preserved
+- **Interruptible retry backoff** — the previous `await asyncio.sleep(cfg.retry_backoff_seconds)` was not woken by `shutdown.set()`, so a SIGTERM landing during retry backoff (default 30s) could blow past the 10s SIGTERM→SIGKILL budget. Now uses `await asyncio.wait_for(shutdown.wait(), timeout=retry_backoff_seconds)` — same pattern as the idle poll, wakes immediately on signal
+- **New regression test** — `test_main_loop_shutdown_interrupts_retry_backoff` configures `retry_backoff_seconds=10` and asserts main_loop exits in under 5s when shutdown fires mid-backoff (runs in 0.05s post-fix). Guards against future re-introduction of non-interruptible sleeps
+- **Test migration** — 4 tests in `tests/daemons/dream/test_loop.py` + `test_timeout_retry.py` migrated from calling `_drain_queue` directly to driving `main_loop` with scheduled `shutdown.set()`. Matches observable-behavior testing pattern (no internal-helper coupling)
+- **Spec sync** — `docs/specs/dream.md` §1.1 ASCII diagram replaced with a cleaner two-process + shared-FS sketch (pseudocode moved out of the diagram into prose). §1.4 worker loop pseudocode consolidated to one block; Clean-shutdown bound paragraph rewritten to reflect interruptible sleeps and honestly bounded by `review_timeout_seconds`
+
 ## [0.8.236]
 
 ### Memory chunker: structure-aware sentence-split + heading boundaries

@@ -14,67 +14,26 @@ The broader persistent cognition model lives in [memory.md](memory.md). Startup 
 ### 1.1 Architecture Overview
 
 ```
-                  ┌──────────┐
-                  │   User   │  ─── submits turns, sees output ──┐
-                  └──────────┘                                    │
-                                                                  ▼
-   ┌──────────────────────────────────────────────────────────────────────┐
-   │                  Ollama  (per-model serializer)                       │
-   │     No coordination API. No priority. No queue introspection.         │
-   └──▲────────────────────────────────────────────────────────▲──────────┘
-      │ fires on demand; surfaces                              │ asyncio.timeout(review_timeout_s);
-      │ latency to user as normal variance                     │ TimeoutError → retry with backoff
-      │                                                         │
-┌─────┴─────────────────────────┐         ┌────────────────────┴──────────────────┐
-│  REPL  (co chat)               │         │  dream daemon  (co dream start)       │
-│                                │         │                                        │
-│  _post_turn_hook               │         │  main_loop  (signal-driven shutdown)   │
-│    turns_since_memory_review   │         │    initial_drain(queue/)  (cold start) │
-│      += 1                      │         │    while not shutdown.is_set():        │
-│    iters_since_skill_review    │         │      if queue not empty:               │
-│      += turn_iteration_count   │         │        _drain_queue()                  │
-│    if ≥ threshold:             │         │        continue   (skip-sleep-busy)    │
-│      _send_review_kick(domain) │         │      await wait_for(                   │
-│      counter = 0               │         │        shutdown.wait(),                │
-│                                │         │        poll_interval_seconds)          │
-│  inline tool-write resets      │         │                                        │
-│    memory_manage(create|       │         │  _drain_queue                          │
-│      append|replace)           │         │    while files: pick oldest            │
-│      → memory ctr = 0          │         │      if shutdown.is_set(): return      │
-│    skill_manage(create|        │         │      try:                              │
-│      edit|patch)               │         │        async with asyncio.timeout(T):  │
-│      → skill ctr = 0           │         │          load_transcript(              │
-│                                │         │            sessions/<id>.jsonl,        │
-│  _drain_and_cleanup (end)      │         │            max_message_count=N)        │
-│    fire both KICKs             │         │          run_standalone(domain_spec)   │
-│    unconditionally             │         │        move file → done/               │
-│                                │         │      except Exception:                 │
-│  bootstrap.maybe_autospawn     │         │        attempts += 1                   │
-│    flock dream.lock            │         │        if attempts ≥ MAX:              │
-│    if not pid_live: Popen(     │         │          move file → failed/           │
-│      co dream start            │         │        else:                           │
-│      --origin=repl-autospawn)  │         │          sleep(retry_backoff_s)        │
-│    frontend.on_status(notice)  │         │                                        │
-└────────────┬───────────────────┘         └──────────────────┬─────────────────────┘
-             │  filesystem is the SOLE cross-process bridge    │
-             ▼                                                 ▼
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│                                    $CO_HOME                                        │
-│   daemons/                                                                         │
-│     dream.pid     pid + spawn_origin + spawn_session_id + started_at               │
-│     dream.lock    advisory flock (POSIX-only) — auto-spawn race guard             │
-│     dream/                                                                         │
-│       queue/                                                                       │
-│         <ts>-<uuid>.json   payload: domain, session_id,                            │
-│                                     persisted_message_count, created_at, attempts  │
-│         done/<ts>-<uuid>.json   successful reviews (audit retention)               │
-│         failed/<ts>-<uuid>.json  exhausted retries (inspect via co dream status)  │
-│   sessions/<id>.jsonl   REPL appends; daemon reads up to persisted_message_count  │
-│   memory/*.md           both REPL and daemon write; recall metrics updated on hit  │
-│   skills/.usage.json    both REPL and daemon update recall_days on read paths      │
-│   logs/dream/<ts>.log   daemon stdout/stderr                                       │
-└───────────────────────────────────────────────────────────────────────────────────┘
+   User ── turns ──> REPL (co chat)             dream daemon (co dream start)
+                          ▲                                ▲
+                          │ writes KICK files,             │ polls queue,
+                          │ writes memory/skill            │ writes memory/skill,
+                          ▼                                ▼ moves files → done/failed
+                  ┌───────────────────────────────────────────────┐
+                  │  $CO_HOME — sole cross-process bridge         │
+                  │    daemons/dream/queue/<ts>-<uuid>.json       │
+                  │    daemons/dream/{done,failed}/               │
+                  │    daemons/dream.pid, dream.lock              │
+                  │    sessions/<id>.jsonl                        │
+                  │    memory/*.md     skills/.usage.json         │
+                  │    logs/dream/<ts>.log                        │
+                  └───────────────────────────────────────────────┘
+
+   Ollama (off-diagram): shared serializer; no coordination API. REPL fires
+   on demand; daemon wraps each call in asyncio.timeout + retry/backoff.
 ```
+
+REPL behavior lives in §1.2 (counters, KICK dispatch, auto-spawn). Daemon behavior lives in §1.4 (main loop, drain, retries). Filesystem layout under `daemons/dream/` is detailed in §1.3. This diagram only shows the two processes and the single bridge between them.
 
 Key properties:
 
@@ -176,42 +135,36 @@ POSIX-only boundary: `fcntl.flock`, `start_new_session=True`, POSIX signals (`SI
 
 **Worker loop:**
 
-The main loop is signal-driven and polling-based — no IPC. On startup the daemon installs SIGTERM/SIGINT handlers (each sets a shared `asyncio.Event`), then runs `_initial_drain` against any queue files that accumulated while it was down. After that:
-
-```
-while not shutdown.is_set():
-    if queue not empty:
-        await _drain_queue()
-        continue                                    # skip-sleep-when-busy
-    await asyncio.wait_for(shutdown.wait(),
-                           timeout=poll_interval_seconds)
-```
-
-The `continue` after a drain rescans immediately — sustained pressure means catch-up at drain speed with no inter-drain idle gaps. When the queue is empty the loop blocks on `wait_for(shutdown.wait(), ...)` and wakes on either the poll interval or the shutdown event being set.
-
-**Clean-shutdown bound.** `_drain_queue` checks `shutdown.is_set()` at the top of each iteration, *between* items. The in-flight item is always allowed to finish (its LLM call + queue-file finalize complete); remaining queue files stay in `queue/` and are picked up by the next startup `_initial_drain`. Worst-case shutdown latency is one reviewer call (~10 s) — inside the 10 s SIGTERM → SIGKILL budget.
-
-**Queue drain loop:**
+The main loop is signal-driven and polling-based — no IPC. On startup the daemon installs SIGTERM/SIGINT handlers (each sets a shared `asyncio.Event`); cold-start drain is implicit — the first iterations see pending files and process them before reaching any sleep. There is one loop, three branches per iteration: idle-poll, process-item, retry-backoff.
 
 ```python
-while True:
+while not shutdown.is_set():
     files = sorted(queue_dir.glob("*.json"))
-    if not files: break
-    item = files[0]                         # process in chronological order
+    if not files:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(shutdown.wait(),
+                                   timeout=poll_interval_seconds)
+        continue                                        # idle-poll
+
+    item = files[0]                                     # FIFO
     try:
         async with asyncio.timeout(cfg.review_timeout_seconds):
             await _process_kick_file(deps, item, state)
         move_to_done(item)
     except Exception as exc:
         payload["attempts"] += 1
-        write_queue_item(item, payload)     # persist attempt counter to survive restart
+        write_queue_item(item, payload)                 # persist counter across restarts
         if attempts >= cfg.max_retry_attempts:
             move_to_failed(item, last_error=str(exc))
         else:
-            await asyncio.sleep(cfg.retry_backoff_seconds)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(shutdown.wait(),
+                                       timeout=retry_backoff_seconds)
 ```
 
-`CancelledError` is `BaseException` and is not caught by `except Exception`, so SIGTERM/task-cancel propagates cleanly.
+Skip-sleep-when-busy falls out of the structure: as long as the queue keeps refilling, the loop never enters either sleep branch.
+
+**Clean-shutdown bound.** Both sleep points — idle poll and retry backoff — are `asyncio.wait_for(shutdown.wait(), timeout=...)`, so SIGTERM wakes the loop immediately rather than after the timeout. The in-flight item is allowed to finish (its `asyncio.timeout` runs to completion or its own timeout fires). Remaining queue files stay in `queue/` and are picked up by the next daemon start. Worst-case shutdown latency is one reviewer call, bounded by `review_timeout_seconds` — inside the 10 s SIGTERM → SIGKILL budget when `review_timeout_seconds ≤ 10`. With the current default (`120`), an in-flight reviewer can exceed the SIGKILL window — that is the timeout's intrinsic cost, not a loop-structure issue. `CancelledError` is `BaseException` and is not caught by `except Exception`, so task-cancel propagates cleanly.
 
 ### 1.5 Domain Reviewers
 

@@ -1,8 +1,8 @@
-"""Behavioral tests for the dream daemon event loop and queue drain logic.
+"""Behavioral tests for the dream daemon main_loop.
 
 Covers invariants NOT exercised by the integration drain path:
-- _drain_queue stops between items when shutdown is set (clean-shutdown bound)
-- _drain_queue processes every item in a populated queue (loop iteration)
+- main_loop exits immediately when shutdown is pre-set (no items touched)
+- main_loop drains every item in a populated queue then exits on shutdown
 
 No LLM — kicks use a nonexistent session_id so process_review returns
 immediately (transcript file absent → early return, no exception).
@@ -34,6 +34,7 @@ def _make_cfg(**overrides) -> DreamSettings:
         "review_timeout_seconds": 30,
         "retry_backoff_seconds": 1,
         "max_retry_attempts": 3,
+        "poll_interval_seconds": 1,
     }
     defaults.update(overrides)
     return DreamSettings(**defaults)
@@ -64,12 +65,8 @@ def _write_kick(queue_dir: Path, name: str) -> Path:
 
 
 @pytest.mark.asyncio
-async def test_drain_queue_stops_immediately_when_shutdown_is_set(tmp_path: Path) -> None:
-    """_drain_queue returns without processing any items when shutdown is pre-set.
-
-    The between-items shutdown check fires at the top of the drain loop before
-    picking up the first item — no processing occurs when shutdown is already set.
-    """
+async def test_main_loop_exits_immediately_when_shutdown_preset(tmp_path: Path) -> None:
+    """main_loop returns without processing any items when shutdown is pre-set."""
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
     item_path = _write_kick(queue_dir, "2024-01-01T00-00-00.json")
@@ -80,7 +77,7 @@ async def test_drain_queue_stops_immediately_when_shutdown_is_set(tmp_path: Path
     shutdown = asyncio.Event()
     shutdown.set()
 
-    await _loop._drain_queue(deps, queue_dir, cfg, state, shutdown=shutdown)
+    await _loop.main_loop(deps, queue_dir, state, cfg, shutdown)
 
     assert item_path.exists(), "queue file must remain when shutdown is pre-set"
     done_path = queue_dir / "done" / "2024-01-01T00-00-00.json"
@@ -88,8 +85,8 @@ async def test_drain_queue_stops_immediately_when_shutdown_is_set(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_drain_queue_drains_multiple_items(tmp_path: Path) -> None:
-    """_drain_queue processes all items in the queue when shutdown is not set."""
+async def test_main_loop_drains_multiple_items_then_exits(tmp_path: Path) -> None:
+    """main_loop processes all items then sleeps in idle-poll; shutdown wakes it."""
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
     items = [_write_kick(queue_dir, f"2024-01-01T0000-0{i}.json") for i in range(3)]
@@ -97,8 +94,20 @@ async def test_drain_queue_drains_multiple_items(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     state = _make_state()
     cfg = _make_cfg()
+    shutdown = asyncio.Event()
 
-    await _loop._drain_queue(deps, queue_dir, cfg, state, shutdown=asyncio.Event())
+    async def stopper() -> None:
+        done_dir = queue_dir / "done"
+        for _ in range(200):
+            if done_dir.exists() and len(list(done_dir.glob("*.json"))) >= 3:
+                break
+            await asyncio.sleep(0.01)
+        shutdown.set()
+
+    await asyncio.gather(
+        _loop.main_loop(deps, queue_dir, state, cfg, shutdown),
+        stopper(),
+    )
 
     for item_path in items:
         assert not item_path.exists(), f"{item_path.name} must be removed from queue"
