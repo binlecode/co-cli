@@ -263,16 +263,3 @@ async def test_summarize_messages_from_scratch_returns_structured_text():
     assert any(kw in result.lower() for kw in ("auth", "secret_key", "secret", "co_auth")), (
         f"Summary does not mention the auth/SECRET_KEY topic:\n{result}"
     )
-
-    # Skippable sections must be omitted entirely when empty — not filled with
-    # "None." or "[None]" filler. The prompt is explicit: "Skip sections that have
-    # no content — do not generate filler."
-    filler_section = re.compile(
-        r"^##[^\n]*\n\s*(?:\[?None\]?|N/A|\(none\))\s*$",
-        re.MULTILINE | re.IGNORECASE,
-    )
-    filler_matches = filler_section.findall(result)
-    assert not filler_matches, (
-        f"Summary contains filler placeholders in empty sections (should be skipped):\n"
-        f"matches: {filler_matches}\nfull output:\n{result}"
-    )

@@ -64,14 +64,14 @@ class MemoryItem:
     memory_kind: str
     title: str | None
     content: str
-    created: str
-    updated: str | None = None
+    created_at: str
+    updated_at: str | None = None
     description: str | None = None
     related: list[str] = field(default_factory=list)
     source_type: str | None = None
     source_ref: str | None = None
     decay_protected: bool = False
-    last_recalled: str | None = None
+    last_recalled_at: str | None = None
     recall_count: int = 0
     recall_days: list[str] = field(default_factory=list)
 
@@ -84,14 +84,14 @@ def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> Memory
         memory_kind=frontmatter.get("memory_kind", MemoryKindEnum.NOTE.value),
         title=frontmatter.get("title"),
         content=body.strip(),
-        created=frontmatter["created"],
-        updated=frontmatter.get("updated"),
+        created_at=frontmatter["created_at"],
+        updated_at=frontmatter.get("updated_at"),
         description=frontmatter.get("description"),
         related=list(frontmatter.get("related") or []),
         source_type=frontmatter.get("source_type"),
         source_ref=frontmatter.get("source_ref"),
         decay_protected=bool(frontmatter.get("decay_protected", False)),
-        last_recalled=frontmatter.get("last_recalled"),
+        last_recalled_at=frontmatter.get("last_recalled_at"),
         recall_count=int(frontmatter.get("recall_count", 0) or 0),
         recall_days=list(frontmatter.get("recall_days") or []),
     )
@@ -100,7 +100,7 @@ def _coerce_fields(frontmatter: dict[str, Any], body: str, path: Path) -> Memory
 def load_memory_item(path: Path) -> MemoryItem:
     """Load a single .md file as a MemoryItem.
 
-    Requires ``id`` and ``created`` in frontmatter. Memory items live under
+    Requires ``id`` and ``created_at`` in frontmatter. Memory items live under
     ``memory_dir/*.md`` and are peer-independent from sessions, so no tier
     discriminator field is needed.
     """
@@ -108,8 +108,8 @@ def load_memory_item(path: Path) -> MemoryItem:
     frontmatter, body = parse_frontmatter(raw)
     if "id" not in frontmatter:
         raise ValueError(f"{path}: missing required field 'id'")
-    if "created" not in frontmatter:
-        raise ValueError(f"{path}: missing required field 'created'")
+    if "created_at" not in frontmatter:
+        raise ValueError(f"{path}: missing required field 'created_at'")
     return _coerce_fields(frontmatter, body, path)
 
 
@@ -148,13 +148,14 @@ def filter_memory_items(entries: list[MemoryItem], filters: dict[str, Any]) -> l
         result = [
             m
             for m in result
-            if (now - datetime.fromisoformat(m.created.replace("Z", "+00:00"))).days > cutoff_days
+            if (now - datetime.fromisoformat(m.created_at.replace("Z", "+00:00"))).days
+            > cutoff_days
         ]
     return result
 
 
 def format_memory_item_row(m: MemoryItem) -> str:
     id_prefix = m.id[:8]
-    created = m.created[:10]
+    created_at = m.created_at[:10]
     snippet = m.content[:80]
-    return f"{id_prefix}  {created}  [{m.memory_kind}]  {snippet}"
+    return f"{id_prefix}  {created_at}  [{m.memory_kind}]  {snippet}"

@@ -200,8 +200,8 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
         return None
 
     for art in candidates:
-        created = (art.created or "")[:10]
-        last = art.last_recalled[:10] if art.last_recalled else "never"
+        created = (art.created_at or "")[:10]
+        last = art.last_recalled_at[:10] if art.last_recalled_at else "never"
         slug_prefix = art.path.stem
         console.print(f"  {slug_prefix}  created={created}  last_recalled={last}")
     console.print(f"[dim]{len(candidates)} decay candidate(s)[/dim]")

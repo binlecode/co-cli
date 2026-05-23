@@ -38,7 +38,6 @@ def test_build_todo_snapshot_body_lines_match_id_prefix_format() -> None:
     assert snapshot is not None
     assert len(snapshot.parts) == 1
     content = snapshot.parts[0].content  # type: ignore[union-attr]
-    assert isinstance(content, str)
     assert content.startswith(TODO_SNAPSHOT_PREFIX)
 
     body_lines = [ln for ln in content.splitlines() if ln.startswith("- [")]

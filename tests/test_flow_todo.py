@@ -343,7 +343,6 @@ async def test_todo_write_metadata_todos_has_all_keys_on_success(tmp_path: Path)
 
     assert result.metadata is not None
     todos = result.metadata.get("todos")
-    assert isinstance(todos, list)
     assert len(todos) == 2
     required_keys = {"id", "content", "status", "priority"}
     for item in todos:

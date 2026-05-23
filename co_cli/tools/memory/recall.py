@@ -31,7 +31,7 @@ def _grep_recall(
         for m in items
         if query_lower in m.content.lower() or query_lower in (m.title or "").lower()
     ]
-    matches.sort(key=lambda m: m.updated or m.created, reverse=True)
+    matches.sort(key=lambda m: m.updated_at or m.created_at, reverse=True)
     return matches[:max_results]
 
 
@@ -68,7 +68,7 @@ def _list_memory_items(
         span.set_attribute("memory.items.count", len(rows))
         return rows
     items = load_memory_items(ctx.deps.memory_dir, memory_kinds=kinds)
-    items.sort(key=lambda a: a.created, reverse=True)
+    items.sort(key=lambda a: a.created_at, reverse=True)
     page = items[:limit]
     span.set_attribute("memory.items.count", len(page))
     return [
@@ -147,7 +147,7 @@ def _record_memory_recall(deps: CoDeps, item_paths: list[Path]) -> None:
         except Exception:
             continue
         item.recall_count += 1
-        item.last_recalled = now.isoformat().replace("+00:00", "Z")
+        item.last_recalled_at = now.isoformat().replace("+00:00", "Z")
         if today_iso not in item.recall_days:
             item.recall_days.append(today_iso)
         atomic_write_text(path, render_memory_item_file(item))

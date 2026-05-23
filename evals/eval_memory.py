@@ -140,7 +140,7 @@ def _seed_dup_artifact(
         "id": artifact_id,
         "memory_kind": "note",
         "title": title,
-        "created": created,
+        "created_at": created,
     }
     yaml_lines = [
         "---",

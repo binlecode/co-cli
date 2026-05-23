@@ -75,8 +75,8 @@ class SessionStore:
                 title=uuid8,
                 mtime=session_path.stat().st_mtime,
                 hash=content_hash,
-                created=created_at.isoformat(),
-                updated=created_at.isoformat(),
+                created_at=created_at.isoformat(),
+                updated_at=created_at.isoformat(),
             )
             tx.index_chunks(SESSION_SOURCE, uuid8, sess_chunks)
 

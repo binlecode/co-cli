@@ -70,7 +70,7 @@ class EmbeddingService:
         blob = struct.pack(f"{len(embedding)}f", *embedding)
         self._conn.execute(
             "INSERT OR REPLACE INTO embedding_cache"
-            "(provider, model, content_hash, embedding, created) VALUES (?, ?, ?, ?, ?)",
+            "(provider, model, content_hash, embedding, created_at) VALUES (?, ?, ?, ?, ?)",
             (
                 self._provider,
                 self._model,

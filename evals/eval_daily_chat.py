@@ -138,7 +138,7 @@ def _seed_knowledge_artifact(knowledge_dir: Path) -> Path:
         "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, _SEED_STEM)),
         "memory_kind": MemoryKindEnum.NOTE.value,
         "title": _SEED_STEM,
-        "created": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     artifact_path.write_text(
         render_frontmatter(frontmatter, _SEED_BODY),
@@ -181,7 +181,7 @@ def _seed_dream_pair(memory_dir: Path) -> tuple[Path, Path]:
             "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, stem)),
             "memory_kind": MemoryKindEnum.NOTE.value,
             "title": stem,
-            "created": datetime.now(UTC).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         path.write_text(render_frontmatter(frontmatter_dict, body), encoding="utf-8")
         return path
@@ -646,7 +646,7 @@ async def _case_w1_e_tool_spill_summary(
             "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, _SPILL_STEM)),
             "memory_kind": MemoryKindEnum.NOTE.value,
             "title": _SPILL_STEM,
-            "created": datetime.now(UTC).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         spill_path.write_text(render_frontmatter(frontmatter_dict, spill_body), encoding="utf-8")
         deps.memory_store.sync_dir(deps.memory_dir)

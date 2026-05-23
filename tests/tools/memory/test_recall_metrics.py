@@ -84,14 +84,14 @@ def test_last_recalled_is_set_after_recall(tmp_path: Path) -> None:
     path = _save_item(deps.memory_dir, "Item C", "Content C")
 
     item_before = load_memory_item(path)
-    assert item_before.last_recalled is None
+    assert item_before.last_recalled_at is None
 
     _record_memory_recall(deps, [path])
 
     item_after = load_memory_item(path)
-    assert item_after.last_recalled is not None
+    assert item_after.last_recalled_at is not None
     # Should parse as a valid ISO datetime
-    parsed = datetime.fromisoformat(item_after.last_recalled.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(item_after.last_recalled_at.replace("Z", "+00:00"))
     assert parsed is not None
 
 
@@ -102,11 +102,11 @@ def test_last_recalled_updates_on_second_call(tmp_path: Path) -> None:
 
     _record_memory_recall(deps, [path])
     item_first = load_memory_item(path)
-    ts_first = item_first.last_recalled
+    ts_first = item_first.last_recalled_at
 
     _record_memory_recall(deps, [path])
     item_second = load_memory_item(path)
-    ts_second = item_second.last_recalled
+    ts_second = item_second.last_recalled_at
 
     assert ts_second is not None
     # second timestamp must be >= first (monotone or same second)

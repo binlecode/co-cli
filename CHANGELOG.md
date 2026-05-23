@@ -30,7 +30,7 @@ Surfaced during the post-0.8.239 spec sync pass.
 
 Spec sync (`docs/specs/dream.md`): §1.4 lifecycle reflects new spawn/stop semantics + log-file wiring; §5 public-interface table updated with `spawn_detached`, refined `stop_daemon` semantics, dropped `timeout_ms` from `status_daemon`.
 
-## [0.8.240]
+## [0.8.242]
 
 ### Timestamp fields renamed to `_at` suffix
 

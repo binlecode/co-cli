@@ -59,9 +59,19 @@ def test_read_record_returns_none_when_sidecar_missing(tmp_path: Path) -> None:
 
 def test_write_then_read_roundtrip(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
-    record = skill_usage._new_record(skill_usage._utcnow_iso())
-    record["use_count"] = 3
-    record["pinned"] = True
+    record: dict = {
+        "version": 1,
+        "use_count": 3,
+        "view_count": 0,
+        "patch_count": 0,
+        "created_at": "2026-01-01T00:00:00Z",
+        "last_used_at": None,
+        "last_viewed_at": None,
+        "last_patched_at": None,
+        "state": "active",
+        "pinned": True,
+        "recall_days": [],
+    }
     skill_usage.write_record(deps, "foo", record)
 
     assert (tmp_path / "foo.usage.json").exists()

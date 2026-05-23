@@ -39,18 +39,18 @@ def find_decay_candidates(
         if item.decay_protected:
             continue
 
-        created_at = _parse_iso8601(item.created)
+        created_at = _parse_iso8601(item.created_at)
         if created_at is None or created_at >= cutoff:
             continue
 
-        if item.last_recalled is not None:
-            recalled_at = _parse_iso8601(item.last_recalled)
+        if item.last_recalled_at is not None:
+            recalled_at = _parse_iso8601(item.last_recalled_at)
             if recalled_at is not None and recalled_at >= cutoff:
                 continue
 
         candidates.append(item)
 
-    candidates.sort(key=lambda art: _parse_iso8601(art.created) or cutoff)
+    candidates.sort(key=lambda art: _parse_iso8601(art.created_at) or cutoff)
     return candidates
 
 

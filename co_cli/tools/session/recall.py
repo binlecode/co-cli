@@ -90,7 +90,7 @@ def _search_sessions(
 
     results: list[dict] = []
     for session_uuid8, r in seen.items():
-        when = r.created[:10] if r.created else ""
+        when = r.created_at[:10] if r.created_at else ""
         results.append(
             {
                 "session_id": session_uuid8,

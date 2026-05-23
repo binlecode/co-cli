@@ -56,21 +56,21 @@ def memory_item_to_frontmatter(item: MemoryItem) -> dict[str, Any]:
     """Serialize a MemoryItem to its frontmatter dict.
 
     Drops None, empty-list, and default-valued fields so files stay readable.
-    Always keeps id, memory_kind, created (required identity).
+    Always keeps id, memory_kind, created_at (required identity).
     """
     frontmatter: dict[str, Any] = {
         "id": item.id,
         "memory_kind": item.memory_kind,
-        "created": item.created,
+        "created_at": item.created_at,
     }
     optional: list[tuple[str, Any]] = [
         ("title", item.title),
         ("description", item.description),
-        ("updated", item.updated),
+        ("updated_at", item.updated_at),
         ("related", list(item.related)),
         ("source_type", item.source_type),
         ("source_ref", item.source_ref),
-        ("last_recalled", item.last_recalled),
+        ("last_recalled_at", item.last_recalled_at),
         ("recall_count", item.recall_count),
         ("recall_days", item.recall_days),
     ]

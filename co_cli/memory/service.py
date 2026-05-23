@@ -121,7 +121,7 @@ def reindex(
             title=frontmatter.get("title") or filename_stem,
             mtime=path.stat().st_mtime,
             hash=content_hash,
-            created=frontmatter.get("created"),
+            created_at=frontmatter.get("created_at"),
             description=frontmatter.get("description"),
             source_ref=frontmatter.get("source_ref"),
             artifact_id=str(frontmatter["id"]) if frontmatter.get("id") is not None else None,
@@ -174,8 +174,8 @@ def save_memory_item(
                 memory_kind=MemoryKindEnum.ARTICLE.value,
                 title=title or existing.title or existing_path.stem,
                 content=content,
-                created=existing.created,
-                updated=datetime.now(UTC).isoformat(),
+                created_at=existing.created_at,
+                updated_at=datetime.now(UTC).isoformat(),
                 related=list(existing.related),
                 source_type=SourceTypeEnum.WEB_FETCH.value,
                 source_ref=source_url,
@@ -203,7 +203,7 @@ def save_memory_item(
             memory_kind=MemoryKindEnum.ARTICLE.value,
             title=title,
             content=content,
-            created=datetime.now(UTC).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             source_type=SourceTypeEnum.WEB_FETCH.value,
             source_ref=source_url,
             decay_protected=True,
@@ -247,7 +247,7 @@ def save_memory_item(
                 merged_body = best_item.content.rstrip() + "\n" + content
             raw = best_item.path.read_text(encoding="utf-8")
             frontmatter, _ = parse_frontmatter(raw)
-            frontmatter["updated"] = datetime.now(UTC).isoformat()
+            frontmatter["updated_at"] = datetime.now(UTC).isoformat()
             markdown_content = render_frontmatter(frontmatter, merged_body)
             atomic_write_text(best_item.path, markdown_content)
             return SaveResult(
@@ -271,7 +271,7 @@ def save_memory_item(
         memory_kind=memory_kind,
         title=title,
         content=content,
-        created=datetime.now(UTC).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
         description=description,
         source_type=source_type,
         decay_protected=decay_protected,
@@ -335,7 +335,7 @@ def mutate_memory_item(
         updated_body = body.replace(target, content, 1)
         result_action = "replaced"
 
-    frontmatter["updated"] = datetime.now(UTC).isoformat()
+    frontmatter["updated_at"] = datetime.now(UTC).isoformat()
     markdown_content = render_frontmatter(frontmatter, updated_body)
     atomic_write_text(match_path, markdown_content)
 

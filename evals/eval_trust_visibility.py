@@ -209,7 +209,7 @@ async def case_w6_c_deny_blocks_execution(
         "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, _W6C_STEM)),
         "memory_kind": MemoryKindEnum.NOTE.value,
         "title": _W6C_TITLE,
-        "created": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     seed_path.write_text(render_frontmatter(fm, body), encoding="utf-8")
     if deps.memory_store is not None:

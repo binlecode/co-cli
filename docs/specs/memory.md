@@ -137,8 +137,8 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 | `co_cli/index/_retrieval.py` | `RetrievalService` — FTS + vec + RRF + rerank (private) |
 | `co_cli/index/_embedding.py` | `EmbeddingService` — embed + cache (private) |
 | `co_cli/index/_providers.py` | ollama / tei / gemini dispatch (private) |
-| `co_cli/index/_search_util.py` | FTS5 query sanitize, BM25 normalize, snippet helpers (private) |
-| `co_cli/index/_stopwords.py` | `STOPWORDS` frozenset (private) |
+| `co_cli/index/search_util.py` | FTS5 query sanitize, BM25 normalize, snippet helpers |
+| `co_cli/index/stopwords.py` | `STOPWORDS` frozenset |
 
 ### Memory domain (`co_cli/memory/`)
 

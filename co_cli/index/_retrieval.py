@@ -32,7 +32,7 @@ SELECT c.source, c.doc_path AS path,
        snippet(chunks_fts, 0, '>', '<', '...', {FTS_SNIPPET_TOKENS}) AS snippet,
        bm25(chunks_fts) AS rank,
        c.chunk_index, c.start_line, c.end_line,
-       d.kind, d.title, d.category, d.created, d.updated,
+       d.kind, d.title, d.category, d.created_at, d.updated_at,
        d.description, d.source_ref, d.artifact_id
   FROM chunks_fts
   JOIN chunks c ON c.rowid = chunks_fts.rowid
@@ -52,8 +52,8 @@ class SearchResult:
     snippet: str | None
     score: float
     category: str | None
-    created: str | None
-    updated: str | None
+    created_at: str | None
+    updated_at: str | None
     confidence: float | None = None
     chunk_index: int | None = None
     start_line: int | None = None
@@ -84,8 +84,8 @@ def _chunk_row_to_result(row: Any) -> SearchResult:
         snippet=row["snippet"],
         score=normalize_bm25(row["rank"]),
         category=row["category"],
-        created=row["created"],
-        updated=row["updated"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
         chunk_index=row["chunk_index"],
         start_line=row["start_line"],
         end_line=row["end_line"],
@@ -118,7 +118,7 @@ def _chunks_like_search(
         "SELECT c.source, c.doc_path AS path,"
         f" substr(c.content, 1, 300) AS snippet, {rank_expr} AS rank,"
         " c.chunk_index, c.start_line, c.end_line,"
-        " d.kind, d.title, d.category, d.created, d.updated,"
+        " d.kind, d.title, d.category, d.created_at, d.updated_at,"
         " d.description, d.source_ref, d.artifact_id"
         " FROM chunks c"
         " JOIN docs d ON d.source = c.source AND d.path = c.doc_path"
@@ -131,10 +131,10 @@ def _chunks_like_search(
     lsql += k_sql
     lp.extend(k_params)
     if created_after is not None:
-        lsql += " AND d.created >= ?"
+        lsql += " AND d.created_at >= ?"
         lp.append(created_after)
     if created_before is not None:
-        lsql += " AND d.created <= ?"
+        lsql += " AND d.created_at <= ?"
         lp.append(created_before)
     lsql += " LIMIT ?"
     lp.append(limit)
@@ -289,10 +289,10 @@ class RetrievalService:
         sql += k_sql
         params.extend(k_params)
         if created_after is not None:
-            sql += " AND d.created >= ?"
+            sql += " AND d.created_at >= ?"
             params.append(created_after)
         if created_before is not None:
-            sql += " AND d.created <= ?"
+            sql += " AND d.created_at <= ?"
             params.append(created_before)
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)
@@ -369,7 +369,7 @@ class RetrievalService:
         doc_paths = list({row["doc_path"] for row in chunk_rows})
         doc_ph = ",".join("?" * len(doc_paths))
         doc_sql = (
-            "SELECT source, kind, path, title, category, created, updated,"
+            "SELECT source, kind, path, title, category, created_at, updated_at,"
             " type, description, source_ref, artifact_id"
             f" FROM docs WHERE path IN ({doc_ph})"
         )
@@ -378,10 +378,10 @@ class RetrievalService:
         doc_sql += k_sql
         doc_params.extend(k_params)
         if created_after is not None:
-            doc_sql += " AND created >= ?"
+            doc_sql += " AND created_at >= ?"
             doc_params.append(created_after)
         if created_before is not None:
-            doc_sql += " AND created <= ?"
+            doc_sql += " AND created_at <= ?"
             doc_params.append(created_before)
 
         doc_rows = self._conn.execute(doc_sql, doc_params).fetchall()
@@ -402,8 +402,8 @@ class RetrievalService:
                     snippet=None,
                     score=max(0.0, 1.0 - dist),
                     category=meta["category"],
-                    created=meta["created"],
-                    updated=meta["updated"],
+                    created_at=meta["created_at"],
+                    updated_at=meta["updated_at"],
                     chunk_index=c["chunk_index"],
                     start_line=c["start_line"],
                     end_line=c["end_line"],

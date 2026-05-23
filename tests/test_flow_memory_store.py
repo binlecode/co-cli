@@ -107,7 +107,7 @@ def _write_memory_file(path: Path, *, body: str) -> None:
     fm = {
         "id": "test-1",
         "memory_kind": "user",
-        "created": "2026-01-01T00:00:00+00:00",
+        "created_at": "2026-01-01T00:00:00+00:00",
     }
     path.write_text(
         f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body}\n",

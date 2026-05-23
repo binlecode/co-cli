@@ -99,24 +99,6 @@ def test_bump_recall_deduplicates_same_day(tmp_path: Path) -> None:
     assert record["recall_days"].count(today) == 1
 
 
-def test_bump_recall_does_not_duplicate_when_already_present(tmp_path: Path) -> None:
-    """If today's date is already in recall_days, bump_recall does not add it again."""
-    deps = _make_deps(tmp_path)
-    today = date.today().isoformat()
-
-    # Seed per-skill sidecar with today already present
-    now_iso = skill_usage._utcnow_iso()
-    record = skill_usage._new_record(now_iso)
-    record["recall_days"] = [today]
-    skill_usage.write_record(deps, "test-recall-skill", record)
-
-    skill_usage.bump_recall(deps, "test-recall-skill")
-
-    record = skill_usage.read_record(deps, "test-recall-skill")
-    assert record is not None
-    assert record["recall_days"].count(today) == 1
-
-
 # ---------------------------------------------------------------------------
 # Usage tracking disabled short-circuits
 # ---------------------------------------------------------------------------

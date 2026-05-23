@@ -212,11 +212,30 @@ def test_evict_protects_tool_returns_in_last_turn():
 
 
 def test_dedup_tolerates_lone_surrogate_content():
-    """dedup_tool_results must not raise UnicodeEncodeError on lone-surrogate content."""
+    """dedup_tool_results deduplicates correctly with lone-surrogate content (no UnicodeEncodeError)."""
     surrogate_content = "\ud800prefix" * 100  # lone surrogate, well above 200-char floor
     messages = [
         *_file_read_exchange("call1", surrogate_content),
         ModelResponse(parts=[TextPart(content="done")]),
         *_file_read_exchange("call2", surrogate_content),
     ]
-    dedup_tool_results(_ctx(), messages)  # must not raise
+    result = dedup_tool_results(_ctx(), messages)
+    call1 = next(
+        p
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for p in msg.parts
+        if isinstance(p, ToolReturnPart) and p.tool_call_id == "call1"
+    )
+    call2 = next(
+        p
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for p in msg.parts
+        if isinstance(p, ToolReturnPart) and p.tool_call_id == "call2"
+    )
+    assert surrogate_content not in call1.content, (
+        "older duplicate must be replaced with back-reference"
+    )
+    assert "call2" in call1.content
+    assert call2.content == surrogate_content, "newer call must retain original content"

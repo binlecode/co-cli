@@ -17,8 +17,8 @@ CREATE TABLE IF NOT EXISTS docs (
     mtime       REAL,
     hash        TEXT,
     category    TEXT,
-    created     TEXT,
-    updated     TEXT,
+    created_at  TEXT,
+    updated_at  TEXT,
     type        TEXT,
     description TEXT,
     source_ref  TEXT,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
     model        TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     embedding    BLOB NOT NULL,
-    created      TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
     PRIMARY KEY (provider, model, content_hash)
 );
 

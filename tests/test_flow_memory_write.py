@@ -249,7 +249,7 @@ def _write_seeded_artifact(path: Path, body: str) -> None:
     frontmatter = {
         "memory_kind": "note",
         "id": "test-123",
-        "created": "2026-01-01T00:00:00+00:00",
+        "created_at": "2026-01-01T00:00:00+00:00",
     }
     path.write_text(
         f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{body}\n",
@@ -275,4 +275,4 @@ def test_mutate_memory_item_replace_preserves_frontmatter(tmp_path: Path) -> Non
     item = load_memory_item(artifact_path)
     assert item.content.strip() == "updated body content"
     assert item.id == "test-123"
-    assert item.created == "2026-01-01T00:00:00+00:00"
+    assert item.created_at == "2026-01-01T00:00:00+00:00"

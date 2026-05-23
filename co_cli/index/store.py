@@ -81,8 +81,8 @@ class IndexTransaction:
         mtime: float | None = None,
         hash: str | None = None,
         category: str | None = None,
-        created: str | None = None,
-        updated: str | None = None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
         description: str | None = None,
         source_ref: str | None = None,
         artifact_id: str | None = None,
@@ -96,8 +96,8 @@ class IndexTransaction:
             mtime=mtime,
             hash=hash,
             category=category,
-            created=created,
-            updated=updated,
+            created_at=created_at,
+            updated_at=updated_at,
             description=description,
             source_ref=source_ref,
             artifact_id=artifact_id,
@@ -223,8 +223,8 @@ class IndexStore:
         mtime: float | None = None,
         hash: str | None = None,
         category: str | None = None,
-        created: str | None = None,
-        updated: str | None = None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
         description: str | None = None,
         source_ref: str | None = None,
         artifact_id: str | None = None,
@@ -232,13 +232,13 @@ class IndexStore:
         self._conn.execute(
             """INSERT INTO docs
                    (source, kind, path, title, mtime, hash, category,
-                    created, updated, description, source_ref, artifact_id)
+                    created_at, updated_at, description, source_ref, artifact_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(source, path) DO UPDATE SET
                    kind=excluded.kind, title=excluded.title,
                    mtime=excluded.mtime, hash=excluded.hash,
-                   category=excluded.category, created=excluded.created,
-                   updated=excluded.updated, description=excluded.description,
+                   category=excluded.category, created_at=excluded.created_at,
+                   updated_at=excluded.updated_at, description=excluded.description,
                    source_ref=excluded.source_ref, artifact_id=excluded.artifact_id
                WHERE excluded.hash IS NOT docs.hash""",
             (
@@ -249,8 +249,8 @@ class IndexStore:
                 mtime,
                 hash,
                 category,
-                created,
-                updated,
+                created_at,
+                updated_at,
                 description,
                 source_ref,
                 artifact_id,
@@ -267,8 +267,8 @@ class IndexStore:
         mtime: float | None = None,
         hash: str | None = None,
         category: str | None = None,
-        created: str | None = None,
-        updated: str | None = None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
         description: str | None = None,
         source_ref: str | None = None,
         artifact_id: str | None = None,
@@ -282,8 +282,8 @@ class IndexStore:
             mtime=mtime,
             hash=hash,
             category=category,
-            created=created,
-            updated=updated,
+            created_at=created_at,
+            updated_at=updated_at,
             description=description,
             source_ref=source_ref,
             artifact_id=artifact_id,
@@ -454,16 +454,16 @@ class IndexStore:
         return row["path"] if row else None
 
     def list_items(self, source: str, kinds: list[str] | None, limit: int) -> list[dict[str, Any]]:
-        """Return inventory rows for a source, sorted by created DESC."""
+        """Return inventory rows for a source, sorted by created_at DESC."""
         k_sql, k_params = kind_clause(kinds, "d.kind")
         rows = self._conn.execute(
-            f"""SELECT d.path, d.kind, d.title, d.created,
+            f"""SELECT d.path, d.kind, d.title, d.created_at,
                        c.content AS snippet
                 FROM docs d
                 LEFT JOIN chunks c
                   ON c.doc_path = d.path AND c.source = d.source AND c.chunk_index = 0
                 WHERE d.source = ?{k_sql}
-                ORDER BY d.created DESC LIMIT ?""",
+                ORDER BY d.created_at DESC LIMIT ?""",
             [source, *k_params, limit],
         ).fetchall()
         return [
