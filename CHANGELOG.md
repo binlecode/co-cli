@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.8.241]
+
+### Dream daemon: spec sync + banner/CLI follow-up fixes
+
+Surfaced during the post-0.8.239 spec sync pass.
+
+- **Banner `_socket_status` import was dead since v0.8.234** — `co_cli/bootstrap/banner.py` imported `_socket_status` from `co_cli.commands.dream` which has not existed since sockets were retired. Every banner render raised `ImportError`, caught by a broad `except Exception`, falling through to "enabled but daemon not running" — even when the daemon WAS running. Switched to the file-based `status_daemon(USER_DIR)` directly. The deleted regression test `tests/bootstrap/test_banner_dream_line.py` would have caught this; not adding it back here since coworker's clean-tests pass removed it intentionally
+- **`co dream stop --force` CLI flag** — `stop_daemon(force=True)` was wired in 0.8.239 but the typer command didn't expose `--force`. Users had no CLI path to invoke it
+- **`co dream start --foreground` help text** — was "Run in the foreground (after double-fork)"; now "skip detached spawn via setsid", matching the renamed `spawn_detached`
+- **Spec sync (`docs/specs/dream.md`)** — §1.3 queue-tmp note covers both producers (REPL + daemon now both use atomic tmp writes); §5 `process_review` contract documents the `ValueError`-on-unknown-domain semantics from 0.8.239; §6 `_process.py` purpose says `spawn_detached`; §3 CLI surface lists `co dream stop [--force]`
+
 ## [0.8.239]
 
 ### Dream daemon: latent-bug sweep (10 fixes)

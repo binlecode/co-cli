@@ -53,7 +53,9 @@ def _dream_callback(ctx: typer.Context) -> None:
 @dream_app.command("start")
 def dream_start(
     foreground: bool = typer.Option(
-        False, "--foreground/--no-foreground", help="Run in the foreground (after double-fork)"
+        False,
+        "--foreground/--no-foreground",
+        help="Run in the foreground (skip detached spawn via setsid)",
     ),
     origin: str = typer.Option("manual", "--origin", help="Spawn origin label"),
     session_id: str = typer.Option(
@@ -76,8 +78,12 @@ def dream_status() -> None:
 
 
 @dream_app.command("stop")
-def dream_stop() -> None:
+def dream_stop(
+    force: bool = typer.Option(
+        False, "--force", help="SIGKILL immediately, skipping the SIGTERM grace period"
+    ),
+) -> None:
     """Stop the dream daemon."""
     from co_cli.daemons.dream.process import stop_daemon
 
-    stop_daemon(USER_DIR)
+    stop_daemon(USER_DIR, force=force)

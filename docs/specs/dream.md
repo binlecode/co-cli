@@ -103,7 +103,7 @@ Queue directories under `$CO_HOME/daemons/dream/`:
 | `queue/done/*.json` | Successfully processed (audit retention) |
 | `queue/failed/*.json` | Exhausted `max_retry_attempts`; inspect via `co dream status` |
 
-The daemon's `_queue.py` scanner skips any `*.tmp` files (in-flight REPL writes).
+The daemon's `_queue.py` scanner skips any `*.tmp` files. Both producers — REPL writing a new KICK and the daemon updating the attempt counter in place — use tmp + `os.replace` so a crash mid-write never leaves a torn `*.json` file visible to the scanner.
 
 ### 1.4 Daemon Process Model
 
@@ -437,7 +437,7 @@ CLI subcommands (MVP surface):
 ```text
 co dream start [--foreground] [--origin=<str>] [--session-id=<str>]
 co dream status
-co dream stop
+co dream stop [--force]
 ```
 
 `tail` and `config` are deferred to Plan 2. For log streaming: `tail -f $CO_HOME/logs/dream/*.log`.
@@ -504,7 +504,7 @@ Internal caps (batch cycle):
 | `spawn_detached(cmd, env=None) -> int` | `co_cli/daemons/dream/_process.py` | Popen with start_new_session=True (setsid). Returns child PID. Not a classic POSIX double-fork — setsid alone gives the needed detachment on modern Linux/macOS. |
 | `create_deps(*, on_status, stack=None, theme_override=None) -> CoDeps` | `co_cli/bootstrap/core.py` | Shared bootstrap for REPL and daemon; daemon passes `stack=None` to skip MCP |
 | `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Domain reviewer task specs |
-| `process_review(deps, domain, session_id, persisted_message_count)` | `co_cli/daemons/dream/_reviewer.py` | Load transcript + dispatch to domain reviewer |
+| `process_review(deps, domain, session_id, persisted_message_count)` | `co_cli/daemons/dream/_reviewer.py` | Load transcript + dispatch to domain reviewer. Raises `ValueError` on unknown domain (corrupt kick → `failed/`). Missing transcript is a benign no-op. |
 | `maybe_autospawn_dream(deps, frontend)` | `co_cli/bootstrap/core.py` | REPL auto-spawn hook |
 | `build_dream_line(deps) -> str` | `co_cli/bootstrap/banner.py` | Banner `Dream:` line builder |
 | `handle_dream_slash(ctx, args)` | `co_cli/commands/dream.py` | `/dream` slash handler |
@@ -546,7 +546,7 @@ Internal caps (batch cycle):
 | `co_cli/daemons/dream/_queue.py` | Queue file read/write/move helpers |
 | `co_cli/daemons/dream/_loop.py` | Polling main loop and queue drain logic |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
-| `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, double-fork detach (POSIX-only) |
+| `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, `spawn_detached` (Popen + setsid, POSIX-only) |
 | `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader |
 | `co_cli/daemons/dream/process.py` | Public surface: `start_daemon`, `stop_daemon`, `status_daemon`, `_run_foreground` |
 | `co_cli/daemons/dream/prompts/memory_review.md` | Memory reviewer instructions |

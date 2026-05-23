@@ -23,29 +23,19 @@ _ASCII_ART = {
 
 def build_dream_line(deps: "CoDeps") -> str:
     """Build the Dream: status line for the welcome banner."""
-    # Lazy import to avoid circular import at module load time
-    from co_cli.commands.dream import _socket_status
-    from co_cli.config.core import DREAM_QUEUE_DIR
+    from co_cli.config.core import USER_DIR
+    from co_cli.daemons.dream.process import status_daemon
 
     if not deps.config.dream.enabled:
         return "    Dream: [dim]disabled[/dim]"
 
-    def _queue_depth() -> int:
-        if not DREAM_QUEUE_DIR.exists():
-            return 0
-        return len([f for f in DREAM_QUEUE_DIR.glob("*.json") if not f.name.endswith(".tmp")])
-
-    try:
-        status = _socket_status(timeout_ms=200)
-    except Exception:
-        status = None
-
-    if isinstance(status, dict):
-        queue_n = status.get("queue_depth", 0)
+    status = status_daemon(USER_DIR)
+    queue_n = status.get("queue_depth", 0)
+    if status.get("running"):
         return f"    Dream: [accent]✓ running[/accent]  queue: {queue_n}"
-
-    n = _queue_depth()
-    return f"    Dream: [yellow]enabled but daemon not running[/yellow]  queue: {n} (on disk)"
+    return (
+        f"    Dream: [yellow]enabled but daemon not running[/yellow]  queue: {queue_n} (on disk)"
+    )
 
 
 def build_memory_line(
