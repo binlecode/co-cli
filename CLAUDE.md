@@ -54,6 +54,8 @@ Recall is search-driven: there is no `memory_list` or `memory_read` tool. Browse
 - **`_prefix.py` helpers**: leading-underscore modules are package-private. If imported outside the package, drop the underscore.
 - **Quality gates**: `scripts/quality-gate.sh` is the single source of truth. Tool configs in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
 
+- **Surgical changes**: touch only what the task requires. Do not improve adjacent code, fix unrelated style, or refactor things not broken. Match existing style even if you'd do it differently. The only dead code you remove is orphans *your* changes created — pre-existing dead code gets mentioned, not deleted.
+
 **Known Pitfall — DO NOT hardcode `~/.co-cli`**: use `USER_DIR` and derived constants from `co_cli/config/core.py`. Tests override `CO_HOME` to a temp dir — hardcoded paths bypass this and bleed state across test runs.
 
 <important if="you are writing or modifying Python code (naming, classes, display)">
