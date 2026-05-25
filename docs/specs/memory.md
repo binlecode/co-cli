@@ -158,3 +158,77 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 | `co_cli/tools/memory/recall.py` | `memory_search` — ranked recall |
 | `co_cli/tools/memory/view.py` | `memory_view` — full memory item body reader |
 | `co_cli/tools/memory/manage.py` | `memory_manage` — write surface |
+
+## 6. Growth pipeline and curation discipline
+
+Memory growth has two distinct accumulation modes:
+
+- **Substrate accumulation (passive)** — `web_fetch` → `kind=article` → chunk + embed + index. Substrate lands without distillation; the agent has no obligation to interpret each fetched article at fetch time.
+- **Derivative accumulation (deliberate)** — `kind=note` and `kind=rule` items, written through deliberate agent curation. The note/rule tier accumulates only via the inline curation discipline (below) and the session-end reviewer.
+
+```
+   web_fetch ─────────────▶ kind=article (raw)
+                            source_type=web_fetch
+                                    │
+   chunk + embed + index ◀──────────┘
+                                    │
+   memory_search ────▶ recall_count++, last_recalled_at, recall_days
+                                    │
+                                    ▼
+              ┌─────────────────────────────────┐
+              │ INLINE AGENT CURATION (doctrine)│
+              │ ─ promote: article → note/rule  │
+              │ ─ correct: replace on contradict│
+              │ ─ drift:   replace/delete stale │
+              │ (memory_manage create / replace)│
+              └─────────────────────────────────┘
+                                    │
+   session_end ─────────────────────┤
+                                    ▼
+              ┌─────────────────────────────────┐
+              │ DAEMON SESSION-END WORK         │
+              │ ─ memory_review extracts        │
+              │   durable facts; saves are      │
+              │   tagged source_type=           │
+              │   session_review                │
+              │ ─ skill_review extracts         │
+              │   procedural updates            │
+              └─────────────────────────────────┘
+                                    │
+                                    ▼
+              ┌─────────────────────────────────┐
+              │ dream merge (note/rule only;    │
+              │   articles excluded)            │
+              │ dream decay (all kinds, recall- │
+              │   protected)                    │
+              └─────────────────────────────────┘
+                                    │
+                                    ▼
+              hybrid retrieval over union of articles +
+              notes + rules → informs future agent turns
+```
+
+### Inline curation surface
+
+Inline curation is a doctrine-level discipline (see `co_cli/context/rules/07_memory_protocol.md`) — promote substrate into notes/rules while research context is hot, replace on user contradiction, replace or delete on drift. No new code path; the rule renders into the static prompt via `build_static_instructions`.
+
+### Session-end reviewers
+
+`memory_review` and `skill_review` (see [dream.md](dream.md)) operate over the session transcript as substrate, extracting durable facts and procedural updates. The session itself is **not** promoted to a first-class memory object — session boundaries are user-defined and arbitrary (lunch, Ctrl+C, task-switch). Reviewer-extracted items are tagged `source_type='session_review'`. See [sessions.md](sessions.md) for the transcript tier and [core-loop.md](core-loop.md) for turn orchestration that triggers session-end kicks.
+
+### Merge and decay (closing the loop)
+
+Dream housekeeping (see [dream.md](dream.md)) collapses note/rule duplicates via Jaccard clustering and archives aged items past `decay_after_days`. Articles are excluded from merge (RAG integrity); recent recall within `recall_protection_days` protects an aged item from decay.
+
+### `source_type` taxonomy
+
+Six values populate `MemoryItem.source_type`:
+
+| source_type | Producer | Meaning |
+| --- | --- | --- |
+| `web_fetch` | `web_fetch` tool / `save_memory_item` URL branch | raw article substrate from URL fetch |
+| `manual` | agent inline saves via `memory_manage(create)` | default for agent-curated notes/rules/articles without URL |
+| `obsidian` | Obsidian vault sync | external read-only source |
+| `drive` | Google Drive sync | external read-only source |
+| `consolidated` | dream merge (`_housekeeping.merge_memory`) | output of duplicate-collapse pass |
+| `session_review` | memory reviewer (`_run_memory_review`) | reviewer-extracted durable facts |

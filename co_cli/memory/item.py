@@ -38,7 +38,6 @@ MemoryKind = Literal[
 
 
 class SourceTypeEnum(StrEnum):
-    DETECTED = "detected"
     WEB_FETCH = "web_fetch"
     MANUAL = "manual"
     OBSIDIAN = "obsidian"

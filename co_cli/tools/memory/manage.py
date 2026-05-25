@@ -7,7 +7,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, VisibilityPolicyEnum
-from co_cli.memory.item import MemoryKind, MemoryKindEnum
+from co_cli.memory.item import MemoryKind, MemoryKindEnum, SourceTypeEnum
 from co_cli.memory.service import mutate_memory_item, reindex, save_memory_item
 from co_cli.observability.tracing import current_span, trace
 from co_cli.tools.agent_tool import agent_tool
@@ -43,6 +43,7 @@ async def memory_manage(
     content: str | None = None,
     kind: MemoryKind | None = None,
     section: str | None = None,
+    source_type: str | None = None,
 ) -> ToolReturn:
     """Create, update, or delete a memory artifact.
 
@@ -61,9 +62,15 @@ async def memory_manage(
         content: Text body for create/append, or replacement text for replace.
         kind: Required for create. One of user | rule | article | note.
         section: For replace — the exact passage to replace (must appear exactly once).
+        source_type: For create — provenance tag on the saved frontmatter.
+                     Defaults to 'manual' for direct agent saves; the session-end
+                     memory reviewer sets 'session_review' so reviewer-extracted
+                     facts are distinguishable from inline saves.
     """
     if action == "create":
-        return await _handle_create(ctx, name=name, content=content, kind=kind)
+        return await _handle_create(
+            ctx, name=name, content=content, kind=kind, source_type=source_type
+        )
     if action == "append":
         return await _handle_mutate(ctx, filename_stem=name, op="append", content=content)
     if action == "replace":
@@ -85,6 +92,7 @@ async def _handle_create(
     name: str,
     content: str | None,
     kind: str | None,
+    source_type: str | None = None,
 ) -> ToolReturn:
     if content is None:
         return tool_error("content is required for action='create'", ctx=ctx)
@@ -108,6 +116,7 @@ async def _handle_create(
         content=content,
         memory_kind=kind,
         title=name,
+        source_type=source_type or SourceTypeEnum.MANUAL.value,
         consolidation_similarity_threshold=ctx.deps.config.memory.consolidation_similarity_threshold,
         index_store=ctx.deps.index_store,
     )

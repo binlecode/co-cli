@@ -95,48 +95,4 @@ match, do not retry it — pivot or explain the limitation.
 
 ## Memory
 
-### Recall
-
-When the user references something from a past conversation, a prior preference, or an
-established decision — or when you suspect relevant cross-session context exists — call
-`memory_search` for declarative state (preferences, conventions, articles) or
-`session_search` for past conversations before answering. Do not ask the user to repeat
-themselves when the answer may already be in memory.
-
-Load a memory item's full body with `memory_view(name)`; for verbatim past-session
-turns, `session_view(session_id, start, end)`. Don't reach for `file_read` to retrieve
-memory item bodies.
-
-Triggers: past session references, user preferences, standing rules, prior decisions,
-anything the user might reasonably expect you to already know.
-
-### Explicit saves
-
-When the user explicitly asks to remember or save something — "remember I prefer X",
-"always do Y", "we decided Z", "save this URL", "remember this note" — call `memory_manage(action='create', ...)`
-synchronously in the same turn. Do not defer to the dream cycle; dream handles implicit
-patterns only.
-
-Write memories as declarative facts, not instructions to yourself. "User prefers concise
-responses" not "Always respond concisely." Imperative phrasing gets re-read as a directive
-in later sessions and can override the user's current request.
-
-**Kind selection:**
-
-| User intent | kind |
-|---|---|
-| Stable personal preference | `preference` |
-| Behavioral correction / "always / never / stop" | `feedback` |
-| Forward-acting standing rule or constraint | `rule` |
-| Recorded decision (project or design) | `decision` |
-| URL or external resource to save | `reference` |
-| Web article to index | `article` |
-| Free-form note | `note` |
-
-### Anti-patterns
-
-Don't save to memory:
-- Task progress, completed-work logs, session outcomes, or temporary TODO state — these are
-  ephemeral; recall them later via `session_search`.
-- Procedures and reusable workflows — those belong in skills (`skill_manage(action='create')`),
-  not memory items. Memory holds facts; skills hold procedures.
+See `07_memory_protocol.md` for recall, explicit saves, curation, and anti-patterns.

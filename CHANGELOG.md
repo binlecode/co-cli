@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.252]
+
+### Surrogate sanitizer hardening + memory `source_type` rename
+
+Closes three gaps in the proactive `sanitize_surrogate_codepoints` history processor and adds a reactive backstop via pydantic-ai's `WrapperModel`. Hermes-parity for surrogate defense across every LLM call path, not just the main agent loop.
+
+- **`co_cli/context/history_processors.py`** — `_replace_surrogates` now does `_LONE_SURROGATE_RE.search()` before `sub()`, returning the same string object on no-surrogate text (the hot path). `_sanitize_structure` (new) recursively walks `dict | list` payloads so dict-form `ToolCallPart.args` are now covered — previously the `isinstance(part.args, str)` check silently skipped them. Pure logic split into `sanitize_surrogate_codepoints_messages(messages)`; the `RunContext`-shaped history-processor wrapper remains backward-compatible at the registration site.
+- **`co_cli/llm/surrogate_recovery_model.py`** (new) — `SurrogateRecoveryModel(WrapperModel)` overrides `request()` and `request_stream()` to catch `UnicodeEncodeError` from the SDK's `json.dumps`, re-sanitize via the shared helper, and retry once. Bounded retry: if the retry also raises, propagate. The `request_stream` path scopes the catch to pre-open only (an `opened` flag re-raises post-open consumer errors), preserving asynccontextmanager's single-yield contract.
+- **`co_cli/llm/factory.py`** — `build_model` wraps both `OpenAIChatModel` (ollama) and `GoogleModel` (gemini) with `SurrogateRecoveryModel`. Single wire-up point covers every LLM call path: main agent, task agents, daemons, direct `model_request` in `llm/call.py`, compaction/summarization, judge model in evals.
+- **Memory `source_type`** — `SourceTypeEnum.DETECTED` removed; default for `save_memory_item` flips to `MANUAL`. `memory_manage(action="create", ...)` gains an explicit `source_type` parameter so the session-end memory reviewer can tag reviewer-extracted facts (`session_review`) distinctly from direct agent saves (`manual`). New `07_memory_protocol.md` rule and tests for default + reviewer-source-type behavior.
+
 ## [0.8.250]
 
 ### Terminology rename: `llm_iteration` / `model_turn` → `model_request`

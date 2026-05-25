@@ -140,7 +140,7 @@ def save_memory_item(
     title: str | None = None,
     description: str | None = None,
     source_url: str | None = None,
-    source_type: str = SourceTypeEnum.DETECTED.value,
+    source_type: str = SourceTypeEnum.MANUAL.value,
     decay_protected: bool = False,
     consolidation_similarity_threshold: float = 0.75,
     index_store: "IndexStore | None" = None,
