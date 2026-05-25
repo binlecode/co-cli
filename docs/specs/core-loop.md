@@ -269,7 +269,7 @@ Processor roles:
 | Processor | Role |
 | --- | --- |
 | `dedup_tool_results` | collapses identical `(tool_name, content-hash)` `ToolReturnPart`s in the pre-tail region into back-references pointing at the latest `tool_call_id` |
-| `evict_old_tool_results` | content-clears `COMPACTABLE_TOOLS` returns older than the 5-most-recent per tool name; replaces with a semantic marker; protects the last turn (from last `UserPromptPart` onward) |
+| `evict_old_tool_results` | content-clears tool returns older than the 5-most-recent per tool name; replaces with a semantic marker; protects the last turn (from last `UserPromptPart` onward) |
 | `enforce_request_size` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; the cheap (non-LLM) path that fires before `proactive_window_processor` |
 | `proactive_window_processor` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 | `sanitize_surrogate_codepoints` | replaces lone Unicode surrogates (U+D800–U+DFFF) with U+FFFD across all parts; guards against `UnicodeEncodeError` from byte-token reasoning models |

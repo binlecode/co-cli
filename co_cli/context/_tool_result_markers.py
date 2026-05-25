@@ -5,9 +5,8 @@ placeholder with a per-tool description that preserves intent and outcome
 signal (tool name, key args, char/line count) so the summarizer and future
 turns retain a recognizable trace of what the cleared call did.
 
-Per-tool handlers cover every member of ``COMPACTABLE_TOOLS``. A generic
-fallback handles any tool that drifts into the compactable set without an
-explicit handler.
+Per-tool handlers cover the high-volume read tools. A generic fallback
+handles any other tool — every return is eligible for clearing.
 """
 
 from __future__ import annotations
@@ -16,8 +15,6 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from co_cli.tools.categories import COMPACTABLE_TOOLS
-
 _ARG_PREVIEW_MAX = 40
 _CMD_PREVIEW_MAX = 80
 _URL_PREVIEW_MAX = 80
@@ -25,24 +22,30 @@ _QUERY_PREVIEW_MAX = 60
 
 _SHELL_EXIT_RE = re.compile(r"^exit (-?\d+):")
 
+_MARKER_PREFIX_RE = re.compile(r"^\[[a-z_][a-z0-9_]*\] ")
+
 
 def is_cleared_marker(content: object) -> bool:
     """True when content was produced by ``evict_old_tool_results`` as a replacement.
 
     Matches the static ``_CLEARED_PLACEHOLDER`` fallback (for non-string
-    content) and per-tool semantic markers whose prefix is a known
-    compactable tool name. Used by tests and evals to detect "was this
-    return cleared?" without depending on the exact marker format.
+    content) and per-tool semantic markers whose prefix is any tool name
+    matching co's naming convention (lowercase + underscore). Used by tests
+    and evals to detect "was this return cleared?" without depending on the
+    exact marker format.
 
-    Unknown prefixes (``[file] ...`` from verbatim file_find output,
-    ``[Reply]`` in an email body, ``[TODO]`` in a note) correctly return
-    False — only compactable-tool markers are recognized.
+    The regex's lowercase/underscore restriction bounds the collision risk
+    against unrelated string content that happens to start with ``[...] ``.
+    The predicate is only called on already-cleared returns inside
+    ``_build_cleared_part`` (idempotency) and ``strip_all_tool_returns``
+    (idempotency), so false positives at the call site are constrained by
+    construction.
     """
     if not isinstance(content, str):
         return False
     if content.startswith("[tool result cleared"):
         return True
-    return any(content.startswith(f"[{tool}] ") for tool in COMPACTABLE_TOOLS)
+    return _MARKER_PREFIX_RE.match(content) is not None
 
 
 def _truncate(value: str, max_len: int) -> str:

@@ -31,7 +31,6 @@ from co_cli.context.history_processors import (
     dedup_tool_results,
     enforce_request_size,
     evict_old_tool_results,
-    sanitize_surrogate_codepoints,
 )
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
@@ -61,8 +60,7 @@ async def _run_chain(ctx: RunContext, messages: list[ModelMessage]) -> list[Mode
     out = dedup_tool_results(ctx, messages)
     out = evict_old_tool_results(ctx, out)
     out = enforce_request_size(ctx, out)
-    out = await proactive_window_processor(ctx, out)
-    return sanitize_surrogate_codepoints(ctx, out)
+    return await proactive_window_processor(ctx, out)
 
 
 def _user(text: str) -> ModelRequest:

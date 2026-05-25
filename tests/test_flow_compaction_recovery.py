@@ -92,10 +92,9 @@ async def test_recover_strip_only_fits():
 
     assert recovered is not None
     assert len(recovered) == len(messages), "strip preserves message count"
-    # ret_a (file_read, compactable) → per-tool marker.
+    # ret_a (file_read) → per-tool marker.
     assert recovered[2].parts[0].content.startswith("[file_read] ")
-    # ret_b (memory_create, non-compactable) is also stripped — strip has no filter.
-    # is_cleared_marker() does not recognize this prefix; assert by tool name directly.
+    # ret_b (memory_create) is also stripped — strip is universal across tool names.
     assert recovered[4].parts[0].content.startswith("[memory_create] ")
     # No compaction marker injected — strip-only path bypasses apply_compaction.
     for msg in recovered:

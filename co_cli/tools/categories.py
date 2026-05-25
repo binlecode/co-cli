@@ -26,17 +26,3 @@ FILE_TOOLS: frozenset[str] = frozenset(
         "file_find",
     }
 )
-
-# Tools whose results are content-cleared when older than the N most recent
-# per-tool returns. Keeps context window lean for high-volume read tools.
-COMPACTABLE_TOOLS: frozenset[str] = frozenset(
-    {
-        "file_read",
-        "shell_exec",
-        "file_search",
-        "file_find",
-        "web_search",
-        "web_fetch",
-        "obsidian_read",
-    }
-)

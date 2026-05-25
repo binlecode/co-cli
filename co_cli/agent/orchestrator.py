@@ -15,7 +15,6 @@ from co_cli.context.history_processors import (
     dedup_tool_results,
     enforce_request_size,
     evict_old_tool_results,
-    sanitize_surrogate_codepoints,
 )
 
 if TYPE_CHECKING:
@@ -72,6 +71,5 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
         evict_old_tool_results,
         enforce_request_size,
         proactive_window_processor,
-        sanitize_surrogate_codepoints,
     ),
 )

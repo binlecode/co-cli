@@ -9,8 +9,7 @@ external callers have a single import surface.
 Submodule map:
     _compaction_boundaries  — TurnGroup, group_by_turn, plan_compaction_boundaries
     _compaction_markers     — static/summary/todo markers, enrichment context
-    history_processors     — dedup_tool_results, evict_old_tool_results,
-                             sanitize_surrogate_codepoints
+    history_processors     — dedup_tool_results, evict_old_tool_results
 """
 
 from __future__ import annotations
@@ -351,8 +350,8 @@ async def recover_overflow_history(
     """Single-tier overflow recovery: strip-then-summarize.
 
     PATH 1: strip every ToolReturnPart to a per-tool semantic marker (no
-            ``COMPACTABLE_TOOLS`` filter, no recency cap, no boundary). If the
-            stripped history fits the budget, return it directly — no LLM call.
+            recency cap, no boundary). If the stripped history fits the
+            budget, return it directly — no LLM call.
 
     PATH 2: run ``plan_compaction_boundaries`` + ``compact_messages`` on the
             stripped history. Returns None when the planner cannot find valid

@@ -10,13 +10,12 @@ Registered processors:
     evict_old_tool_results      — content-clears compactable tool results by recency
     enforce_request_size        — force-spills largest unspilled tool returns when full
                                   request exceeds spill_threshold_tokens
-    sanitize_surrogate_codepoints — replaces lone Unicode surrogates with U+FFFD
 
 Recovery helpers (not registered as processors):
     strip_all_tool_returns      — collapses every tool return to a semantic marker;
                                   used by overflow recovery to cut tokens before retry.
-                                  Differs from evict_old_tool_results: no COMPACTABLE_TOOLS
-                                  filter, no recency cap, no boundary protection.
+                                  Differs from evict_old_tool_results: no recency cap,
+                                  no boundary protection.
 """
 
 from __future__ import annotations
@@ -55,11 +54,10 @@ from co_cli.context.summarization import estimate_message_tokens, latest_respons
 from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.observability.tracing import current_span
-from co_cli.tools.categories import COMPACTABLE_TOOLS
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, spill_if_oversized
 
 COMPACTABLE_KEEP_RECENT = 5
-"""Keep the N most-recent tool returns per compactable tool type; clear older.
+"""Keep the N most-recent tool returns per tool name; clear older.
 
 Borrowed from ``fork-claude-code/services/compact/timeBasedMCConfig.ts:33``
 (``keepRecent: 5``). Not convergent across peers — codex, hermes, and
@@ -152,18 +150,16 @@ def _build_durable_call_ids(messages: list[ModelMessage], boundary: int) -> set[
     back-references that ``evict_old_tool_results`` will subsequently clear.
     """
     durable: set[str] = set()
-    # Tail-protected: compactable returns at or after boundary always survive.
+    # Tail-protected: tool returns at or after boundary always survive.
     for msg in messages[boundary:]:
         if not isinstance(msg, ModelRequest):
             continue
         for part in msg.parts:
-            if isinstance(part, ToolReturnPart) and part.tool_name in COMPACTABLE_TOOLS:
+            if isinstance(part, ToolReturnPart):
                 durable.add(part.tool_call_id)
     # Pre-tail: mirror truncate's keep-recent logic using tool_call_id strings.
     seen_counts: dict[str, int] = {}
     for part in _iter_tool_returns_reversed(messages[:boundary]):
-        if part.tool_name not in COMPACTABLE_TOOLS:
-            continue
         count = seen_counts.get(part.tool_name, 0)
         if count < COMPACTABLE_KEEP_RECENT:
             durable.add(part.tool_call_id)
@@ -177,14 +173,14 @@ def dedup_tool_results(
 ) -> list[ModelMessage]:
     """Collapse repeat returns of the same ``(tool_name, content)`` pair to back-references.
 
-    For each compactable tool return whose content (≥ 200 chars, string)
-    duplicates a more recent return of the same tool, replace with a 1-line
-    back-reference marker naming the latest ``call_id``. Only the latest
-    occurrence of each ``(tool, hash)`` retains full content.
+    For each tool return whose content (≥ 200 chars, string) duplicates a
+    more recent return of the same tool, replace with a 1-line back-reference
+    marker naming the latest ``call_id``. Only the latest occurrence of each
+    ``(tool, hash)`` retains full content.
 
     Protects the last turn via the same ``_find_last_turn_start`` boundary
-    M2a uses. Non-string content and non-compactable tools pass through
-    unchanged (same safety envelope as ``evict_old_tool_results``).
+    M2a uses. Non-string content and content below the dedup floor pass
+    through unchanged (same safety envelope as ``evict_old_tool_results``).
 
     Back-references are only emitted when the target ``latest_id`` is durable
     (will survive ``evict_old_tool_results``). A non-durable target means the
@@ -220,8 +216,6 @@ def _build_keep_ids(older: list[ModelMessage]) -> set[int]:
     keep_ids: set[int] = set()
     seen_counts: dict[str, int] = {}
     for part in _iter_tool_returns_reversed(older):
-        if part.tool_name not in COMPACTABLE_TOOLS:
-            continue
         count = seen_counts.get(part.tool_name, 0)
         if count < COMPACTABLE_KEEP_RECENT:
             keep_ids.add(id(part))
@@ -285,7 +279,7 @@ def evict_old_tool_results(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """Content-clear compactable tool results older than the 5 most recent per tool type.
+    """Content-clear tool results older than the 5 most recent per tool name.
 
     Replacement content is a per-tool semantic marker (see
     ``semantic_marker``) carrying tool name, key args, and a size/outcome
@@ -293,7 +287,8 @@ def evict_old_tool_results(
     ToolReturnPart carries non-string content.
 
     Protects the last turn (everything from the last UserPromptPart onward).
-    Non-compactable tools pass through intact regardless of count.
+    Every tool name competes for its own keep-recent slot — eligibility is
+    content-shape only, not tool selectivity.
 
     Registered after ``dedup_tool_results`` so the kept window has already
     been collapsed for identical repeats before recency-based clearing
@@ -309,7 +304,7 @@ def evict_old_tool_results(
     call_id_to_args = _build_call_id_to_args(messages[:boundary])
 
     def replacement_for(part: ToolReturnPart) -> ToolReturnPart | None:
-        if part.tool_name not in COMPACTABLE_TOOLS or id(part) in keep_ids:
+        if id(part) in keep_ids:
             return None
         return _build_cleared_part(part, call_id_to_args)
 
@@ -480,16 +475,15 @@ def enforce_request_size(
 def strip_all_tool_returns(messages: list[ModelMessage]) -> list[ModelMessage]:
     """Replace every ToolReturnPart.content with a semantic marker.
 
-    Differs from ``evict_old_tool_results`` in three ways: no
-    ``COMPACTABLE_TOOLS`` filter, no recency cap, no boundary protection.
-    Every tool return — compactable and non-compactable, including writes,
-    approvals, and memory ops — is reduced to a one-line marker. Tool-call
-    pairing is preserved by construction (only ``.content`` is rewritten,
-    ``tool_name`` and ``tool_call_id`` survive).
+    Differs from ``evict_old_tool_results`` in two ways: no recency cap, no
+    boundary protection. Every tool return — including writes, approvals,
+    and memory ops — is reduced to a one-line marker. Tool-call pairing is
+    preserved by construction (only ``.content`` is rewritten, ``tool_name``
+    and ``tool_call_id`` survive).
 
-    Used exclusively by overflow recovery, where preserving signal in
-    non-compactable returns is less valuable than recovering the turn.
-    Cheap: pure, no LLM, no I/O.
+    Used exclusively by overflow recovery, where freeing the entire pre-tail
+    region matters more than preserving the protected window. Cheap: pure,
+    no LLM, no I/O.
     """
     call_id_to_args = _build_call_id_to_args(messages)
 
@@ -604,15 +598,3 @@ def sanitize_surrogate_codepoints_messages(
         else:
             result.append(msg)
     return result
-
-
-def sanitize_surrogate_codepoints(
-    ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-) -> list[ModelMessage]:
-    """History-processor wrapper around :func:`sanitize_surrogate_codepoints_messages`.
-
-    Registered last in the history processor chain so it runs on the final
-    budget-trimmed message list.
-    """
-    return sanitize_surrogate_codepoints_messages(messages)

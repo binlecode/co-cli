@@ -19,8 +19,6 @@ import hashlib
 
 from pydantic_ai.messages import ToolReturnPart
 
-from co_cli.tools.categories import COMPACTABLE_TOOLS
-
 _DEDUP_MIN_CHARS: int = 200
 """Skip content shorter than this: a back-reference marker is larger than the payload.
 
@@ -43,14 +41,11 @@ def _content_hash(content: str) -> str:
 def is_dedup_candidate(part: ToolReturnPart) -> bool:
     """True when a tool return is eligible for hash-based dedup.
 
-    Gates on ``COMPACTABLE_TOOLS`` membership (same gate M2a uses), string
-    content (hashable, non-multimodal), and the ``_DEDUP_MIN_CHARS`` floor.
+    Gates on string content (hashable, non-multimodal) and the
+    ``_DEDUP_MIN_CHARS`` floor. Tool name is not a factor — eligibility is
+    content-shape only, matching ``evict_old_tool_results``.
     """
-    return (
-        part.tool_name in COMPACTABLE_TOOLS
-        and isinstance(part.content, str)
-        and len(part.content) >= _DEDUP_MIN_CHARS
-    )
+    return isinstance(part.content, str) and len(part.content) >= _DEDUP_MIN_CHARS
 
 
 def dedup_key(part: ToolReturnPart) -> str:

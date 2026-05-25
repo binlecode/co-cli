@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.254]
+
+### Remove `COMPACTABLE_TOOLS` whitelist — unified clearing policy
+
+Deletes the 7-entry `COMPACTABLE_TOOLS` frozenset that gated tool-return content-clearing eligibility. Proactive (`evict_old_tool_results`, `dedup_tool_results`) and recovery (`strip_all_tool_returns`) paths now share one policy: every tool return is eligible past `COMPACTABLE_KEEP_RECENT = 5` per tool name; eligibility is content-shape only, not tool selectivity. Aligns co with the cross-peer default-clear pattern (Hermes/Openclaw uniform; Opencode 1-entry blacklist) — co was the only peer with a whitelist.
+
+- **`co_cli/tools/categories.py`** — `COMPACTABLE_TOOLS` deleted. `FILE_TOOLS` and `PATH_NORMALIZATION_TOOLS` retained.
+- **`co_cli/context/history_processors.py`** — 4 filter guards removed from `_build_durable_call_ids`, the durable-tail-protected loop, `_build_keep_ids`, and `evict_old_tool_results` short-circuit. Per-tool-name keep-recent gate iterates by `part.tool_name` only — no category filter. Docstrings reworded.
+- **`co_cli/context/_dedup_tool_results.py`** — `is_dedup_candidate` eligibility is now `string content AND len ≥ 200`; tool-name clause removed.
+- **`co_cli/context/_tool_result_markers.py`** — `is_cleared_marker` rewritten to recognize any tool-name prefix via `_MARKER_PREFIX_RE = re.compile(r"^\[[a-z_][a-z0-9_]*\] ")` instead of scanning a fixed set. Static `[tool result cleared` prefix branch retained. Generic per-tool fallback marker (`[{tool_name}] (N chars)`) becomes the path for every tool without an explicit branch.
+- **Specs** — `compaction.md` §2.3/§2.7/§4/§5, `core-loop.md`, `prompt-assembly.md` rewritten to drop the whitelist framing. Worked examples re-rendered without the "non-compactable preserved" pathway.
+- **Tests** — `test_evict_clears_unknown_tool_via_generic_fallback` added to prove an unknown tool (`memory_create`, not in the old whitelist) gets cleared via the generic fallback path after > `KEEP_RECENT` returns. Recency-protection and last-turn-protection tests preserved. Recovery test docstring + comment updated to document the no-filter rule.
+
+### Surrogate sanitizer follow-up — drop proactive history processor
+
+Reactive `SurrogateRecoveryModel` wrapper from 0.8.252 covers every LLM call path, so the proactive `sanitize_surrogate_codepoints` history processor is redundant. Wrapper removed from `orchestrator.py`'s registered processor tuple; the pure helper `sanitize_surrogate_codepoints_messages` remains in `history_processors.py` for direct callers (the reactive wrapper).
+
 ## [0.8.252]
 
 ### Surrogate sanitizer hardening + memory `source_type` rename

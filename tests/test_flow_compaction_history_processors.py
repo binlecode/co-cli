@@ -17,7 +17,7 @@ from co_cli.context.history_processors import (
     COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
     evict_old_tool_results,
-    sanitize_surrogate_codepoints,
+    sanitize_surrogate_codepoints_messages,
 )
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
@@ -174,6 +174,51 @@ def test_evict_keeps_all_when_at_limit():
     assert not any(is_cleared_marker(p.content) for p in returns)
 
 
+def test_evict_clears_unknown_tool_via_generic_fallback():
+    """Unknown tool names follow the same recency policy as known ones (no whitelist)."""
+    total = COMPACTABLE_KEEP_RECENT + 1
+    messages: list = []
+    for i in range(total):
+        messages.append(ModelRequest(parts=[UserPromptPart(content=f"call {i}")]))
+        messages.append(
+            ModelResponse(
+                parts=[
+                    TextPart(content="ok"),
+                    ToolCallPart(
+                        tool_name="memory_create",
+                        args='{"title": "t"}',
+                        tool_call_id=f"call{i}",
+                    ),
+                ]
+            )
+        )
+        messages.append(
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="memory_create",
+                        content=f"created article 'note{i}' " * 20,
+                        tool_call_id=f"call{i}",
+                    )
+                ]
+            )
+        )
+    messages.append(ModelRequest(parts=[UserPromptPart(content="pending")]))
+
+    result = evict_old_tool_results(_ctx(), messages)
+
+    returns = [
+        p
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for p in msg.parts
+        if isinstance(p, ToolReturnPart) and p.tool_name == "memory_create"
+    ]
+    oldest = next(p for p in returns if p.tool_call_id == "call0")
+    assert is_cleared_marker(oldest.content)
+    assert oldest.content.startswith("[memory_create]")
+
+
 def test_evict_protects_tool_returns_in_last_turn():
     """Tool returns in the last user turn must never be evicted regardless of count."""
     protected_content = "protected " * 30
@@ -242,27 +287,8 @@ def test_dedup_tolerates_lone_surrogate_content():
     assert call2.content == surrogate_content, "newer call must retain original content"
 
 
-def test_sanitize_dict_form_tool_call_args():
-    """sanitize_surrogate_codepoints replaces surrogates inside dict-form ToolCallPart.args."""
-    messages = [
-        ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name="file_read",
-                    args={"path": "foo\ud800bar"},
-                    tool_call_id="c1",
-                )
-            ]
-        )
-    ]
-    result = sanitize_surrogate_codepoints(_ctx(), messages)
-    part = result[0].parts[0]
-    assert isinstance(part.args, dict)
-    assert part.args["path"] == "foo�bar"
-
-
 def test_sanitize_nested_dict_list_args():
-    """sanitize_surrogate_codepoints walks nested dict/list structures."""
+    """sanitize_surrogate_codepoints_messages walks nested dict/list structures."""
     messages = [
         ModelResponse(
             parts=[
@@ -280,7 +306,7 @@ def test_sanitize_nested_dict_list_args():
             ]
         )
     ]
-    result = sanitize_surrogate_codepoints(_ctx(), messages)
+    result = sanitize_surrogate_codepoints_messages(messages)
     args = result[0].parts[0].args
     assert args["items"][0]["name"] == "x�"
     assert args["items"][1]["name"] == "clean"
@@ -288,10 +314,10 @@ def test_sanitize_nested_dict_list_args():
 
 
 def test_sanitize_clean_args_unchanged():
-    """sanitize_surrogate_codepoints is identity on clean dict args (no allocation)."""
+    """sanitize_surrogate_codepoints_messages is identity on clean dict args (no allocation)."""
     clean_args = {"path": "/a.txt", "items": [{"name": "clean"}]}
     messages = [
         ModelResponse(parts=[ToolCallPart(tool_name="t", args=clean_args, tool_call_id="c3")])
     ]
-    result = sanitize_surrogate_codepoints(_ctx(), messages)
+    result = sanitize_surrogate_codepoints_messages(messages)
     assert result[0].parts[0].args is clean_args

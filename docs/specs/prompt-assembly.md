@@ -78,7 +78,7 @@ Pure-transformer processors run in this exact order (registered in `build_orches
 | Processor | Behavior |
 | --- | --- |
 | `dedup_tool_results` | collapses identical `(tool_name, content-hash)` returns in the pre-tail region into back-references pointing at the latest `tool_call_id` |
-| `evict_old_tool_results` | content-clears `COMPACTABLE_TOOLS` returns older than the 5-most-recent per tool name; protects last user turn |
+| `evict_old_tool_results` | content-clears tool returns older than the 5-most-recent per tool name; protects last user turn |
 | `enforce_request_size` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; cheap (non-LLM) per-request cap that runs before `proactive_window_processor`. See [compaction.md](compaction.md) §2.4. |
 | `proactive_window_processor` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full design in [compaction.md](compaction.md) |
 | `sanitize_surrogate_codepoints` | replaces lone Unicode surrogates (U+D800–U+DFFF) with U+FFFD across all parts; guards against `UnicodeEncodeError` |
