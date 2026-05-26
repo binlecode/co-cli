@@ -64,14 +64,14 @@ _finalize_turn()  (main.py)
 |---|---|---|---|---|
 | **L0** | `lifecycle.wrap_tool_execute` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
 | **L1** | `tool_output()` in native tools, `lifecycle.after_tool_execute` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
-| **L2** | `enforce_request_size` history processor | `max(estimate_message_tokens, latest_response_input_tokens) > deps.spill_threshold_tokens` | Force-spill largest unspilled string `ToolReturnPart`s, largest-first, until aggregate ≤ threshold | No |
-| **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND not anti-thrash-tripped AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | [search breadcrumbs] | tail` | Yes (static marker fallback) |
+| **L2** | `enforce_request_size` history processor | `max(estimate_message_tokens, runtime.last_reported_input_tokens) > deps.spill_threshold_tokens` | Force-spill largest unspilled string `ToolReturnPart`s, largest-first, until aggregate ≤ threshold | No |
+| **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND not anti-thrash-tripped AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail` | Yes (static marker fallback) |
 | **Recovery** | `run_turn` overflow branch | `is_context_overflow(e)` AND `overflow_recovery_attempted == False` | `strip_all_tool_returns`; if still over budget, planner + `compact_messages` + `commit_compaction` on stripped history | Yes (static marker fallback) |
 | **Manual** | `/compact [focus]` slash command | User-invoked | `compact_messages` with full-history bounds `(0, n, n)` + `commit_compaction`; same degradation policy as L3 | Yes (static marker fallback) |
 
 L1 / L2 / L3 fast-path when below their threshold. The validator at `config/compaction.py:_validate_shape` enforces `tail_fraction < compaction_ratio` and `spill_ratio ≤ compaction_ratio` so L2 spill (cheap) precedes L3 LLM summarization, and post-compact state always leaves headroom before the trigger re-fires.
 
-All three LLM-capable paths share one primitive — `compact_messages(ctx, messages, bounds, focus)` — which slices, runs the gated summarizer, and assembles `head | marker | [todo_snapshot] | [search breadcrumbs] | tail`. Each path then calls `commit_compaction` (the single writer of the three "applied" runtime fields). Proactive layers its own savings / status-callback / OTEL / thrash policy on top inside `proactive_window_processor`; Recovery and Manual handle their own status messaging upstream. Static vs. summary markers differ only in whether a non-empty summary string is available.
+All three LLM-capable paths share one primitive — `compact_messages(ctx, messages, bounds, focus)` — which slices, runs the gated summarizer, and assembles `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail`. Each path then calls `commit_compaction` (the single writer of the three "applied" runtime fields). Proactive layers its own savings / status-callback / OTEL / thrash policy on top inside `proactive_window_processor`; Recovery and Manual handle their own status messaging upstream. Static vs. summary markers differ only in whether a non-empty summary string is available.
 
 **Why per-request cadence.** Context pressure rises mid-turn — a single tool round can append a 50K-char shell output plus several `file_read` results, pushing the next request over budget before the user speaks again. Per-turn cadence would catch overflow only reactively via HTTP 400/413.
 
@@ -172,7 +172,7 @@ Four `ModelRequestNode` snapshots across a user turn that crosses the compaction
   ModelResponse   TextPart        (1st turn)         ┘
   ModelRequest    UserPromptPart  (COMPACTION MARKER)    ← summary or static
   ModelRequest    UserPromptPart  (todo snapshot)        ┐ metadata
-  ModelRequest    ToolReturnPart  (search breadcrumbs)   ┘ (carried over)
+  ModelRequest    ToolReturnPart  (deferred-tool discoveries)   ┘ (carried over)
   ModelRequest    UserPromptPart  (current)          ┐
   ModelResponse   ToolCallPart    (file_read)        │ current turn
   ModelRequest    ToolReturnPart  (result1)          ┘
@@ -187,7 +187,7 @@ Four `ModelRequestNode` snapshots across a user turn that crosses the compaction
   ModelResponse   TextPart        (1st turn)         ┘
   ModelRequest    UserPromptPart  (COMPACTION MARKER)    ← persists across requests
   ModelRequest    UserPromptPart  (todo snapshot)
-  ModelRequest    ToolReturnPart  (search breadcrumbs)
+  ModelRequest    ToolReturnPart  (deferred-tool discoveries)
   ModelRequest    UserPromptPart  (current)          ┐
   ModelResponse   ToolCallPart    (file_read)        │
   ModelRequest    ToolReturnPart  (result1)          │ two tools resolved
@@ -200,21 +200,20 @@ Four `ModelRequestNode` snapshots across a user turn that crosses the compaction
 
 ### 1.5 Runtime flag and callback map
 
-Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Five fields are per-turn (cleared by `reset_for_turn()`); five are cross-turn (cleared explicitly by `/new` and `/clear`, plus path-specific resets).
+Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Per-turn fields are cleared by `reset_for_turn()`; cross-turn fields are cleared explicitly by `/new` and `/clear`, plus path-specific resets.
 
 | Field | Written by | Read by | Reset by |
 |---|---|---|---|
 | `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `proactive_window_processor` (zeros `reported`); `_finalize_turn` (drives transcript rewrite) | `reset_for_turn` |
 | `current_request_tokens_estimate` | `enforce_request_size` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch) | `reset_for_turn` |
 | `tool_call_limit_run_step`, `tool_calls_in_model_request` | `lifecycle.wrap_tool_execute` per call | L0 cap check + telemetry span | `lifecycle.wrap_tool_execute` on `ctx.run_step` change |
-| `post_compaction_token_estimate` | `commit_compaction` (sole writer) | `proactive_window_processor` (cross-turn stale guard) | `/new`, `/clear`; proactive on observed fresh `ModelResponse` |
-| `message_count_at_last_compaction` | `commit_compaction` (sole writer) | `proactive_window_processor` (guard-clear test) | `/new`, `/clear`; proactive on observed fresh `ModelResponse` |
+| `last_reported_input_tokens` | `TokenTrackingCapability.after_model_request` from `ModelResponse.usage.input_tokens` (>0); overwritten by `commit_compaction` with the local post-compaction estimate | `proactive_window_processor` (cross-turn `reported`); `enforce_request_size` (L2 trigger); `_finalize_turn` (OTEL ratio) | `/new`, `/clear` |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
 | `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; anti-thrash banner | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact` |
 
 **Sole callback into the frontend.** `runtime.status_callback` is set by `run_turn` to `frontend.on_status` and is the only frontend hook the processor chain sees — used by `_gated_summarize_or_none` to print "Compacting conversation…" (opening, gate-open paths only) and by `proactive_window_processor` to emit the closing status ("Compacted." / "LLM compaction unavailable — used static marker." / "Summarizer failed — used static marker.") via the `_record_proactive_outcome` helper. Recovery and `/compact` emit their own status messaging upstream (via `frontend.on_status` in `orchestrate.py` and `console.print` in the slash command, respectively). Tool progress goes through the separate `tool_progress_callback`.
 
-**Cross-turn cleared on observed fresh response.** `post_compaction_token_estimate` and `message_count_at_last_compaction` are cleared inside `proactive_window_processor` only when a `ModelResponse` with `usage.input_tokens > 0` exists at index `>= message_count_at_last_compaction` — proving the LLM has actually seen the post-compaction context. Message-count delta alone is unreliable (post-compaction tool returns or user messages may be appended without a fresh LLM call).
+**Tracked input-token field replaces message-history scanning.** `runtime.last_reported_input_tokens` is the single source of "latest provider-reported input_tokens." Written by `TokenTrackingCapability` after every successful model request whose response carries `usage.input_tokens > 0`. `commit_compaction` overwrites it with the local post-compaction estimate so the next trigger pass sees the compacted size, not the pre-compaction provider value. No stale-token guard is needed — the field is always current by construction.
 
 ## 2. Core Logic
 
@@ -370,7 +369,7 @@ L2's per-request cap. Operates on the **full message list** at `ModelRequestNode
 
 **Algorithm.**
 
-1. `total = max(estimate_message_tokens(messages), latest_response_input_tokens(messages))` — folds local char-based estimate with the most recent provider-reported input-token count to bias toward earlier spilling.
+1. `total = max(estimate_message_tokens(messages), deps.runtime.last_reported_input_tokens or 0)` — folds local char-based estimate with the latest provider-reported input-token count to bias toward earlier spilling.
 2. If `total ≤ deps.spill_threshold_tokens`, fast-path.
 3. Walk every `ModelRequest`, collect all `ToolReturnPart`s with string content as candidates. Filter spillable: those whose content does not start with `PERSISTED_OUTPUT_TAG`.
 4. Sort spillable largest-first by `len(content)`.
@@ -419,8 +418,7 @@ proactive_window_processor — full path
     local_estimate    = estimate_message_tokens(messages)
     reported_estimate = (
         0  if compaction_applied_this_turn
-        else post_compaction_token_estimate (stale guard)
-          or latest_response_input_tokens(messages)
+        else runtime.last_reported_input_tokens or 0
     )
     token_count = max(local_estimate, reported_estimate)
                     ↑ biases toward earlier compaction
@@ -454,7 +452,7 @@ proactive_window_processor — full path
 
   ─ STEP 4: assembly (compact_messages — see §2.6) ───────────────
     summary = _gated_summarize_or_none(messages[head_end:tail_start])
-    result  = head | marker | [todo_snapshot] | [search breadcrumbs] | tail
+    result  = head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail
 
   ─ STEP 5: post-compaction feedback (anti-thrash counter) ───────
     savings = (tokens_before − tokens_after) / tokens_before   (tokens_before = max(local, reported))
@@ -465,20 +463,17 @@ proactive_window_processor — full path
 
   ─ STEP 6: commit (last step before return) ─────────────────────
     commit_compaction(ctx, result)           ← sole writer of:
-      runtime.compaction_applied_this_turn      = True
-      runtime.post_compaction_token_estimate    = tokens_after
-      runtime.message_count_at_last_compaction  = len(result)
+      runtime.compaction_applied_this_turn  = True
+      runtime.last_reported_input_tokens    = tokens_after
 ```
 
 All STEPs above live inside `proactive_window_processor` — the trigger gates (threshold + anti-thrash gate), trigger-check OTEL span, and the post-compaction policy (savings, status callback, OTEL execution attributes, thrash counter, commit) are co-located. STEP 4 calls `compact_messages` — the shared assembly primitive also used by recovery PATH 2 and `/compact`. STEPs 5–6 are bundled in the private helper `_record_proactive_outcome`, which is proactive-only (recovery and `/compact` skip it: they don't track savings, don't fire the closing callback, and `/compact` resets the thrash counter unconditionally upstream). See §2.6 for the assembly logic, enrichment helper, summarizer LLM call, and circuit breaker.
 
-**Task-3 invariant.** STEPs 4 and 5 happen *before* STEP 6's `commit_compaction` call. If anything between STEP 4 and STEP 6 raises (e.g. `estimate_message_tokens` on malformed content, savings calc edge cases), the exception propagates with runtime untouched; `proactive_window_processor`'s bare `except` returns the original `messages` reference. `commit_compaction` itself computes the token estimate before any write so a token-estimator failure inside the helper also leaves runtime untouched. Partial-commit state cannot leak across turns.
-
-**Stale-suppression guard.** STEP 1's `post_compaction_token_estimate` branch only clears once a `ModelResponse` with `input_tokens > 0` exists in `messages[message_count_at_last_compaction:]` — message-count delta alone is unreliable since post-compaction tool returns or user messages may have been appended without a fresh LLM call.
+**Single-writer atomicity.** STEPs 4 and 5 happen *before* STEP 6's `commit_compaction` call. If anything between STEP 4 and STEP 6 raises (e.g. `estimate_message_tokens` on malformed content, savings calc edge cases), the exception propagates with runtime untouched; `proactive_window_processor`'s bare `except` returns the original `messages` reference. `commit_compaction` itself computes the token estimate before any write so a token-estimator failure inside the helper also leaves runtime untouched. Partial-commit state cannot leak across turns.
 
 **Token counting:**
 - `estimate_message_tokens(messages)` — `total_chars // CHARS_PER_TOKEN` over text parts and JSON-serialized `ToolCallPart.args`. Args are included because `evict_old_tool_results` clears return content only, never call args.
-- `latest_response_input_tokens(messages)` — most recent `ModelResponse.usage.input_tokens`; zeroed when `compaction_applied_this_turn` (provider count is stale).
+- `runtime.last_reported_input_tokens` — latest provider-reported `ModelResponse.usage.input_tokens`, written by `TokenTrackingCapability`; overwritten by `commit_compaction` with the local post-compaction estimate; zeroed by the trigger when `compaction_applied_this_turn` (within-turn re-trigger short-circuit).
 - `_effective_token_count` — `max(local, reported)`; biases toward earlier compaction.
 
 **Budget resolution.** `resolve_compaction_budget(deps)` returns `deps.model_max_ctx` (Ollama probe capped by `config.llm.max_ctx`, set at bootstrap).
@@ -522,11 +517,11 @@ proactive_window_processor          recover_overflow_history          /compact s
                     │        has_tail=True  (proactive/overflow) → "Recent messages are preserved verbatim."
                     │        has_tail=False (/compact)           → "Continue the conversation from the user's next message."
                     │        static_marker fallback uses STATIC_MARKER_PREFIX, same shape minus summary_text
-                    └── _preserve_search_tool_breadcrumbs(dropped)
-                             ← paired search_tools call/return cycles only; orphans dropped
+                    └── _preserve_deferred_tool_discoveries(dropped)
+                             ← restores the deferred-tool discovery state the SDK rebuilds from history; orphans dropped
 ```
 
-**Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn`, `post_compaction_token_estimate`, and `message_count_at_last_compaction`; the token estimate is computed before any field write so a token-estimator failure leaves runtime untouched (Task-3 invariant).
+**Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn` and the only post-compaction overwriter of `last_reported_input_tokens`; the token estimate is computed before any field write so a token-estimator failure leaves runtime untouched (single-writer atomicity).
 
 | Caller | Calls | Extra side effects (all proactive-only) |
 |---|---|---|
@@ -602,7 +597,7 @@ PATH 2 — strip + summarize (budget still exceeded after strip)
   ModelResponse   TextPart         (1st turn)         ┘
   ModelRequest    UserPromptPart   (COMPACTION MARKER)    ← summary or static
   ModelRequest    UserPromptPart   (todo snapshot)
-  ModelRequest    ToolReturnPart   (search breadcrumbs)
+  ModelRequest    ToolReturnPart   (deferred-tool discoveries)
   ModelRequest / ModelResponse    tail turns          ← retained, returns stripped
 
       │  retry once
@@ -682,8 +677,8 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `compact_messages(ctx, messages, bounds, focus) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer, assembles `head \| marker \| [todo_snapshot] \| [search breadcrumbs] \| tail`; does NOT write runtime |
-| `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn`, `post_compaction_token_estimate`, `message_count_at_last_compaction` |
+| `compact_messages(ctx, messages, bounds, focus) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer, assembles `head \| marker \| [todo_snapshot] \| [deferred-tool discoveries] \| tail`; does NOT write runtime |
+| `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn`; overwrites `last_reported_input_tokens` with the local post-compaction estimate |
 
 ### Compaction entry points
 
@@ -784,4 +779,4 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | Overflow recovery — pairing: every `tool_call_id` in `ToolCallPart`s matches a `ToolReturnPart` (both paths) | `tests/test_flow_compaction_recovery.py` |
 | `strip_all_tool_returns` idempotent on already-marked content | `tests/test_flow_compaction_recovery.py` |
 | `is_context_overflow`: 413 is unconditional; 400 requires overflow evidence in body | `tests/test_flow_http_error_classifier.py` |
-| `/clear` resets compaction runtime fields (`post_compaction_token_estimate`, `message_count_at_last_compaction`) to initial state | `tests/test_flow_slash_commands.py` |
+| `/clear` resets compaction runtime field (`last_reported_input_tokens`) to initial state | `tests/test_flow_compaction_slash_commands.py` |

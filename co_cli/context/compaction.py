@@ -50,7 +50,6 @@ from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.history_processors import strip_all_tool_returns
 from co_cli.context.summarization import (
     estimate_message_tokens,
-    latest_response_input_tokens,
     resolve_compaction_budget,
     summarize_messages,
 )
@@ -75,7 +74,6 @@ __all__ = [
     "is_cleared_marker",
     "is_compaction_marker",
     "is_context_overflow",
-    "latest_response_input_tokens",
     "plan_compaction_boundaries",
     "proactive_window_processor",
     "recover_overflow_history",
@@ -208,10 +206,19 @@ async def _gated_summarize_or_none(
     return summary_text
 
 
-def _preserve_search_tool_breadcrumbs(
+def _preserve_deferred_tool_discoveries(
     dropped: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """Keep paired search_tools tool-call/return cycles across compaction boundaries."""
+    """Carry paired search_tools call/return cycles into the compacted history.
+
+    pydantic-ai's ToolSearchToolset._parse_discovered_tools walks message
+    history for search_tools ToolReturnParts with _DISCOVERED_TOOLS_METADATA_KEY
+    metadata; that set is unioned into the visible toolset each turn. Dropping
+    these pairs across compaction silently revokes every deferred tool the
+    model has unlocked.
+
+    Orphan returns (no paired call) are dropped to avoid emitting broken shapes.
+    """
     call_part_by_id: dict[str, ToolCallPart] = {}
     for msg in dropped:
         if isinstance(msg, ModelResponse):
@@ -246,7 +253,7 @@ async def compact_messages(
 
     Slices by ``bounds``, runs the gated summarizer over the dropped middle,
     builds the marker, and assembles ``head | marker | [todo_snapshot] |
-    [search breadcrumbs] | tail``. Returns ``(result, summary_text)``;
+    [deferred-tool discoveries] | tail``. Returns ``(result, summary_text)``;
     ``summary_text`` is None when the summarizer fell back to a static marker.
 
     Does NOT write runtime — the caller commits via ``commit_compaction`` as
@@ -265,7 +272,7 @@ async def compact_messages(
         *head,
         marker,
         *([todo_snapshot] if todo_snapshot is not None else []),
-        *_preserve_search_tool_breadcrumbs(dropped),
+        *_preserve_deferred_tool_discoveries(dropped),
         *tail,
     ]
     return result, summary_text
@@ -275,20 +282,19 @@ def commit_compaction(
     ctx: RunContext[CoDeps],
     result: list[ModelMessage],
 ) -> None:
-    """Atomically write the three runtime "applied" fields.
+    """Atomically write the two runtime "applied" fields.
 
-    Single writer of ``compaction_applied_this_turn``,
-    ``post_compaction_token_estimate``, and ``message_count_at_last_compaction``.
-    Token estimate is computed before any write so a token-estimator failure
-    leaves runtime untouched (partial-commit prevention).
+    Single writer of ``compaction_applied_this_turn`` and
+    ``last_reported_input_tokens`` (overwrite with the post-compaction local
+    estimate so the next trigger pass doesn't see the stale pre-compaction
+    provider value). Token estimate is computed before any write so a
+    token-estimator failure leaves runtime untouched (partial-commit prevention).
 
-    Callers must invoke this as the last step before returning to preserve the
-    Task-3 invariant.
+    Callers must invoke this as the last step before returning.
     """
     post_token_estimate = estimate_message_tokens(result)
     ctx.deps.runtime.compaction_applied_this_turn = True
-    ctx.deps.runtime.post_compaction_token_estimate = post_token_estimate
-    ctx.deps.runtime.message_count_at_last_compaction = len(result)
+    ctx.deps.runtime.last_reported_input_tokens = post_token_estimate
 
 
 def _record_proactive_outcome(
@@ -306,7 +312,7 @@ def _record_proactive_outcome(
     ``max(local, reported)``), emits execution OTEL attributes onto the
     wrapper span, updates the anti-thrash counter, then commits runtime as
     the final step. Any exception before ``commit_compaction`` leaves runtime
-    untouched (Task-3 invariant).
+    untouched — single-writer atomicity for the "applied" fields.
     """
     cfg = ctx.deps.config.compaction
 
@@ -435,37 +441,10 @@ async def proactive_window_processor(
             return messages
         cfg = ctx.deps.config.compaction
 
-        # --- guard resolution ---
-        guard_active = False
-        guard_cleared = False
-        fresh_responses_after_compact = 0
-
         if ctx.deps.runtime.compaction_applied_this_turn:
             reported = 0
-        elif ctx.deps.runtime.post_compaction_token_estimate is not None:
-            guard_active = True
-            _count = ctx.deps.runtime.message_count_at_last_compaction
-            # Only clear when a ModelResponse that actually saw the post-compaction
-            # history exists. Message-count delta alone is unreliable: the +2 messages
-            # may have been generated from the pre-compaction context (tool returns,
-            # user messages) with no fresh LLM call in between.
-            if _count is not None:
-                fresh_responses_after_compact = sum(
-                    1
-                    for m in messages[_count:]
-                    if isinstance(m, ModelResponse) and m.usage.input_tokens > 0
-                )
-                if fresh_responses_after_compact > 0:
-                    guard_cleared = True
-                    ctx.deps.runtime.post_compaction_token_estimate = None
-                    ctx.deps.runtime.message_count_at_last_compaction = None
-                    reported = latest_response_input_tokens(messages)
-                else:
-                    reported = ctx.deps.runtime.post_compaction_token_estimate
-            else:
-                reported = ctx.deps.runtime.post_compaction_token_estimate
         else:
-            reported = latest_response_input_tokens(messages)
+            reported = ctx.deps.runtime.last_reported_input_tokens or 0
 
         # Trigger uses max(local, reported) to bias toward earlier compaction.
         # Savings uses the same effective-before so reported-driven triggers don't
@@ -474,7 +453,6 @@ async def proactive_window_processor(
         token_count = max(tokens_before_local, reported)
         token_threshold = int(budget * cfg.compaction_ratio)
 
-        # Count tool calls in current history for OTEL diagnostics.
         tool_calls_in_history = sum(
             1
             for m in messages
@@ -484,16 +462,12 @@ async def proactive_window_processor(
         )
 
         log.debug(
-            "Proactive check: msgs=%d local=%d reported=%d count=%d threshold=%d "
-            "guard=%s cleared=%s fresh_resp=%d tool_calls=%d",
+            "Proactive check: msgs=%d local=%d reported=%d count=%d threshold=%d tool_calls=%d",
             len(messages),
             tokens_before_local,
             reported,
             token_count,
             token_threshold,
-            guard_active,
-            guard_cleared,
-            fresh_responses_after_compact,
             tool_calls_in_history,
         )
 
@@ -504,11 +478,6 @@ async def proactive_window_processor(
         span.set_attribute("compaction.token_count", token_count)
         span.set_attribute("compaction.threshold", token_threshold)
         span.set_attribute("compaction.budget", budget)
-        span.set_attribute("compaction.guard_active", guard_active)
-        span.set_attribute("compaction.guard_cleared", guard_cleared)
-        span.set_attribute(
-            "compaction.fresh_responses_after_compact", fresh_responses_after_compact
-        )
         span.set_attribute("compaction.tool_calls_in_history", tool_calls_in_history)
         span.set_attribute(
             "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn

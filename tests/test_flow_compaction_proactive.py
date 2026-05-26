@@ -297,11 +297,15 @@ async def test_thrash_counter_not_incremented_for_reported_driven_compaction() -
         session=CoSessionState(),
         model_max_ctx=200,
     )
+    # Simulate what TokenTrackingCapability.after_model_request would have written
+    # from the trailing ModelResponse's usage. The proactive processor reads this
+    # field, not the scan of message.usage values.
+    deps.runtime.last_reported_input_tokens = 2000
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
 
     # 4-turn meaningful conversation — local estimate ~119 tokens, just above threshold
-    # of 100 (model_max_ctx=200, compaction_ratio=0.50). The last ModelResponse carries
-    # input_tokens=2000 (reported >> local), so token_count = max(119, 2000) = 2000.
+    # of 100 (model_max_ctx=200, compaction_ratio=0.50). last_reported_input_tokens=2000
+    # (reported >> local), so token_count = max(119, 2000) = 2000.
     #
     # After compaction the marker preamble overhead pushes local_after > local_before
     # (~522 tokens for the result vs ~119 for the input), making local savings negative.

@@ -17,7 +17,6 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         return None
 
     ctx.deps.session.session_path = new_session_path(ctx.deps.sessions_dir)
-    ctx.deps.runtime.post_compaction_token_estimate = None
-    ctx.deps.runtime.message_count_at_last_compaction = None
+    ctx.deps.runtime.last_reported_input_tokens = None
     console.print("[dim]Session rotated.[/dim]")
     return []

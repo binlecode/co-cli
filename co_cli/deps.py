@@ -176,8 +176,7 @@ class CoRuntimeState:
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions,
-      post_compaction_token_estimate, message_count_at_last_compaction,
-      persisted_message_count
+      last_reported_input_tokens, persisted_message_count
     """
 
     # Per-model-request brake counter; resets implicitly on ctx.run_step transition.
@@ -201,8 +200,9 @@ class CoRuntimeState:
     active_skill_name: str | None = None
     active_skill_env: dict[str, str] = field(default_factory=dict)
     resume_tool_names: frozenset[str] | None = None
-    # True when compaction ran this turn; drives both session-branching (main.py) and
-    # stale-token suppression (compaction.py). Cleared by reset_for_turn().
+    # True when compaction ran this turn; drives session-branching (main.py) and the
+    # within-turn re-trigger short-circuit in proactive_window_processor. Cleared by
+    # reset_for_turn().
     compaction_applied_this_turn: bool = False
     # Delegation depth — incremented by fork_deps(); guards against recursive delegation.
     agent_depth: int = 0
@@ -210,13 +210,12 @@ class CoRuntimeState:
     # the configured minimum savings threshold.
     # Reset by compaction.py when overflow recovery or hygiene fires.
     consecutive_low_yield_proactive_compactions: int = 0
-    # Cross-turn stale-token suppression: set by apply_compaction / emergency_recover to
-    # a local char-based estimate of the post-compaction message list. Used by
-    # proactive_window_processor as the `reported` value until a fresh ModelResponse
-    # (usage.input_tokens > 0) appears at index >= message_count_at_last_compaction,
-    # proving the LLM has seen the post-compaction context. Cleared by /new and /clear.
-    post_compaction_token_estimate: int | None = None
-    message_count_at_last_compaction: int | None = None
+    # Latest provider-reported input_tokens. Written by TokenTrackingCapability.after_model_request
+    # from each ModelResponse with usage.input_tokens > 0, and overwritten by commit_compaction with
+    # the local post-compaction estimate so the next trigger pass doesn't see the stale pre-compaction
+    # value. Read by proactive_window_processor, enforce_request_size, and the OTEL turn-end ratio.
+    # Cleared by /new and /clear.
+    last_reported_input_tokens: int | None = None
     # Count of messages durably persisted to session_path; accumulates across the session.
     # Not reset per-turn — append-only persistence requires this to grow monotonically.
     persisted_message_count: int = 0

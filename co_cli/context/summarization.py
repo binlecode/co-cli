@@ -16,7 +16,6 @@ import json
 
 from pydantic_ai.messages import (
     ModelMessage,
-    ModelResponse,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -60,18 +59,6 @@ def estimate_message_tokens(messages: list[ModelMessage]) -> int:
                 if args:
                     total_chars += len(json.dumps(args, ensure_ascii=False))
     return total_chars // CHARS_PER_TOKEN
-
-
-def latest_response_input_tokens(messages: list[ModelMessage]) -> int:
-    """Return the most recent provider-reported input token count from message history.
-
-    Scans in reverse for the first ModelResponse with usage.input_tokens > 0.
-    Returns 0 when no such response exists (local/custom models with no usage reporting).
-    """
-    for msg in reversed(messages):
-        if isinstance(msg, ModelResponse) and msg.usage.input_tokens > 0:
-            return msg.usage.input_tokens
-    return 0
 
 
 # ---------------------------------------------------------------------------

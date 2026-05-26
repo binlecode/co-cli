@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.256]
+
+### Hermes-parity input-token tracking — drop stale-suppression guard
+
+The proactive/L2 compaction triggers no longer reverse-scan message history for `ModelResponse.usage.input_tokens`. A new `TokenTrackingCapability` writes `runtime.last_reported_input_tokens` from every successful `after_model_request` hook, and `commit_compaction` overwrites it with the post-compaction local estimate so the next trigger pass sees the compacted size — not the stale pre-compaction provider value. The two-field cross-turn stale-suppression guard (`post_compaction_token_estimate`, `message_count_at_last_compaction`) and the reverse-scan helper `latest_response_input_tokens` are deleted; staleness is gone by construction.
+
+- **New** — `co_cli/context/token_tracking.py` — `TokenTrackingCapability(AbstractCapability[CoDeps])` overriding `after_model_request` to record `usage.input_tokens` (>0) onto `runtime.last_reported_input_tokens`.
+- **`co_cli/deps.py`** — `CoRuntimeState`: deleted `post_compaction_token_estimate` + `message_count_at_last_compaction`; added single `last_reported_input_tokens: int | None = None`. Cross-turn block docstring + `compaction_applied_this_turn` comment updated to reflect the new mechanism.
+- **`co_cli/agent/build.py`** — `TokenTrackingCapability` wired between `ObservabilityCapability` and `CoToolLifecycle` in both orchestrator and task-agent builders. Order-independent for the new capability; existing "Observability FIRST" invariant preserved.
+- **`co_cli/context/compaction.py`** — `commit_compaction` simplified to a two-field write (`compaction_applied_this_turn`, `last_reported_input_tokens ← post_token_estimate`). `proactive_window_processor` guard block (~30 lines) collapsed into a single `runtime.last_reported_input_tokens or 0` read; dead OTEL span attributes (`guard_active`, `guard_cleared`, `fresh_responses_after_compact`) removed. Stale `latest_response_input_tokens` import + `__all__` entry deleted.
+- **`co_cli/context/{orchestrate,history_processors}.py`** — `enforce_request_size` and the turn-end OTEL ratio in `_check_output_limits` now read `runtime.last_reported_input_tokens` instead of calling the deleted scan helper. Stale imports removed.
+- **`co_cli/context/summarization.py`** — `latest_response_input_tokens` function deleted; `ModelResponse` import dropped (no longer used in this module).
+- **`co_cli/commands/{clear,new}.py`** — slash command resets collapsed from two-field to one-field assignment.
+- **Specs** — `docs/specs/compaction.md` (runtime-fields table, L2 trigger formula, proactive flow STEP 1/STEP 6, contract tables, test-coverage row), `docs/specs/core-loop.md` (output-limit diagnostics) rewritten to describe the tracked-field mechanism. "Task-3 invariant" and "stale-suppression guard" terminology removed in favor of direct "single-writer atomicity" language. Filename fix: `test_flow_slash_commands.py` → `test_flow_compaction_slash_commands.py`.
+- **Tests** — `tests/test_flow_compaction_slash_commands.py` asserts on the new field. `tests/test_flow_compaction_proactive.py::test_thrash_counter_not_incremented_for_reported_driven_compaction` and the two `tests/test_flow_compaction_enforce_request_size.py` "high_reported" tests set `deps.runtime.last_reported_input_tokens` directly to simulate what `TokenTrackingCapability` would have written.
+
+### Rename: search-tool breadcrumbs → deferred-tool discoveries
+
+Cross-team rename bundled into this ship. `_preserve_search_tool_breadcrumbs` → `_preserve_deferred_tool_discoveries`; docstring expanded to cite pydantic-ai's `ToolSearchToolset._parse_discovered_tools` walk that consumes these returns. Spec references in `compaction.md` and `self-planning.md` updated consistently. No behavior change — purely terminology alignment with pydantic-ai's deferred-tool model.
+
 ## [0.8.255]
 
 ### Reduce L0 tool-call cap from 6 to 3

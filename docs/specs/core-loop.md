@@ -315,7 +315,7 @@ Error matrix:
 Output-limit diagnostics happen only after a successful final segment:
 
 1. if `latest_result.response.finish_reason == "length"`, show a truncation status message
-2. if `deps.model_max_ctx` is set, compare `latest_response_input_tokens / deps.model_max_ctx`
+2. if `deps.model_max_ctx` is set, compare `runtime.last_reported_input_tokens / deps.model_max_ctx`
 3. emit either a warning or overflow message based on `ctx_warn_threshold` and `ctx_overflow_threshold`
 
 Interrupt handling is conservative:

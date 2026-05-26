@@ -256,6 +256,7 @@ def test_high_reported_local_small_nothing_spilled(tmp_path: Path):
         _tool_request("shell_exec", "tc1", small_content),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
+    deps.runtime.last_reported_input_tokens = 20_000
 
     result = enforce_request_size(_ctx(deps), messages)
 
@@ -275,6 +276,7 @@ def test_high_reported_large_local_spills(tmp_path: Path):
         _tool_request("shell_exec", "tc1", big_content),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
+    deps.runtime.last_reported_input_tokens = 20_000
 
     result = enforce_request_size(_ctx(deps), messages)
 

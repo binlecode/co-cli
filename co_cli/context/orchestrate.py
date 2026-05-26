@@ -70,7 +70,6 @@ assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for ret
 from co_cli.config.core import REASONING_DISPLAY_SUMMARY
 from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
-from co_cli.context.summarization import latest_response_input_tokens
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
 from co_cli.display.stream_renderer import StreamRenderer
@@ -560,7 +559,7 @@ def _check_output_limits(
         frontend.on_status(
             "Response truncated at output token ceiling — use /compact to free context."
         )
-    latest_input = latest_response_input_tokens(turn_state.current_history)
+    latest_input = deps.runtime.last_reported_input_tokens or 0
     if latest_input > 0:
         ratio = latest_input / deps.model_max_ctx
         current_span().add_event(

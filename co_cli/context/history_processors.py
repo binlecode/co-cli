@@ -50,7 +50,7 @@ from co_cli.context._dedup_tool_results import (
     is_dedup_candidate,
 )
 from co_cli.context._tool_result_markers import is_cleared_marker, semantic_marker
-from co_cli.context.summarization import estimate_message_tokens, latest_response_input_tokens
+from co_cli.context.summarization import estimate_message_tokens
 from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.observability.tracing import current_span
@@ -375,7 +375,7 @@ def enforce_request_size(
     actually carry.
 
     Algorithm:
-      1. ``total = max(estimate_message_tokens, latest_response_input_tokens)``.
+      1. ``total = max(estimate_message_tokens, runtime.last_reported_input_tokens)``.
       2. If ``total <= deps.spill_threshold_tokens``, fast-path.
       3. Collect ``ToolReturnPart`` candidates with string content; filter
          spillable (content does not start with ``PERSISTED_OUTPUT_TAG``).
@@ -395,7 +395,7 @@ def enforce_request_size(
     threshold = deps.spill_threshold_tokens
 
     local_total = estimate_message_tokens(messages)
-    reported_total = latest_response_input_tokens(messages)
+    reported_total = deps.runtime.last_reported_input_tokens or 0
     trigger = max(local_total, reported_total)
     candidates = _collect_tool_return_candidates(messages)
     spillable = [p for p in candidates if not p.content.startswith(PERSISTED_OUTPUT_TAG)]

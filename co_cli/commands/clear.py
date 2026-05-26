@@ -10,7 +10,6 @@ from co_cli.display.core import console
 
 async def _cmd_clear(ctx: CommandContext, args: str) -> list[Any]:
     """Clear conversation history."""
-    ctx.deps.runtime.post_compaction_token_estimate = None
-    ctx.deps.runtime.message_count_at_last_compaction = None
+    ctx.deps.runtime.last_reported_input_tokens = None
     console.print("[info]Conversation history cleared.[/info]")
     return []

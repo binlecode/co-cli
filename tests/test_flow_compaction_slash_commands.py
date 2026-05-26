@@ -21,10 +21,9 @@ def _resp(content: str) -> ModelResponse:
 
 @pytest.mark.asyncio
 async def test_cmd_clear_wipes_history_and_resets_compaction_state() -> None:
-    """/clear must return empty history and reset all compaction runtime fields."""
+    """/clear must return empty history and reset the tracked input-token field."""
     runtime = CoRuntimeState()
-    runtime.post_compaction_token_estimate = 42_000
-    runtime.message_count_at_last_compaction = 10
+    runtime.last_reported_input_tokens = 42_000
 
     deps = CoDeps(
         shell=ShellBackend(), config=SETTINGS_NO_MCP, session=CoSessionState(), runtime=runtime
@@ -36,5 +35,4 @@ async def test_cmd_clear_wipes_history_and_resets_compaction_state() -> None:
     result = await _cmd_clear(ctx, "")
 
     assert result == []
-    assert deps.runtime.post_compaction_token_estimate is None
-    assert deps.runtime.message_count_at_last_compaction is None
+    assert deps.runtime.last_reported_input_tokens is None
