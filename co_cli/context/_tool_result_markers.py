@@ -75,7 +75,7 @@ def _file_read_marker(args: dict[str, Any], _content: str, chars: int, _lines: i
     start = args.get("start_line")
     end = args.get("end_line")
     span = f"lines {start or 1}-{end or '?'}" if start or end else "full"
-    return f"[file_read] {path} ({span}, {chars:,} chars)"
+    return f"[file_read] {path} ({span}, {chars:,} chars) — read on demand"
 
 
 def _file_search_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -> str:
@@ -83,7 +83,7 @@ def _file_search_marker(args: dict[str, Any], content: str, _chars: int, lines: 
     path = args.get("path", ".")
     if content.startswith("(no matches)"):
         return f"[file_search] '{pattern}' in {path} → no matches"
-    return f"[file_search] '{pattern}' in {path} ({lines} result lines)"
+    return f"[file_search] '{pattern}' in {path} ({lines} result lines) — re-query on demand"
 
 
 def _file_find_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -> str:
@@ -91,24 +91,24 @@ def _file_find_marker(args: dict[str, Any], content: str, _chars: int, lines: in
     pattern = args.get("pattern", "*")
     if content.startswith("(empty)"):
         return f"[file_find] {pattern} in {path} → no entries"
-    return f"[file_find] {pattern} in {path} ({lines} entries)"
+    return f"[file_find] {pattern} in {path} ({lines} entries) — re-query on demand"
 
 
 def _web_search_marker(args: dict[str, Any], content: str, chars: int, _lines: int) -> str:
     query = _truncate(str(args.get("query", "")), _QUERY_PREVIEW_MAX)
     if content.startswith("No results"):
         return f"[web_search] '{query}' → no results"
-    return f"[web_search] '{query}' ({chars:,} chars)"
+    return f"[web_search] '{query}' ({chars:,} chars) — re-query on demand"
 
 
 def _web_fetch_marker(args: dict[str, Any], _content: str, chars: int, _lines: int) -> str:
     url = _truncate(str(args.get("url", "")), _URL_PREVIEW_MAX)
-    return f"[web_fetch] {url} ({chars:,} chars)"
+    return f"[web_fetch] {url} ({chars:,} chars) — fetch on demand"
 
 
 def _obsidian_read_marker(args: dict[str, Any], _content: str, chars: int, _lines: int) -> str:
     filename = args.get("filename", "?")
-    return f"[obsidian_read] {filename} ({chars:,} chars)"
+    return f"[obsidian_read] {filename} ({chars:,} chars) — read on demand"
 
 
 _MarkerFn = Callable[[dict[str, Any], str, int, int], str]

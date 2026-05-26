@@ -27,7 +27,6 @@ run_turn() (orchestrate.py:run_turn)
           │     2. evict_old_tool_results      (keep 5 most recent per tool)  │
           │     3. enforce_request_size        (L2 force-spill cap)           │
           │     4. proactive_window_processor  (L3 LLM compaction)            │
-          │     5. sanitize_surrogate_codepoints (lone-surrogate sweep)       │
           │   model.request() → HTTP                                          │
           └───────────────────────────────────────────────────────────────────┘
           │
@@ -78,7 +77,7 @@ All three LLM-capable paths share one primitive — `compact_messages(ctx, messa
 
 ### 1.3 Diagram: Overall compaction pipeline
 
-Mermaid view of the same pipeline shown in §1.1. End-to-end flow: `UserPromptPart` → `ModelRequestNode` pre-flight hook (the **MRN** subgraph — five `history_processors`) → model HTTP → `CallToolsNode` (the **CTN** subgraph — per-result `spill_if_oversized` only); overflow recovery branches off HTTP 400/413. See §2.3 for per-stage message transformation; §2.4 for `enforce_request_size`; §2.5 for `proactive_window_processor` internals.
+Mermaid view of the same pipeline shown in §1.1. End-to-end flow: `UserPromptPart` → `ModelRequestNode` pre-flight hook (the **MRN** subgraph — four `history_processors`) → model HTTP → `CallToolsNode` (the **CTN** subgraph — per-result `spill_if_oversized` only); overflow recovery branches off HTTP 400/413. See §2.3 for per-stage message transformation; §2.4 for `enforce_request_size`; §2.5 for `proactive_window_processor` internals.
 
 ```mermaid
 flowchart TD
@@ -88,7 +87,7 @@ flowchart TD
 
     subgraph MRN["ModelRequestNode — history_processors chain → HTTP"]
         direction LR
-        C0["dedup_tool_results"] --> C1["evict_old_tool_results"] --> CE["enforce_request_size"] --> C2["proactive_window_processor"] --> C3["sanitize_surrogate_codepoints"] --> HTTP["model.request()\nHTTP → model"]
+        C0["dedup_tool_results"] --> C1["evict_old_tool_results"] --> CE["enforce_request_size"] --> C2["proactive_window_processor"] --> HTTP["model.request()\nHTTP → model"]
     end
 
     subgraph CTN["CallToolsNode — execute_tools (per-result spill_if_oversized only)"]
@@ -131,7 +130,7 @@ flowchart TD
     classDef hook fill:#ede0f5,stroke:#9c6fc7
     classDef term fill:#d4edda,stroke:#74c476
     classDef enr fill:#fff8dc,stroke:#cc9900
-    class C0,C1,CE,C2,C3,M1 hook
+    class C0,C1,CE,C2,M1 hook
     class UPN,FINAL,COMPACT term
     class GC,GC2,SUMM enr
 ```
@@ -294,7 +293,7 @@ Sensitivity:
 
 ### 2.3 `dedup_tool_results` / `evict_old_tool_results` — Prepass recency clearing
 
-Two sync processors in order; no LLM calls. A third sync processor (`sanitize_surrogate_codepoints`) runs after `proactive_window_processor` — see end of this section.
+Two sync processors in order; no LLM calls.
 
 **`dedup_tool_results`** — collapses identical returns outside the protected tail before recency clearing. For each tool return whose `(tool_name, sha256(content))` key matches a more recent return of the same tool, replaces content with a 1-line back-reference to the latest `tool_call_id`. Eligibility: string content ≥ 200 chars; non-string and shorter content pass through. (`co_cli/context/_dedup_tool_results.py`)
 
@@ -350,11 +349,9 @@ AFTER evict_old_tool_results
   TR(shell)      run 7
 ```
 
-**`sanitize_surrogate_codepoints`.** Runs after `proactive_window_processor` — last in the pipeline. Replaces lone Unicode surrogate code points (U+D800–U+DFFF) with U+FFFD in all `ModelRequest` and `ModelResponse` parts. Applies to string content on `UserPromptPart`, `SystemPromptPart`, `RetryPromptPart`, `ToolReturnPart`, `TextPart`, `ThinkingPart`, and `ToolCallPart.args`. Guards against `UnicodeEncodeError` inside the OpenAI SDK caused by byte-token reasoning models that occasionally emit lone surrogates.
-
 ### 2.4 `enforce_request_size` — Per-request size control (history processor)
 
-L2's per-request cap. Operates on the **full message list** at `ModelRequestNode` entry — not on a single batch. Implemented as a sync history processor in `co_cli/context/history_processors.py` alongside `dedup_tool_results`, `evict_old_tool_results`, and `sanitize_surrogate_codepoints`. Replaces a prior post-tool-exec hook design (`_enforce_request_budget`) which only saw the just-produced batch and over-fired on small histories while under-firing on multi-batch accumulation.
+L2's per-request cap. Operates on the **full message list** at `ModelRequestNode` entry — not on a single batch. Implemented as a sync history processor in `co_cli/context/history_processors.py` alongside `dedup_tool_results` and `evict_old_tool_results`. Replaces a prior post-tool-exec hook design (`_enforce_request_budget`) which only saw the just-produced batch and over-fired on small histories while under-firing on multi-batch accumulation.
 
 **Chain placement.** Fires after `dedup_tool_results` and `evict_old_tool_results` (so cheap reductions happen first — no point spilling content the next processor would have deduped) and before `proactive_window_processor` (which fast-paths whenever spill brought total under `compaction_ratio × budget`, sparing the LLM call).
 
@@ -614,15 +611,11 @@ PATH 2 — strip + summarize (budget still exceeded after strip)
 
 On a non-`None` result, `run_turn` sets `current_history = compacted`, clears pending input, emits `"Context overflow — compacting and retrying..."`, and retries. Terminal error (`"Context overflow — unrecoverable."`) on `None` or on a second overflow in the same turn.
 
-### 2.8 Base system prompt advisory
+### 2.8 Recovery signal at the marker
 
-`RECENCY_CLEARING_ADVISORY` — static, cacheable `## Tool result recency` section; no per-turn interpolation; `5` sourced from `COMPACTABLE_KEEP_RECENT` at module-load time:
+co does not pre-announce the recency-clearing mechanism in the system prompt. Recovery affordance lives in the marker text itself: content-fetch handlers in `semantic_marker` (`file_read`, `web_fetch`, `obsidian_read`, populated `file_search` / `file_find` / `web_search`) append an `— read on demand` / `— fetch on demand` / `— re-query on demand` suffix. Side-effect tools (`shell_exec`) and the generic fallback do not — re-running a side effect is incorrect, and unknown semantics cannot justify a recovery directive.
 
-> "## Tool result recency
->
-> Tool results may be automatically cleared from context to free space. The 5 most recent results per tool type are always kept. Note important information from tool results in your response — the original output may be cleared on later turns."
-
-**Injection point.** Defined as a module-level constant in `co_cli/context/assembly.py` and appended by `build_static_instructions()` as the **final** section of the static system prompt, after seed → mindsets → numbered rule files in `co_cli/context/rules/`. Not a rule file (it would need template substitution for `COMPACTABLE_KEEP_RECENT`) and not a dynamic instruction (the value is invariant within a session, so dynamic injection would blow prompt caching for zero benefit). The Python-constant + f-string pattern keeps it inside the cacheable static prefix while letting the `5` track `COMPACTABLE_KEEP_RECENT` at module load.
+Peer parity: hermes embeds an inline `Use file tools to read the full file.` in its truncation marker; openclaw uses a bare `[... N more characters truncated]`. Co matches hermes' approach on the recovery-hint axis while keeping the marker self-contained.
 
 ### 2.9 Error handling and degradation
 
@@ -709,7 +702,6 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `dedup_tool_results(ctx, messages)` | `co_cli/context/history_processors.py` | Collapses identical `(tool_name, content-hash)` returns in pre-tail to back-references |
 | `evict_old_tool_results(ctx, messages)` | `co_cli/context/history_processors.py` | Clears tool returns older than `COMPACTABLE_KEEP_RECENT` per tool name |
 | `enforce_request_size(ctx, messages)` | `co_cli/context/history_processors.py` | Force-spills largest unspilled `ToolReturnPart`s when total tokens exceed `deps.spill_threshold_tokens` |
-| `sanitize_surrogate_codepoints(ctx, messages)` | `co_cli/context/history_processors.py` | Sweeps lone Unicode surrogates (U+D800–U+DFFF) → U+FFFD |
 | `strip_all_tool_returns(messages) -> list[ModelMessage]` | `co_cli/context/history_processors.py` | Recovery helper: replaces every `ToolReturnPart` content with a per-tool marker; idempotent |
 
 ### Spill emission
@@ -735,7 +727,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/context/_compaction_boundaries.py` | Boundary planner: `TurnGroup`, `group_by_turn`, `plan_compaction_boundaries`, active-user anchoring. |
 | `co_cli/context/_compaction_markers.py` | Marker builders, `gather_compaction_context` enrichment helper, `SUMMARY_MARKER_PREFIX`. |
 | `co_cli/context/_dedup_tool_results.py` | `dedup_tool_results` helpers: content hash, eligibility predicate (`is_dedup_candidate`), back-reference builder (`build_dedup_part`). |
-| `co_cli/context/history_processors.py` | Pure history processors (registered): `dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`, `sanitize_surrogate_codepoints`. Recovery helper (unregistered): `strip_all_tool_returns`. |
+| `co_cli/context/history_processors.py` | Pure history processors (registered): `dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`. Recovery helper (unregistered): `strip_all_tool_returns`. |
 | `co_cli/tools/lifecycle.py` | `CoToolLifecycle` capability: dedup tool calls (`before_node_run`), per-call cap brake (`wrap_tool_execute`), L0 tool-call-limit span (`after_node_run`), JSON repair (`before_tool_validate`), path normalization (`before_tool_execute`), audit/span enrichment (`after_tool_execute`). |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker` per-tool format and `is_cleared_marker` predicate. |
 | `co_cli/context/summarization.py` | `summarize_messages`, token estimator, budget resolver, and prompt templates. |
@@ -748,7 +740,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/tools/files/read.py` | `file_read` per-tool `spill_threshold_chars=math.inf` override (never spills). |
 | `co_cli/tools/tool_call_limit.py` | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `MaxToolCallsExceededPayload`, `make_exceeded_payload`. |
 | `co_cli/config/llm.py` | `max_ctx` (Ollama probe ceiling). |
-| `co_cli/context/assembly.py` | Prompt assembly: `build_static_instructions`; static `RECENCY_CLEARING_ADVISORY` recency-clearing paragraph. |
+| `co_cli/context/assembly.py` | Prompt assembly: `build_static_instructions`. |
 | `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |
 | `evals/eval_compaction_proactive.py` | Proactive compaction end-to-end eval. |
 | `evals/eval_compaction_multi_cycle.py` | Multi-cycle compaction fidelity eval. |

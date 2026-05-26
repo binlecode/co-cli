@@ -11,31 +11,12 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.context.history_processors import COMPACTABLE_KEEP_RECENT
-
 if TYPE_CHECKING:
     from co_cli.config.core import Settings
 
 _RULES_DIR = Path(__file__).parent / "rules"
 
 _RULE_FILENAME_RE = re.compile(r"^(?P<order>\d{2})_(?P<rule_id>[a-z0-9_]+)\.md$")
-
-
-RECENCY_CLEARING_ADVISORY = (
-    "## Tool result recency\n\n"
-    "Tool results may be automatically cleared from context to free space. "
-    f"The {COMPACTABLE_KEEP_RECENT} most recent results per tool type are always kept. "
-    "Note important information from tool results in your response — "
-    "the original output may be cleared on later turns."
-)
-"""Static, cacheable advisory describing the ``[tool result cleared…]`` placeholders.
-
-Built once at module-load time from ``COMPACTABLE_KEEP_RECENT`` (static per
-process). Gets injected verbatim into the static instruction scaffold by
-``build_static_instructions`` so it lives in the cacheable prefix — no
-per-turn interpolation, no dynamic gating. Borrowed pattern from
-``fork-claude-code`` (Gap G fix).
-"""
 
 
 def _collect_rule_files() -> list[tuple[int, str, Path]]:
@@ -89,8 +70,6 @@ def build_static_instructions(config: Settings) -> str:
     1. Soul seed (identity anchor)
     2. Mindsets
     3. Behavioral rules (numbered, strict order)
-    4. Recency-clearing advisory (explains the ``[tool result cleared…]``
-       placeholders that appear after ``evict_old_tool_results`` runs)
 
     Canon and critique are NOT injected here — canon is indexed at bootstrap under
     ``source='canon'`` for personality-system auto-injection only (no model-callable
@@ -125,10 +104,6 @@ def build_static_instructions(config: Settings) -> str:
         content = rule_path.read_text(encoding="utf-8").strip()
         if content:
             parts.append(content)
-
-    # 4. Recency-clearing advisory — static, cacheable; explains the
-    # ``[tool result cleared…]`` placeholders the model will encounter.
-    parts.append(RECENCY_CLEARING_ADVISORY)
 
     prompt = "\n\n".join(parts)
 

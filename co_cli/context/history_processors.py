@@ -66,9 +66,7 @@ co-cli's tool surface; revisit via ``evals/eval_compaction_quality.py`` if a
 retention/fidelity tradeoff becomes measurable.
 """
 
-_CLEARED_PLACEHOLDER = (
-    f"[tool result cleared — older than {COMPACTABLE_KEEP_RECENT} most recent calls]"
-)
+_CLEARED_PLACEHOLDER = "[tool result cleared]"
 """Last-resort fallback when ToolReturnPart.content is non-string (multimodal).
 
 Normal path uses ``semantic_marker`` to produce per-tool descriptions that
@@ -582,8 +580,8 @@ def sanitize_surrogate_codepoints_messages(
 ) -> list[ModelMessage]:
     """Replace lone Unicode surrogate code points (U+D800-U+DFFF) with U+FFFD.
 
-    Pure function — shared by the history-processor (proactive walk) and
-    ``SurrogateRecoveryModel`` (reactive backstop on ``UnicodeEncodeError``).
+    Pure function — called by ``SurrogateRecoveryModel`` as a reactive
+    backstop on ``UnicodeEncodeError``.
 
     Byte-token reasoning models (Qwen3 quantizations, GLM-5, Kimi K2.5)
     occasionally emit lone surrogates that crash json.dumps() with

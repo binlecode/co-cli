@@ -87,7 +87,6 @@ for human reference — they are not loaded into the agent.
 section_1 = load_soul_seed(role)               # Required — placed first; identity anchor
 section_2 = load_soul_mindsets(role)            # Optional — ## Mindsets block, all 6 files
 section_3 = _collect_rule_files()               # Rules from context/rules/NN_rule_id.md (01–06)
-section_4 = RECENCY_CLEARING_ADVISORY           # Static advisory for tool-result eviction
 
 return "\n\n".join(non_empty_sections)
 ```
@@ -172,7 +171,7 @@ for missing mindset files.
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules + `RECENCY_CLEARING_ADVISORY` joined with `\n\n`; called once per session at agent construction |
+| `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules joined with `\n\n`; called once per session at agent construction |
 
 ### Soul asset loaders
 

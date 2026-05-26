@@ -21,7 +21,7 @@ flowchart TD
 
     subgraph PerRequest["per model request"]
         Dynamic["@agent.instructions callbacks"]
-        Processors["history processors 1..5"]
+        Processors["history processors 1..4"]
         Model[model request]
         Dynamic --> Processors --> Model
     end
@@ -81,7 +81,6 @@ Pure-transformer processors run in this exact order (registered in `build_orches
 | `evict_old_tool_results` | content-clears tool returns older than the 5-most-recent per tool name; protects last user turn |
 | `enforce_request_size` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; cheap (non-LLM) per-request cap that runs before `proactive_window_processor`. See [compaction.md](compaction.md) §2.4. |
 | `proactive_window_processor` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full design in [compaction.md](compaction.md) |
-| `sanitize_surrogate_codepoints` | replaces lone Unicode surrogates (U+D800–U+DFFF) with U+FFFD across all parts; guards against `UnicodeEncodeError` |
 
 Two dynamic instruction functions are registered via `agent.instructions()` and run before every model request:
 
@@ -92,7 +91,6 @@ Two dynamic instruction functions are registered via `agent.instructions()` and 
 
 **Ordering rationale:**
 - **#1–2 before #3–4**: dedup and eviction run before size enforcement and summarization. The summarizer sees a smaller, deduped history; size enforcement fires after cheap reductions but before the LLM call.
-- **#5 last**: surrogate sanitization runs after `proactive_window_processor` so the summary text it produces is also swept.
 - **`safety_prompt` before `current_time_prompt`**: structural behavioral guidance sits above ephemeral grounding. `current_time_prompt` is at the tail — the last thing the model sees before the user turn — because ephemeral grounding is most effective close to the user message.
 - **Dynamic instructions before model request**: these functions run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
 
@@ -116,8 +114,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules + `RECENCY_CLEARING_ADVISORY`, joined with `\n\n`; called once at agent construction |
-| `RECENCY_CLEARING_ADVISORY` | `co_cli/context/assembly.py` | Module-level constant — "## Tool result recency" paragraph appended last to the static prompt |
+| `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules, joined with `\n\n`; called once at agent construction |
 | `build_toolset_guidance(tool_index) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE`) |
 | `build_category_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a single-sentence category-level hint for `DEFERRED` tools; empty when no deferred tools exist |
 | `render_skill_manifest(skill_index, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block injected after tool guidance |
@@ -143,7 +140,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | --- | --- |
 | `co_cli/agent/core.py` | main-agent and delegation-agent construction; history-processor and instruction registration |
 | `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `current_time_prompt`, `safety_prompt` |
-| `co_cli/context/assembly.py` | `build_static_instructions()` — soul + mindsets + rules + recency advisory; rule-file validation |
+| `co_cli/context/assembly.py` | `build_static_instructions()` — soul + mindsets + rules; rule-file validation |
 | `co_cli/context/guidance.py` | `MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE` constants; `build_toolset_guidance()` — gated on tool presence |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |
