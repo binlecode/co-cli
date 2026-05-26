@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.255]
+
+### Reduce L0 tool-call cap from 6 to 3
+
+Small ollama models (the primary local backend) lose plan coherence past ~3 parallel tool calls per response, producing malformed JSON, duplicate calls, or off-target tool selection. Halving the L0 admission cap from 6 to 3 trades nominal throughput for stability on the realistic local workload. 3 non-spilling (≤ 4K char) returns aggregate well inside the per-request spill threshold; the constant remains non-configurable.
+
+- **`co_cli/tools/tool_call_limit.py`** — `MAX_TOOL_CALLS_PER_MODEL_REQUEST: 6 → 3`. Comment updated to cite small-ollama-model coherence as the sizing constraint.
+- **Specs** — `compaction.md` diagram (§1.1), L0 row in §1.2, §2.1 constant paragraph + rejection JSON example, constants table (§Sizing), and contract table updated to the new value.
+- **Tests** — `test_flow_tool_call_limit.py` and `test_flow_model_request_cap.py` literal `6`/`7` references in docstrings/comments rewritten to symbolic `MAX` / `MAX+1`. Assertions were already symbolic via `MAX_TOOL_CALLS_PER_MODEL_REQUEST` and pass at the new value.
+
 ## [0.8.254]
 
 ### Remove `COMPACTABLE_TOOLS` whitelist — unified clearing policy

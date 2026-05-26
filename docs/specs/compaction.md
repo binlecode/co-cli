@@ -33,7 +33,7 @@ run_turn() (orchestrate.py:run_turn)
           ┌── CallToolsNode (post-response) ──────────────────────────────────┐
           │   CoToolLifecycle hooks:                                          │
           │     before_node_run:    dedup ToolCallParts in one ModelResponse  │
-          │     wrap_tool_execute:  L0 cap (MAX_TOOL_CALLS_PER_MODEL_REQUEST=6)  │
+          │     wrap_tool_execute:  L0 cap (MAX_TOOL_CALLS_PER_MODEL_REQUEST=3)  │
           │     before_tool_validate: JSON repair                             │
           │     before_tool_execute: path normalization                       │
           │     [tool runs]                                                   │
@@ -62,7 +62,7 @@ _finalize_turn()  (main.py)
 
 | Layer | Where | Trigger | Effect | LLM? |
 |---|---|---|---|---|
-| **L0** | `lifecycle.wrap_tool_execute` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 6) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
+| **L0** | `lifecycle.wrap_tool_execute` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
 | **L1** | `tool_output()` in native tools, `lifecycle.after_tool_execute` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
 | **L2** | `enforce_request_size` history processor | `max(estimate_message_tokens, latest_response_input_tokens) > deps.spill_threshold_tokens` | Force-spill largest unspilled string `ToolReturnPart`s, largest-first, until aggregate ≤ threshold | No |
 | **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND not anti-thrash-tripped AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | [search breadcrumbs] | tail` | Yes (static marker fallback) |
@@ -222,18 +222,18 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Five fields are p
 
 L0 caps how many tool calls a single `ModelResponse` can issue (the first row of §1.2). Calls beyond the cap never execute and never produce a `ToolReturnPart` for the lower layers to handle.
 
-**Constant.** `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 6` in `co_cli/tools/tool_call_limit.py`; non-configurable. Sized so 6 non-spilling (≤ 4K char) tool returns aggregate inside the per-request spill threshold.
+**Constant.** `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3` in `co_cli/tools/tool_call_limit.py`; non-configurable. Sized for small-ollama-model coherence (small models lose plan coherence past ~3 parallel calls per response); 3 non-spilling (≤ 4K char) tool returns aggregate well inside the per-request spill threshold.
 
 **Trigger surface.** `CoToolLifecycle.before_tool_execute` — runs inside `CallToolsNode`, before each tool handler is invoked, on every `ToolCallPart` in the model response.
 
-**Counter mechanics.** `ctx.run_step` increments once per `ModelRequestNode`, so all tool calls from one assistant message share the same `run_step`. When `run_step` changes, `runtime.tool_calls_in_model_request` resets to 0; each call increments before the cap check. The first 6 calls execute normally; calls 7+ are **rejected without running** — the rejection payload is returned as the tool's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
+**Counter mechanics.** `ctx.run_step` increments once per `ModelRequestNode`, so all tool calls from one assistant message share the same `run_step`. When `run_step` changes, `runtime.tool_calls_in_model_request` resets to 0; each call increments before the cap check. The first 3 calls execute normally; calls 4+ are **rejected without running** — the rejection payload is returned as the tool's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
 
 ```json
 {
   "error": "max_tool_calls_per_model_request_exceeded",
-  "max": 6,
+  "max": 3,
   "issued": <N>,
-  "guidance": "Issued <N> tool calls in one model request; cap is 6. Pick the 6 most important calls and try again."
+  "guidance": "Issued <N> tool calls in one model request; cap is 3. Pick the 3 most important calls and try again."
 }
 ```
 
@@ -658,7 +658,7 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 | `COMPACTABLE_KEEP_RECENT` | `co_cli/context/history_processors.py` | `5` | `evict_old_tool_results`: most-recent returns per tool to keep |
 | `_COMPACTION_BREAKER_TRIP` | `co_cli/context/compaction.py` | `3` | Consecutive failures that trip the circuit breaker |
 | `_COMPACTION_BREAKER_PROBE_EVERY` | `co_cli/context/compaction.py` | `10` | Skips between probe attempts when circuit breaker is tripped |
-| `MAX_TOOL_CALLS_PER_MODEL_REQUEST` | `co_cli/tools/tool_call_limit.py` | `6` | L0 admission cap on tool calls per `ModelResponse` (see §2.1) |
+| `MAX_TOOL_CALLS_PER_MODEL_REQUEST` | `co_cli/tools/tool_call_limit.py` | `3` | L0 admission cap on tool calls per `ModelResponse` (see §2.1) |
 
 **Spill / request-budget constants** (module-level; not user-configurable):
 
@@ -710,7 +710,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 |---|---|---|
 | `spill_if_oversized(content, tool_results_dir, tool_name, force=False, threshold=SPILL_THRESHOLD_CHARS) -> str` | `co_cli/tools/tool_io.py` | Persist oversized content to `tool-results/<sha16>.txt`; returns inline `<persisted-output>` placeholder |
 | `SPILL_THRESHOLD_CHARS = 4_000`, `TOOL_RESULT_PREVIEW_CHARS = 1_500` | `co_cli/tools/tool_io.py` | Module constants (non-configurable) |
-| `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 6` | `co_cli/tools/tool_call_limit.py` | L0 admission cap; non-configurable |
+| `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3` | `co_cli/tools/tool_call_limit.py` | L0 admission cap; non-configurable |
 
 ### Error classification
 

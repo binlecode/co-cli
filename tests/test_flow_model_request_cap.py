@@ -170,7 +170,7 @@ def _make_hard_stop_agent() -> Agent:
     Protocol:
       model call 1 — approval-required call (initial segment → DeferredToolRequests)
       model calls 2-4 — each streams MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls
-                        (7 calls, cap is 6 → violation each round)
+                        (one over cap → violation each round)
       model call 5+  — stream text "done"
 
     After model call 4's tools execute, consecutive_tool_cap_violations == 3 and

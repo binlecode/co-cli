@@ -93,7 +93,7 @@ def test_reset_for_turn_resets_all_per_turn_fields():
 
 @pytest.mark.asyncio
 async def test_brake_allows_up_to_cap():
-    """All 6 calls within the cap must reach the handler and return 'ok'."""
+    """All calls up to the cap must reach the handler and return 'ok'."""
     lifecycle = CoToolLifecycle()
     deps = _make_deps()
     ctx = _ctx(deps, run_step=1)
@@ -116,7 +116,7 @@ async def test_brake_allows_up_to_cap():
 
 @pytest.mark.asyncio
 async def test_brake_rejects_above_cap():
-    """Calls 7 and 8 must be rejected; their payloads must contain error and guidance."""
+    """Calls past the cap (up to total 8) must be rejected; payloads must contain error and guidance."""
     lifecycle = CoToolLifecycle()
     deps = _make_deps()
     ctx = _ctx(deps, run_step=1)
@@ -132,17 +132,17 @@ async def test_brake_rejects_above_cap():
         )
         results.append(result)
 
-    # First 6 allowed
+    # First MAX allowed
     assert all(r == "ok" for r in results[:MAX_TOOL_CALLS_PER_MODEL_REQUEST])
 
-    # Last 2 rejected
+    # Remaining rejected
     for rejected in results[MAX_TOOL_CALLS_PER_MODEL_REQUEST:]:
         payload = json.loads(rejected)
         assert payload["error"] == "max_tool_calls_per_model_request_exceeded"
         assert "guidance" in payload
         guidance = payload["guidance"]
         assert str(MAX_TOOL_CALLS_PER_MODEL_REQUEST) in guidance
-        # issued count (7 or 8) must appear in guidance
+        # issued count (MAX+1 .. 8) must appear in guidance
         issued_in_guidance = any(
             str(i) in guidance for i in range(MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1, 9)
         )
@@ -151,7 +151,7 @@ async def test_brake_rejects_above_cap():
 
 @pytest.mark.asyncio
 async def test_run_step_transition_resets_counter():
-    """6 calls at run_step=1 (all allowed), then 6 calls at run_step=2 (all allowed again)."""
+    """MAX calls at run_step=1 (all allowed), then MAX calls at run_step=2 (all allowed again)."""
     lifecycle = CoToolLifecycle()
     deps = _make_deps()
 
@@ -239,7 +239,7 @@ def _find_event(span: dict, name: str) -> dict | None:
 
 @pytest.mark.asyncio
 async def test_enforce_tool_call_limit_event_on_saturation(lifecycle_with_span):
-    """8 calls in one turn: event fires with issued=8, allowed=6, rejected=2, limit_exceeded=True."""
+    """8 calls in one turn: event fires with issued=8, allowed=MAX, rejected=8-MAX, limit_exceeded=True."""
     lifecycle, parent_span = lifecycle_with_span
     deps = _make_deps()
     ctx = _ctx(deps, run_step=1)

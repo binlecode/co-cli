@@ -2,7 +2,7 @@
 
 from typing import Literal, TypedDict
 
-MAX_TOOL_CALLS_PER_MODEL_REQUEST = 6  # 6 non-spilling calls fit the 64K-floor tail; see Sizing
+MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3  # small ollama models lose coherence past ~3 parallel calls per response; well within the 64K-floor tail
 TOOL_CAP_HARD_STOP_CONSECUTIVE: int = 3
 
 
