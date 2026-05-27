@@ -422,7 +422,9 @@ async def _handle_one_input(
     )
 
 
-def _build_status_snapshot(deps: CoDeps, mode: Literal["idle", "active"]) -> StatusSnapshot:
+def _build_status_snapshot(
+    deps: CoDeps, mode: Literal["idle", "active"], queue_depth: int = 0
+) -> StatusSnapshot:
     stem = deps.session.session_path.stem
     session_label = stem[-8:] if stem else "—"
     context_pct: float | None = None
@@ -434,24 +436,47 @@ def _build_status_snapshot(deps: CoDeps, mode: Literal["idle", "active"]) -> Sta
         context_pct=context_pct,
         background_task_count=len(deps.session.background_tasks),
         approval_count=len(deps.session.session_approval_rules),
+        queue_depth=queue_depth,
     )
 
 
 def _build_accept_handler(
-    runtime: _ReplRuntime, dispatch: Callable[..., Awaitable[None]]
+    runtime: _ReplRuntime,
+    dispatch: Callable[..., Awaitable[None]],
+    on_status: Callable[[], None],
 ) -> Callable[[Buffer], bool]:
-    """Return the input TextArea accept_handler.
+    """Return the input TextArea accept_handler wired for the input queue.
 
-    Idle submissions schedule a turn task; submissions arriving while a turn is
-    active are dropped (BC6) — this is the single Phase 1 seam where
-    repl-input-queue swaps drop→enqueue. The handler only *schedules* (never
-    blocks the app's input loop, per co's same-loop concurrency discipline).
+    Idle submissions arm a turn; submissions arriving while a turn is active
+    enqueue (FIFO, non-blank only) instead of dropping. Each armed turn carries
+    a done-callback that drains the next queued item at the turn boundary —
+    normal completion *and* Esc-cancel both fire it — so the queue advances one
+    item per turn. ``on_status`` repaints the toolbar on enqueue and on dequeue.
+    The handler only schedules/enqueues; it never blocks the app's input loop,
+    per co's same-loop concurrency discipline.
     """
 
+    def _arm_turn(coro: Awaitable[None]) -> None:
+        runtime.turn_task = asyncio.ensure_future(coro)
+        runtime.turn_task.add_done_callback(_drain_next)
+
+    def _drain_next(_task: "asyncio.Task[None]") -> None:
+        # A drained item that set should_exit ends the session; remaining queued
+        # items are intentionally dropped (C8). Empty queue → nothing to drain.
+        if runtime.state.should_exit or not runtime.queue:
+            return
+        next_input = runtime.queue.popleft()
+        on_status()
+        _arm_turn(dispatch(user_input=next_input, eof=False))
+
     def accept_handler(buffer: Buffer) -> bool:
+        text = buffer.text
         if runtime.turn_active:
+            if text.strip():
+                runtime.queue.append(text)
+                on_status()
             return False
-        runtime.turn_task = asyncio.ensure_future(dispatch(user_input=buffer.text, eof=False))
+        _arm_turn(dispatch(user_input=text, eof=False))
         return False
 
     return accept_handler
@@ -505,18 +530,20 @@ async def _chat_loop(
         frontend.clear_status()
         frontend.update_status(_build_status_snapshot(deps, "idle"))
 
-        # Single owner of turn state, shared by the accept_handler and the c-c
-        # key binding (F7) — created here in loop scope, never a module global.
+        # Single owner of turn state, shared by the accept_handler and the key
+        # bindings (Esc cancels the active turn) (F7) — created here in loop
+        # scope, never a module global.
         runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
 
         async def _dispatch(*, user_input: str | None, eof: bool) -> None:
             """Run one chat-loop iteration, apply its result, and exit when asked.
 
-            Scheduled as the turn task (idle submissions) or as a control task
-            (Ctrl+C / EOF). A mid-turn Ctrl+C cancels the turn task, surfacing
-            here as CancelledError — restore terminal state and let it propagate.
+            Scheduled as the turn task (idle submission or queued-item drain) or
+            as a control task (Ctrl+C / EOF). A mid-turn Esc cancels the turn
+            task, surfacing here as CancelledError — clean up the terminal and let
+            it propagate; the task's done-callback then advances the queue.
             """
-            frontend.update_status(_build_status_snapshot(deps, "active"))
+            frontend.update_status(_build_status_snapshot(deps, "active", len(runtime.queue)))
             try:
                 runtime.state = await _handle_one_input(
                     user_input=user_input,
@@ -538,11 +565,14 @@ async def _chat_loop(
                     message_history=runtime.state.message_history,
                     last_interrupt_time=0.0,
                 )
-            frontend.update_status(_build_status_snapshot(deps, "idle"))
+            frontend.update_status(_build_status_snapshot(deps, "idle", len(runtime.queue)))
             if runtime.state.should_exit:
                 app.exit()
 
-        accept_handler = _build_accept_handler(runtime, _dispatch)
+        def _on_queue_status() -> None:
+            frontend.update_status(_build_status_snapshot(deps, "active", len(runtime.queue)))
+
+        accept_handler = _build_accept_handler(runtime, _dispatch, _on_queue_status)
         key_bindings = build_key_bindings(runtime=runtime, dispatch=_dispatch)
         app = build_repl_app(
             frontend=frontend,

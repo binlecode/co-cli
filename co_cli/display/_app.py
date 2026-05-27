@@ -7,6 +7,7 @@ reverse (F2). ``__init__.py`` stays docstring-only per the package convention.
 """
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -53,15 +54,19 @@ Dispatch = Callable[..., Awaitable[None]]
 class _ReplRuntime:
     """Single mutable owner of chat-loop turn state (F7).
 
-    Shared by the ``accept_handler`` (drop submissions while a turn is active)
-    and the Ctrl+C key binding (cancel the active turn). Created in ``_chat_loop``
-    scope and passed by reference — never a module global. Holds the turn-task
-    reference so the ``c-c`` binding can cancel a running turn (BC2 mid-turn).
+    Shared by the ``accept_handler`` (enqueue submissions while a turn is active)
+    and the key bindings (``Esc`` cancels the active turn, ``c-c`` arms exit).
+    Created in ``_chat_loop`` scope and passed by reference — never a module
+    global. Holds the turn-task reference so ``Esc`` can cancel a running turn,
+    and the ``queue`` of input strings buffered while a turn is active (drained
+    one item per turn boundary). The queue element type is ``str`` by design but
+    not a frozen contract — see the plan's HLD.
     """
 
     state: "_IterationState"
     turn_task: "asyncio.Task[None] | None" = None
     control_tasks: "set[asyncio.Task[None]]" = field(default_factory=set)
+    queue: "deque[str]" = field(default_factory=deque)
 
     @property
     def turn_active(self) -> bool:
@@ -79,18 +84,26 @@ class _ReplRuntime:
 def build_key_bindings(*, runtime: _ReplRuntime, dispatch: Dispatch) -> KeyBindings:
     """Build the REPL key bindings.
 
-    ``c-c``: if a turn is active, cancel it (BC2 — blunt mid-turn turn-cancel is
-    kept; interrupt-with-requeue/steering is deferred to repl-input-queue), then
-    route to ``_handle_one_input(user_input=None)`` so the 2 s double-press-exit
-    window is armed identically to today.
+    ``escape``: if a turn is active, cancel it; the turn task's done-callback
+    drains the next queued item, so Esc interrupts and advances the queue (C4).
+    Idle: no-op (this binding overrides prompt_toolkit's default escape, so the
+    idle branch inherits no free line-clear — the no-op is intentional, C6).
+    ``c-c``: route to ``_handle_one_input(user_input=None)`` to arm the 2 s
+    double-press-exit window — **without** cancelling the turn (interrupt moved
+    to Esc). A double-press exit tears the app down, which cancels any in-flight
+    turn. Dispatched via ``schedule_control`` so it is not routed through the
+    turn-arming path (only turns get the drain callback) and is not GC'd.
     ``c-d``: route to ``_handle_one_input(eof=True)``.
     """
     kb = KeyBindings()
 
-    @kb.add("c-c")
+    @kb.add("escape")
     def _(event: "KeyPressEvent") -> None:
         if runtime.turn_active and runtime.turn_task is not None:
             runtime.turn_task.cancel()
+
+    @kb.add("c-c")
+    def _(event: "KeyPressEvent") -> None:
         runtime.schedule_control(dispatch(user_input=None, eof=False))
 
     @kb.add("c-d")

@@ -5,7 +5,7 @@ Compares co-cli's "built-in learning loop" capability against `hermes-agent`'s c
 Sibling docs (don't duplicate):
 - `RESEARCH-tools-gaps-co-vs-hermes.md` — broader tool-surface delta
 - `RESEARCH-tui-compare-hermes-and-co.md` — REPL / surface comparison
-- `RESEARCH-context-management-comparison.md` — compaction-side
+- `RESEARCH-context-management-peer-survey.md` — compaction-side (Hermes vs. Openclaw depth dive)
 
 ## 1. What "self-improving" means in hermes's pitch
 

@@ -12,10 +12,29 @@ mapping, and prioritized gap analysis.
 - **fork-claude-code** — Claude Code is the harness, not a general AI-agent CLI peer; its skill set is harness-specific (keybindings, settings.json, etc.) and not representative of agent-CLI convergence.
 - **opencode** — runtime-only skill system (0 production bundled skills, 2 test fixtures); contributes nothing to catalog convergence.
 
-**Reference system:** co-cli (1 bundled skill, `co_cli/skills/doctor.md`, as of
-v0.8.x; the `.claude/skills/*` files are Claude Code harness skills bundled in
-the repo for dev workflow but live outside co-cli's own skill loader and are
-out of scope for this comparison).
+**Reference system:** co-cli (6 bundled skills as of v0.8.x — `doctor`, `plan`,
+`refactor`, `review`, `skill-creator`, `triage`; the `.claude/skills/*` files are
+Claude Code harness skills bundled in the repo for dev workflow but live outside
+co-cli's own skill loader and are out of scope for this comparison).
+
+> **Status refresh (2026-05-27).** This survey was first written when co-cli had
+> 1 bundled skill (`doctor`) and no skill lifecycle. co-cli has since shipped
+> most of the Part-5 build order. Current state, reflected in the cells below:
+> - **6 bundled skills** (`doctor`, `plan`, `refactor`, `review`, `triage`,
+>   `skill-creator`) — Step 3 done.
+> - **Authoring + patch** via model-callable `skill_manage`
+>   (create/edit/patch/delete) — Steps 2 (T1-1, T1-3) done; **install (T1-2)
+>   still absent** (no URL/repo install path — `co_cli/skills/usage.py:67`).
+> - **Lint** `co_cli/skills/lint.py` (R1–R4 + B1) + `/skills lint` — Step 1 done.
+> - **Awareness layer** `render_skill_manifest()` → `<available_skills>` block
+>   injected into the static prompt; model loads bodies via `skill_view` (Path 2),
+>   not a `skill_run` tool — Step 4 done (different mechanism than the doc proposed).
+> - **Self-improvement loop**: dream-daemon skill reviewer
+>   (`co_cli/daemons/dream/_reviewer.py`) + merge/decay housekeeping + usage
+>   sidecars + `/skills pin` — beyond what any surveyed peer ships.
+> - **Migration importer (Step 5)** — NOT built; the plan was withdrawn.
+> - **Linked files** — still unsupported (`skill_manage` `write_file` returns error).
+> See `docs/specs/skills.md` for the authoritative current surface.
 
 **Sources (code-grounded scan basis for each peer):**
 - **hermes**: repo `skills/` + `optional-skills/`; `tools/skills_sync.py`, `tools/skills_hub.py`, `tools/skills_tool.py`, `agent/prompt_builder.py`, `agent/skill_utils.py`, `agent/skill_registry.py`
@@ -184,22 +203,25 @@ Source: `codex-rs/skills/src/lib.rs` (embedded installer) +
 
 ### 1.4 co-cli (reference)
 
-Source: `co_cli/skills/`, `co_cli/commands/_commands.py`, `docs/specs/skills.md`.
+Source: `co_cli/skills/`, `co_cli/commands/skills.py`, `co_cli/tools/system/skills.py`, `docs/specs/skills.md`.
 
-**Bundled skills: 1 — `co_cli/skills/doctor.md`.**
+**Bundled skills: 6 — `doctor`, `plan`, `refactor`, `review`, `triage`, `skill-creator`.**
 User-global directory: `~/.co-cli/skills/*.md` (security-scanned at load).
 
 #### co-cli Skill Runtime
 
 | Aspect | Detail |
 |---|---|
-| Registration | `_load_skill_file(path, root, scan)` per-file at `create_deps()` startup; bundled (`scan=False`) → user-global (`scan=True`) |
+| Registration | `load_skills()` per-file at `create_deps()` startup; bundled (`scan=False`) → user-global (`scan=True`) |
 | Override | User-global wins on name collision |
-| Dispatch model | Slash command only; skill body becomes `delegated_input`; main agent runs `run_turn()` on it as a normal LLM turn |
-| Index in prompt | None — agent has no system-prompt awareness of available skills |
-| Authoring tool | None — no model-invokable create/edit/patch path |
-| Linked files | Frontmatter only; no `references/`, `templates/`, `scripts/` convention |
-| Distinctive feature | Turn-scoped `skill-env` injection with rollback (filtered through `_SKILL_ENV_BLOCKED`) — no peer equivalent |
+| Dispatch model | Slash command (`/skill-name` → `delegated_input`, new turn) OR model inline (`skill_view` loads body inline within the turn) |
+| Index in prompt | `render_skill_manifest()` → `<available_skills>` block in the static system prompt; opt-in (not hermes mandatory-scan) |
+| Load tool | `skill_view(name)` — full body inline (`spill_threshold=inf`) |
+| Authoring tool | `skill_manage` — model-callable create/edit/patch/delete; security-scanned, rollback-on-flag, auto-reload. **No install action** (no URL/repo path) |
+| Lint | `co_cli/skills/lint.py` — R1–R4 advisory + B1 (bundled no-marker gate); surfaced via `/skills lint` and on `skill_manage` success |
+| Self-improvement | Dream-daemon skill reviewer (`_reviewer.py`) patches/creates from transcripts; merge/decay housekeeping; usage sidecars; `/skills pin` exemption |
+| Linked files | Frontmatter only; `write_file`/`remove_file` reserved but return "not yet supported" |
+| Distinctive features | Turn-scoped `skill-env` injection with rollback (no peer equivalent); skill body as one-shot `delegated_input`; self-evolution daemon (beyond all surveyed peers) |
 
 ---
 
@@ -212,10 +234,11 @@ bundled skill in this domain.
 
 | Capability | hermes | openclaw | codex | Score | co-cli |
 |---|---|---|---|---|---|
-| Session diagnosis (debug logs / frozen sessions) | `systematic-debugging` | `healthcheck`, `session-logs`, `model-usage` | — | 2 | `doctor` ✓ |
+| Session diagnosis (debug logs / frozen sessions) | `systematic-debugging` | `healthcheck`, `session-logs`, `model-usage` | — | 2 | `doctor` + `triage` ✓ (native) |
 | Subagent-driven implementation | `subagent-driven-development` | `coding-agent` (peer-CLI) | — | 2 | harness-only (`.claude/skills/orchestrate-dev`) |
-| Code review / critique | `requesting-code-review`, `github-code-review` | (`.agents/skills/openclaw-pr-maintainer` for PR-side automation) | — | 1–2 | harness-only (`.claude/skills/review-impl`) |
-| Plan drafting | `plan`, `writing-plans` | — | — | 1 | harness-only (`.claude/skills/orchestrate-plan`) |
+| Code review / critique | `requesting-code-review`, `github-code-review` | (`.agents/skills/openclaw-pr-maintainer` for PR-side automation) | — | 1–2 | `review` ✓ (native bundled) |
+| Plan drafting | `plan`, `writing-plans` | — | — | 1 | `plan` ✓ (native bundled) |
+| Guided refactor | (—) | — | — | 0 | `refactor` ✓ (native bundled; co-unique) |
 | TDD discipline | `test-driven-development` | — | — | 1 | ✗ gap |
 | Test automation routines | — | `.agents/`: 10 testing skills | — | 1 (caveat: agent routines, not user skills) | ✗ gap |
 
@@ -223,10 +246,10 @@ bundled skill in this domain.
 
 | Capability | hermes | openclaw | codex | Score | co-cli |
 |---|---|---|---|---|---|
-| Author new skill from session | `skill_manage` tool | `skill-creator` skill + `skill-workshop` extension | `skill-creator` | **3** | ✗ gap |
-| Install skill from URL/repo | `skills_hub` (`OptionalSkillSource`) | `clawhub` skill + `skills-clawhub.ts` runtime | `skill-installer` | **3** | partial — `/skills install <url>` CLI only |
-| Patch / self-improve skill | `skill_manage(action='patch')` | `skill-workshop` reviewer + creator pair | `skill-creator` update path | **3** | ✗ gap (Gap 3) |
-| Migration from peer system | `openclaw-migration` (opt) | `migrate-claude` + `migrate-hermes` extensions | — | 2 | ✗ gap |
+| Author new skill from session | `skill_manage` tool | `skill-creator` skill + `skill-workshop` extension | `skill-creator` | **3** | ✓ `skill_manage(action='create')` + `skill-creator` bundled skill |
+| Install skill from URL/repo | `skills_hub` (`OptionalSkillSource`) | `clawhub` skill + `skills-clawhub.ts` runtime | `skill-installer` | **3** | ✗ gap (no URL/repo install path) |
+| Patch / self-improve skill | `skill_manage(action='patch')` | `skill-workshop` reviewer + creator pair | `skill-creator` update path | **3** | ✓ `skill_manage(action='patch')` + dream-daemon skill reviewer |
+| Migration from peer system | `openclaw-migration` (opt) | `migrate-claude` + `migrate-hermes` extensions | — | 2 | ✗ gap (importer plan withdrawn) |
 | Plugin scaffolding | — | (separate plugin system) | `plugin-creator` | 1 | ✗ gap |
 
 ### 2.3 Scheduling & Maintainer Routines
@@ -355,14 +378,17 @@ catalog**. The entire Tier 1 is the skill lifecycle.
 
 | # | Capability | Peers | co-cli status |
 |---|---|---|---|
-| T1-1 | Skill authoring (create new SKILL.md from session workflow) | hermes `skill_manage`, openclaw `skill-creator`+`skill-workshop`, codex `skill-creator` (3) | ✗ gap |
-| T1-2 | Skill installation from external source | hermes `skills_hub`/`OptionalSkillSource`, openclaw `clawhub`+`skills-clawhub.ts`, codex `skill-installer` (3) | partial — `/skills install <url>` is a CLI command, no skill-form workflow |
-| T1-3 | Skill patch / self-improvement | hermes `skill_manage(action='patch')`, openclaw `skill-workshop` reviewer/creator pair, codex `skill-creator` update path (3) | ✗ gap (Gap 3) |
+| T1-1 | Skill authoring (create new SKILL.md from session workflow) | hermes `skill_manage`, openclaw `skill-creator`+`skill-workshop`, codex `skill-creator` (3) | ✓ `skill_manage(create)` + `skill-creator` bundled skill |
+| T1-2 | Skill installation from external source | hermes `skills_hub`/`OptionalSkillSource`, openclaw `clawhub`+`skills-clawhub.ts`, codex `skill-installer` (3) | ✗ gap — no URL/repo install path |
+| T1-3 | Skill patch / self-improvement | hermes `skill_manage(action='patch')`, openclaw `skill-workshop` reviewer/creator pair, codex `skill-creator` update path (3) | ✓ `skill_manage(patch)` + dream-daemon skill reviewer (self-evolving) |
 
-**Reading:** The strongest cross-peer signal is that a skill catalog without a
-maintenance loop becomes a liability. Every catalog-shipping system shipped
-the create / install / patch trio. co-cli has only partial install (CLI
-command, not a skill-form workflow) and no authoring or patch loop.
+**Reading (refreshed).** The strongest cross-peer signal is that a skill catalog
+without a maintenance loop becomes a liability — every catalog-shipping system
+shipped the create / install / patch trio. co-cli has since shipped **authoring
+(T1-1) and patch (T1-3)** via `skill_manage`, and goes further with an
+autonomous dream-daemon skill reviewer that no surveyed peer matches. The one
+remaining Tier-1 gap is **install-from-source (T1-2)** — co-cli has no URL/repo
+install path; user skills arrive only via hand-authoring or `skill_manage`.
 
 ---
 
@@ -372,7 +398,7 @@ command, not a skill-form workflow) and no authoring or patch loop.
 
 | # | Capability | Peers | co-cli status |
 |---|---|---|---|
-| T2-A1 | Session diagnosis (logs, frozen sessions, debugging) | hermes `systematic-debugging`, openclaw `healthcheck`+`session-logs`+`model-usage` (2) | `doctor` ✓ |
+| T2-A1 | Session diagnosis (logs, frozen sessions, debugging) | hermes `systematic-debugging`, openclaw `healthcheck`+`session-logs`+`model-usage` (2) | `doctor` + `triage` ✓ (debugging capability already covered) |
 | T2-A2 | Subagent-driven / coding-agent delegation | hermes `subagent-driven-development`, openclaw `coding-agent` (2) | harness-only (`.claude/skills/orchestrate-dev`) |
 
 #### T2-B: Skill Maintenance
@@ -436,7 +462,11 @@ command, not a skill-form workflow) and no authoring or patch loop.
 |---|---|---|---|
 | T2-I1 | 1Password | hermes (opt) + openclaw (2) | ✗ gap |
 
-**co-cli Tier 2 coverage: 1 / ~25 capabilities (T2-A1 via `doctor`).**
+**co-cli Tier 2 coverage (refreshed): T2-A1 via `doctor`+`triage` ✓; engineering
+workflow also covered natively by `plan`/`review`/`refactor`. The ~22 remaining
+Tier-2 capabilities are SaaS/media/integration domains — most either already
+covered by co-cli *tools* (Obsidian, Google Workspace) or blocked on a missing
+tool (OCR/PDF, Whisper, MCP-server skill).**
 
 ---
 
@@ -505,19 +535,19 @@ BCI (opt), 1-3-1 decision framework (opt), `youtube-content`, `arxiv`,
 | **User catalog directory** | `~/.hermes/skills/` + `external_dirs` config | Active workspace skills dir + plugin contributions | User skills dir under home | `~/.co-cli/skills/*.md` |
 | **Override semantics** | Local wins on collision | Workspace-synced; bundled allowlist + plugin merge | Sample reinstall on startup | User-global wins over bundled |
 | **Visibility filtering** | Platform check + `disabled_skills` + `metadata.hermes` conditional fields | `SkillEligibilityContext` (platform, bins, env, config) via `agent-filter.ts` | (Sample-set only) | `requires` block: bins, anyBins, env, os, settings |
-| **Model discovery surface** | `<available_skills>` system-prompt block (cached snapshot, mandatory-scan) | `<available_skills>` XML block via `formatSkillsForPrompt()`; **compact-mode fallback** drops descriptions before truncating | Skill names visible via skill tool | None (Gap 1) |
-| **Prompt budget handling** | Index cached on disk; rebuilt on manifest change | `applySkillsPromptLimits()` — full → compact → count-truncate | — | None |
-| **Model load mechanism** | `skill_view(name)` tool — body + linked-file metadata | **Generic Read tool against `<location>` path** — no dedicated load tool | Skill name → load | None (slash command only) |
+| **Model discovery surface** | `<available_skills>` system-prompt block (cached snapshot, mandatory-scan) | `<available_skills>` XML block via `formatSkillsForPrompt()`; **compact-mode fallback** drops descriptions before truncating | Skill names visible via skill tool | `<available_skills>` block via `render_skill_manifest()` — opt-in (not mandatory-scan) |
+| **Prompt budget handling** | Index cached on disk; rebuilt on manifest change | `applySkillsPromptLimits()` — full → compact → count-truncate | — | Rides the static-prompt cache; no compact-mode fallback yet |
+| **Model load mechanism** | `skill_view(name)` tool — body + linked-file metadata | **Generic Read tool against `<location>` path** — no dedicated load tool | Skill name → load | `skill_view(name)` tool — full body inline (`spill_threshold=inf`) |
 | **Slash invocation** | `/skill-name` → activation note + body prepended | (via slash + tool) | (via tool) | `/skill-name` → body becomes `delegated_input` |
-| **Authoring contract** | Strong: rich frontmatter, standardized sections, code examples | `skill-creator` skill + `skill-workshop` extension (reviewer + creator) — explicit rubric (forked from codex) | `skill-creator` skill encodes rubric | None (Gap 2) |
+| **Authoring contract** | Strong: rich frontmatter, standardized sections, code examples | `skill-creator` skill + `skill-workshop` extension (reviewer + creator) — explicit rubric (forked from codex) | `skill-creator` skill encodes rubric | `docs/specs/skills.md` authoring contract + `lint.py` R1–R4/B1 + `skill-creator` bundled skill |
 | **Linked-file convention** | `references/`, `templates/`, `assets/`, `scripts/` | Per-skill scripts/refs (e.g. `skill-creator/scripts/*.py`) | Per-skill asset dir | Frontmatter only |
-| **Self-improvement loop** | `skill_manage(action='patch')` + prompt invariant | `skill-workshop` reviewer + creator pair | `skill-creator` update path | None (Gap 3) |
+| **Self-improvement loop** | `skill_manage(action='patch')` + prompt invariant | `skill-workshop` reviewer + creator pair | `skill-creator` update path | `skill_manage(patch)` + prompt invariant + **autonomous dream-daemon skill reviewer** (no peer equivalent) |
 | **Body-as-prompt vs reference** | Loaded into context as reference; model may revisit | Loaded into context as reference (model reads from `<location>`) | Loaded as reference | One-shot prompt that drives a single turn |
 | **Env injection** | Env passthrough names registered for child execution | `env-overrides.ts` + `env-overrides.runtime.ts` — apply skill-declared vars with **snapshot + restore** | None | Turn-scoped `skill-env` with rollback; `_SKILL_ENV_BLOCKED` filter — **finer scope than openclaw's session-level snapshot** |
 | **Plugin skills** | Qualified `plugin:skill` namespace | First-class via `plugin-skills.ts` | — | None |
 | **Migration extensions** | `openclaw-migration` opt skill (one-way) | `migrate-claude` + `migrate-hermes` extensions (both directions) | — | None |
-| **Skill hub / install runtime** | `skills_hub.py` `OptionalSkillSource` | `clawhub` skill + `skills-clawhub.ts` runtime | `skill-installer` | `/skills install <url>` CLI command |
-| **Index caching** | On-disk snapshot (`.skills_prompt_snapshot.json`) | `refresh-state.ts` + `snapshot-hydration.ts` | — | None |
+| **Skill hub / install runtime** | `skills_hub.py` `OptionalSkillSource` | `clawhub` skill + `skills-clawhub.ts` runtime | `skill-installer` | None — no URL/repo install path |
+| **Index caching** | On-disk snapshot (`.skills_prompt_snapshot.json`) | `refresh-state.ts` + `snapshot-hydration.ts` | — | Manifest rendered into static prompt; `refresh_skills()` rebuilds on write |
 | **Preload mechanisms** | `--skills` CLI flag, cron-job prepend, gateway auto-load | Workspace sync at session start | — | None |
 | **Routine vs user skills** | (cron jobs are tool-side) | `.agents/skills/` separate from `skills/` — different dispatch surface | — | — |
 
@@ -544,6 +574,18 @@ reference if co-cli ever adds an index — it bounds the prompt cost.
 ---
 
 ## Part 5: co-cli Gap Priority — Build Order
+
+> **STATUS (2026-05-27 refresh).** Steps 1–4 are SHIPPED. Step 5 was withdrawn.
+> | Step | Status |
+> |---|---|
+> | 1 — Lifecycle spec + lint | ✅ shipped (`skills.md` contract, `lint.py` R1–R4/B1) |
+> | 2 — Lifecycle trio | ⚠️ partial: create ✅ + patch ✅ (`skill_manage`); **install ❌ still absent** |
+> | 3 — Bundled library | ✅ shipped (`doctor`,`plan`,`refactor`,`review`,`triage`,`skill-creator`) |
+> | 4 — Awareness layer | ✅ shipped (`render_skill_manifest` / `<available_skills>`, opt-in) |
+> | 5 — Migration importer | ❌ withdrawn (over-engineered; loader ignores unknown frontmatter so porting needs no importer) |
+> The implementation-plan prose below is preserved as the historical roadmap;
+> read it as "what was proposed," not "what's pending." Remaining real gaps:
+> **install-from-source (T1-2)** and opportunistic tool-backed Tier-2 skills.
 
 Derived from `RESEARCH-skills-prompt-gaps.md` "Concrete Gaps" § and the
 convergence matrix above. Ordering is by **dependency**, not signal strength —

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.260]
+
+### REPL input queue — type-ahead during an active turn enqueues instead of dropping (Phase 1)
+
+While a turn ran, mid-turn submissions were silently dropped (`main.py` BC6 from the Phase 0 single-owner refactor). Now submissions during an active turn **enqueue** (FIFO) and drain one item per turn boundary — both on normal completion and on `Esc`-cancel. Idle submissions still run immediately. Matches the Claude Code / opencode interaction model.
+
+- **`co_cli/display/core.py`** — `StatusSnapshot` gains `queue_depth: int = 0` (last field); `render_footer_toolbar` renders `"{n} queued"` between `mode` and `ctx` (omitted at 0). `update_status` now calls `self._invalidate()` after storing the snapshot so a status push repaints with no co-located render event (the drain path has none); `_invalidate()` is a no-op when no app is bound.
+- **`co_cli/display/_app.py`** — `_ReplRuntime` gains an in-memory `queue: deque[str]` (session-lifetime, not persisted). Key remap in `build_key_bindings`: `Esc` cancels the active turn and advances the queue (the turn's done-callback drains); `Ctrl+C` is now **exit-only** (double-press) and no longer cancels the turn; `Ctrl+D` (EOF) unchanged.
+- **`co_cli/main.py`** — `_build_accept_handler` rewritten: mid-turn non-blank text enqueues and pushes live depth; idle submits via a new `_arm_turn` helper that attaches a `_drain_next` done-callback so the next queued item advances at every turn boundary. Blank/whitespace submissions never occupy a slot. Live depth (`len(runtime.queue)`) flows to `_build_status_snapshot` only from runtime-aware callers; `_handle_one_input`'s contract is untouched.
+- **Tests** — `tests/integration/test_repl_input_queue.py` (new) drives a genuinely-running `app.run_async()` with a real warm Ollama turn: type-ahead during the active turn enqueues (`queue_depth==1` via captured snapshot), both turns drain FIFO, queue returns to 0. Unit coverage in `tests/test_display.py` (toolbar depth render, `update_status` invalidate) and `tests/test_flow_chat_loop.py` (FIFO enqueue/drain, blank-drop, `Esc` interrupt+advance, `Ctrl+C` exit-only).
+- **Spec** — `docs/specs/tui.md` synced (flow diagram, REPL-loop prose, interrupt-handling, `StatusSnapshot`/`_build_status_snapshot` signatures).
+
 ## [0.8.258]
 
 ### Single terminal owner — persistent prompt_toolkit Application replaces the Rich Live / PromptSession baton-pass

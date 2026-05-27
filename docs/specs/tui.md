@@ -14,8 +14,8 @@ User input
     ↓
 Application (prompt_toolkit, full_screen=False)  ← single terminal owner
   layout: in-flight streaming window + input TextArea (FileHistory, completer) + toolbar window
-    ↓ accept_handler: schedule a turn task (idle) / drop (mid-turn, Phase 0)
-_chat_loop()                    ← session lifecycle; c-c cancels active turn + double-press exit
+    ↓ accept_handler: arm a turn task (idle) / enqueue (mid-turn, FIFO)
+_chat_loop()                    ← session lifecycle; Esc interrupts active turn, c-c double-press exit
     ↓ starts with "/"
 dispatch(raw_input, ctx)        ← routes to BUILTIN_COMMANDS or skill
     ↓ starts without "/"
@@ -47,16 +47,24 @@ wrapped in `patch_stdout()` so the incidental `console.print` sites reflow above
   inside `patch_stdout()`
 
 The Application is event-driven, not a read-one-line loop. The input `TextArea`'s
-`accept_handler` schedules a turn task (`asyncio.ensure_future`) for an idle submission and
-drops submissions that arrive while a turn is active (Phase 0 — the single seam where the
-`repl-input-queue` plan will swap drop→enqueue). Turn state — the current turn-task reference
-and the iteration state — has one owner, `_ReplRuntime`, shared by the `accept_handler` and the
-Ctrl+C key binding. `exit`/`quit` and empty input are handled inside `_handle_one_input`.
+`accept_handler` arms a turn task (`asyncio.ensure_future`) for an idle submission; a submission
+arriving while a turn is active **enqueues** (FIFO, non-blank only) instead of being dropped.
+Each armed turn carries an `add_done_callback` that drains the next queued item at the turn
+boundary — normal completion *and* `Esc`-cancel both fire it — so the queue advances one item
+per turn. Turn state — the current turn-task reference, the iteration state, and the input
+`queue` (`collections.deque[str]`) — has one owner, `_ReplRuntime`, shared by the
+`accept_handler` and the key bindings. Queue depth surfaces in the bottom toolbar
+(`"{n} queued"`, omitted at 0). `exit`/`quit` and empty input are handled inside
+`_handle_one_input`.
 
-Interrupt handling (via key bindings, behaviour-preserving):
+Interrupt handling (via key bindings):
+- `Esc` while a turn is running: cancels the active turn task; its done-callback drains the next
+  queued item, so `Esc` interrupts and advances the queue. The interrupted query is abandoned
+  (not re-run). Idle: no-op.
 - First Ctrl+C while idle: prints "Press Ctrl+C again to exit" and arms a 2 s window
 - Second Ctrl+C within 2 seconds: exits (`app.exit()`)
-- Ctrl+C while a turn is running: cancels the active turn task, then arms the double-press window
+- Ctrl+C is exit-only — it does **not** cancel the active turn (interrupt moved to `Esc`); a
+  double-press exit tears the app down, which cancels any in-flight turn
 - Ctrl+D (`eof`): exits
 
 ### Tab Completion
@@ -166,12 +174,12 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | `HeadlessFrontend` | `co_cli/display/headless.py` | No-op frontend for evals and tests; stores `last_status_snapshot` for inspection; mirrors the async prompt signatures |
 | `render_to_ansi(renderable, *, width) -> str` | `co_cli/display/core.py` | The sole Rich renderable→ANSI-string primitive; stateless, width supplied by the caller |
 | `console`, `set_theme(name)`, `PROMPT_CHAR` | `co_cli/display/core.py` | Shared console instance, theme switcher, prompt glyph |
-| `build_repl_app(...)`, `build_key_bindings(...)`, `_ReplRuntime` | `co_cli/display/_app.py` | Inline-REPL Application factory, Ctrl+C/Ctrl+D key bindings, and the single turn-state holder (F7) |
+| `build_repl_app(...)`, `build_key_bindings(...)`, `_ReplRuntime` | `co_cli/display/_app.py` | Inline-REPL Application factory, Esc/Ctrl+C/Ctrl+D key bindings, and the single turn-state holder (F7) — holds the turn-task reference and the input `queue` |
 | `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-segment text/thinking buffering and flush policy |
 | `QuestionPrompt(question, options, multiple)` | `co_cli/display/core.py` | Clarify-path approval prompt for tool-issued questions |
-| `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` |
+| `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count, queue_depth=0)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` (which repaints via `_invalidate`); `queue_depth` renders as `"{n} queued"` between `mode` and `ctx`, omitted at 0 |
 | `TerminalFrontend.render_footer_toolbar()` | `co_cli/display/core.py` | Plain-text footer string consumed by the toolbar `Window` in the Application layout |
-| `_build_status_snapshot(deps, mode)` | `co_cli/main.py` | Assembles a `StatusSnapshot` from `CoDeps` at lifecycle push points |
+| `_build_status_snapshot(deps, mode, queue_depth=0)` | `co_cli/main.py` | Assembles a `StatusSnapshot` from `CoDeps` at lifecycle push points; runtime-aware callers pass `len(runtime.queue)` for live depth |
 
 ### Slash command reference
 

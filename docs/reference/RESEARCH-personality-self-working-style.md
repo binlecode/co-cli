@@ -126,10 +126,28 @@ block (`load_soul_mindsets`). Each is a clearly labeled subsection (`## Debuggin
 …), so the model self-selects which applies — there is no system-level gating, no runtime concept
 like `task_mode=debugging`, `risk_level=elevated`, or `response_contract=brief_direct`.
 
+The selection is not even nudged at the prompt level. The mindsets block ships with no preamble:
+`load_soul_mindsets` emits `## Mindsets` followed by the six joined files and nothing else. No rule
+instructs a classify-then-focus step — `03_reasoning.md` covers verification and when-to-ask, never
+task-shape selection — and neither seed nor critique references mindsets. The only structuring
+signal is the heading labels themselves. So co relies on emergent attention to labeled sections: the
+model *may* weight the relevant heading by relevance, but nothing prompts it to, and on a
+non-reasoning model no explicit selection step need happen at all.
+
 Consequence: mindset selection is the model's inference, not a system decision. No mechanism exists
 to deliberately activate the right stance when stakes rise, suppress the other five, or verify the
-intended mindset was applied. (SillyTavern/Soul.md/ElizaOS have lighter dynamic mechanisms, but co's
-static load is rated the most sophisticated role layer — so this is direction-of-travel, not lag.)
+intended mindset was applied.
+
+Two interventions, cheapest first:
+- **Prompt-level selection nudge** — a one-line preamble on the block ("identify which task shape
+  this turn is and lead with that mindset; treat the others as background") converts flat awareness
+  into an instructed classify-then-focus step. Cheap, but adds prompt weight the peer survey warns
+  about and stays unverifiable.
+- **Per-turn injection of only the relevant heading(s)** — the real fix, but requires the runtime
+  resolver (§4.2) to do the picking.
+
+(SillyTavern/Soul.md/ElizaOS have lighter dynamic mechanisms, but co's static load is rated the most
+sophisticated role layer — so this is direction-of-travel, not lag.)
 
 ## 2.3 Preference state is a weak control surface
 

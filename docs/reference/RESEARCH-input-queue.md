@@ -257,30 +257,6 @@ Tradeoffs:
 
 ---
 
-## co-cli Baseline (Current)
-
-`co-cli` currently processes one input at a time from prompt loop:
-- Prompt reads one `user_input`.
-- Chat loop calls `run_turn(agent, user_input=...)`.
-- No input queue in loop around `run_turn()`.
-
-Evidence:
-- [main.py:273](/Users/binle/workspace_genai/co-cli/co_cli/main.py:273)
-- [main.py:327](/Users/binle/workspace_genai/co-cli/co_cli/main.py:327)
-
-`run_turn()` contract is single-turn orchestration:
-- Accepts one `user_input: str`.
-- Streams events through frontend protocol callbacks.
-
-Evidence:
-- [\_orchestrate.py:475](/Users/binle/workspace_genai/co-cli/co_cli/_orchestrate.py:475)
-- [\_orchestrate.py:300](/Users/binle/workspace_genai/co-cli/co_cli/_orchestrate.py:300)
-
-Implication:
-- Any input queue for co should be owned by chat-loop/TUI layer, not embedded into `run_turn()`.
-
----
-
 ## Adoption Recommendations for co-cli
 
 ## Recommended Target

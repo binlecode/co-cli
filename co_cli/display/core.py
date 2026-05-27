@@ -244,6 +244,7 @@ class StatusSnapshot:
     context_pct: float | None
     background_task_count: int
     approval_count: int
+    queue_depth: int = 0
 
 
 @runtime_checkable
@@ -399,12 +400,18 @@ class TerminalFrontend:
 
     def update_status(self, snapshot: StatusSnapshot) -> None:
         self._footer_snapshot = snapshot
+        # Repaint so a status push reflects immediately even with no co-located
+        # render event (the queue drain fires inside a done-callback with none).
+        # _invalidate is a no-op when no app is bound (headless/stub paths).
+        self._invalidate()
 
     def render_footer_toolbar(self) -> str:
         if self._footer_snapshot is None:
             return ""
         s = self._footer_snapshot
         parts: list[str] = [s.session_label, s.mode]
+        if s.queue_depth > 0:
+            parts.append(f"{s.queue_depth} queued")
         if s.context_pct is not None:
             parts.append(f"ctx {int(s.context_pct * 100)}%")
         if s.background_task_count > 0:

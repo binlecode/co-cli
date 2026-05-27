@@ -94,14 +94,21 @@ async def test_repl_app_builds():
         await asyncio.sleep(0.01)
         assert dispatched == [(None, False)]
 
-        # c-c while a turn task is active cancels that task before routing.
+        # c-c while a turn task is active is exit-only — it does NOT cancel the
+        # turn (interrupt moved to Esc), just routes the double-press signal.
         turn_task = asyncio.ensure_future(asyncio.sleep(10))
         await asyncio.sleep(0)
         runtime.turn_task = turn_task
         cc.handler(object())
         await asyncio.sleep(0.01)
-        assert turn_task.cancelled()
+        assert not turn_task.cancelled()
         assert dispatched[-1] == (None, False)
+
+        # Esc cancels the active turn (the new interrupt key).
+        esc = kb.get_bindings_for_keys((Keys.Escape,))[0]
+        esc.handler(object())
+        await asyncio.sleep(0.01)
+        assert turn_task.cancelled()
 
 
 # ── TerminalFrontend in-flight streaming buffer ────────────────────────────
@@ -304,6 +311,66 @@ def test_render_footer_toolbar_empty_session_label_renders():
     result = frontend.render_footer_toolbar()
     assert "—" in result
     assert "idle" in result
+
+
+def test_status_toolbar_renders_queue_depth():
+    frontend = TerminalFrontend()
+    frontend.update_status(
+        StatusSnapshot(
+            session_label="a1b2c3d4",
+            mode="active",
+            context_pct=0.5,
+            background_task_count=0,
+            approval_count=0,
+            queue_depth=3,
+        )
+    )
+    result = frontend.render_footer_toolbar()
+    assert "3 queued" in result
+    # Rendered between mode and ctx.
+    assert result.index("active") < result.index("3 queued") < result.index("ctx")
+
+
+def test_status_toolbar_omits_queue_depth_when_zero():
+    frontend = TerminalFrontend()
+    frontend.update_status(
+        StatusSnapshot(
+            session_label="a1b2c3d4",
+            mode="idle",
+            context_pct=None,
+            background_task_count=0,
+            approval_count=0,
+            queue_depth=0,
+        )
+    )
+    assert "queued" not in frontend.render_footer_toolbar()
+
+
+def test_update_status_invalidates():
+    class _StubApp:
+        def __init__(self) -> None:
+            self.invalidate_count = 0
+
+        def invalidate(self) -> None:
+            self.invalidate_count += 1
+
+    snapshot = StatusSnapshot(
+        session_label="abc",
+        mode="idle",
+        context_pct=None,
+        background_task_count=0,
+        approval_count=0,
+    )
+
+    # Bound app: update_status triggers exactly one invalidate.
+    frontend = TerminalFrontend()
+    stub = _StubApp()
+    frontend.bind_app(stub)
+    frontend.update_status(snapshot)
+    assert stub.invalidate_count == 1
+
+    # No app bound: update_status is a silent no-op (no raise).
+    TerminalFrontend().update_status(snapshot)
 
 
 # ── HeadlessFrontend.update_status ────────────────────────────────────────

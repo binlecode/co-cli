@@ -1,132 +1,33 @@
-# RESEARCH: Tool Tiering Across Peers — fork-cc · hermes · opencode · codex
+# RESEARCH: Tool Tiering Across Peers — hermes · openclaw · opencode · codex
 
-Cross-peer synthesis of all four `RESEARCH-tools-*.md` files plus
-`RESEARCH-tools-gaps-co-vs-hermes.md`. Establishes a three-tier classification
-of tool capabilities based on convergence frequency across peers, with
-full per-peer inventories, lifecycle architecture comparison, co-cli coverage
-mapping, and prioritized gap analysis.
+Cross-peer synthesis of the `RESEARCH-tools-*.md` files plus
+`RESEARCH-tools-gaps-co-vs-hermes.md` and a direct survey of the openclaw repo.
+Establishes a three-tier classification of tool capabilities based on
+convergence frequency across peers, with full per-peer inventories, lifecycle
+architecture comparison, co-cli coverage mapping, and prioritized gap analysis.
 
-**Peers reviewed:** fork-claude-code (fork-cc), hermes-agent, opencode, codex.  
+**Peers reviewed:** hermes-agent, openclaw, opencode, codex.  
 **Reference system:** co-cli (~35 native tools as of v0.8.x).
 
 **Sources:**
-- `RESEARCH-tools-fork-cc.md` — fork-claude-code source diff
 - `RESEARCH-tools-hermes-agent.md` — hermes tool registry
 - `RESEARCH-tools-opencode.md` — opencode built-in registry
 - `RESEARCH-tools-codex.md` — codex Rust tool spec
 - `RESEARCH-tools-gaps-co-vs-hermes.md` — per-tool parity + architecture gaps
+- `~/workspace_genai/openclaw/src/agents/openclaw-tools.ts` — openclaw factory registry (surveyed directly; no standalone research file)
 
 **Tiering method:** Each capability is scored by how many of the four peers
-implement it as a native first-class tool. **Tier 1 = 3–4 peers** (universal),
-**Tier 2 = 2–3 peers** (converged capability), **Tier 3 = 1–2 peers**
-(specialized / differentiated).
+implement it as a native first-class tool. **Tier 1 = 3–4 peers** (universal /
+near-universal), **Tier 2 = 2 peers** (converged capability), **Tier 3 = 1 peer**
+(specialized / differentiated). A capability covered only via a peer's harness
+or API surface (not a discrete tool) is marked "(via API)" and counts as a soft
+presence.
 
 ---
 
 ## Part 1: Per-Peer Tool Inventories
 
-### 1.1 fork-claude-code
-
-Source: `getAllBaseTools()` in `fork-claude-code/tools.ts` + built-in tool directories.
-
-#### Core file and shell
-
-| Tool | Class |
-|---|---|
-| Shell execution | `BashTool` |
-| File read | `ReadTool` |
-| File write | `WriteTool` |
-| File edit (string replacement) | `EditTool` |
-| Glob / file find | `GlobTool` |
-| Content search (ripgrep) | `GrepTool` |
-| PowerShell (Windows) | `PowerShellTool` |
-
-#### Interaction and mode control
-
-| Tool | Class |
-|---|---|
-| Ask user a question | `AskUserQuestionTool` |
-| Enter plan mode | `EnterPlanModeTool` |
-| Exit plan mode v2 | `ExitPlanModeV2Tool` |
-| Enter git worktree | `EnterWorktreeTool` |
-| Exit git worktree | `ExitWorktreeTool` |
-
-#### Web
-
-| Tool | Class |
-|---|---|
-| Web fetch | `WebFetchTool` |
-| Web search | `WebSearchTool` |
-
-#### Task tracking
-
-| Tool | Class |
-|---|---|
-| Structured to-do list | `TodoWriteTool` |
-
-#### Code intelligence
-
-| Tool | Class |
-|---|---|
-| Language Server Protocol (diagnostics, hover, go-to-def) | `LSPTool` |
-| Jupyter notebook cell editing | `NotebookEditTool` |
-
-#### Multi-agent and task orchestration
-
-| Tool | Class |
-|---|---|
-| Spawn agent / run subagent | `AgentTool` |
-| Create tracked task | `TaskCreateTool` |
-| Get task state | `TaskGetTool` |
-| List tasks | `TaskListTool` |
-| Update task | `TaskUpdateTool` |
-| Get task output | `TaskOutputTool` |
-| Stop task | `TaskStopTool` |
-| Send message to agent or user | `SendMessageTool` |
-| Create team | `TeamCreateTool` |
-| Delete team | `TeamDeleteTool` |
-
-#### MCP resources
-
-| Tool | Class |
-|---|---|
-| List MCP resources | `ListMcpResourcesTool` |
-| Read MCP resource | `ReadMcpResourceTool` |
-| Generic MCP tool wrapper | `MCPTool` |
-| MCP authentication flow | `McpAuthTool` |
-
-#### Configuration and metadata
-
-| Tool | Class |
-|---|---|
-| Read / write Claude Code config | `ConfigTool` |
-| Read project brief (CLAUDE.md) | `BriefTool` |
-
-#### Scheduling and remote execution
-
-| Tool | Class |
-|---|---|
-| Create cron job | `CronCreateTool` |
-| Delete cron job | `CronDeleteTool` |
-| List cron jobs | `CronListTool` |
-| Trigger remote agent run | `RemoteTriggerTool` |
-
-**fork-cc total: ~38 built-in tools**
-
-#### fork-cc Lifecycle Architecture
-
-| Aspect | Detail |
-|---|---|
-| Tool contract | `Tool<T>`: `inputSchema`, `isConcurrencySafe`, `isReadOnly`, `isDestructive`, `interruptBehavior`, `validateInput`, `checkPermissions`, `backfillObservableInput`, `mapToolResultToToolResultBlockParam`, `maxResultSizeChars`, `aliases` |
-| Hook runners | `runPreToolUseHooks` (yields: permission result, updated input, prevent-continuation signal, additional context), `runPostToolUseHooks`, `runPostToolUseFailureHooks` |
-| Permission sources | `userSettings`, `projectSettings`, `localSettings`, `flagSettings`, `policySettings`, `cliArg`, `command`, `session` |
-| Permission modes | `acceptEdits`, `bypassPermissions`, `default`, `dontAsk`, `plan` |
-| Concurrency partitioning | `partitionToolCalls()` batches calls by `isConcurrencySafe` before dispatch |
-| Per-tool rendering | `tools/*/UI.tsx` — each tool has its own React component |
-
----
-
-### 1.2 hermes-agent
+### 1.1 hermes-agent
 
 Source: `hermes-agent/tools/` implementations + `toolsets.py`.
 
@@ -228,6 +129,83 @@ Source: `hermes-agent/tools/` implementations + `toolsets.py`.
 | Named toolset profiles | `toolsets.py` + `resolve_toolset()`: `web`, `file`, `terminal`, `skills`, `session_search`, `browser`, `vision`, `image_gen`, `tts`, `todo`, `cronjob`, `homeassistant` |
 | Approval model | Blocking gateway pattern; answer channel independent of tool call identity; `_permanent_approved` for cross-session persistence |
 | Result size | `max_result_size_chars` enforced uniformly by registry on all tools including MCP |
+
+---
+
+### 1.2 openclaw
+
+Source: `openclaw/src/agents/openclaw-tools.ts` (factory composition) +
+`openclaw-tools.registration.ts` + `src/agents/tools/` (24 implementation files).
+
+#### Session coordination and lifecycle
+
+| Tool | Key parameters / behavior |
+|---|---|
+| `sessions_spawn` | Spawn subagents; async nested agent execution with workspace inheritance; `runtime` selects identity |
+| `sessions_send` | Send messages to other sessions; inter-session (agent-to-agent) communication |
+| `sessions_list` | Query active / historical sessions; filter by kind, agent, status |
+| `sessions_history` | Fetch transcript history for a session with message filtering |
+| `session_status` | Query run status, model info, loop-detection state |
+| `sessions_yield` | End current turn; collect subagent results asynchronously |
+| `subagents` | List available subagent runtime identities for spawn |
+| `agents_list` | List available agent IDs for `sessions_spawn runtime="subagent"`, with scope restrictions |
+
+#### Message and interaction
+
+| Tool | Key parameters / behavior |
+|---|---|
+| `message` | Send / receive / edit / react across Slack, Discord, Teams, Telegram, iMessage, Matrix; thread routing; channel-capability gated |
+| `heartbeat` | Record structured heartbeat outcomes (done / failed / check-back); notify preference; priority |
+
+#### Web
+
+| Tool | Key parameters / behavior |
+|---|---|
+| `web_search` | Brave / Perplexity / DuckDuckGo / Jina; domain filters, date ranges, country / language |
+| `web_fetch` | Fetch URL as markdown / text; readability extraction; caching; 750KB default / 10MB cap |
+
+#### Process and scheduling
+
+| Tool | Key parameters / behavior |
+|---|---|
+| `cron` | Manage Gateway cron jobs: reminders, delayed follow-ups, recurring work; no emulation via exec/polling |
+| `nodes` | Execute shell commands / scripts; run hosted HTTP servers; invoke media-returning commands; workspace isolation |
+
+#### Media generation and understanding (optional, auth/config-gated)
+
+| Tool | Key parameters / behavior |
+|---|---|
+| `image_generate` | Generate images (DALL-E, Flux, …); requires auth + agent directory |
+| `image` | Describe / analyze images; vision LLM call; path / URL / base64 input; up to 20 images |
+| `video_generate` | Generate videos; provider-specific (e.g. Runway) |
+| `music_generate` | Generate audio / music |
+| `pdf` | Understand PDF documents; multimodal extraction |
+| `tts` | Synthesize text to speech; provider selection; voice-list discovery |
+
+#### Planning and gateway
+
+| Tool | Key parameters / behavior |
+|---|---|
+| `update_plan` | Update exec-plan (Codex strict-agentic mode); write back structured tasks |
+| `gateway` | Internal gateway calls for late-bound plugin tool binding; not exposed to normal agents |
+
+**openclaw total: ~22 native tools (5 media tools auth/config-gated) + plugin tools + per-session MCP tools.**  
+Note: openclaw exposes **no dedicated file read/write/edit/find/grep tools** — file work is done through the `nodes` shell tool.
+
+#### openclaw Lifecycle Architecture
+
+| Aspect | Detail |
+|---|---|
+| Registry | Factory composition: `createOpenClawTools()` instantiates each `createXxxTool()`; no manifest. Tools conditionally included by config flags, auth/capability checks, embedded mode, and allow/deny policy |
+| Runtime availability | `availability.ts` expressions — `kind`: `always` / `auth` / `config` / `env` / `plugin-enabled` / `context`; `allOf` (AND) + `anyOf` (OR) combinations |
+| Pre/post hooks | `before_tool_call` hook (`pi-tools.before-tool-call.ts`): plugin veto + param adjust, approval request, tool-loop detection, trusted-tool policy; post = diagnostic event emission |
+| Approval model | Plugin approval `ALLOW_ONCE` / `ALLOW_ALWAYS` / `DENY` (120s + 10s timeout); config `allow` / `deny` / `alsoAllow`; `ownerOnly` tools restricted to owner senders |
+| Concurrency | Per-call `AbortSignal`; no tool-level concurrency cap; one approval at a time per call |
+| Result size | Per-tool caps (web_fetch 750KB/10MB, search 10 results, image 20, history 20 msgs); no uniform registry gate |
+| MCP integration | Per-session MCP runtime created on demand, catalog materialized per session, names sanitized vs native tools, disposed after run |
+| Toolset profiles | No explicit profiles; implicit groupings — embedded mode, sandboxed exec, media-capable, plugin-augmented, owner-only |
+| Tool context | `HookContext`: `agentId`, `config`, `sessionKey`, `sessionId`, `runId`, `channelId`, `loopDetection`, `sandbox{root,bridge}`, `onToolOutcome` |
+| Typed output | `AgentToolResult{content[], details}`; helpers `textResult` / `jsonResult` / `payloadTextResult`; no schema-driven output narrowing |
 
 ---
 
@@ -386,141 +364,143 @@ Assembly: `create_tools_json_for_responses_api()`, `mcp_tool_to_responses_api_to
 
 ## Part 2: Cross-Peer Convergence Matrix
 
-Score = number of peers (fork-cc, hermes, opencode, codex) with a native first-class implementation.
+Score = number of peers (hermes, openclaw, opencode, codex) with a native first-class implementation.
 co-cli column shows current coverage status.
 
 ### 2.1 File and Workspace Operations
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| File read (paginated) | ReadTool | read_file | read | (via API) | 3–4 | `file_read` ✓ |
-| File write (full overwrite) | WriteTool | write_file | write | (via API) | 3–4 | `file_write` ✓ |
-| File edit (string replace) | EditTool | patch (replace mode) | edit | apply_patch | 4 | `file_patch` ✓ |
-| Multi-hunk patch (V4A/unified diff) | — | patch (patch mode) | ApplyPatchTool | apply_patch | 3 | `file_patch` (`_v4a.py`) ✓ |
-| File / glob search | GlobTool | search_files(files) | glob | — | 3 | `file_find` ✓ |
-| Content / grep search | GrepTool | search_files(content) | grep | — | 3 | `file_search` ✓ |
+| File read (paginated) | read_file | — (via nodes) | read | (via API) | 2–3 | `file_read` ✓ |
+| File write (full overwrite) | write_file | — (via nodes) | write | (via API) | 2–3 | `file_write` ✓ |
+| File edit (string replace) | patch (replace mode) | — | edit | apply_patch | 3 | `file_patch` ✓ |
+| Multi-hunk patch (V4A/unified diff) | patch (patch mode) | — | ApplyPatchTool | apply_patch | 3 | `file_patch` (`_v4a.py`) ✓ |
+| File / glob search | search_files(files) | — | glob | — | 2 | `file_find` ✓ |
+| Content / grep search | search_files(content) | — | grep | — | 2 | `file_search` ✓ |
 
 ### 2.2 Shell and Process Execution
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Foreground shell execution | BashTool | terminal | bash | exec_command | 4 | `shell` ✓ |
-| Background process start | — | terminal(background=True) | — | (via code/wait) | 2 | `task_start` ✓ |
-| Background process status / output | — | process(poll/log) | — | — | 1 | `task_status` ✓ |
-| Background process kill | — | process(kill) | — | — | 1 | `task_cancel` ✓ |
-| Background process list | — | process(list) | — | — | 1 | `task_list` ✓ |
-| Stdin write to running process | — | process(write/submit/close) | — | write_stdin | 2 | ✗ gap |
-| PTY mode (interactive CLI) | — | terminal(pty=True) | — | — | 1 | ✗ gap |
-| Output watch patterns (notify) | — | terminal(watch_patterns) | — | — | 1 | ✗ gap |
-| Code / sandboxed execution | — | execute_code | — | js_repl | 2 | `code_execute` (host-only) |
+| Foreground shell execution | terminal | nodes | bash | exec_command | 4 | `shell` ✓ |
+| Background process start | terminal(background=True) | — | — | (via code/wait) | 2 | `task_start` ✓ |
+| Background process status / output | process(poll/log) | — | — | — | 1 | `task_status` ✓ |
+| Background process kill | process(kill) | — | — | — | 1 | `task_cancel` ✓ |
+| Background process list | process(list) | — | — | — | 1 | `task_list` ✓ |
+| Stdin write to running process | process(write/submit/close) | — | — | write_stdin | 2 | ✗ gap |
+| PTY mode (interactive CLI) | terminal(pty=True) | — | — | — | 1 | ✗ gap |
+| Output watch patterns (notify) | terminal(watch_patterns) | — | — | — | 1 | ✗ gap |
+| Code / sandboxed execution | execute_code | — | — | js_repl | 2 | `code_execute` (host-only) |
 
 ### 2.3 Web
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Web search | WebSearchTool | web_search | search (conditional) | WebSearch | 4 | `web_search` ✓ |
-| Web fetch / extract (single URL) | WebFetchTool | web_extract | fetch | (via API) | 3–4 | `web_fetch` ✓ |
-| Batch URL fetch (multi-URL parallel) | — | web_extract(urls=[…]) | — | — | 1 | ✗ gap |
+| Web search | web_search | web_search | search (conditional) | WebSearch | 4 | `web_search` ✓ |
+| Web fetch / extract (single URL) | web_extract | web_fetch | fetch | (via API) | 3–4 | `web_fetch` ✓ |
+| Batch URL fetch (multi-URL parallel) | web_extract(urls=[…]) | — | — | — | 1 | ✗ gap |
 | Code-specific search | — | — | CodeSearchTool | tool_search | 2 | ✗ gap |
 
 ### 2.4 Interaction and Session Control
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Ask user a question / clarify | AskUserQuestion | clarify | QuestionTool | request_user_input | 4 | `clarify` ✓ (one-shot; see §3.1) |
-| Structured to-do / task list | TodoWriteTool | todo | TodoWriteTool | — | 3 | `todo_write` / `todo_read` ✓ |
-| Runtime capability / tool introspection | — | (registry check_fn only) | — | tool_search / tool_suggest | 1 | `capabilities_check` ✓ (unique) |
+| Ask user a question / clarify | clarify | — | QuestionTool | request_user_input | 3 | `clarify` ✓ (one-shot; see §3.1) |
+| Structured to-do / task list | todo | — | TodoWriteTool | — | 2 | `todo_write` / `todo_read` ✓ |
+| Runtime capability / tool introspection | (registry check_fn only) | — | — | tool_search / tool_suggest | 1 | `capabilities_check` ✓ (unique) |
 
 ### 2.5 Memory and Recall
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Persistent memory store (CRUD) | (subsystem) | memory | — | — | 2 | `memory_create/modify` ✓ |
+| Persistent memory store (CRUD) | memory | — | — | — | 1 | `memory_create/modify` ✓ |
 | Paginated memory inventory | — | — | — | — | 0 | ✗ deliberate gap — see docs/specs/memory.md |
 | Full memory artifact read by slug | — | — | — | — | 0 | ✗ deliberate gap — see docs/specs/memory.md |
-| Session / history search | — | session_search | — | — | 1 | `memory_search` (T1) ✓ |
+| Session / history search | session_search | sessions_history | — | — | 2 | `memory_search` (T1) ✓ |
 | T2 artifact search (FTS5 BM25) | — | — | — | — | 0 | `memory_search` (T2) ✓ (unique) |
-| Role-filtered session search | — | session_search(role_filter) | — | — | 1 | ✗ gap |
+| Role-filtered session search | session_search(role_filter) | — | — | — | 1 | ✗ gap |
 
 ### 2.6 Skills System
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Model-callable skill list | — | skills_list | skill (inject) | — | 2 | ✗ gap |
-| Model-callable skill read | — | skill_view | skill (inject) | — | 2 | ✗ gap |
-| Model-callable skill write / manage | — | skill_manage | — | — | 1 | ✗ gap |
+| Model-callable skill list | skills_list | — | skill (inject) | — | 2 | ✗ gap |
+| Model-callable skill read | skill_view | — | skill (inject) | — | 2 | ✗ gap |
+| Model-callable skill write / manage | skill_manage | — | — | — | 1 | ✗ gap |
 
 ### 2.7 Subagents and Delegation
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Named-goal subagent / delegate | AgentTool | delegate_task | task | spawn_agent | 4 | N/A — co-cli does not expose delegation as a model-visible primitive; every capability is a tool call; `web_research`, `knowledge_analyze`, `reason` encapsulate subagent dispatch internally |
-| Named toolset profile for delegate | — | delegate_task(toolsets=[…]) | — | — | 1 | ✗ gap |
-| Parallel batch subagent dispatch | — | delegate_task(tasks=[…]) | — | spawn_agents_on_csv | 2 | ✗ gap |
-| Tracked task create/update/stop | TaskCreate/Get/Update/Stop/Output | — | — | assign_task/wait_agent/close_agent | 2 | (partial via task_*) |
-| Agent-to-agent messaging | SendMessageTool | — | — | send_message/send_input | 2 | ✗ gap |
-| Agent lifecycle (resume/close/list) | — | — | — | resume/close/list_agent | 1 | ✗ gap |
+| Named-goal subagent / delegate | delegate_task | sessions_spawn | task | spawn_agent | 4 | N/A — co-cli does not expose delegation as a model-visible primitive; every capability is a tool call; `web_research`, `knowledge_analyze`, `reason` encapsulate subagent dispatch internally |
+| Named toolset profile for delegate | delegate_task(toolsets=[…]) | — | — | — | 1 | ✗ gap |
+| Parallel batch subagent dispatch | delegate_task(tasks=[…]) | — | — | spawn_agents_on_csv | 2 | ✗ gap |
+| Tracked task create/update/stop | — | sessions_spawn/status/yield | — | assign_task/wait_agent/close_agent | 2 | (partial via task_*) |
+| Agent-to-agent messaging | — | sessions_send | — | send_message/send_input | 2 | ✗ gap |
+| Agent lifecycle (list/status/resume/close) | — | sessions_list/session_status | — | resume/close/list_agent | 2 | ✗ gap |
 
 ### 2.8 Planning and Mode Control
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Enter plan mode | EnterPlanModeTool | — | — | update_plan | 2 | ✗ gap |
-| Exit plan mode | ExitPlanModeV2Tool | — | PlanExitTool | — | 2 | ✗ gap |
-| Worktree management | EnterWorktreeTool / ExitWorktreeTool | — | — | — | 1 | ✗ gap |
+| Enter / update plan mode | — | update_plan | — | update_plan | 2 | ✗ gap |
+| Exit plan mode | — | — | PlanExitTool | — | 1 | ✗ gap |
 
 ### 2.9 Scheduling and Automation
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Cron / scheduled job CRUD | CronCreate/Delete/List | cronjob | — | — | 2 | ✗ gap |
-| Remote agent trigger | RemoteTriggerTool | cronjob(deliver=…) | — | — | 2 | ✗ gap |
+| Cron / scheduled job CRUD | cronjob | cron | — | — | 2 | ✗ gap |
+| Remote agent trigger | cronjob(deliver=…) | cron (reminders/follow-ups) | — | — | 2 | ✗ gap |
 
 ### 2.10 MCP and Extensibility
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| List MCP resources | ListMcpResourcesTool | — | — | list_mcp_resources | 2 | ✗ gap |
-| Read MCP resource | ReadMcpResourceTool | — | — | read_mcp_resource | 2 | ✗ gap |
+| List MCP resources | — | — | — | list_mcp_resources | 1 | ✗ gap |
+| Read MCP resource | — | — | — | read_mcp_resource | 1 | ✗ gap |
 | MCP resource templates | — | — | — | list_mcp_resource_templates | 1 | ✗ gap |
-| Dynamic MCP tool refresh | — | (deregister/re-register) | — | — | 1 | ✗ gap |
-| MCP result size-gated | — | (registry uniform) | — | — | 1 | ✗ gap |
+| Dynamic MCP tool refresh | (deregister/re-register) | (per-session runtime) | — | — | 2 | ✗ gap |
+| MCP result size-gated | (registry uniform) | — | — | — | 1 | ✗ gap |
 
 ### 2.11 Vision and Media
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Image analysis / vision | — | vision_analyze | — | view_image | 2 | ✗ gap |
-| Browser screenshot + vision | — | browser_vision | — | — | 1 | ✗ gap |
-| Image generation | — | image_generate | — | ImageGeneration | 2 | ✗ gap |
-| Text-to-speech | — | text_to_speech | — | — | 1 | ✗ gap |
+| Image analysis / vision | vision_analyze | image | — | view_image | 3 | ✗ gap |
+| Image generation | image_generate | image_generate | — | ImageGeneration | 3 | ✗ gap |
+| Text-to-speech | text_to_speech | tts | — | — | 2 | ✗ gap |
+| Browser screenshot + vision | browser_vision | — | — | — | 1 | ✗ gap |
+| Video generation | — | video_generate | — | — | 1 | ✗ gap |
+| Audio / music generation | — | music_generate | — | — | 1 | ✗ gap |
+| PDF document understanding | — | pdf | — | — | 1 | ✗ gap |
 
 ### 2.12 Code Intelligence
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Language Server Protocol | LSPTool | — | LspTool | — | 2 | ✗ gap |
-| Notebook (Jupyter) editing | NotebookEditTool | — | — | — | 1 | ✗ gap |
+| Language Server Protocol | — | — | LspTool | — | 1 | ✗ gap |
 
 ### 2.13 Browser Automation
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Browser navigate + snapshot | — | browser_navigate | — | — | 1 | ✗ gap |
-| Browser click / type / scroll | — | browser_click/type/scroll | — | — | 1 | ✗ gap |
-| Browser keyboard / back | — | browser_press/back | — | — | 1 | ✗ gap |
-| Browser JS console | — | browser_console | — | — | 1 | ✗ gap |
-| Browser image list | — | browser_get_images | — | — | 1 | ✗ gap |
+| Browser navigate + snapshot | browser_navigate | — | — | — | 1 | ✗ gap |
+| Browser click / type / scroll | browser_click/type/scroll | — | — | — | 1 | ✗ gap |
+| Browser keyboard / back | browser_press/back | — | — | — | 1 | ✗ gap |
+| Browser JS console | browser_console | — | — | — | 1 | ✗ gap |
+| Browser image list | browser_get_images | — | — | — | 1 | ✗ gap |
 
 ### 2.14 External Service Integrations
 
-| Capability | fork-cc | hermes | opencode | codex | Score | co-cli |
+| Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Cross-platform messaging | SendMessageTool | send_message | — | — | 2 | ✗ gap |
-| Smart home (Home Assistant) | — | ha_* (4 tools) | — | — | 1 | ✗ gap |
+| Cross-platform messaging | send_message | message | — | — | 2 | ✗ gap |
+| Structured heartbeat / status reporting | — | heartbeat | — | — | 1 | ✗ gap |
+| Smart home (Home Assistant) | ha_* (4 tools) | — | — | — | 1 | ✗ gap |
 | Obsidian notes | — | — | — | — | 0 | `obsidian_*` ✓ (unique) |
 | Google Workspace (Drive/Gmail/Calendar) | — | — | — | — | 0 | `drive_*`, `gmail_*`, `calendar_*` ✓ (unique) |
-| RL training control | — | rl_* (10 tools) | — | — | 1 | ✗ gap |
+| RL training control | rl_* (10 tools) | — | — | — | 1 | ✗ gap |
 
 ### 2.15 Agentic Meta-Tools (unique to one peer)
 
@@ -528,132 +508,129 @@ co-cli column shows current coverage status.
 |---|---|---|
 | Mixture of agents (4 LLMs + aggregator) | hermes | `reason` subagent covers some of this |
 | Tool suggest by task | codex (tool_suggest) | ✗ gap |
-| Tool search (model discovers tools) | codex (tool_search), fork-cc (ToolSearch spec) | ✗ gap |
-| Config read/write | fork-cc (ConfigTool) | ✗ gap |
-| Project brief (CLAUDE.md) read | fork-cc (BriefTool) | ✗ gap |
+| Tool search (model discovers tools) | codex (tool_search / ToolSearch spec) | ✗ gap |
+| Async turn yield / subagent result collection | openclaw (sessions_yield) | ✗ gap |
 | Invalid tool call handler | opencode (InvalidTool) | implicit (pydantic-ai error path) |
 
 ---
 
 ## Part 3: Three-Tier Classification
 
+Tiers by peer count: **Tier 1 = 3–4 peers** (universal / near-universal),
+**Tier 2 = exactly 2** (converged), **Tier 3 = exactly 1** (specialized).
+Capabilities present in 0 peers but native to co-cli are collected as
+co-cli-unique extensions (§3-unique).
+
 ### Tier 1 — System / Core
 
-**Definition:** Present in 3–4 peers as a native first-class tool. Every general-purpose
-AI agent CLI that reaches production independently converged on these.
+**Definition:** Present in 3 or 4 peers as a native first-class tool (file
+read/write/fetch count codex's API-level access as a soft presence). Every
+general-purpose AI agent CLI that reaches production independently converged on
+these.
 
 | # | Capability | Peers (score) | co-cli status |
 |---|---|---|---|
-| T1-1 | Shell / terminal execution | fork-cc, hermes, opencode, codex (4) | `shell` ✓ |
-| T1-2 | File read (paginated, line-ranged) | fork-cc, hermes, opencode, (codex via API) (3–4) | `file_read` ✓ |
-| T1-3 | File write (full overwrite) | fork-cc, hermes, opencode, (codex via API) (3–4) | `file_write` ✓ |
-| T1-4 | File edit (string-replace) | fork-cc, hermes, opencode, codex (4) | `file_patch` ✓ |
-| T1-5 | File / glob search | fork-cc, hermes, opencode (3) | `file_find` ✓ |
-| T1-6 | Content / grep search | fork-cc, hermes, opencode (3) | `file_search` ✓ |
-| T1-7 | Web search | fork-cc, hermes, opencode, codex (4) | `web_search` ✓ |
-| T1-8 | Web fetch / extract | fork-cc, hermes, opencode, (codex via API) (3–4) | `web_fetch` ✓ |
-| T1-9 | Structured to-do / task list | fork-cc, hermes, opencode (3) | `todo_write` / `todo_read` ✓ |
-| T1-10 | Ask user / clarify (interactive question) | fork-cc, hermes, opencode, codex (4) | `clarify` ✓ (one-shot fragility; see §4.1) |
-| T1-11 | Named-goal subagent delegation | fork-cc, hermes, opencode, codex (4) | N/A — co-cli's architecture does not surface delegation to the model; every capability is a tool; subagent dispatch is an internal implementation detail of tools like `web_research`, `knowledge_analyze`, `reason` |
+| T1-1 | Shell / terminal execution | hermes, openclaw, opencode, codex (4) | `shell` ✓ |
+| T1-2 | File read (paginated, line-ranged) | hermes, opencode, (codex via API) (2–3) | `file_read` ✓ |
+| T1-3 | File write (full overwrite) | hermes, opencode, (codex via API) (2–3) | `file_write` ✓ |
+| T1-4 | File edit (string-replace) | hermes, opencode, codex (3) | `file_patch` ✓ |
+| T1-5 | Web search | hermes, openclaw, opencode, codex (4) | `web_search` ✓ |
+| T1-6 | Web fetch / extract | hermes, openclaw, opencode, (codex via API) (3–4) | `web_fetch` ✓ (one-URL; see §4.2) |
+| T1-7 | Ask user / clarify (interactive question) | hermes, opencode, codex (3) | `clarify` ✓ (one-shot fragility; see §4.1) |
+| T1-8 | Named-goal subagent delegation | hermes, openclaw, opencode, codex (4) | N/A — co-cli's architecture does not surface delegation to the model; every capability is a tool; subagent dispatch is an internal implementation detail of tools like `web_research`, `knowledge_analyze`, `reason` |
+| T1-9 | Image analysis / vision | hermes, openclaw, codex (3) | ✗ gap |
+| T1-10 | Image generation | hermes, openclaw, codex (3) | ✗ gap |
 
-**co-cli Tier 1 coverage: 10 / 11 applicable.**  
-T1-11 is N/A by design: co-cli does not expose delegation as a model-visible primitive — the model only sees tools, and subagent dispatch is encapsulated inside them.  
-Residual quality gaps: `clarify` one-shot fragility (§4.1), `web_fetch` single-URL only (§4.2).
+**co-cli Tier 1 coverage: 7 / 9 applicable.**  
+T1-8 is N/A by design: co-cli does not expose delegation as a model-visible primitive — the model only sees tools, and subagent dispatch is encapsulated inside them.  
+**New from the openclaw peer:** vision (T1-9) and image generation (T1-10) cross into Tier 1 — three of four peers now ship them as native tools, and co-cli has neither. File/glob search, content/grep search, and structured to-do sit in Tier 2 (only 2 peers each).  
+Residual quality gaps: `clarify` one-shot fragility (§4.1), `web_fetch` single-URL only (§4.2), no vision (T1-9), no image generation (T1-10).
 
 ---
 
 ### Tier 2 — Capabilities
 
-**Definition:** Present in 2–3 peers. Not universal, but multiple mature systems
-independently decided these are worth building as native tools.
-
-#### T2-A: Memory and Recall
+**Definition:** Present in exactly 2 of the 4 peers. Not universal, but multiple
+mature systems independently decided these are worth building as native tools.
 
 | # | Capability | Peers (score) | co-cli status |
 |---|---|---|---|
-| T2-A1 | Persistent memory CRUD (user/agent notes) | fork-cc (subsystem), hermes (2) | `memory_create`, `memory_modify` ✓ |
-| T2-A2 | Session / history search | hermes (1 native, strong case) | `memory_search` (T1) ✓ |
-| T2-A3 | Role-filtered session recall | hermes `session_search(role_filter)` (1) | ✗ gap |
+| T2-1 | File / glob search | hermes, opencode (2) | `file_find` ✓ |
+| T2-2 | Content / grep search | hermes, opencode (2) | `file_search` ✓ |
+| T2-3 | Structured to-do / task list | hermes, opencode (2) | `todo_write` / `todo_read` ✓ |
+| T2-4 | Background process start | hermes, codex via code/wait (2) | `task_start` ✓ |
+| T2-5 | Stdin write to running process | hermes `process(write/submit/close)`, codex `write_stdin` (2) | ✗ gap |
+| T2-6 | Code / sandboxed execution | hermes `execute_code`, codex `js_repl` (2) | `code_execute` (host-only) |
+| T2-7 | Code-specific search | opencode `CodeSearchTool`, codex `tool_search` (2) | ✗ gap |
+| T2-8 | Model-callable skill list | hermes `skills_list`, opencode `skill` inject (2) | ✗ gap — model cannot discover skills without a user slash command |
+| T2-9 | Model-callable skill read / load | hermes `skill_view`, opencode `skill` inject (2) | ✗ gap |
+| T2-10 | Parallel batch subagent dispatch | hermes `tasks=[…]`, codex `spawn_agents_on_csv` (2) | ✗ gap |
+| T2-11 | Session / history search | hermes `session_search`, openclaw `sessions_history` (2) | `memory_search` ✓ |
+| T2-12 | Tracked task create / update / stop | openclaw `sessions_spawn/status/yield`, codex `assign_task/wait_agent` (2) | partial — `task_*` covers status/cancel/list |
+| T2-13 | Agent-to-agent messaging | openclaw `sessions_send`, codex `send_message/send_input` (2) | ✗ gap |
+| T2-14 | Agent lifecycle (list / status / resume / close) | openclaw `sessions_list/session_status`, codex `resume/close/list_agent` (2) | ✗ gap |
+| T2-15 | Enter / update plan mode | openclaw `update_plan`, codex `update_plan` (2) | ✗ gap |
+| T2-16 | Cron / scheduled job CRUD | hermes `cronjob`, openclaw `cron` (2) | ✗ gap |
+| T2-17 | Remote agent trigger | hermes `cronjob(deliver)`, openclaw `cron` (2) | ✗ gap |
+| T2-18 | Text-to-speech | hermes `text_to_speech`, openclaw `tts` (2) | ✗ gap |
+| T2-19 | Cross-platform messaging | hermes `send_message`, openclaw `message` (2) | ✗ gap |
+| T2-20 | Dynamic MCP tool refresh | hermes (deregister/re-register), openclaw (per-session runtime) (2) | ✗ gap |
 
-#### T2-B: Skills System
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-B1 | Model-callable skills list | hermes `skills_list`, opencode `skill` inject (2) | ✗ gap — model cannot discover skills without a user slash command |
-| T2-B2 | Model-callable skill read / load | hermes `skill_view`, opencode `skill` inject (2) | ✗ gap |
-| T2-B3 | Model-callable skill write (create/edit) | hermes `skill_manage` (1) | ✗ gap |
-
-#### T2-C: Background and Process Control
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-C1 | Background process lifecycle (full API) | hermes `process`, fork-cc `Task*` (2) | `task_*` ✓ (partial: missing stdin write, PTY) |
-| T2-C2 | Stdin write to running process | hermes `process(write/submit/close)`, codex `write_stdin` (2) | ✗ gap |
-| T2-C3 | Output watch patterns / notify | hermes `terminal(watch_patterns)` (1) | ✗ gap |
-| T2-C4 | PTY mode for interactive CLIs | hermes `terminal(pty=True)` (1) | ✗ gap |
-| T2-C5 | Task output persistence (file-backed) | hermes (file-tee), codex `ExecCommandToolOutput` (2) | ✗ gap — in-memory deque(500) only |
-
-#### T2-D: Scheduling and Remote Execution
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-D1 | Cron / scheduled job CRUD | fork-cc `CronCreate/Delete/List`, hermes `cronjob` (2) | ✗ gap |
-| T2-D2 | Remote agent trigger | fork-cc `RemoteTriggerTool`, hermes `cronjob(deliver)` (2) | ✗ gap |
-
-#### T2-E: Subagent and Multi-Agent Patterns
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-E1 | Toolset-parameterized delegation | hermes `delegate_task(toolsets=[…])` (1, strong) | ✗ gap — delegation agents have hard-coded tool lists |
-| T2-E2 | Parallel batch subagent dispatch | hermes `tasks=[…]`, codex `spawn_agents_on_csv` (2) | ✗ gap |
-| T2-E3 | Tracked task create/update/output | fork-cc `Task*`, codex `assign_task`/`wait_agent` (2) | partial — `task_*` covers status/cancel/list |
-| T2-E4 | Agent-to-agent messaging | fork-cc `SendMessageTool`, codex `send_message` (2) | ✗ gap |
-
-#### T2-F: Planning Mode
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-F1 | Enter plan mode | fork-cc, codex `update_plan` (2) | ✗ gap |
-| T2-F2 | Exit plan mode | fork-cc, opencode `PlanExitTool` (2) | ✗ gap |
-
-#### T2-G: MCP Resources
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-G1 | List MCP resources | fork-cc `ListMcpResourcesTool`, codex (2) | ✗ gap |
-| T2-G2 | Read MCP resource | fork-cc `ReadMcpResourceTool`, codex (2) | ✗ gap |
-
-#### T2-H: Vision
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-H1 | Image analysis / vision (URL or path) | hermes `vision_analyze`, codex `view_image` (2) | ✗ gap |
-| T2-H2 | Image generation | hermes `image_generate`, codex `ImageGeneration` (2) | ✗ gap |
-
-#### T2-I: Code Intelligence
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-I1 | Language Server Protocol integration | fork-cc `LSPTool`, opencode `LspTool` (2) | ✗ gap |
-
-#### T2-J: Web Ergonomics
-
-| # | Capability | Peers (score) | co-cli status |
-|---|---|---|---|
-| T2-J1 | Parallel multi-URL fetch | hermes `web_extract(urls=[…])` (1, strong case) | ✗ gap — `web_fetch` accepts one URL |
-| T2-J2 | Code-specific search | opencode `CodeSearchTool`, codex `tool_search` (2) | ✗ gap |
-
-**co-cli Tier 2 coverage: 3 / ~22 capabilities fully covered.**  
-Significant gaps: skills model-callability (T2-B), stdin write to running process (T2-C2), scheduling (T2-D), toolset-parameterized delegation (T2-E1), parallel delegation (T2-E2), planning mode (T2-F), MCP resource tools (T2-G), vision (T2-H1), LSP (T2-I1), multi-URL fetch (T2-J1).
+**co-cli Tier 2 coverage: 4 / 20 fully covered (T2-1, T2-2, T2-3, T2-11); T2-4 and T2-6 partial.**  
+The openclaw peer pulls a large cluster into Tier 2 — session/history search (T2-11), agent lifecycle and messaging (T2-12/13/14), plan mode (T2-15), scheduling (T2-16/17), TTS (T2-18), and cross-platform messaging (T2-19) all reach 2 peers. Significant gaps: skill model-callability (T2-8/9), stdin write (T2-5), code-specific search (T2-7), parallel delegation (T2-10), and the openclaw-driven cluster T2-12 through T2-19.
 
 ---
 
-### Tier 3 — Extensions / Integrations
+### Tier 3 — Specialized / Differentiated
 
-**Definition:** Present in 1–2 peers; specialized, domain-bound, or requiring
-significant external infrastructure.
+**Definition:** Present in exactly 1 of the 4 peers; specialized, domain-bound,
+or requiring significant external infrastructure.
 
-#### T3-A: Browser Automation (hermes only)
+#### T3-A: Fine-grained process control (hermes)
+
+`process(poll/log)` status, `process(kill)`, `process(list)`, `terminal(pty=True)`,
+`terminal(watch_patterns)`. co-cli covers status/kill/list via `task_status` /
+`task_cancel` / `task_list`; PTY and watch-patterns are gaps.
+
+#### T3-B: Memory CRUD and role-filtered recall (hermes)
+
+`memory` (persistent CRUD) and `session_search(role_filter)`. co-cli covers
+persistent CRUD (`memory_create` / `memory_modify`); role-filtered recall is a gap.
+(Plain session/history search is Tier 2 — T2-11.)
+
+#### T3-C: Skills authoring (hermes)
+
+`skill_manage` (create/edit/patch/delete). co-cli gap — no model-callable skill write.
+
+#### T3-D: Delegation extras
+
+| Tool | Peer | co-cli |
+|---|---|---|
+| Named toolset profile for delegation (`delegate_task(toolsets=[…])`) | hermes | ✗ gap — delegation agents have hard-coded tool lists |
+
+#### T3-E: Exit plan mode (opencode)
+
+`PlanExitTool`. (Entering / updating a plan is Tier 2 — T2-15.) co-cli gap — no
+model-gated plan mode.
+
+#### T3-F: MCP resources (codex)
+
+`list_mcp_resources`, `read_mcp_resource`, `list_mcp_resource_templates`; plus
+hermes's uniform MCP result size-gating. co-cli gap on all — `discover_mcp_tools()`
+runs once at startup with no resource surface and no size gate. (Dynamic refresh
+is Tier 2 — T2-20.)
+
+#### T3-G: Web ergonomics (hermes)
+
+`web_extract(urls=[…])` — parallel multi-URL fetch. co-cli gap — `web_fetch`
+accepts one URL.
+
+#### T3-H: Code intelligence (opencode)
+
+`LspTool` — Language Server Protocol integration (diagnostics, hover, go-to-def).
+co-cli gap.
+
+#### T3-I: Browser automation (hermes)
 
 Full browser stack: `browser_navigate`, `browser_snapshot`, `browser_click`,
 `browser_type`, `browser_scroll`, `browser_back`, `browser_press`,
@@ -661,71 +638,57 @@ Full browser stack: `browser_navigate`, `browser_snapshot`, `browser_click`,
 Requires: Camofox / Browserbase / Firecrawl backend. 10+ tools, large dependency surface.  
 co-cli gap: all 10 tools. Port requires a browser backend commitment.
 
-#### T3-B: Cross-Platform Messaging (fork-cc + hermes)
+#### T3-J: Code / REPL sandbox backends (hermes)
 
-| Tool | Peer |
-|---|---|
-| `send_message` (Telegram, Discord, Slack, Signal, Matrix, SMS) | hermes |
-| `SendMessageTool` (agent-to-user or agent-to-agent) | fork-cc |
+`execute_code` runs in a multi-environment sandbox (daytona, docker, local,
+modal, singularity, SSH). co-cli has `code_execute` but runs on host with
+shell-policy gate only — no sandboxed multi-environment backend. (The base
+code-execution *capability* is Tier 2 / T2-6; the multi-backend sandbox is the
+differentiated extension.)
 
-co-cli gap: no messaging delivery. fork-cc's `SendMessageTool` is narrower (agent-to-user notification); hermes's is full platform routing.
+#### T3-K: Extended media generation (openclaw)
 
-#### T3-C: Code / REPL Sandboxes (hermes + codex)
+`video_generate`, `music_generate`, `pdf` (document understanding). openclaw-unique
+across the four peers. co-cli gap. (Image generation and TTS reach Tier 1 / Tier 2
+respectively — see T1-10, T2-18.)
 
-| Tool | Peer |
-|---|---|
-| `execute_code` (Python sandbox with hermes_tools import; multi-environment backends: daytona, docker, local, modal, singularity, SSH) | hermes |
-| `js_repl` / `js_repl_reset` | codex |
+#### T3-L: Multi-model reasoning (hermes)
 
-co-cli has `code_execute` but runs on host with shell-policy gate only — no sandboxed multi-environment backend.
+`mixture_of_agents`: 4 frontier LLMs + aggregator, max reasoning effort, 5 API
+calls per invoke. co-cli covers similar use cases via `reason` subagent; not a
+tool-level gap.
 
-#### T3-D: Text-to-Speech (hermes only)
+#### T3-M: Smart home (hermes)
 
-`text_to_speech` with `MEDIA:` path delivery. Platform-specific (Telegram voice bubble, Discord audio attachment, CLI file). No analogous co-cli workflow.
+`ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`.
+Domain-specific (Home Assistant). co-cli's equivalent domain integration is
+Google Workspace.
 
-#### T3-E: Multi-Model Reasoning (hermes only)
+#### T3-N: Reinforcement learning training (hermes)
 
-`mixture_of_agents`: 4 frontier LLMs + aggregator, max reasoning effort, 5 API calls per invoke.  
-co-cli covers similar use cases via `reason` subagent; not a tool-level gap.
+10 `rl_*` tools covering environment selection, config, training lifecycle, WandB
+metrics, inference testing. Highly domain-specific (Tinker-Atropos).
 
-#### T3-F: Smart Home (hermes only)
+#### T3-O: Structured heartbeat reporting (openclaw)
 
-`ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`.  
-Domain-specific (Home Assistant). co-cli's equivalent domain integration is Google Workspace.
+`heartbeat` records structured run outcomes (done / failed / check-back) with
+notify preference and priority. openclaw-unique; serves its long-running /
+scheduled-agent model. No co-cli equivalent.
 
-#### T3-G: Reinforcement Learning Training (hermes only)
+#### T3-P: Tool discovery by model (codex)
 
-10 `rl_*` tools covering environment selection, config, training lifecycle, WandB metrics, inference testing.  
-Highly domain-specific (Tinker-Atropos).
+`tool_search` (search available tools by query), `tool_suggest` (suggest tools
+for a task), `ToolSearch` (deferred model-native tool discovery). co-cli has
+`capabilities_check` which exposes the runtime tool surface but does not support
+query-based tool lookup.
 
-#### T3-H: Git Worktree Management (fork-cc only)
-
-`EnterWorktreeTool`, `ExitWorktreeTool`. Co-cli's orchestrate-dev skill uses worktrees via bash commands.
-
-#### T3-I: Config and Project Brief (fork-cc only)
-
-`ConfigTool` (read/write Claude Code settings), `BriefTool` (read CLAUDE.md).  
-co-cli equivalent: user reads CLAUDE.md directly; no model-callable config surface.
-
-#### T3-J: Tool Discovery by Model (codex)
-
-`tool_search` (search available tools by query), `tool_suggest` (suggest tools for a task), `ToolSearch` (deferred model-native tool discovery). co-cli has `capabilities_check` which exposes the runtime tool surface but does not support query-based tool lookup.
-
-#### T3-K: Notebook Editing (fork-cc only)
-
-`NotebookEditTool` for Jupyter notebook cell editing. No co-cli equivalent.
-
-#### T3-L: Platform-Specific Shell (fork-cc only)
-
-`PowerShellTool`. macOS/Linux-only co-cli has no Windows shell surface.
-
-#### T3-M: co-cli-Unique Extensions (no peer equivalent)
+#### T3-unique: co-cli-Unique Extensions (no peer equivalent)
 
 | Capability | co-cli tool(s) |
 |---|---|
 | T2 artifact CRUD (create / modify) | `memory_create`, `memory_modify` |
 | FTS5 BM25 knowledge search | `memory_search` (T2 tier) |
-| Runtime capability introspection | `capabilities_check` |
+| Runtime capability introspection | `capabilities_check` (codex `tool_search`/`tool_suggest` is the nearest analog) |
 | Obsidian vault integration | `obsidian_list`, `obsidian_search`, `obsidian_read` |
 | Google Drive | `drive_search`, `drive_read` |
 | Google Gmail | `gmail_list`, `gmail_search`, `gmail_draft` |
@@ -737,18 +700,18 @@ co-cli equivalent: user reads CLAUDE.md directly; no model-callable config surfa
 
 How each system handles the meta-layer: registration, execution hooks, approval, result sizing, concurrency, and extensibility.
 
-| Aspect | fork-cc | hermes | opencode | codex | co-cli |
+| Aspect | hermes | openclaw | opencode | codex | co-cli |
 |---|---|---|---|---|---|
-| **Registration** | Manual list in `getAllBaseTools()` | AST auto-discovery of `registry.register()` | `ToolRegistry.all()` + dynamic repo-local + plugin | `ToolRegistryBuilder.push_spec()` manual | Manual `NATIVE_TOOLS` tuple + `@agent_tool` decorator — decorator-only path is silently omitted |
-| **Runtime availability gate** | `checkPermissions()` per tool | `check_fn` per tool (runtime) | Plugin `tool.definition` hook | `is_mutating()` / `turn.tool_call_gate` | Build-time `requires_config` only — credential expiry not caught mid-session |
-| **Pre/post-tool hooks** | `runPreToolUseHooks` / `runPostToolUseHooks` / `runPostToolUseFailureHooks` | — (gateway pattern) | `tool.execute.before` / `tool.execute.after` | `run_pre_tool_use_hooks` / `run_post_tool_use_hooks` | `CoToolLifecycle.before_tool_execute` / `after_tool_execute` ✓ |
-| **Approval model** | Multi-source rules; named modes; persisted deny/allow | Blocking gateway; `_permanent_approved` persisted | `Permission.ask()` / `.reply()`; `"always"` persists | `request_permissions`; `SandboxPermissions` | Deferred approval loop; semantic `ApprovalSubject` (shell/path/domain/tool); session-scoped only |
-| **Concurrency partitioning** | `partitionToolCalls()` by `isConcurrencySafe` | — (toolset profiles) | Plugin hooks | `turn.tool_call_gate` for mutating | `ResourceLockStore` per-path; no class-level concurrency gate |
-| **Result size** | `maxResultSizeChars` per tool | `max_result_size_chars` uniform (all tools incl. MCP) | `Truncate.output()` wrapper | `truncated_output()` token-based | Per-tool `max_result_size` via `@agent_tool`; MCP results ungated — runaway MCP can flood context |
-| **MCP integration** | `ListMcpResourcesTool`, `ReadMcpResourceTool`, `McpAuthTool`; dynamic refresh | `mcp_tool.py` with deregister/re-register on refresh | — | `mcp_tool_to_responses_api_tool()`; `list_tools()` with timeout (implied) | `discover_mcp_tools()` once at startup; no timeout wrapper; no `list_tools` timeout; no dynamic refresh |
-| **Toolset profiles / grouping** | — | `toolsets.py` named profiles (`web`, `file`, …) | Plugin tool.definition hook | `model_visible_specs` filtering | No named profiles; delegation agents have explicit hard-coded tool lists |
-| **Tool context** | — | — | `Tool.Context` (sessionID, messageID, agent, abort, callID, messages, metadata(), ask()) | `ToolInvocation` (session, turn, tracker, call_id, tool_name, namespace, payload) | `RunContext[CoDeps]` passed to tool body |
-| **Typed output** | `mapToolResultToToolResultBlockParam` | — | `Truncate.output()` wrapper | `ToolOutput` trait; `FunctionToolOutput`; `ExecCommandToolOutput` | `ToolReturn(return_value, metadata)` — string only; no structured content block |
+| **Registration** | AST auto-discovery of `registry.register()` | Factory composition in `createOpenClawTools()`; no manifest; conditional inclusion by config/auth/mode/policy | `ToolRegistry.all()` + dynamic repo-local + plugin | `ToolRegistryBuilder.push_spec()` manual | Manual `NATIVE_TOOLS` tuple + `@agent_tool` decorator — decorator-only path is silently omitted |
+| **Runtime availability gate** | `check_fn` per tool (runtime) | `availability.ts` expressions (`always`/`auth`/`config`/`env`/`plugin-enabled`/`context`, `allOf`/`anyOf`) | Plugin `tool.definition` hook | `is_mutating()` / `turn.tool_call_gate` | Build-time `requires_config` only — credential expiry not caught mid-session |
+| **Pre/post-tool hooks** | — (gateway pattern) | `before_tool_call` (plugin veto, approval, loop detection); post = diagnostic emit | `tool.execute.before` / `tool.execute.after` | `run_pre_tool_use_hooks` / `run_post_tool_use_hooks` | `CoToolLifecycle.before_tool_execute` / `after_tool_execute` ✓ |
+| **Approval model** | Blocking gateway; `_permanent_approved` persisted | Plugin approval `ALLOW_ONCE`/`ALLOW_ALWAYS`/`DENY` (120s+10s); config `allow`/`deny`/`alsoAllow`; `ownerOnly` | `Permission.ask()` / `.reply()`; `"always"` persists | `request_permissions`; `SandboxPermissions` | Deferred approval loop; semantic `ApprovalSubject` (shell/path/domain/tool); session-scoped only |
+| **Concurrency partitioning** | — (toolset profiles) | Per-call `AbortSignal`; no tool-level cap; one approval at a time | Plugin hooks | `turn.tool_call_gate` for mutating | `ResourceLockStore` per-path; no class-level concurrency gate |
+| **Result size** | `max_result_size_chars` uniform (all tools incl. MCP) | Per-tool caps (web_fetch 750KB/10MB, search 10, image 20, history 20); no uniform gate | `Truncate.output()` wrapper | `truncated_output()` token-based | Per-tool `max_result_size` via `@agent_tool`; MCP results ungated — runaway MCP can flood context |
+| **MCP integration** | `mcp_tool.py` with deregister/re-register on refresh | Per-session MCP runtime, materialized + name-sanitized per session, disposed after run | — | `mcp_tool_to_responses_api_tool()`; `list_tools()` with timeout (implied) | `discover_mcp_tools()` once at startup; no timeout wrapper; no `list_tools` timeout; no dynamic refresh |
+| **Toolset profiles / grouping** | `toolsets.py` named profiles (`web`, `file`, …) | No explicit profiles; implicit groupings (embedded, sandboxed, media-capable, plugin-augmented, owner-only) | Plugin tool.definition hook | `model_visible_specs` filtering | No named profiles; delegation agents have explicit hard-coded tool lists |
+| **Tool context** | — | `HookContext` (agentId, config, sessionKey, sessionId, runId, channelId, loopDetection, sandbox) | `Tool.Context` (sessionID, messageID, agent, abort, callID, messages, metadata(), ask()) | `ToolInvocation` (session, turn, tracker, call_id, tool_name, namespace, payload) | `RunContext[CoDeps]` passed to tool body |
+| **Typed output** | — | `AgentToolResult{content[], details}`; helpers `textResult`/`jsonResult`; no schema narrowing | `Truncate.output()` wrapper | `ToolOutput` trait; `FunctionToolOutput`; `ExecCommandToolOutput` | `ToolReturn(return_value, metadata)` — string only; no structured content block |
 
 ---
 
@@ -760,6 +723,7 @@ Derived from convergence scores, parity matrix (§1 of `RESEARCH-tools-gaps-co-v
 
 | Gap | Convergence signal | Risk | Effort |
 |---|---|---|---|
+| `vision` / image analysis (T1-9) | hermes + openclaw + codex — score 3, **Tier 1** | No vision capability while 3/4 peers ship it natively | Medium — pydantic-ai model wrapper already available |
 | MCP `list_tools()` no timeout at startup (§3.8 gaps doc) | Architecture flaw | Startup hang if MCP server stalls | Low — `asyncio.timeout()` + `asyncio.gather()` |
 | `tool_output_raw()` bypasses size gate and telemetry (§4.2 gaps doc) | Architecture flaw | Silent context overflow | Medium — audit callsites, restrict to ctx-less helpers |
 | MCP tool results not size-gated (§3.7 gaps doc) | Architecture flaw | Context overflow via runaway MCP | Medium — extend `CoToolLifecycle.after_tool_execute` to MCP spans |
@@ -770,42 +734,43 @@ Derived from convergence scores, parity matrix (§1 of `RESEARCH-tools-gaps-co-v
 
 | Gap | Convergence signal | Risk | Effort |
 |---|---|---|---|
-| Model-callable `skills_list` + `skill_view` (T2-B1, T2-B2) | hermes + opencode — score 2 | Skill discovery requires user slash commands; model cannot self-load skills | Medium — read-only tools over existing `co_cli/skills/` registry |
-| Runtime `check_fn` for tool availability (§3.1 gaps doc) | hermes pattern | Stale credentials look like transient failures | Medium — optional `check_fn` field on `@agent_tool` + visibility filter hook |
-| `vision_analyze` tool (T2-H1) | hermes + codex — score 2 | No vision capability | Medium — pydantic-ai model wrapper already available |
-| `task_start` / `shell`: stdin write to running process (T2-C2) | hermes + codex — score 2 | Cannot send input to interactive background processes | Medium — extend `task_*` or add `process(action=write/submit/close)` |
-| Background task output file-backed (T2-C5) | hermes + codex — score 2 | In-memory `deque(500)` drops output; crash loses all | Medium — optional file sink on task spawn |
-| `NATIVE_TOOLS` manual tuple (§3.3 gaps doc) | hermes AST auto-discovery | Tool silently omitted if decorator without tuple entry | Low — module scan for `@agent_tool`-decorated functions at import |
-| `shell` PTY mode (T2-C4) | hermes score 1, high value | Cannot run interactive CLIs (Codex, Python REPL, etc.) | Medium — add `pty` flag to `shell` |
-| Named toolset profiles for delegation (§3.5 gaps doc, T2-E1) | hermes — score 1, strong | New tools invisible to delegation agents; manual list drift | Medium — `toolsets.py`-style registry |
+| Model-callable `skills_list` + `skill_view` (T2-8, T2-9) | hermes + opencode — score 2 | Skill discovery requires user slash commands; model cannot self-load skills | Medium — read-only tools over existing `co_cli/skills/` registry |
+| Runtime `check_fn` for tool availability (§3.1 gaps doc) | hermes + openclaw availability gating | Stale credentials look like transient failures | Medium — optional `check_fn` field on `@agent_tool` + visibility filter hook |
+| `task_start` / `shell`: stdin write to running process (T2-5) | hermes + codex — score 2 | Cannot send input to interactive background processes | Medium — extend `task_*` or add `process(action=write/submit/close)` |
+| Background task output file-backed | hermes (file-tee) + codex `ExecCommandToolOutput` — score 2 | In-memory `deque(500)` drops output; crash loses all | Medium — optional file sink on task spawn |
+| Code-specific search (T2-7) | opencode + codex — score 2 | No code-aware search surface beyond grep | Medium — wrap existing search or external provider |
+| Parallel batch delegation (T2-10) | hermes + codex — score 2 | Sequential research; no batch fan-out | Medium — `delegate_task(tasks=[…])` pattern |
+| `NATIVE_TOOLS` manual tuple (§3.3 gaps doc) | hermes AST auto-discovery; openclaw factory composition | Tool silently omitted if decorator without tuple entry | Low — module scan for `@agent_tool`-decorated functions at import |
+| `shell` PTY mode (T3-A) | hermes — score 1, high value | Cannot run interactive CLIs (Codex, Python REPL, etc.) | Medium — add `pty` flag to `shell` |
+| Named toolset profiles for delegation (§3.5 gaps doc, T3-D) | hermes — score 1, strong | New tools invisible to delegation agents; manual list drift | Medium — `toolsets.py`-style registry |
 
 ### Priority Low
 
 | Gap | Convergence signal | Risk | Effort |
 |---|---|---|---|
-| `terminal.watch_patterns` for background tasks (T2-C3) | hermes — score 1 | Long-running tasks cannot notify on specific output | Medium — extend `task_start` with regex notifier |
-| MCP dynamic tool refresh (§3.2 gaps doc) | hermes — score 1 | Stale tool index in long sessions | Medium — subscribe to `notifications/tools/list_changed` |
-| MCP resource tools: list + read (T2-G1, T2-G2) | fork-cc + codex — score 2 | Cannot access MCP server resources (only tools) | Medium — two new tools over existing MCP client |
+| `terminal.watch_patterns` for background tasks (T3-A) | hermes — score 1 | Long-running tasks cannot notify on specific output | Medium — extend `task_start` with regex notifier |
+| MCP dynamic tool refresh (T2-20, §3.2 gaps doc) | hermes + openclaw — score 2 | Stale tool index in long sessions | Medium — subscribe to `notifications/tools/list_changed` |
+| MCP resource tools: list + read (T3-F) | codex — score 1 | Cannot access MCP server resources (only tools) | Medium — two new tools over existing MCP client |
 | `clarify` one-shot fragility (§4.1 gaps doc) | Architecture flaw | Model confusion if called twice in one step | Hard — approval-loop dedup |
 | `file_read_mtimes` unbounded (§4.4 gaps doc) | Architecture flaw | Memory growth in very long sessions | Low — cap dict or evict at turn reset |
-| Session search `role_filter` (T2-A3) | hermes — score 1 | Cannot filter assistant vs. user messages in recall | Low — extend T1 tier query |
-| Parallel batch delegation (T2-E2) | hermes + codex — score 2 | Sequential research; no batch fan-out | Medium — `delegate_task(tasks=[…])` pattern |
-| Planning mode tools (T2-F1, T2-F2) | fork-cc + opencode — score 2 | No model-gated plan mode | Large — requires new REPL mode + tool pair |
-| LSP integration (T2-I1) | fork-cc + opencode — score 2 | No IDE-class code intelligence | Large — requires LSP client infrastructure |
+| Session search `role_filter` (T3-B) | hermes — score 1 | Cannot filter assistant vs. user messages in recall | Low — extend search query |
+| Enter / update plan mode (T2-15) | openclaw + codex — score 2 | No model-gated plan mode | Large — requires new REPL mode + tool pair |
+| LSP integration (T3-H) | opencode — score 1 | No IDE-class code intelligence | Large — requires LSP client infrastructure |
 
-### Out of Scope (hermes-tier-3 tools not worth porting)
+### Out of Scope (peer tools not worth porting)
 
 | Capability | Reason |
 |---|---|
-| Browser automation (T3-A, 10 tools) | Large browser stack dependency; `web_fetch` covers most read-only needs |
-| Text-to-speech (T3-D) | No co-cli delivery channel for audio |
-| Home Assistant (T3-F, 4 tools) | Domain-specific; not in co-cli's use case scope |
-| Reinforcement learning training (T3-G, 10 tools) | Highly domain-specific (Tinker-Atropos only) |
-| Notebook editing (T3-K) | No Jupyter infrastructure |
-| Cron / scheduling (T2-D) | co-cli is user-interactive; OS cron or Claude Code `CronCreate` is better suited |
-| `mixture_of_agents` (T3-E) | `reason` subagent covers the use case without the 4-LLM cost |
-| Image generation (T2-H2) | Niche; direct Google/OpenAI API use is simpler |
-| Cross-platform messaging (T3-B) | Large auth/config surface; no current co-cli delivery workflow |
+| Image generation (T1-10, score 3) | Near-universal among peers but co-cli scopes media generation out; direct Google/OpenAI API use is simpler — revisit if a delivery use case emerges |
+| Cross-platform messaging (T2-19, score 2) | Large auth/config surface; no current co-cli delivery workflow |
+| Text-to-speech (T2-18, score 2) | No co-cli delivery channel for audio |
+| Cron / scheduling (T2-16, T2-17, score 2) | co-cli is user-interactive; OS cron is better suited |
+| Extended media generation — video, music, PDF (T3-K) | openclaw-only; no co-cli delivery channel |
+| Browser automation (T3-I, 10 tools) | Large browser stack dependency; `web_fetch` covers most read-only needs |
+| Home Assistant (T3-M, 4 tools) | Domain-specific; not in co-cli's use case scope |
+| Reinforcement learning training (T3-N, 10 tools) | Highly domain-specific (Tinker-Atropos only) |
+| `mixture_of_agents` (T3-L) | `reason` subagent covers the use case without the 4-LLM cost |
+| Structured heartbeat reporting (T3-O) | openclaw-specific to its long-running scheduled-agent model |
 
 ---
 
@@ -813,32 +778,37 @@ Derived from convergence scores, parity matrix (§1 of `RESEARCH-tools-gaps-co-v
 
 Quick lookup for finding the equivalent tool across systems.
 
-| Capability | co-cli | fork-cc | hermes | opencode | codex |
+| Capability | co-cli | hermes | openclaw | opencode | codex |
 |---|---|---|---|---|---|
-| Shell exec | `shell` | `BashTool` | `terminal` | `bash` | `exec_command` |
-| File read | `file_read` | `ReadTool` | `read_file` | `read` | — |
-| File write | `file_write` | `WriteTool` | `write_file` | `write` | — |
-| File edit | `file_patch` | `EditTool` | `patch(replace)` | `edit` | `apply_patch` |
-| Multi-hunk patch | `file_patch(_v4a)` | — | `patch(patch)` | `ApplyPatchTool` | `apply_patch` |
-| File find | `file_find` | `GlobTool` | `search_files(files)` | `glob` | — |
-| Content search | `file_search` | `GrepTool` | `search_files(content)` | `grep` | — |
-| Web search | `web_search` | `WebSearchTool` | `web_search` | `search` | `WebSearch` |
-| Web fetch | `web_fetch` | `WebFetchTool` | `web_extract` | `fetch` | — |
-| Todo list | `todo_write/read` | `TodoWriteTool` | `todo` | `todo` | — |
-| Clarify / ask user | `clarify` | `AskUserQuestion` | `clarify` | `question` | `request_user_input` |
-| Delegate / subagent | — (no model-callable primitive) | `AgentTool` | `delegate_task` | `task` | `spawn_agent` |
-| Skills load | — | — | `skill_view` | `skill` | — |
-| Skills list | — | — | `skills_list` | `skill` (dynamic desc) | — |
-| Background task start | `task_start` | — | `terminal(background=True)` | — | `code` / `wait` |
-| Background task status | `task_status` | `TaskGetTool` | `process(poll)` | — | `wait_agent` |
-| Memory search | `memory_search` | — | `session_search` | — | — |
-| Memory create | `memory_create` | — | `memory(add)` | — | — |
-| Vision | — | — | `vision_analyze` | — | `view_image` |
-| LSP | — | `LSPTool` | — | `lsp` | — |
-| Plan enter | — | `EnterPlanMode` | — | — | `update_plan` |
-| Plan exit | — | `ExitPlanModeV2` | — | `plan` | — |
-| Cron create | — | `CronCreateTool` | `cronjob(create)` | — | — |
-| MCP resource read | — | `ReadMcpResourceTool` | — | — | `read_mcp_resource` |
+| Shell exec | `shell` | `terminal` | `nodes` | `bash` | `exec_command` |
+| File read | `file_read` | `read_file` | (via nodes) | `read` | (via API) |
+| File write | `file_write` | `write_file` | (via nodes) | `write` | (via API) |
+| File edit | `file_patch` | `patch(replace)` | — | `edit` | `apply_patch` |
+| Multi-hunk patch | `file_patch(_v4a)` | `patch(patch)` | — | `ApplyPatchTool` | `apply_patch` |
+| File find | `file_find` | `search_files(files)` | — | `glob` | — |
+| Content search | `file_search` | `search_files(content)` | — | `grep` | — |
+| Web search | `web_search` | `web_search` | `web_search` | `search` | `WebSearch` |
+| Web fetch | `web_fetch` | `web_extract` | `web_fetch` | `fetch` | (via API) |
+| Todo list | `todo_write/read` | `todo` | — | `todo` | — |
+| Clarify / ask user | `clarify` | `clarify` | — | `question` | `request_user_input` |
+| Delegate / subagent | — (no model-callable primitive) | `delegate_task` | `sessions_spawn` | `task` | `spawn_agent` |
+| Agent-to-agent messaging | — | — | `sessions_send` | — | `send_message`/`send_input` |
+| Agent lifecycle | — | — | `sessions_list`/`session_status` | — | `list_agents`/`resume_agent` |
+| Session / history search | `memory_search` | `session_search` | `sessions_history` | — | — |
+| Skills load | — | `skill_view` | — | `skill` | — |
+| Skills list | — | `skills_list` | — | `skill` (dynamic desc) | — |
+| Background task start | `task_start` | `terminal(background=True)` | — | — | `code` / `wait` |
+| Background task status | `task_status` | `process(poll)` | `session_status` | — | `wait_agent` |
+| Memory create | `memory_create` | `memory(add)` | — | — | — |
+| Vision | — | `vision_analyze` | `image` | — | `view_image` |
+| Image generation | — | `image_generate` | `image_generate` | — | `ImageGeneration` |
+| Text-to-speech | — | `text_to_speech` | `tts` | — | — |
+| LSP | — | — | — | `lsp` | — |
+| Plan enter / update | — | — | `update_plan` | — | `update_plan` |
+| Plan exit | — | — | — | `plan` | — |
+| Cron create | — | `cronjob(create)` | `cron` | — | — |
+| Cross-platform messaging | — | `send_message` | `message` | — | — |
+| MCP resource read | — | — | — | — | `read_mcp_resource` |
 | Capabilities check | `capabilities_check` | — | — | — | `tool_search` / `tool_suggest` |
 | Obsidian | `obsidian_*` | — | — | — | — |
 | Google Workspace | `drive_*`, `gmail_*`, `calendar_*` | — | — | — | — |

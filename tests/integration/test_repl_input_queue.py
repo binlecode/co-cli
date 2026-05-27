@@ -1,19 +1,16 @@
-"""Integration smoke: a real turn streams and commits under a running single-owner Application.
+"""Integration smoke: typed-ahead survives a real turn and drains FIFO.
 
-Drives a genuinely running ``app.run_async()`` (via create_pipe_input + AppSession,
-so run_in_terminal's suspend/restore path is real, not the no-app inline fallback)
-with a real warm Ollama model. Feeds one prompt through the pipe into the
-accept_handler, awaits the turn, and asserts the single-owner invariants:
-committed output reaches scrollback, the in-flight buffer is empty at end, no Rich
-Live surfaces exist, and run_in_terminal + invalidate while a delta is mid-render
-corrupt neither the in-flight buffer nor committed scrollback (co's run_async +
-turn-task divergence from hermes's thread model).
+Drives a genuinely running ``app.run_async()`` (via create_pipe_input + AppSession)
+with a real warm Ollama model. Feeds one prompt, waits until the turn is genuinely
+active (observed, not timed), then feeds a second prompt while the first is in
+flight — proving it enqueues (depth 1) instead of being dropped — and asserts both
+turns commit output and the queue returns to 0. This is the end-to-end proof of the
+repl-input-queue feature: type-ahead is never lost during an active turn.
 
-The live approval *keystroke* round-trip (y/n/a typed at the terminal) is part of
-the mandatory manual tty smoke (Gate-2 #2) — Rich's Prompt.ask reads the real tty,
-which cannot be driven deterministically here without mocking (forbidden). This
-test validates the run_in_terminal mechanism that prompt_approval rides on with a
-canned callback instead.
+Two sequential production-tool-context turns run here, so the combined await uses a
+doubled per-call budget (LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2) and the pytest safety
+net is raised to 180s (100s wrapped + ~50s mid-suite KV-cache flush + overhead),
+per tests/_timeouts.py. ensure_ollama_warm stays outside every asyncio.timeout.
 """
 
 from __future__ import annotations
@@ -24,7 +21,6 @@ import time
 from pathlib import Path
 
 import pytest
-from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.application.current import create_app_session
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input import create_pipe_input
@@ -42,7 +38,12 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import TerminalFrontend
 from co_cli.llm.factory import build_model
-from co_cli.main import _build_accept_handler, _handle_one_input, _IterationState
+from co_cli.main import (
+    _build_accept_handler,
+    _build_status_snapshot,
+    _handle_one_input,
+    _IterationState,
+)
 from co_cli.skills.loader import load_skills
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -82,28 +83,21 @@ async def _wait_running(app, *, timeout: float = 10.0) -> None:
         await asyncio.sleep(0.02)
 
 
-async def _poll_until(predicate, *, timeout: float = 3.0) -> None:
-    """Poll predicate until True or timeout — for the StdoutProxy's async flush."""
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError("condition not met within timeout")
-        await asyncio.sleep(0.05)
-
-
 @pytest.mark.asyncio
-async def test_repl_renders_real_turn_under_owned_application(tmp_path: Path) -> None:
+@pytest.mark.timeout(180)
+async def test_typed_ahead_enqueues_and_drains_under_real_turn(tmp_path: Path) -> None:
     # ensure_ollama_warm is infrastructure prep — outside any asyncio.timeout.
     await ensure_ollama_warm(TEST_LLM.model)
 
     deps = _make_deps(tmp_path)
-    # A writable session path so post-turn persistence succeeds (no error status
-    # lingers in the in-flight region) — the bootstrap normally sets this.
+    # Writable session path so post-turn persistence succeeds (bootstrap sets this).
     deps.session.session_path = tmp_path / "co-session.jsonl"
     agent = _make_agent(deps)
     completer = SlashCommandCompleter()
     frontend = TerminalFrontend()
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+
+    completed: list[str] = []
 
     async def dispatch(*, user_input, eof):
         runtime.state = await _handle_one_input(
@@ -116,6 +110,14 @@ async def test_repl_renders_real_turn_under_owned_application(tmp_path: Path) ->
             completer=completer,
             now=time.monotonic(),
         )
+        completed.append(user_input)
+
+    snapshots = []
+
+    def _on_queue_status() -> None:
+        snapshot = _build_status_snapshot(deps, "active", len(runtime.queue))
+        snapshots.append(snapshot)
+        frontend.update_status(snapshot)
 
     captured = io.StringIO()
     with (
@@ -123,7 +125,7 @@ async def test_repl_renders_real_turn_under_owned_application(tmp_path: Path) ->
         create_app_session(input=pipe, output=PlainTextOutput(captured)),
         patch_stdout(),
     ):
-        accept_handler = _build_accept_handler(runtime, dispatch, lambda: None)
+        accept_handler = _build_accept_handler(runtime, dispatch, _on_queue_status)
         key_bindings = build_key_bindings(runtime=runtime, dispatch=dispatch)
         app = build_repl_app(
             frontend=frontend,
@@ -138,42 +140,32 @@ async def test_repl_renders_real_turn_under_owned_application(tmp_path: Path) ->
         try:
             await _wait_running(app)
 
-            # BC3: no Rich Live surfaces exist on the single-owner frontend.
-            assert not hasattr(frontend, "_live")
-            assert not hasattr(frontend, "_status_live")
-            assert not hasattr(frontend, "_tool_live")
-
-            # Feed one prompt through the pipe into the accept_handler, which
-            # schedules the turn task; await it under the warm-call timeout.
-            pipe.send_text("Say OK\r")
-            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-                while runtime.turn_task is None:
+            # Feed the first prompt; wait until the turn is genuinely active
+            # (observed runtime state, not a timing guess) before feeding more.
+            pipe.send_text("Say the single word apple\r")
+            async with asyncio.timeout(10):
+                while not runtime.turn_active:
                     await asyncio.sleep(0.02)
-                await runtime.turn_task
 
-            # The turn produced output (user + assistant response in history) and
-            # the in-flight region is empty at end.
-            assert len(runtime.state.message_history) >= 2
+            # Feed the second prompt while the first turn is in flight — it must
+            # enqueue (depth 1), not drop and not interleave.
+            pipe.send_text("Say the single word banana\r")
+            async with asyncio.timeout(5):
+                while len(runtime.queue) != 1:
+                    await asyncio.sleep(0.02)
+            assert snapshots[-1].queue_depth == 1
+
+            # Both turns drain one-per-boundary under a doubled per-call budget
+            # (two sequential production-tool-context calls).
+            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
+                while len(completed) < 2:
+                    await asyncio.sleep(0.05)
+
+            # FIFO order, both committed, queue drained, in-flight clean.
+            assert completed == ["Say the single word apple", "Say the single word banana"]
+            assert len(runtime.state.message_history) >= 4
+            assert len(runtime.queue) == 0
             assert frontend.get_inflight() == ""
-
-            # Same-loop concurrency hazard (run_async + turn-task, not hermes's
-            # thread model): with a delta mid-render, an invalidate() and a
-            # run_in_terminal round-trip corrupt neither the in-flight buffer nor
-            # the committed scrollback.
-            frontend.on_text_delta("streaming chunk")
-            inflight_mid = frontend.get_inflight()
-            assert inflight_mid != ""
-            app.invalidate()
-            resolved = await run_in_terminal(lambda: "approved")
-            assert resolved == "approved"
-            assert frontend.get_inflight() == inflight_mid
-
-            # Committing while a delta was mid-render clears the in-flight region
-            # and the committed text reaches scrollback (via the StdoutProxy under
-            # patch_stdout, flushed asynchronously — poll within a bounded window).
-            frontend.on_text_commit("integration-marker-xyz")
-            assert frontend.get_inflight() == ""
-            await _poll_until(lambda: "integration-marker-xyz" in captured.getvalue())
         finally:
             app.exit()
             await run_task

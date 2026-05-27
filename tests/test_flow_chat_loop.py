@@ -366,11 +366,12 @@ async def test_plain_text_routes_to_foreground_turn(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_accept_handler_schedules_turn_task() -> None:
-    """Idle submission schedules a turn task via the accept_handler; a submission
-    while a turn is active is dropped (BC6 — the Phase 1 enqueue seam).
+    """Idle submission arms a turn task via the accept_handler; a submission while
+    a turn is active enqueues (FIFO) instead of dropping — the Phase 1 seam.
 
-    Regression guard: if the accept_handler blocked or always scheduled, mid-turn
-    submissions would interleave with a running turn on the single owned terminal.
+    Regression guard: if the accept_handler blocked or ran turns concurrently,
+    mid-turn submissions would interleave on the single owned terminal instead of
+    buffering for the next turn boundary.
     """
     dispatched: list[tuple] = []
 
@@ -378,7 +379,7 @@ async def test_accept_handler_schedules_turn_task() -> None:
         dispatched.append((user_input, eof))
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
-    handler = _build_accept_handler(runtime, dispatch)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None)
 
     class _Buf:
         text = "hello"
@@ -388,7 +389,7 @@ async def test_accept_handler_schedules_turn_task() -> None:
     await asyncio.sleep(0.01)
     assert dispatched == [("hello", False)]
 
-    # Mid-turn: a still-running turn task makes the next submission a no-op.
+    # Mid-turn: a still-running turn task makes the next submission enqueue.
     long_task = asyncio.ensure_future(asyncio.sleep(10))
     await asyncio.sleep(0)
     runtime.turn_task = long_task
@@ -396,21 +397,84 @@ async def test_accept_handler_schedules_turn_task() -> None:
     handler(_Buf())
     await asyncio.sleep(0.01)
     assert dispatched == []
+    assert list(runtime.queue) == ["hello"]
+    long_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_typed_ahead_enqueues_and_drains_fifo() -> None:
+    """Submissions during an active turn enqueue and drain one-per-boundary in
+    FIFO order after the turn completes (C3)."""
+    gate = asyncio.Event()
+    order: list[str] = []
+    depths: list[int] = []
+
+    async def dispatch(*, user_input, eof):
+        order.append(user_input)
+        await gate.wait()
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    handler = _build_accept_handler(runtime, dispatch, lambda: depths.append(len(runtime.queue)))
+
+    def _buf(text: str):
+        return type("_Buf", (), {"text": text})()
+
+    # Arm turn 1 and let it reach the gate so it is genuinely active.
+    handler(_buf("first"))
+    await asyncio.sleep(0)
+    assert runtime.turn_active
+
+    # Two mid-turn submissions enqueue (depth 1 → 2).
+    handler(_buf("second"))
+    handler(_buf("third"))
+    assert list(runtime.queue) == ["second", "third"]
+    assert depths == [1, 2]
+
+    # Release the gate: turn 1 completes, queue drains FIFO one-per-boundary.
+    gate.set()
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if not runtime.queue and not runtime.turn_active:
+            break
+    assert order == ["first", "second", "third"]
+    assert len(runtime.queue) == 0
+
+
+@pytest.mark.asyncio
+async def test_blank_input_never_enqueues() -> None:
+    """Whitespace submissions while a turn is active never occupy a queue slot (C3)."""
+    dispatched: list[tuple] = []
+
+    async def dispatch(*, user_input, eof):
+        dispatched.append((user_input, eof))
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    handler = _build_accept_handler(runtime, dispatch, lambda: None)
+
+    long_task = asyncio.ensure_future(asyncio.sleep(10))
+    await asyncio.sleep(0)
+    runtime.turn_task = long_task
+
+    handler(type("_Buf", (), {"text": "   "})())
+    handler(type("_Buf", (), {"text": ""})())
+    handler(type("_Buf", (), {"text": "\t\n"})())
+    await asyncio.sleep(0.01)
+    assert list(runtime.queue) == []
     long_task.cancel()
 
 
 # ---------------------------------------------------------------------------
-# Test 11: mid-turn Ctrl+C cancels the turn task and arms double-press exit
+# Test 11: Ctrl+C is exit-only (double-press); interrupt moved to Esc
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_ctrl_c_cancels_active_turn() -> None:
-    """A c-c while a turn task is active cancels that task and arms the 2s
-    double-press window; a second c-c within 2s exits (BC2 mid-turn parity).
+async def test_ctrl_c_is_exit_only_double_press() -> None:
+    """c-c no longer cancels the active turn (interrupt moved to Esc); the first
+    press arms the 2 s double-press window, a second within 2 s exits (C6).
 
-    Regression guard: if mid-turn Ctrl+C dropped turn-cancel or the double-press
-    arming, the successor repl-input-queue plan's assumed primitive would break.
+    Regression guard: if c-c cancelled the turn, Esc and Ctrl+C would collide on
+    the interrupt role and double-press exit semantics would be ambiguous.
     """
     from prompt_toolkit.keys import Keys
 
@@ -438,13 +502,59 @@ async def test_ctrl_c_cancels_active_turn() -> None:
     await asyncio.sleep(0)
     runtime.turn_task = turn_task
 
-    # First c-c: cancels the active turn, arms double-press (no exit yet).
+    # First c-c: does NOT cancel the active turn; arms double-press (no exit).
     cc.handler(object())
     await asyncio.sleep(0.01)
-    assert turn_task.cancelled()
+    assert not turn_task.cancelled()
+    assert not turn_task.done()
     assert exited == []
 
-    # Second c-c within 2s: turn no longer active → exits.
+    # Second c-c within 2 s: exits.
     cc.handler(object())
     await asyncio.sleep(0.01)
     assert exited == [True]
+    turn_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_esc_cancels_turn_and_advances_queue() -> None:
+    """Esc cancels the active turn; its done-callback drains the next queued item
+    as the next turn (C4). The queue advances one item, exit is untouched."""
+    from prompt_toolkit.keys import Keys
+
+    gate = asyncio.Event()
+    order: list[str] = []
+
+    async def dispatch(*, user_input, eof):
+        order.append(user_input)
+        if user_input == "first":
+            await gate.wait()
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    handler = _build_accept_handler(runtime, dispatch, lambda: None)
+    kb = build_key_bindings(runtime=runtime, dispatch=dispatch)
+
+    def _buf(text: str):
+        return type("_Buf", (), {"text": text})()
+
+    # Arm turn 1 (carries the drain callback) and reach the gate.
+    handler(_buf("first"))
+    await asyncio.sleep(0)
+    assert runtime.turn_active
+    turn_one = runtime.turn_task
+
+    # One queued item waiting behind the active turn.
+    handler(_buf("queued"))
+    assert list(runtime.queue) == ["queued"]
+
+    # Esc cancels turn 1; the done-callback drains "queued" as the next turn.
+    esc = kb.get_bindings_for_keys((Keys.Escape,))[0]
+    esc.handler(object())
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if not runtime.queue and not runtime.turn_active:
+            break
+    assert turn_one.cancelled()
+    assert order == ["first", "queued"]
+    assert len(runtime.queue) == 0
+    assert not runtime.state.should_exit
