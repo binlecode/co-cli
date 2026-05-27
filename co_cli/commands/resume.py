@@ -77,7 +77,7 @@ async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | Non
         date_str = s.last_modified.strftime("%Y-%m-%d %H:%M")
         items.append(f"{s.title} ({date_str} · {format_file_size(s.file_size)})")
 
-    selection = prompt_selection(items, title="Resume session")
+    selection = await prompt_selection(items, title="Resume session")
     if selection is None:
         return None
 

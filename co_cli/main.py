@@ -4,15 +4,16 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
 import typer
-from prompt_toolkit import PromptSession
+from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.styles import Style
+from prompt_toolkit.patch_stdout import patch_stdout
 from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.messages import ModelMessage
 
@@ -41,8 +42,8 @@ from co_cli.config.core import (
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.deps import CoDeps
+from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import (
-    PROMPT_CHAR,
     Frontend,
     StatusSnapshot,
     TerminalFrontend,
@@ -212,7 +213,7 @@ async def _drain_and_cleanup(
                 task_state.log_path.unlink(missing_ok=True)
         deps.shell.cleanup()
         if deps.memory_store is not None:
-            deps.memory_store.close()
+            deps.memory_store.index.close()
     await stack.aclose()
 
 
@@ -436,17 +437,24 @@ def _build_status_snapshot(deps: CoDeps, mode: Literal["idle", "active"]) -> Sta
     )
 
 
-_COMPLETION_STYLE = Style.from_dict(
-    {
-        "completion-menu": "bg:default",
-        "completion-menu.completion": "bg:default",
-        "completion-menu.completion.current": "bold bg:default",
-        "completion-menu.meta.completion": "fg:#888888 bg:default",
-        "completion-menu.meta.completion.current": "fg:#aaaaaa bg:default bold",
-        "scrollbar.background": "bg:default",
-        "scrollbar.button": "fg:#888888 bg:default",
-    }
-)
+def _build_accept_handler(
+    runtime: _ReplRuntime, dispatch: Callable[..., Awaitable[None]]
+) -> Callable[[Buffer], bool]:
+    """Return the input TextArea accept_handler.
+
+    Idle submissions schedule a turn task; submissions arriving while a turn is
+    active are dropped (BC6) — this is the single Phase 1 seam where
+    repl-input-queue swaps drop→enqueue. The handler only *schedules* (never
+    blocks the app's input loop, per co's same-loop concurrency discipline).
+    """
+
+    def accept_handler(buffer: Buffer) -> bool:
+        if runtime.turn_active:
+            return False
+        runtime.turn_task = asyncio.ensure_future(dispatch(user_input=buffer.text, eof=False))
+        return False
+
+    return accept_handler
 
 
 async def _chat_loop(
@@ -454,15 +462,8 @@ async def _chat_loop(
     theme: str | None = None,
 ):
     frontend = TerminalFrontend()
-
     completer = SlashCommandCompleter()
-    session = PromptSession(
-        history=FileHistory(str(USER_DIR / "history.txt")),
-        completer=completer,
-        complete_while_typing=True,
-        style=_COMPLETION_STYLE,
-        bottom_toolbar=frontend.render_footer_toolbar,
-    )
+    history = FileHistory(str(USER_DIR / "history.txt"))
     stack = AsyncExitStack()
     deps: CoDeps | None = None
     try:
@@ -504,56 +505,59 @@ async def _chat_loop(
         frontend.clear_status()
         frontend.update_status(_build_status_snapshot(deps, "idle"))
 
-        state = _IterationState(message_history=[], last_interrupt_time=0.0)
+        # Single owner of turn state, shared by the accept_handler and the c-c
+        # key binding (F7) — created here in loop scope, never a module global.
+        runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
 
-        while True:
+        async def _dispatch(*, user_input: str | None, eof: bool) -> None:
+            """Run one chat-loop iteration, apply its result, and exit when asked.
+
+            Scheduled as the turn task (idle submissions) or as a control task
+            (Ctrl+C / EOF). A mid-turn Ctrl+C cancels the turn task, surfacing
+            here as CancelledError — restore terminal state and let it propagate.
+            """
+            frontend.update_status(_build_status_snapshot(deps, "active"))
             try:
-                frontend.update_status(_build_status_snapshot(deps, "idle"))
-                frontend.set_input_active(True)
-                user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
-                frontend.set_input_active(False)
-                frontend.update_status(_build_status_snapshot(deps, "active"))
-                state = await _handle_one_input(
+                runtime.state = await _handle_one_input(
                     user_input=user_input,
-                    eof=False,
-                    state=state,
+                    eof=eof,
+                    state=runtime.state,
                     deps=deps,
                     agent=agent,
                     frontend=frontend,
                     completer=completer,
                     now=time.monotonic(),
                 )
-            except EOFError:
-                frontend.set_input_active(False)
-                frontend.update_status(_build_status_snapshot(deps, "active"))
-                state = await _handle_one_input(
-                    user_input=None,
-                    eof=True,
-                    state=state,
-                    deps=deps,
-                    agent=agent,
-                    frontend=frontend,
-                    completer=completer,
-                    now=time.monotonic(),
-                )
-            except (KeyboardInterrupt, asyncio.CancelledError):
-                frontend.set_input_active(False)
-                frontend.update_status(_build_status_snapshot(deps, "active"))
-                state = await _handle_one_input(
-                    user_input=None,
-                    eof=False,
-                    state=state,
-                    deps=deps,
-                    agent=agent,
-                    frontend=frontend,
-                    completer=completer,
-                    now=time.monotonic(),
-                )
+            except asyncio.CancelledError:
+                frontend.cleanup()
+                raise
             except Exception as e:
+                frontend.cleanup()
                 console.print(f"[bold red]Error:[/bold red] {e}")
-                continue
-            if state.should_exit:
-                break
+                runtime.state = _IterationState(
+                    message_history=runtime.state.message_history,
+                    last_interrupt_time=0.0,
+                )
+            frontend.update_status(_build_status_snapshot(deps, "idle"))
+            if runtime.state.should_exit:
+                app.exit()
+
+        accept_handler = _build_accept_handler(runtime, _dispatch)
+        key_bindings = build_key_bindings(runtime=runtime, dispatch=_dispatch)
+        app = build_repl_app(
+            frontend=frontend,
+            completer=completer,
+            history=history,
+            accept_handler=accept_handler,
+            key_bindings=key_bindings,
+        )
+        frontend.bind_app(app)
+
+        # patch_stdout makes the ~128 incidental console.print/display_* sites
+        # reflow above the input area (BC4) — the load-bearing half of single
+        # terminal ownership, not polish.
+        with patch_stdout():
+            await app.run_async()
     finally:
         await _drain_and_cleanup(deps, stack)
 

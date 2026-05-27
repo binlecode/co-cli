@@ -83,26 +83,23 @@ class HeadlessFrontend:
     def on_final_output(self, text: str) -> None:
         pass
 
-    def prompt_approval(self, subject: ApprovalSubject) -> str:
+    async def prompt_approval(self, subject: ApprovalSubject) -> str:
         self.last_approval_subject = subject
         self.approval_calls.append(subject.display)
         return self._approval_response
 
-    def prompt_question(self, prompt: QuestionPrompt) -> str:
+    async def prompt_question(self, prompt: QuestionPrompt) -> str:
         self.last_question = prompt
         self.question_call_count += 1
         return self._question_answer
 
-    def prompt_confirm(self, message: str) -> bool:
+    async def prompt_confirm(self, message: str) -> bool:
         return self._confirm_response
 
     def update_status(self, snapshot: StatusSnapshot) -> None:
         self.last_status_snapshot = snapshot
 
     def clear_status(self) -> None:
-        pass
-
-    def set_input_active(self, active: bool) -> None:
         pass
 
     def cleanup(self) -> None:

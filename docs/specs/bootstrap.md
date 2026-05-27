@@ -31,8 +31,8 @@ co_cli.main  (module import)
 co_cli.main.chat() → asyncio.run(_chat_loop())
 │
 ├─ TerminalFrontend()
-├─ WordCompleter(["/cmd", ...])
-├─ PromptSession(history=..., completer=...)
+├─ SlashCommandCompleter()
+├─ FileHistory(~/.co-cli/history.txt)        # the REPL Application is built post-create_deps
 ├─ AsyncExitStack()
 │
 ├─ create_deps(frontend, stack)

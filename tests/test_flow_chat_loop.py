@@ -1,6 +1,7 @@
 """Behavioural tests for _handle_one_input — the extracted chat loop iteration helper."""
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -13,9 +14,10 @@ from co_cli.agent.core import build_native_toolset
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.display._app import _ReplRuntime, build_key_bindings
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.factory import build_model
-from co_cli.main import _handle_one_input, _IterationState
+from co_cli.main import _build_accept_handler, _handle_one_input, _IterationState
 from co_cli.skills.loader import load_skills
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -355,3 +357,94 @@ async def test_plain_text_routes_to_foreground_turn(tmp_path: Path) -> None:
 
     assert result.should_exit is False
     assert len(result.message_history) > len(state.message_history)
+
+
+# ---------------------------------------------------------------------------
+# Test 10: accept_handler schedules a turn task (idle) / drops (mid-turn)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_accept_handler_schedules_turn_task() -> None:
+    """Idle submission schedules a turn task via the accept_handler; a submission
+    while a turn is active is dropped (BC6 — the Phase 1 enqueue seam).
+
+    Regression guard: if the accept_handler blocked or always scheduled, mid-turn
+    submissions would interleave with a running turn on the single owned terminal.
+    """
+    dispatched: list[tuple] = []
+
+    async def dispatch(*, user_input, eof):
+        dispatched.append((user_input, eof))
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+    handler = _build_accept_handler(runtime, dispatch)
+
+    class _Buf:
+        text = "hello"
+
+    handler(_Buf())
+    assert runtime.turn_task is not None
+    await asyncio.sleep(0.01)
+    assert dispatched == [("hello", False)]
+
+    # Mid-turn: a still-running turn task makes the next submission a no-op.
+    long_task = asyncio.ensure_future(asyncio.sleep(10))
+    await asyncio.sleep(0)
+    runtime.turn_task = long_task
+    dispatched.clear()
+    handler(_Buf())
+    await asyncio.sleep(0.01)
+    assert dispatched == []
+    long_task.cancel()
+
+
+# ---------------------------------------------------------------------------
+# Test 11: mid-turn Ctrl+C cancels the turn task and arms double-press exit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_cancels_active_turn() -> None:
+    """A c-c while a turn task is active cancels that task and arms the 2s
+    double-press window; a second c-c within 2s exits (BC2 mid-turn parity).
+
+    Regression guard: if mid-turn Ctrl+C dropped turn-cancel or the double-press
+    arming, the successor repl-input-queue plan's assumed primitive would break.
+    """
+    from prompt_toolkit.keys import Keys
+
+    exited: list[bool] = []
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+
+    async def dispatch(*, user_input, eof):
+        runtime.state = await _handle_one_input(
+            user_input=user_input,
+            eof=eof,
+            state=runtime.state,
+            deps=None,  # type: ignore[arg-type]
+            agent=None,  # type: ignore[arg-type]
+            frontend=HeadlessFrontend(),
+            completer=SlashCommandCompleter(),
+            now=time.monotonic(),
+        )
+        if runtime.state.should_exit:
+            exited.append(True)
+
+    kb = build_key_bindings(runtime=runtime, dispatch=dispatch)
+    cc = kb.get_bindings_for_keys((Keys.ControlC,))[0]
+
+    turn_task = asyncio.ensure_future(asyncio.sleep(10))
+    await asyncio.sleep(0)
+    runtime.turn_task = turn_task
+
+    # First c-c: cancels the active turn, arms double-press (no exit yet).
+    cc.handler(object())
+    await asyncio.sleep(0.01)
+    assert turn_task.cancelled()
+    assert exited == []
+
+    # Second c-c within 2s: turn no longer active → exits.
+    cc.handler(object())
+    await asyncio.sleep(0.01)
+    assert exited == [True]

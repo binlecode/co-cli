@@ -1,13 +1,15 @@
 """Tests for StatusSnapshot assembly and footer toolbar rendering."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
 from pydantic_ai.usage import RunUsage
+from rich.panel import Panel
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.deps import CoDeps
-from co_cli.display.core import StatusSnapshot, TerminalFrontend
+from co_cli.display.core import StatusSnapshot, TerminalFrontend, render_to_ansi
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.main import _build_status_snapshot
 from co_cli.tools.shell_backend import ShellBackend
@@ -15,6 +17,194 @@ from co_cli.tools.shell_backend import ShellBackend
 
 def _deps(**overrides) -> CoDeps:
     return CoDeps(shell=ShellBackend(), config=SETTINGS_NO_MCP, **overrides)
+
+
+# ── render_to_ansi ─────────────────────────────────────────────────────────
+
+
+def test_render_to_ansi_panel():
+    # A styled panel mirrors the app's real panels (border_style warning/shell_exec/red);
+    # a bare Panel("hi") carries border_style="none" and emits no ANSI at all.
+    out1 = render_to_ansi(Panel("hi", border_style="cyan"), width=40)
+    out2 = render_to_ansi(Panel("hi", border_style="cyan"), width=40)
+    assert out1
+    assert "\x1b[" in out1
+    assert out1 == out2
+
+
+# ── build_repl_app (Application scaffold) ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_repl_app_builds():
+    from prompt_toolkit.application.current import create_app_session
+    from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.keys import Keys
+    from prompt_toolkit.output import DummyOutput
+
+    from co_cli.commands.completer import SlashCommandCompleter
+    from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
+    from co_cli.main import _IterationState
+
+    frontend = TerminalFrontend()
+    frontend.update_status(
+        StatusSnapshot(
+            session_label="sess1234",
+            mode="idle",
+            context_pct=None,
+            background_task_count=0,
+            approval_count=0,
+        )
+    )
+
+    dispatched: list[tuple] = []
+
+    async def dispatch(*, user_input, eof):
+        dispatched.append((user_input, eof))
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    kb = build_key_bindings(runtime=runtime, dispatch=dispatch)
+
+    with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+        app = build_repl_app(
+            frontend=frontend,
+            completer=SlashCommandCompleter(),
+            history=InMemoryHistory(),
+            accept_handler=lambda buf: False,
+            key_bindings=kb,
+        )
+
+        # Three layout regions: in-flight window, input TextArea, toolbar window.
+        children = app.layout.container.children
+        assert len(children) == 3
+
+        # The toolbar window's text callable invokes frontend.render_footer_toolbar.
+        toolbar_text = children[2].content.text()
+        assert "sess1234" in toolbar_text
+
+        # The completion style is applied.
+        attrs = app.style.get_attrs_for_style_str("class:completion-menu.completion.current")
+        assert attrs.bold
+
+        cc = kb.get_bindings_for_keys((Keys.ControlC,))[0]
+
+        # Idle c-c dispatches to _handle_one_input with user_input=None.
+        cc.handler(object())
+        await asyncio.sleep(0.01)
+        assert dispatched == [(None, False)]
+
+        # c-c while a turn task is active cancels that task before routing.
+        turn_task = asyncio.ensure_future(asyncio.sleep(10))
+        await asyncio.sleep(0)
+        runtime.turn_task = turn_task
+        cc.handler(object())
+        await asyncio.sleep(0.01)
+        assert turn_task.cancelled()
+        assert dispatched[-1] == (None, False)
+
+
+# ── TerminalFrontend in-flight streaming buffer ────────────────────────────
+
+
+def _capture_committed():
+    """An (context_manager, get_text) pair capturing print_formatted_text output.
+
+    Routes committed scrollback output through a PlainTextOutput-backed app session
+    so it can be asserted without a real terminal.
+    """
+    import io
+
+    from prompt_toolkit.application.current import create_app_session
+    from prompt_toolkit.output.plain_text import PlainTextOutput
+
+    buffer = io.StringIO()
+    return create_app_session(output=PlainTextOutput(buffer)), buffer
+
+
+def test_inflight_set_on_text_delta_and_cleared_on_commit():
+    frontend = TerminalFrontend()
+    frontend.on_text_delta("hello world")
+    assert "hello world" in frontend.get_inflight()
+
+    session, buffer = _capture_committed()
+    with session:
+        frontend.on_text_commit("hello world")
+    assert frontend.get_inflight() == ""
+    # Text-commit path commits its content to scrollback.
+    assert "hello world" in buffer.getvalue()
+
+
+def test_thinking_commit_erases_inflight_and_commits_final():
+    frontend = TerminalFrontend()
+    frontend.on_thinking_delta("partial reasoning text")
+    assert "partial reasoning text" in frontend.get_inflight()
+
+    session, buffer = _capture_committed()
+    with session:
+        frontend.on_thinking_commit("final reasoning text")
+    # Transient parity: the in-flight thinking region is erased on commit.
+    assert frontend.get_inflight() == ""
+    out = buffer.getvalue()
+    assert "final reasoning text" in out
+    # The transient partial is discarded, not committed — unlike the text-commit path.
+    assert "partial reasoning text" not in out
+
+
+# ── patch_stdout reflow (BC4) ──────────────────────────────────────────────
+
+
+def test_console_print_reflows_under_patch_stdout():
+    import io
+    import sys
+
+    from prompt_toolkit.application.current import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output.plain_text import PlainTextOutput
+    from prompt_toolkit.patch_stdout import StdoutProxy, patch_stdout
+
+    from co_cli.display.core import console
+
+    captured = io.StringIO()
+    with (
+        create_pipe_input() as pipe,
+        create_app_session(input=pipe, output=PlainTextOutput(captured)),
+        patch_stdout(),
+    ):
+        # Rich resolves sys.stdout per write, so the module console picks up the proxy.
+        assert isinstance(sys.stdout, StdoutProxy)
+        assert isinstance(console.file, StdoutProxy)
+        console.print("reflow-marker-xyz")
+    # The StdoutProxy routed the incidental console.print into the app output
+    # (reflowed above the input area, BC4) — not raw to the original terminal.
+    assert "reflow-marker-xyz" in captured.getvalue()
+
+
+# ── async prompts (run_in_terminal) ────────────────────────────────────────
+
+
+def test_prompt_approval_is_coroutine():
+    import inspect
+
+    assert inspect.iscoroutinefunction(TerminalFrontend.prompt_approval)
+    assert inspect.iscoroutinefunction(TerminalFrontend.prompt_question)
+    assert inspect.iscoroutinefunction(TerminalFrontend.prompt_confirm)
+    assert inspect.iscoroutinefunction(HeadlessFrontend.prompt_approval)
+
+
+@pytest.mark.asyncio
+async def test_headless_prompt_approval_awaits_to_canned_response():
+    from co_cli.deps import ApprovalKindEnum, ApprovalSubject
+
+    frontend = HeadlessFrontend(approval_response="a")
+    subject = ApprovalSubject(
+        tool_name="shell_exec",
+        kind=ApprovalKindEnum.TOOL,
+        value="shell_exec",
+        display="run ls",
+        can_remember=True,
+    )
+    assert await frontend.prompt_approval(subject) == "a"
 
 
 # ── TerminalFrontend.render_footer_toolbar ─────────────────────────────────

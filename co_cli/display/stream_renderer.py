@@ -107,7 +107,7 @@ class StreamRenderer:
     def _flush_thinking(self) -> None:
         if self._reasoning_display == REASONING_DISPLAY_FULL and self._thinking_buffer:
             self._frontend.on_thinking_commit(self._thinking_buffer.rstrip())
-        # summary: buffer discarded; _status_live cleared automatically by on_text_delta
+        # summary: buffer discarded; the in-flight status region is superseded by on_text_delta
         # off: buffer never filled (early return in append_thinking), nothing to discard
         self._thinking_buffer = ""
         self._last_thinking_render_at = 0.0

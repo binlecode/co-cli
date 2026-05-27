@@ -242,7 +242,7 @@ async def _collect_deferred_tool_approvals(
                     options=labels,
                     multiple=q.get("multiple", False),
                 )
-                answer = frontend.prompt_question(q_prompt) if frontend is not None else ""
+                answer = (await frontend.prompt_question(q_prompt)) if frontend is not None else ""
                 answers.append(answer)
             approvals.approvals[call.tool_call_id] = ToolApproved(
                 override_args={"user_answers": answers}
@@ -261,7 +261,7 @@ async def _collect_deferred_tool_approvals(
             continue
 
         # User prompt
-        choice = frontend.prompt_approval(subject) if frontend is not None else "n"
+        choice = (await frontend.prompt_approval(subject)) if frontend is not None else "n"
 
         approved = choice in ("y", "a")
         record_approval_choice(

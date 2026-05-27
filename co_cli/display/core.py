@@ -1,11 +1,12 @@
 """Themed terminal display — console, semantic styles, display helpers, Frontend, TerminalFrontend."""
 
-import signal
 from dataclasses import dataclass
+from io import StringIO
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
-from rich.console import Console, Group
-from rich.live import Live
+from prompt_toolkit import ANSI, print_formatted_text
+from prompt_toolkit.application import run_in_terminal
+from rich.console import Console, Group, RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -17,6 +18,8 @@ from rich.theme import Theme
 from co_cli.deps import ApprovalSubject
 
 if TYPE_CHECKING:
+    from prompt_toolkit import Application
+
     from co_cli.tools.tool_io import ToolResultPayload
 
 # -- Theme palettes (keyed by theme name) ------------------------------------
@@ -50,6 +53,10 @@ _THEMES: dict[str, dict[str, str]] = {
 
 console = Console(theme=Theme(_THEMES["light"]))
 
+# Tracks the active theme so render_to_ansi can build a styling-identical sink
+# console; updated by set_theme alongside the module console's pushed theme.
+_active_theme: Theme = Theme(_THEMES["light"])
+
 # -- Indicators ------------------------------------------------------------
 
 PROMPT_CHAR = "❯"
@@ -63,7 +70,34 @@ INFO = "◈"
 
 def set_theme(name: str) -> None:
     """Switch the console theme at runtime (e.g. from --theme flag)."""
-    console.push_theme(Theme(_THEMES.get(name, _THEMES["light"])))
+    global _active_theme
+    _active_theme = Theme(_THEMES.get(name, _THEMES["light"]))
+    console.push_theme(_active_theme)
+
+
+# -- Rich → ANSI bridge (the single renderable→string primitive) ------------
+
+
+def render_to_ansi(renderable: RenderableType, *, width: int) -> str:
+    """Render a Rich renderable to an ANSI string.
+
+    The sole renderable→string routine: both the committed-streaming path and
+    the in-flight control go through it, so they cannot diverge in width/color.
+    Stateless and pure — `width` is supplied by the caller (resolved from the
+    bound app), never read from an ambient terminal or get_app(). Forces a
+    terminal color system so the captured string carries ANSI styling even when
+    the process stdout is not a tty.
+    """
+    buffer = StringIO()
+    sink = Console(
+        file=buffer,
+        force_terminal=True,
+        color_system="truecolor",
+        width=width,
+        theme=_active_theme,
+    )
+    sink.print(renderable)
+    return buffer.getvalue()
 
 
 # -- Display helpers -------------------------------------------------------
@@ -128,21 +162,9 @@ def _read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def prompt_selection(
-    items: list[str],
-    *,
-    title: str = "Select",
-    current: str | None = None,
-) -> str | None:
-    """Interactive arrow-key menu for selecting from a list.
-
-    Up/Down to navigate, Enter to select, q/Esc to cancel.
-    Returns the selected item string, or None if cancelled.
-    """
+def _run_selection(items: list[str], title: str, current: str | None) -> str | None:
+    """The raw termios arrow-key menu — assumes it owns the terminal in cooked/raw mode."""
     import sys
-
-    if not items:
-        return None
 
     idx = 0
     if current and current in items:
@@ -173,6 +195,32 @@ def prompt_selection(
                 return None
     except (EOFError, KeyboardInterrupt):
         return None
+
+
+async def prompt_selection(
+    items: list[str],
+    *,
+    title: str = "Select",
+    current: str | None = None,
+) -> str | None:
+    """Interactive arrow-key menu for selecting from a list.
+
+    Up/Down to navigate, Enter to select, q/Esc to cancel.
+    Returns the selected item string, or None if cancelled.
+
+    When an owned Application is running (in-REPL), the raw termios read runs
+    inside run_in_terminal so the app suspends and restores terminal ownership
+    cleanly; otherwise (non-REPL callers) it reads inline (CD-m-3, mirroring
+    hermes cli.py:7103-7117).
+    """
+    from prompt_toolkit.application import get_app_or_none
+
+    if not items:
+        return None
+
+    if get_app_or_none() is not None:
+        return await run_in_terminal(lambda: _run_selection(items, title, current))
+    return _run_selection(items, title, current)
 
 
 # -- Frontend — abstraction for display + user interaction ----------
@@ -242,15 +290,15 @@ class Frontend(Protocol):
         """Fallback Markdown render when streaming didn't emit text."""
         ...
 
-    def prompt_approval(self, subject: ApprovalSubject) -> str:
+    async def prompt_approval(self, subject: ApprovalSubject) -> str:
         """Prompt user for approval. Returns 'y', 'n', or 'a'."""
         ...
 
-    def prompt_question(self, prompt: QuestionPrompt) -> str:
+    async def prompt_question(self, prompt: QuestionPrompt) -> str:
         """Prompt user for a free-text or constrained answer. Returns the user's answer."""
         ...
 
-    def prompt_confirm(self, message: str) -> bool:
+    async def prompt_confirm(self, message: str) -> bool:
         """Prompt user for a yes/no confirmation. Returns True if confirmed."""
         ...
 
@@ -260,10 +308,6 @@ class Frontend(Protocol):
 
     def clear_status(self) -> None:
         """Dismiss the status surface so the next prompt starts on a clean line."""
-        ...
-
-    def set_input_active(self, active: bool) -> None:
-        """Signal whether prompt_toolkit owns the terminal for user input."""
         ...
 
     def cleanup(self) -> None:
@@ -277,49 +321,81 @@ _CHOICES_HINT = " [[green]y[/green]=once  [yellow]a[/yellow]=session  [red]n[/re
 
 
 class TerminalFrontend:
-    """Rich-based terminal frontend implementing Frontend.
+    """Single-owner terminal frontend implementing Frontend.
 
-    Manages Live instances for streaming text and thinking panels,
-    and SIGINT handler swapping for synchronous approval prompts.
+    Drives one persistent ``prompt_toolkit.Application``: in-flight streaming
+    surfaces (assistant text, thinking, tool labels, status) render into a single
+    ANSI buffer shown by the app's in-flight window and updated via
+    ``app.invalidate()``; committed output (final text, thinking, tool result
+    panels) is printed to scrollback via ``print_formatted_text(ANSI(...))``.
+
+    The four live surfaces are mutually exclusive in time (StreamRenderer commits
+    text before any tool/thinking surface renders), so one in-flight region is
+    sufficient. The app handle is supplied by ``bind_app`` — this frontend never
+    calls prompt_toolkit's ``get_app()`` itself (F3), keeping it stub-testable.
     """
 
     def __init__(self) -> None:
-        self._live: Live | None = None
-        self._thinking_live: Live | None = None
-        self._status_live: Live | None = None
-        self._tool_live: Live | None = None
+        self._app: Application | None = None
+        # Single in-flight ANSI buffer for the live region; "" when no surface active.
+        self._inflight: str = ""
+        # Which surface owns the in-flight buffer — drives commit-on-supersede for status.
+        self._inflight_kind: str = "none"
         # tool_call_id → current display label (overwritten by progress messages)
         self._active_tools: dict[str, str] = {}
         # tool_call_id → stable original label (set once in on_tool_start, never overwritten)
         self._tool_labels: dict[str, str] = {}
-        # last text set via on_status or on_reasoning_progress; None when status surface is cleared
-        self._status_text: str | None = None
-        # True while prompt_toolkit owns the terminal — buffer instead of rendering
-        self._input_active: bool = False
-        # Status messages buffered while input is active; flushed when input ends
-        self._pending_status: list[Text] = []
         # Last pushed status snapshot; drives render_footer_toolbar
         self._footer_snapshot: StatusSnapshot | None = None
 
-    def active_surface(self) -> str:
-        """Return the currently active public display surface name."""
-        if self._live is not None:
-            return "text"
-        if self._thinking_live is not None:
-            return "thinking"
-        if self._tool_live is not None:
-            return "tool"
-        if self._status_live is not None:
-            return "status"
-        return "none"
+    def bind_app(self, app: "Application") -> None:
+        """Bind the owning Application so the frontend can request repaints (F3).
 
-    def active_tool_messages(self) -> tuple[str, ...]:
-        """Return the currently rendered tool labels/messages."""
-        return tuple(self._active_tools.values())
+        Concrete to TerminalFrontend — not on the Frontend protocol; HeadlessFrontend
+        has no app and _chat_loop constructs the concrete frontend directly.
+        """
+        self._app = app
 
-    def active_status_text(self) -> str | None:
-        """Return the text currently shown in the status surface, or None if inactive."""
-        return self._status_text
+    def get_inflight(self) -> str:
+        """Return the current in-flight ANSI buffer (read by the app's in-flight window)."""
+        return self._inflight
+
+    def _width(self) -> int:
+        """Resolve render width from the bound app's output; fall back to the console."""
+        if self._app is not None:
+            try:
+                return self._app.output.get_size().columns
+            except Exception:
+                pass
+        return console.width
+
+    def _invalidate(self) -> None:
+        if self._app is not None:
+            self._app.invalidate()
+
+    def _set_inflight(self, renderable: RenderableType, kind: str) -> None:
+        """Render a live surface into the in-flight buffer and request a repaint."""
+        self._inflight = render_to_ansi(renderable, width=self._width())
+        self._inflight_kind = kind
+        self._invalidate()
+
+    def _clear_inflight(self) -> None:
+        self._inflight = ""
+        self._inflight_kind = "none"
+        self._invalidate()
+
+    def _commit(self, renderable: RenderableType) -> None:
+        """Commit a renderable to scrollback above the app (under patch_stdout)."""
+        print_formatted_text(ANSI(render_to_ansi(renderable, width=self._width())))
+
+    def _commit_status(self) -> None:
+        """Commit an in-flight status line to scrollback before another surface
+        supersedes it — reproducing the old transient=False status persistence."""
+        if self._inflight_kind == "status" and self._inflight:
+            print_formatted_text(ANSI(self._inflight))
+        if self._inflight_kind == "status":
+            self._inflight = ""
+            self._inflight_kind = "none"
 
     def update_status(self, snapshot: StatusSnapshot) -> None:
         self._footer_snapshot = snapshot
@@ -339,101 +415,42 @@ class TerminalFrontend:
         return " · ".join(parts)
 
     def clear_status(self) -> None:
-        """Dismiss the status surface so the next prompt starts on a clean line."""
-        self._clear_status_live()
-
-    def set_input_active(self, active: bool) -> None:
-        """Signal whether prompt_toolkit owns the terminal for user input."""
-        self._input_active = active
-        if not active and self._pending_status:
-            for renderable in self._pending_status:
-                console.print(renderable)
-            self._pending_status.clear()
-            console.print("")
-
-    def _clear_status_live(self) -> None:
-        if self._status_live is not None:
-            self._status_live.stop()
-            self._status_live = None
-            self._status_text = None
-            console.print("")
+        """Commit any pending status then clear the in-flight region."""
+        self._commit_status()
+        self._clear_inflight()
 
     def on_text_delta(self, accumulated: str) -> None:
-        self._clear_status_live()
-        if self._live is None:
-            self._live = Live(
-                Markdown(accumulated),
-                console=console,
-                auto_refresh=False,
-            )
-            self._live.start()
-        else:
-            self._live.update(Markdown(accumulated))
-            self._live.refresh()
+        self._commit_status()
+        self._set_inflight(Markdown(accumulated), "text")
 
     def on_text_commit(self, final: str) -> None:
-        self._clear_status_live()
-        if self._live:
-            self._live.update(Markdown(final))
-            self._live.refresh()
-            self._live.stop()
-            self._live = None
+        self._commit(Markdown(final))
+        self._clear_inflight()
 
     def on_thinking_delta(self, accumulated: str) -> None:
-        self._clear_status_live()
-        renderable = Text(accumulated or "...", style="thinking")
-        if self._thinking_live is None:
-            self._thinking_live = Live(
-                renderable,
-                console=console,
-                auto_refresh=False,
-                transient=True,
-            )
-            self._thinking_live.start()
-        else:
-            self._thinking_live.update(renderable)
-            self._thinking_live.refresh()
+        self._commit_status()
+        self._set_inflight(Text(accumulated or "...", style="thinking"), "thinking")
 
     def on_thinking_commit(self, final: str) -> None:
-        self._clear_status_live()
-        if self._thinking_live:
-            self._thinking_live.stop()
-            self._thinking_live = None
+        # Transient parity: erase the in-flight thinking region (it never lands in
+        # scrollback), then commit the final dim thinking text below it.
+        self._clear_inflight()
         if final:
-            console.print(Text(final, style="thinking"))
+            self._commit(Text(final, style="thinking"))
 
-    def _stop_tool_live(self) -> None:
-        if self._tool_live is not None:
-            self._tool_live.stop()
-            self._tool_live = None
-
-    def _refresh_tool_live(self) -> None:
-        """Render all active tool labels as one Text block in a single Live instance."""
+    def _refresh_tool_inflight(self) -> None:
+        """Render all active tool labels as one in-flight Text block."""
         if not self._active_tools:
-            self._stop_tool_live()
+            self._clear_inflight()
             return
         lines = "\n".join(f"  {label}" for label in self._active_tools.values())
-        renderable = Text(lines, style="dim")
-        if self._tool_live is None:
-            self._tool_live = Live(
-                renderable,
-                console=console,
-                auto_refresh=False,
-                transient=False,
-            )
-            self._tool_live.start()
-        else:
-            self._tool_live.update(renderable)
-        self._tool_live.refresh()
+        self._set_inflight(Text(lines, style="dim"), "tool")
 
     def _close_tool(self, tool_id: str) -> str:
-        """Pop both dicts and manage _tool_live. Returns stable label for panel title."""
+        """Pop both dicts and refresh the in-flight block. Returns stable label for panel title."""
         self._active_tools.pop(tool_id, None)
         label = self._tool_labels.pop(tool_id, tool_id)
-        if not self._active_tools:
-            self._stop_tool_live()
-        else:
-            self._refresh_tool_live()
+        self._refresh_tool_inflight()
         return label
 
     def _render_tool_panel(self, label: str, result: "ToolResultPayload") -> None:
@@ -442,21 +459,20 @@ class TerminalFrontend:
         Extracted so new result types (v2) require one edit here, not in on_tool_complete.
         """
         if isinstance(result, str) and result.strip():
-            console.print(Panel(result.rstrip(), title=label, border_style="shell_exec"))
+            self._commit(Panel(result.rstrip(), title=label, border_style="shell_exec"))
 
     def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
         """Tool lifecycle: tool invocation started."""
-        self._clear_status_live()
+        self._commit_status()
         label = args_display if args_display else name
         self._active_tools[tool_id] = label
         self._tool_labels[tool_id] = label
-        self._refresh_tool_live()
+        self._refresh_tool_inflight()
 
     def on_tool_progress(self, tool_id: str, message: str) -> None:
         """Tool lifecycle: in-progress update from a running tool."""
-        self._clear_status_live()
         self._active_tools[tool_id] = message
-        self._refresh_tool_live()
+        self._refresh_tool_inflight()
 
     def on_tool_complete(self, tool_id: str, result: "ToolResultPayload") -> None:
         """Tool lifecycle: tool completed with optional final result payload."""
@@ -464,43 +480,23 @@ class TerminalFrontend:
         self._render_tool_panel(label, result)
 
     def on_status(self, message: str) -> None:
-        self._status_text = message
-        renderable = Text(message, style="dim")
-        if self._input_active:
-            self._pending_status.append(renderable)
+        if self._app is None:
+            # Bootstrap / no owned app yet — print directly so startup status is visible.
+            console.print(Text(message, style="dim"))
             return
-        if self._status_live is None:
-            self._status_live = Live(
-                renderable,
-                console=console,
-                auto_refresh=False,
-                transient=False,
-            )
-            self._status_live.start()
-        else:
-            self._status_live.update(renderable)
-        self._status_live.refresh()
+        self._set_inflight(Text(message, style="dim"), "status")
 
     def on_reasoning_progress(self, text: str) -> None:
         if not text or not text.strip():
             return
-        self._status_text = text
-        renderable = Text(text, style="status")
-        if self._status_live is None:
-            self._status_live = Live(
-                renderable,
-                console=console,
-                auto_refresh=False,
-                transient=False,
-            )
-            self._status_live.start()
-        else:
-            self._status_live.update(renderable)
-        self._status_live.refresh()
+        if self._app is None:
+            console.print(Text(text, style="status"))
+            return
+        self._set_inflight(Text(text, style="status"), "status")
 
     def on_final_output(self, text: str) -> None:
-        self._clear_status_live()
-        console.print(Markdown(text))
+        self._commit_status()
+        self._commit(Markdown(text))
 
     def _build_approval_panel(self, subject: ApprovalSubject) -> Panel:
         """Build the Rich Panel renderable for an approval prompt."""
@@ -515,16 +511,18 @@ class TerminalFrontend:
             title_align="left",
         )
 
-    def prompt_approval(self, subject: ApprovalSubject) -> str:
-        """Prompt user for y/n with SIGINT handler swap for blocking input."""
-        self._clear_status_live()
-        console.print(self._build_approval_panel(subject))
-        console.print("Allow?" + _CHOICES_HINT, end=" ")
+    async def prompt_approval(self, subject: ApprovalSubject) -> str:
+        """Prompt for y/n/a, suspending the owned app via run_in_terminal.
 
-        prev_handler = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT, signal.default_int_handler)
-        try:
-            choice = Prompt.ask(
+        run_in_terminal restores cooked-mode terminal ownership for the blocking
+        read, so the old SIGINT-handler swap is no longer needed.
+        """
+        self.clear_status()
+
+        def _ask() -> str:
+            console.print(self._build_approval_panel(subject))
+            console.print("Allow?" + _CHOICES_HINT, end=" ")
+            return Prompt.ask(
                 "",
                 choices=["y", "n", "a"],
                 default="n",
@@ -532,49 +530,35 @@ class TerminalFrontend:
                 show_default=False,
                 console=console,
             )
-        finally:
-            signal.signal(signal.SIGINT, prev_handler)
 
-        return choice
+        return await run_in_terminal(_ask)
 
-    def prompt_question(self, prompt: QuestionPrompt) -> str:
-        """Prompt user for a constrained or free-text answer with SIGINT handler swap."""
-        self._clear_status_live()
-        if prompt.options:
-            suffix = " (select multiple, comma-separated)" if prompt.multiple else ""
-            body = f"[accent]{prompt.question}[/accent]\n[hint]Options: {' | '.join(prompt.options)}{suffix}[/hint]"
-        else:
-            body = f"[accent]{prompt.question}[/accent]"
-        console.print(Panel(body, title="Question", border_style="info", title_align="left"))
+    async def prompt_question(self, prompt: QuestionPrompt) -> str:
+        """Prompt for a constrained or free-text answer, suspending the app via run_in_terminal."""
+        self.clear_status()
 
-        prev_handler = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT, signal.default_int_handler)
-        try:
+        def _ask() -> str:
+            if prompt.options:
+                suffix = " (select multiple, comma-separated)" if prompt.multiple else ""
+                body = f"[accent]{prompt.question}[/accent]\n[hint]Options: {' | '.join(prompt.options)}{suffix}[/hint]"
+            else:
+                body = f"[accent]{prompt.question}[/accent]"
+            console.print(Panel(body, title="Question", border_style="info", title_align="left"))
             if prompt.options and not prompt.multiple:
                 return Prompt.ask("", choices=prompt.options, console=console)
             if prompt.options and prompt.multiple:
                 return Prompt.ask("Select (comma-separated)", console=console)
             return Prompt.ask("Answer", console=console)
-        finally:
-            signal.signal(signal.SIGINT, prev_handler)
 
-    def prompt_confirm(self, message: str) -> bool:
-        """Prompt user for a yes/no confirmation. Returns True if user types 'y'."""
-        response = console.input(message)
+        return await run_in_terminal(_ask)
+
+    async def prompt_confirm(self, message: str) -> bool:
+        """Prompt for a yes/no confirmation, suspending the app via run_in_terminal."""
+        response = await run_in_terminal(lambda: console.input(message))
         return response.strip().lower() == "y"
 
     def cleanup(self) -> None:
-        """Stop any active Live instances to restore terminal state."""
-        for lv in (self._tool_live, self._status_live, self._thinking_live, self._live):
-            if lv:
-                try:
-                    lv.stop()
-                except Exception:
-                    pass
-        self._tool_live = None
-        self._status_live = None
-        self._thinking_live = None
-        self._live = None
-        self._status_text = None
+        """Clear the in-flight region and tool state on exception/cancellation."""
         self._active_tools.clear()
         self._tool_labels.clear()
+        self._clear_inflight()

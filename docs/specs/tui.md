@@ -12,9 +12,10 @@ layer is implemented across three modules: `co_cli/main.py` (loop and lifecycle)
 ```
 User input
     ↓
-PromptSession (prompt_toolkit)  ← FileHistory, WordCompleter
-    ↓
-_chat_loop()                    ← session lifecycle, Ctrl+C handling
+Application (prompt_toolkit, full_screen=False)  ← single terminal owner
+  layout: in-flight streaming window + input TextArea (FileHistory, completer) + toolbar window
+    ↓ accept_handler: schedule a turn task (idle) / drop (mid-turn, Phase 0)
+_chat_loop()                    ← session lifecycle; c-c cancels active turn + double-press exit
     ↓ starts with "/"
 dispatch(raw_input, ctx)        ← routes to BUILTIN_COMMANDS or skill
     ↓ starts without "/"
@@ -26,23 +27,37 @@ SlashOutcome
   DelegateToAgent  → enter LLM turn with delegated_input
 ```
 
+A single `prompt_toolkit.Application` owns the inline terminal. Rich is demoted to a
+stateless renderable→ANSI bridge (`render_to_ansi`): committed output is printed to
+scrollback via `print_formatted_text(ANSI(...))`, and in-flight streaming renders into a
+`FormattedTextControl` window updated by throttled `app.invalidate()`. `app.run_async()` is
+wrapped in `patch_stdout()` so the incidental `console.print` sites reflow above the input.
+
 ## 2. Core Logic
 
 ### REPL Loop (`_chat_loop`)
 
 `_chat_loop` is the async entry point for an interactive session. It initialises:
-- `PromptSession` with `FileHistory` persisted to `~/.co-cli/history.txt`
-- `WordCompleter` seeded from `BUILTIN_COMMANDS` keys and user-invocable skill names
-  via `_build_completer_words()`
 - `CoDeps` via `create_deps()`, which resolves all service handles, workspace paths, and config
 - `deps.session.reasoning_display` set from the effective startup mode (CLI flag or config)
+- a `FileHistory` persisted to `~/.co-cli/history.txt` and a completer seeded from
+  `BUILTIN_COMMANDS` keys and user-invocable skill names
+- the REPL `Application` via `build_repl_app(...)` (`co_cli/display/_app.py`), bound to the
+  frontend via `frontend.bind_app(app)`; the loop then drives it with `await app.run_async()`
+  inside `patch_stdout()`
 
-The loop reads one line of input at a time. `exit`/`quit` break cleanly. Empty input is skipped.
+The Application is event-driven, not a read-one-line loop. The input `TextArea`'s
+`accept_handler` schedules a turn task (`asyncio.ensure_future`) for an idle submission and
+drops submissions that arrive while a turn is active (Phase 0 — the single seam where the
+`repl-input-queue` plan will swap drop→enqueue). Turn state — the current turn-task reference
+and the iteration state — has one owner, `_ReplRuntime`, shared by the `accept_handler` and the
+Ctrl+C key binding. `exit`/`quit` and empty input are handled inside `_handle_one_input`.
 
-Interrupt handling:
-- First Ctrl+C: prints "Press Ctrl+C again to exit" and continues
-- Second Ctrl+C within 2 seconds: breaks the loop
-- `EOFError` (Ctrl+D): breaks the loop
+Interrupt handling (via key bindings, behaviour-preserving):
+- First Ctrl+C while idle: prints "Press Ctrl+C again to exit" and arms a 2 s window
+- Second Ctrl+C within 2 seconds: exits (`app.exit()`)
+- Ctrl+C while a turn is running: cancels the active turn task, then arms the double-press window
+- Ctrl+D (`eof`): exits
 
 ### Tab Completion
 
@@ -146,14 +161,16 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `Frontend` (Protocol) | `co_cli/display/core.py` | Display contract — `on_status`, `clear_status`, `update_status`, `prompt_question`, `cleanup`, etc. |
-| `TerminalFrontend` | `co_cli/display/core.py` | Default terminal implementation using `rich.console` |
-| `HeadlessFrontend` | `co_cli/display/headless.py` | No-op frontend for evals and tests; stores `last_status_snapshot` for inspection |
+| `Frontend` (Protocol) | `co_cli/display/core.py` | Display contract — `on_status`, `clear_status`, `update_status`, `cleanup`, and the async interactive prompts `prompt_approval`, `prompt_question`, `prompt_confirm` (coroutines) |
+| `TerminalFrontend` | `co_cli/display/core.py` | Single-owner terminal implementation: drives one `prompt_toolkit.Application` via `bind_app(app)`; streaming surfaces share one in-flight ANSI buffer; committed output prints to scrollback. Rich is used only as the `render_to_ansi` bridge |
+| `HeadlessFrontend` | `co_cli/display/headless.py` | No-op frontend for evals and tests; stores `last_status_snapshot` for inspection; mirrors the async prompt signatures |
+| `render_to_ansi(renderable, *, width) -> str` | `co_cli/display/core.py` | The sole Rich renderable→ANSI-string primitive; stateless, width supplied by the caller |
 | `console`, `set_theme(name)`, `PROMPT_CHAR` | `co_cli/display/core.py` | Shared console instance, theme switcher, prompt glyph |
+| `build_repl_app(...)`, `build_key_bindings(...)`, `_ReplRuntime` | `co_cli/display/_app.py` | Inline-REPL Application factory, Ctrl+C/Ctrl+D key bindings, and the single turn-state holder (F7) |
 | `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-segment text/thinking buffering and flush policy |
 | `QuestionPrompt(question, options, multiple)` | `co_cli/display/core.py` | Clarify-path approval prompt for tool-issued questions |
 | `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` |
-| `TerminalFrontend.render_footer_toolbar()` | `co_cli/display/core.py` | Plain-text footer string consumed by `PromptSession(bottom_toolbar=...)` |
+| `TerminalFrontend.render_footer_toolbar()` | `co_cli/display/core.py` | Plain-text footer string consumed by the toolbar `Window` in the Application layout |
 | `_build_status_snapshot(deps, mode)` | `co_cli/main.py` | Assembles a `StatusSnapshot` from `CoDeps` at lifecycle push points |
 
 ### Slash command reference
@@ -209,7 +226,8 @@ Delegation agent turns inherit the mode via `fork_deps()`, which copies
 | `co_cli/commands/core.py` | Slash-command registry and `dispatch()` |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, completer helpers |
 | `co_cli/commands/types.py` | `CommandContext`, `SlashOutcome`, `LocalOnly`, `ReplaceTranscript`, `DelegateToAgent`, `_confirm` |
-| `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `StatusSnapshot`, `console`, `set_theme`, `PROMPT_CHAR` |
+| `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `render_to_ansi`, `StatusSnapshot`, `console`, `set_theme`, `PROMPT_CHAR` |
+| `co_cli/display/_app.py` | `build_repl_app`, `build_key_bindings`, `_ReplRuntime` — the single-owner inline-REPL Application factory |
 | `co_cli/display/headless.py` | `HeadlessFrontend` — full `Frontend` protocol implementation for evals and tests |
 | `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy per segment |
 | `co_cli/deps.py` | `CoSessionState` (user-preference + tool-visible state), `CoRuntimeState` (orchestration state) |

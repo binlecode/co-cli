@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.258]
+
+### Single terminal owner — persistent prompt_toolkit Application replaces the Rich Live / PromptSession baton-pass
+
+Phase 0 behavior-preserving re-architecture (unblocks the `repl-input-queue` plan). The REPL had two libraries each owning the terminal — Rich `Live` (output) and prompt_toolkit `PromptSession` (input) — that could only coexist via a sequential baton-pass, so input and output never ran at the same time. Now a single persistent `Application(full_screen=False)` owns the inline terminal; Rich is demoted to a stateless renderable→ANSI builder. Observable UX is unchanged (inline prompt + scrollback transcript, streaming Markdown, panels, toolbar, approvals, slash completion, FileHistory, Ctrl+C double-press exit, theme).
+
+- **New** — `co_cli/display/_app.py` — `build_repl_app(...)` factory assembles the `Application` (in-flight streaming window + input `TextArea` + toolbar `Window`); `build_key_bindings(...)` (Ctrl+C / Ctrl+D); `_ReplRuntime` is the single owner of turn state (`turn_task` + `control_tasks`), passed by reference — never a module global. Mid-turn Ctrl+C cancels the active turn task then arms the 2 s double-press-exit window (BC2 parity).
+- **`co_cli/display/core.py`** — new stateless `render_to_ansi(renderable, *, width)` bridge (the sole renderable→string routine). `TerminalFrontend` rewritten to drive the Application: a single in-flight ANSI buffer updated via `app.invalidate()` for streaming surfaces, committed output via `print_formatted_text(ANSI(...))`. All Rich `Live` surfaces (five sites), `set_input_active`, `_pending_status`, and the `active_*` introspection orphans deleted. `prompt_approval`/`prompt_question`/`prompt_confirm`/`prompt_selection` are now coroutines run via `run_in_terminal`; the SIGINT-handler swap is removed.
+- **`co_cli/main.py`** — `_chat_loop` rewritten to construct the app, `bind_app`, wrap `app.run_async()` in `patch_stdout()`, and drive the REPL on a single owned Application. The `accept_handler` schedules a turn via `asyncio.ensure_future` for idle submissions and drops mid-turn submissions (BC6 — the Phase 1 enqueue seam). `PromptSession`/`bottom_toolbar`/`set_input_active` wiring removed. Fixed a pre-existing clean-exit crash: `_drain_and_cleanup` called the nonexistent `MemoryStore.close()` → routed through `.index.close()`.
+- **`co_cli/display/headless.py`** — async prompt signatures; `set_input_active` removed.
+- **`co_cli/commands/{_utils,memory,resume}.py`, `co_cli/context/orchestrate.py`** — full transitive `await` cascade for the now-async prompts; `_confirm`'s no-frontend fallback stays a direct sync `console.input`.
+- **Specs** — `docs/specs/{tui,core-loop,bootstrap}.md` synced to the single-owner model (Application/`run_async`, accept_handler scheduling, async approval prompts via `run_in_terminal`, `patch_stdout`, `_app.py` symbols, toolbar `Window`).
+- **Tests** — `tests/integration/test_repl_terminal_owner.py` (new) drives a genuinely-running `app.run_async()` with a real warm Ollama turn, asserting committed output, empty in-flight buffer, zero Rich Live, and the same-loop concurrency invariant. `tests/test_display.py` + `tests/test_flow_chat_loop.py` cover `render_to_ansi`, in-flight/transient parity, `patch_stdout` reflow, async-prompt contract, and accept_handler scheduling + mid-turn Ctrl+C cancel.
+
 ## [0.8.256]
 
 ### Hermes-parity input-token tracking — drop stale-suppression guard

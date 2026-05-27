@@ -114,7 +114,7 @@ async def _subcmd_memory_forget(
         console.print(format_memory_item_row(m))
 
     prompt_text = f"Delete {len(entries)} memories? [y/N] "
-    confirmed = _confirm(ctx, prompt_text)
+    confirmed = await _confirm(ctx, prompt_text)
     if not confirmed:
         console.print("[dim]Aborted.[/dim]")
         return None
@@ -189,7 +189,7 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
         return None
 
     prompt_text = f"Archive {len(candidates)} decay candidates? [y/N] "
-    confirmed = _confirm(ctx, prompt_text)
+    confirmed = await _confirm(ctx, prompt_text)
     if not confirmed:
         console.print("[dim]Aborted.[/dim]")
         return None

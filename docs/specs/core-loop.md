@@ -44,7 +44,7 @@ Detailed foreground turn flow:
 
 ```mermaid
 flowchart TD
-    A["PromptSession.prompt_async()"] --> B{"blank or exit?"}
+    A["Application accept_handler (input TextArea submit)"] --> B{"blank or exit?"}
     B -->|exit/quit| Z["exit REPL"]
     B -->|blank| A
     B -->|non-empty| C{"starts with '/'?"}
@@ -197,15 +197,19 @@ Approval deferral uses the native Pydantic-AI objects directly:
 Approval collection sequence (per pending call):
 
 0. read `output.metadata[tool_call_id]`; if `"questions" in metadata`, take the clarify path:
-   - for each question dict in `metadata["questions"]`, construct `QuestionPrompt(question, options, multiple)` and call `frontend.prompt_question(prompt)`; collect answers into a list
+   - for each question dict in `metadata["questions"]`, construct `QuestionPrompt(question, options, multiple)` and `await frontend.prompt_question(prompt)`; collect answers into a list
    - encode `ToolApproved(override_args={"user_answers": answers})` — tool resumes with the injected answer list
    - skip steps 1–7
 1. decode tool arguments with `decode_tool_args()`
 2. resolve one `ApprovalSubject`
 3. check `deps.session.session_approval_rules` for an exact `kind + value` match
-4. otherwise prompt the user for `y`, `n`, or `a`
+4. otherwise `await frontend.prompt_approval(subject)` for `y`, `n`, or `a`
 5. encode the decision into `DeferredToolResults`
 6. optionally remember the scope when the user chose `a`
+
+The interactive frontend prompts (`prompt_approval`, `prompt_question`, `prompt_confirm`) are
+coroutines: the `TerminalFrontend` runs each blocking read via `run_in_terminal(...)`, which
+suspends the owned `Application` and restores cooked-mode terminal ownership for the read.
 7. if denied, emit `logger.debug("tool_denied", tool_name, subject_kind, subject_value)`
 
 Approval subject scopes:
