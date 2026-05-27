@@ -126,4 +126,4 @@ Quick reference:
 
 ## Reference Repos
 
-Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-peer-repos.md` for the table.
+Peer repos in `~/workspace_genai/` are used for design research. See `docs/reference/RESEARCH-agentic-context-peer-survey.md` for the per-repo context/history-management survey.

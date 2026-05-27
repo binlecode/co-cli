@@ -285,8 +285,10 @@ Sensitivity:
 4,000 is the smallest preview that reliably retains a useful summary of typical shell output — test failure summary lines, directory listing heads, a few error frames — while affording the targeted ~30-call budget.
 
 **Scaling to other context sizes.** Apply the same formula:
-- 200K context (frontier model) → working budget ~600K chars → spill ≈ 9,500 chars. Close to opencode's 50K (which budgets fewer tool calls per turn).
-- 1M context → spill ≈ 16,000 chars. Close to hermes's 100K (which targets even larger per-call payloads).
+- 200K context (frontier model) → working budget ~600K chars → spill ≈ 9,500 chars.
+- 1M context → spill ≈ 16,000 chars.
+
+Peers don't expose a directly comparable per-call spill threshold: opencode truncates tool output in place (`TOOL_OUTPUT_MAX_CHARS = 2000` on the compaction path) and hermes preserves it in full until compaction (summarizer input cap `_CONTENT_MAX = 6000`), so neither offers an apples-to-apples anchor for this formula.
 
 **Why `file_read` is exempted (`math.inf`).** File content is the work, not incidental output. The exemption keeps small-to-medium reads inline (~5K–50K chars typical); a few large reads saturate L3's `compaction_ratio` trigger quickly, but that's the right signal — it means the agent is loading enough source to need a checkpoint.
 
