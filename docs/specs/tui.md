@@ -53,9 +53,11 @@ Each armed turn carries an `add_done_callback` that drains the next queued item 
 boundary — normal completion *and* `Esc`-cancel both fire it — so the queue advances one item
 per turn. Turn state — the current turn-task reference, the iteration state, and the input
 `queue` (`collections.deque[str]`) — has one owner, `_ReplRuntime`, shared by the
-`accept_handler` and the key bindings. Queue depth surfaces in the bottom toolbar
-(`"{n} queued"`, omitted at 0). `exit`/`quit` and empty input are handled inside
-`_handle_one_input`.
+`accept_handler` and the key bindings. Queue depth + a truncated head-item preview surface
+in the bottom toolbar (`{n} queued: "…"`, omitted at depth 0). `/queue [list|clear|pop [n]]`
+inspects or prunes pending items; mid-turn it bypasses the queue and runs via
+`runtime.schedule_control(...)` (it is a buffer op, not a turn). `exit`/`quit` and empty input
+are handled inside `_handle_one_input`.
 
 Interrupt handling (via key bindings):
 - `Esc` while a turn is running: cancels the active turn task; its done-callback drains the next
@@ -160,7 +162,7 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async — parses `/<name> <args>`, routes to `BUILTIN_COMMANDS` or skill; falls back to unknown-command hint |
 | `BUILTIN_COMMANDS: dict[str, SlashCommand]` | `co_cli/commands/registry.py` | Module-level registry of built-in slash commands |
 | `SlashCommand` | `co_cli/commands/registry.py` | Dataclass — `name`, `handler`, `description`, `argument_hint`, `category` |
-| `CommandContext` | `co_cli/commands/types.py` | Input bag passed to every handler — `message_history`, `deps`, `agent`, `completer`, `frontend` |
+| `CommandContext` | `co_cli/commands/types.py` | Input bag passed to every handler — `message_history`, `deps`, `agent`, `completer`, `frontend`, `input_queue` (live REPL queue by reference, `None` outside REPL) |
 | `SlashOutcome`, `LocalOnly`, `ReplaceTranscript(history)`, `DelegateToAgent(delegated_input, skill_env, skill_name)` | `co_cli/commands/types.py` | Handler return types signalling REPL action |
 | `filter_namespace_conflicts(skill_index) -> dict` | `co_cli/commands/registry.py` | Drops skills whose names collide with `BUILTIN_COMMANDS` |
 | `_build_completer_words(skill_index) -> list[str]` | `co_cli/commands/registry.py` | Returns `["/cmd" for cmd in BUILTIN_COMMANDS] + ["/name" for user-invocable skills]` |
@@ -177,9 +179,9 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | `build_repl_app(...)`, `build_key_bindings(...)`, `_ReplRuntime` | `co_cli/display/_app.py` | Inline-REPL Application factory, Esc/Ctrl+C/Ctrl+D key bindings, and the single turn-state holder (F7) — holds the turn-task reference and the input `queue` |
 | `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-segment text/thinking buffering and flush policy |
 | `QuestionPrompt(question, options, multiple)` | `co_cli/display/core.py` | Clarify-path approval prompt for tool-issued questions |
-| `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count, queue_depth=0)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` (which repaints via `_invalidate`); `queue_depth` renders as `"{n} queued"` between `mode` and `ctx`, omitted at 0 |
+| `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count, queue_depth=0, queue_head_preview=None)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` (which repaints via `_invalidate`); when `queue_depth > 0`, renders `{n} queued: "<preview>"` between `mode` and `ctx`; omitted at 0 |
 | `TerminalFrontend.render_footer_toolbar()` | `co_cli/display/core.py` | Plain-text footer string consumed by the toolbar `Window` in the Application layout |
-| `_build_status_snapshot(deps, mode, queue_depth=0)` | `co_cli/main.py` | Assembles a `StatusSnapshot` from `CoDeps` at lifecycle push points; runtime-aware callers pass `len(runtime.queue)` for live depth |
+| `_build_status_snapshot(deps, mode, queue)` | `co_cli/main.py` | Assembles a `StatusSnapshot` from `CoDeps` at lifecycle push points; callers pass `runtime.queue` (or an empty `deque()` at startup) — both depth and head-item preview are derived inside |
 
 ### Slash command reference
 
@@ -201,6 +203,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `/background` | `<command>` | Run a shell command in the background | `None` |
 | `/tasks` | `[status-filter \| task-id]` | List background tasks; pass a 12-hex-char task ID to show detail | `None` |
 | `/cancel` | `<task-id>` | Cancel a running background task | `None` |
+| `/queue` | `[list\|clear\|pop [n]]` | Inspect or prune pending REPL input-queue items; mid-turn bypass runs immediately without enqueueing | `None` |
 | `/reasoning` | `[off\|summary\|full\|next]` | Show or set reasoning display mode | `None` |
 
 #### `/reasoning` detail

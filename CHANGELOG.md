@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.264]
+
+### REPL input-queue UX — `/queue` command + head-item toolbar preview (Phase 2)
+
+Phase 1 (v0.8.260) made mid-turn submissions enqueue instead of drop. Phase 2 makes that queue **inspectable and manageable**. The user can now see what's pending, drop a mis-typed entry before it costs a turn, or wipe the queue entirely — without killing the session.
+
+- **`co_cli/commands/_queue_control.py`** (new) — queue-control core: `list` / `clear` / `pop [n]` operating on a `deque[str]` by reference. 1-based indices in the user surface, usage errors (never silent no-op or exception) on bad/out-of-range args. Prints via the module-level `console` (no `Frontend` parameter — matches `help.py` / `tasks.py`).
+- **`co_cli/commands/queue.py`** (new) — `_cmd_queue(ctx, args)` builtin handler delegating to the core on `ctx.input_queue`; returns `None` so dispatch maps to `LocalOnly` (never a history list, never an armed turn).
+- **`co_cli/commands/types.py`** — `CommandContext` gains `input_queue: deque[str] | None = None` (stdlib only, mirrors the existing `completer`/`frontend` optionality — no `_ReplRuntime` import into `co_cli/commands/`).
+- **`co_cli/commands/core.py`** — registers `BUILTIN_COMMANDS["queue"]` so the command is visible in `/help` and the completer.
+- **`co_cli/main.py`** — `_handle_one_input` passes `input_queue=queue` at the slash-dispatch `CommandContext` build. `_build_accept_handler` gains a controlled mid-turn bypass: a `/queue` prefix (parsed via `_parse_queue_command`, a literal mirror of dispatch's parse so idle and mid-turn paths cannot diverge) runs the queue-control core via `runtime.schedule_control(...)` — **not** `_arm_turn` — so it never carries the `_drain_next` callback and never arms a new turn. All other mid-turn input still enqueues (Phase 1 invariant preserved). `_build_status_snapshot(deps, mode, queue)` now takes the deque positionally and derives both `queue_depth` and a new `queue_head_preview` internally; `_queue_head_preview` truncates `queue[0]` at a fixed `_QUEUE_PREVIEW_BUDGET = 30` char budget for the toolbar.
+- **`co_cli/display/core.py`** — `StatusSnapshot` gains `queue_head_preview: str | None = None`. `render_footer_toolbar` renders `{n} queued: "<preview>"` when a preview is present, falls back to the bare `{n} queued` form, and omits the segment entirely at depth 0. Segment placement (between `mode` and `ctx`) is unchanged.
+- **Tests** — `tests/test_flow_queue_command.py` (new, 7 dispatch-level tests covering `/queue`/`pop`/`pop n`/`clear` + out-of-range + non-integer + empty-queue no-op; all assert `LocalOnly` + queue mutation by reference). `tests/test_flow_chat_loop.py::test_queue_command_bypasses_enqueue_mid_turn` exercises the bypass against a held `turn_task` stub and asserts observable state (queue empty, `turn_task is long_task`, regression guard for non-`/queue` mid-turn input). `tests/test_display.py` adds toolbar-preview render + snapshot-builder coverage (populated, truncated past budget, none when empty) and updates the Phase 1 depth test to the new `{n} queued: "…"` form. `tests/integration/test_repl_input_queue.py` migrated to the positional `queue` signature.
+- **Spec** — `docs/specs/tui.md` synced: queue paragraph mentions `/queue` + head preview; `CommandContext` row gains `input_queue`; `StatusSnapshot` row adds `queue_head_preview`; `_build_status_snapshot` signature row updated; command-reference table gains `/queue`.
+- **Plan**: `docs/exec-plans/completed/2026-05-27-214118-repl-queue-ux.md`.
+
 ## [0.8.262]
 
 ### Tool Gap Batch 1 — restored article URL-dedup + removed `tool_output_raw` spill bypass

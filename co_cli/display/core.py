@@ -245,6 +245,7 @@ class StatusSnapshot:
     background_task_count: int
     approval_count: int
     queue_depth: int = 0
+    queue_head_preview: str | None = None
 
 
 @runtime_checkable
@@ -411,7 +412,10 @@ class TerminalFrontend:
         s = self._footer_snapshot
         parts: list[str] = [s.session_label, s.mode]
         if s.queue_depth > 0:
-            parts.append(f"{s.queue_depth} queued")
+            if s.queue_head_preview:
+                parts.append(f'{s.queue_depth} queued: "{s.queue_head_preview}"')
+            else:
+                parts.append(f"{s.queue_depth} queued")
         if s.context_pct is not None:
             parts.append(f"ctx {int(s.context_pct * 100)}%")
         if s.background_task_count > 0:

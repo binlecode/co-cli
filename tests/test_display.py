@@ -1,6 +1,7 @@
 """Tests for StatusSnapshot assembly and footer toolbar rendering."""
 
 import asyncio
+from collections import deque
 from pathlib import Path
 
 import pytest
@@ -323,12 +324,31 @@ def test_status_toolbar_renders_queue_depth():
             background_task_count=0,
             approval_count=0,
             queue_depth=3,
+            queue_head_preview="fix the parser bug",
         )
     )
     result = frontend.render_footer_toolbar()
-    assert "3 queued" in result
-    # Rendered between mode and ctx.
+    assert '3 queued: "fix the parser bug"' in result
     assert result.index("active") < result.index("3 queued") < result.index("ctx")
+
+
+def test_status_toolbar_renders_queue_preview_truncated():
+    """Queue head preview renders inline, truncated to a fixed budget (Phase 2 C3)."""
+    frontend = TerminalFrontend()
+    frontend.update_status(
+        StatusSnapshot(
+            session_label="a1b2c3d4",
+            mode="active",
+            context_pct=0.5,
+            background_task_count=0,
+            approval_count=0,
+            queue_depth=2,
+            queue_head_preview="fix the parser bug urgently…",
+        )
+    )
+    result = frontend.render_footer_toolbar()
+    assert '2 queued: "fix the parser bug urgently…"' in result
+    assert result.index("active") < result.index("2 queued") < result.index("ctx")
 
 
 def test_status_toolbar_omits_queue_depth_when_zero():
@@ -396,42 +416,66 @@ def test_headless_update_status_stores_snapshot():
 def test_build_status_snapshot_empty_session_path_produces_dash():
     deps = _deps()
     assert deps.session.session_path == Path()
-    snapshot = _build_status_snapshot(deps, "idle", 0)
+    snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.session_label == "—"
 
 
 def test_build_status_snapshot_no_turn_usage_produces_none_context_pct():
     deps = _deps(model_max_ctx=200_000)
     assert deps.runtime.turn_usage is None
-    snapshot = _build_status_snapshot(deps, "idle", 0)
+    snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.context_pct is None
 
 
 def test_build_status_snapshot_zero_max_ctx_produces_none_context_pct():
     deps = _deps(model_max_ctx=0)
     deps.runtime.turn_usage = RunUsage(input_tokens=5_000)
-    snapshot = _build_status_snapshot(deps, "idle", 0)
+    snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.context_pct is None
 
 
 def test_build_status_snapshot_session_label_from_path_stem():
     deps = _deps()
     deps.session.session_path = Path("/sessions/2026-05-01_a1b2c3d4.jsonl")
-    snapshot = _build_status_snapshot(deps, "idle", 0)
+    snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.session_label == "a1b2c3d4"
 
 
 def test_build_status_snapshot_context_pct_from_usage():
     deps = _deps(model_max_ctx=100_000)
     deps.runtime.turn_usage = RunUsage(input_tokens=47_000)
-    snapshot = _build_status_snapshot(deps, "idle", 0)
+    snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.context_pct == pytest.approx(0.47)
 
 
 def test_build_status_snapshot_mode_propagated():
     deps = _deps()
-    assert _build_status_snapshot(deps, "active", 0).mode == "active"
-    assert _build_status_snapshot(deps, "idle", 0).mode == "idle"
+    assert _build_status_snapshot(deps, "active", deque()).mode == "active"
+    assert _build_status_snapshot(deps, "idle", deque()).mode == "idle"
+
+
+def test_build_status_snapshot_queue_head_preview_populated_when_non_empty():
+    deps = _deps()
+    snapshot = _build_status_snapshot(deps, "active", deque(["fix the parser bug", "second"]))
+    assert snapshot.queue_depth == 2
+    assert snapshot.queue_head_preview == "fix the parser bug"
+
+
+def test_build_status_snapshot_queue_head_preview_truncated_past_budget():
+    deps = _deps()
+    long_head = "fix the parser bug urgently — it's blocking ship"
+    snapshot = _build_status_snapshot(deps, "active", deque([long_head]))
+    assert snapshot.queue_depth == 1
+    assert snapshot.queue_head_preview is not None
+    assert snapshot.queue_head_preview.endswith("…")
+    assert len(snapshot.queue_head_preview) <= 30
+
+
+def test_build_status_snapshot_queue_head_preview_none_when_empty():
+    deps = _deps()
+    snapshot = _build_status_snapshot(deps, "idle", deque())
+    assert snapshot.queue_depth == 0
+    assert snapshot.queue_head_preview is None
 
 
 def test_build_status_snapshot_counts_reflect_session_state():
@@ -442,6 +486,6 @@ def test_build_status_snapshot_counts_reflect_session_state():
         SessionApprovalRule(kind=ApprovalKindEnum.TOOL, value="shell_exec"),
         SessionApprovalRule(kind=ApprovalKindEnum.TOOL, value="file_write"),
     ]
-    snapshot = _build_status_snapshot(deps, "idle", 0)
+    snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.approval_count == 2
     assert snapshot.background_task_count == 0

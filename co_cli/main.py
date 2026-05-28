@@ -28,6 +28,7 @@ from co_cli.bootstrap.core import (
     restore_session,
 )
 from co_cli.bootstrap.project_info import project_info
+from co_cli.commands._queue_control import run_queue_control
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.commands.core import dispatch as dispatch_command
 from co_cli.commands.registry import build_completer_entries
@@ -380,6 +381,7 @@ async def _handle_one_input(
             agent=agent,
             frontend=frontend,
             completer=completer,
+            input_queue=queue,
         )
         outcome = await dispatch_command(user_input, cmd_ctx)
         should_continue, new_history, new_input, saved_env = _apply_command_outcome(
@@ -400,7 +402,7 @@ async def _handle_one_input(
             deps=deps,
             frontend=frontend,
         )
-        frontend.update_status(_build_status_snapshot(deps, "idle", len(queue)))
+        frontend.update_status(_build_status_snapshot(deps, "idle", queue))
         return _IterationState(
             message_history=updated_history,
             last_interrupt_time=0.0,
@@ -416,7 +418,7 @@ async def _handle_one_input(
         deps=deps,
         frontend=frontend,
     )
-    frontend.update_status(_build_status_snapshot(deps, "idle", len(queue)))
+    frontend.update_status(_build_status_snapshot(deps, "idle", queue))
     return _IterationState(
         message_history=updated_history,
         last_interrupt_time=0.0,
@@ -424,8 +426,20 @@ async def _handle_one_input(
     )
 
 
+_QUEUE_PREVIEW_BUDGET = 30
+
+
+def _queue_head_preview(queue: deque[str]) -> str | None:
+    if not queue:
+        return None
+    head = queue[0].replace("\n", " ").strip()
+    if len(head) <= _QUEUE_PREVIEW_BUDGET:
+        return head
+    return head[: _QUEUE_PREVIEW_BUDGET - 1] + "…"
+
+
 def _build_status_snapshot(
-    deps: CoDeps, mode: Literal["idle", "active"], queue_depth: int
+    deps: CoDeps, mode: Literal["idle", "active"], queue: deque[str]
 ) -> StatusSnapshot:
     stem = deps.session.session_path.stem
     session_label = stem[-8:] if stem else "—"
@@ -438,8 +452,23 @@ def _build_status_snapshot(
         context_pct=context_pct,
         background_task_count=len(deps.session.background_tasks),
         approval_count=len(deps.session.session_approval_rules),
-        queue_depth=queue_depth,
+        queue_depth=len(queue),
+        queue_head_preview=_queue_head_preview(queue),
     )
+
+
+def _parse_queue_command(text: str) -> tuple[bool, str]:
+    """Mirror `dispatch`'s slash parse to decide if `text` is a `/queue` invocation.
+
+    Returns `(is_queue, args)`. Used by the mid-turn bypass in
+    `_build_accept_handler` so idle and mid-turn parsing cannot diverge.
+    """
+    if not text.startswith("/"):
+        return False, ""
+    parts = text[1:].split(maxsplit=1)
+    name = parts[0].lower() if parts else ""
+    args = parts[1] if len(parts) > 1 else ""
+    return name == "queue", args
 
 
 def _build_accept_handler(
@@ -454,6 +483,9 @@ def _build_accept_handler(
     a done-callback that drains the next queued item at the turn boundary —
     normal completion *and* Esc-cancel both fire it — so the queue advances one
     item per turn. ``on_status`` repaints the toolbar on enqueue and on dequeue.
+    Mid-turn ``/queue`` bypasses the queue and runs the queue-control core via
+    ``schedule_control`` — it is a buffer op, not a turn, so it never carries
+    the `_drain_next` callback (Phase 2 C1).
     The handler only schedules/enqueues; it never blocks the app's input loop,
     per co's same-loop concurrency discipline.
     """
@@ -471,9 +503,17 @@ def _build_accept_handler(
         on_status()
         _arm_turn(dispatch(user_input=next_input, eof=False))
 
+    async def _run_queue_bypass(args: str) -> None:
+        run_queue_control(runtime.queue, args)
+        on_status()
+
     def accept_handler(buffer: Buffer) -> bool:
         text = buffer.text
         if runtime.turn_active:
+            is_queue, queue_args = _parse_queue_command(text)
+            if is_queue:
+                runtime.schedule_control(_run_queue_bypass(queue_args))
+                return False
             if text.strip():
                 runtime.queue.append(text)
                 on_status()
@@ -533,7 +573,7 @@ async def _chat_loop(
         # Startup snapshot fires before `runtime` is constructed; the queue is
         # genuinely empty here, so 0 is the literal truth — not a default
         # waiting for a corrector push.
-        frontend.update_status(_build_status_snapshot(deps, "idle", 0))
+        frontend.update_status(_build_status_snapshot(deps, "idle", deque()))
 
         # Single owner of turn state, shared by the accept_handler and the key
         # bindings (Esc cancels the active turn) (F7) — created here in loop
@@ -548,7 +588,7 @@ async def _chat_loop(
             task, surfacing here as CancelledError — clean up the terminal and let
             it propagate; the task's done-callback then advances the queue.
             """
-            frontend.update_status(_build_status_snapshot(deps, "active", len(runtime.queue)))
+            frontend.update_status(_build_status_snapshot(deps, "active", runtime.queue))
             try:
                 runtime.state = await _handle_one_input(
                     user_input=user_input,
@@ -571,12 +611,12 @@ async def _chat_loop(
                     message_history=runtime.state.message_history,
                     last_interrupt_time=0.0,
                 )
-            frontend.update_status(_build_status_snapshot(deps, "idle", len(runtime.queue)))
+            frontend.update_status(_build_status_snapshot(deps, "idle", runtime.queue))
             if runtime.state.should_exit:
                 app.exit()
 
         def _on_queue_status() -> None:
-            frontend.update_status(_build_status_snapshot(deps, "active", len(runtime.queue)))
+            frontend.update_status(_build_status_snapshot(deps, "active", runtime.queue))
 
         accept_handler = _build_accept_handler(runtime, _dispatch, _on_queue_status)
         key_bindings = build_key_bindings(runtime=runtime, dispatch=_dispatch)

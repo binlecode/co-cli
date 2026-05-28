@@ -14,6 +14,7 @@ from co_cli.commands.help import _cmd_help
 from co_cli.commands.history import _cmd_history
 from co_cli.commands.memory import _cmd_memory
 from co_cli.commands.new import _cmd_new
+from co_cli.commands.queue import _cmd_queue
 from co_cli.commands.reasoning import _cmd_reasoning
 from co_cli.commands.registry import (
     BUILTIN_COMMANDS,
@@ -68,6 +69,11 @@ BUILTIN_COMMANDS["tasks"] = SlashCommand(
 )
 BUILTIN_COMMANDS["cancel"] = SlashCommand(
     "cancel", "Cancel a running background task", _cmd_cancel
+)
+BUILTIN_COMMANDS["queue"] = SlashCommand(
+    "queue",
+    "Inspect or prune pending REPL input queue: /queue [list|clear|pop [n]]",
+    _cmd_queue,
 )
 BUILTIN_COMMANDS["resume"] = SlashCommand("resume", "Resume a past session", _cmd_resume)
 BUILTIN_COMMANDS["sessions"] = SlashCommand("sessions", "List past sessions", _cmd_sessions)

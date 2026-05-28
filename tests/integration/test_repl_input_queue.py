@@ -116,7 +116,7 @@ async def test_typed_ahead_enqueues_and_drains_under_real_turn(tmp_path: Path) -
     snapshots = []
 
     def _on_queue_status() -> None:
-        snapshot = _build_status_snapshot(deps, "active", len(runtime.queue))
+        snapshot = _build_status_snapshot(deps, "active", runtime.queue)
         snapshots.append(snapshot)
         frontend.update_status(snapshot)
 

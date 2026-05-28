@@ -530,6 +530,50 @@ async def test_ctrl_c_is_exit_only_double_press() -> None:
 
 
 @pytest.mark.asyncio
+async def test_queue_command_bypasses_enqueue_mid_turn() -> None:
+    """Mid-turn `/queue clear` empties the queue via a control task and does
+    NOT enqueue, NOT arm a new turn, and leaves the active `turn_task`
+    untouched. Phase 2 C1 — the controlled bypass to Phase 1 C5.
+
+    Regression guard: a non-`/queue` mid-turn submission still enqueues (the
+    bypass is scoped to the `/queue` prefix, not all slash commands).
+    """
+
+    async def dispatch(*, user_input, eof):
+        # Not reached in this test — the bypass schedules schedule_control, not _arm_turn.
+        pass
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    handler = _build_accept_handler(runtime, dispatch, lambda: None)
+
+    def _buf(text: str):
+        return type("_Buf", (), {"text": text})()
+
+    long_task = asyncio.ensure_future(asyncio.sleep(10))
+    await asyncio.sleep(0)
+    runtime.turn_task = long_task
+
+    runtime.queue.extend(["alpha", "beta"])
+
+    handler(_buf("/queue clear"))
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if not runtime.queue:
+            break
+
+    assert list(runtime.queue) == []
+    assert runtime.turn_task is long_task
+    assert not long_task.done()
+
+    handler(_buf("plain mid-turn text"))
+    await asyncio.sleep(0.01)
+    assert list(runtime.queue) == ["plain mid-turn text"]
+    assert runtime.turn_task is long_task
+
+    long_task.cancel()
+
+
+@pytest.mark.asyncio
 async def test_esc_cancels_turn_and_advances_queue() -> None:
     """Esc cancels the active turn; its done-callback drains the next queued item
     as the next turn (C4). The queue advances one item, exit is untouched."""
