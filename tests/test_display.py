@@ -396,42 +396,42 @@ def test_headless_update_status_stores_snapshot():
 def test_build_status_snapshot_empty_session_path_produces_dash():
     deps = _deps()
     assert deps.session.session_path == Path()
-    snapshot = _build_status_snapshot(deps, "idle")
+    snapshot = _build_status_snapshot(deps, "idle", 0)
     assert snapshot.session_label == "—"
 
 
 def test_build_status_snapshot_no_turn_usage_produces_none_context_pct():
     deps = _deps(model_max_ctx=200_000)
     assert deps.runtime.turn_usage is None
-    snapshot = _build_status_snapshot(deps, "idle")
+    snapshot = _build_status_snapshot(deps, "idle", 0)
     assert snapshot.context_pct is None
 
 
 def test_build_status_snapshot_zero_max_ctx_produces_none_context_pct():
     deps = _deps(model_max_ctx=0)
     deps.runtime.turn_usage = RunUsage(input_tokens=5_000)
-    snapshot = _build_status_snapshot(deps, "idle")
+    snapshot = _build_status_snapshot(deps, "idle", 0)
     assert snapshot.context_pct is None
 
 
 def test_build_status_snapshot_session_label_from_path_stem():
     deps = _deps()
     deps.session.session_path = Path("/sessions/2026-05-01_a1b2c3d4.jsonl")
-    snapshot = _build_status_snapshot(deps, "idle")
+    snapshot = _build_status_snapshot(deps, "idle", 0)
     assert snapshot.session_label == "a1b2c3d4"
 
 
 def test_build_status_snapshot_context_pct_from_usage():
     deps = _deps(model_max_ctx=100_000)
     deps.runtime.turn_usage = RunUsage(input_tokens=47_000)
-    snapshot = _build_status_snapshot(deps, "idle")
+    snapshot = _build_status_snapshot(deps, "idle", 0)
     assert snapshot.context_pct == pytest.approx(0.47)
 
 
 def test_build_status_snapshot_mode_propagated():
     deps = _deps()
-    assert _build_status_snapshot(deps, "active").mode == "active"
-    assert _build_status_snapshot(deps, "idle").mode == "idle"
+    assert _build_status_snapshot(deps, "active", 0).mode == "active"
+    assert _build_status_snapshot(deps, "idle", 0).mode == "idle"
 
 
 def test_build_status_snapshot_counts_reflect_session_state():
@@ -442,6 +442,6 @@ def test_build_status_snapshot_counts_reflect_session_state():
         SessionApprovalRule(kind=ApprovalKindEnum.TOOL, value="shell_exec"),
         SessionApprovalRule(kind=ApprovalKindEnum.TOOL, value="file_write"),
     ]
-    snapshot = _build_status_snapshot(deps, "idle")
+    snapshot = _build_status_snapshot(deps, "idle", 0)
     assert snapshot.approval_count == 2
     assert snapshot.background_task_count == 0

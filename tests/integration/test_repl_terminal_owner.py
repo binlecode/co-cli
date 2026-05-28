@@ -115,6 +115,7 @@ async def test_repl_renders_real_turn_under_owned_application(tmp_path: Path) ->
             frontend=frontend,
             completer=completer,
             now=time.monotonic(),
+            queue=runtime.queue,
         )
 
     captured = io.StringIO()

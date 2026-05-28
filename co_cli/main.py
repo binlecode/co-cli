@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -328,6 +329,7 @@ async def _handle_one_input(
     frontend: Frontend,
     completer: SlashCommandCompleter,
     now: float,
+    queue: deque[str],
 ) -> _IterationState:
     """Process one iteration of the chat loop given pre-parsed input signals.
 
@@ -398,7 +400,7 @@ async def _handle_one_input(
             deps=deps,
             frontend=frontend,
         )
-        frontend.update_status(_build_status_snapshot(deps, "idle"))
+        frontend.update_status(_build_status_snapshot(deps, "idle", len(queue)))
         return _IterationState(
             message_history=updated_history,
             last_interrupt_time=0.0,
@@ -414,7 +416,7 @@ async def _handle_one_input(
         deps=deps,
         frontend=frontend,
     )
-    frontend.update_status(_build_status_snapshot(deps, "idle"))
+    frontend.update_status(_build_status_snapshot(deps, "idle", len(queue)))
     return _IterationState(
         message_history=updated_history,
         last_interrupt_time=0.0,
@@ -423,7 +425,7 @@ async def _handle_one_input(
 
 
 def _build_status_snapshot(
-    deps: CoDeps, mode: Literal["idle", "active"], queue_depth: int = 0
+    deps: CoDeps, mode: Literal["idle", "active"], queue_depth: int
 ) -> StatusSnapshot:
     stem = deps.session.session_path.stem
     session_label = stem[-8:] if stem else "—"
@@ -528,7 +530,10 @@ async def _chat_loop(
 
         render_security_findings(check_security())
         frontend.clear_status()
-        frontend.update_status(_build_status_snapshot(deps, "idle"))
+        # Startup snapshot fires before `runtime` is constructed; the queue is
+        # genuinely empty here, so 0 is the literal truth — not a default
+        # waiting for a corrector push.
+        frontend.update_status(_build_status_snapshot(deps, "idle", 0))
 
         # Single owner of turn state, shared by the accept_handler and the key
         # bindings (Esc cancels the active turn) (F7) — created here in loop
@@ -554,6 +559,7 @@ async def _chat_loop(
                     frontend=frontend,
                     completer=completer,
                     now=time.monotonic(),
+                    queue=runtime.queue,
                 )
             except asyncio.CancelledError:
                 frontend.cleanup()

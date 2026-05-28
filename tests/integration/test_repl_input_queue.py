@@ -109,6 +109,7 @@ async def test_typed_ahead_enqueues_and_drains_under_real_turn(tmp_path: Path) -
             frontend=frontend,
             completer=completer,
             now=time.monotonic(),
+            queue=runtime.queue,
         )
         completed.append(user_input)
 

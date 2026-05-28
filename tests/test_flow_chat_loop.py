@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from collections import deque
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,7 @@ async def test_empty_input_continues(tmp_path: Path) -> None:
         frontend=frontend,
         completer=completer,
         now=0.0,
+        queue=deque(),
     )
 
     assert result.should_exit is False
@@ -121,6 +123,7 @@ async def test_exit_command_exits(tmp_path: Path) -> None:
         frontend=frontend,
         completer=completer,
         now=0.0,
+        queue=deque(),
     )
 
     assert result.should_exit is True
@@ -152,6 +155,7 @@ async def test_ctrl_c_double_press_within_window_exits() -> None:
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=0.0,
+        queue=deque(),
     )
     assert first.should_exit is False
     assert first.last_interrupt_time == 0.0
@@ -167,6 +171,7 @@ async def test_ctrl_c_double_press_within_window_exits() -> None:
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=1.5,
+        queue=deque(),
     )
     assert second.should_exit is True
 
@@ -196,6 +201,7 @@ async def test_ctrl_c_outside_window_resets_timer() -> None:
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=0.0,
+        queue=deque(),
     )
     assert first.should_exit is False
     assert first.last_interrupt_time == 0.0
@@ -211,6 +217,7 @@ async def test_ctrl_c_outside_window_resets_timer() -> None:
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=3.0,
+        queue=deque(),
     )
     assert second.should_exit is False
     assert second.last_interrupt_time == 3.0
@@ -240,6 +247,7 @@ async def test_eof_exits() -> None:
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=0.0,
+        queue=deque(),
     )
 
     assert result.should_exit is True
@@ -274,6 +282,7 @@ async def test_successful_input_resets_interrupt_timer(tmp_path: Path) -> None:
         frontend=frontend,
         completer=completer,
         now=5.0,
+        queue=deque(),
     )
     assert whitespace_result.last_interrupt_time == 1.0
 
@@ -287,6 +296,7 @@ async def test_successful_input_resets_interrupt_timer(tmp_path: Path) -> None:
         frontend=frontend,
         completer=completer,
         now=5.0,
+        queue=deque(),
     )
     assert exit_result.last_interrupt_time == 0.0
     assert exit_result.should_exit is True
@@ -319,6 +329,7 @@ async def test_slash_command_routes_to_dispatch(tmp_path: Path) -> None:
         frontend=frontend,
         completer=completer,
         now=0.0,
+        queue=deque(),
     )
 
     assert result.should_exit is False
@@ -353,6 +364,7 @@ async def test_plain_text_routes_to_foreground_turn(tmp_path: Path) -> None:
             frontend=frontend,
             completer=completer,
             now=0.0,
+            queue=deque(),
         )
 
     assert result.should_exit is False
@@ -491,6 +503,7 @@ async def test_ctrl_c_is_exit_only_double_press() -> None:
             frontend=HeadlessFrontend(),
             completer=SlashCommandCompleter(),
             now=time.monotonic(),
+            queue=runtime.queue,
         )
         if runtime.state.should_exit:
             exited.append(True)
