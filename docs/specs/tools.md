@@ -198,12 +198,13 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 
 ### Tool output / errors
 
+**Invariant** — every tool result is constructed at the ctx-bearing entrypoint via `tool_output()` or `tool_error()`; both route through `spill_with_span` so every result respects the per-tool spill threshold. Impl helpers without `ctx` (e.g. `_http_get_with_retries`) return raw data or an error string — never a `ToolReturn` — and the entrypoint wraps the error case via `tool_error`.
+
 | Symbol | Source | Contract |
 |--------|--------|----------|
-| `tool_output(content, *, deps, tool_name, spill_threshold_chars=SPILL_THRESHOLD_CHARS) -> ToolReturn` | `co_cli/tools/tool_io.py` | Standard tool result emit; runs `spill_if_oversized` first |
-| `tool_output_raw(content) -> ToolReturn` | `co_cli/tools/tool_io.py` | Bypass spill (for prebuilt structured output) |
-| `tool_error(message, *, tool_name=None) -> ToolReturn` | `co_cli/tools/tool_io.py` | Standard tool error payload |
-| `spill_if_oversized(content, tool_results_dir, tool_name, force=False, threshold=...) -> str` | `co_cli/tools/tool_io.py` | Persist oversized content; returns inline placeholder block |
+| `tool_output(display, *, ctx, **metadata) -> ToolReturn` | `co_cli/tools/tool_io.py` | Standard tool result emit; runs `spill_with_span` against the per-tool threshold before returning |
+| `tool_error(message, *, ctx) -> ToolReturn` | `co_cli/tools/tool_io.py` | Terminal (non-retryable) tool failure — `tool_output(message, ctx=ctx, error=True)`, spills like any other output |
+| `spill_if_oversized(content, tool_results_dir, tool_name, *, force=False) -> str` | `co_cli/tools/tool_io.py` | Persist oversized content; returns inline placeholder block |
 | `check_tool_results_size(tool_results_dir) -> str | None` | `co_cli/tools/tool_io.py` | Returns warning text when `tool-results/` exceeds 100 MB |
 
 ### Tool lifecycle and approval
@@ -234,7 +235,7 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 | `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
 | `co_cli/tools/deferred_prompt.py` | category-awareness prompt for DEFERRED tools |
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator, `TOOL_REGISTRY` self-populating list, `TOOL_REGISTRY_BY_NAME` lookup dict |
-| `co_cli/tools/tool_io.py` | `tool_output()`, `tool_output_raw()`, `tool_error()` |
+| `co_cli/tools/tool_io.py` | `tool_output()`, `tool_error()`, `spill_if_oversized()`, `spill_with_span()`, `check_tool_results_size()` |
 | `co_cli/tools/shell_policy.py` | `shell`, `code_execute`, and `task_start` command-safety policy |
 | `co_cli/tools/agents/delegation.py` | `web_research`, `knowledge_analyze`, `reason` tools; `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`, `REASON_SPEC` |
 | `co_cli/tools/files/read.py` | `file_read`, `file_find`, `file_search` |

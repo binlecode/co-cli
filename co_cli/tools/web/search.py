@@ -15,7 +15,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.tool_io import tool_output, tool_output_raw
+from co_cli.tools.tool_io import tool_error, tool_output
 
 # ---------------------------------------------------------------------------
 # HTTP retry helpers
@@ -202,7 +202,7 @@ async def _http_get_with_retries(
     backoff_max_seconds: float,
     backoff_jitter_ratio: float,
     cf_fallback_headers: dict[str, str] | None = None,
-) -> "httpx.Response | ToolReturn":
+) -> "httpx.Response | str":
     attempts_total = max(0, max_retries) + 1
 
     for attempt in range(1, attempts_total + 1):
@@ -226,12 +226,10 @@ async def _http_get_with_retries(
                 max_retry_after_seconds=backoff_max_seconds,
             )
             if not decision.retryable:
-                return tool_output_raw(decision.message, error=True)
+                return decision.message
 
             if attempt >= attempts_total:
-                return tool_output_raw(
-                    f"{decision.message} Retries exhausted ({max_retries}).", error=True
-                )
+                return f"{decision.message} Retries exhausted ({max_retries})."
 
             delay = compute_backoff_delay(
                 attempt=attempt,
@@ -243,7 +241,7 @@ async def _http_get_with_retries(
                 delay = max(delay, min(decision.delay_seconds, backoff_max_seconds))
             await asyncio.sleep(delay)
 
-    return tool_output_raw(f"{tool_name} failed for {target}.", error=True)
+    return f"{tool_name} failed for {target}."
 
 
 def _is_cloudflare_challenge(resp: httpx.Response) -> bool:
@@ -341,7 +339,7 @@ async def web_search(
             backoff_jitter_ratio=ctx.deps.config.web.http_jitter_ratio,
         )
     if not isinstance(resp_or_error, httpx.Response):
-        return resp_or_error
+        return tool_error(resp_or_error, ctx=ctx)
     resp = resp_or_error
 
     data = resp.json()

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.262]
+
+### Tool Gap Batch 1 — restored article URL-dedup + removed `tool_output_raw` spill bypass
+
+Two surgical fixes shipped together. (1) `tool_output_raw` was the one path by which a tool-call output reached context unbounded — an impl-layer helper (`_http_get_with_retries`) built a terminal `ToolReturn` itself and the ctx-bearing entrypoint forwarded it untouched, skipping `spill_with_span`. The fix routes helper errors back through the tool boundary (`tool_error` → `tool_output` → spill) and deletes `tool_output_raw`. (2) The URL-keyed article-save capability was orphaned in the v0.8 unification refactor: `save_memory_item`'s URL-dedup branch (`_find_article_by_url` + `SourceTypeEnum.WEB_FETCH` + consolidation logic) was tested but had no production caller — re-saving the same URL silently created duplicates. The fix threads `source_url` through `memory_manage(action="create", …)`; no service-layer change needed, the plumbing was already there.
+
+- **`co_cli/tools/web/search.py`, `co_cli/tools/web/fetch.py`** — `_http_get_with_retries` return type changed from `httpx.Response | ToolReturn` to `httpx.Response | str`; the three terminal-error returns become bare error strings; both ctx-bearing entrypoints wrap the helper-error case via `tool_error(resp_or_error, ctx=ctx)` so the spill path always fires.
+- **`co_cli/tools/tool_io.py`** — `tool_output_raw` deleted (was the spill bypass); module + `tool_error` docstrings updated to state the invariant: "every tool result is constructed at the ctx-bearing entrypoint via `tool_output()`/`tool_error()`, so all spill". Impl helpers without ctx return raw data or error strings — never a `ToolReturn`.
+- **`co_cli/tools/memory/manage.py`** — `memory_manage(action="create", …)` accepts `source_url: str | None = None`; threads through `_handle_create` → `save_memory_item`. When set with `kind="article"`, the existing URL-keyed branch fires: `source_type=web_fetch`, `source_ref=<url>`, `decay_protected=True`; re-saves consolidate on `artifact_id` with existing `related` preserved. Absent `source_url`: today's Jaccard path unchanged. `tags`/caller-supplied `related` were rejected as out-of-scope schema work (not restoration).
+- **Tests** — `tests/test_tool_io.py` (new): three regression guards — `tool_output_raw` not exposed, helper return annotation excludes `ToolReturn`, both entrypoints wrap the error case via `tool_error`. `tests/test_flow_memory_item_manage.py`: three new URL-dedup tool-surface tests — WEB_FETCH stamping on first create, consolidation on re-save with the same URL (same `artifact_id`, single .md file, content updated), Jaccard/manual fallback when `source_url` is absent.
+- **Spec** — `docs/specs/memory.md` rewritten: "Substrate accumulation (passive)" prose, the lifecycle-table row, and the ASCII diagram all corrected — article ingestion is explicit and agent-mediated, never an auto-wire from `web_fetch`. `memory_manage` signature row updated with `source_type`/`source_url` params and a one-sentence URL-dedup-on-create note. `docs/specs/tools.md` removes the `tool_output_raw` row, states the invariant inline, and fixes the `tool_output`/`tool_error` signature rows to match the actual code.
+- **Plan**: `docs/exec-plans/completed/2026-05-27-172716-toolgap-b1-fetch-spill.md`.
+
 ## [0.8.260]
 
 ### REPL input queue — type-ahead during an active turn enqueues instead of dropping (Phase 1)

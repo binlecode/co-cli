@@ -4,15 +4,16 @@ tool_output() returns ToolReturn(return_value=display, metadata=metadata_dict).
 pydantic-ai places the display string into ToolReturnPart.content (model sees plain
 text) and metadata into ToolReturnPart.metadata (app-side, not sent to LLM).
 
+All tool results are constructed at the ctx-bearing entrypoint via
+tool_output() / tool_error(); both route through spill_with_span so every
+result respects the per-tool spill threshold. Impl helpers without ctx
+return raw data or error strings — never a ToolReturn — and the entrypoint
+wraps the error via tool_error().
+
 Usage:
     from co_cli.tools.tool_io import tool_output
 
     return tool_output("formatted display text", ctx=ctx, count=3)
-
-For call sites without RunContext (helper functions, lifecycle modules):
-    from co_cli.tools.tool_io import tool_output_raw
-
-    return tool_output_raw("formatted display text", action="saved")
 """
 
 import hashlib
@@ -258,18 +259,6 @@ def tool_output(
     return ToolReturn(return_value=display, metadata=metadata or None)
 
 
-def tool_output_raw(
-    display: str,
-    **metadata: Any,
-) -> ToolReturn:
-    """Construct a ToolReturn without RunContext — no size checking.
-
-    Use only in helper functions that lack RunContext (e.g. memory lifecycle,
-    memory save). Tool functions with ctx should always use tool_output().
-    """
-    return ToolReturn(return_value=display, metadata=metadata or None)
-
-
 # Shared type alias for Frontend.on_tool_complete, _run_stream_segment dispatch,
 # and TerminalFrontend._render_tool_panel — one edit point if a new result type is added.
 ToolResultPayload = str | ToolReturn | None
@@ -290,9 +279,9 @@ def tool_error(
     Unlike ModelRetry, this stops the retry loop immediately — the model
     sees the error in the tool result and can pick a different tool.
 
-    Tool functions always have RunContext; use this helper. For ctx-less
-    helpers (e.g. _http_get_with_retries), call tool_output_raw(..., error=True)
-    directly.
+    Tool functions always have RunContext; use this helper. Impl helpers
+    without ctx (e.g. _http_get_with_retries) return an error string; the
+    ctx-bearing entrypoint wraps it via tool_error so every result spills.
     """
     return tool_output(message, ctx=ctx, error=True)
 

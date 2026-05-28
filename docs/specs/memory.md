@@ -98,7 +98,7 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `memory_manage(ctx, action, name, content=None, kind=None, section=None)` | `co_cli/tools/memory/manage.py` | Async tool — `create`/`append`/`replace`/`delete`; `approval=True`; subject `tool:memory_manage:<action>:<name>` |
+| `memory_manage(ctx, action, name, content=None, kind=None, section=None, source_type=None, source_url=None)` | `co_cli/tools/memory/manage.py` | Async tool — `create`/`append`/`replace`/`delete`; `approval=True`; subject `tool:memory_manage:<action>:<name>`. On `create` with `source_url=…` + `kind="article"`: URL-keyed dedup branch fires — re-saves consolidate (same `artifact_id`, `existing.related` preserved) instead of duplicating; `source_type` defaults to `web_fetch` and `decay_protected=True`. |
 
 ### Domain API
 
@@ -163,12 +163,22 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 
 Memory growth has two distinct accumulation modes:
 
-- **Substrate accumulation (passive)** — `web_fetch` → `kind=article` → chunk + embed + index. Substrate lands without distillation; the agent has no obligation to interpret each fetched article at fetch time.
+- **Article accumulation (agent-mediated)** — `web_fetch` produces transient content; the agent decides whether the page is worth keeping and then calls `memory_manage(action="create", kind="article", source_url=…, content=…)`. There is **no** automatic `web_fetch → save_memory_item` wire — the two tools are isolated and the agent composes them. Passing `source_url` enables URL-keyed dedup: re-saves of the same URL consolidate onto the existing article (same `artifact_id`, content updated, `existing.related` preserved) and the item is stamped `source_type=web_fetch`, `source_ref=<url>`, `decay_protected=True`. Absent `source_url`, articles fall back to the Jaccard-dedup path with `source_type=manual`, identical to notes/rules.
 - **Derivative accumulation (deliberate)** — `kind=note` and `kind=rule` items, written through deliberate agent curation. The note/rule tier accumulates only via the inline curation discipline (below) and the session-end reviewer.
 
 ```
-   web_fetch ─────────────▶ kind=article (raw)
-                            source_type=web_fetch
+   web_fetch ──▶ transient content (no auto-save)
+                                    │
+   agent decides: worth keeping?    │
+                                    ▼
+   memory_manage(create, kind=article, source_url=…)
+                                    │
+                                    ▼
+   save_memory_item URL-keyed branch:
+     ─ new URL: write article, source_type=web_fetch,
+                source_ref=<url>, decay_protected=True
+     ─ same URL: consolidate (same artifact_id, content
+                 updated, existing related preserved)
                                     │
    chunk + embed + index ◀──────────┘
                                     │
@@ -226,7 +236,7 @@ Six values populate `MemoryItem.source_type`:
 
 | source_type | Producer | Meaning |
 | --- | --- | --- |
-| `web_fetch` | `web_fetch` tool / `save_memory_item` URL branch | raw article substrate from URL fetch |
+| `web_fetch` | `save_memory_item` URL-keyed branch, fired when the agent calls `memory_manage(create, kind=article, source_url=…)` | curated article saved with a URL for dedup; re-saves with the same URL consolidate (same `artifact_id`, existing `related` preserved). `web_fetch` itself does not write memory — the agent composes the two tools. |
 | `manual` | agent inline saves via `memory_manage(create)` | default for agent-curated notes/rules/articles without URL |
 | `obsidian` | Obsidian vault sync | external read-only source |
 | `drive` | Google Drive sync | external read-only source |

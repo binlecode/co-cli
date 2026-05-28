@@ -29,7 +29,8 @@ from co_cli.tools.web.search import _http_get_with_retries
 
 _FETCH_TIMEOUT = 15
 _MAX_FETCH_CHARS = 100_000
-_MAX_FETCH_BYTES = 1_048_576  # 1 MB pre-decode limit
+# 1 MB pre-decode limit
+_MAX_FETCH_BYTES = 1_048_576
 
 _FETCH_USER_AGENT = f"co-cli/{_pkg_version('co-cli')} (+https://github.com/binlecode/co-cli)"
 
@@ -82,7 +83,8 @@ def _html_to_markdown(html: str) -> str:
     converter = html2text.HTML2Text()
     converter.ignore_links = False
     converter.ignore_images = True
-    converter.body_width = 0  # No line wrapping
+    # 0 disables line wrapping
+    converter.body_width = 0
     return converter.handle(html)
 
 
@@ -194,7 +196,7 @@ async def web_fetch(
         ) from exc
 
     if not isinstance(resp_or_error, httpx.Response):
-        return resp_or_error
+        return tool_error(resp_or_error, ctx=ctx)
     resp = resp_or_error
 
     final_url = str(resp.url)

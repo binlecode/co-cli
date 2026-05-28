@@ -44,6 +44,7 @@ async def memory_manage(
     kind: MemoryKind | None = None,
     section: str | None = None,
     source_type: str | None = None,
+    source_url: str | None = None,
 ) -> ToolReturn:
     """Create, update, or delete a memory artifact.
 
@@ -66,10 +67,22 @@ async def memory_manage(
                      Defaults to 'manual' for direct agent saves; the session-end
                      memory reviewer sets 'session_review' so reviewer-extracted
                      facts are distinguishable from inline saves.
+        source_url: For create — when set, enables URL-keyed dedup. A re-save with
+                    the same source_url consolidates onto the existing article
+                    (same artifact_id, content updated, existing related preserved)
+                    instead of creating a duplicate. Stamps source_type=web_fetch,
+                    source_ref=<url>, decay_protected=True. Typical use: agent
+                    fetches a page via web_fetch, then saves the curated content
+                    with the same URL so subsequent re-saves consolidate.
     """
     if action == "create":
         return await _handle_create(
-            ctx, name=name, content=content, kind=kind, source_type=source_type
+            ctx,
+            name=name,
+            content=content,
+            kind=kind,
+            source_type=source_type,
+            source_url=source_url,
         )
     if action == "append":
         return await _handle_mutate(ctx, filename_stem=name, op="append", content=content)
@@ -93,6 +106,7 @@ async def _handle_create(
     content: str | None,
     kind: str | None,
     source_type: str | None = None,
+    source_url: str | None = None,
 ) -> ToolReturn:
     if content is None:
         return tool_error("content is required for action='create'", ctx=ctx)
@@ -117,6 +131,7 @@ async def _handle_create(
         memory_kind=kind,
         title=name,
         source_type=source_type or SourceTypeEnum.MANUAL.value,
+        source_url=source_url,
         consolidation_similarity_threshold=ctx.deps.config.memory.consolidation_similarity_threshold,
         index_store=ctx.deps.index_store,
     )
