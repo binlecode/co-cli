@@ -7,15 +7,17 @@ from pathlib import Path
 
 import pytest
 from tests._ollama import ensure_ollama_warm
-from tests._settings import SETTINGS_NO_MCP, TEST_LLM
+from tests._settings import SETTINGS_NO_MCP, TEST_LLM, make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.core import build_native_toolset
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.commands.completer import SlashCommandCompleter
+from co_cli.config.repl import ReplSettings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._app import _ReplRuntime, build_key_bindings
+from co_cli.display.core import console
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.factory import build_model
 from co_cli.main import _build_accept_handler, _handle_one_input, _IterationState
@@ -39,6 +41,16 @@ def _make_deps(tmp_path: Path) -> CoDeps:
         tool_results_dir=tmp_path / "tool-results",
         model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
     )
+
+
+def _make_deps_with_repl(tmp_path: Path, queue_cap: int, drop_policy: str = "oldest") -> CoDeps:
+    """Build deps whose config carries a bounded-queue ReplSettings override."""
+    deps = _make_deps(tmp_path)
+    deps.config = make_settings(
+        mcp_servers={},
+        repl=ReplSettings(queue_cap=queue_cap, drop_policy=drop_policy),
+    )
+    return deps
 
 
 def _make_agent(deps: CoDeps):
@@ -377,7 +389,7 @@ async def test_plain_text_routes_to_foreground_turn(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_accept_handler_schedules_turn_task() -> None:
+async def test_accept_handler_schedules_turn_task(tmp_path: Path) -> None:
     """Idle submission arms a turn task via the accept_handler; a submission while
     a turn is active enqueues (FIFO) instead of dropping — the Phase 1 seam.
 
@@ -391,7 +403,7 @@ async def test_accept_handler_schedules_turn_task() -> None:
         dispatched.append((user_input, eof))
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: None)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
 
     class _Buf:
         text = "hello"
@@ -414,7 +426,7 @@ async def test_accept_handler_schedules_turn_task() -> None:
 
 
 @pytest.mark.asyncio
-async def test_typed_ahead_enqueues_and_drains_fifo() -> None:
+async def test_typed_ahead_enqueues_and_drains_fifo(tmp_path: Path) -> None:
     """Submissions during an active turn enqueue and drain one-per-boundary in
     FIFO order after the turn completes (C3)."""
     gate = asyncio.Event()
@@ -426,7 +438,9 @@ async def test_typed_ahead_enqueues_and_drains_fifo() -> None:
         await gate.wait()
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: depths.append(len(runtime.queue)))
+    handler = _build_accept_handler(
+        runtime, dispatch, lambda: depths.append(len(runtime.queue)), _make_deps(tmp_path)
+    )
 
     def _buf(text: str):
         return type("_Buf", (), {"text": text})()
@@ -453,7 +467,7 @@ async def test_typed_ahead_enqueues_and_drains_fifo() -> None:
 
 
 @pytest.mark.asyncio
-async def test_blank_input_never_enqueues() -> None:
+async def test_blank_input_never_enqueues(tmp_path: Path) -> None:
     """Whitespace submissions while a turn is active never occupy a queue slot (C3)."""
     dispatched: list[tuple] = []
 
@@ -461,7 +475,7 @@ async def test_blank_input_never_enqueues() -> None:
         dispatched.append((user_input, eof))
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: None)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
 
     long_task = asyncio.ensure_future(asyncio.sleep(10))
     await asyncio.sleep(0)
@@ -472,6 +486,101 @@ async def test_blank_input_never_enqueues() -> None:
     handler(type("_Buf", (), {"text": "\t\n"})())
     await asyncio.sleep(0.01)
     assert list(runtime.queue) == []
+    long_task.cancel()
+
+
+# ---------------------------------------------------------------------------
+# Test 10b: bounded-queue cap + drop policy (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_queue_cap_drops_oldest(tmp_path: Path) -> None:
+    """cap=2 + drop_policy='oldest': a third mid-turn submit drops the head, so the
+    queue holds the last two items, and exactly one drop notice is emitted (C3)."""
+
+    async def dispatch(*, user_input, eof):
+        pass
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    deps = _make_deps_with_repl(tmp_path, queue_cap=2, drop_policy="oldest")
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
+
+    long_task = asyncio.ensure_future(asyncio.sleep(10))
+    await asyncio.sleep(0)
+    runtime.turn_task = long_task
+
+    def _buf(text: str):
+        return type("_Buf", (), {"text": text})()
+
+    with console.capture() as capture:
+        handler(_buf("first"))
+        handler(_buf("second"))
+        handler(_buf("third"))
+    output = capture.get()
+
+    assert list(runtime.queue) == ["second", "third"]
+    assert output.count("Queue full") == 1
+    assert "dropped oldest" in output
+    long_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_queue_cap_newest_rejects(tmp_path: Path) -> None:
+    """cap=2 + drop_policy='newest': a third mid-turn submit is rejected, so the queue
+    holds the first two items, and exactly one reject notice is emitted (C3)."""
+
+    async def dispatch(*, user_input, eof):
+        pass
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    deps = _make_deps_with_repl(tmp_path, queue_cap=2, drop_policy="newest")
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
+
+    long_task = asyncio.ensure_future(asyncio.sleep(10))
+    await asyncio.sleep(0)
+    runtime.turn_task = long_task
+
+    def _buf(text: str):
+        return type("_Buf", (), {"text": text})()
+
+    with console.capture() as capture:
+        handler(_buf("first"))
+        handler(_buf("second"))
+        handler(_buf("third"))
+    output = capture.get()
+
+    assert list(runtime.queue) == ["first", "second"]
+    assert output.count("Queue full") == 1
+    assert "rejected" in output
+    long_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_cap_zero_unbounded(tmp_path: Path) -> None:
+    """cap=0 (default) enqueues every mid-turn submit with no notice — Phase 1 regression."""
+
+    async def dispatch(*, user_input, eof):
+        pass
+
+    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    deps = _make_deps_with_repl(tmp_path, queue_cap=0)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
+
+    long_task = asyncio.ensure_future(asyncio.sleep(10))
+    await asyncio.sleep(0)
+    runtime.turn_task = long_task
+
+    def _buf(text: str):
+        return type("_Buf", (), {"text": text})()
+
+    with console.capture() as capture:
+        for text in ("a", "b", "c", "d"):
+            handler(_buf(text))
+    output = capture.get()
+
+    assert list(runtime.queue) == ["a", "b", "c", "d"]
+    assert "Queue full" not in output
     long_task.cancel()
 
 
@@ -530,7 +639,7 @@ async def test_ctrl_c_is_exit_only_double_press() -> None:
 
 
 @pytest.mark.asyncio
-async def test_queue_command_bypasses_enqueue_mid_turn() -> None:
+async def test_queue_command_bypasses_enqueue_mid_turn(tmp_path: Path) -> None:
     """Mid-turn `/queue clear` empties the queue via a control task and does
     NOT enqueue, NOT arm a new turn, and leaves the active `turn_task`
     untouched. Phase 2 C1 — the controlled bypass to Phase 1 C5.
@@ -544,7 +653,7 @@ async def test_queue_command_bypasses_enqueue_mid_turn() -> None:
         pass
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: None)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
 
     def _buf(text: str):
         return type("_Buf", (), {"text": text})()
@@ -574,7 +683,7 @@ async def test_queue_command_bypasses_enqueue_mid_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_esc_cancels_turn_and_advances_queue() -> None:
+async def test_esc_cancels_turn_and_advances_queue(tmp_path: Path) -> None:
     """Esc cancels the active turn; its done-callback drains the next queued item
     as the next turn (C4). The queue advances one item, exit is untouched."""
     from prompt_toolkit.keys import Keys
@@ -588,7 +697,7 @@ async def test_esc_cancels_turn_and_advances_queue() -> None:
             await gate.wait()
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: None)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
     kb = build_key_bindings(runtime=runtime, dispatch=dispatch)
 
     def _buf(text: str):

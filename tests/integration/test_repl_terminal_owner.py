@@ -124,7 +124,7 @@ async def test_repl_renders_real_turn_under_owned_application(tmp_path: Path) ->
         create_app_session(input=pipe, output=PlainTextOutput(captured)),
         patch_stdout(),
     ):
-        accept_handler = _build_accept_handler(runtime, dispatch, lambda: None)
+        accept_handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
         key_bindings = build_key_bindings(runtime=runtime, dispatch=dispatch)
         app = build_repl_app(
             frontend=frontend,

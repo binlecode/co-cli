@@ -108,6 +108,25 @@ def test_memory_settings_json_config_applies_without_env(tmp_path: Path) -> None
     assert result.memory.chunk_tokens == 300
 
 
+def test_repl_settings_defaults(tmp_path: Path) -> None:
+    """ReplSettings defaults preserve Phase-1 behavior: unbounded, oldest-drop."""
+    result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
+
+    assert result.repl.queue_cap == 0
+    assert result.repl.drop_policy == "oldest"
+
+
+def test_repl_settings_env_overrides_defaults(tmp_path: Path) -> None:
+    """CO_REPL_QUEUE_CAP / CO_REPL_DROP_POLICY env vars override the defaults via fill_from_env."""
+    result = load_config(
+        _user_config_path=tmp_path / "settings.json",
+        _env={"CO_REPL_QUEUE_CAP": "5", "CO_REPL_DROP_POLICY": "newest"},
+    )
+
+    assert result.repl.queue_cap == 5
+    assert result.repl.drop_policy == "newest"
+
+
 def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     """Project skill directory with one valid skill: skill appears in loaded commands."""
     from co_cli.skills.loader import load_skills

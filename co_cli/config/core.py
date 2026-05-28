@@ -22,6 +22,7 @@ from co_cli.config.llm import LLM_ENV_MAP, LlmSettings, resolve_api_key_from_env
 from co_cli.config.mcp import DEFAULT_MCP_SERVERS, MCPServerSettings, parse_mcp_servers_from_env
 from co_cli.config.memory import MEMORY_ENV_MAP, MemorySettings
 from co_cli.config.observability import OBSERVABILITY_ENV_MAP, ObservabilitySettings
+from co_cli.config.repl import REPL_ENV_MAP, ReplSettings
 from co_cli.config.shell import SHELL_ENV_MAP, ShellSettings
 from co_cli.config.skills import SKILLS_ENV_MAP, SkillsSettings
 from co_cli.config.web import WEB_ENV_MAP, WebSettings
@@ -93,6 +94,7 @@ class Settings(BaseModel):
     compaction: CompactionSettings = Field(default_factory=CompactionSettings)
     skills: SkillsSettings = Field(default_factory=SkillsSettings)
     dream: DreamSettings = Field(default_factory=DreamSettings)
+    repl: ReplSettings = Field(default_factory=ReplSettings)
 
     # Flat — integration paths
     obsidian_vault_path: str | None = Field(default=None)
@@ -165,6 +167,7 @@ class Settings(BaseModel):
             "compaction": COMPACTION_ENV_MAP,
             "skills": SKILLS_ENV_MAP,
             "dream": DREAM_ENV_MAP,
+            "repl": REPL_ENV_MAP,
         }
         for group, fields in nested_env_map.items():
             for field, env_var in fields.items():

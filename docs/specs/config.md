@@ -265,6 +265,13 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 | `dream.run_at` | `CO_DREAM_RUN_AT` | `"03:00"` | Preferred local time-of-day boundary for the scheduled housekeeping tick |
 | `dream.max_pass_seconds` | `CO_DREAM_MAX_PASS_SECONDS` | `600` | Wall-clock cap on the merge phase of a housekeeping pass (≥ 60); decay runs unconditionally after merge |
 
+### REPL input queue (`repl.*`)
+
+| Setting | Env Var | Default | Description |
+|---------|---------|---------|-------------|
+| `repl.queue_cap` | `CO_REPL_QUEUE_CAP` | `0` | Max pending mid-turn input-queue items (≥ 0); `0` = unbounded (Phase 1/2 behavior) |
+| `repl.drop_policy` | `CO_REPL_DROP_POLICY` | `"oldest"` | When an enqueue would exceed `queue_cap`: `"oldest"` drops the head then appends; `"newest"` rejects the incoming item. Inert at cap `0` |
+
 ### MCP servers (`mcp_servers.*`)
 
 | Field | Default | Description |
@@ -302,6 +309,8 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `ShellSettings` | `co_cli/config/shell.py` | Shell timeout and safe-command allowlist |
 | `ObservabilitySettings` | `co_cli/config/observability.py` | Log level, rotation, span redaction patterns |
 | `SkillsSettings` | `co_cli/config/skills.py` | Skill review automation knobs |
+| `DreamSettings` | `co_cli/config/dream.py` | Dream-daemon enable, timeout, retry, and housekeeping cadence knobs |
+| `ReplSettings` | `co_cli/config/repl.py` | REPL input-queue bound (`queue_cap`) and drop policy (`drop_policy`) |
 | `MCPServerSettings` | `co_cli/config/mcp.py` | Per-server transport config |
 
 ### Path constants

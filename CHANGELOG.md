@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.268]
+
+### REPL bounded input queue — config-gated cap + drop policy (Phase 3)
+
+Phases 1/2 made mid-turn submissions enqueue and manageable, but the queue was unbounded — a runaway paste or a wall of type-ahead could grow it without limit. Phase 3 bounds it behind config, default-off so a user who sets nothing sees zero behavior change.
+
+- **`co_cli/config/repl.py`** (new) — `ReplSettings` (`queue_cap: int = 0` [`0` = unbounded], `drop_policy: Literal["oldest","newest"] = "oldest"`) + `REPL_ENV_MAP` (`CO_REPL_QUEUE_CAP`, `CO_REPL_DROP_POLICY`). Mirrors `DreamSettings`.
+- **`co_cli/config/core.py`** — registers the `repl` group: `Field(default_factory=ReplSettings)` + `nested_env_map["repl"]`.
+- **`co_cli/main.py`** — centralizes the mid-turn append in a single `_enqueue(runtime, text, deps, on_status)` helper: blank-drop first (a blank never counts against the cap), then cap check + drop policy (`"oldest"` pops the head then appends; `"newest"` rejects the incoming item, one notice either way), then exactly one status repaint. `queue_cap == 0` preserves Phase 1/2 behavior. `_build_accept_handler` gains a `deps` param.
+- **`docs/specs/config.md`, `docs/specs/tui.md`** — document the `repl.*` group and the `_enqueue` blank→cap→drop behavior.
+
 ## [0.8.266]
 
 ### Prompt static-prefix stability — move skill manifest + tool-category awareness to per-turn

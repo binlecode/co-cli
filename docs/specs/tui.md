@@ -49,11 +49,15 @@ wrapped in `patch_stdout()` so the incidental `console.print` sites reflow above
 The Application is event-driven, not a read-one-line loop. The input `TextArea`'s
 `accept_handler` arms a turn task (`asyncio.ensure_future`) for an idle submission; a submission
 arriving while a turn is active **enqueues** (FIFO, non-blank only) instead of being dropped.
-Each armed turn carries an `add_done_callback` that drains the next queued item at the turn
-boundary — normal completion *and* `Esc`-cancel both fire it — so the queue advances one item
-per turn. Turn state — the current turn-task reference, the iteration state, and the input
-`queue` (`collections.deque[str]`) — has one owner, `_ReplRuntime`, shared by the
-`accept_handler` and the key bindings. Queue depth + a truncated head-item preview surface
+The mid-turn append routes through a single `_enqueue(runtime, text, deps, on_status)` helper
+(`co_cli/main.py`): blank-drop first (a blank never counts against the cap), then a bound check —
+when `repl.queue_cap > 0` and the append would exceed it, drop per `repl.drop_policy`
+(`"oldest"` pops the head then appends; `"newest"` rejects the incoming item, one notice either
+way); `queue_cap == 0` is unbounded (the default). Each armed turn carries an `add_done_callback`
+that drains the next queued item at the turn boundary — normal completion *and* `Esc`-cancel both
+fire it — so the queue advances one item per turn. Turn state — the current turn-task reference,
+the iteration state, and the input `queue` (`collections.deque[str]`) — has one owner,
+`_ReplRuntime`, shared by the `accept_handler` and the key bindings. Queue depth + a truncated head-item preview surface
 in the bottom toolbar (`{n} queued: "…"`, omitted at depth 0). `/queue [list|clear|pop [n]]`
 inspects or prunes pending items; mid-turn it bypasses the queue and runs via
 `runtime.schedule_control(...)` (it is a buffer op, not a turn). `exit`/`quit` and empty input
@@ -150,6 +154,8 @@ to `CoRuntimeState` — use `CoSessionState` for user-preference and cross-turn 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Initial reasoning display mode; overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
+| `repl.queue_cap` | `CO_REPL_QUEUE_CAP` | `0` | Max pending mid-turn input-queue items (≥ 0); `0` = unbounded |
+| `repl.drop_policy` | `CO_REPL_DROP_POLICY` | `"oldest"` | Drop policy when an enqueue exceeds `queue_cap`: `"oldest"` drops the head, `"newest"` rejects the incoming item. Inert at cap `0` |
 
 The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 

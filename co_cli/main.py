@@ -471,10 +471,56 @@ def _parse_queue_command(text: str) -> tuple[bool, str]:
     return name == "queue", args
 
 
+_QUEUE_NOTICE_BUDGET = 60
+
+
+def _preview(text: str, budget: int = _QUEUE_NOTICE_BUDGET) -> str:
+    """One-line preview of a queue item for drop/reject notices."""
+    text = text.replace("\n", " ")
+    if len(text) <= budget:
+        return text
+    return text[: budget - 1] + "…"
+
+
+def _enqueue(
+    runtime: _ReplRuntime,
+    text: str,
+    deps: CoDeps,
+    on_status: Callable[[], None],
+) -> None:
+    """Append a mid-turn submission to the input queue under the bounded-queue policy.
+
+    Blank-drop comes first — a blank never counts against the cap (Phase 1). Then,
+    when ``repl.queue_cap > 0`` and the append would exceed the cap, drop per
+    ``repl.drop_policy``: ``"oldest"`` pops the head then appends the new item;
+    ``"newest"`` rejects the incoming item. Either drop path emits exactly one
+    notice. Every accepted/rejected non-blank submission ends in exactly one
+    ``on_status`` repaint. ``queue_cap == 0`` is unbounded (Phase 1/2 default, C3).
+    """
+    if not text.strip():
+        return
+    cap = deps.config.repl.queue_cap
+    if cap > 0 and len(runtime.queue) >= cap:
+        if deps.config.repl.drop_policy == "oldest":
+            dropped = runtime.queue.popleft()
+            runtime.queue.append(text)
+            console.print(
+                f"[dim]Queue full (cap {cap}) — dropped oldest: {_preview(dropped)!r}[/dim]"
+            )
+        else:
+            console.print(
+                f"[dim]Queue full (cap {cap}) — rejected new item: {_preview(text)!r}[/dim]"
+            )
+    else:
+        runtime.queue.append(text)
+    on_status()
+
+
 def _build_accept_handler(
     runtime: _ReplRuntime,
     dispatch: Callable[..., Awaitable[None]],
     on_status: Callable[[], None],
+    deps: CoDeps,
 ) -> Callable[[Buffer], bool]:
     """Return the input TextArea accept_handler wired for the input queue.
 
@@ -514,9 +560,7 @@ def _build_accept_handler(
             if is_queue:
                 runtime.schedule_control(_run_queue_bypass(queue_args))
                 return False
-            if text.strip():
-                runtime.queue.append(text)
-                on_status()
+            _enqueue(runtime, text, deps, on_status)
             return False
         _arm_turn(dispatch(user_input=text, eof=False))
         return False
@@ -618,7 +662,7 @@ async def _chat_loop(
         def _on_queue_status() -> None:
             frontend.update_status(_build_status_snapshot(deps, "active", runtime.queue))
 
-        accept_handler = _build_accept_handler(runtime, _dispatch, _on_queue_status)
+        accept_handler = _build_accept_handler(runtime, _dispatch, _on_queue_status, deps)
         key_bindings = build_key_bindings(runtime=runtime, dispatch=_dispatch)
         app = build_repl_app(
             frontend=frontend,
