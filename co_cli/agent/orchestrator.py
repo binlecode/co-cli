@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from co_cli.agent._instructions import current_time_prompt, safety_prompt
+from co_cli.agent._instructions import (
+    current_time_prompt,
+    safety_prompt,
+    skill_manifest_prompt,
+    tool_category_awareness_prompt,
+)
 from co_cli.agent.spec import OrchestratorSpec
 from co_cli.context.compaction import proactive_window_processor
 from co_cli.context.history_processors import (
@@ -33,18 +38,6 @@ def _toolset_guidance_provider(deps: CoDeps) -> str | None:
     return build_toolset_guidance(deps.tool_index)
 
 
-def _category_awareness_provider(deps: CoDeps) -> str | None:
-    from co_cli.tools.deferred_prompt import build_category_awareness_prompt
-
-    return build_category_awareness_prompt(deps.tool_index)
-
-
-def _skill_manifest_provider(deps: CoDeps) -> str | None:
-    from co_cli.context.manifests.skill_manifest import render_skill_manifest
-
-    return render_skill_manifest(deps.skill_index, deps.skills_dir, deps.user_skills_dir)
-
-
 def _personality_critique_provider(deps: CoDeps) -> str | None:
     if not deps.config.personality:
         return None
@@ -61,11 +54,14 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
     static_instruction_builders=(
         _static_instructions_provider,
         _toolset_guidance_provider,
-        _category_awareness_provider,
-        _skill_manifest_provider,
         _personality_critique_provider,
     ),
-    per_turn_instructions=(safety_prompt, current_time_prompt),
+    per_turn_instructions=(
+        safety_prompt,
+        current_time_prompt,
+        tool_category_awareness_prompt,
+        skill_manifest_prompt,
+    ),
     history_processors=(
         dedup_tool_results,
         evict_old_tool_results,

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.266]
+
+### Prompt static-prefix stability — move skill manifest + tool-category awareness to per-turn
+
+Removes ~345 tokens of `skill_index` / `tool_index`-dependent content from the static prompt prefix, making the cached prefix byte-identical across turns regardless of mid-session skill or tool changes. On Ollama, any prefix mutation forces full KV-cache re-prefill; with ~9 loop calls per turn this was paying ~3,000 tokens/turn of unnecessary re-prefill on any session with skill/tool mutations.
+
+- **`co_cli/agent/_instructions.py`** — adds `skill_manifest_prompt` and `tool_category_awareness_prompt` as per-turn callables reading live `ctx.deps.skill_index` / `ctx.deps.tool_index` each turn.
+- **`co_cli/agent/orchestrator.py`** — removes `_skill_manifest_provider` and `_tool_category_awareness_provider` from `static_instruction_builders`; appends both to `per_turn_instructions`.
+- **`co_cli/tools/deferred_prompt.py`** — renames `build_category_awareness_prompt` → `build_tool_category_awareness_prompt` for clarity.
+- **`co_cli/context/rules/06_skill_protocol.md`** — drops stale "above" positional wording; manifest now lands after the rules block in the assembled prompt.
+- **`co_cli/context/rules/07_memory_protocol.md`** — condenses kind-selection table → bullets (~40 tokens, information preserved 1:1).
+- **`docs/specs/`** — 6 spec files updated to reflect static→per-turn relocation and the builder count change.
+- **Measured result:** static prefix 7,112 → 6,761 tok (−351); per-turn +340; total −11 absolute.
+
 ## [0.8.264]
 
 ### REPL input-queue UX — `/queue` command + head-item toolbar preview (Phase 2)

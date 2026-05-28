@@ -21,10 +21,12 @@ build_orchestrator(ORCHESTRATOR_SPEC, deps)
     iterates ORCHESTRATOR_SPEC.static_instruction_builders in order:
     [1] _static_instructions_provider   → soul seed, mindsets, behavioral rules, recency advisory
     [2] _toolset_guidance_provider      — tool-specific guidance (conditional on tool presence)
-    [3] _category_awareness_provider    — deferred tool category hint (conditional)
-    [4] _skill_manifest_provider        — <available_skills> for bundled skills (conditional)
-    [5] _personality_critique_provider  — ## Review lens, last (conditional on personality + critique file)
+    [3] _personality_critique_provider  — ## Review lens, last (conditional on personality + critique file)
     → joined and set as Agent.instructions (static, once per session)
+
+    then registers ORCHESTRATOR_SPEC.per_turn_instructions via agent.instructions():
+    [safety_prompt, current_time_prompt, tool_category_awareness_prompt, skill_manifest_prompt]
+    → each emitted as InstructionPart(dynamic=True), evaluated fresh per request
 
 Character canon (souls/{role}/memories/*.md) is indexed at bootstrap by `_sync_canon_store()`
 for personality-system consumption only — it is never returned by any model-callable tool.
@@ -98,13 +100,16 @@ parts = []
 for builder in ORCHESTRATOR_SPEC.static_instruction_builders:
     piece = builder(deps)                            # _static_instructions_provider,
                                                      # _toolset_guidance_provider,
-                                                     # _category_awareness_provider,
-                                                     # _skill_manifest_provider,
                                                      # _personality_critique_provider
     if piece:
         parts.append(piece)
 static_instructions = "\n\n".join(parts)
 ```
+
+The `<available_skills>` manifest and deferred-tool-category awareness are NOT in this static
+block; they are emitted by per-turn `agent.instructions()` callbacks
+(`skill_manifest_prompt`, `tool_category_awareness_prompt`) so that `skill_index` /
+`tool_index` mutations do not invalidate the cached prefix. See [prompt-assembly.md](prompt-assembly.md) §2.2–2.3.
 
 Character canon (`memories/*.md`) is NOT included in the static prompt. It is indexed at
 bootstrap into the shared FTS index under `source='canon'` for personality-system use
@@ -115,8 +120,9 @@ on the model's operating space. Review lens is last so it frames all operational
 as subject to self-review.
 
 **Rule files** (`context/rules/`) are personality-independent universal policies. Files must
-be numbered `01`–`06`, contiguous, and unique. Current rules: `01_identity.md`,
-`02_safety.md`, `03_reasoning.md`, `04_tool_protocol.md`, `05_workflow.md`, `06_skill_protocol.md`.
+be numbered contiguously starting at `01` and unique. Current rules: `01_identity.md`,
+`02_safety.md`, `03_reasoning.md`, `04_tool_protocol.md`, `05_workflow.md`, `06_skill_protocol.md`,
+`07_memory_protocol.md`.
 
 ### Personality Discovery and Validation
 
@@ -201,16 +207,16 @@ for missing mindset files.
 | File | Purpose |
 |---|---|
 | `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (soul + mindsets + rules + recency advisory) |
-| `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — bundled skill `<available_skills>` block appended after tool guidance |
+| `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — `<available_skills>` block; emitted per-turn via `skill_manifest_prompt` |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` |
 | `co_cli/personality/prompts/souls/{role}/memories/*.md` | Canon scene files (package-shipped) |
 | `co_cli/bootstrap/core.py:_sync_canon_store` | Bootstrap hook indexing canon under `source='canon'` (personality-load-only path) |
 | `co_cli/memory/memory_store.py:sync_dir(no_chunk=True)` | Single-chunk-per-file indexing path used by canon |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
-| `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `06_skill_protocol.md` |
+| `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `07_memory_protocol.md` |
 | `co_cli/personality/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agent/build.py` | `build_orchestrator()` — iterates `ORCHESTRATOR_SPEC.static_instruction_builders` and registers per-turn instruction callbacks |
-| `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` and its 5 static-instruction builder closures |
-| `co_cli/agent/_instructions.py` | `current_time_prompt()` — dynamic instruction returning current date/time; `safety_prompt()` — doom-loop and shell-error warnings |
+| `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` and its 3 static-instruction builder closures + 4 per-turn instruction callbacks |
+| `co_cli/agent/_instructions.py` | Per-turn callbacks: `safety_prompt`, `current_time_prompt`, `tool_category_awareness_prompt`, `skill_manifest_prompt` |

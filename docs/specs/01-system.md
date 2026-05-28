@@ -121,8 +121,8 @@ Approval gates run per-tool-call; retries wrap individual tool failures. The age
 
 Every turn's system prompt is assembled from three layers injected before the agent run:
 
-1. **Static** — soul seed + mindsets + bundled skill manifest (injected at agent construction, not per-turn)
-2. **Dynamic** — personality-context artifacts from the knowledge index (canon, not user-queryable)
+1. **Static** — soul seed + mindsets + behavioral rules + toolset guidance + personality critique lens (injected at agent construction, byte-stable across turns)
+2. **Per-turn instructions** — safety warnings, current time, deferred-tool-category awareness, and the `<available_skills>` skill manifest; emitted as `InstructionPart(dynamic=True)` so live `deps` state surfaces without churning the cached prefix
 3. **Recall** — `memory_search` + `session_search` results injected into the turn context window
 
 Recall is search-driven and on-demand — nothing is wholesale injected into every turn. History processors (compaction, spill placeholders) apply in the pre-run pass.
@@ -183,7 +183,7 @@ Dream runs are idempotent. The trigger is `session_end` by default; `manual` tri
 
 ### Skills
 
-Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared in the static system prompt via the `<available_skills>` manifest. Slash commands in the REPL dispatch to installed skills via the `skill_index` map on `CoDeps`.
+Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared via the `<available_skills>` manifest, emitted as a per-turn dynamic instruction so newly created skills become visible to the model on the next turn. Slash commands in the REPL dispatch to installed skills via the `skill_index` map on `CoDeps`.
 
 The REPL writes KICK files to `$CO_HOME/daemons/dream/queue/` at threshold-based intervals (configurable per domain: memory and skill). The dream daemon dequeues these and runs the appropriate reviewer agent out-of-process. The same daemon also runs scheduled-tick housekeeping over both the memory store and the user skill library (`merge_skills` + `decay_skills`) — see [dream.md](dream.md) for the full mechanics. Usage counters, `pinned`, and `recall_days` are persisted in per-skill sidecars at `~/.co-cli/skills/<name>.usage.json`.
 

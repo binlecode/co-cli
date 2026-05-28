@@ -214,7 +214,7 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 | `CoToolLifecycle(AbstractCapability[CoDeps])` | `co_cli/tools/lifecycle.py` | pydantic-ai capability — fires `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute` on every tool call |
 | `resolve_approval_subject(tool_name, args) -> ApprovalSubject` | `co_cli/tools/approvals.py` | Maps a tool call to its approval-subject kind (`shell`, `path`, `domain`, `tool`) |
 | `ApprovalSubject`, `SessionApprovalRule`, `ApprovalKindEnum` | `co_cli/deps.py` | Approval-subject record types and remembered-rule shape |
-| `build_category_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Static system-prompt hint listing deferred-tool categories |
+| `build_tool_category_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt hint listing deferred tool-category domains; emitted via `tool_category_awareness_prompt` in `co_cli/agent/_instructions.py` |
 
 ### Delegation handoff
 

@@ -34,12 +34,10 @@ in later sessions and can override the user's current request.
 
 **Kind selection:**
 
-| User intent | kind |
-|---|---|
-| Stable personal preference / "I prefer X" | `user` |
-| Forward-acting standing rule / "always / never / stop" | `rule` |
-| Web article / fetched substrate | `article` |
-| Free-form note / distilled finding / recorded decision / saved URL | `note` |
+- `user` — stable personal preference ("I prefer X")
+- `rule` — forward-acting standing rule ("always / never / stop")
+- `article` — web article or fetched substrate
+- `note` — free-form note, distilled finding, recorded decision, saved URL
 
 ## Curation
 

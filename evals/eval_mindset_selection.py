@@ -132,16 +132,6 @@ CASES: tuple[Case, ...] = (
         ),
     ),
     Case(
-        case_id="memory",
-        prompt="Remember that I always want PRs squash-merged, never merge commits.",
-        task_types=("memory",),
-        wrong_type="exploration",
-        target_stance=(
-            "Treats it as recording/reconciling a durable preference: confirms what will be "
-            "remembered and records it, not just a passing acknowledgment."
-        ),
-    ),
-    Case(
         case_id="debug+teach",
         prompt="Walk me through why this recursion blows the stack, and explain it so I actually understand the underlying cause.",
         task_types=("debugging", "teaching"),
@@ -159,6 +149,16 @@ CASES: tuple[Case, ...] = (
         target_stance=(
             "Briefly acknowledges the overwhelm, then leads with concrete implementation help "
             "— both steadying and doing the work, not pure reassurance or pure code-dump."
+        ),
+    ),
+    Case(
+        case_id="memory",
+        prompt="Remember that I always want PRs squash-merged, never merge commits.",
+        task_types=("memory",),
+        wrong_type="exploration",
+        target_stance=(
+            "Treats it as recording/reconciling a durable preference: confirms what will be "
+            "remembered and records it, not just a passing acknowledgment."
         ),
     ),
 )
@@ -255,6 +255,32 @@ async def _arm_response(
             agent=agent,
         )
     return _response_text(turn_result.messages)
+
+
+async def _safe_arm_response(
+    arm_label: str,
+    deps: CoDeps,
+    frontend: EvalFrontend,
+    role: str,
+    mindsets_block: str,
+    case: Case,
+    run: EvalRun,
+) -> str:
+    """Run one arm with exception isolation — one bad turn doesn't lose the rest.
+
+    On any failure (TimeoutError from CALL_TIMEOUT_S, agent loop, MCP teardown
+    fallout, etc.) returns a sentinel string so pairwise judging on the case
+    still has two inputs and the case loop continues. The pairwise judge will
+    typically tie a sentinel vs a real response — fine, that case becomes
+    non-decisive in the majority rule.
+    """
+    try:
+        return await _arm_response(deps, frontend, role, mindsets_block, case, arm_label, run)
+    except Exception as exc:
+        print(
+            f"[mindset_selection] {case.case_id} {arm_label} FAILED: {type(exc).__name__}: {exc}"
+        )
+        return f"[arm {arm_label} failed: {type(exc).__name__}]"
 
 
 async def _case_winner(
@@ -363,9 +389,9 @@ async def main() -> int:
             responses: dict[str, dict[str, str]] = {}
             for case in CASES:
                 a2_block = _mindset_block(_ROLE, case.task_types)
-                r0 = await _arm_response(deps, frontend, _ROLE, a0_block, case, "A0", run)
-                r1 = await _arm_response(deps, frontend, _ROLE, a1_block, case, "A1", run)
-                r2 = await _arm_response(deps, frontend, _ROLE, a2_block, case, "A2", run)
+                r0 = await _safe_arm_response("A0", deps, frontend, _ROLE, a0_block, case, run)
+                r1 = await _safe_arm_response("A1", deps, frontend, _ROLE, a1_block, case, run)
+                r2 = await _safe_arm_response("A2", deps, frontend, _ROLE, a2_block, case, run)
                 responses[case.case_id] = {"A0": r0, "A1": r1, "A2": r2}
                 print(f"[mindset_selection] {case.case_id}: A0/A1/A2 responses captured")
 
@@ -426,7 +452,9 @@ async def main() -> int:
                     pair3_cases: dict[str, str] = {}
                     for case in CASES:
                         a3_block = _mindset_block(_ROLE, (case.wrong_type,))
-                        r3 = await _arm_response(deps, frontend, _ROLE, a3_block, case, "A3", run)
+                        r3 = await _safe_arm_response(
+                            "A3", deps, frontend, _ROLE, a3_block, case, run
+                        )
                         pair3_cases[case.case_id] = await _case_winner(
                             deps, case.target_stance, responses[case.case_id]["A2"], r3
                         )

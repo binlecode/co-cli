@@ -24,7 +24,7 @@ flowchart LR
 | `load_skills` | Two-pass loader — bundled then user-global; security scan applied to user-global only |
 | `deps.skill_index` | Full skill registry (`dict[str, SkillInfo]`); used by slash-command dispatch |
 | `get_skill_index()` | Model-facing subset — excludes hidden skills; source for `<available_skills>` manifest |
-| `render_skill_manifest()` | Renders `<available_skills>` XML block injected into the static system prompt |
+| `render_skill_manifest()` | Renders `<available_skills>` XML block; emitted per-turn via `skill_manifest_prompt` so newly created skills are visible on the next turn |
 | `dispatch(raw_input, ctx)` | Routes slash commands — built-ins first, then `skill_index`, then error |
 | `refresh_skills(deps)` | Hot-reload: re-loads both tiers, replaces `deps.skill_index`; called by `skill_manage` and `/skills reload` |
 | `skill_manage` | Single model-callable write entry point — create, edit, patch, delete |
@@ -46,7 +46,7 @@ Skills are reached through three distinct paths:
 The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name in `skill_index`, expands the body (argument substitution), and returns `DelegateToAgent`. The REPL then calls `run_turn()` with the expanded body as the user input — a full new agent turn. The skill body replaces the user's input for that turn; the model never sees the raw `/skill-name` string.
 
 **Path 2 — Model inline use.**
-The agent reads the `<available_skills>` manifest injected into the static system prompt, identifies a matching skill, and calls `skill_view(name)` to load the full body. The body is returned as a tool result inside the current turn. The agent reads it and follows its phases as its procedure — no new turn, no dispatch, no REPL involvement. This is the primary path for agent-initiated skill use.
+The agent reads the `<available_skills>` manifest injected per-turn into the system prompt, identifies a matching skill, and calls `skill_view(name)` to load the full body. The body is returned as a tool result inside the current turn. The agent reads it and follows its phases as its procedure — no new turn, no dispatch, no REPL involvement. This is the primary path for agent-initiated skill use.
 
 **Path 3 — Model write.**
 The agent calls `skill_manage(action=...)` to create, edit, patch, or delete a user skill. Used for drift fixes (stale steps), promoting a reusable procedure to a new skill, or removing an obsolete one. `skill_manage` requires approval, runs the security scan, and calls `refresh_skills(deps)` on success so the change is live immediately.
@@ -314,7 +314,7 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `render_skill_manifest(skill_index, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders `<available_skills>` XML block for the static system prompt |
+| `render_skill_manifest(skill_index, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders `<available_skills>` XML block; emitted per-turn via `skill_manifest_prompt` (`co_cli/agent/_instructions.py`) |
 
 ### Schema
 
@@ -338,7 +338,8 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | `co_cli/commands/skills.py` | `/skills` command family (list/check/lint/reload/usage/pin/unpin) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass |
 | `co_cli/bootstrap/core.py` | `create_deps()` — skill loading at startup |
-| `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload, skill manifest injection; `_post_turn_hook` (two-counter KICK dispatch), `_fire_session_end_kicks` |
+| `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload; `_post_turn_hook` (two-counter KICK dispatch), `_fire_session_end_kicks` |
+| `co_cli/agent/_instructions.py` | `skill_manifest_prompt` — per-turn `@agent.instructions` callback that re-renders the manifest from live `ctx.deps.skill_index` |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_index`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer` |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` — both call into `co_cli/skills/usage.py` on success |

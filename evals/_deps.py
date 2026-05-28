@@ -73,7 +73,9 @@ async def eval_deps(
     """
     frontend = EvalFrontend()
     async with AsyncExitStack() as stack:
-        deps = await create_deps(frontend, stack, theme_override=theme_override)
+        deps = await create_deps(
+            on_status=frontend.on_status, stack=stack, theme_override=theme_override
+        )
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
         yield deps, agent, frontend
 
@@ -89,6 +91,6 @@ async def make_eval_deps() -> tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend, As
     frontend = EvalFrontend()
     stack = AsyncExitStack()
     await stack.__aenter__()
-    deps = await create_deps(frontend, stack, theme_override=None)
+    deps = await create_deps(on_status=frontend.on_status, stack=stack, theme_override=None)
     agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
     return deps, agent, frontend, stack

@@ -6,7 +6,7 @@ procedures that define how to structure the task itself. Before any
 multi-step task, check the skill surface first; recall facts within
 whatever procedure applies.
 
-The skill manifest (visible in the <available_skills> block above)
+The skill manifest (the <available_skills> block in this prompt)
 covers all skills: bundled and user-installed. Scan it before any
 multi-step task.
 
