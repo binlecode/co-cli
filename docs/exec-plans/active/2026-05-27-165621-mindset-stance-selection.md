@@ -135,7 +135,7 @@ right one.
    `make_eval_deps()`, config `llm.host`, real model. `ensure_ollama_warm()` called
    **outside** any `asyncio.timeout`. No caps, no test stores.
 
-## Step 0 — Extract the rules-block seam
+## ✓ DONE — Step 0 — Extract the rules-block seam
 
 In `co_cli/context/assembly.py`, extract the inline rule-walking (lines ~102-106)
 into a public `build_rules_block() -> str` and have `build_static_instructions` call
@@ -147,7 +147,14 @@ private `_collect_rule_files` or duplicating the walk.
 **Verify 0:** `scripts/quality-gate.sh lint`; run `tests/test_flow_prompt_assembly.py`
 to confirm the assembled prompt is byte-identical before/after the extraction.
 
-## Step 1 — Build the ablation eval and run it (the diagnostic)
+## ◐ PARTIAL — Step 1 — Build the ablation eval and run it (the diagnostic)
+
+> **Build delivered, run deferred** (orchestrate-dev scoped to "build harness, defer run").
+> Done: `judge_pairwise`/`PairwiseVerdict` in `evals/_judge.py`; `evals/eval_mindset_selection.py`
+> (arms A0–A3, 8 cases, order-swap reconciliation, majority-rule decision tree) — lint-clean
+> and import-clean. **Not done in this session:** the actual `uv run` diagnostic, the report,
+> and the decision-tree branch (that is a separate real-35B run + TL read at the gate).
+
 
 `evals/eval_mindset_selection.py`, mirroring `eval_skills.py` structure
 (`make_eval_deps`, `run_turn`, `ensure_ollama_warm`, `open_eval_run`,
@@ -299,3 +306,24 @@ cheap close-the-gap attempt, the router only if a distraction gap survives it. T
 eval is a retained real-estate/regression guard regardless of verdict — even a
 "ship nothing" result delivers a settled §2.2 and a standing guard. Full dialog
 rationale in `docs/reference/RESEARCH-personality-self-working-style.md` §2.2 / §4.2.
+
+## Delivery Summary — 2026-05-27
+
+Scope: **build harness, defer run** (per the orchestrate-dev scoping decision). Step 1's
+diagnostic run, the decision tree, and Step 2 (conditional authoring) are deliberately
+out of this session.
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-0 — `build_rules_block()` extraction (`assembly.py`) | public fn exists, `build_static_instructions` calls it, prompt byte-identical, assembly test green | ✓ pass |
+| TASK-1a — `judge_pairwise` + `PairwiseVerdict` (`evals/_judge.py`) | returns winner∈{A,B,tie}+rationale, order-swap documented, lint clean, importable | ✓ pass |
+| TASK-1b — ablation harness (`evals/eval_mindset_selection.py`) | imports clean (`import` smoke), arms/cases/order-swap/decision-tree defined, lint clean — **not run** | ✓ pass (build only) |
+| Step 1 run + decision tree | — | — deferred (separate real-35B run + TL gate) |
+| Step 2 — anchors + nudge | — | — deferred (conditional on Step 1 result) |
+
+**Files changed:** `co_cli/context/assembly.py`, `evals/_judge.py`, `evals/eval_mindset_selection.py` (new). No extra files.
+**Tests:** scoped — `tests/test_flow_prompt_assembly.py` 5 passed, 0 failed.
+**Doc Sync:** no-op — assembled prompt byte-identical; `build_rules_block` is an internal helper, not a runtime-behavior contract change.
+
+**Overall: DELIVERED (scoped subset).**
+Harness is built, lint-clean, and import-verified. Next is not `/review-impl` of more code but the **diagnostic run**: `uv run python evals/eval_mindset_selection.py` (real 35B, tens of min) → read the DECISION branch → if `AUTHOR`, that unblocks Step 2; otherwise surface the verdict (INERT / FLAT_OK / STRUCTURAL) to TL. Run `/review-impl <slug>` first if you want a full-suite + evidence pass on the three built files before that.

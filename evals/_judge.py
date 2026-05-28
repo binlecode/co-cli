@@ -57,6 +57,23 @@ Rules:
 
 _JSON_OBJ_RE = re.compile(r"\{[^{}]*\"passed\"[^{}]*\}", re.DOTALL)
 
+_PAIRWISE_SYSTEM_PROMPT = """You are a pairwise judge for an AI agent eval.
+You are given a TARGET STANCE describing the behavioral stance a good response
+should exhibit, and two candidate responses, A and B. Decide which response
+better exhibits the target stance. Return ONE compact JSON object on a single
+line. Schema:
+
+    {"winner": "A"|"B"|"tie", "rationale": "<one sentence>"}
+
+Rules:
+- Judge only against the target stance — not length, politeness, or formatting.
+- Choose "tie" only when neither response is clearly better on the stance.
+- The rationale must be a single sentence under 200 chars.
+- Output nothing else — no preamble, no markdown, no commentary.
+"""
+
+_PAIRWISE_OBJ_RE = re.compile(r"\{[^{}]*\"winner\"[^{}]*\}", re.DOTALL)
+
 
 @dataclass(frozen=True)
 class JudgeVerdict:
@@ -64,6 +81,14 @@ class JudgeVerdict:
 
     passed: bool
     score: int
+    rationale: str
+
+
+@dataclass(frozen=True)
+class PairwiseVerdict:
+    """Single pairwise comparison — ``winner`` ∈ {"A", "B", "tie"}."""
+
+    winner: str
     rationale: str
 
 
@@ -153,3 +178,55 @@ async def judge_with_llm(
     async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         raw = await llm_call(deps, prompt, instructions=_JUDGE_SYSTEM_PROMPT, model=model)
     return _parse_verdict(raw)
+
+
+def _parse_pairwise(raw: str) -> PairwiseVerdict:
+    """Pull a single ``{winner, rationale}`` object; coerce winner to A/B/tie."""
+    raw = raw.strip()
+    match = _PAIRWISE_OBJ_RE.search(raw)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            winner = str(data.get("winner", "tie")).strip().upper()
+            if winner not in {"A", "B"}:
+                winner = "tie"
+            return PairwiseVerdict(
+                winner=winner,
+                rationale=str(data.get("rationale", ""))[:300],
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return PairwiseVerdict(
+        winner="tie", rationale=f"Judge returned unparseable output: {raw[:200]}"
+    )
+
+
+async def judge_pairwise(
+    target_stance: str,
+    response_a: str,
+    response_b: str,
+    *,
+    deps: CoDeps,
+    model: LlmModel | None = None,
+) -> PairwiseVerdict:
+    """One oriented pairwise comparison: which of A/B better exhibits ``target_stance``.
+
+    This is the single-comparison primitive. To cancel position bias, callers
+    must run each comparison in **both orders** ((A,B) and (B,A)) and treat a
+    disagreement between the two runs as a tie — see the ablation eval's
+    per-case reconciliation. The absolute :func:`judge_with_llm` is untouched.
+
+    Pass ``model=deps.judge_model`` to pin a judge distinct from the agent under
+    test (recommended). Wrapped in ``asyncio.timeout`` like the absolute judge;
+    returns ``winner="tie"`` on parse failure so a malformed response never
+    crashes the eval.
+    """
+    prompt = (
+        f"TARGET STANCE:\n{target_stance.strip()}\n\n"
+        f"RESPONSE A:\n{response_a.strip()}\n\n"
+        f"RESPONSE B:\n{response_b.strip()}\n\n"
+        "Return JSON now."
+    )
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
+        raw = await llm_call(deps, prompt, instructions=_PAIRWISE_SYSTEM_PROMPT, model=model)
+    return _parse_pairwise(raw)

@@ -63,6 +63,23 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
     return parsed
 
 
+def build_rules_block() -> str:
+    """Assemble the behavioral rules into one block, in strict numbered order.
+
+    The numbered ``NN_rule_id.md`` files under ``rules/``, each stripped and
+    joined with blank lines in order. Public so callers that need the rules
+    independently of soul/mindset assembly — prompt-ablation evals composing
+    ``seed + <varied mindsets> + rules`` — reuse the exact production rule text
+    without importing the private ``_collect_rule_files`` or duplicating the walk.
+    """
+    rule_parts: list[str] = []
+    for _order, _name, rule_path in _collect_rule_files():
+        content = rule_path.read_text(encoding="utf-8").strip()
+        if content:
+            rule_parts.append(content)
+    return "\n\n".join(rule_parts)
+
+
 def build_static_instructions(config: Settings) -> str:
     """Build the static instructions string for the given model and personality.
 
@@ -100,10 +117,9 @@ def build_static_instructions(config: Settings) -> str:
         parts.append(mindsets)
 
     # 3. Behavioral rules (strict numbered order)
-    for _order, _name, rule_path in _collect_rule_files():
-        content = rule_path.read_text(encoding="utf-8").strip()
-        if content:
-            parts.append(content)
+    rules_block = build_rules_block()
+    if rules_block:
+        parts.append(rules_block)
 
     prompt = "\n\n".join(parts)
 
