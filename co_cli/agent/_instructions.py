@@ -19,15 +19,16 @@ def safety_prompt(ctx: RunContext[CoDeps]) -> str:
     return safety_prompt_text(ctx)
 
 
-def tool_category_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
-    """Per-turn: list deferred tool-category domains available via search_tools.
+def deferred_tool_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
+    """Per-turn: emit a per-tool stub (name + one-liner) for every deferred tool.
 
-    Lives post-static so mid-session integration registration / tool toggles are reflected
-    on the next turn without invalidating the static prefix.
+    Lists each DEFERRED tool by name and purpose so the model can load it via search_tools
+    before calling it. Lives post-static so mid-session integration registration / tool
+    toggles are reflected on the next turn without invalidating the static prefix.
     """
-    from co_cli.tools.deferred_prompt import build_tool_category_awareness_prompt
+    from co_cli.tools.deferred_prompt import build_deferred_tool_awareness_prompt
 
-    return build_tool_category_awareness_prompt(ctx.deps.tool_index)
+    return build_deferred_tool_awareness_prompt(ctx.deps.tool_index)
 
 
 def skill_manifest_prompt(ctx: RunContext[CoDeps]) -> str:

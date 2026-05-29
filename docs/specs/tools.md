@@ -31,12 +31,12 @@ graph LR
 | Workspace & Files | `file_find`, `file_read`, `file_search`, `file_write`, `file_patch` | `file_write`/`file_patch` approval + lock |
 | Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_manage`, `skill_view`, `skill_manage` | `memory_manage`/`skill_manage` approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
-| Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list`, `code_execute` | `shell_exec`/`code_execute` hybrid approval |
-| Delegation | `web_research`, `knowledge_analyze`, `reason` | All DEFERRED; spawn task agents |
+| Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval |
+| Delegation | `web_research`, `knowledge_analyze` | All DEFERRED; spawn task agents |
 | Obsidian | `obsidian_list`, `obsidian_search`, `obsidian_read` | Gate: `obsidian_vault_path` |
 | Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | Gate: `google_credentials_path`; `google_gmail_draft` approval |
 
-**Total: 37 native tools** (19 ALWAYS · 18 DEFERRED · 6 explicit approval-gated · 10 config-gated; `shell_exec` and `code_execute` may also prompt dynamically based on the command path)
+**Total: 35 native tools** (19 ALWAYS · 16 DEFERRED · 5 explicit approval-gated · 10 config-gated; `shell_exec` may also prompt dynamically based on the command path)
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 
@@ -134,9 +134,9 @@ Resume segments skip `ModelRequestNode` — no new model prompt is sent just to 
 
 ### Concurrency Safety
 
-Most tools run concurrently by default (`is_concurrent_safe=True`). Three tools opt out
-explicitly because they cannot tolerate interleaved invocations: `file_write`, `file_patch`,
-`code_execute`. A per-session semaphore caps total concurrent tool calls at
+Most tools run concurrently by default (`is_concurrent_safe=True`). Two tools opt out
+explicitly because they cannot tolerate interleaved invocations: `file_write`, `file_patch`.
+A per-session semaphore caps total concurrent tool calls at
 `MAX_TOOL_DISPATCH_WORKERS = 10`; the 11th+ call queues until a slot frees. Forked agents
 (reviewer) share the parent's semaphore so the cap is session-wide.
 
@@ -146,7 +146,7 @@ tool call dispatched
       ├─ acquire deps.tool_dispatch_sem  (MAX_TOOL_DISPATCH_WORKERS = 10 per session)
       │       blocked? ──► queue until slot frees
       │
-      ├─ is_concurrent_safe=False?  (file_write, file_patch, code_execute — explicit opt-out)
+      ├─ is_concurrent_safe=False?  (file_write, file_patch — explicit opt-out)
       │       yes ──► force sequential order in multi-tool batch
       │
       ├─ path locked by another agent?  (resource_locks)
@@ -164,7 +164,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 
 ### Delegation Agents
 
-Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused task agents. The agent surface, spec records, runner semantics, depth check, single-span retry topology, and per-agent tool surfaces are owned by [agents.md](agents.md). Tools.md scope ends at the orchestrator hand-off via `fork_deps`.
+Delegation tools (`web_research`, `knowledge_analyze`) spawn focused task agents. The agent surface, spec records, runner semantics, depth check, single-span retry topology, and per-agent tool surfaces are owned by [agents.md](agents.md). Tools.md scope ends at the orchestrator hand-off via `fork_deps`.
 
 ## 3. Config
 
@@ -214,7 +214,7 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 | `CoToolLifecycle(AbstractCapability[CoDeps])` | `co_cli/tools/lifecycle.py` | pydantic-ai capability — fires `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute` on every tool call |
 | `resolve_approval_subject(tool_name, args) -> ApprovalSubject` | `co_cli/tools/approvals.py` | Maps a tool call to its approval-subject kind (`shell`, `path`, `domain`, `tool`) |
 | `ApprovalSubject`, `SessionApprovalRule`, `ApprovalKindEnum` | `co_cli/deps.py` | Approval-subject record types and remembered-rule shape |
-| `build_tool_category_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt hint listing deferred tool-category domains; emitted via `tool_category_awareness_prompt` in `co_cli/agent/_instructions.py` |
+| `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt stub list (one `` - `name`: one-liner `` per DEFERRED tool) telling the model to load a tool via `search_tools` first; emitted via `deferred_tool_awareness_prompt` in `co_cli/agent/_instructions.py` |
 
 ### Delegation handoff
 
@@ -233,11 +233,11 @@ Delegation tools (`web_research`, `knowledge_analyze`, `reason`) spawn focused t
 | `co_cli/agent/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |
 | `co_cli/tools/lifecycle.py` | `CoToolLifecycle` — all four per-call hooks |
 | `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
-| `co_cli/tools/deferred_prompt.py` | category-awareness prompt for DEFERRED tools |
+| `co_cli/tools/deferred_prompt.py` | per-tool awareness stub list for DEFERRED tools |
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator, `TOOL_REGISTRY` self-populating list, `TOOL_REGISTRY_BY_NAME` lookup dict |
 | `co_cli/tools/tool_io.py` | `tool_output()`, `tool_error()`, `spill_if_oversized()`, `spill_with_span()`, `check_tool_results_size()` |
-| `co_cli/tools/shell_policy.py` | `shell`, `code_execute`, and `task_start` command-safety policy |
-| `co_cli/tools/agents/delegation.py` | `web_research`, `knowledge_analyze`, `reason` tools; `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`, `REASON_SPEC` |
+| `co_cli/tools/shell_policy.py` | `shell_exec` and `task_start` command-safety policy |
+| `co_cli/tools/agents/delegation.py` | `web_research`, `knowledge_analyze` tools; `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC` |
 | `co_cli/tools/files/read.py` | `file_read`, `file_find`, `file_search` |
 | `co_cli/tools/files/write.py` | `file_write`, `file_patch` |
 | `co_cli/tools/memory/recall.py` | `memory_search`, `session_search` |

@@ -58,7 +58,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ build_orchestrator(ORCHESTRATOR_SPEC, deps)
 │      composes static instructions from ORCHESTRATOR_SPEC.static_instruction_builders (3 builders:
 │      static, toolset guidance, personality critique), registers per-turn instructions
-│      (safety, current_time, tool_category_awareness, skill_manifest), and attaches history processors.
+│      (safety, current_time, deferred_tool_awareness, skill_manifest), and attaches history processors.
 │
 ├─ restore_session(deps, frontend) → current_session_path
 ├─ init_session_index(deps, current_session_path, frontend)
@@ -175,7 +175,7 @@ After bootstrap completes, `deps.config` is treated as read-only by convention e
 
 ### Step 11. Build the foreground agent
 
-Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, and calls `build_orchestrator(ORCHESTRATOR_SPEC, deps)`. The orchestrator builder composes its static instructions from the spec's three static builders (static instructions, toolset guidance, personality critique) and registers four per-turn callbacks (safety, current_time, tool_category_awareness, skill_manifest) — each pulls from `deps` (or `ctx.deps` for per-turn) directly. Prompt instruction assembly belongs to agent construction, not to bootstrap.
+Once `create_deps()` returns, `_chat_loop()` stores the chosen reasoning display mode in session state, refreshes the completer, and calls `build_orchestrator(ORCHESTRATOR_SPEC, deps)`. The orchestrator builder composes its static instructions from the spec's three static builders (static instructions, toolset guidance, personality critique) and registers four per-turn callbacks (safety, current_time, deferred_tool_awareness, skill_manifest) — each pulls from `deps` (or `ctx.deps` for per-turn) directly. Prompt instruction assembly belongs to agent construction, not to bootstrap.
 
 ### Step 12. Restore or create the session
 

@@ -76,10 +76,20 @@ async def test_real_turn_with_tool_call_populates_model_requests() -> None:
         f"expected at least one ModelResponse, got model_requests="
         f"{turn.model_requests} (direct count over full history={direct_count})"
     )
-    assert turn.model_requests == direct_count, (
-        f"accumulator ({turn.model_requests}) disagrees with direct count "
-        f"({direct_count}) over turn-local messages"
-    )
+    # On the interrupted path, _build_interrupted_turn_result deliberately drops
+    # the trailing ModelResponse when it carries unanswered ToolCallParts, so the
+    # accumulator (real request count) may exceed the ModelResponses left in the
+    # trimmed turn-local history. The strict equality only holds when not interrupted.
+    if turn.interrupted:
+        assert turn.model_requests >= direct_count, (
+            f"accumulator ({turn.model_requests}) is below direct count "
+            f"({direct_count}) on interrupted turn — should be >= after trim"
+        )
+    else:
+        assert turn.model_requests == direct_count, (
+            f"accumulator ({turn.model_requests}) disagrees with direct count "
+            f"({direct_count}) over turn-local messages"
+        )
 
 
 @pytest.mark.asyncio

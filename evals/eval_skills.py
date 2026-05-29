@@ -3,9 +3,11 @@
 Covers user-skill dispatch via ``/<skill> <args>`` (body expansion through
 ``run_turn`` with ``skill_env`` applied to the process environment),
 post-dispatch env restoration via ``cleanup_skill_run_state``, the
-``skill_manage`` write surface (create / patch / delete), and the
+``skill_manage`` write surface (create / patch / delete), the
 built-in-shadowing safety boundary that prevents a user skill from
-intercepting a built-in slash command.
+intercepting a built-in slash command, and (W4.E) the deferred-tool
+discovery diagnostic — a guarded SOFT_PASS-only case that activates only
+when ``skill_manage`` is DEFERRED.
 
 Per-case structure mirrors W1-W6: real CoDeps via ``make_eval_deps()``,
 real ``~/.co-cli/`` workspace, dispatch via ``co_cli.commands.core.dispatch``
@@ -45,7 +47,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent, LocalOnly, SlashOutcome
 from co_cli.context.orchestrate import run_turn
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.skills.lifecycle import cleanup_skill_run_state, refresh_skills
 from co_cli.tools.system.skills import skill_manage
 
@@ -522,12 +524,174 @@ async def case_w4_d_builtin_shadowing_blocked(
 
 
 # ---------------------------------------------------------------------------
+# W4.E — deferred skill_manage discovery (gated re-flip diagnostic)
+# ---------------------------------------------------------------------------
+
+
+def _eval_w4e_skill_body(name: str) -> str:
+    """Valid skill markdown for the discovery probe — passed verbatim to the model.
+
+    Pre-formed so the trial isolates *discovery* of the DEFERRED skill_manage tool
+    from content-generation quality: the only variable under test is whether the
+    model finds skill_manage via search_tools and creates with the given content.
+    """
+    return (
+        "---\n"
+        f"description: Eval W4.E discovery probe {name} — clears stale pytest logs.\n"
+        "---\n"
+        f"\n# {name}\n\n"
+        f"**Invocation:** /{name}\n\n"
+        "## Phase 1 — Locate\n\n"
+        "Find log files older than 7 days under .pytest-logs/.\n\n"
+        "## Phase 2 — Remove\n\n"
+        "Delete the located files.\n"
+    )
+
+
+async def case_w4_e_discovery(
+    deps: CoDeps,
+    agent,
+    frontend: EvalFrontend,
+    run,
+    trials: int = 3,
+) -> CaseResult:
+    """W4.E — does the model discover DEFERRED skill_manage via search_tools and create?
+
+    Diagnostic for the deferred-tool-stubs bet: with skill_manage flipped to DEFERRED
+    and the per-tool awareness stubs live, run ``trials`` independent discovery attempts.
+    Each trial drives one ``run_turn`` with a fresh ``message_history=[]`` asking the
+    model to save a procedure as a skill. A trial is a HIT when, in one turn, the model:
+    (1) calls ``search_tools`` (discovery), (2) calls ``skill_manage`` (loaded + invoked
+    the deferred tool), (3) leaves the skill on disk in the user skills dir, and (4) does
+    NOT fall back to ``file_write`` (the FM-3 cwd-pollution failure mode).
+
+    Independence note: the SDK's ToolSearchToolset derives "already discovered" state
+    from the message history (``_parse_discovered_tools`` walks ``ctx.messages``), NOT
+    from toolset-instance state. A fresh ``message_history=[]`` per trial therefore
+    re-defers skill_manage every trial, so reusing one bootstrap is genuinely independent
+    — and avoids the cross-task MCP teardown crash that per-trial ``make_eval_deps()``
+    bootstraps trigger (the plan's stated 'fresh deps per trial' rationale is moot).
+
+    Gate: HITS ≥ ceil(2/3 · trials) → keep skill_manage DEFERRED; below → revert to
+    ALWAYS. The gate result is recorded in ``reason`` for the human re-flip decision;
+    the verdict is always ``SOFT_PASS`` so a stochastic miss never flips the eval's
+    process exit code (``CaseResult.passed`` is True only for PASS/SOFT_PASS, so
+    SOFT_FAIL would redden the run — avoided here by design).
+
+    Also captures the measured stub-prompt char length from the live bootstrap.
+    """
+    case_id = "W4.E"
+    t0 = time.monotonic()
+    trace_file = run.case_trace_path(case_id)
+    trace_file.touch(exist_ok=True)
+
+    skill_info = deps.tool_index.get("skill_manage")
+    if skill_info is None or skill_info.visibility != VisibilityPolicyEnum.DEFERRED:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.SOFT_PASS,
+            duration_s=time.monotonic() - t0,
+            trace_files=[str(trace_file.relative_to(run.dir.parent))],
+            reason=(
+                "inert: skill_manage is ALWAYS, not DEFERRED — the deferred-discovery "
+                "path has no target. Re-flip skill_manage to DEFERRED to re-test FM-2/3 "
+                "(stubs alone were insufficient; binding constraint is the loader UX)."
+            ),
+        )
+
+    from co_cli.tools.deferred_prompt import build_deferred_tool_awareness_prompt
+
+    stub_chars = len(build_deferred_tool_awareness_prompt(deps.tool_index))
+
+    threshold = -(-2 * trials // 3)
+    hits = 0
+    trial_notes: list[str] = []
+    total_model_seconds = 0.0
+    token_usage: dict[str, int] = {}
+
+    for i in range(trials):
+        name = f"eval_w4e_discovery_{i}"
+        skill_path = deps.user_skills_dir / f"{name}.md"
+        try:
+            if skill_path.exists():
+                skill_path.unlink()
+                refresh_skills(deps)
+
+            prompt = (
+                f"I just worked out a reliable multi-step procedure for clearing stale "
+                f"pytest logs. Save it as a reusable skill named {name!r} and create it "
+                f"on disk now. Use exactly this content:\n\n{_eval_w4e_skill_body(name)}"
+            )
+            tool_names: list[str] = []
+            try:
+                async with asyncio.timeout(CALL_TIMEOUT_S):
+                    _turn_result, turn_trace = await record_turn(
+                        case_id=case_id,
+                        turn_index=i,
+                        user_input=prompt,
+                        run_turn_callable=lambda p=prompt: run_turn(
+                            agent=agent,
+                            user_input=p,
+                            deps=deps,
+                            message_history=[],
+                            frontend=frontend,
+                        ),
+                        case_dir_path=trace_file,
+                        agent=agent,
+                    )
+                total_model_seconds += turn_trace.model_call_seconds
+                for k, v in turn_trace.token_usage.items():
+                    token_usage[k] = token_usage.get(k, 0) + v
+                tool_names = [tc.tool_name for tc in turn_trace.tool_calls]
+            except TimeoutError:
+                trial_notes.append(f"t{i}=timeout")
+                continue
+            except Exception as exc:
+                trial_notes.append(f"t{i}=err({type(exc).__name__})")
+                continue
+
+            searched = "search_tools" in tool_names
+            managed = "skill_manage" in tool_names
+            on_disk = skill_path.exists()
+            polluted = "file_write" in tool_names
+            hit = searched and managed and on_disk and not polluted
+            if hit:
+                hits += 1
+            trial_notes.append(
+                f"t{i}={'HIT' if hit else 'miss'}"
+                f"[search={int(searched)},manage={int(managed)},"
+                f"disk={int(on_disk)},fw={int(polluted)}]"
+            )
+        finally:
+            if skill_path.exists():
+                skill_path.unlink(missing_ok=True)
+                refresh_skills(deps)
+
+    gate_pass = hits >= threshold
+    reason = (
+        f"discovery {hits}/{trials} (gate {'PASS' if gate_pass else 'FAIL'}, "
+        f"need ≥{threshold}) — {'keep DEFERRED' if gate_pass else 'revert to ALWAYS'}; "
+        f"stub_prompt={stub_chars}c; {', '.join(trial_notes)}"
+    )
+
+    return CaseResult(
+        name=case_id,
+        verdict=Verdict.SOFT_PASS,
+        duration_s=time.monotonic() - t0,
+        model_call_seconds=total_model_seconds,
+        token_usage=token_usage,
+        trace_files=[str(trace_file.relative_to(run.dir.parent))],
+        reason=reason,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 
 async def main() -> int:
-    """Run W4.A through W4.D against real CoDeps and emit the REPORT.
+    """Run W4.A through W4.E against real CoDeps and emit the REPORT.
 
     Ollama warm-up runs outside any ``asyncio.timeout`` per behavioral
     constraint #3. Each case captures its own verdict; a failure in one
@@ -603,6 +767,22 @@ async def main() -> int:
             print(
                 f"[skills] {cr_d.name}: {'PASS' if cr_d.passed else 'FAIL'} — "
                 f"{cr_d.reason or 'ok'}"
+            )
+
+            try:
+                cr_e = await case_w4_e_discovery(deps, agent, frontend, run)
+            except Exception as exc:
+                cr_e = CaseResult(
+                    name="W4.E",
+                    verdict=Verdict.SOFT_PASS,
+                    duration_s=0.0,
+                    reason=f"diagnostic errored: {type(exc).__name__}: {exc}",
+                )
+            cases.append(cr_e)
+            run.append(cr_e)
+            print(
+                f"[skills] {cr_e.name}: {'SOFT_PASS' if cr_e.passed else 'SOFT_FAIL'} — "
+                f"{cr_e.reason or 'ok'}"
             )
 
             prepend_report(

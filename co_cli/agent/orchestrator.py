@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 
 from co_cli.agent._instructions import (
     current_time_prompt,
+    deferred_tool_awareness_prompt,
     safety_prompt,
     skill_manifest_prompt,
-    tool_category_awareness_prompt,
 )
 from co_cli.agent.spec import OrchestratorSpec
 from co_cli.context.compaction import proactive_window_processor
@@ -59,7 +59,7 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
     per_turn_instructions=(
         safety_prompt,
         current_time_prompt,
-        tool_category_awareness_prompt,
+        deferred_tool_awareness_prompt,
         skill_manifest_prompt,
     ),
     history_processors=(

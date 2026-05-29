@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.270]
+
+### Deferred-tool awareness — auto-generated per-tool stubs
+
+Replaces the hardcoded, category-level deferred-tool hint with per-tool stubs derived from `tool_index` — complete by construction, so no future DEFERRED tool can be silently omitted from the prompt. Re-tested the `skill_manage` DEFERRED flip on top of the stubs; the gated discovery eval failed (0/3 < 2/3), proving awareness was not the binding constraint (the `search_tools`→load→call loader UX is), so `skill_manage` stays ALWAYS. The awareness + regression-guard value ships regardless.
+
+- **`co_cli/tools/deferred_prompt.py`** — body rewrite: iterate `tool_index`, select `visibility == DEFERRED`, emit one `` - `name`: <one-liner> `` line per tool under a `search_tools` directive. One-liner rule: first non-empty line of `description`, stripped, truncated to ≤100 chars (ellipsis in-budget); empty-description → name-only. Empty-set returns `""`. Drops `_NATIVE_TOOL_CATEGORIES` / `_REPS` / `_INTEGRATION_TOOL_CATEGORIES`. Renamed `tool_category_awareness_prompt` → `deferred_tool_awareness_prompt` (the category concept is gone).
+- **`co_cli/agent/_instructions.py`, `co_cli/agent/orchestrator.py`** — rename + docstring; builder stays per-turn (post-static), preserving the v0.8.266 cached-prefix invariant.
+- **`tests/test_flow_deferred_tool_stubs.py`** (new) — completeness, exclusion, one-liner cap, empty-description fallback, truncation, first-line, `search_tools` directive, and empty-set contract, built from a real native bootstrap `tool_index`.
+- **`evals/eval_skills.py`, `evals/_deps.py`** — adds `case_w4_e_discovery` (N≥3 independent trials, self-skipping `SOFT_PASS` guard that auto-reactivates if `skill_manage` is ever re-flipped to DEFERRED); `EvalFrontend` prompt methods made async to match the awaited frontend protocol.
+- **`tests/test_flow_turn_result_model_requests.py`** — fix a latent test-invariant bug: on the interrupted path `_build_interrupted_turn_result` deliberately trims the trailing tool-call response, so the request accumulator may exceed the trimmed history's `ModelResponse` count; the assertion now branches on `turn.interrupted` (`>=` when interrupted, `==` otherwise).
+- **specs** — `prompt-assembly.md`, `tools.md`, `personality.md`, `bootstrap.md`, `01-system.md`: identifier rename + category→per-tool prose.
+
 ## [0.8.268]
 
 ### REPL bounded input queue — config-gated cap + drop policy (Phase 3)

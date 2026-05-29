@@ -25,7 +25,7 @@ build_orchestrator(ORCHESTRATOR_SPEC, deps)
     → joined and set as Agent.instructions (static, once per session)
 
     then registers ORCHESTRATOR_SPEC.per_turn_instructions via agent.instructions():
-    [safety_prompt, current_time_prompt, tool_category_awareness_prompt, skill_manifest_prompt]
+    [safety_prompt, current_time_prompt, deferred_tool_awareness_prompt, skill_manifest_prompt]
     → each emitted as InstructionPart(dynamic=True), evaluated fresh per request
 
 Character canon (souls/{role}/memories/*.md) is indexed at bootstrap by `_sync_canon_store()`
@@ -106,9 +106,9 @@ for builder in ORCHESTRATOR_SPEC.static_instruction_builders:
 static_instructions = "\n\n".join(parts)
 ```
 
-The `<available_skills>` manifest and deferred-tool-category awareness are NOT in this static
+The `<available_skills>` manifest and deferred-tool awareness are NOT in this static
 block; they are emitted by per-turn `agent.instructions()` callbacks
-(`skill_manifest_prompt`, `tool_category_awareness_prompt`) so that `skill_index` /
+(`skill_manifest_prompt`, `deferred_tool_awareness_prompt`) so that `skill_index` /
 `tool_index` mutations do not invalidate the cached prefix. See [prompt-assembly.md](prompt-assembly.md) §2.2–2.3.
 
 Character canon (`memories/*.md`) is NOT included in the static prompt. It is indexed at
@@ -219,4 +219,4 @@ for missing mindset files.
 | `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agent/build.py` | `build_orchestrator()` — iterates `ORCHESTRATOR_SPEC.static_instruction_builders` and registers per-turn instruction callbacks |
 | `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` and its 3 static-instruction builder closures + 4 per-turn instruction callbacks |
-| `co_cli/agent/_instructions.py` | Per-turn callbacks: `safety_prompt`, `current_time_prompt`, `tool_category_awareness_prompt`, `skill_manifest_prompt` |
+| `co_cli/agent/_instructions.py` | Per-turn callbacks: `safety_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt` |

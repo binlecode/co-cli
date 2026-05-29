@@ -48,15 +48,15 @@ class EvalFrontend(TerminalFrontend):
     output a real REPL would produce.
     """
 
-    def prompt_approval(self, subject: ApprovalSubject) -> str:
+    async def prompt_approval(self, subject: ApprovalSubject) -> str:
         return "a" if subject.can_remember else "y"
 
-    def prompt_question(self, prompt: QuestionPrompt) -> str:
+    async def prompt_question(self, prompt: QuestionPrompt) -> str:
         if prompt.options:
             return prompt.options[0]
         return ""
 
-    def prompt_confirm(self, message: str) -> bool:
+    async def prompt_confirm(self, message: str) -> bool:
         return True
 
 

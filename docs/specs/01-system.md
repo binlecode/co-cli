@@ -122,7 +122,7 @@ Approval gates run per-tool-call; retries wrap individual tool failures. The age
 Every turn's system prompt is assembled from three layers injected before the agent run:
 
 1. **Static** — soul seed + mindsets + behavioral rules + toolset guidance + personality critique lens (injected at agent construction, byte-stable across turns)
-2. **Per-turn instructions** — safety warnings, current time, deferred-tool-category awareness, and the `<available_skills>` skill manifest; emitted as `InstructionPart(dynamic=True)` so live `deps` state surfaces without churning the cached prefix
+2. **Per-turn instructions** — safety warnings, current time, deferred-tool awareness (per-tool stubs), and the `<available_skills>` skill manifest; emitted as `InstructionPart(dynamic=True)` so live `deps` state surfaces without churning the cached prefix
 3. **Recall** — `memory_search` + `session_search` results injected into the turn context window
 
 Recall is search-driven and on-demand — nothing is wholesale injected into every turn. History processors (compaction, spill placeholders) apply in the pre-run pass.
