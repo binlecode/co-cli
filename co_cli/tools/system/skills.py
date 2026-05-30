@@ -78,12 +78,6 @@ _NAME_RE: re.Pattern = re.compile(r"^[a-z0-9_-]+$")
 _MAX_DESCRIPTION_CHARS: int = 1024
 _MAX_SKILL_CHARS: int = 50_000
 
-_LINKED_FILE_ERROR = (
-    "Linked files (file_path) are not yet supported in co-cli. "
-    "SKILL.md is the only writable target. "
-    "Track this gap in RESEARCH-skills-peers-tiers.md §T3-D."
-)
-
 
 def _find_user_skill(deps: CoDeps, name: str) -> Path | None:
     """Return Path under user_skills_dir if <name>.md exists, else None."""
@@ -135,9 +129,7 @@ def _lint_warnings(content: str) -> list[str]:
     return [f"{f.rule}: {f.message}" for f in lint_skill(content)]
 
 
-def _skill_create(
-    ctx: RunContext[CoDeps], name: str, content: str | None, category: str | None
-) -> ToolReturn:
+def _skill_create(ctx: RunContext[CoDeps], name: str, content: str | None) -> ToolReturn:
     if not content:
         return tool_error("content is required for 'create'.", ctx=ctx)
     err = _validate_skill_content(content)
@@ -158,8 +150,6 @@ def _skill_create(
 
     record_create(ctx.deps, name)
     result: dict = {"success": True, "message": f"Skill {name!r} created.", "path": str(path)}
-    if category:
-        result["category_ignored"] = True
     warnings = _lint_warnings(content)
     if warnings:
         result["lint_warnings"] = warnings
@@ -208,14 +198,11 @@ def _skill_patch(
     old_string: str | None,
     new_string: str | None,
     replace_all: bool,
-    file_path: str | None = None,
 ) -> ToolReturn:
     if not old_string:
         return tool_error("old_string is required for 'patch'.", ctx=ctx)
     if new_string is None:
         return tool_error("new_string is required for 'patch'.", ctx=ctx)
-    if file_path:
-        return tool_error(_LINKED_FILE_ERROR, ctx=ctx)
     path = _find_user_skill(ctx.deps, name)
     if path is None:
         return tool_error(
@@ -309,12 +296,9 @@ def _skill_manage_approval_subject(args: dict) -> ApprovalSubject:
 )
 async def skill_manage(
     ctx: RunContext[CoDeps],
-    action: Literal["create", "edit", "patch", "delete", "write_file", "remove_file"],
+    action: Literal["create", "edit", "patch", "delete"],
     name: str = "",
     content: str | None = None,
-    category: str | None = None,
-    file_path: str | None = None,
-    file_content: str | None = None,
     old_string: str | None = None,
     new_string: str | None = None,
     replace_all: bool = False,
@@ -343,23 +327,18 @@ async def skill_manage(
     Bundled skills are read-only; copy to ~/.co-cli/skills/ first to modify them.
 
     Actions:
-      create      Write a new skill (requires content with valid frontmatter + description).
-      edit        Replace an existing user-installed skill's full content.
-      patch       Surgical find-and-replace within a skill body.
-      delete      Remove a user-installed skill.
-      write_file  Not yet supported — returns error.
-      remove_file Not yet supported — returns error.
+      create  Write a new skill (requires content with valid frontmatter + description).
+      edit    Replace an existing user-installed skill's full content.
+      patch   Surgical find-and-replace within a skill body.
+      delete  Remove a user-installed skill.
 
     Args:
-        action:      One of the six actions above.
-        name:        Skill name for create/edit/patch/delete.
+        action:      One of create | edit | patch | delete.
+        name:        Skill name.
         content:     Full SKILL.md content for create/edit (frontmatter + body).
-        category:    Category hint (accepted for hermes parity; silently ignored today).
-        file_path:   Linked-file path within the skill (not yet supported).
-        file_content: Linked-file body (not yet supported).
         old_string:  Text to find for patch.
         new_string:  Replacement text for patch.
-        replace_all: When True replace all occurrences; otherwise require exactly one match.
+        replace_all: Replace all matches; default requires exactly one.
     """
     if not _NAME_RE.match(name) or len(name) > 64:
         return tool_error(
@@ -368,15 +347,13 @@ async def skill_manage(
             ctx=ctx,
         )
     if action == "create":
-        return _skill_create(ctx, name, content, category)
+        return _skill_create(ctx, name, content)
     if action == "edit":
         return _skill_edit(ctx, name, content)
     if action == "patch":
-        return _skill_patch(ctx, name, old_string, new_string, replace_all, file_path)
+        return _skill_patch(ctx, name, old_string, new_string, replace_all)
     if action == "delete":
         return _skill_delete(ctx, name)
-    if action in ("write_file", "remove_file"):
-        return tool_error(_LINKED_FILE_ERROR, ctx=ctx)
     return tool_error(
         f"Unknown action {action!r}. Valid actions: create, edit, patch, delete.",
         ctx=ctx,
