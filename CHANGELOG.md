@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.272]
+
+### Tool-surface small-model audit — Task 1 (Pattern 5: dead params & broken references)
+
+Removes dead/parity surface from `skill_view` and fixes the V4A patch parser's silent handling of unsupported directives. Surface-correctness cleanup for small models; no registry or native-tool-count change.
+
+- **`co_cli/tools/system/skills.py`** — `skill_view`: dropped the dead `file_path` parameter (every non-None value errored) and the always-empty `linked_files={}` return stub; removed the inert `plugin:skill` prefix-strip (co has no plugin namespace) and inlined the `lookup` alias to `name`. Plugin-prefixed names now return a clean unknown-skill error instead of silently stripping.
+- **`co_cli/tools/files/_v4a.py`** — `parse_v4a_patch` now rejects any unrecognized `*** Xxx File:` directive (e.g. `Move File`) with an explicit parse error, instead of silently absorbing it as a hunk context line.
+- **`co_cli/tools/files/write.py`** — converted the unreachable `else: continue` (silent MOVE skip) in `_apply_v4a_patch` into an explicit error return.
+- **`docs/specs/skills.md`** — synced the `skill_view` signature/prose; fixed three verification rows that pointed at the nonexistent `tests/test_flow_skills_tools.py` → `tests/test_flow_skills_manage.py`.
+- **Tests** — added `test_file_patch_v4a_mode_rejects_unsupported_move_directive`; removed the now-dead `file_path` and `plugin`-qualified `skill_view` tests.
+
 ## [0.8.270]
 
 ### Deferred-tool awareness — auto-generated per-tool stubs

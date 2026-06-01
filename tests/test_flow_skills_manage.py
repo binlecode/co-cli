@@ -450,7 +450,6 @@ async def test_skill_view_returns_body_inline(tmp_path: Path) -> None:
     ctx = _make_ctx(deps, tool_name="skill_view")
     result = await skill_view(ctx, name="doctor")
     assert result.metadata.get("error") is None
-    assert result.metadata["linked_files"] == {}
     assert result.metadata["name"] == "doctor"
     assert "<persisted-output>" not in result.return_value
     assert len(result.return_value) > 0
@@ -468,16 +467,6 @@ async def test_skill_view_body_not_spilled_when_large(tmp_path: Path) -> None:
     result = await skill_view(ctx, name="big-skill")
     assert "<persisted-output>" not in result.return_value
     assert result.return_value == large_body
-
-
-@pytest.mark.asyncio
-async def test_skill_view_plugin_qualified_name(tmp_path: Path) -> None:
-    """skill_view with plugin-qualified name 'plugin:doctor' resolves to doctor body."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps, tool_name="skill_view")
-    result = await skill_view(ctx, name="anyplugin:doctor")
-    assert result.metadata.get("error") is None
-    assert result.metadata["name"] == "doctor"
 
 
 @pytest.mark.asyncio
@@ -505,14 +494,3 @@ async def test_skill_view_blocked_skill(tmp_path: Path) -> None:
     assert result.metadata is not None
     assert result.metadata.get("error") is True
     assert "not model-invocable" in result.return_value
-
-
-@pytest.mark.asyncio
-async def test_skill_view_file_path_unsupported(tmp_path: Path) -> None:
-    """skill_view with file_path returns tool_error (flat-file degeneracy guard)."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    result = await skill_view(ctx, name="doctor", file_path="references/x.md")
-    assert result.metadata is not None
-    assert result.metadata.get("error") is True
-    assert "has no linked files" in result.return_value

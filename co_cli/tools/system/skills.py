@@ -4,7 +4,7 @@ Hermes-parity port: skill_view (read surface) and skill_manage (write surface).
 Read surface: hermes-agent/tools/skills_tool.py:1440-1512.
 Write surface: hermes-agent/tools/skill_manager_tool.py:647-720.
 
-Co-cli's flat-file skill model degenerates file_path and linked_files to stubs for now.
+Co-cli's flat-file skill model has no linked files; skill_view returns the SKILL.md body only.
 """
 
 import json
@@ -38,36 +38,26 @@ from co_cli.tools.tool_io import tool_error, tool_output
 async def skill_view(
     ctx: RunContext[CoDeps],
     name: str,
-    file_path: str | None = None,
 ) -> ToolReturn:
-    """Load a skill's full content. Returns SKILL.md body plus a 'linked_files' dict.
+    """Load a skill's full SKILL.md content.
 
     Call before skill_manage(action='edit') or skill_manage(action='patch')
-    to read current content. Don't edit blind.
-
-    First call (no file_path) returns the skill body and an empty linked_files dict.
-    Co-cli's flat-file skill model has no linked files today; any non-None file_path
-    returns a tool_error.
+    to read current content — don't edit blind.
 
     Args:
-        name: Skill name. Plugin-qualified form 'plugin:skill' is accepted —
-            co-cli has no plugin namespace, so the prefix is dropped.
-        file_path: Linked file path within the skill. Not supported in co-cli today.
+        name: Skill name, e.g. "deep-research" (the filename_stem from the skill manifest).
     """
-    lookup = name.split(":", 1)[1] if ":" in name else name
-    skill = ctx.deps.skill_index.get(lookup)
+    skill = ctx.deps.skill_index.get(name)
     if skill is None:
         return tool_error(f"skill_view: unknown skill {name!r}.", ctx=ctx)
     if skill.disable_model_invocation:
         return tool_error(f"skill_view: skill {name!r} is not model-invocable.", ctx=ctx)
-    if file_path is not None:
-        return tool_error(f"skill_view: skill {name!r} has no linked files.", ctx=ctx)
     from co_cli.skills.usage import bump_recall, bump_use, bump_view
 
-    bump_view(ctx.deps, lookup)
-    bump_use(ctx.deps, lookup)
-    bump_recall(ctx.deps, lookup)
-    return tool_output(skill.body, ctx=ctx, name=lookup, linked_files={})
+    bump_view(ctx.deps, name)
+    bump_use(ctx.deps, name)
+    bump_recall(ctx.deps, name)
+    return tool_output(skill.body, ctx=ctx, name=name)
 
 
 # ---------------------------------------------------------------------------

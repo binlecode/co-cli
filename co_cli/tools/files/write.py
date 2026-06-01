@@ -414,7 +414,7 @@ async def _apply_v4a_patch(
         elif op.operation == OperationType.DELETE:
             result = _compute_v4a_delete(op, resolved, ctx)
         else:
-            continue  # MOVE not supported; skip
+            return f"file_patch: unsupported V4A operation {op.operation.value!r}"
 
         if isinstance(result, str):
             return result

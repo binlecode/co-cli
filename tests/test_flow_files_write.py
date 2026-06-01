@@ -206,3 +206,19 @@ async def test_file_patch_v4a_mode_adds_new_file(tmp_path: Path) -> None:
     assert result.metadata.get("error") is not True
     assert (tmp_path / "newmod.py").exists()
     assert "x = 1" in (tmp_path / "newmod.py").read_text()
+
+
+@pytest.mark.asyncio
+async def test_file_patch_v4a_mode_rejects_unsupported_move_directive(tmp_path: Path) -> None:
+    """A Move File directive is rejected with explicit feedback, not silently misparsed."""
+    deps = _make_deps(tmp_path)
+    ctx = _ctx(deps)
+
+    v4a = "*** Begin Patch\n*** Move File: old.py\n*** End Patch\n"
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await file_patch(ctx, mode="patch", patch=v4a)
+
+    assert result.metadata is not None
+    assert result.metadata.get("error") is True
+    assert "Move File" in result.return_value

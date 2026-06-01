@@ -72,6 +72,7 @@ def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], str | Non
         update_match = re.match(r"\*\*\*\s*Update\s+File:\s*(.+)", line)
         add_match = re.match(r"\*\*\*\s*Add\s+File:\s*(.+)", line)
         delete_match = re.match(r"\*\*\*\s*Delete\s+File:\s*(.+)", line)
+        unknown_directive = re.match(r"\*\*\*\s*(\w+)\s+File:", line)
 
         if update_match:
             if current_op:
@@ -96,6 +97,11 @@ def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], str | Non
             operations.append(current_op)
             current_op = None
             current_hunk = None
+        elif unknown_directive:
+            return [], (
+                f"Unsupported V4A directive: {unknown_directive.group(1)} File "
+                "(only Update, Add, and Delete are supported)"
+            )
         elif line.startswith("@@"):
             if current_op:
                 if current_hunk and current_hunk.lines:

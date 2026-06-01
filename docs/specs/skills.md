@@ -298,9 +298,9 @@ Single write entry point for the skills channel. `co_cli/tools/system/skills.py`
 
 `edit`, `patch`, and `delete` reject bundled-only skills ("copy to `~/.co-cli/skills/` first"). After every successful write, `refresh_skills(deps)` re-loads and re-indexes so the change is immediately dispatchable.
 
-#### `skill_view(name, file_path=None)`
+#### `skill_view(name)`
 
-Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; prefix stripped. `spill_threshold_chars=inf` — body always lands inline regardless of size. `file_path` always returns `tool_error`.
+Returns a skill's full body, addressed by the `filename_stem` from the skill manifest. `spill_threshold_chars=inf` — body always lands inline regardless of size.
 
 ### Loader and registry
 
@@ -387,9 +387,8 @@ Returns a skill's full body. Plugin-qualified names (`plugin:skill`) accepted; p
 | delete removes user copy; promotes bundled shadow | `tests/test_flow_skills_manage.py` |
 | delete rejects nonexistent and bundled-only skills | `tests/test_flow_skills_manage.py` |
 | size_warning emitted when skill count reaches 30 | `tests/test_flow_skills_manage.py` |
-| skill_view returns body inline regardless of size | `tests/test_flow_skills_tools.py` |
-| skill_view resolves plugin-qualified names | `tests/test_flow_skills_tools.py` |
-| skill_view errors on unknown name, hidden skill, or file_path | `tests/test_flow_skills_tools.py` |
+| skill_view returns body inline regardless of size | `tests/test_flow_skills_manage.py` |
+| skill_view errors on unknown name or hidden skill | `tests/test_flow_skills_manage.py` |
 | Dream-daemon skill merge/decay coverage | `tests/daemons/dream/test_skill_housekeeping.py` (see [dream.md §7](dream.md)) |
 | usage sidecar read/write roundtrip; returns empty when missing or corrupt | `tests/test_flow_skill_usage.py` |
 | write_records is atomic | `tests/test_flow_skill_usage.py` |
