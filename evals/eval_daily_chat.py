@@ -340,7 +340,7 @@ async def _case_w1_b_tool_chain(
 ) -> CaseResult:
     """W1.B — 2-turn tool chain.
 
-    Turn 0 asks for a directory listing (expects ``file_find`` or ``shell_exec ls``).
+    Turn 0 asks for a directory listing (expects ``file_search`` with a path glob or ``shell_exec ls``).
     Turn 1 asks to read a specific file by name (expects ``file_read`` or
     ``shell_exec cat/head``). PASS requires both turns picked an appropriate
     tool — the second turn proves the agent can carry on after a tool result
@@ -373,7 +373,7 @@ async def _case_w1_b_tool_chain(
         t0_names = [tc.tool_name for tc in t0_calls]
         t1_names = [tc.tool_name for tc in t1_calls]
 
-        t0_tool_ok = "file_find" in t0_names or _used_shell_command(t0_calls, "ls")
+        t0_tool_ok = "file_search" in t0_names or _used_shell_command(t0_calls, "ls")
         t1_tool_ok = (
             "file_read" in t1_names
             or "file_view" in t1_names

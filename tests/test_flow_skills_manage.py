@@ -301,38 +301,6 @@ async def test_delete_bundled_only_skill_errors(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# linked-file stubs
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_write_file_stub_returns_linked_file_error(tmp_path: Path) -> None:
-    """write_file action returns linked-file-deferred error."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    result = await skill_manage(ctx, action="write_file", name="my-skill", file_path="x.md")
-    assert _is_error(result)
-    assert "not yet supported" in result.return_value
-
-
-@pytest.mark.asyncio
-async def test_patch_with_file_path_returns_linked_file_error(tmp_path: Path) -> None:
-    """patch with file_path set returns linked-file-deferred error."""
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    result = await skill_manage(
-        ctx,
-        action="patch",
-        name="my-skill",
-        old_string="x",
-        new_string="y",
-        file_path="references/x.md",
-    )
-    assert _is_error(result)
-    assert "not yet supported" in result.return_value
-
-
-# ---------------------------------------------------------------------------
 # invalid name validation
 # ---------------------------------------------------------------------------
 

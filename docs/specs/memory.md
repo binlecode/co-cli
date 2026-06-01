@@ -12,6 +12,10 @@ Memory holds long-term declarative memory items: facts the agent has accumulated
 
 Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, bundled skill manifest) is injected once at agent construction. Memory items are loaded on-demand through the recall tool surface, keeping context bounded and recall purposeful.
 
+### Memory vs. files on disk
+
+Memory holds only co's **own curated** declarative items. External file- or folder-based knowledge (a notes vault, a docs tree) is **not** memory and is never re-indexed into the memory DB — a mirrored second copy goes stale and reimplements (worse) what the filesystem already holds. Such data is reached through the file tools ([tools.md](tools.md): `file_search` / `file_read`), which read the filesystem live; `memory_search` covers only the curated memory corpus. The dividing line is **ownership + curation, not file format**: co owns and curates it → memory pipeline; co only reads someone else's folder → file tools. Promoting an external note into durable memory is a deliberate `memory_manage` act, never automatic.
+
 ```mermaid
 flowchart TD
     MemoryFiles["memory items\n(~/.co-cli/memory/*.md)"] -->|"source='memory'"| IndexDB["co-cli-search.db\n(IndexStore + FTS5 + optional vec)"]

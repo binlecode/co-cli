@@ -636,7 +636,7 @@ Internal caps (housekeeping — apply to both domains):
 | Property | Test file |
 |---|---|
 | `memory_manage` reset — no crossover; `delete` does not reset | `tests/tools/memory/test_manage_resets.py` |
-| `skill_manage` reset — no crossover; `write_file`/`remove_file` do not reset | `tests/tools/system/test_skill_manage_resets.py` |
+| `skill_manage` reset — `create`/`edit`/`patch` reset; `delete` does not | `tests/tools/system/test_skill_manage_resets.py` |
 | Memory recall updates on `memory_search`; backward-compat load | `tests/tools/memory/test_recall_metrics.py` |
 | Skill recall sidecar `recall_days`; deduplication; backward-compat | `tests/skills/test_usage_recall_days.py` |
 | `.tmp` skip filter and FIFO drain order; `last_error` injection on `failed/` move | `tests/daemons/dream/test_queue.py` |
