@@ -271,7 +271,7 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | `co_cli/agent/build.py` | Agent builders (`build_orchestrator()`, `build_task_agent()`) |
 | `co_cli/agent/spec.py` | `OrchestratorSpec` and `TaskAgentSpec` declarative records |
 | `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` — always-present primary agent record |
-| `co_cli/agent/run.py` | Task-agent runners: `run_in_turn` (in-turn, depth-checked, usage-merged) and `run_standalone` (daemon) |
+| `co_cli/agent/run.py` | Task-agent runners: `run_standalone` (daemon) plus `run_attempt`, the in-turn primitive driven by tool wrappers |
 | `co_cli/agent/core.py` | Toolset composition helpers (`build_native_toolset`, `build_mcp_entries`, `assemble_routing_toolset`) |
 | `co_cli/agent/toolset.py` | Native toolset construction and tool registry |
 | `co_cli/agent/mcp.py` | MCP toolset wiring and discovery |

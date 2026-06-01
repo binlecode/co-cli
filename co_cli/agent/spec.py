@@ -2,7 +2,7 @@
 
 Daemons are task agents — the in-turn vs daemon distinction is lifecycle
 ownership (which runner you call), not spec shape. Both share TaskAgentSpec.
-run_in_turn always depth-checks; run_standalone never does.
+run_standalone never depth-checks — daemons are top-level.
 """
 
 from __future__ import annotations

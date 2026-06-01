@@ -26,7 +26,6 @@ TOOL_START_DISPLAY_ARG: dict[str, str] = {
     "memory_view": "name",
     "session_view": "session_id",
     "web_research": "query",
-    "knowledge_analyze": "question",
     "task_start": "command",
     "task_status": "task_id",
 }

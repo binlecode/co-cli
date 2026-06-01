@@ -12,7 +12,7 @@ from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
 
 # Import all tool modules to trigger @agent_tool self-registration into TOOL_REGISTRY.
-from co_cli.tools.agents.delegation import knowledge_analyze, web_research  # noqa: F401
+from co_cli.tools.agents.delegation import web_research  # noqa: F401
 from co_cli.tools.files.read import file_read, file_search  # noqa: F401
 from co_cli.tools.files.write import file_patch, file_write  # noqa: F401
 from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search  # noqa: F401

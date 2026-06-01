@@ -17,7 +17,7 @@ graph TD
     subgraph TaskPath["Per-call task agents"]
         TS --> BT["build_task_agent(spec, deps, model)"]
         BT -->|"TOOL_REGISTRY_BY_NAME[name]\nfor name in spec.tool_names"| TA["Task Agent"]
-        TA --> RIT["run_in_turn\n(in-turn delegation)"]
+        TA --> RIT["run_attempt\n(in-turn delegation, own span)"]
         TA --> RST["run_standalone\n(daemon)"]
     end
     RIT -.usage merge.-> Parent["parent turn_usage"]
@@ -31,15 +31,14 @@ graph TD
 | `OrchestratorSpec` | Always-present primary agent | Built once per chat session | None (`deps.toolset` injected directly) | `static_instruction_builders`, `per_turn_instructions`, `history_processors` |
 | `TaskAgentSpec` | Focused task agent (delegation or daemon) | Built per call | `tool_names: tuple[str, ...]` | `instructions`, `output_type`, `default_budget`, `error_message`, `include_skill_manifest` |
 
-No shared base. The two specs do not feed a polymorphic dispatcher — inheritance would be decorative. Runner choice (`run_in_turn` vs `run_standalone`) selects lifecycle, not spec shape.
+No shared base. The two specs do not feed a polymorphic dispatcher — inheritance would be decorative. Runner choice (the daemon `run_standalone` vs a tool wrapper driving `run_attempt` in its own span) selects lifecycle, not spec shape.
 
 ### Concrete specs
 
 | Spec | Owner module | Caller | Runner |
 |------|--------------|--------|--------|
 | `ORCHESTRATOR_SPEC` | `co_cli/agent/orchestrator.py` | `_chat_loop` in `main.py` | `build_orchestrator` directly |
-| `WEB_RESEARCH_SPEC` | `co_cli/tools/agents/delegation.py` | `web_research` tool | `_run_attempt` ×2 in own span (retry-on-empty) |
-| `KNOWLEDGE_ANALYZE_SPEC` | `co_cli/tools/agents/delegation.py` | `knowledge_analyze` tool | `run_in_turn` |
+| `WEB_RESEARCH_SPEC` | `co_cli/tools/agents/delegation.py` | `web_research` tool | `run_attempt` ×2 in own span (retry-on-empty) |
 | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | `process_review` (dream daemon, queue-driven) | `run_standalone` |
 
 **Curation rule.** Specs live with the caller that owns the agent's purpose — delegation specs sit alongside their tool wrappers; daemon specs sit alongside their daemon orchestration. The `co_cli/agent/` package owns lifecycle (build + run) and the orchestrator spec only.
@@ -50,7 +49,7 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
 
 `build_task_agent(spec, deps, model)` (`co_cli/agent/build.py`) resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME` (populated by `@agent_tool` at import time), filters through `_config_requirement_met` to drop integration tools whose credentials are absent, and registers each resolved tool with `requires_approval=False`. Unknown names raise `ValueError` at build time. When `spec.include_skill_manifest=True`, the rendered skill manifest is prepended to `spec.instructions(deps)`.
 
-`run_in_turn(spec, ctx, prompt, budget)` and `run_standalone(spec, deps, prompt, budget, model_settings)` (`co_cli/agent/run.py`) are the two task-agent runners. `_run_attempt` is the inner primitive both share — `web_research` calls it twice inside a single outer span via `@trace("co.web_research.retry_loop")` so the two attempts share one parent retry-envelope span.
+`run_standalone(spec, deps, prompt, budget, model_settings)` (`co_cli/agent/run.py`) is the daemon task-agent runner. `run_attempt` is the inner primitive — `web_research` calls it twice inside a single outer span via `@trace("co.web_research.retry_loop")` so the two attempts share one parent retry-envelope span.
 
 ## 2. Core Logic
 
@@ -71,7 +70,9 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
        include_skill_manifest=False,   # True only when the agent reads/edits skills
      )
 3. Wire the runner:
-     in-turn delegation → return await run_in_turn(SPEC, ctx, prompt, budget=...)
+     in-turn delegation → in the tool wrapper: depth-check, fork_deps(ctx.deps),
+                          then drive run_attempt inside a @trace span and merge
+                          usage via merge_turn_usage (see web_research).
      daemon             → output, usage, run_id = await run_standalone(
                             SPEC, child_deps, prompt, budget=..., model_settings=...)
 ```
@@ -109,28 +110,9 @@ return agent
 
 `requires_approval=False` for every resolved tool — task agents do not prompt the user. The orchestrator's `_approval_resume_filter` and `DeferredToolRequests` flow stay on the orchestrator path only.
 
-### `run_in_turn` — in-turn delegation
+### `run_attempt` — the in-turn primitive
 
-```
-if ctx.deps.runtime.agent_depth >= MAX_AGENT_DEPTH:        # always depth-checks
-    raise ModelRetry("Delegation depth limit reached ...")
-if not ctx.deps.model:
-    raise ModelRetry(f"{spec.name} agent is unavailable ...")
-
-request_limit = budget or spec.default_budget
-child_deps    = fork_deps(ctx.deps)                        # increments agent_depth
-                                                           # forwards tool_index, excludes toolset
-otel_span(spec.name, role=spec.name, model=..., request_limit=...):
-    output, usage, run_id = _run_attempt(spec, ctx, prompt, request_limit, child_deps)
-    _merge_turn_usage(ctx, usage)                          # writes ctx.deps.runtime.turn_usage
-
-return tool_output(
-    f"{output.result}\n[{spec.name} · {model} · {used}/{limit} req]",
-    role=spec.name, run_id=run_id,
-)
-```
-
-`_run_attempt` builds the agent and runs one attempt; on any exception it raises `ModelRetry(spec.error_message)`, surfaced back to the orchestrator's retry budget.
+In-turn delegation has no dedicated runner: each tool wrapper owns its own depth-check, `fork_deps`, OTel span, and `merge_turn_usage`, then calls `run_attempt` to build and run the agent once. `run_attempt` raises `ModelRetry(spec.error_message)` on any exception, surfaced back to the orchestrator's retry budget. `web_research` is the only in-turn caller today (see below).
 
 ### `run_standalone` — daemon
 
@@ -158,14 +140,14 @@ Daemons differ from in-turn delegation in three ways: (1) **no depth check** —
 depth-check
 fork_deps
 otel_span("web_research"):                                 # outer span owns both attempts
-    output_1, usage_1, _ = _run_attempt(SPEC, ctx, prompt, budget, child_deps)
-    _merge_turn_usage(ctx, usage_1)
+    output_1, usage_1, _ = run_attempt(SPEC, ctx, prompt, budget, child_deps)
+    merge_turn_usage(ctx, usage_1)
     if output_1 is empty:
-        output_2, usage_2, _ = _run_attempt(SPEC, ctx, rephrased(prompt), remaining_budget, child_deps)
-        _merge_turn_usage(ctx, usage_2)
+        output_2, usage_2, _ = run_attempt(SPEC, ctx, rephrased(prompt), remaining_budget, child_deps)
+        merge_turn_usage(ctx, usage_2)
 ```
 
-`web_research` is the only caller that reaches below `run_in_turn`. The reason is span topology: a retry should appear as one `co.web_research.retry_loop` span with two child agent runs, not two sibling spans. All other delegation tools call `run_in_turn` directly.
+`web_research` drives `run_attempt` directly rather than through a shared runner. The reason is span topology: a retry should appear as one `co.web_research.retry_loop` span with two child agent runs, not two sibling spans. The wrapper owns its depth-check, `fork_deps`, span, and usage merge.
 
 ## 3. Config
 
@@ -173,7 +155,7 @@ otel_span("web_research"):                                 # outer span owns bot
 |---------|---------|---------|-------------|
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | `retries=` for orchestrator and task agents |
 | `skills.review_enabled` | — | `false` | Gates the dream-daemon reviewer KICK dispatch |
-| `MAX_AGENT_DEPTH` | — | `2` | Hard cap on nesting depth enforced by `run_in_turn`; module constant |
+| `MAX_AGENT_DEPTH` | — | `2` | Hard cap on nesting depth enforced by the `web_research` tool wrapper; module constant |
 | `REVIEW_MAX_ITERATIONS` | — | `8` | `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` `default_budget` |
 | `dream.review_timeout_seconds` | — | `120` | `asyncio.timeout` wrapping each reviewer call inside the daemon worker loop |
 
@@ -186,7 +168,7 @@ otel_span("web_research"):                                 # outer span owns bot
 | `OrchestratorSpec` | `co_cli/agent/spec.py` | Frozen dataclass — fields: `name`, `static_instruction_builders`, `per_turn_instructions`, `history_processors` (all tuples for immutability) |
 | `TaskAgentSpec` | `co_cli/agent/spec.py` | Frozen dataclass — fields: `name`, `instructions`, `tool_names`, `output_type`, `default_budget`, `error_message`, `include_skill_manifest=False` |
 | `ORCHESTRATOR_SPEC` | `co_cli/agent/orchestrator.py` | Singleton — 5 static-instruction builders, 2 per-turn instructions, 5 history processors |
-| `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC` | `co_cli/tools/agents/delegation.py` | In-turn task specs; budgets 10 / 8 |
+| `WEB_RESEARCH_SPEC` | `co_cli/tools/agents/delegation.py` | In-turn task spec; budget 10 |
 | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Dream-daemon task specs; budget `REVIEW_MAX_ITERATIONS` |
 
 ### Builders
@@ -200,10 +182,9 @@ otel_span("web_research"):                                 # outer span owns bot
 
 | Symbol | Source | Contract |
 |--------|--------|----------|
-| `run_in_turn(spec: TaskAgentSpec, ctx: RunContext[CoDeps], prompt: str, budget: int \| None = None) -> ToolReturn` | `co_cli/agent/run.py` | In-turn runner; depth-checks, forks deps, opens span, merges usage, raises `ModelRetry(spec.error_message)` on failure; returns formatted `ToolReturn` |
 | `run_standalone(spec: TaskAgentSpec, deps: CoDeps, prompt: str, budget: int \| None = None, model_settings: Any = None) -> tuple[Any, RunUsage, str]` | `co_cli/agent/run.py` | Daemon runner; takes already-forked deps, opens own span, never depth-checks, no usage merge, plain exceptions |
-| `_run_attempt(spec, ctx, prompt, budget, child_deps) -> tuple[Any, RunUsage, str]` | `co_cli/agent/run.py` | Inner primitive — builds and runs the agent once; raises `ModelRetry(spec.error_message)` on any exception; used by `web_research` to drive single-span retry |
-| `MAX_AGENT_DEPTH` | `co_cli/agent/run.py` | Module constant (`2`) enforced by `run_in_turn` |
+| `run_attempt(spec, ctx, prompt, budget, child_deps) -> tuple[Any, RunUsage, str]` | `co_cli/agent/run.py` | Inner primitive — builds and runs the agent once; raises `ModelRetry(spec.error_message)` on any exception; used by `web_research` to drive single-span retry |
+| `MAX_AGENT_DEPTH` | `co_cli/agent/run.py` | Module constant (`2`) enforced by the `web_research` tool wrapper |
 
 ## 5. Files
 
@@ -212,11 +193,11 @@ otel_span("web_research"):                                 # outer span owns bot
 | `co_cli/agent/spec.py` | `OrchestratorSpec`, `TaskAgentSpec` declarative records |
 | `co_cli/agent/build.py` | `build_orchestrator`, `build_task_agent` |
 | `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` + the 5 static-instruction provider closures |
-| `co_cli/agent/run.py` | `run_in_turn`, `run_standalone`, `_run_attempt`, `_merge_turn_usage`, `MAX_AGENT_DEPTH` |
+| `co_cli/agent/run.py` | `run_standalone`, `run_attempt`, `merge_turn_usage`, `MAX_AGENT_DEPTH` |
 | `co_cli/agent/_instructions.py` | `safety_prompt`, `current_time_prompt` — orchestrator per-turn instructions |
 | `co_cli/agent/core.py` | `build_native_toolset`, `build_mcp_entries`, `assemble_routing_toolset` (toolset helpers; see [tools.md](tools.md)) |
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator; `TOOL_REGISTRY`, `TOOL_REGISTRY_BY_NAME` |
-| `co_cli/tools/agents/delegation.py` | In-turn task specs (`WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`) + tool wrappers |
+| `co_cli/tools/agents/delegation.py` | In-turn task spec (`WEB_RESEARCH_SPEC`) + `web_research` tool wrapper |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` + `process_review` dispatcher (dream daemon) |
 | `co_cli/daemons/dream/_housekeeping.py` | `run_housekeeping` + memory/skill merge & decay phases (no agent — direct `llm_call` for cluster merges) |
 
@@ -230,7 +211,7 @@ otel_span("web_research"):                                 # outer span owns bot
 | Task agents register all tools with `requires_approval=False` | `tests/test_agent_build_task_agent.py` |
 | `fork_deps` increments `agent_depth` on each delegation | `tests/test_flow_delegation_agent.py` |
 | `fork_deps` starts child with fresh `runtime` state | `tests/test_flow_delegation_agent.py` |
-| `run_in_turn` raises `ModelRetry` at `MAX_AGENT_DEPTH` | `tests/test_flow_delegation_agent.py` |
+| `web_research` raises `ModelRetry` at `MAX_AGENT_DEPTH` | `tests/test_flow_delegation_agent.py` |
 | Orchestrator serves a real prompt-response turn end-to-end | `tests/test_flow_chat_loop.py::test_plain_text_routes_to_foreground_turn` |
 | Dream-daemon reviewer process_review dispatch + reviewer specs | `tests/daemons/dream/` (see [dream.md](dream.md) §7) |
 | `refresh_skills` makes pass-B see pass-A's skill writes | `tests/test_flow_review_background.py::test_child_deps_refresh_surfaces_disk_skill_when_parent_registry_stale` |

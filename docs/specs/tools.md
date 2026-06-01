@@ -32,10 +32,10 @@ graph LR
 | Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_manage`, `skill_view`, `skill_manage` | `memory_manage`/`skill_manage` approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
 | Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval |
-| Delegation | `web_research`, `knowledge_analyze` | All DEFERRED; spawn task agents |
+| Delegation | `web_research` | DEFERRED; spawns a task agent |
 | Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | Gate: `google_credentials_path`; `google_gmail_draft` approval |
 
-**Total: 31 native tools** (18 ALWAYS · 13 DEFERRED · 5 explicit approval-gated · 7 config-gated; `shell_exec` may also prompt dynamically based on the command path)
+**Total: 30 native tools** (18 ALWAYS · 12 DEFERRED · 5 explicit approval-gated · 7 config-gated; `shell_exec` may also prompt dynamically based on the command path)
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 
@@ -43,7 +43,7 @@ graph LR
 
 `CoToolLifecycle` (`co_cli/tools/lifecycle.py`) is the pydantic-ai capability registered on the orchestrator agent. It fires four hooks per tool call: `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute`. All tool instrumentation and safety guards run through these hooks — no inline per-tool branching.
 
-Task-agent lifecycle — `fork_deps`, `build_task_agent`, `run_in_turn`, `run_standalone` — is owned by [agents.md](agents.md). Tool-side concerns end at `fork_deps`: it forwards `tool_index` for approval and span-attribute lookup and explicitly excludes `toolset` so the orchestrator's combined routing surface never propagates to a task agent.
+Task-agent lifecycle — `fork_deps`, `build_task_agent`, `run_attempt`, `run_standalone` — is owned by [agents.md](agents.md). Tool-side concerns end at `fork_deps`: it forwards `tool_index` for approval and span-attribute lookup and explicitly excludes `toolset` so the orchestrator's combined routing surface never propagates to a task agent.
 
 ### `file_search` contract (presence-based mode)
 
@@ -196,7 +196,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 
 ### Delegation Agents
 
-Delegation tools (`web_research`, `knowledge_analyze`) spawn focused task agents. The agent surface, spec records, runner semantics, depth check, single-span retry topology, and per-agent tool surfaces are owned by [agents.md](agents.md). Tools.md scope ends at the orchestrator hand-off via `fork_deps`.
+The delegation tool (`web_research`) spawns a focused task agent. The agent surface, spec records, runner semantics, depth check, single-span retry topology, and per-agent tool surfaces are owned by [agents.md](agents.md). Tools.md scope ends at the orchestrator hand-off via `fork_deps`.
 
 ## 3. Config
 
@@ -254,7 +254,7 @@ Delegation tools (`web_research`, `knowledge_analyze`) spawn focused task agents
 |--------|--------|----------|
 | `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds an isolated `CoDeps` for a task agent; forwards `tool_index`, excludes `toolset`, increments `agent_depth` |
 
-> Runners (`run_in_turn`, `run_standalone`, `_run_attempt`) live in [agents.md § 4](agents.md).
+> Runners (`run_standalone`, `run_attempt`) live in [agents.md § 4](agents.md).
 
 ## 5. Files
 
@@ -269,7 +269,7 @@ Delegation tools (`web_research`, `knowledge_analyze`) spawn focused task agents
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator, `TOOL_REGISTRY` self-populating list, `TOOL_REGISTRY_BY_NAME` lookup dict |
 | `co_cli/tools/tool_io.py` | `tool_output()`, `tool_error()`, `spill_if_oversized()`, `spill_with_span()`, `check_tool_results_size()` |
 | `co_cli/tools/shell_policy.py` | `shell_exec` and `task_start` command-safety policy |
-| `co_cli/tools/agents/delegation.py` | `web_research`, `knowledge_analyze` tools; `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC` |
+| `co_cli/tools/agents/delegation.py` | `web_research` tool; `WEB_RESEARCH_SPEC` |
 | `co_cli/tools/files/read.py` | `file_read`, `file_search` |
 | `co_cli/tools/files/write.py` | `file_write`, `file_patch` |
 | `co_cli/tools/memory/recall.py` | `memory_search`, `session_search` |
