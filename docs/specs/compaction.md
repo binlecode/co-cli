@@ -610,7 +610,7 @@ On a non-`None` result, `run_turn` sets `current_history = compacted`, clears pe
 
 ### 2.8 Recovery signal at the marker
 
-co does not pre-announce the recency-clearing mechanism in the system prompt. Recovery affordance lives in the marker text itself: content-fetch handlers in `semantic_marker` (`file_read`, `web_fetch`, `obsidian_read`, populated `file_search` / `file_find` / `web_search`) append an `— read on demand` / `— fetch on demand` / `— re-query on demand` suffix. Side-effect tools (`shell_exec`) and the generic fallback do not — re-running a side effect is incorrect, and unknown semantics cannot justify a recovery directive.
+co does not pre-announce the recency-clearing mechanism in the system prompt. Recovery affordance lives in the marker text itself: content-fetch handlers in `semantic_marker` (`file_read`, `web_fetch`, populated `file_search` / `web_search`) append an `— read on demand` / `— fetch on demand` / `— re-query on demand` suffix. Side-effect tools (`shell_exec`) and the generic fallback do not — re-running a side effect is incorrect, and unknown semantics cannot justify a recovery directive.
 
 Peer parity: hermes embeds an inline `Use file tools to read the full file.` in its truncation marker; openclaw uses a bare `[... N more characters truncated]`. Co matches hermes' approach on the recovery-hint axis while keeping the marker self-contained.
 

@@ -28,15 +28,14 @@ graph LR
 | Group | Tools | Notes |
 |-------|-------|-------|
 | Interaction & Session | `clarify`, `capabilities_check`, `todo_write`, `todo_read` | All ALWAYS |
-| Workspace & Files | `file_find`, `file_read`, `file_search`, `file_write`, `file_patch` | `file_write`/`file_patch` approval + lock |
+| Workspace & Files | `file_read`, `file_search`, `file_write`, `file_patch` | `file_search` finds files or greps contents; `file_write`/`file_patch` approval + lock |
 | Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_manage`, `skill_view`, `skill_manage` | `memory_manage`/`skill_manage` approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
 | Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval |
 | Delegation | `web_research`, `knowledge_analyze` | All DEFERRED; spawn task agents |
-| Obsidian | `obsidian_list`, `obsidian_search`, `obsidian_read` | Gate: `obsidian_vault_path` |
 | Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | Gate: `google_credentials_path`; `google_gmail_draft` approval |
 
-**Total: 35 native tools** (19 ALWAYS · 16 DEFERRED · 5 explicit approval-gated · 10 config-gated; `shell_exec` may also prompt dynamically based on the command path)
+**Total: 31 native tools** (18 ALWAYS · 13 DEFERRED · 5 explicit approval-gated · 7 config-gated; `shell_exec` may also prompt dynamically based on the command path)
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 
@@ -45,6 +44,39 @@ graph LR
 `CoToolLifecycle` (`co_cli/tools/lifecycle.py`) is the pydantic-ai capability registered on the orchestrator agent. It fires four hooks per tool call: `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute`. All tool instrumentation and safety guards run through these hooks — no inline per-tool branching.
 
 Task-agent lifecycle — `fork_deps`, `build_task_agent`, `run_in_turn`, `run_standalone` — is owned by [agents.md](agents.md). Tool-side concerns end at `fork_deps`: it forwards `tool_index` for approval and span-attribute lookup and explicitly excludes `toolset` so the orchestrator's combined routing surface never propagates to a task agent.
+
+### `file_search` contract (presence-based mode)
+
+`file_search` is the single tool for both file discovery (replaces `find`/`ls`) and content search (replaces `grep`/`rg`). It is **not** mode-dispatched by an explicit switch; the operation is inferred from whether `content` is given. This is a deliberate small-model design — it avoids the overloaded-parameter and dead-parameter hazards that a `target=`-style switch creates.
+
+```
+file_search(path="**/*", content=None, case_insensitive=False,
+            files_only=False, limit=50, offset=0)
+```
+
+Design invariants — every argument has exactly one meaning, and no argument changes meaning based on another:
+
+- **`path` is always a glob**, never a regex — it answers *which files* (e.g. `**/*.py`, `src/*.ts`, `*config*`, or a bare directory matched recursively). It is split internally into a literal directory prefix (boundary-checked against the configured read roots) and a glob remainder. Default `**/*` = every file under the active `file_search_roots`. Read scope is `file_search_roots` (defaults to `[workspace_dir]`; an operator may add read-only reference roots such as a notes vault); writes stay anchored to `workspace_dir`. With a single root, hits display relative to it (unchanged); with more than one root configured, hits display as absolute paths that round-trip back through `file_read`.
+- **`content` is always a regex**, never a glob — it answers *what to find inside* the matched files. Its presence selects the operation:
+  - `content` omitted → return the list of files matching `path` (discovery).
+  - `content` given → grep that regex inside the files matching `path` (search).
+- **`path` absorbs the file filter.** There is no separate `file_glob` argument — scoping a content search to a file type is `file_search(path="**/*.py", content="…")`. Two knobs for "which files" was redundant and is collapsed to one.
+- **`case_insensitive` and `files_only` are content-search refinements**, semantically pinned to `content`; they are no-ops when `content` is omitted. `files_only=True` returns matching file paths instead of matching lines (the "which files contain X" question).
+- **`limit`/`offset` are a complete pagination pair** applied uniformly to both operations (file entries or matching lines). `limit=0` means unlimited.
+
+There is no overloaded `pattern` argument, no `target` switch, no `file_glob`, no `context_lines`, and no `count` output mode — each was removed because it either overloaded one input across two syntaxes or added a parameter that was dead/conditional in one operation. Every optional argument's default is stated inline in the tool docstring (the schema the model sees), so the model never has to infer a default. Implementation: `co_cli/tools/files/read.py` (`file_search`, `_split_path_glob`).
+
+**Routing boundary.** `file_search` reads files on disk; `memory_search` ([memory.md](memory.md)) reads co's curated memory corpus. The two never overlap: external file/folder knowledge is reached through `file_search` / `file_read` and is never re-indexed into the memory DB. The split is by **ownership + curation, not file format** — co owns and curates it → memory pipeline; co only reads someone else's folder → file tools.
+
+### `shell_exec` working directory (stateless per call)
+
+`shell_exec` runs each command as a fresh `sh -c` subprocess whose working directory is anchored to `workspace_dir` — the same write/cwd anchor as `file_write` / `file_patch`. There is no separate shell-cwd anchor and no backend-held state; `ShellBackend` is stateless and the cwd is supplied per call.
+
+- **Default cwd is `workspace_dir`.** An explicit cwd is always passed, so a configured `workspace_path` takes effect even when no `workdir` is given.
+- **`workdir` scopes to a sub-directory under the workspace.** It is resolved through the write boundary, so a `workdir` that escapes `workspace_dir` (e.g. `../..`) is rejected — read scope (`file_search_roots`) never widens shell cwd.
+- **No cwd persistence across calls (settled — by design).** A `cd` in one call does **not** carry to the next; each call starts fresh at the anchored cwd. To run in a sub-directory, either pass `workdir`, or chain within one command (`cd build && make`). This is deliberate, not a gap: stateless calls are reproducible and approval-legible — what runs is fully determined by the call itself, with no hidden accumulated cwd that could silently relocate the shell or drift outside the boundary. It also matches the peer majority (openclaw and hermes are stateless for a model-issued `cd`; only one surveyed peer auto-persists `cd` drift, and it does so to solve a concurrent-agent isolation problem co does not have).
+
+Implementation: `co_cli/tools/shell/execute.py` (`shell_exec`), `co_cli/tools/shell_backend.py` (`ShellBackend`).
 
 ## 2. Core Logic
 
@@ -175,7 +207,7 @@ Delegation tools (`web_research`, `knowledge_analyze`) spawn focused task agents
 | `web.fetch_allowed_domains` | `CO_WEB_FETCH_ALLOWED_DOMAINS` | `[]` | Domain allowlist (optional) |
 | `web.fetch_blocked_domains` | `CO_WEB_FETCH_BLOCKED_DOMAINS` | `[]` | Domain blocklist |
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Required for `web_search` |
-| `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Registration gate for Obsidian tools |
+| `file_search_paths` | — | `[]` | Read-only reference roots for `file_read`/`file_search` (e.g. a notes vault). Empty → `[workspace_dir]`; non-empty is authoritative and total. `file_write`/`file_patch` never widen to these roots |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google tools |
 | `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | Memory item directory |
 | `mcp_servers` | `CO_MCP_SERVERS` | 2 defaults | MCP server definitions |
@@ -238,7 +270,7 @@ Delegation tools (`web_research`, `knowledge_analyze`) spawn focused task agents
 | `co_cli/tools/tool_io.py` | `tool_output()`, `tool_error()`, `spill_if_oversized()`, `spill_with_span()`, `check_tool_results_size()` |
 | `co_cli/tools/shell_policy.py` | `shell_exec` and `task_start` command-safety policy |
 | `co_cli/tools/agents/delegation.py` | `web_research`, `knowledge_analyze` tools; `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC` |
-| `co_cli/tools/files/read.py` | `file_read`, `file_find`, `file_search` |
+| `co_cli/tools/files/read.py` | `file_read`, `file_search` |
 | `co_cli/tools/files/write.py` | `file_write`, `file_patch` |
 | `co_cli/tools/memory/recall.py` | `memory_search`, `session_search` |
 | `co_cli/tools/memory/view.py` | `memory_view`, `session_view` |
@@ -247,7 +279,6 @@ Delegation tools (`web_research`, `knowledge_analyze`) spawn focused task agents
 | `co_cli/tools/web/search.py` | `web_search` |
 | `co_cli/tools/web/fetch.py` | `web_fetch` |
 | `co_cli/tools/web/_ssrf.py` | SSRF protection — URL safety checks, redirect guard, IP-pinning transport (`SSRFSafeNetworkBackend`, `make_ssrf_safe_transport`) |
-| `co_cli/tools/obsidian/tools.py` | `obsidian_list`, `obsidian_search`, `obsidian_read` |
 | `co_cli/tools/google/drive.py` | `google_drive_search`, `google_drive_read` |
 | `co_cli/tools/google/gmail.py` | `google_gmail_list`, `google_gmail_search`, `google_gmail_draft` |
 | `co_cli/tools/google/calendar.py` | `google_calendar_list`, `google_calendar_search` |

@@ -8,7 +8,7 @@ Public surface to domain modules (memory, session). Owns:
   - Embedding cache (delegates to private EmbeddingService)
 
 Source-agnostic — operates on opaque `source` strings (`'memory'`,
-`'session'`, `'obsidian'`, `'drive'`, `'canon'`).
+`'session'`, `'drive'`, `'canon'`).
 """
 
 from __future__ import annotations

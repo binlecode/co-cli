@@ -12,13 +12,8 @@ from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
 
 # Import all tool modules to trigger @agent_tool self-registration into TOOL_REGISTRY.
-from co_cli.tools.agents.delegation import (  # noqa: F401
-    knowledge_analyze,
-    reason,
-    web_research,
-)
-from co_cli.tools.code.execute import code_execute  # noqa: F401
-from co_cli.tools.files.read import file_find, file_read, file_search  # noqa: F401
+from co_cli.tools.agents.delegation import knowledge_analyze, web_research  # noqa: F401
+from co_cli.tools.files.read import file_read, file_search  # noqa: F401
 from co_cli.tools.files.write import file_patch, file_write  # noqa: F401
 from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search  # noqa: F401
 from co_cli.tools.google.drive import google_drive_read, google_drive_search  # noqa: F401
@@ -30,7 +25,6 @@ from co_cli.tools.google.gmail import (  # noqa: F401
 from co_cli.tools.memory.manage import memory_manage  # noqa: F401
 from co_cli.tools.memory.recall import memory_search  # noqa: F401
 from co_cli.tools.memory.view import memory_view  # noqa: F401
-from co_cli.tools.obsidian.tools import obsidian_list, obsidian_read, obsidian_search  # noqa: F401
 from co_cli.tools.session.recall import session_search  # noqa: F401
 from co_cli.tools.session.view import session_view  # noqa: F401
 from co_cli.tools.shell.execute import shell_exec  # noqa: F401
@@ -86,7 +80,7 @@ def _build_native_toolset(
     Tools are registered with defer_loading derived from VisibilityPolicyEnum. The SDK's
     ToolSearchToolset (auto-added by Agent) handles deferred visibility.
 
-    Integration tools (obsidian, google) are excluded when the relevant config field
+    Integration tools (google) are excluded when the relevant config field
     is absent — they would fail at runtime regardless.
 
     Returns (native_toolset, native_index) where native_index maps each tool name

@@ -21,7 +21,7 @@ from co_cli.tools.files._v4a import (
 )
 from co_cli.tools.files.fs_guards import (
     detect_encoding,
-    enforce_workspace_boundary,
+    enforce_write_boundary,
     safe_mtime,
 )
 from co_cli.tools.shell_env import build_subprocess_env
@@ -403,7 +403,7 @@ async def _apply_v4a_patch(
 
     for op in ops:
         try:
-            resolved = enforce_workspace_boundary(Path(op.file_path), workspace_dir)
+            resolved = enforce_write_boundary(Path(op.file_path), workspace_dir)
         except ValueError as e:
             return str(e)
 
@@ -440,7 +440,7 @@ async def _file_patch_replace(
         return tool_error("new_string is required in replace mode", ctx=ctx)
 
     try:
-        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_dir)
+        resolved = enforce_write_boundary(Path(path), ctx.deps.workspace_dir)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -510,7 +510,7 @@ async def file_write(
         content: Text content to write.
     """
     try:
-        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_dir)
+        resolved = enforce_write_boundary(Path(path), ctx.deps.workspace_dir)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 

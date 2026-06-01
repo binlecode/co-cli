@@ -222,3 +222,34 @@ async def test_file_patch_v4a_mode_rejects_unsupported_move_directive(tmp_path: 
     assert result.metadata is not None
     assert result.metadata.get("error") is True
     assert "Move File" in result.return_value
+
+
+# ---------------------------------------------------------------------------
+# Write scope stays workspace-anchored even when read scope spans extra roots
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_file_write_rejects_path_under_extra_read_root(tmp_path: Path) -> None:
+    """file_write rejects a path under a read-only extra root — read scope never widens write (BC-1)."""
+    workspace = tmp_path / "ws"
+    vault = tmp_path / "vault"
+    workspace.mkdir()
+    vault.mkdir()
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS,
+        session=CoSessionState(),
+        workspace_dir=workspace,
+        file_search_roots=[workspace.resolve(), vault.resolve()],
+    )
+    ctx = _ctx(deps)
+
+    target = vault / "should_not_write.txt"
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await file_write(ctx, path=str(target.resolve()), content="nope\n")
+
+    assert result.metadata is not None
+    assert result.metadata.get("error") is True, result.return_value
+    assert not target.exists(), "write into a read-only extra root must not create the file"

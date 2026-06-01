@@ -4,16 +4,17 @@ Approval-gated subprocess with env-sanitized execution.
 """
 
 import asyncio
-import os
 
 from co_cli.tools.shell_env import build_subprocess_env, kill_process_tree
 
 
 class ShellBackend:
-    """Subprocess-based shell backend with env-sanitized execution."""
+    """Subprocess-based shell backend with env-sanitized execution.
 
-    def __init__(self, workspace_dir: str | None = None):
-        self.workspace_dir = workspace_dir or os.getcwd()
+    Stateless — the working directory is supplied per call via ``cwd`` (shell_exec
+    anchors it to ``deps.workspace_dir``). No backend-held workspace anchor exists,
+    so there is a single source of truth for the cwd.
+    """
 
     async def run_command(
         self,
@@ -38,7 +39,7 @@ class ShellBackend:
             "sh",
             "-c",
             cmd,
-            cwd=cwd or self.workspace_dir,
+            cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,

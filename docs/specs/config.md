@@ -147,11 +147,11 @@ Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is)
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Max retries on tool errors |
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | Consecutive identical tool calls before agent is halted (2–10) |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | Max agent self-reflection passes per turn (1–10) |
-| `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `None` | Absolute path to Obsidian vault for note search |
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `None` | Brave Search API key |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` | Path to Google OAuth credentials JSON |
 | `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | Override for the memory items directory |
-| `workspace_path` | `CO_WORKSPACE_PATH` | `None` | Path to the workspace root (used for workspace-relative resolution) |
+| `workspace_path` | `CO_WORKSPACE_PATH` | `None` | Write/cwd anchor: where `file_write`/`file_patch` land and the base for relative paths |
+| `file_search_paths` | — | `[]` | Read-only reference roots for `file_read`/`file_search` (e.g. a notes vault). Empty → `[workspace_dir]`; non-empty is authoritative and total (no implicit workspace append). Writes never widen to these roots |
 
 ### LLM (`llm.*`)
 

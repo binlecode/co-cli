@@ -14,7 +14,6 @@ from co_cli.deps import (
     fork_deps_for_reviewer,
 )
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, agent_tool
-from co_cli.tools.code.execute import code_execute
 from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -61,7 +60,6 @@ def test_explicit_opt_out():
 @pytest.mark.parametrize(
     ("tool_fn", "name"),
     [
-        (code_execute, "code_execute"),
         (file_write, "file_write"),
         (file_patch, "file_patch"),
     ],

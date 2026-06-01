@@ -297,7 +297,10 @@ class CoDeps:
 
     # Workspace paths — resolved from config at bootstrap, not from cwd
     workspace_dir: Path = field(default_factory=Path.cwd)
-    obsidian_vault_path: Path | None = None
+    # Read scope for file_read / file_search — decoupled from the write/cwd anchor.
+    # Empty here is filled with [workspace_dir] in __post_init__ (BC-4 default); an
+    # explicit non-empty list (resolve_workspace_paths / fork) is authoritative (BC-3).
+    file_search_roots: list[Path] = field(default_factory=list)
     memory_dir: Path = field(default_factory=lambda: _DEFAULT_MEMORY_DIR)
     skills_dir: Path = field(default_factory=lambda: _DEFAULT_SKILLS_DIR)
     user_skills_dir: Path = field(default_factory=lambda: _DEFAULT_USER_SKILLS_DIR)
@@ -315,6 +318,13 @@ class CoDeps:
     # Runtime degradation state — mutated during bootstrap, read-only after
     degradations: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
+    def __post_init__(self) -> None:
+        # The read scope defaults to the write anchor when unconfigured (BC-4), so
+        # direct construction (tests, ad-hoc) tracks workspace_dir without routing
+        # through resolve_workspace_paths.
+        if not self.file_search_roots:
+            self.file_search_roots = [self.workspace_dir]
+
 
 def fork_deps_for_reviewer(parent: CoDeps) -> CoDeps:
     """Fork deps for a domain reviewer agent (memory or skill)."""
@@ -323,13 +333,17 @@ def fork_deps_for_reviewer(parent: CoDeps) -> CoDeps:
 
 def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
     """Resolve workspace paths from Settings. Used by create_deps()."""
+    workspace_dir = Path(config.workspace_path).resolve() if config.workspace_path else Path.cwd()
+    # Empty -> default to [workspace_dir] (BC-4). Non-empty -> exactly the resolved
+    # list, authoritative and total — no implicit workspace_dir append (BC-3).
+    file_search_roots = (
+        [Path(p).resolve() for p in config.file_search_paths]
+        if config.file_search_paths
+        else [workspace_dir]
+    )
     return {
-        "workspace_dir": Path(config.workspace_path).resolve()
-        if config.workspace_path
-        else Path.cwd(),
-        "obsidian_vault_path": Path(config.obsidian_vault_path)
-        if config.obsidian_vault_path
-        else None,
+        "workspace_dir": workspace_dir,
+        "file_search_roots": file_search_roots,
         "skills_dir": Path(__file__).parent / "skills",
         "user_skills_dir": USER_DIR / "skills",
         "sessions_dir": SESSIONS_DIR,
@@ -379,7 +393,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         session=inherited_session,
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
         workspace_dir=base.workspace_dir,
-        obsidian_vault_path=base.obsidian_vault_path,
+        file_search_roots=base.file_search_roots,
         memory_dir=base.memory_dir,
         skills_dir=base.skills_dir,
         user_skills_dir=base.user_skills_dir,

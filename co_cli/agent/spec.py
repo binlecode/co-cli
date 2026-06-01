@@ -39,7 +39,7 @@ class TaskAgentSpec:
     """Declarative spec for a focused task agent (in-turn delegation or standalone daemon).
 
     tool_names is resolved against TOOL_REGISTRY_BY_NAME at build time. Unknown
-    names fail loud. Config-conditional tools (Google/Obsidian) drop out when
+    names fail loud. Config-conditional tools (Google) drop out when
     credentials are absent. All resolved tools are registered with
     requires_approval=False.
 

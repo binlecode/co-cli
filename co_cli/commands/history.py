@@ -11,7 +11,6 @@ _DELEGATION_TOOLS = frozenset(
     {
         "web_research",
         "knowledge_analyze",
-        "reason",
         "task_start",
     }
 )

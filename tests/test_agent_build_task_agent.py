@@ -75,22 +75,6 @@ def test_google_tool_drops_out_without_credentials() -> None:
     assert "web_search" in tool_names
 
 
-def test_obsidian_tool_drops_out_without_vault_path() -> None:
-    settings = make_settings(mcp_servers={}, obsidian_vault_path=None)
-    spec = TaskAgentSpec(
-        name="test_agent",
-        instructions=_instructions,
-        tool_names=("obsidian_search", "web_search"),
-        output_type=_Output,
-        default_budget=1,
-        error_message="",
-    )
-    agent = build_task_agent(spec, _deps(settings), model=None)
-    tool_names = list(agent._function_toolset.tools.keys())
-    assert "obsidian_search" not in tool_names
-    assert "web_search" in tool_names
-
-
 def test_all_tools_registered_with_no_approval() -> None:
     spec = TaskAgentSpec(
         name="test_agent",

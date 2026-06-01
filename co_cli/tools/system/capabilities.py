@@ -186,7 +186,6 @@ async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
         knowledge_backend=caps["knowledge_backend"],
         reranker=reranker,
         google=caps["google"],
-        obsidian=caps["obsidian"],
         brave=caps["brave"],
         mcp_count=caps["mcp_count"],
         mcp_configured_server_count=len(ctx.deps.config.mcp_servers or {}),

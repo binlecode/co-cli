@@ -97,11 +97,13 @@ class Settings(BaseModel):
     repl: ReplSettings = Field(default_factory=ReplSettings)
 
     # Flat — integration paths
-    obsidian_vault_path: str | None = Field(default=None)
     brave_search_api_key: str | None = Field(default=None)
     google_credentials_path: str | None = Field(default=None)
     memory_path: str | None = Field(default=None)
     workspace_path: str | None = Field(default=None)
+    # Read-only reference roots for file_read / file_search (write anchor stays workspace_path).
+    # Empty -> defaults to [workspace_dir]; non-empty -> authoritative and total (no implicit append).
+    file_search_paths: list[str] = Field(default_factory=list)
 
     # Flat — behavior
     theme: str = Field(default=DEFAULT_THEME)
@@ -140,7 +142,6 @@ class Settings(BaseModel):
 
         # Flat fields
         flat_env_map = {
-            "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
             "memory_path": "CO_MEMORY_PATH",

@@ -40,7 +40,6 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
 | `ORCHESTRATOR_SPEC` | `co_cli/agent/orchestrator.py` | `_chat_loop` in `main.py` | `build_orchestrator` directly |
 | `WEB_RESEARCH_SPEC` | `co_cli/tools/agents/delegation.py` | `web_research` tool | `_run_attempt` ×2 in own span (retry-on-empty) |
 | `KNOWLEDGE_ANALYZE_SPEC` | `co_cli/tools/agents/delegation.py` | `knowledge_analyze` tool | `run_in_turn` |
-| `REASON_SPEC` | `co_cli/tools/agents/delegation.py` | `reason` tool | `run_in_turn` |
 | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | `process_review` (dream daemon, queue-driven) | `run_standalone` |
 
 **Curation rule.** Specs live with the caller that owns the agent's purpose — delegation specs sit alongside their tool wrappers; daemon specs sit alongside their daemon orchestration. The `co_cli/agent/` package owns lifecycle (build + run) and the orchestrator spec only.
@@ -89,7 +88,7 @@ for name in spec.tool_names:
         raise ValueError(f"{spec.name}: unknown tool {name!r}")
     info = fn.<agent-tool-metadata>
     if not _config_requirement_met(info, deps.config):
-        continue                              # drop Google/Obsidian tools without creds
+        continue                              # drop Google tools without creds
     tool_fns.append(fn)
 
 instructions = spec.instructions(deps)
@@ -187,7 +186,7 @@ otel_span("web_research"):                                 # outer span owns bot
 | `OrchestratorSpec` | `co_cli/agent/spec.py` | Frozen dataclass — fields: `name`, `static_instruction_builders`, `per_turn_instructions`, `history_processors` (all tuples for immutability) |
 | `TaskAgentSpec` | `co_cli/agent/spec.py` | Frozen dataclass — fields: `name`, `instructions`, `tool_names`, `output_type`, `default_budget`, `error_message`, `include_skill_manifest=False` |
 | `ORCHESTRATOR_SPEC` | `co_cli/agent/orchestrator.py` | Singleton — 5 static-instruction builders, 2 per-turn instructions, 5 history processors |
-| `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`, `REASON_SPEC` | `co_cli/tools/agents/delegation.py` | In-turn task specs; budgets 10 / 8 / 3 |
+| `WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC` | `co_cli/tools/agents/delegation.py` | In-turn task specs; budgets 10 / 8 |
 | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Dream-daemon task specs; budget `REVIEW_MAX_ITERATIONS` |
 
 ### Builders
@@ -217,7 +216,7 @@ otel_span("web_research"):                                 # outer span owns bot
 | `co_cli/agent/_instructions.py` | `safety_prompt`, `current_time_prompt` — orchestrator per-turn instructions |
 | `co_cli/agent/core.py` | `build_native_toolset`, `build_mcp_entries`, `assemble_routing_toolset` (toolset helpers; see [tools.md](tools.md)) |
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator; `TOOL_REGISTRY`, `TOOL_REGISTRY_BY_NAME` |
-| `co_cli/tools/agents/delegation.py` | In-turn task specs (`WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`, `REASON_SPEC`) + tool wrappers |
+| `co_cli/tools/agents/delegation.py` | In-turn task specs (`WEB_RESEARCH_SPEC`, `KNOWLEDGE_ANALYZE_SPEC`) + tool wrappers |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` + `process_review` dispatcher (dream daemon) |
 | `co_cli/daemons/dream/_housekeeping.py` | `run_housekeeping` + memory/skill merge & decay phases (no agent — direct `llm_call` for cluster merges) |
 
@@ -228,7 +227,6 @@ otel_span("web_research"):                                 # outer span owns bot
 | `TaskAgentSpec.tool_names` resolves to registered tools by exact name | `tests/test_agent_build_task_agent.py` |
 | Unknown tool name in `tool_names` raises `ValueError` at build time | `tests/test_agent_build_task_agent.py` |
 | Google tools drop out of resolved set when `google_credentials_path` is absent | `tests/test_agent_build_task_agent.py` |
-| Obsidian tools drop out of resolved set when `obsidian_vault_path` is absent | `tests/test_agent_build_task_agent.py` |
 | Task agents register all tools with `requires_approval=False` | `tests/test_agent_build_task_agent.py` |
 | `fork_deps` increments `agent_depth` on each delegation | `tests/test_flow_delegation_agent.py` |
 | `fork_deps` starts child with fresh `runtime` state | `tests/test_flow_delegation_agent.py` |

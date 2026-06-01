@@ -65,7 +65,7 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
     """Build a task agent from a spec.
 
     Resolves spec.tool_names against TOOL_REGISTRY_BY_NAME, filtered by
-    _config_requirement_met (Google/Obsidian tools drop out without
+    _config_requirement_met (Google tools drop out without
     credentials). Unknown tool names raise ValueError at build time.
     All resolved tools are registered with requires_approval=False.
 

@@ -7,7 +7,7 @@ from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.deps import CoDeps, CoSessionState, fork_deps
 from co_cli.llm.factory import build_model
-from co_cli.tools.agents.delegation import MAX_AGENT_DEPTH, knowledge_analyze, reason, web_research
+from co_cli.tools.agents.delegation import MAX_AGENT_DEPTH, knowledge_analyze, web_research
 from co_cli.tools.shell_backend import ShellBackend
 
 _LLM_MODEL = build_model(SETTINGS_NO_MCP.llm)
@@ -53,8 +53,8 @@ def test_fork_deps_starts_fresh_runtime():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tool",
-    [reason, knowledge_analyze, web_research],
-    ids=["reason", "knowledge_analyze", "web_research"],
+    [knowledge_analyze, web_research],
+    ids=["knowledge_analyze", "web_research"],
 )
 async def test_delegation_tool_raises_model_retry_at_max_depth(tool):
     """Each delegation entry-point must raise ModelRetry when agent_depth >= MAX_AGENT_DEPTH.

@@ -60,15 +60,6 @@ def _analyst_instructions(deps: CoDeps) -> str:
     )
 
 
-def _reasoner_instructions(deps: CoDeps) -> str:
-    return (
-        "You are a reasoning agent. "
-        "Decompose the problem, reason step-by-step, and return a structured result. "
-        "Return your reasoning in result. Include: a high-level approach (1–3 sentences), "
-        "ordered action steps, and a synthesized answer or recommendation."
-    )
-
-
 # --- Specs ---
 
 
@@ -89,23 +80,10 @@ KNOWLEDGE_ANALYZE_SPEC = TaskAgentSpec(
         "memory_search",
         "google_drive_search",
         "google_drive_read",
-        "obsidian_search",
-        "obsidian_list",
-        "obsidian_read",
     ),
     output_type=AgentOutput,
     default_budget=8,
     error_message="Analysis agent failed — handle this task directly.",
-)
-
-
-REASON_SPEC = TaskAgentSpec(
-    name="reason",
-    instructions=_reasoner_instructions,
-    tool_names=(),
-    output_type=AgentOutput,
-    default_budget=3,
-    error_message="Reasoning agent failed — handle this task directly.",
 )
 
 
@@ -230,29 +208,3 @@ async def knowledge_analyze(
     return await run_in_turn(
         KNOWLEDGE_ANALYZE_SPEC, ctx, scoped_prompt, budget=max_requests or None
     )
-
-
-@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
-async def reason(
-    ctx: RunContext[CoDeps],
-    problem: str,
-    max_requests: int = 0,
-) -> ToolReturn:
-    """Delegate structured reasoning to a tool-free thinking agent.
-
-    When to use: problems that benefit from dedicated step-by-step reasoning
-    — planning, trade-off analysis, problem decomposition, or multi-constraint
-    decisions. The agent has no tools; it reasons purely via the model's
-    native thinking capability. Give a complete problem statement.
-
-    When NOT to use: tasks that require reading files, searching the web, or
-    querying the knowledge base — those need the coder, researcher, or analyst
-    agents respectively.
-
-    Returns the agent's findings as a text result.
-
-    Args:
-        problem: The problem or question to reason about.
-        max_requests: Max LLM requests (0 = config default).
-    """
-    return await run_in_turn(REASON_SPEC, ctx, problem, budget=max_requests or None)

@@ -6,7 +6,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.files.fs_guards import enforce_workspace_boundary
+from co_cli.tools.files.fs_guards import enforce_write_boundary
 from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
@@ -23,10 +23,8 @@ async def shell_exec(
 
     Do not use shell for file reads, content search, or tasks with dedicated tools:
     - file_read instead of cat/head/tail
-    - file_search instead of grep/rg
-    - file_find instead of ls/find
+    - file_search instead of grep/rg/find/ls
     - web_fetch instead of curl for web pages
-    - obsidian_search / obsidian_read instead of grep/cat on the Obsidian vault
     - google_drive_search / google_drive_read instead of manual API calls
     - file_write / file_patch instead of shell redirection for workspace file creation or editing
     - task_start instead of shell for detached long-running work
@@ -66,15 +64,18 @@ async def shell_exec(
         raise ApprovalRequired(metadata={"cmd": cmd})
     # ALLOW or tool_call_approved: fall through to execution
 
+    # Shell cwd is anchored to the workspace dir — the same write/cwd anchor as
+    # file_write/file_patch (BC-1). An explicit cwd is always passed (the backend
+    # holds no default), so a configured workspace_path takes effect even when no
+    # workdir is given.
+    workspace_dir = ctx.deps.workspace_dir
     if workdir is not None:
         try:
-            resolved_cwd = str(
-                enforce_workspace_boundary(Path(workdir), Path(ctx.deps.shell.workspace_dir))
-            )
+            resolved_cwd = str(enforce_write_boundary(Path(workdir), workspace_dir))
         except ValueError as e:
             return tool_error(str(e), ctx=ctx)
     else:
-        resolved_cwd = None
+        resolved_cwd = str(workspace_dir)
 
     effective = min(timeout, ctx.deps.config.shell.max_timeout)
     skill_env = ctx.deps.runtime.active_skill_env or None

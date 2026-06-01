@@ -218,7 +218,8 @@ CoDeps
 │       ├── turn_usage            token usage for current turn
 │       └── persisted_msg_count   JSONL write cursor
 ├── paths
-│   ├── workspace_dir
+│   ├── workspace_dir        write/cwd anchor (file_write/file_patch land here)
+│   ├── file_search_roots    read scope for file_read/file_search; defaults to [workspace_dir]
 │   ├── knowledge_dir
 │   ├── sessions_dir
 │   ├── tool_results_dir

@@ -40,7 +40,6 @@ MemoryKind = Literal[
 class SourceTypeEnum(StrEnum):
     WEB_FETCH = "web_fetch"
     MANUAL = "manual"
-    OBSIDIAN = "obsidian"
     DRIVE = "drive"
     CONSOLIDATED = "consolidated"
     SESSION_REVIEW = "session_review"
@@ -50,7 +49,6 @@ class IndexSourceEnum(StrEnum):
     """`source` column values in the index store for write-eligible domains."""
 
     MEMORY = "memory"
-    OBSIDIAN = "obsidian"
     DRIVE = "drive"
 
 

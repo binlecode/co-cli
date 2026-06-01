@@ -1,4 +1,4 @@
-"""Read-only file system tools: file_find, file_read, file_search."""
+"""Read-only file system tools: file_read, file_search."""
 
 import asyncio
 import difflib
@@ -8,9 +8,6 @@ import re
 import shlex
 import shutil
 from pathlib import Path
-from typing import Literal
-
-SearchOutputMode = Literal["content", "files_with_matches", "count"]
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
@@ -20,7 +17,7 @@ from co_cli.observability.tracing import current_span
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.files.fs_guards import (
     detect_encoding,
-    enforce_workspace_boundary,
+    enforce_read_boundary,
     is_recursive_pattern,
     safe_mtime,
 )
@@ -75,8 +72,50 @@ def _has_command(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
+def _display_name(path: Path, display_base: Path | None) -> str:
+    """Render a hit path for display.
+
+    display_base set (single-root): relative to it, falling back to absolute when
+    the path lies outside (byte-identical to the old workspace-relative form).
+    display_base None (multi-root): absolute — unambiguous across same-named
+    subpaths and round-trips through file_read's read guard (BC-5).
+    """
+    if display_base is None:
+        return str(path)
+    try:
+        return str(path.relative_to(display_base))
+    except ValueError:
+        return str(path)
+
+
+def _split_path_glob(path: str) -> tuple[str, str]:
+    """Split a glob-or-directory path into (literal_prefix, glob).
+
+    The leading run of components without glob metacharacters becomes the
+    literal directory prefix (search root); the remainder is the glob. A path
+    with no glob component is a plain directory, matched recursively ("**/*").
+
+    Examples:
+      "**/*.py"          -> (".", "**/*.py")
+      "co_cli/**/*.py"   -> ("co_cli", "**/*.py")
+      "src/*.py"         -> ("src", "*.py")
+      "*"                -> (".", "*")
+      "co_cli"           -> ("co_cli", "**/*")
+    """
+    parts = Path(path).parts
+    glob_index = len(parts)
+    for index, part in enumerate(parts):
+        if any(ch in part for ch in "*?["):
+            glob_index = index
+            break
+    literal = parts[:glob_index]
+    glob = "/".join(parts[glob_index:]) if glob_index < len(parts) else "**/*"
+    prefix = str(Path(*literal)) if literal else "."
+    return prefix, glob
+
+
 async def _glob_python(
-    resolved: Path, workspace_dir: Path, pattern: str, max_entries: int
+    resolved: Path, display_base: Path | None, pattern: str, max_entries: int
 ) -> tuple[list[dict[str, str]], bool]:
     entries = []
     truncated = False
@@ -84,11 +123,7 @@ async def _glob_python(
         raw = sorted(resolved.glob(pattern), key=safe_mtime, reverse=True)
         for entry in raw:
             kind = "dir" if entry.is_dir() else "file"
-            try:
-                rel = str(entry.relative_to(workspace_dir))
-            except ValueError:
-                rel = str(entry)
-            entries.append({"name": rel, "type": kind})
+            entries.append({"name": _display_name(entry, display_base), "type": kind})
             if len(entries) >= max_entries:
                 truncated = True
                 break
@@ -97,7 +132,8 @@ async def _glob_python(
             if not fnmatch.fnmatch(entry.name, pattern):
                 continue
             kind = "dir" if entry.is_dir() else "file"
-            entries.append({"name": entry.name, "type": kind})
+            name = entry.name if display_base is not None else str(entry)
+            entries.append({"name": name, "type": kind})
             if len(entries) >= max_entries:
                 truncated = True
                 break
@@ -105,7 +141,7 @@ async def _glob_python(
 
 
 async def _glob_ripgrep(
-    resolved: Path, workspace_dir: Path, pattern: str, max_entries: int
+    resolved: Path, display_base: Path | None, pattern: str, max_entries: int
 ) -> tuple[list[dict[str, str]], bool] | None:
     # Run rg from `resolved` with no dir arg: path-prefix globs like src/**/*.py only work
     # correctly when rg resolves paths relative to its cwd, not against an absolute dir arg.
@@ -141,71 +177,27 @@ async def _glob_ripgrep(
     truncated = len(raw_paths) > max_entries
     entries = []
     for path in raw_paths[:max_entries]:
-        try:
-            rel = str(path.relative_to(workspace_dir))
-        except ValueError:
-            rel = str(path)
-        entries.append({"name": rel, "type": "file"})
+        entries.append({"name": _display_name(path, display_base), "type": "file"})
     return entries, truncated
 
 
-def _relativize_output_path(path_str: str, workspace_dir: Path) -> str:
-    """Return a workspace-relative path when possible."""
-    try:
-        return str(Path(path_str).relative_to(workspace_dir))
-    except ValueError:
-        return path_str
-
-
-def _parse_grep_count_output(lines: list[str], workspace_dir: Path) -> tuple[list[str], int]:
-    """Parse ripgrep count-mode output into display lines and total match count."""
-    total_match_count = 0
-    all_output: list[str] = []
-    for line in lines:
-        if ":" not in line:
-            continue
-        path_str, count_str = line.rsplit(":", 1)
-        try:
-            count = int(count_str)
-        except ValueError:
-            continue
-        total_match_count += count
-        rel_path = _relativize_output_path(path_str, workspace_dir)
-        all_output.append(f"{rel_path}: {count}")
-    return all_output, total_match_count
-
-
-def _parse_grep_content_output(lines: list[str], workspace_dir: Path) -> tuple[list[str], int]:
-    """Parse ripgrep content-mode output into the tool's legacy display format."""
+def _parse_grep_content_output(
+    lines: list[str], display_base: Path | None
+) -> tuple[list[str], int]:
+    """Parse ripgrep content-mode output into the tool's display format."""
     match_re = re.compile(r"^([A-Za-z]:)?(.*?):(\d+):(.*)$")
-    context_re = re.compile(r"^([A-Za-z]:)?(.*?)-(\d+)-(.*)$")
     total_match_count = 0
     all_output: list[str] = []
     for line in lines:
-        if not line or line == "--":
-            all_output.append("--")
+        if not line:
             continue
         match = match_re.match(line)
         if match:
             path_str = (match.group(1) or "") + match.group(2)
-            rel_path = _relativize_output_path(path_str, workspace_dir)
+            rel_path = _display_name(Path(path_str), display_base)
             all_output.append(f"{rel_path}:{match.group(3)}: {match.group(4)}")
             total_match_count += 1
-            continue
-        context_match = context_re.match(line)
-        if context_match:
-            path_str = (context_match.group(1) or "") + context_match.group(2)
-            rel_path = _relativize_output_path(path_str, workspace_dir)
-            all_output.append(f"{rel_path}:{context_match.group(3)}- {context_match.group(4)}")
-
-    filtered_output: list[str] = []
-    for entry in all_output:
-        if entry == "--" and (not filtered_output or filtered_output[-1] == "--"):
-            continue
-        filtered_output.append(entry)
-    if filtered_output and filtered_output[-1] == "--":
-        filtered_output.pop()
-    return filtered_output, total_match_count
+    return all_output, total_match_count
 
 
 def _build_grep_shell_command(
@@ -214,7 +206,6 @@ def _build_grep_shell_command(
     glob_pat: str,
     case_insensitive: bool,
     output_mode: str,
-    context_lines: int,
 ) -> str:
     """Build a ripgrep command line that preserves the tool's search surface."""
     cmd_parts = [
@@ -227,45 +218,36 @@ def _build_grep_shell_command(
     ]
     if case_insensitive:
         cmd_parts.append("-i")
-    if context_lines > 0:
-        cmd_parts.extend(["-C", str(context_lines)])
     if glob_pat:
         cmd_parts.extend(["--glob", shlex.quote(glob_pat)])
-    if output_mode == "files_with_matches":
+    if output_mode == "files_only":
         cmd_parts.append("-l")
-    elif output_mode == "count":
-        cmd_parts.append("-c")
     cmd_parts.append(shlex.quote(pattern))
     cmd_parts.append(shlex.quote(str(resolved)))
     return " ".join(cmd_parts)
 
 
 def _parse_grep_shell_output(
-    lines: list[str], workspace_dir: Path, output_mode: str
+    lines: list[str], display_base: Path | None, output_mode: str
 ) -> tuple[list[str], int]:
     """Parse shell grep output according to the requested display mode."""
-    if output_mode == "files_with_matches":
-        all_output = [_relativize_output_path(line, workspace_dir) for line in lines if line]
+    if output_mode == "files_only":
+        all_output = [_display_name(Path(line), display_base) for line in lines if line]
         return all_output, len(all_output)
-    if output_mode == "count":
-        return _parse_grep_count_output(lines, workspace_dir)
-    return _parse_grep_content_output(lines, workspace_dir)
+    return _parse_grep_content_output(lines, display_base)
 
 
 async def _grep_shell(
     resolved: Path,
-    workspace_dir: Path,
+    display_base: Path | None,
     pattern: str,
     glob_pat: str,
     case_insensitive: bool,
     output_mode: str,
-    context_lines: int,
     head_limit: int,
     offset: int,
 ) -> tuple[list[str], int, bool] | str | None:
-    cmd = _build_grep_shell_command(
-        resolved, pattern, glob_pat, case_insensitive, output_mode, context_lines
-    )
+    cmd = _build_grep_shell_command(resolved, pattern, glob_pat, case_insensitive, output_mode)
 
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -280,7 +262,7 @@ async def _grep_shell(
         lines = stdout.decode().strip().split("\n")
         if not lines or not lines[0]:
             return [], 0, False
-        all_output, total_match_count = _parse_grep_shell_output(lines, workspace_dir, output_mode)
+        all_output, total_match_count = _parse_grep_shell_output(lines, display_base, output_mode)
 
         paginated = (
             all_output[offset : offset + head_limit] if head_limit > 0 else all_output[offset:]
@@ -293,12 +275,11 @@ async def _grep_shell(
 
 async def _grep_python(
     search_root: Path,
-    workspace_dir: Path,
+    display_base: Path | None,
     pattern: str,
     glob_pat: str,
     case_insensitive: bool,
     output_mode: str,
-    context_lines: int,
     head_limit: int,
     offset: int,
 ) -> tuple[list[str], int, bool] | str:
@@ -316,48 +297,18 @@ async def _grep_python(
             text = file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        rel_path = str(file_path.relative_to(workspace_dir))
+        rel_path = _display_name(file_path, display_base)
         file_lines = text.splitlines()
         match_indices = [idx for idx, line in enumerate(file_lines) if compiled.search(line)]
         if not match_indices:
             continue
         total_match_count += len(match_indices)
         all_output.extend(
-            _grep_format_file_matches(
-                rel_path, file_lines, match_indices, output_mode, context_lines
-            )
+            _grep_format_file_matches(rel_path, file_lines, match_indices, output_mode)
         )
     paginated = all_output[offset : offset + head_limit] if head_limit > 0 else all_output[offset:]
     truncated = len(all_output) - offset > len(paginated)
     return paginated, total_match_count, truncated
-
-
-def _grep_context_output(
-    rel_path: str, file_lines: list[str], match_indices: list[int], context: int
-) -> list[str]:
-    """Build grep-style context output for matched lines in one file.
-
-    Merges overlapping context windows and inserts '--' between disjoint groups.
-    Match lines use ':' separator; context lines use '-' separator.
-    """
-    ranges: list[tuple[int, int]] = []
-    for idx in match_indices:
-        lo = max(0, idx - context)
-        hi = min(len(file_lines) - 1, idx + context)
-        if ranges and lo <= ranges[-1][1] + 1:
-            ranges[-1] = (ranges[-1][0], hi)
-        else:
-            ranges.append((lo, hi))
-
-    match_set = set(match_indices)
-    output: list[str] = []
-    for group_idx, (lo, hi) in enumerate(ranges):
-        if group_idx > 0:
-            output.append("--")
-        for line_idx in range(lo, hi + 1):
-            sep = ":" if line_idx in match_set else "-"
-            output.append(f"{rel_path}:{line_idx + 1}{sep} {file_lines[line_idx]}")
-    return output
 
 
 def _grep_format_file_matches(
@@ -365,86 +316,78 @@ def _grep_format_file_matches(
     file_lines: list[str],
     match_indices: list[int],
     output_mode: str,
-    context_lines: int,
 ) -> list[str]:
     """Format grep matches for a single file according to output_mode."""
-    if output_mode == "content":
-        if context_lines > 0:
-            return _grep_context_output(rel_path, file_lines, match_indices, context_lines)
-        return [f"{rel_path}:{idx + 1}: {file_lines[idx]}" for idx in match_indices]
-    if output_mode == "files_with_matches":
+    if output_mode == "files_only":
         return [rel_path]
-    # count mode
-    return [f"{rel_path}: {len(match_indices)}"]
+    return [f"{rel_path}:{idx + 1}: {file_lines[idx]}" for idx in match_indices]
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
-async def file_find(
-    ctx: RunContext[CoDeps],
-    path: str = ".",
-    pattern: str = "*",
-    max_entries: int = 200,
-) -> ToolReturn:
-    """Find workspace files by name pattern, or list a directory.
+async def _glob_roots(
+    search_targets: list[Path],
+    display_base: Path | None,
+    glob: str,
+    fetch_cap: int,
+) -> tuple[list[dict[str, str]], bool]:
+    """Run the single-root glob machinery across each target root and concat entries.
 
-    Prefer this over shell `ls` or `find`. Results are sorted by
-    modification time, newest first.
-
-    Pattern examples:
-      "*"            — list everything in `path` (files + dirs)
-      "*.py"         — flat: .py files in `path` only
-      "**/*.py"      — recursive: all .py files under `path`
-      "src/**/*.py"  — recursive: .py files under src/ only
-      "*config*"     — flat: entries with "config" in the name
-
-    Recursive patterns (containing ** or /) return files only, not
-    directories. Flat patterns return both files and directories.
-
-    When NOT to use: to search file contents — use file_search instead.
-
-    Args:
-        path: Search root relative to workspace root (default: ".").
-        pattern: Glob pattern (default: "*" lists all entries).
-        max_entries: Maximum entries returned (default: 200).
+    Cross-root order is per-root-grouped (each root pre-sorted by mtime); there is no
+    true global mtime sort — glob entries carry no mtime and re-stat'ing every path is
+    not worth it. `truncated` is the OR of the per-root caps; the caller applies the
+    global offset/limit slice on the concatenated list.
     """
-    try:
-        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_dir)
-    except ValueError as e:
-        return tool_error(str(e), ctx=ctx)
-
-    if not resolved.exists():
-        return tool_error(f"Path not found: {path}", ctx=ctx)
-
-    if not resolved.is_dir():
-        return tool_error(f"Not a directory: {path}", ctx=ctx)
-
-    workspace_dir = ctx.deps.workspace_dir
-
     entries: list[dict[str, str]] = []
     truncated = False
-
-    if is_recursive_pattern(pattern) and _has_command("rg"):
-        rg_result = await _glob_ripgrep(resolved, workspace_dir, pattern, max_entries)
-        if rg_result is not None:
-            entries, truncated = rg_result
+    for target in search_targets:
+        if is_recursive_pattern(glob) and _has_command("rg"):
+            rg_result = await _glob_ripgrep(target, display_base, glob, fetch_cap)
+            t_entries, t_trunc = (
+                rg_result
+                if rg_result is not None
+                else await _glob_python(target, display_base, glob, fetch_cap)
+            )
         else:
-            entries, truncated = await _glob_python(resolved, workspace_dir, pattern, max_entries)
-    else:
-        entries, truncated = await _glob_python(resolved, workspace_dir, pattern, max_entries)
+            t_entries, t_trunc = await _glob_python(target, display_base, glob, fetch_cap)
+        entries.extend(t_entries)
+        truncated = truncated or t_trunc
+    return entries, truncated
 
-    lines = [f"[{e['type']}] {e['name']}" for e in entries]
-    if truncated:
-        lines.append(f"(truncated at {max_entries} entries — use a more specific pattern)")
-    display = "\n".join(lines) if lines else "(empty)"
 
-    return tool_output(
-        display,
-        ctx=ctx,
-        path=str(resolved),
-        count=len(entries),
-        truncated=truncated,
-        entries=entries,
-    )
+async def _grep_roots(
+    search_targets: list[Path],
+    display_base: Path | None,
+    content: str,
+    glob: str,
+    case_insensitive: bool,
+    output_mode: str,
+    fetch_cap: int,
+) -> tuple[list[str], int, bool] | str:
+    """Run the single-root grep machinery across each target root and merge results.
+
+    Each root is called with offset 0 and head_limit=fetch_cap so its internal
+    pagination is neutralized; the caller slices the merged list globally.
+    total_match_count sums across roots. Returns an error string on bad regex.
+    """
+    merged: list[str] = []
+    total_match_count = 0
+    truncated = False
+    for target in search_targets:
+        result = None
+        if _has_command("rg"):
+            result = await _grep_shell(
+                target, display_base, content, glob, case_insensitive, output_mode, fetch_cap, 0
+            )
+        if result is None:
+            result = await _grep_python(
+                target, display_base, content, glob, case_insensitive, output_mode, fetch_cap, 0
+            )
+        if isinstance(result, str):
+            return result
+        t_paginated, t_total, t_trunc = result
+        merged.extend(t_paginated)
+        total_match_count += t_total
+        truncated = truncated or t_trunc
+    return merged, total_match_count, truncated
 
 
 @agent_tool(
@@ -466,16 +409,22 @@ async def file_read(
     with start_line set to the indicated value. If the file is not found, the error
     message includes similar filenames from the same directory to help correct typos.
 
-    When NOT to use: when the file location is unknown — use file_find or
-    file_search first to locate the file.
+    When NOT to use: when the file location is unknown — use file_search first to locate it.
 
     Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
     up to 500 lines are returned; use start_line to continue reading.
 
     Args:
-        path: File path relative to the workspace root.
-        start_line: First line to include (1-indexed, inclusive). Optional.
-        end_line: Last line to include (1-indexed, inclusive). Optional.
+        path: A path relative to the workspace root (the default base), OR an
+            absolute path under any configured file-search root — the form
+            file_search prints when more than one root is active. Relative paths
+            anchor to the workspace root.
+        start_line: First line to include (1-indexed, inclusive). Default None →
+            read from the top, up to 500 lines (a continuation hint follows if the
+            file is longer). Set it to read a specific section or to continue past
+            the hint.
+        end_line: Last line to include (1-indexed, inclusive). Default None → read
+            through line 500 (or end of file). Set it to bound the section's end.
     """
     try:
         refetch_attempt = Path(path).resolve().is_relative_to(ctx.deps.tool_results_dir.resolve())
@@ -483,7 +432,7 @@ async def file_read(
         refetch_attempt = False
     current_span().set_attribute("co.tool.spill_refetch_attempt", refetch_attempt)
     try:
-        resolved = enforce_workspace_boundary(Path(path), ctx.deps.workspace_dir)
+        resolved, _root = enforce_read_boundary(Path(path), ctx.deps.file_search_roots)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
@@ -538,93 +487,124 @@ async def file_read(
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
 async def file_search(
     ctx: RunContext[CoDeps],
-    pattern: str,
-    path: str = ".",
-    glob: str = "**/*",
+    path: str = "**/*",
+    content: str | None = None,
     case_insensitive: bool = False,
-    output_mode: SearchOutputMode = "content",
-    context_lines: int = 0,
-    head_limit: int = 250,
+    files_only: bool = False,
+    limit: int = 50,
     offset: int = 0,
 ) -> ToolReturn:
-    """Search file contents by regex across the workspace or a subdirectory.
+    """Find files by path glob, or regex-search inside them. Replaces grep/rg/find/ls.
 
-    Use this instead of shell `grep` or `rg` for workspace content search.
-    Use it to find text, symbols, or patterns inside files.
-    If you want to search only within matching files, set `glob`
-    (for example `glob="**/*.py"`).
+    Two operations, chosen by whether `content` is given:
+      - content omitted -> list the files matching `path` (like find/ls).
+      - content given   -> regex-search inside the files matching `path` (like grep).
 
-    When NOT to use: for file-name discovery — use file_find with a pattern
-    instead.
+    `path` always selects WHICH files; `content` is WHAT to find inside them.
 
-    Skips binary files.
-
-    output_mode controls what is returned:
-      "content"           — matching lines with file:line_no: text (default)
-      "files_with_matches" — only file paths that contain at least one match
-      "count"             — file path and match count per file
+    Examples:
+      file_search(path="**/*.py")                     -> list all Python files
+      file_search(path="co_cli/")                     -> list files under co_cli/
+      file_search(content="TODO")                     -> grep "TODO" across all files
+      file_search(path="**/*.py", content="def main") -> grep within Python files only
+      file_search(content="auth", files_only=True)    -> which files contain "auth"
 
     Args:
-        pattern: Regular expression to search for.
-        path: Directory to search within, relative to the workspace root (default: ".").
-        glob: Glob pattern to filter which files are searched (default: "**/*").
-        case_insensitive: If True, match regardless of case (default: False).
-        output_mode: One of "content", "files_with_matches", "count" (default: "content").
-        context_lines: Lines of context before and after each match in content mode (default: 0).
-        head_limit: Maximum output lines/entries to return; 0 means unlimited (default: 250).
-        offset: Skip the first N output lines/entries for pagination (default: 0).
+        path: Glob selecting which files (e.g. "**/*.py", "src/*.ts", "*config*"),
+            or a directory to search under. Default "**/*" = every file under the
+            active file-search root(s), recursively. Use "*" for a flat listing of
+            one directory. Hits print relative to the workspace when a single root
+            is active, and as absolute paths when more than one root is configured
+            (feed an absolute hit straight back to file_read).
+        content: Python regex to search for inside the matched files. Default None;
+            when omitted, the tool returns the list of matching files instead of
+            searching their contents. Binary files are skipped.
+        case_insensitive: Match `content` regardless of case. Default False
+            (case-sensitive). Only affects content search.
+        files_only: When True and `content` is set, return only the paths of files
+            that contain a match, not the matching lines. Default False (return the
+            matching lines). Use it for "which files contain X" questions.
+        limit: Maximum results returned — file entries, or matching lines. Default 50.
+            0 means unlimited; with more than one root configured an unlimited
+            content search is capped per root to bound a cross-root scan. Pair with
+            `offset` to page through more.
+        offset: Number of results to skip before returning, for pagination. Default 0
+            (start from the first result). Use together with `limit`.
     """
+    roots = ctx.deps.file_search_roots
+    multi_root = len(roots) > 1
+    # Single root: hits render relative to it (byte-identical to today). Multi-root:
+    # absolute, so they are unambiguous and round-trip through file_read (BC-5).
+    display_base = None if multi_root else roots[0]
+    prefix, glob = _split_path_glob(path)
+
+    # An explicit literal prefix binds to its one containing root (single-root search,
+    # as today); a bare glob (prefix ".") fans across every configured root.
+    if prefix != ".":
+        try:
+            search_root, _root = enforce_read_boundary(Path(prefix), roots)
+        except ValueError as e:
+            return tool_error(str(e), ctx=ctx)
+        if not search_root.is_dir():
+            return tool_error(f"Not a directory: {prefix}", ctx=ctx)
+        search_targets = [search_root]
+    else:
+        search_targets = [r for r in roots if r.is_dir()]
+
+    if content is None:
+        # Glob path is already 200-capped for the unlimited (limit<=0) case today.
+        fetch_cap = (offset + limit) if limit > 0 else 200
+        entries, truncated = await _glob_roots(search_targets, display_base, glob, fetch_cap)
+        page = entries[offset:] if limit <= 0 else entries[offset : offset + limit]
+        truncated = truncated or (len(entries) - offset > len(page))
+        file_lines = [f"[{e['type']}] {e['name']}" for e in page]
+        if truncated:
+            file_lines.append("(truncated — narrow `path` or page with `offset`)")
+        display = "\n".join(file_lines) if file_lines else "(empty)"
+        return tool_output(
+            display,
+            ctx=ctx,
+            path=path,
+            count=len(page),
+            truncated=truncated,
+        )
+
     flags = re.IGNORECASE if case_insensitive else 0
     try:
-        re.compile(pattern, flags)
+        re.compile(content, flags)
     except re.error:
-        return tool_error(f"Invalid regex: {pattern}", ctx=ctx)
+        return tool_error(f"Invalid regex: {content}", ctx=ctx)
 
-    workspace_dir = ctx.deps.workspace_dir
-    try:
-        search_root = enforce_workspace_boundary(Path(path), workspace_dir)
-    except ValueError as e:
-        return tool_error(str(e), ctx=ctx)
-    if not search_root.is_dir():
-        return tool_error(f"Not a directory: {path}", ctx=ctx)
+    output_mode = "files_only" if files_only else "content"
+    # Per-root pagination is neutralized (offset=0 to each helper) so the merged list
+    # can be sliced globally. fetch_cap bounds each root: a positive limit pages
+    # exactly (offset+limit covers the global page); the unlimited (limit<=0) case
+    # stays truly unbounded for a single root (byte-identical to today) but takes a
+    # 200-row ceiling per root once more than one root is searched — never fan an
+    # uncapped content scan across every root (incl. a vault).
+    if limit > 0:
+        fetch_cap = offset + limit
+    elif multi_root:
+        fetch_cap = 200
+    else:
+        fetch_cap = 0
+    if multi_root and limit <= 0:
+        current_span().set_attribute("co.tool.file_search.multiroot_grep_capped", True)
 
-    result = None
-    if _has_command("rg"):
-        result = await _grep_shell(
-            search_root,
-            workspace_dir,
-            pattern,
-            glob,
-            case_insensitive,
-            output_mode,
-            context_lines,
-            head_limit,
-            offset,
-        )
-
-    if result is None:
-        result = await _grep_python(
-            search_root,
-            workspace_dir,
-            pattern,
-            glob,
-            case_insensitive,
-            output_mode,
-            context_lines,
-            head_limit,
-            offset,
-        )
-
+    result = await _grep_roots(
+        search_targets, display_base, content, glob, case_insensitive, output_mode, fetch_cap
+    )
     if isinstance(result, str):
         return tool_error(result, ctx=ctx)
-
-    paginated, total_match_count, truncated = result
-    display = "\n".join(paginated) if paginated else "(no matches)"
+    merged, total_match_count, truncated = result
+    page = merged[offset:] if limit <= 0 else merged[offset : offset + limit]
+    truncated = truncated or (len(merged) - offset > len(page))
+    display = "\n".join(page) if page else "(no matches)"
 
     return tool_output(
         display,
         ctx=ctx,
-        pattern=pattern,
+        content=content,
         count=total_match_count,
         mode=output_mode,
         truncated=truncated,

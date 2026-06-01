@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 # Map raw CheckResult.status to a coarse component-state vocabulary used by the
 # self-check tool display. "warn" is split below based on intent: soft-unconfigured
-# integrations (google/brave/obsidian/skills with no config) report "not_configured",
+# integrations (google/brave/skills with no config) report "not_configured",
 # genuine runtime failures report "degraded".
 _STATE_BY_STATUS: dict[str, str] = {
     "ok": "available",
@@ -267,14 +267,6 @@ def _check_google(creds: str | None, token_path: Path, adc_path: Path) -> CheckR
     return CheckResult(ok=True, status="warn", detail="not configured")
 
 
-def _check_obsidian(vault: str | None) -> CheckResult:
-    if vault is None:
-        return CheckResult(ok=True, status="skipped", detail="not configured")
-    if os.path.exists(vault):
-        return CheckResult(ok=True, status="ok", detail="vault found", extra={"path": vault})
-    return CheckResult(ok=True, status="warn", detail="path not found", extra={"path": vault})
-
-
 def _check_brave(api_key: str | None) -> CheckResult:
     if api_key:
         return CheckResult(ok=True, status="ok", detail="API key configured")
@@ -328,10 +320,6 @@ def check_runtime(
 
     _emit_progress(progress, "Doctor: checking configured integrations...")
     google_result = _check_google(deps.config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
-    _obsidian_vault = (
-        str(deps.config.obsidian_vault_path) if deps.config.obsidian_vault_path else None
-    )
-    obsidian_result = _check_obsidian(_obsidian_vault)
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
     _emit_progress(progress, "Doctor: checking knowledge backend...")
@@ -354,7 +342,6 @@ def check_runtime(
     named_checks: list[tuple[str, CheckResult]] = [
         ("provider", provider_result),
         ("google", google_result),
-        ("obsidian", obsidian_result),
         ("brave", brave_result),
         ("knowledge", knowledge_result),
         ("skills", skills_result),
@@ -372,7 +359,6 @@ def check_runtime(
         "reasoning_model": deps.config.llm.model,
         "reasoning_ready": provider_result.ok,
         "google": google_result.status == "ok",
-        "obsidian": obsidian_result.status == "ok",
         "brave": brave_result.status == "ok",
         "mcp_count": mcp_count,
         "knowledge_backend": deps.config.memory.search_backend,

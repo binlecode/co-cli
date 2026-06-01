@@ -78,20 +78,16 @@ def _file_read_marker(args: dict[str, Any], _content: str, chars: int, _lines: i
     return f"[file_read] {path} ({span}, {chars:,} chars) — read on demand"
 
 
-def _file_search_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -> str:
-    pattern = args.get("pattern", "?")
-    path = args.get("path", ".")
-    if content.startswith("(no matches)"):
-        return f"[file_search] '{pattern}' in {path} → no matches"
-    return f"[file_search] '{pattern}' in {path} ({lines} result lines) — re-query on demand"
-
-
-def _file_find_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -> str:
-    path = args.get("path", ".")
-    pattern = args.get("pattern", "*")
-    if content.startswith("(empty)"):
-        return f"[file_find] {pattern} in {path} → no entries"
-    return f"[file_find] {pattern} in {path} ({lines} entries) — re-query on demand"
+def _file_search_marker(args: dict[str, Any], body: str, _chars: int, lines: int) -> str:
+    path = args.get("path", "**/*")
+    query = args.get("content")
+    if query is None:
+        if body.startswith("(empty)"):
+            return f"[file_search] {path} → no files"
+        return f"[file_search] {path} ({lines} files) — re-query on demand"
+    if body.startswith("(no matches)"):
+        return f"[file_search] '{query}' in {path} → no matches"
+    return f"[file_search] '{query}' in {path} ({lines} result lines) — re-query on demand"
 
 
 def _web_search_marker(args: dict[str, Any], content: str, chars: int, _lines: int) -> str:
@@ -106,21 +102,14 @@ def _web_fetch_marker(args: dict[str, Any], _content: str, chars: int, _lines: i
     return f"[web_fetch] {url} ({chars:,} chars) — fetch on demand"
 
 
-def _obsidian_read_marker(args: dict[str, Any], _content: str, chars: int, _lines: int) -> str:
-    filename = args.get("filename", "?")
-    return f"[obsidian_read] {filename} ({chars:,} chars) — read on demand"
-
-
 _MarkerFn = Callable[[dict[str, Any], str, int, int], str]
 
 _TOOL_MARKERS: dict[str, _MarkerFn] = {
     "shell_exec": _shell_marker,
     "file_read": _file_read_marker,
     "file_search": _file_search_marker,
-    "file_find": _file_find_marker,
     "web_search": _web_search_marker,
     "web_fetch": _web_fetch_marker,
-    "obsidian_read": _obsidian_read_marker,
 }
 
 
