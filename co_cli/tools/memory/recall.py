@@ -178,23 +178,13 @@ async def memory_search(
 ) -> ToolReturn:
     """Search memory artifacts by keyword, or browse recent artifacts.
 
-    USE THIS for recall of saved preferences, conventions, articles, notes — anything
-    the agent has learned or saved to the memory store.
+    Use for recall of saved preferences, conventions, articles, notes — anything the
+    agent has learned or saved. Empty query → recent N artifacts (browse mode);
+    non-empty → BM25 FTS5 search. Load a full body with memory_view(name).
 
-    Empty query → recent N artifacts (title, kind, path, snippet) — browse mode.
-    Non-empty → BM25 FTS5/grep search. Load a full artifact body with memory_view(name).
-
-    INTENT → KINDS:
-      "what do I prefer / how do I like..."     → kinds=["user"]
-      "how do I usually handle / my approach..."→ kinds=["user", "rule"]
-      "what do I know about / saved article..." → kinds=["article"]
-      "everything about X"                      → kinds=["user", "rule", "article"]
-      broad or uncertain intent                 → omit kinds (searches all)
-
-    Search syntax (FTS5): keywords joined with OR (auth OR login), phrases ("connection pool"),
-    boolean (python NOT java), prefix (deploy*).
-
-    Result fields: kind, title, snippet, score, path, filename_stem
+    kinds filter: "user" for preferences, "article" for saved knowledge, "rule" for
+    conventions; omit to search all. FTS5 syntax: OR (auth OR login), phrases
+    ("connection pool"), NOT (python NOT java), prefix (deploy*).
 
     Args:
         query: FTS5 keyword query.

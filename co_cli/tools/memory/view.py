@@ -27,12 +27,8 @@ async def memory_view(
 ) -> ToolReturn:
     """Load the full body of a memory artifact by its filename_stem.
 
-    Use after memory_search returns a hit when you need the complete artifact
-    content — not just the snippet. The `name` is the `filename_stem` field from
-    search results.
-
-    Returns: artifact body (post-frontmatter), plus kind, name, and path metadata.
-    Returns tool_error when the artifact does not exist.
+    Use after memory_search returns a hit when you need the complete artifact content,
+    not just the snippet. `name` is the `filename_stem` field from search results.
 
     Args:
         name: The artifact filename_stem (no directory, no .md extension).

@@ -213,42 +213,21 @@ def todo_write(
 ) -> ToolReturn:
     """Replace or merge-update the session todo list for tracking multi-step work.
 
-    When to use: proactively for any directive requiring 3+ steps or non-trivial
-    planning. Create the list before starting work, update status as each
-    sub-goal completes, and only ONE item may be "in_progress" at a time — writes that produce more than one are rejected.
+    When to use: proactively for any directive requiring 3+ steps. Create the list
+    before starting, update status as each sub-goal completes. Only ONE item may be
+    "in_progress" at a time — writes that produce more than one are rejected.
 
-    When NOT to use: trivial single-step tasks where tracking adds no value.
+    Model assigns and owns `id` (unique within the session, stable across merge calls).
 
-    Model assigns and owns `id`; ids must be unique within the session and stable
-    across merge calls. To rename an id, do a fresh write (merge=False).
-
-    merge=False (default): replace the full list. Every item must have a valid id,
-    non-empty content, and pass status/priority validation. On success,
-    session_todos is replaced with the validated list.
-
-    merge=True: update by id without touching the rest. Known ids update only the
-    fields provided; unknown ids are appended as new items (full validation).
-    Existing items not mentioned in the payload are preserved unchanged, in
-    original order.
-
-    Validation is all-or-nothing for both modes: if any item fails, nothing is
-    saved and session_todos is unchanged.
-
-    Each item must have:
-    - id (str): model-assigned; unique within session; no '.' or whitespace
-    - content (str): task description — must be non-empty
-    - status (str): "pending" | "in_progress" | "completed" | "cancelled"
-    - priority (str): "high" | "medium" | "low"
-
-    Returns a dict with:
-    - display: summary of the todo list after the operation — show directly to user
-    - count: number of items in the list after the operation
-    - pending: number of pending items
-    - in_progress: number of in_progress items
-    - todos: full post-state list of {id, content, status, priority} dicts
+    merge=False (default): replace the full list.
+    merge=True: update known ids by the fields provided, append unknown ids as new
+    items, and preserve unmentioned items unchanged. Validation is all-or-nothing in
+    both modes — if any item fails, nothing is saved.
 
     Args:
-        todos: Items to write or merge. Fresh mode replaces the list. Merge mode updates by id.
+        todos: Items to write. Each has id (str, no '.' or whitespace), content (str,
+            non-empty), status (pending | in_progress | completed | cancelled), and
+            priority (high | medium | low).
         merge: If True, merge-update by id instead of replacing the full list.
     """
     todos_dicts = [t.model_dump() for t in todos]
@@ -312,18 +291,8 @@ def todo_read(
 ) -> ToolReturn:
     """Read the current session todo list to verify progress and completeness.
 
-    When to use: before ending a turn — if any items are still "pending" or
-    "in_progress", continue working rather than responding as done. Also useful
-    mid-task to check what remains.
-
-    When NOT to use: when no todo list has been created for this session.
-
-    Returns a dict with:
-    - display: formatted todo list — show directly to user
-    - count: total items
-    - pending: number of pending items
-    - in_progress: number of in_progress items
-    - todos: list of {id, content, status, priority} dicts
+    When to use: before ending a turn — if any items are still pending or in_progress,
+    keep working rather than responding as done. Also useful mid-task to check what remains.
 
     Args: (none)
     """

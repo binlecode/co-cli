@@ -48,32 +48,22 @@ async def memory_manage(
 ) -> ToolReturn:
     """Create, update, or delete a memory artifact.
 
-    action='create'  — Save a new artifact. Requires content and kind.
-    action='append'  — Add content at the end of an existing artifact body.
-                       name must be the filename_stem (from memory_search).
-    action='replace' — Surgically replace a passage in an existing artifact.
-                       name must be the filename_stem; section is the exact passage
-                       to replace (must appear exactly once); content is the replacement.
-    action='delete'  — Remove the artifact file and its index entries.
-                       name must be the filename_stem (from memory_search).
+    action='create'  — save a new artifact (requires content + kind).
+    action='append'  — add content to the end of an existing artifact body.
+    action='replace' — replace a passage (section) in an existing artifact.
+    action='delete'  — remove the artifact and its index entries.
+
+    For append/replace/delete, name is the filename_stem from memory_search.
 
     Args:
         action: One of create | append | replace | delete.
-        name: For create — the artifact title. For append/replace/delete — the filename_stem.
-        content: Text body for create/append, or replacement text for replace.
+        name: For create — the artifact title. Otherwise the filename_stem.
+        content: Body for create/append, or replacement text for replace.
         kind: Required for create. One of user | rule | article | note.
-        section: For replace — the exact passage to replace (must appear exactly once).
-        source_type: For create — provenance tag on the saved frontmatter.
-                     Defaults to 'manual' for direct agent saves; the session-end
-                     memory reviewer sets 'session_review' so reviewer-extracted
-                     facts are distinguishable from inline saves.
-        source_url: For create — when set, enables URL-keyed dedup. A re-save with
-                    the same source_url consolidates onto the existing article
-                    (same artifact_id, content updated, existing related preserved)
-                    instead of creating a duplicate. Stamps source_type=web_fetch,
-                    source_ref=<url>, decay_protected=True. Typical use: agent
-                    fetches a page via web_fetch, then saves the curated content
-                    with the same URL so subsequent re-saves consolidate.
+        section: For replace — the exact passage to replace; must appear exactly once.
+        source_type: For create — provenance tag; defaults to 'manual'.
+        source_url: For create — when set, enables URL-keyed dedup: a re-save with
+            the same URL consolidates onto the existing article instead of duplicating.
     """
     if action == "create":
         return await _handle_create(
