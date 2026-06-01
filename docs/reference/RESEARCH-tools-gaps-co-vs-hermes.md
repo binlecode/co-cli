@@ -1,17 +1,32 @@
 # RESEARCH: Tool Parity & Lifecycle Gaps — `co-cli` vs Hermes
 
-> **Last refreshed:** 2026-05-27 (co-cli v0.8.258). Tool inventories re-counted
+> **Last refreshed:** 2026-05-28 (co-cli v0.8.264). Tool inventories re-counted
 > directly from each repo (co-cli `TOOL_REGISTRY` dump via runtime import; hermes
 > `registry.register()` AST scan). Active in-flight items linked to exec-plans
 > where applicable.
 >
-> **Changes since 2026-05-08 refresh:** co-cli grew 33→37 tools — the skills port
-> (`skill_view`, `skill_manage`) and the memory/session split (`memory_view`,
-> `session_search`, `session_view` now distinct) both shipped, and `todo_write`
-> gained hermes-style `merge`. MCP `inputSchema` sanitization shipped
-> (`tools/mcp_schema.py`). Hermes grew 61→64: dropped the 10 `rl_*` tools, added
-> `computer_use`, `x_search`, `video_analyze`, `video_generate`, and a 9-tool
-> `kanban_*` coordination set.
+> **Changes since 2026-05-27 refresh:** co-cli at 37 tools (inventory unchanged).
+> Tool Gap B1 shipped at v0.8.262 (`tool_output_raw` bypass removed by deleting
+> the helper; article URL-dedup restored via `memory_manage(source_url=…)`).
+> Tool Gap B2 (document handling) pivoted from a `document_extract` tool to a
+> `documents` skill that drives `shell_exec` + a `scripts/extract_pdf.py` helper
+> — see §2.1. The §3.4/§4.5 "delegation profile field" verdict has been
+> downgraded after re-reading the code: the active mechanism is
+> `TaskAgentSpec.tool_names=(…)` tuples on each delegation spec, not a
+> `delegation` field on `@agent_tool` (no such field exists; no
+> `discover_delegation_tools()` either). Hermes inventory unchanged at 64.
+>
+> **Changes since 2026-05-28 (v0.8.262) refresh:** co-cli now at v0.8.264 (two
+> REPL queue commits; no tool surface impact). `COMPACTABLE_TOOLS` was removed
+> from `categories.py` at v0.8.254 (stale reference corrected in §1 sources).
+> The two dedicated documents-skill plans (`2026-05-27-171910-documents-skill.md`,
+> `2026-05-27-172717-skill-documents.md`) were withdrawn and deleted; the
+> `documents` skill (TASK-4) is now tracked under the consolidated
+> `2026-05-27-133104-skill-porting-mission-converged.md` plan — §2.1 and §5
+> updated accordingly. Prompt-static-trim plan (in-flight): `_skill_manifest_provider`
+> and `_category_awareness_provider` are being moved from static instruction
+> builders to per-turn instructions (`orchestrator.py` + `_instructions.py`) to
+> stabilize the Ollama cache prefix — no tool surface change.
 
 Code-verified cross-review of co-cli's tool surface and lifecycle against hermes-agent.
 Per-tool parity matrix first (what each co tool looks like in hermes, porting implications),
@@ -28,7 +43,7 @@ then architecture-level gaps and anti-patterns.
 - [`co_cli/tools/mcp_schema.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/mcp_schema.py) — `sanitize_mcp_schema()` (type-array collapse, nullable-union collapse, object-shape fix, recursion)
 - [`co_cli/agent/core.py`](/Users/binle/workspace_genai/co-cli/co_cli/agent/core.py)
 - [`co_cli/tools/lifecycle.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/lifecycle.py)
-- [`co_cli/tools/categories.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/categories.py) — `PATH_NORMALIZATION_TOOLS`, `FILE_TOOLS`, `COMPACTABLE_TOOLS`
+- [`co_cli/tools/categories.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/categories.py) — `PATH_NORMALIZATION_TOOLS`, `FILE_TOOLS` (`COMPACTABLE_TOOLS` removed at v0.8.254)
 - [`co_cli/tools/approvals.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/approvals.py)
 - [`co_cli/tools/agent_tool.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/agent_tool.py)
 - [`co_cli/tools/tool_io.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/tool_io.py) — `tool_output`/`tool_output_raw`, `spill_if_oversized`, `SPILL_THRESHOLD_CHARS`
@@ -136,14 +151,14 @@ Columns: **co-cli tool** · **hermes equivalent** · **Parity** (✓ = same sema
 | co-cli tool | hermes equivalent | Parity | Gap & porting notes |
 |---|---|---|---|
 | `web_search(query, max_results=5, domains=None)` (`web/search.py`) | `web_search(query, limit=5)` (`web_tools.py`) | ✓ | Both Brave-backed. co-cli adds an SSRF-hardened `web/_ssrf.py` + domain filter; hermes uses a generic `url_safety.py`. **Port:** domains filter is a co-cli-specific policy knob; no porting needed. |
-| `web_fetch(url, format="markdown", timeout=15)` (`web/fetch.py`) | `web_extract(urls: list[str])` | ~ | Hermes accepts up to 5 URLs per call — **real latency advantage**. co-cli accepts a single URL but exposes `format` (markdown/html/text) and per-call `timeout` knobs hermes lacks. **Port candidate (still open):** add `urls: list[str]` with a parallel fetch + per-URL timeout. |
+| `web_fetch(url, format="markdown", timeout=15)` (`web/fetch.py`) | `web_extract(urls: list[str])` | ~ | Hermes accepts up to 5 URLs per call. co-cli accepts a single URL but exposes `format` (markdown/html/text) and per-call `timeout` knobs hermes lacks. **Multi-URL port rejected as parity-cosmetic** (B1 plan audit, 2026-05-27): `web_fetch` is `is_read_only=True` + `is_concurrent_safe=True`, so pydantic-ai's `sequential=False` already dispatches parallel `web_fetch(url=…)` calls concurrently and isolates per-call errors. A `urls: list[str]` argument would add list validation, dual return shape, multi-domain approval, and batched formatting for **no capability gain**. |
 
 ### 1.5 Execution, Jobs & Delegation
 
 | co-cli tool | hermes equivalent | Parity | Gap & porting notes |
 |---|---|---|---|
 | `shell_exec(cmd, timeout=120, workdir=None)` (`shell/execute.py`) | `terminal(command, background, timeout, workdir, pty, notify_on_complete, watch_patterns)` (`terminal_tool.py`) | ~ | Hermes's `terminal` is a superset: built-in background mode with `notify_on_complete` and `watch_patterns` (regex pattern notifier mid-process) and **PTY support** for interactive CLIs. co-cli keeps `shell_exec` blocking-only (with `workdir` confined to workspace) and splits background into `task_*`. **Port candidates (ranked):** (a) `pty=True` for interactive tool use (Codex, Claude Code, Python REPL invocation) — high value, small surface; (b) `watch_patterns` for long-running `task_*` — real utility for build/test watching; (c) unified `shell_exec`+`task_start` is a larger redesign. |
-| `task_start(command, description, working_directory)` (`tasks/control.py`) | `terminal(background=True, notify_on_complete, watch_patterns)` + `process(action, session_id)` (`process_registry.py`) | ~ | Hermes collapses task lifecycle into two tools. Hermes's `process` supports `list`, `poll`, `log`, `wait`, `kill`, `write`, `submit`, `close` — **`write`/`submit`/`close` are co-cli gaps** (can't send stdin to a running task, no clean shutdown channel). |
+| `task_start(command, description, working_directory)` (`tasks/control.py`) | `terminal(background=True, notify_on_complete, watch_patterns)` + `process(action, session_id)` (`process_registry.py`) | ~ | Hermes collapses task lifecycle into two tools. Hermes's `process` supports `list`, `poll`, `log`, `wait`, `kill`, `write`, `submit`, `close` — **`write`/`submit`/`close` were co-cli gaps** (can't send stdin to a running task, no clean shutdown channel). **Now planned:** `task_write` + `task_close` in Phase 2 of `2026-05-28-200025-toolgap-interactive-terminal.md` — opens `stdin=PIPE` on the background spawn and adds the write/EOF tools. This is the interactive-drive enhancement sequenced alongside (Phase 1) the `shell_exec` pty fidelity step in the same plan. |
 | `task_status(task_id, tail_lines=20)` | `process(action="poll"/"log")` | ~ | Same surface. See Gap 4 (in-memory ring buffer). |
 | `task_cancel(task_id)` | `process(action="kill")` | ✓ | Both SIGTERM→SIGKILL via process group; co-cli additionally drains the monitor task and reports `cleanup_incomplete` on timeout. |
 | `task_list(status_filter)` | `process(action="list")` | ✓ | Equivalent. |
@@ -184,8 +199,8 @@ Capabilities co-cli does not have, grouped by porting recommendation.
 
 | hermes tool | File | Why it might matter for co-cli |
 |---|---|---|
-| `session_search` `role_filter` + anchored scroll | `session_search_tool.py` | The boolean-syntax + no-query-mode parity is shipped (see §1.3); `role_filter` (assistant vs user) and the `session_id`+`around_message_id`+`window` anchored-scroll shape are the remaining differentiators. `role_filter` lets callers narrow recall to "what did *I* say last time" vs "what did *the assistant* say last time". |
-| `vision_analyze` / local document handling | `vision_tools.py` | co-cli has no vision or local-document tool. **Tool-first port in flight** for the document half — `document_extract` in `docs/exec-plans/active/2026-05-27-172717-toolgap-b2-document-extract.md` (local PDF text extraction; `file_read` currently rejects binary); the `documents` skill follows in `2026-05-27-171910-documents-skill.md`. Image/screenshot vision is the adjacent unaddressed gap; the pydantic-ai model wrapper makes it cheap. |
+| `session_search` `role_filter` + anchored scroll | `session_search_tool.py` | The boolean-syntax + no-query-mode parity is shipped (see §1.3). **`role_filter` WITHDRAWN (2026-05-28)** as an intentional architecture divergence, not a defect — co's multi-message chunking makes role a sub-span property; clean filtering would need per-message re-indexing for marginal value (see priority table). The `session_id`+`around_message_id`+`window` anchored-scroll shape remains a differentiator but is covered today by `session_view` (verbatim slice). |
+| `vision_analyze` / local document handling | `vision_tools.py` | **Both halves now planned.** Document half — `documents` skill (TASK-4 in `2026-05-27-133104-skill-porting-mission-converged.md`) drives `shell_exec` + `scripts/extract_pdf.py` (pymupdf4llm). The earlier `document_extract` tool design was rejected: in-process `asyncio.to_thread` gives no RSS isolation for large PDFs; a subprocess does. Two earlier dedicated plans (`2026-05-27-171910-documents-skill.md`, `2026-05-27-172717-skill-documents.md`) were withdrawn and consolidated. Vision half — `image_view` tool in `2026-05-28-150239-vision-input.md`: `BinaryContent` + a `build_vision_model` helper (Gemini native multimodal; Ollama needs optional `llm.vision_model`), single model request, `check_fn` capability gate. |
 | `terminal.watch_patterns` / `terminal.pty` | `terminal_tool.py` | See §1.5 for the feature-level port. |
 | `web_extract` multi-URL | `web_tools.py` | See §1.4 — co-cli's `web_fetch` is still single-URL; hermes takes up to 5 per call. |
 
@@ -247,15 +262,17 @@ calls concurrently via `asyncio.gather` through a `_discover_one` helper. Startu
 delay is now `max(timeouts)` instead of `N × timeout`.
 
 ### 3.4 No named toolset profiles for delegation
-**Done (code-verified 2026-05-08).** `@agent_tool` accepts a `delegation:
-frozenset[str] | set[str] | None` field that tags a tool with one or more delegation
-profile names. `discover_delegation_tools(profile, config)` (`agent/core.py`) iterates
-`TOOL_REGISTRY`, filters by `info.delegation` membership and `info.requires_config`,
-and returns the matching list. Delegation agents call this helper instead of hardcoded
-lists. Tools currently tagged: `"web_research"` (web_search, web_fetch),
-`"knowledge_analyze"` (memory_search, google_drive_search, obsidian_search,
-obsidian_list). Adding a tool to a profile is one decorator edit; new optional
-integrations (e.g. obsidian) are gated automatically via `requires_config`.
+**Partial (code-verified 2026-05-28).** The 2026-05-08 verdict ("`delegation` field on
+`@agent_tool` + `discover_delegation_tools()`") was wrong against the current code:
+`@agent_tool` has no `delegation` parameter, and no `discover_delegation_tools()`
+function exists. The actual mechanism today is `TaskAgentSpec.tool_names=(…)` tuples
+on each delegation spec (`co_cli/tools/agents/delegation.py:73-108`): each spec
+hardcodes the tool *names* it needs, and the runtime resolves those names against
+`TOOL_REGISTRY` at agent construction. That keeps tools registered in one place
+(`TOOL_REGISTRY`) so the §3.2 self-registration win still holds, but the §4.5
+anti-pattern ("re-enumerate tool lists by hand") remains live — adding a tool to a
+profile is still a tuple edit on the spec, not a decorator tag, and requires_config
+gating is per-spec rather than automatic.
 
 ### 3.5 No MCP dynamic tool refresh
 **Deferred.** `discover_mcp_tools()` runs once at bootstrap; ignores
@@ -338,9 +355,12 @@ Intentional for cross-agent staleness detection, but unbounded in long sessions.
 values than production runs.
 
 ### 4.5 Delegation agents re-enumerate tool lists by hand
-**Done (code-verified 2026-05-08).** Resolved alongside §3.4 — the `delegation` profile
-field on `@agent_tool` + `discover_delegation_tools()` removes the per-agent hardcoded
-`tool_fns=[...]` enumeration.
+**Open (re-verified 2026-05-28).** The 2026-05-08 "done" verdict was retracted in
+§3.4. Today each `TaskAgentSpec` carries its own hardcoded `tool_names=(…)` tuple
+of registry-resolved names (`co_cli/tools/agents/delegation.py:73-108`). The shape
+is one indirection cleaner than the old `tool_fns=[...]` import-and-list, and the
+registry lookup catches typos at agent-construction time, but adding a tool to a
+profile is still a per-spec edit and `requires_config` gating is repeated per-spec.
 
 ---
 
@@ -352,17 +372,17 @@ Status legend: ✅ done · 🟢 in flight (active exec-plan) · 🟠 open · ⚪
 |---|---|---|---|---|
 | **High** | ✅ | MCP `inputSchema` sanitization (§3.8) | MCP tools silently dropped on Ollama / llama.cpp; Anthropic schema rejection | Done — `_SanitizingMCPServer` + `tools/mcp_schema.py`, code-verified 2026-05-27 |
 | **High** | ✅ | MCP tool results not spill-gated (§3.1) | Context overflow via runaway MCP | Done — `lifecycle.py:249-257`, code-verified 2026-05-08 |
-| **High** | 🟢 | `tool_output_raw()` bypasses spill gate (§4.1) | Silent context overflow | Batch 1 `2026-05-27-172716-toolgap-b1-fetch-spill.md` — hard-cap + truncation marker (ctx-less can't disk-spill) |
-| **Medium** | 🟢 | Local document handling (PDF/text extraction), vision-adjacent (§2.1) | Cannot read local PDFs/documents (`file_read` rejects binary) | Batch 2 `2026-05-27-172717-toolgap-b2-document-extract.md` (`document_extract` via `pymupdf4llm`); skill in `2026-05-27-171910-documents-skill.md` |
+| **High** | ✅ | `tool_output_raw()` bypasses spill gate (§4.1) | Silent context overflow | Done at v0.8.262 — `tool_output_raw` **deleted**; helper-layer errors now route back through `tool_error` (which spills via `ctx`). Shipped via `docs/exec-plans/completed/2026-05-27-172716-toolgap-b1-fetch-spill.md`. |
+| **Medium** | 🟢 | Local document handling (PDF/text extraction), vision-adjacent (§2.1) | Cannot read local PDFs/documents (`file_read` rejects binary) | TASK-4 of `2026-05-27-133104-skill-porting-mission-converged.md` — `documents` skill drives `shell_exec` + `scripts/extract_pdf.py` (`pymupdf4llm`). Standalone `document_extract` tool design rejected: subprocess gives RSS isolation that in-process `asyncio.to_thread` cannot. Two dedicated plans withdrawn and deleted; now consolidated. |
 | **Medium** | ✅ | Add model-callable `skill_view` / `skill_manage` (§2.1) | Skill discovery + authoring required user slash commands | Done — `tools/system/skills.py`; read + write surfaces both ported, code-verified 2026-05-27 |
 | **Medium** | ✅ | Concurrent MCP `list_tools()` discovery (§3.3) | Cumulative startup delay = N × timeout | Done — `_discover_one` + `asyncio.gather` in `agent/mcp.py` |
-| **Medium** | 🟢 | `shell_exec` `pty` flag (§1.5) | CLIs that gate on isatty | Batch 3 `2026-05-27-172718-toolgap-b3-pty-rolefilter.md` — **output fidelity only** (stdlib `pty.openpty`, no dep); interactive stdin drive needs a `task_*` write channel co lacks (separate gap) |
-| **Medium** | 🟢 | `web_fetch` `urls: list[str]` parallel fetch (§1.4) | Sequential latency | Batch 1 `2026-05-27-172716-toolgap-b1-fetch-spill.md` — `asyncio.gather(return_exceptions=True)`, cap 5, per-URL error isolation (no LLM summarization, unlike hermes) |
+| **Medium** | 🟢 | `shell_exec` `pty` flag (§1.5) | CLIs that gate on isatty | `2026-05-28-200025-toolgap-interactive-terminal.md` (Phase 1) — **output fidelity only** (stdlib `pty.openpty`, no dep); interactive stdin drive is Phase 2 of the same plan (`task_write`/`task_close`) |
+| **Medium** | ⚪ | `web_fetch` `urls: list[str]` parallel fetch (§1.4) | Sequential latency | **Rejected as parity-cosmetic** (B1 plan audit 2026-05-27): `web_fetch` is `is_read_only=True` + `is_concurrent_safe=True`, so pydantic-ai's `sequential=False` already dispatches parallel `web_fetch(url=…)` calls concurrently with per-call error isolation. The `urls: list[str]` argument would add list validation, dual return shape, multi-domain approval, and batched formatting for no capability gain. |
 | **Medium** | 🟠 | `ModelRetry` / `tool_error` unenforced (§4.2) | Retry-budget waste | Medium — ruff rule or base-class signal |
 | **Medium** | ✅ | `NATIVE_TOOLS` manual tuple (§3.2) | Tool silently omitted | Done — `TOOL_REGISTRY` self-registration via `@agent_tool`, code-verified 2026-05-08 |
-| **Low** | 🟠 | Add image/screenshot vision tool (§2.1) | No vision capability | Medium — new tool + pydantic-ai model wrapper |
-| **Low** | 🟢 | Add `role_filter` to `session_search` (§1.3) | Cannot narrow recall to assistant-vs-user | Batch 3 `2026-05-27-172718-toolgap-b3-pty-rolefilter.md` — **Medium, not Low**: co chunks are role-mixed (no `m.role` column like hermes), so honest parity needs post-filter or a re-index. May **defer** rather than ship a mixed-chunk passthrough |
-| **Low** | ✅ | Named toolset profiles for delegation (§3.4, §4.5) | Tool-list drift in delegation | Done — `delegation` field on `@agent_tool` + `discover_delegation_tools()`, code-verified 2026-05-08 |
+| **Low** | 🟢 | Add image/screenshot vision tool (§2.1) | No vision capability | `2026-05-28-150239-vision-input.md` — `image_view(path, prompt)` over `BinaryContent` + a `build_vision_model` helper (Gemini native; Ollama needs optional `llm.vision_model`). Honest capability gate via `check_fn`. |
+| **Low** | 🟢 | Add `role_filter` to `session_search` (§1.3) | Cannot narrow recall to assistant-vs-user | **WITHDRAWN (2026-05-28) — not a defect.** This is an intentional architecture divergence, not a missing feature: hermes indexes 1 message/row with a `role` column (so `role_filter` is free); co deliberately indexes multi-message chunks for recall quality, so role is a sub-span property, not a unit property. Honest parity needs per-message re-indexing (chunker rewrite + recall-quality eval gate) for marginal value — no observed co need. Plan deleted; do **not** re-propose from a signature diff alone. Revisit only on a real, demonstrated recall need. |
+| **Low** | 🟠 | Named toolset profiles for delegation (§3.4, §4.5) | Tool-list drift in delegation | **Partial** (re-verified 2026-05-28). 2026-05-08 "done" verdict retracted: no `delegation` field on `@agent_tool`, no `discover_delegation_tools()`. Current mechanism is `TaskAgentSpec.tool_names=(…)` tuple of registry-resolved names. Tools stay in one registry (§3.2 win holds) but each spec still hardcodes its list. Tag-and-filter design is a future option, not a shipped one. |
 | **Low** | 🟠 | `file_read_mtimes` unbounded (§4.3) | Memory in very long sessions | Low — cap dict or evict on turn reset |
 | **Low** | ⚪ | No permanent approval persistence (§3.7) | UX friction | Medium — deliberate security tradeoff |
 | **Low** | ✅ | Background task ring-buffer lossy (§3.6) | Output loss for long commands | Done — file-only per-task log under `LOGS_DIR`, ring buffer removed; `tail_log` helper for reads; `_drain_and_cleanup` unlinks at session end. Code-verified 2026-05-08. |

@@ -1,6 +1,6 @@
 # deferred-tool-stubs
 
-> **Child 1b of** `2026-05-28-141854-prefill-schema-trim.md`. Supersedes the withdrawn child 1
+> **Child 1b of** `2026-05-28-141854-prefill-trim.md`. Supersedes the withdrawn child 1
 > (`skill-manage-defer`), whose smoke proved the real blocker is *discoverability of deferred
 > tools*, not the model's raw ability to use them. This plan fixes discoverability for **every**
 > deferred tool, then re-tests the `skill_manage` DEFERRED flip on top of it.
