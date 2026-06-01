@@ -1,9 +1,11 @@
 # tool-surface-small-model-audit
 
 > **Status: draft plan (not yet Gate-1 approved).** Captures the full output of the
-> cross-tool small-model surface audit (63 findings: 5 critical, 27 high, 31 low) with a
-> concrete fix per finding. `file_search` is already fixed and is the reference design —
-> excluded here.
+> cross-tool small-model surface audit — **63 findings as originally audited** (5 critical,
+> 27 high, 31 low), with a concrete fix per finding. `file_search` is already fixed and is the
+> reference design — excluded here. Live total is now **61** (5 critical · 26 high · 30 low):
+> `knowledge_analyze` was deleted, voiding its Task 2 LOW + one Task 4 HIGH. The original count
+> also predates the obsidian-surface removal (Task 1), so 61 is an upper bound.
 
 ## Context
 
@@ -41,7 +43,9 @@ monomorphic primitives. Damage concentrates in three `action`/`mode`-discriminat
 (`memory_manage`, `skill_manage`, `file_patch`) plus systemic doc gaps across the
 `google_*`/`obsidian_*` families.
 
-Counts: **5 critical · 27 high · 31 low = 63.**
+Counts (as originally audited): **5 critical · 27 high · 31 low = 63.** Live after the
+`knowledge_analyze` deletion: **5 critical · 26 high · 30 low = 61** (upper bound — also predates
+the obsidian-surface removal in Task 1).
 
 ---
 
@@ -51,8 +55,8 @@ Counts: **5 critical · 27 high · 31 low = 63.**
   dead params. Tiny, high-certainty, no behavior risk. (`skill_view.file_path` removal,
   `skill_view.name` plugin note, V4A Move error. The `obsidian_list` item was resolved by removing
   the obsidian tool surface entirely.)
-- **Task 2 — Pattern 2 sweep (defaults-inline):** ~15 docstring-only edits across many tools.
-  Low risk, high coverage, no signature changes.
+- **Task 2 — Pattern 2 sweep (defaults-inline): ✓ DONE.** 9 docstring-only Args-line edits across
+  6 tools. Low risk, no signature changes.
 - **Task 3 — the three monomorphic splits (CRITICAL):** `memory_manage`, `skill_manage`,
   `file_patch`. Largest correctness win; mirrors the shipped `file_search` split. Signature +
   registry + tests + spec. Internal `_handle_*`/`_skill_*` helpers already exist → thin wrappers.
@@ -109,16 +113,28 @@ Each task is independently shippable. Task 3 is the only one touching the tool r
 
 ---
 
-## Task 2 — Pattern 2: state every optional default inline (docstring-only sweep)
+## Task 2 — Pattern 2: state every optional default inline (docstring-only sweep) — ✓ DONE
 
 All edits are reword-the-Args-line only; no signature changes.
+
+> **Delivered:** 9 Args-line rewrites across 6 files — `web_search.domains`, `web_research.domains`,
+> `shell_exec.workdir`, `memory_search.query`/`kinds`, `session_search.query`/`limit`,
+> `google_drive_search.page`, and `google_gmail_list`/`google_gmail_search.max_results`. For
+> `memory_search`, also trimmed the now-redundant body paragraph (kinds-filter + FTS5-syntax prose)
+> since the rewritten Args lines carry it — budget-neutral. The `knowledge_analyze.inputs` row was
+> dropped (tool deleted; see note below). Lint clean; 111 scoped behavioral tests pass, no
+> docstring-asserting test broke.
+
+> Note: the `knowledge_analyze.inputs` finding was dropped — `knowledge_analyze` was deleted
+> wholesale (no behavioral consumer: the dream daemon synthesizes via its own `memory_reviewer`,
+> and the foreground DEFERRED tool was effectively unused). Its `max_requests` item in Task 4 is
+> likewise void.
 
 | Tool | Param | File:line | Fix (new Args line) |
 |---|---|---|---|
 | `web_search` | `domains` | `web/search.py:311` | `domains: Restrict results to these domains, e.g. ["github.com"] (default None = search the entire web).` |
-| `web_research` | `domains` | `agents/delegation.py:120` | `domains: Restrict the agent's web searches to these domains (default None = search the entire web).` |
-| `knowledge_analyze` | `inputs` | `agents/delegation.py:205` | `inputs: Optional prior results / context strings (default None = ask the question alone). Each is prepended under a "Context:" header.` |
-| `shell_exec` | `workdir` | `shell/execute.py:51` | append `Default None = the workspace root.` (see also Task 4 rename) |
+| `web_research` | `domains` | `agents/delegation.py:82` | `domains: Restrict the agent's web searches to these domains (default None = search the entire web).` |
+| `shell_exec` | `workdir` | `shell/execute.py:50` | append `Default None = the workspace root.` (see also Task 4 rename) |
 | `memory_search` | `query` | `memory/recall.py:190` | `query: FTS5 keyword query. Default "" lists the most recent `limit` artifacts (browse mode); non-empty runs BM25 search. Syntax: OR, NOT, "phrase", prefix*.` |
 | `memory_search` | `kinds` | `memory/recall.py:191` | `kinds: Filter to these artifact kinds — any of user, rule, article, note. Default None = all kinds.` Drop the unenforced "Up to 3". |
 | `session_search` | `query` | `session/recall.py:142` | `query: FTS5 keyword query. Default "" browses recent `limit` sessions; non-empty runs BM25 chunk-cited search.` |
@@ -224,11 +240,11 @@ and tests.
   Add the "Recurring events are expanded into individual occurrences" caveat to `search` for
   parity (`:184`).
 
-### `max_requests` magic sentinel (HIGH ×2)
-- `web_research` (`delegation.py:121`) and `knowledge_analyze` (`:206`): `0` means "use config
-  default budget" (10 and 8 respectively), the opposite of its literal reading.
+### `max_requests` magic sentinel (HIGH)
+- `web_research` (`delegation.py:83`): `0` means "use config default budget" (10), the opposite of
+  its literal reading. (Was HIGH ×2 with `knowledge_analyze`; that tool is now deleted.)
 - **Fix:** `max_requests: Upper bound on the agent's internal LLM calls. Leave at 0 to use the
-  configured default budget (10 / 8). Higher = more thorough but slower/costlier.`
+  configured default budget (10). Higher = more thorough but slower/costlier.`
 
 ### `google_drive_search.page` stateful contract (HIGH)
 - `page` is session-stateful (hidden page tokens, `drive.py:20-29`); page N errors without N-1

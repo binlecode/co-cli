@@ -100,7 +100,7 @@ class TurnResult:
     # Kept Any: callers pattern-match on interrupted/outcome, not on output type directly.
     output: Any = None
     # usage: pydantic-ai RunUsage object. Kept Any: callers never inspect fields directly;
-    # usage is forwarded opaquely to _merge_turn_usage and span attributes.
+    # usage is forwarded opaquely to _merge_segment_usage and span attributes.
     usage: Any = None
     streamed_text: bool = False
     # Count of ModelResponses across all segments in this turn.
@@ -148,7 +148,7 @@ class _TurnState:
     latest_result: SessionRunResult | None = None
     latest_streamed_text: bool = False
     # latest_usage: pydantic-ai RunUsage object. Kept Any: forwarded opaquely to
-    # _merge_turn_usage and span attributes; callers never inspect fields directly.
+    # _merge_segment_usage and span attributes; callers never inspect fields directly.
     latest_usage: Any = None
     tool_approval_decisions: ToolApprovalDecisions | None = None
     # cross-turn outcome flags
@@ -164,19 +164,20 @@ class _TurnState:
 
 
 # ---------------------------------------------------------------------------
-# _merge_turn_usage — accumulate segment usage into the authoritative per-turn total
+# _merge_segment_usage — accumulate one stream segment's usage into the per-turn total
 # ---------------------------------------------------------------------------
 
 
-def _merge_turn_usage(
+def _merge_segment_usage(
     deps: CoDeps,
     # usage: pydantic-ai RunUsage object. Kept Any: forwarded opaquely; never inspected here.
     usage: Any | None,
 ) -> None:
     """Merge one segment's usage into deps.runtime.turn_usage (the authoritative accumulator).
 
-    Called after every _execute_stream_segment() completes. Sub-agent tools call
-    their own variant; this one is owned by the foreground orchestrator.
+    Called after every _execute_stream_segment() completes. Delegation sub-agent
+    tools accumulate via merge_delegation_usage; this one is owned by the foreground
+    orchestrator.
     """
     if usage is None:
         return
@@ -425,7 +426,7 @@ async def _execute_stream_segment(
     turn_state.latest_streamed_text = renderer.streamed_text
     turn_state.latest_usage = result.usage()
     turn_state.tool_approval_decisions = None
-    _merge_turn_usage(deps, turn_state.latest_usage)
+    _merge_segment_usage(deps, turn_state.latest_usage)
 
 
 async def _run_approval_loop(

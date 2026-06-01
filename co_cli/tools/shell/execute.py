@@ -48,7 +48,8 @@ async def shell_exec(
         timeout: Max seconds to wait (default 120). Increase for builds or
                  long scripts (e.g. 300). Capped by shell_max_timeout.
         workdir: Optional subdirectory (relative to workspace root) to run the
-                 command in. Prevents directory traversal.
+                 command in. Default None = the workspace root. Prevents
+                 directory traversal.
     """
     # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → defer for user approval
     policy = evaluate_shell_command(cmd, ctx.deps.config.shell.safe_commands)

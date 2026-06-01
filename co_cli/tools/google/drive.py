@@ -92,7 +92,7 @@ def google_drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> T
 
     Args:
         query: Search keywords (e.g. "weekly meeting", "Q4 budget report").
-        page: Page number (1-based). Use 1 for first page, 2 for next, etc.
+        page: Page number (1-based, default 1). Use 1 for first page, 2 for next, etc.
     """
     service, err = _get_google_service(ctx, "drive", "v3", _DRIVE_NOT_CONFIGURED)
     if err:

@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.agent.run import MAX_AGENT_DEPTH, merge_turn_usage, run_attempt
+from co_cli.agent.run import MAX_AGENT_DEPTH, merge_delegation_usage, run_attempt
 from co_cli.agent.spec import TaskAgentSpec
 from co_cli.deps import CoDeps, VisibilityPolicyEnum, fork_deps
 from co_cli.observability.tracing import current_span, trace
@@ -79,7 +79,7 @@ async def web_research(
 
     Args:
         query: Research question or topic.
-        domains: Restrict search to these domains.
+        domains: Restrict the agent's web searches to these domains (default None = search the entire web).
         max_requests: Max LLM requests (0 = config default).
     """
     if ctx.deps.runtime.agent_depth >= MAX_AGENT_DEPTH:
@@ -109,7 +109,7 @@ async def web_research(
     output, usage_1, run_id = await run_attempt(
         WEB_RESEARCH_SPEC, ctx, scoped_prompt, budget, child_deps
     )
-    merge_turn_usage(ctx, usage_1)
+    merge_delegation_usage(ctx, usage_1)
     requests_used = usage_1.requests
 
     remaining = budget - usage_1.requests
@@ -121,7 +121,7 @@ async def web_research(
         output_2, usage_2, _ = await run_attempt(
             WEB_RESEARCH_SPEC, ctx, retry_query, remaining, child_deps
         )
-        merge_turn_usage(ctx, usage_2)
+        merge_delegation_usage(ctx, usage_2)
         output = output_2
         requests_used = usage_1.requests + usage_2.requests
     if not output.result.strip():

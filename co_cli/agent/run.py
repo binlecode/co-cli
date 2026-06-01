@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 MAX_AGENT_DEPTH: int = 2
 
 
-def merge_turn_usage(ctx: RunContext[CoDeps], usage: RunUsage) -> None:
+def merge_delegation_usage(ctx: RunContext[CoDeps], usage: RunUsage) -> None:
     """Merge delegation agent usage into the parent turn's authoritative usage accumulator."""
     if ctx.deps.runtime.turn_usage is None:
         ctx.deps.runtime.turn_usage = usage

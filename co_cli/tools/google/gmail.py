@@ -68,7 +68,7 @@ def google_gmail_list(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
     - count: number of emails returned
 
     Args:
-        max_results: Number of emails to return (default 5, max ~100).
+        max_results: Number of emails to return (default 5; values above 100 may be slow).
     """
     service, err = _get_google_service(ctx, "gmail", "v1", _GMAIL_NOT_CONFIGURED)
     if err:
@@ -116,7 +116,7 @@ def google_gmail_search(ctx: RunContext[CoDeps], query: str, max_results: int = 
 
     Args:
         query: Gmail search query (e.g. "from:alice subject:invoice newer_than:7d").
-        max_results: Number of emails to return (default 5, max ~100).
+        max_results: Number of emails to return (default 5; values above 100 may be slow).
     """
     service, err = _get_google_service(ctx, "gmail", "v1", _GMAIL_NOT_CONFIGURED)
     if err:

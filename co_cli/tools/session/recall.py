@@ -133,14 +133,13 @@ async def session_search(
     USE THIS for past-conversation recall — "what did we figure out about X last time?",
     "what was that auth bug we hit?", "what were we working on yesterday?".
 
-    Empty query → recent N session metadata (id, date, title) — browse mode.
-    Non-empty query → BM25 chunk-cited search; results carry (session_id, when, source,
-    chunk_text, start_line, end_line, score). Load verbatim turns with
-    session_view(session_id, start_line, end_line).
+    Browse mode returns session metadata (id, date, title); search results carry
+    (session_id, when, source, chunk_text, start_line, end_line, score). Load verbatim
+    turns with session_view(session_id, start_line, end_line).
 
     Args:
-        query: FTS5 keyword query.
-        limit: Max sessions returned (default 3).
+        query: FTS5 keyword query. Default "" browses recent `limit` sessions; non-empty runs BM25 chunk-cited search.
+        limit: Max sessions returned in browse mode (default 3). Keyword search always returns at most 3 sessions regardless of this value.
     """
     span = current_span()
     limit = max(1, int(limit))

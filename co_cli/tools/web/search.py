@@ -308,7 +308,7 @@ async def web_search(
         query: Search query string (e.g. "python asyncio tutorial",
                "latest pydantic-ai release notes").
         max_results: Number of results to return (default 5, max 8).
-        domains: Restrict to these domains (e.g. ["github.com", "stackoverflow.com"]).
+        domains: Restrict results to these domains, e.g. ["github.com"] (default None = search the entire web).
     """
     if not query or not query.strip():
         raise ModelRetry("Query is required for web_search.")
