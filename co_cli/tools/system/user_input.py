@@ -27,51 +27,33 @@ class ClarifyQuestion(BaseModel):
 async def clarify(
     ctx: RunContext[CoDeps],
     questions: list[ClarifyQuestion],
-    user_answers: list[str] | None = None,
 ) -> ToolReturn:
     """Ask the user one or more clarifying questions mid-execution and return their answers.
 
-    Use when:
-    - the task is ambiguous and the answer will meaningfully affect which actions to take
-    - there are multiple reasonable approaches with real tradeoffs and the user should choose
-    - you need missing preferences, constraints, or decisions that cannot be inferred from context
-    - you want the user to pick between concrete options rather than forcing a guess
+    Use when the task is ambiguous and the answer meaningfully changes which actions to
+    take, or there are real tradeoffs the user should decide. Don't use for approval of
+    dangerous actions (handled separately), low-stakes choices with a reasonable default,
+    or anything answerable by reading the workspace first.
 
-    Do NOT use for:
-    - approval or confirmation of dangerous actions (that is handled separately)
-    - low-stakes choices where a reasonable default is fine
-    - questions that can be answered by reading the workspace or using other tools first
+    Batch all related questions into one call; prefer concise multiple-choice options.
 
-    One clarify call should collect all related questions — batch them to avoid multiple
-    round-trips. Prefer concise multiple-choice options when decisions can be enumerated.
-
-    CRITICAL — one call only:
-    - Call clarify exactly ONCE per batch.
-    - The tool result IS the user's answers — read it from the ToolReturnPart as a JSON
-      list of strings positionally aligned to your `questions` list.
-    - Do NOT call clarify again after receiving the result. Do NOT pass user_answers
-      yourself — it is always injected by the system and must be omitted entirely.
-
-    Each question:
-        question:  str — the question text
-        options:   list of choices, each with a label (str) and optional description (str);
-                   when provided the user picks one (or multiple if multiple=True)
-        multiple:  bool (default False) — allow comma-joined multi-select from options
-
-    Returns: JSON-encoded list[str] — one string per question, positionally aligned.
-        Multi-select answers are comma-joined into a single string.
+    CRITICAL — one call only: the tool result IS the user's answers (a JSON list of
+    strings positionally aligned to your questions). Do NOT call clarify again after
+    receiving it.
 
     Args:
-        questions: List of questions to ask sequentially.
-        user_answers: System-injected after the user responds. NEVER supply this
-            argument — leave it out of every call you make.
+        questions: Questions to ask. Each has question (str), optional options (label +
+            optional description; user picks one, or multiple if multiple=True), and
+            multiple (bool, default False).
     """
-    # Always raise on the first (unapproved) call — covers both the expected case
-    # (user_answers absent) and the LLM escape-hatch case (model pre-supplies answers).
+    # First (unapproved) call: pause for user input via the deferred-tool mechanism.
     if not ctx.tool_call_approved:
         raise QuestionRequired(questions=[q.model_dump() for q in questions])
 
-    # Resumed call: user_answers injected via ToolApproved(override_args=...).
+    # Resumed (approved) call: answers stashed by the orchestrator in runtime state,
+    # keyed by tool_call_id (see CoRuntimeState.clarify_answers). Injecting via deps
+    # rather than override_args keeps the original questions args intact for validation.
+    user_answers = ctx.deps.runtime.clarify_answers.get(ctx.tool_call_id)
     if user_answers is None:
         return tool_error("No answers were received from the user.", ctx=ctx)
 

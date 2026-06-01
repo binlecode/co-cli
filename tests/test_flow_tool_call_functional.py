@@ -145,13 +145,14 @@ async def test_auto_approval_skips_prompt_for_remembered_session_rule() -> None:
 @pytest.mark.timeout(240)
 @pytest.mark.asyncio
 async def test_clarify_deferred_resume_end_to_end() -> None:
-    """clarify must never route through the standard approval path in a live LLM turn.
+    """A live clarify call must route through the question path, not the approval path.
 
     Failure mode: _collect_deferred_tool_approvals misses the "questions" key in
     QuestionRequired metadata → falls through to prompt_approval → approval_calls > 0.
-    This catches the routing regression whether or not the model calls clarify this run.
-    Deterministic seam coverage (injection contract + structured output) is in
-    test_clarify_deferred_approval_routing.
+    Asserting clarify was actually invoked (question_call_count >= 1) keeps this a real
+    finder: approval_calls == 0 alone would pass vacuously on any run where the model
+    skips clarify. Deterministic seam coverage (injection contract + structured output)
+    is in test_clarify_deferred_approval_routing.
     """
     deps = _make_deps()
     frontend = SilentFrontend(approval_response="y", question_answer="json")
@@ -170,6 +171,10 @@ async def test_clarify_deferred_resume_end_to_end() -> None:
             frontend=frontend,
         )
 
+    assert frontend.question_call_count >= 1, (
+        "clarify was never routed through the question path — "
+        "the test cannot verify routing if the model did not call clarify"
+    )
     assert len(frontend.approval_calls) == 0, (
         f"clarify must not go through the approval path — "
         f"got approval_calls: {frontend.approval_calls}"

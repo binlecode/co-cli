@@ -3,8 +3,22 @@
 import json
 
 import pytest
-from pydantic_ai import AgentRunResult, DeferredToolRequests, ToolApproved
-from pydantic_ai.messages import ToolCallPart
+from pydantic_ai import (
+    Agent,
+    AgentRunResult,
+    DeferredToolRequests,
+    DeferredToolResults,
+    ToolApproved,
+)
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.context.orchestrate import _collect_deferred_tool_approvals
@@ -16,6 +30,7 @@ from co_cli.tools.approvals import (
     resolve_approval_subject,
 )
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.system.user_input import clarify
 
 
 def _fresh_deps() -> CoDeps:
@@ -157,7 +172,78 @@ async def test_clarify_deferred_approval_routing() -> None:
     assert frontend.last_question.question == "Which format?"
     assert frontend.last_question.options == ["json", "text"]
 
-    # injection: ToolApproved with override_args must carry the collected answer
+    # injection: answers stashed in runtime keyed by tool_call_id, and the approval is
+    # bare (no override_args) so the original `questions` args survive resume validation.
+    assert deps.runtime.clarify_answers == {tool_call_id: ["json"]}
     approved = result.approvals.get(tool_call_id)
     assert isinstance(approved, ToolApproved)
-    assert approved.override_args == {"user_answers": ["json"]}
+    assert approved.override_args is None
+
+
+@pytest.mark.asyncio
+async def test_clarify_resume_returns_answers_as_tool_output() -> None:
+    """The approved resume must execute the clarify body and return answers as output.
+
+    Regression guard for the override_args footgun: override_args REPLACES the whole
+    args dict, dropping the required `questions` field, so resume validation fails with
+    a RetryPromptPart and the answers never reach the model. The deps-injection design
+    (bare ToolApproved + runtime.clarify_answers) preserves the original args, so the
+    tool re-runs approved and emits a clean ToolReturnPart. This drives the real two-
+    segment deferred flow through the production clarify tool, no LLM.
+    """
+    tool_call_id = "clarify-resume"
+    call_count = {"n": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="clarify",
+                        args={"questions": [{"question": "Which format?"}]},
+                        tool_call_id=tool_call_id,
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = Agent(
+        FunctionModel(model_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+    )
+    agent.tool(clarify)
+    deps = _fresh_deps()
+
+    # Segment 1: model calls clarify → QuestionRequired → deferred approval request.
+    result = await agent.run("ask me", deps=deps)
+    assert isinstance(result.output, DeferredToolRequests)
+    assert [c.tool_name for c in result.output.approvals] == ["clarify"]
+
+    # Orchestrator behaviour: stash answers in runtime, approve with no override_args.
+    deps.runtime.clarify_answers[tool_call_id] = ["json"]
+    approvals = DeferredToolResults()
+    approvals.approvals[tool_call_id] = ToolApproved()
+
+    # Segment 2: resume must run the tool body and return the answers as output.
+    result2 = await agent.run(
+        message_history=result.all_messages(),
+        deps=deps,
+        deferred_tool_results=approvals,
+    )
+    returns = [
+        part
+        for message in result2.new_messages()
+        for part in getattr(message, "parts", [])
+        if isinstance(part, ToolReturnPart) and part.tool_name == "clarify"
+    ]
+    retries = [
+        part
+        for message in result2.new_messages()
+        for part in getattr(message, "parts", [])
+        if isinstance(part, RetryPromptPart)
+    ]
+    assert not retries, f"resume must not produce a validation retry: {retries}"
+    assert len(returns) == 1
+    assert returns[0].content == json.dumps(["json"])

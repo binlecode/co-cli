@@ -200,6 +200,13 @@ class CoRuntimeState:
     active_skill_name: str | None = None
     active_skill_env: dict[str, str] = field(default_factory=dict)
     resume_tool_names: frozenset[str] | None = None
+    # Clarify answers collected during deferred-tool approval, keyed by tool_call_id.
+    # Orchestration-owned transient state threaded to the clarify tool on its approved
+    # resume — the deferred-resume case this docstring's "explicitly justified" carve-out
+    # anticipates. Injecting here (rather than via ToolApproved.override_args) keeps
+    # user_answers out of the model-facing schema and preserves the original questions
+    # args through resume validation.
+    clarify_answers: dict[str, list[str]] = field(default_factory=dict)
     # True when compaction ran this turn; drives session-branching (main.py) and the
     # within-turn re-trigger short-circuit in proactive_window_processor. Cleared by
     # reset_for_turn().
@@ -228,6 +235,7 @@ class CoRuntimeState:
         self.tool_progress_callback = None
         self.status_callback = None
         self.resume_tool_names = None
+        self.clarify_answers = {}
         self.compaction_applied_this_turn = False
         self.current_request_tokens_estimate = None
         self.consecutive_tool_cap_violations = 0

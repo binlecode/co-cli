@@ -244,9 +244,13 @@ async def _collect_deferred_tool_approvals(
                 )
                 answer = (await frontend.prompt_question(q_prompt)) if frontend is not None else ""
                 answers.append(answer)
-            approvals.approvals[call.tool_call_id] = ToolApproved(
-                override_args={"user_answers": answers}
-            )
+            # Stash answers in runtime keyed by tool_call_id and approve with no
+            # override_args. override_args REPLACES the whole args dict, which would
+            # drop the required `questions` field and fail resume validation; a bare
+            # approval preserves the original args so the clarify tool re-runs approved
+            # and reads its answers from deps.runtime.clarify_answers.
+            deps.runtime.clarify_answers[call.tool_call_id] = answers
+            approvals.approvals[call.tool_call_id] = ToolApproved()
             continue
 
         # Standard approval path
