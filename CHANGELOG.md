@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.276]
+
+### Tool-surface small-model audit — Task 3c (file_patch V4A removal)
+
+Removes the V4A multi-file patch capability from `file_patch`, collapsing it to a monomorphic single-file find-and-replace tool. V4A is the OpenAI-Codex-native patch format; peers gate it to OpenAI models only (opencode `registry.ts:322-325`, openclaw `pi-tools.ts:266-292`), making it the wrong surface for co's small local models. No native-tool-count change (no new tool added); whole-file delete moves to `shell_exec` (`rm`), in-file deletion stays via `new_string=""`. Supersedes the Task-1 V4A Move-directive parser fix ([0.8.272]) — the `_v4a.py` module it patched is now deleted.
+
+- **`co_cli/tools/files/_v4a.py`** — deleted (the V4A parser module; only consumers were `write.py` + the V4A tests).
+- **`co_cli/tools/files/write.py`** — removed the `_v4a` imports, the `PatchMode`/`Literal` alias, and all V4A apply helpers (`_PendingWrite`, `_insert_addition_hunk`, `_compute_v4a_update`/`_add`/`_delete`, `_write_v4a_pending`, `_apply_v4a_patch`). `file_patch` is now `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` — all params unconditional, `path`/`old_string`/`new_string` required by signature (the three None-guards removed), defaults stated inline, with the `old_string`-uniqueness guidance and `new_string=""` delete idiom in the docstring. The `mode`-dispatch and `_file_patch_replace` indirection were inlined into the tool body.
+- **`tests/test_flow_files_write.py`** — removed the three V4A tests; dropped the now-absent `mode=` kwarg from the replace tests; added `test_file_patch_deletes_matched_text_with_empty_new_string` for the `new_string=""` delete idiom.
+- **`docs/reference/RESEARCH-tools-gaps-co-vs-hermes.md`, `RESEARCH-tools-peers-tiers.md`** — factual correction: the three co-cli comparison cells that asserted V4A support now read "removed — V4A is OpenAI-Codex format, gated to OpenAI models by opencode/openclaw"; peer-inventory rows left intact.
+
+Integration touch-points (`agent/toolset.py`, `tools/display.py`, `tools/categories.py`, `tools/approvals.py`) unchanged — `file_patch` keeps its name and single `path` arg.
+
 ## [0.8.274]
 
 ### Prefill-trim child 3 — data/reflexive tool schema trim

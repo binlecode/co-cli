@@ -87,7 +87,7 @@ async def test_file_write_creates_parent_directories(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_file_patch_replace_mode_applies_exact_substitution(tmp_path: Path) -> None:
-    """file_patch(mode='replace') replaces the old_string with new_string in place."""
+    """file_patch replaces the old_string with new_string in place."""
     target = tmp_path / "code.py"
     target.write_text("def foo():\n    return 1\n")
 
@@ -99,7 +99,6 @@ async def test_file_patch_replace_mode_applies_exact_substitution(tmp_path: Path
     async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
         result = await file_patch(
             ctx,
-            mode="replace",
             path="code.py",
             old_string="return 1",
             new_string="return 42",
@@ -113,7 +112,7 @@ async def test_file_patch_replace_mode_applies_exact_substitution(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_file_patch_replace_mode_blocks_unread_file(tmp_path: Path) -> None:
-    """file_patch(mode='replace') raises ModelRetry when the file has not been read first."""
+    """file_patch raises ModelRetry when the file has not been read first."""
     from pydantic_ai import ModelRetry
 
     target = tmp_path / "unread.py"
@@ -126,7 +125,6 @@ async def test_file_patch_replace_mode_blocks_unread_file(tmp_path: Path) -> Non
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
             await file_patch(
                 ctx,
-                mode="replace",
                 path="unread.py",
                 old_string="x = 1",
                 new_string="x = 2",
@@ -137,7 +135,7 @@ async def test_file_patch_replace_mode_blocks_unread_file(tmp_path: Path) -> Non
 async def test_file_patch_replace_mode_returns_error_when_old_string_not_found(
     tmp_path: Path,
 ) -> None:
-    """file_patch(mode='replace') returns tool_error when old_string is absent from the file."""
+    """file_patch returns tool_error when old_string is absent from the file."""
     target = tmp_path / "src.py"
     target.write_text("y = 99\n")
 
@@ -149,7 +147,6 @@ async def test_file_patch_replace_mode_returns_error_when_old_string_not_found(
     async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
         result = await file_patch(
             ctx,
-            mode="replace",
             path="src.py",
             old_string="x = 1",
             new_string="x = 2",
@@ -159,69 +156,28 @@ async def test_file_patch_replace_mode_returns_error_when_old_string_not_found(
     assert result.metadata.get("error") is True
 
 
-# ---------------------------------------------------------------------------
-# file_patch — V4A patch mode
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_file_patch_v4a_mode_updates_file_content(tmp_path: Path) -> None:
-    """file_patch(mode='patch') applies a V4A Update File patch to modify a file."""
-    target = tmp_path / "app.py"
-    target.write_text("VERSION = '1.0'\n")
+async def test_file_patch_deletes_matched_text_with_empty_new_string(tmp_path: Path) -> None:
+    """file_patch with new_string="" removes the matched text in place."""
+    target = tmp_path / "del.py"
+    target.write_text("keep = 1\nremove = 2\n")
 
     deps = _make_deps(tmp_path)
     ctx = _ctx(deps)
     path_key = str(target)
     deps.file_tracker.record_read(path_key, target.stat().st_mtime, partial=False)
 
-    v4a = (
-        "*** Begin Patch\n"
-        "*** Update File: app.py\n"
-        "-VERSION = '1.0'\n"
-        "+VERSION = '2.0'\n"
-        "*** End Patch\n"
-    )
-
     async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-        result = await file_patch(ctx, mode="patch", patch=v4a)
+        result = await file_patch(
+            ctx,
+            path="del.py",
+            old_string="remove = 2\n",
+            new_string="",
+        )
 
     assert result.metadata is not None
     assert result.metadata.get("error") is not True
-    assert "2.0" in target.read_text()
-
-
-@pytest.mark.asyncio
-async def test_file_patch_v4a_mode_adds_new_file(tmp_path: Path) -> None:
-    """file_patch(mode='patch') with Add File op creates a new file."""
-    deps = _make_deps(tmp_path)
-    ctx = _ctx(deps)
-
-    v4a = "*** Begin Patch\n*** Add File: newmod.py\n+# generated\n+x = 1\n*** End Patch\n"
-
-    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-        result = await file_patch(ctx, mode="patch", patch=v4a)
-
-    assert result.metadata is not None
-    assert result.metadata.get("error") is not True
-    assert (tmp_path / "newmod.py").exists()
-    assert "x = 1" in (tmp_path / "newmod.py").read_text()
-
-
-@pytest.mark.asyncio
-async def test_file_patch_v4a_mode_rejects_unsupported_move_directive(tmp_path: Path) -> None:
-    """A Move File directive is rejected with explicit feedback, not silently misparsed."""
-    deps = _make_deps(tmp_path)
-    ctx = _ctx(deps)
-
-    v4a = "*** Begin Patch\n*** Move File: old.py\n*** End Patch\n"
-
-    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-        result = await file_patch(ctx, mode="patch", patch=v4a)
-
-    assert result.metadata is not None
-    assert result.metadata.get("error") is True
-    assert "Move File" in result.return_value
+    assert target.read_text() == "keep = 1\n"
 
 
 # ---------------------------------------------------------------------------

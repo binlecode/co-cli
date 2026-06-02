@@ -57,9 +57,10 @@ the obsidian-surface removal in Task 1).
   the obsidian tool surface entirely.)
 - **Task 2 — Pattern 2 sweep (defaults-inline): ✓ DONE.** 9 docstring-only Args-line edits across
   6 tools. Low risk, no signature changes.
-- **Task 3 — the three monomorphic splits (CRITICAL):** `memory_manage`, `skill_manage`,
-  `file_patch`. Largest correctness win; mirrors the shipped `file_search` split. Signature +
-  registry + tests + spec. Internal `_handle_*`/`_skill_*` helpers already exist → thin wrappers.
+- **Task 3 — monomorphic surface fixes for the three discriminated write tools (CRITICAL):**
+  `memory_manage` and `skill_manage` split into per-operation tools (mirrors the shipped `file_search`
+  split; internal `_handle_*`/`_skill_*` helpers already exist → thin wrappers). `file_patch` is
+  resolved by **removing** the V4A multi-file mode (Option B), not splitting — see Task 3c.
 - **Task 4 — cross-family naming/semantic alignment:** working-dir name+contract, calendar
   defaults, `max_requests` sentinel wording.
 - **Task 5 — sibling disambiguation steers:** reciprocal when-to-use lines for the three
@@ -292,24 +293,162 @@ and tests.
 - **Fallback if unsplit:** state per-action ignored params + defaults inline (the four HIGH
   rewrites above) and make `name` required.
 
-### 3c. `file_patch(mode=…)` → split
-- **File:** `co_cli/tools/files/write.py:544-587`
-- **Critical issues:** `mode='replace'` (single-file string edit via path/old_string/new_string)
+### 3c. `file_patch(mode=…)` → remove V4A, keep single-file replace (Option B) — ✓ DONE
+
+- **File:** `co_cli/tools/files/write.py:544-606` (signature `:544-553`, docstring `:554-587`,
+  body `:588-606`).
+- **Critical issue:** `mode='replace'` (single-file string edit via path/old_string/new_string)
   and `mode='patch'` (V4A multi-file via `patch`) share **zero** params. `path`/`old_string`/
-  `new_string` are typed-optional but mandatory under replace (`:435-440`) and silently dead under
-  patch (paths come from the patch text).
-- **Dead/conditional (HIGH each):** `patch` (patch-only `:589-590`, ignored in replace),
-  `replace_all` (replace-only; default not named; hardcoded False in V4A `:317`), `show_diff`
-  (replace-only; default not named; patch always emits a diff `:322`).
-- **Guidance/load (HIGH/LOW):** no when-to-use steer or concrete replace example; 7 params with
-  4-5 conditional per call.
-- **Fix (split):**
-  - `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` — single-file
-    replace. Args become unconditionally required/optional; add example
-    `file_patch(path="a.py", old_string="foo", new_string="bar")`.
-  - `file_apply_patch(patch)` — V4A multi-file; `patch` is its single required arg.
-- **Fallback if unsplit:** state dead-in-X-mode on every conditional line; add a when-to-use
-  steer + replace example.
+  `new_string` are typed-optional but mandatory under replace (None-guards at `:435-440`) and silently
+  dead under patch (paths come from the patch text). `patch` is patch-only (`:588-590`);
+  `replace_all`/`show_diff` are declared on the signature (`:550-551`) but consumed only on the replace
+  path.
+- **done_when:** `_v4a.py` deleted; `file_patch` is a 5-param single-file replace
+  (`path`, `old_string`, `new_string`, `replace_all`, `show_diff`) with `path`/`old_string`/`new_string`
+  required-by-signature; no `mode`/`patch` params; the V4A test block removed; full suite green; the 2
+  RESEARCH comparison rows corrected.
+- **success_signal:** the model sees one monomorphic `file_patch(path, old_string, new_string,
+  replace_all, show_diff)` — no `mode`/`patch`, no V4A surface anywhere; native-tool count unchanged.
+
+#### Approach: remove V4A multi-file entirely (not split)
+
+The original plan proposed splitting into `file_patch(replace)` + `file_apply_patch(patch)`. Peer
+evidence overrides that: **V4A is the OpenAI-Codex-native patch format, and harnesses gate it to
+OpenAI models only.**
+
+- **opencode** (`registry.ts:322-325`): `usePatch = modelID.includes("gpt-") && !oss && !gpt-4`.
+  GPT-Codex models get `apply_patch` **only**; Claude and every other model get `edit`+`write` only —
+  mutually exclusive, a non-OpenAI model never sees V4A.
+- **openclaw** (`pi-tools.ts:266-292, 661-668`): `apply_patch` enabled only when `isOpenAIProvider()`.
+- **hermes** keeps the dual-mode `patch` for all models — but targets large frontier models, not the
+  small local models co runs.
+
+co's audit premise is small local models — the exact consumer opencode/openclaw deliberately shield
+from V4A. For co's target models the peer-aligned surface is `{file_patch(replace), file_write}` and
+**no** structured multi-file patch. Whole-file delete (which V4A uniquely provided — co has no
+`file_delete`; verified) moves to `shell_exec` (`rm`), a content-free op the anti-shell-edit steer
+does not cover; in-file content deletion is retained via `new_string=""`. This is *less* work than
+the split and advances the small-model doctrine further. (Alternatives weighed: **A** split as
+originally planned — keeps a frontier-format tool small models shouldn't use; **B′** drop V4A but add
+a monomorphic `file_delete(path)` — adds a native tool (count regression against the prefill-budget
+guard) to cover an op the agent already performs cleanly via `shell_exec rm` (content-free, so the
+anti-shell-edit steer does not cover it), and makes co the only one of the four peers with a standalone
+delete. **B chosen** — it rests on co's own doctrine (no count regression, delete is a content-free
+shell op), not just peer parity.)
+
+#### New surface (hermes schema-design conventions)
+
+`file_patch` becomes a pure single-file replace tool — all params unconditional, defaults stated
+inline with value *and* meaning, hermes's `old_string` uniqueness guidance and `new_string=""`
+delete idiom carried over:
+
+```python
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS, approval=True, retries=1, is_concurrent_safe=False
+)
+async def file_patch(
+    ctx: RunContext[CoDeps],
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+    show_diff: bool = False,
+) -> ToolReturn:
+    """Make a targeted find-and-replace edit in a single existing file.
+
+    Use this instead of sed/awk — never shell redirection — for editing. Requires
+    file_read on the file first. Tries four matching strategies (exact, line-trimmed,
+    indent-stripped, escape-expanded) so minor whitespace differences won't break the
+    match. Returns the replacement count and strategy.
+
+    When NOT to use: creating a new file or a full rewrite — use file_write. To delete
+    a whole file, use shell_exec (rm).
+
+    Args:
+        path: File path relative to the workspace root.
+        old_string: Exact text to find. Must be unique in the file unless replace_all=True;
+            include surrounding context lines to make it unique.
+        new_string: Replacement text, applied verbatim. Pass "" to delete the matched text.
+        replace_all: Replace every occurrence instead of requiring a unique match
+            (default False = require exactly one match).
+        show_diff: Prepend a unified diff of the change to the output (default False).
+    """
+```
+
+The three None-guards (`:435-440`) disappear — params are now required by signature. The body is
+just the current `_file_patch_replace` logic (inline it or keep the helper).
+
+#### Full-system V4A footprint (complete sweep — `git grep -i v4a` + directive/symbol tokens)
+
+Confirmed: V4A is **not driven by any skill, rule prompt, eval, or spec** (zero hits in `co_cli/context/`,
+`skills/`, `evals/`, `docs/specs/`). It lives entirely in the write-tool implementation + tests + two
+reference docs. Every site below is removed/reconciled in this task.
+
+**Production code (delete):**
+- **`co_cli/tools/files/_v4a.py`** — delete the whole module (`OperationType`, `HunkLine`, `Hunk`,
+  `PatchOperation`, `parse_v4a_patch`). Only consumers are `write.py` + the V4A tests.
+- **`co_cli/tools/files/write.py`:** the `_v4a` imports (`:16-20`), the `PatchMode` type alias (`:9`),
+  the parser comment block (`:271-277`), `_PendingWrite` (`:277`), `_insert_addition_hunk` (`:280-288`),
+  `_compute_v4a_update` (`:291-323`), `_compute_v4a_add` (`:326-340`), `_compute_v4a_delete` (`:343-354`),
+  `_write_v4a_pending` (`:357-393`), `_apply_v4a_patch` (`:396-423`), the `mode`/`patch` params + the
+  V4A half of the docstring (`:546,554,561-575,580,586`), and the `mode=='patch'` branch in the tool
+  body (`:588-604`).
+
+**Tests (delete):**
+- **`tests/test_flow_files_write.py:163-224`** — the `# file_patch — V4A patch mode` section: three
+  tests (`test_file_patch_v4a_mode_updates_file_content` `:168`, `..._adds_new_file` `:195`,
+  `..._rejects_unsupported_move_directive` `:212`). Remove the whole block.
+
+**Task 1 supersession:** Task 1's third item added the V4A Move-directive rejection in `_v4a.py` + the
+`..._rejects_unsupported_move_directive` test. Deleting `_v4a.py` supersedes that fix — both go.
+
+**Reference-doc hygiene (factual-accuracy update, not behavioral — reference layer, not specs):**
+- **`docs/reference/RESEARCH-tools-gaps-co-vs-hermes.md:123`** and
+  **`docs/reference/RESEARCH-tools-peers-tiers.md`** (`:40,256,298,376-377,786-787`) carry comparison
+  rows asserting co-cli "✓ supports V4A multi-file patch". After removal these are false. Update the
+  co-cli column entries to "removed — V4A is OpenAI-Codex-format, incompatible with co's small local
+  models" (cite the opencode/openclaw model-gating). These are point-in-time survey artifacts; a
+  one-line correction per row suffices — do not rewrite the surveys.
+
+**CHANGELOG.md — do NOT edit (append-only history):**
+- `CHANGELOG.md:21-27` documents Task 1's *shipped* V4A parser fix at its release version. CHANGELOG is
+  append-only; shipped entries are never rewritten. The V4A removal gets a **new** entry at `/ship`
+  time noting the surface removal + Task-1 supersession.
+
+**Excluded false positive:** `co_cli/tools/web/_ssrf.py:30` (`IPv4Address`) — IP networking, not V4A.
+
+#### Integration touch-points (simpler than the split — most need no change)
+
+- **`agent/toolset.py:17`** — `from co_cli.tools.files.write import file_patch, file_write` is
+  **unchanged** (no `file_apply_patch` added). file_patch keeps its name.
+- **`tools/display.py:21`** — `"file_patch": "path"` stays correct (file_patch keeps `path`). No change.
+- **`tools/categories.py`** — `file_patch` stays in `PATH_NORMALIZATION_TOOLS` (`:12`) and `FILE_TOOLS`
+  (`:22`); it still has a single `path` arg. No change.
+- **`approvals.py:90-126`** — the `("file_write", "file_patch")` path-subject branch stays correct and
+  gets **simpler**: the pre-existing degenerate `file_patch(path=None)` display under the old V4A mode
+  is eliminated (V4A had no `path`), so the `old_string`/`new_string` display path is now always the
+  real one. Optional cleanup: drop the now-dead `path or ""` empty-path fallback. `test_flow_approval_subject.py:66-121`
+  stays valid (replace-mode is path-based).
+- **`deps.py:52`** comment ("shared across file_write and file_patch for the same directory") stays
+  accurate. **`shell/execute.py:29`** steer ("file_write / file_patch instead of shell redirection")
+  stays accurate.
+
+#### Spec sync (post-delivery via sync-doc)
+
+- **`docs/specs/tools.md`:** native-tool count is **unchanged** (file_patch stays one tool, no new
+  tool added). Grep is clean today — the file_patch rows (`:31,73,170,181,187,210,274`) carry no
+  V4A/multi-file/mode wording, so there is nothing to remove; just confirm none reappears, and
+  optionally add the `shell_exec rm` whole-file-delete note to the file_patch row.
+- `docs/specs/01-system.md` likewise has no actionable V4A prose (only the generic `file_write /
+  file_patch land here` at `:221`); confirm clean post-removal.
+
+#### Tests
+
+- **`tests/test_flow_files_write.py`:** remove the V4A block (see footprint above); the remaining
+  replace-mode tests drop the now-absent `mode=` kwarg.
+- **`tests/test_flow_approval_subject.py`:** no change (file_patch path-subject unchanged).
+- **`tests/test_flow_agent_tool_concurrent_default.py`:** verify `is_concurrent_safe=False` still
+  asserted on file_patch (decorator retained).
 
 ---
 
@@ -408,7 +547,13 @@ Each near-duplicate pair needs reciprocal when-to-use / when-NOT-to-use lines.
    **Resolved at Gate 1 for Task 3b (2026-06-01): SPLIT.** `memory_manage` (3a) already shipped as a
    split; leaving `skill_manage` discriminated would be incoherent, and the `_skill_*` helpers already
    exist. The +3 native-tool count is doctrine-aligned (`feedback_tool_split_small_model`), not a
-   prefill regression. (3c `file_patch` remains open.)
+   prefill regression.
+   **3c resolved differently (Option B — remove V4A, not split):** peer evidence (opencode
+   `registry.ts:322-325` and openclaw `pi-tools.ts:266-292` both gate V4A `apply_patch` to OpenAI-Codex
+   models only) shows V4A is the wrong surface for co's small local models. Remove V4A multi-file
+   entirely; keep `file_patch` as a pure single-file replace; whole-file delete moves to `shell_exec`
+   (`rm`), in-file deletion stays via `new_string=""`. Native-tool count is **unchanged** (no new tool).
+   See Task 3c for the full A/B/B′ weigh and the hermes-aligned surface.
 2. **`task_start` working-dir security contract** — enforce workspace boundary (behavior change)
    vs document absolute-path acceptance (doc-only).
 3. **`google_drive_search`** — expose `max_results` for family parity (signature change) vs
@@ -503,3 +648,108 @@ split-introduced regression. The empty-`new_string` deletion path remains intact
 ### Overall: PASS
 Task 3b is correct, complete, and fully tested. Surface is monomorphic per the small-model doctrine;
 zero blocking findings; full suite green. Ready for Gate 2 → `/ship`.
+
+## Gate 1 — PO + TL verdict (Task 3c, 2026-06-02)
+
+**Status: PASS.** Scoped to Task 3c (`file_patch` V4A removal / Option B) only. Converged at Cycle C1 —
+both reviewers returned `Blocking: none`.
+
+- **PO:** right problem (V4A is the OpenAI-Codex-native format; peer-verified that opencode/openclaw
+  gate it to OpenAI models only — wrong surface for co's small local models), correct scope (tight V4A
+  removal, no creep; RESEARCH-doc factual correction + no CHANGELOG rewrite is sound), value justified
+  (smaller small-model-friendly surface; the capability "loss" strands nothing — zero V4A drivers in
+  skills/rules/evals/specs). Option B over B′ confirmed: a standalone `file_delete` would be a
+  native-count regression for an op `shell_exec rm` already covers cleanly.
+- **TL:** removal scope verified complete against source (`git grep -i v4a` + symbol sweep — sole
+  consumers are `write.py`, `_v4a.py`, and the 3 tests at `test_flow_files_write.py:168/195/212`); all
+  "no-change" integration claims (approvals, display, categories, toolset) confirmed; `file_patch` body
+  already delegates wholly to `_file_patch_replace`, so the required-param extraction is safe; no
+  external importer of the deleted symbols.
+- **Open decision #1 resolved for 3c: Option B (remove V4A, not split)** (see updated note above).
+
+**C1 decisions (all 4 minor issues adopted):**
+
+| Issue ID | Decision | Change |
+|----------|----------|--------|
+| CD-m-1 | adopt | Spec-sync bullet softened — `docs/specs/tools.md` has no V4A prose to remove (grep clean); reworded to "confirm clean + optionally add `shell_exec rm` note". |
+| CD-m-2 | adopt | Critical-issue line: corrected stale `:317,322` citations → `replace_all`/`show_diff` declared on signature `:550-551`, consumed only on replace path. |
+| PO-m-1 | adopt | Added explicit `done_when:` and `success_signal:` lines to the 3c section (consistency with 3b). |
+| PO-m-2 | adopt | B′-rejection rationale strengthened — rests on co's own doctrine (no native-count regression; delete is a content-free shell op), not just peer parity. |
+
+> Cleared to implement. Run: `/orchestrate-dev tool-surface-small-model-audit` (Task 3c).
+> Tasks 4, 5 and open decisions #2/#3 remain unapproved — out of this gate.
+
+## Delivery Summary — Task 3c (2026-06-02)
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| 3c — `file_patch` V4A removal (Option B) | `_v4a.py` deleted; `file_patch` is a 5-param single-file replace (`path`/`old_string`/`new_string` required-by-signature, no `mode`/`patch`); V4A test block removed; RESEARCH comparison rows corrected | ✓ pass |
+
+**What shipped:**
+- `co_cli/tools/files/_v4a.py` — **deleted** (`git rm`); sole consumers were `write.py` + the V4A tests.
+- `co_cli/tools/files/write.py` — removed the `_v4a` imports, the `PatchMode`/`Literal` alias, and all
+  V4A apply helpers (`_PendingWrite`, `_insert_addition_hunk`, `_compute_v4a_update/_add/_delete`,
+  `_write_v4a_pending`, `_apply_v4a_patch`). `file_patch` is now monomorphic:
+  `file_patch(path, old_string, new_string, replace_all=False, show_diff=False)` — all params
+  unconditional, `path`/`old_string`/`new_string` required by signature (the three None-guards are
+  gone), defaults stated inline, hermes `old_string`-uniqueness + `new_string=""` delete idiom in the
+  docstring. The `mode`-dispatch and `_file_patch_replace` indirection were inlined into the tool body.
+  Decorator (`approval=True`, `is_concurrent_safe=False`, `retries=1`) retained.
+- **Integration touch-points: all confirmed no-change** (`agent/toolset.py` import, `tools/display.py`,
+  `tools/categories.py`, `approvals.py` path-subject, `deps.py`/`shell/execute.py` comments) — `file_patch`
+  keeps its name and single `path` arg.
+- Reference-doc factual correction (3 co-cli-asserting rows): `RESEARCH-tools-gaps-co-vs-hermes.md:123`,
+  `RESEARCH-tools-peers-tiers.md:377` and `:787` updated to "V4A removed — OpenAI-Codex format gated to
+  OpenAI models by opencode/openclaw". Peer-inventory rows (`:40` hermes, `:298` openclaw `apply_patch`,
+  `:256` model-filtering) left intact — they describe peer surfaces accurately. CHANGELOG untouched
+  (append-only; new entry at `/ship`). Task 1's Move-directive fix is superseded by the `_v4a.py` deletion.
+
+**Tests:** scoped — 28 passed, 0 failed (`test_flow_files_write.py` V4A block removed + `mode=` kwarg
+dropped from replace tests + new `test_file_patch_deletes_matched_text_with_empty_new_string` for the
+delete idiom; `test_flow_approval_subject.py` + `test_flow_agent_tool_concurrent_default.py` unchanged
+and green — `file_patch` path-subject + `is_concurrent_safe=False` still assert).
+**Doc Sync:** clean — specs carry no V4A/`mode`/`patch` prose (grep clean across `docs/specs/`,
+`skills/`, `context/`, `evals/`); native-tool count unchanged; `/sync-doc` would be a no-op, not invoked.
+
+**Overall: DELIVERED**
+Task 3c shipped; `file_patch` is now a monomorphic single-file replace per the small-model doctrine,
+V4A multi-file surface fully removed. Tasks 4/5 remain unstarted.
+
+**Next step:** `/review-impl tool-surface-small-model-audit` — full suite + evidence scan → verdict.
+
+## Implementation Review — Task 3c (2026-06-02)
+
+Scope: Task 3c only. Stance: issues exist — PASS earned. One evidence subagent (full file read +
+done_when re-execution + integration-trace) plus an adversarial subagent targeting the two
+highest-risk false-PASS candidates: behavioral equivalence of the `_file_patch_replace` inlining, and
+orphaned consumers of the deleted `_v4a.py`.
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| 3c | `_v4a.py` deleted; `file_patch` 5-param single-file replace, no `mode`/`patch`; V4A test block gone; RESEARCH rows corrected; suite green | ✓ pass | `write.py:318-388` — signature `file_patch(ctx, path, old_string, new_string, replace_all=False, show_diff=False)`, all three text params required-by-signature, no None-guards; body flow (boundary→exists→preconditions(ModelRetry)→lock→size→resolve→write→mtime→lint) byte-identical to old `_file_patch_replace` minus the removed guards. `_v4a.py` deleted (`git status: D`). `git grep` V4A-symbols across all `*.py` → only the sanctioned `web/_ssrf.py:30` (IPv4Address). `tests/test_flow_files_write.py` — zero `mode=`/`patch=`, real-fs only, new `test_file_patch_deletes_matched_text_with_empty_new_string` asserts content after `new_string=""`. Integration no-change confirmed in source: `toolset.py:17`, `display.py:21`, `categories.py:15,26`, `tools/approvals.py:93`. RESEARCH: gaps `:123` + peers `:377/:787` co-cli cells → "V4A removed"; peer rows (`:40` hermes, `:298` codex) correctly untouched. |
+
+### Issues Found & Fixed
+No issues found. One non-blocking note (no action): `tools/approvals.py:94-96` retains a defensive
+`path = args.get("path", "")` empty-path fallback — still reachable (guards a missing arg), not dead;
+the plan flagged its removal as *optional* cleanup, out of scope here.
+
+### Tests
+- Command: `uv run pytest -q` (full suite)
+- Result: **652 passed, 0 failed** (318.04s) — count moved 654→652 (−3 V4A tests, +1 delete-idiom test).
+- Log: `.pytest-logs/<ts>-review-impl-3c.log`
+
+### Behavioral Verification
+- No `co status`/`logs` command in this project; `co chat` is the user-facing entry. `file_patch` is a
+  chat-visible tool, so the surface change was verified against the **live registered tool schema** via
+  `_build_native_toolset` + `get_tools`.
+- **`success_signal` verified:** the model sees one monomorphic `file_patch` with params exactly
+  `{path, old_string, new_string, replace_all, show_diff}` (required: `path`/`old_string`/`new_string`);
+  no `mode`/`patch`, no `file_apply_patch`; native-tool count **29 (unchanged)**.
+- Replace + `new_string=""` delete behavior exercised end-to-end by `test_flow_files_write.py` (real
+  filesystem, no mocks).
+
+### Overall: PASS
+Task 3c is correct, complete, and fully tested. `file_patch` is now a monomorphic single-file replace
+per the small-model doctrine; V4A multi-file surface fully removed with zero orphaned consumers; full
+suite green; native-tool count unchanged. Ready for Gate 2 → `/ship`.

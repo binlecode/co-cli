@@ -4,21 +4,12 @@ import asyncio
 import difflib
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
-
-PatchMode = Literal["replace", "patch"]
 
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.files._v4a import (
-    Hunk,
-    OperationType,
-    PatchOperation,
-    parse_v4a_patch,
-)
 from co_cli.tools.files.fs_guards import (
     detect_encoding,
     enforce_write_boundary,
@@ -268,223 +259,6 @@ def _check_patch_preconditions(
     return None
 
 
-# ── V4A multi-file patch apply ─────────────────────────────────────────────────
-# Parser lives in _v4a.py (ported from hermes-agent/tools/patch_parser.py).
-# The apply side uses co-cli conventions: resource locks, _resolve_patch_strategies,
-# stale-read block, and _run_lint_if_python.
-
-# pending-write tuple: (resolved, content_or_None, enc, rel_path, display_chunk, kind)
-_PendingWrite = tuple[Path, str | None, str, str, str, OperationType]
-
-
-def _insert_addition_hunk(current: str, hunk: Hunk, insert_text: str) -> str:
-    """Insert addition-only hunk content after context hint, or append to end."""
-    if hunk.context_hint and hunk.context_hint in current:
-        hint_pos = current.find(hunk.context_hint)
-        eol = current.find("\n", hint_pos)
-        if eol != -1:
-            return current[: eol + 1] + insert_text + "\n" + current[eol + 1 :]
-        return current + "\n" + insert_text
-    return current.rstrip("\n") + "\n" + insert_text + "\n"
-
-
-def _compute_v4a_update(
-    op: PatchOperation,
-    resolved: Path,
-    ctx: "RunContext[CoDeps]",
-) -> "_PendingWrite | str":
-    """Compute new content for a V4A UPDATE op. Returns pending tuple or error string."""
-    rel_path = op.file_path
-    path_key = str(resolved)
-
-    if not resolved.exists():
-        return f"File not found: {rel_path}"
-    if err := _check_patch_preconditions(resolved, rel_path, path_key, ctx):
-        return err
-    if resolved.stat().st_size > _MAX_EDIT_BYTES:
-        return f"File too large to patch: {rel_path}"
-
-    enc = detect_encoding(resolved)
-    original = resolved.read_text(encoding=enc)
-    current = original
-
-    for hunk in op.hunks:
-        old_str = "\n".join(line.content for line in hunk.lines if line.prefix in (" ", "-"))
-        new_str = "\n".join(line.content for line in hunk.lines if line.prefix in (" ", "+"))
-        if not old_str:
-            current = _insert_addition_hunk(current, hunk, new_str)
-            continue
-        resolution = _resolve_patch_strategies(current, old_str, new_str, False, False, rel_path)
-        if isinstance(resolution, str):
-            return f"{rel_path}: {resolution}"
-        current, _, _, _ = resolution
-
-    diff = _make_diff_block(original, current, rel_path)
-    return resolved, current, enc, rel_path, f"Updated: {rel_path}\n{diff}", OperationType.UPDATE
-
-
-def _compute_v4a_add(op: PatchOperation, resolved: Path) -> "_PendingWrite | str":
-    """Compute content for a V4A ADD op. Returns pending tuple or error string."""
-    if resolved.exists():
-        return f"Cannot add {op.file_path} — file already exists (use Update File to modify)"
-    content_lines = [
-        line.content for hunk in op.hunks for line in hunk.lines if line.prefix == "+"
-    ]
-    return (
-        resolved,
-        "\n".join(content_lines),
-        "utf-8",
-        op.file_path,
-        f"Created: {op.file_path}",
-        OperationType.ADD,
-    )
-
-
-def _compute_v4a_delete(
-    op: PatchOperation,
-    resolved: Path,
-    ctx: "RunContext[CoDeps]",
-) -> "_PendingWrite | str":
-    """Compute delete for a V4A DELETE op. Returns pending tuple or error string."""
-    rel_path = op.file_path
-    if not resolved.exists():
-        return f"File not found for deletion: {rel_path}"
-    if err := _check_patch_preconditions(resolved, rel_path, str(resolved), ctx):
-        return err
-    return resolved, None, "", rel_path, f"Deleted: {rel_path}", OperationType.DELETE
-
-
-async def _write_v4a_pending(
-    pending: "list[_PendingWrite]",
-    ctx: "RunContext[CoDeps]",
-) -> "tuple[str, list[str], list[str], list[str]] | str":
-    """Write all computed V4A operations. Returns (display, modified, created, deleted) or error."""
-    from co_cli.tools.resource_lock import ResourceBusyError
-
-    _kind_to_list: dict[OperationType, list[str]] = {
-        OperationType.UPDATE: [],
-        OperationType.ADD: [],
-        OperationType.DELETE: [],
-    }
-    display_parts: list[str] = []
-
-    for resolved, content, enc, rel_path, display_chunk, kind in pending:
-        try:
-            async with ctx.deps.resource_locks.try_acquire(str(resolved)):
-                if content is None:
-                    resolved.unlink()
-                else:
-                    resolved.parent.mkdir(parents=True, exist_ok=True)
-                    resolved.write_text(content, encoding=enc)
-                    ctx.deps.file_tracker.update_mtime(str(resolved), safe_mtime(resolved))
-        except ResourceBusyError:
-            return f"{rel_path} is being modified by another tool call — retry next turn"
-
-        if content is not None:
-            display_chunk = await _run_lint_if_python(resolved, display_chunk)
-        _kind_to_list[kind].append(rel_path)
-        display_parts.append(display_chunk)
-
-    return (
-        "\n\n".join(display_parts),
-        _kind_to_list[OperationType.UPDATE],
-        _kind_to_list[OperationType.ADD],
-        _kind_to_list[OperationType.DELETE],
-    )
-
-
-async def _apply_v4a_patch(
-    ops: list[PatchOperation],
-    ctx: "RunContext[CoDeps]",
-) -> "tuple[str, list[str], list[str], list[str]] | str":
-    """Compute all V4A operations in memory, then write. Returns error string or result tuple."""
-    workspace_dir = ctx.deps.workspace_dir
-    pending: list[_PendingWrite] = []
-
-    for op in ops:
-        try:
-            resolved = enforce_write_boundary(Path(op.file_path), workspace_dir)
-        except ValueError as e:
-            return str(e)
-
-        if op.operation == OperationType.UPDATE:
-            result = _compute_v4a_update(op, resolved, ctx)
-        elif op.operation == OperationType.ADD:
-            result = _compute_v4a_add(op, resolved)
-        elif op.operation == OperationType.DELETE:
-            result = _compute_v4a_delete(op, resolved, ctx)
-        else:
-            return f"file_patch: unsupported V4A operation {op.operation.value!r}"
-
-        if isinstance(result, str):
-            return result
-        pending.append(result)
-
-    return await _write_v4a_pending(pending, ctx)
-
-
-async def _file_patch_replace(
-    ctx: "RunContext[CoDeps]",
-    path: str | None,
-    old_string: str | None,
-    new_string: str | None,
-    replace_all: bool,
-    show_diff: bool,
-) -> ToolReturn:
-    """Handle file_patch in replace mode (single-file targeted edit)."""
-    if path is None:
-        return tool_error("path is required in replace mode", ctx=ctx)
-    if old_string is None:
-        return tool_error("old_string is required in replace mode", ctx=ctx)
-    if new_string is None:
-        return tool_error("new_string is required in replace mode", ctx=ctx)
-
-    try:
-        resolved = enforce_write_boundary(Path(path), ctx.deps.workspace_dir)
-    except ValueError as e:
-        return tool_error(str(e), ctx=ctx)
-
-    if not resolved.exists():
-        return tool_error(f"File not found: {path}", ctx=ctx)
-
-    path_key = str(resolved)
-    if err := _check_patch_preconditions(resolved, path, path_key, ctx):
-        raise ModelRetry(err)
-
-    from co_cli.tools.resource_lock import ResourceBusyError
-
-    try:
-        async with ctx.deps.resource_locks.try_acquire(str(resolved)):
-            if resolved.stat().st_size > _MAX_EDIT_BYTES:
-                return tool_error(
-                    f"File too large to edit in-place ({resolved.stat().st_size // 1024} KB) — use shell tools",
-                    ctx=ctx,
-                )
-            enc = detect_encoding(resolved)
-            content = resolved.read_text(encoding=enc)
-            resolution = _resolve_patch_strategies(
-                content, old_string, new_string, replace_all, show_diff, path
-            )
-            if isinstance(resolution, str):
-                return tool_error(resolution, ctx=ctx)
-            updated, display, count, strategy = resolution
-            resolved.write_text(updated, encoding=enc)
-            ctx.deps.file_tracker.update_mtime(path_key, safe_mtime(resolved))
-    except ResourceBusyError:
-        return tool_error(
-            f"File {path} is being modified by another tool call — retry next turn", ctx=ctx
-        )
-
-    display = await _run_lint_if_python(resolved, display)
-    return tool_output(
-        display,
-        ctx=ctx,
-        path=str(resolved),
-        replacements=count,
-        strategy=strategy,
-    )
-
-
 # Approval modal cannot be queued safely for two concurrent writes to the same path.
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS, approval=True, retries=1, is_concurrent_safe=False
@@ -543,64 +317,72 @@ async def file_write(
 )
 async def file_patch(
     ctx: RunContext[CoDeps],
-    mode: PatchMode = "replace",
-    path: str | None = None,
-    old_string: str | None = None,
-    new_string: str | None = None,
+    path: str,
+    old_string: str,
+    new_string: str,
     replace_all: bool = False,
     show_diff: bool = False,
-    patch: str | None = None,
 ) -> ToolReturn:
-    """Edit files by replacing a string with fuzzy matching, or apply a V4A multi-file patch.
+    """Make a targeted find-and-replace edit in a single existing file.
 
-    mode="replace" (default): targeted single-file edit.
-        Requires file_read before patching. path, old_string, and new_string are required.
-        old_string must be unique in the file; set replace_all=True to replace all occurrences.
-        Tries four strategies: exact, line-trimmed, indent-stripped, escape-expanded.
+    Use this instead of sed/awk — never shell redirection — for editing. Requires
+    file_read on the file first. Tries four matching strategies (exact, line-trimmed,
+    indent-stripped, escape-expanded) so minor whitespace differences won't break the
+    match. Returns the replacement count and strategy.
 
-    mode="patch": apply a V4A multi-file patch. patch argument is required.
-        Supports Update File, Add File, and Delete File across multiple files.
-        Update File and Delete File require file_read for each affected file first.
-
-        V4A format:
-            *** Begin Patch
-            *** Update File: path/to/file.py
-            @@ optional context hint @@
-             context line
-            -removed line
-            +added line
-            *** Add File: path/to/new.py
-            +file content line
-            *** Delete File: path/to/old.py
-            *** End Patch
-
-    When NOT to use: for creating new files or complete rewrites — use file_write instead.
+    When NOT to use: creating a new file or a full rewrite — use file_write. To delete
+    a whole file, use shell_exec (rm).
 
     Args:
-        mode: "replace" (default) for single-file edit, "patch" for V4A multi-file patch.
-        path: File path relative to workspace root (required for replace mode).
-        old_string: String to replace with fuzzy matching (required for replace mode).
-        new_string: Replacement string applied verbatim (required for replace mode).
-        replace_all: Replace all occurrences instead of requiring uniqueness (replace mode only).
-        show_diff: Prepend a unified diff to output (replace mode only).
-        patch: V4A format patch string (required for patch mode).
+        path: File path relative to the workspace root.
+        old_string: Exact text to find. Must be unique in the file unless replace_all=True;
+            include surrounding context lines to make it unique.
+        new_string: Replacement text, applied verbatim. Pass "" to delete the matched text.
+        replace_all: Replace every occurrence instead of requiring a unique match
+            (default False = require exactly one match).
+        show_diff: Prepend a unified diff of the change to the output (default False).
     """
-    if mode == "patch":
-        if not patch:
-            return tool_error("patch argument is required in patch mode", ctx=ctx)
-        ops, parse_err = parse_v4a_patch(patch)
-        if parse_err:
-            return tool_error(f"Invalid patch: {parse_err}", ctx=ctx)
-        result = await _apply_v4a_patch(ops, ctx)
-        if isinstance(result, str):
-            return tool_error(result, ctx=ctx)
-        display, files_modified, files_created, files_deleted = result
-        return tool_output(
-            display,
-            ctx=ctx,
-            files_modified=files_modified,
-            files_created=files_created,
-            files_deleted=files_deleted,
+    try:
+        resolved = enforce_write_boundary(Path(path), ctx.deps.workspace_dir)
+    except ValueError as e:
+        return tool_error(str(e), ctx=ctx)
+
+    if not resolved.exists():
+        return tool_error(f"File not found: {path}", ctx=ctx)
+
+    path_key = str(resolved)
+    if err := _check_patch_preconditions(resolved, path, path_key, ctx):
+        raise ModelRetry(err)
+
+    from co_cli.tools.resource_lock import ResourceBusyError
+
+    try:
+        async with ctx.deps.resource_locks.try_acquire(str(resolved)):
+            if resolved.stat().st_size > _MAX_EDIT_BYTES:
+                return tool_error(
+                    f"File too large to edit in-place ({resolved.stat().st_size // 1024} KB) — use shell tools",
+                    ctx=ctx,
+                )
+            enc = detect_encoding(resolved)
+            content = resolved.read_text(encoding=enc)
+            resolution = _resolve_patch_strategies(
+                content, old_string, new_string, replace_all, show_diff, path
+            )
+            if isinstance(resolution, str):
+                return tool_error(resolution, ctx=ctx)
+            updated, display, count, strategy = resolution
+            resolved.write_text(updated, encoding=enc)
+            ctx.deps.file_tracker.update_mtime(path_key, safe_mtime(resolved))
+    except ResourceBusyError:
+        return tool_error(
+            f"File {path} is being modified by another tool call — retry next turn", ctx=ctx
         )
 
-    return await _file_patch_replace(ctx, path, old_string, new_string, replace_all, show_diff)
+    display = await _run_lint_if_python(resolved, display)
+    return tool_output(
+        display,
+        ctx=ctx,
+        path=str(resolved),
+        replacements=count,
+        strategy=strategy,
+    )

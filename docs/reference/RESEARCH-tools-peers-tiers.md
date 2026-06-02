@@ -374,7 +374,7 @@ co-cli column shows current coverage status.
 | File read (paginated) | read_file | — (via nodes) | read | (via API) | 2–3 | `file_read` ✓ |
 | File write (full overwrite) | write_file | — (via nodes) | write | (via API) | 2–3 | `file_write` ✓ |
 | File edit (string replace) | patch (replace mode) | — | edit | apply_patch | 3 | `file_patch` ✓ |
-| Multi-hunk patch (V4A/unified diff) | patch (patch mode) | — | ApplyPatchTool | apply_patch | 3 | `file_patch` (`_v4a.py`) ✓ |
+| Multi-hunk patch (V4A/unified diff) | patch (patch mode) | — | ApplyPatchTool | apply_patch | 3 | — (removed — V4A is OpenAI-Codex format; opencode/openclaw gate it to OpenAI models, wrong fit for co's small local models) |
 | File / glob search | search_files(files) | — | glob | — | 2 | `file_find` ✓ |
 | Content / grep search | search_files(content) | — | grep | — | 2 | `file_search` ✓ |
 
@@ -784,7 +784,7 @@ Quick lookup for finding the equivalent tool across systems.
 | File read | `file_read` | `read_file` | (via nodes) | `read` | (via API) |
 | File write | `file_write` | `write_file` | (via nodes) | `write` | (via API) |
 | File edit | `file_patch` | `patch(replace)` | — | `edit` | `apply_patch` |
-| Multi-hunk patch | `file_patch(_v4a)` | `patch(patch)` | — | `ApplyPatchTool` | `apply_patch` |
+| Multi-hunk patch | — (removed — V4A is OpenAI-Codex format) | `patch(patch)` | — | `ApplyPatchTool` | `apply_patch` |
 | File find | `file_find` | `search_files(files)` | — | `glob` | — |
 | Content search | `file_search` | `search_files(content)` | — | `grep` | — |
 | Web search | `web_search` | `web_search` | `web_search` | `search` | `WebSearch` |
