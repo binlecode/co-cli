@@ -31,7 +31,7 @@ async def memory_view(
     not just the snippet. `name` is the `filename_stem` field from search results.
 
     Args:
-        name: The artifact filename_stem (no directory, no .md extension).
+        name: The artifact filename_stem (no directory, no .md extension; not the artifact title).
     """
     path = ctx.deps.memory_dir / f"{name}.md"
     if not path.exists():

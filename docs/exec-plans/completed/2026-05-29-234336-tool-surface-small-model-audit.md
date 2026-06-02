@@ -495,47 +495,52 @@ longer-lived background command than on the foreground sibling. Conformed by mir
     anchors to `workspace_dir` rather than the process launch dir (identical in the common
     no-`workspace_path` case). **Uncommitted** — to be committed with the rest of Task 4 (or on request).
 
-### `google_calendar` defaults: reconcile (HIGH/LOW)
-- `days_ahead` defaults to **1** in `google_calendar_list` (`calendar.py:94`) but **30** in
-  `google_calendar_search` (`:167`). Same param name, two defaults.
-- **Fix:** document the rationale in both (`list` = narrow today-window; `search` = next-month
-  hunt), or align. Reword `days_back` in both away from the misleading "today onward" →
-  `days_back: How many past days to include before today (default 0 = start from today 00:00).`
-  Add the "Recurring events are expanded into individual occurrences" caveat to `search` for
-  parity (`:184`).
+### `google_calendar` defaults — ➡️ MOVED OUT (2026-06-02)
+Moved to the dedicated Google-surface plan (`deferred-tool-stub-grouping`). The Google Workspace
+docstring-correctness items touch the same surface that plan reworks (deferred-stub grouping +
+intended-design from `RESEARCH-tools-peers-tiers.md` Part 6), so editing them here would clobber.
+Item carried over: `days_ahead` rationale (document, do not align), 3-site `days_back` reword
+(`calendar.py:113/188/184`), recurring-events caveat parity on `search`.
 
-### `max_requests` magic sentinel (HIGH)
+### ✓ DONE `max_requests` magic sentinel (HIGH)
 - `web_research` (`delegation.py:83`): `0` means "use config default budget" (10), the opposite of
   its literal reading. (Was HIGH ×2 with `knowledge_analyze`; that tool is now deleted.)
 - **Fix:** `max_requests: Upper bound on the agent's internal LLM calls. Leave at 0 to use the
   configured default budget (10). Higher = more thorough but slower/costlier.`
 
-### `google_drive_search.page` stateful contract (HIGH)
-- `page` is session-stateful (hidden page tokens, `drive.py:20-29`); page N errors without N-1
-  fetched first (`ModelRetry :25`). Only google tool using `page` vs siblings' `max_results`.
-- **Fix:** reword (`:95`): `page: 1-based page number (default 1). Must be requested
-  sequentially — page N requires page N-1 fetched earlier this session; you cannot jump ahead.`
-  Consider exposing `max_results` for family parity (LOW).
+### `google_drive_search.page` stateful contract — ➡️ MOVED OUT (2026-06-02)
+Moved to the dedicated Google-surface plan (`deferred-tool-stub-grouping`) with the other Google items.
+Item carried over: reword `page` Args (`drive.py:95`) for the sequential-fetch contract + state the
+fixed-10 page size; `max_results` parity stays deferred (decision #3 → doc-only).
 
-### `web_search.max_results` silent clamp (HIGH)
+### ✓ DONE `web_search.max_results` silent clamp (HIGH)
 - `web/search.py:310` — docstring "max 8" reads like validation but is a silent clamp; Caveats
   "capped regardless of max_results" is contradictory.
 - **Fix:** `max_results: How many results to return, 1-8 (default 5). Values above 8 are silently
   clamped to 8.` Drop the contradictory Caveats bullet.
 
-### `web_fetch.format` non-HTML no-op (HIGH)
+### ✓ DONE `web_fetch.format` non-HTML no-op (HIGH)
 - `web/fetch.py:151` — `format` only applies to HTML responses; for JSON/XML/text all three
   values produce identical output.
-- **Fix:** `format: How to render HTML responses — "markdown" (default), "html", or "text".
-  Ignored for JSON/XML/plain-text responses, which are returned as-is.`
+- **Fix (Gate-1 CD-m-2 — tightened; corrects a pre-existing inaccuracy):** the source only transforms
+  when `format == "markdown"` AND the body is HTML; `"html"` and `"text"` produce byte-identical
+  raw-decoded output even for HTML, so "three HTML renderings" overstates the fork. Use the real
+  two-outcome wording → `format: "markdown" (default) converts HTML to markdown; "html" and "text"
+  both return the raw decoded body unchanged. Ignored for JSON/XML/plain-text, which are always
+  returned as-is.`
 
 ### Minor naming (LOW)
-- `task_list.status_filter` (`tasks/control.py:203`): keep the name; tighten Args to mirror the
-  row schema and enumerate the four status values.
-- `memory_view.name` (`memory/view.py:34`): tighten to disambiguate from `memory_create.name_title`
-  (`memory_manage` was split in 3a) — `name: The filename_stem from a memory_search hit (not the
-  artifact title).`
-- `google_gmail_draft.to` (`gmail.py:162`): state comma-separated multiple-recipient support.
+- `task_list.status_filter` (`tasks/control.py:213`): **DROPPED at Gate-1 (CD-m-3 / PO-m-2 — already
+  adequate).** Args `:222-223` already enumerates all four values and states `None = all tasks`; the
+  only residual was a cosmetic "mirror the row schema" nuance with no concrete reader-facing delta.
+  Not worth a budget-guarded edit. No-op.
+- ✓ DONE `memory_view.name` (`memory/view.py:34`): **scoped at Gate-1 (CD-m-4) to appending the
+  contrast only.** The filename_stem framing already exists (body `:31` "from search results"; Args
+  `:34` "The artifact filename_stem") — do NOT re-author the line; just append the disambiguation from
+  `memory_create.name_title`: `… (not the artifact title).` Delivered: appended "; not the artifact
+  title" to the Args line.
+- `google_gmail_draft.to` (`gmail.py:162`): ➡️ MOVED OUT (2026-06-02) to the Google-surface plan
+  (`deferred-tool-stub-grouping`) — state comma-separated multiple-recipient support there.
 
 ---
 
@@ -543,19 +548,15 @@ longer-lived background command than on the foreground sibling. Conformed by mir
 
 Each near-duplicate pair needs reciprocal when-to-use / when-NOT-to-use lines.
 
-- **`web_search` ↔ `web_research`:**
+- ✓ DONE **`web_search` ↔ `web_research`:**
   - `web_search` (`search.py:286`): add "For a single quick lookup of snippets/URLs use this
-    tool; for a multi-page question needing reading + synthesis use `web_research`."
+    tool; for a multi-page question needing reading + synthesis use `web_research`." — delivered.
   - `web_research` (`delegation.py:112`): add to "When NOT to use" — "a quick lookup where ranked
-    snippets/URLs suffice — use `web_search` (single call, not a multi-step agent)."
-- **`google_gmail_list` ↔ `google_gmail_search`:**
-  - `search` (`gmail.py:100`): add "For a plain most-recent-inbox overview with no filters, use
-    `google_gmail_list`." (`list` already points to `search` at `:62`.)
-  - Family note: list-vs-search is a deliberate pattern (mirrors `obsidian_list`/`obsidian_search`)
-    — keep both; do **not** unilaterally merge. A family-wide list-vs-search consolidation
-    decision is out of scope for this plan.
-- **`google_calendar_list` ↔ `google_calendar_search`:** covered by the defaults reconciliation
-  in Task 4 (cross-reference the differing windows in both docstrings).
+    snippets/URLs suffice — use `web_search` (single call, not a multi-step agent)." — delivered.
+- **`google_gmail_list` ↔ `google_gmail_search`:** ➡️ MOVED OUT (2026-06-02) to the Google-surface
+  plan (`deferred-tool-stub-grouping`) — Google sibling steers ride with the other Google items there.
+- **`google_calendar_list` ↔ `google_calendar_search`:** ➡️ MOVED OUT (2026-06-02) — folded into the
+  Google calendar item in the `deferred-tool-stub-grouping` plan.
 
 ---
 
@@ -788,3 +789,210 @@ the plan flagged its removal as *optional* cleanup, out of scope here.
 Task 3c is correct, complete, and fully tested. `file_patch` is now a monomorphic single-file replace
 per the small-model doctrine; V4A multi-file surface fully removed with zero orphaned consumers; full
 suite green; native-tool count unchanged. Ready for Gate 2 → `/ship`.
+
+---
+
+## Gate-1 cycle — Tasks 4 (remaining) + 5
+
+Scope: the **remaining** Task 4 items (work_dir already shipped in `0a240b53` — out of scope) and all
+of Task 5. Tasks 1/2/3a/3b/3c are gated/shipped — out of scope.
+
+In-scope items:
+- **T4-cal** — `google_calendar` defaults reconcile + `days_back` reword + add recurring-events caveat to search (also satisfies the Task-5 calendar pair).
+- **T4-maxreq** — `web_research.max_requests` magic-`0` sentinel reword.
+- **T4-page** — `google_drive_search.page` stateful-contract Args reword.
+- **T4-clamp** — `web_search.max_results` silent-clamp reword + drop contradictory Caveats bullet.
+- **T4-fmt** — `web_fetch.format` non-HTML no-op clause.
+- **T4-minor** — `task_list.status_filter`, `memory_view.name`, `google_gmail_draft.to` LOW tightenings.
+- **T5-web** — `web_search ↔ web_research` reciprocal steers.
+- **T5-gmail** — `google_gmail_search` reciprocal pointer to `google_gmail_list`.
+
+## Cycle C1 — Team Lead
+
+**Current-state verification (source read 2026-06-02, post-3a/3b/3c + work_dir commit):** state is
+consistent; every planned fix still valid; all drift is toward *smaller* scope. Deltas vs the
+2026-05-29 draft:
+
+- `delegation.py` lives at `co_cli/tools/agents/delegation.py` (draft shorthand `agents/delegation.py`).
+  `web_research` signature `:60-65` (`max_requests: int = 0` `:64`), Args line `:83`. `domains` `:82`
+  already reworded by Task 2 — only `max_requests` remains.
+- Calendar confirmed: `days_ahead` default **1** (`calendar.py:94`) vs **30** (`:167`); `days_back`
+  "today onward" wording at `:113` and `:188`; `google_calendar_search` lacks the recurring-events
+  caveat that `google_calendar_list` carries (`:110`). The calendar list↔search *steers* are **already
+  reciprocal** (`:99-100` / `:174-175`) — so the Task-5 calendar item reduces to cross-referencing the
+  differing default windows, folded into T4-cal.
+- `web_search`: `max_results` Args `:310`, contradictory Caveats bullet `:304`.
+- `web_fetch`: `format` Args `:151-153` already lists markdown/html/text but lacks the "ignored for
+  JSON/XML/plain-text" clause.
+- `google_drive_search`: `page` Args `:95` vague; the sequential-fetch note already exists in prose `:79`.
+- `memory_view.name` `:34` already says "filename_stem" and the body `:31` says "from search results" —
+  LOW disambiguation tweak only.
+- `task_list.status_filter` `:213` (draft said `:203`); Args `:222-223` **already enumerates** the four
+  values — item is nearly satisfied (only the row-schema mirror nuance remains).
+- `google_gmail_draft.to` `:162` single-recipient; `google_gmail_list` already points to search (`:62`),
+  `google_gmail_search` lacks the reciprocal pointer (`:101`).
+
+No `mode`/`action` discriminators, no signature changes, no new tools — pure docstring/wording edits
+(plus the optional `google_drive_search.max_results` parity question, decision #3). Submitting for Core
+Dev + PO review.
+
+## Cycle C1 — Core Dev
+
+**Assessment:** approve
+**Blocking:** none
+**Summary:** All planned fixes are docstring/wording-only, verified against source — no signature
+changes, no discriminators, no docstring-asserting tests at risk. Every TL current-state citation
+checks out. Two minor completeness/accuracy gaps (calendar, web_fetch) plus two items already
+(near-)satisfied that should be no-op/scoped rather than "fixed."
+
+**Major issues:** none
+
+**Minor issues:**
+- **CD-m-1** [T4-cal]: "today onward" for `days_back` appears at THREE sites, not two — list Args
+  (`calendar.py:113`), search Args (`:188`), AND a search **Caveats** bullet (`:184`). The fix text
+  only covered the two Args lines. Recommendation: include `:184` so the corrected Args line doesn't
+  contradict a stale Caveats line in the same docstring.
+- **CD-m-2** [T4-fmt]: proposed "render HTML — markdown/html/text" overstates the fork; source
+  (`fetch.py`) only transforms on `format=="markdown"` + HTML; `"html"`/`"text"` are byte-identical
+  raw output. Recommendation: tighten to the real two-outcome behavior (fixes a pre-existing
+  inaccuracy per review discipline).
+- **CD-m-3** [T4-minor/task_list]: already satisfied — `control.py:222-223` enumerates all four values
+  + `None = all tasks`. Recommendation: mark no-op/drop.
+- **CD-m-4** [T4-minor/memory_view.name]: near-satisfied — `view.py:31/34` already say filename_stem
+  "from search results". Recommendation: scope to appending the "(not the artifact title)" contrast
+  only; don't re-author the line.
+
+## Cycle C1 — PO
+
+**Assessment:** approve
+**Blocking:** none
+**Summary:** Right problem (docstring-correctness pass closing out the small-model surface audit
+against the shipped file_search rubric), tight scope — pure wording plus two semantic-alignment
+decisions, no creep, no signature changes. Every in-scope item maps to a verified real defect; nothing
+is busywork; no docstring-correctness gap is missing.
+
+**Open-decision recommendations:**
+- **Decision #3 — `google_drive_search.max_results`:** **doc-only** (do not add the param this cycle).
+  Signature change belongs to a separate search-family-parity workstream; page size already in prose
+  (`drive.py:72`). Just confirm the fixed-10 page size is reflected in the Args line.
+- **Calendar `days_ahead` 1 vs 30:** **document the rationale, do not align** — distinct intents
+  (`list` = today/this-week overview; `search` = forward month hunt); forcing one default degrades a
+  tool. One-line rationale per Args resolves small-model confusion without behavior change.
+
+**Minor issues:**
+- **PO-m-1** [T4-cal `days_back`]: the "today onward" wording is the genuine defect (conflates the
+  past-window param with the window's forward edge at `:113/184/188`) — confirm the reword makes
+  `days_back` unambiguously about *past* days and drops "today onward" everywhere incl. `:184`.
+- **PO-m-2** [T4-minor `task_list.status_filter`]: only the cosmetic "row-schema mirror" nuance remains
+  (values already enumerated) — drop as already-adequate rather than spend a budget-guarded edit.
+
+## Cycle C1 — Team Lead Decisions
+
+| Issue ID | Decision | Rationale | Change |
+|----------|----------|-----------|--------|
+| CD-m-1 / PO-m-1 | adopt | A corrected Args line that contradicts a stale Caveats line in the same docstring is worse than the original. | T4-cal Fix now reworks `days_back` at all THREE sites (list Args `:113`, search Args `:188`, search Caveats `:184`). |
+| CD-m-2 | adopt | Review discipline: fix the pre-existing inaccuracy rather than carry it forward; `"html"`/`"text"` are byte-identical raw output. | T4-fmt Fix replaced with the two-outcome wording (markdown converts; html/text return raw unchanged; non-HTML always as-is). |
+| CD-m-3 / PO-m-2 | adopt | Values already enumerated + `None=all` stated; only a cosmetic nuance remained — not worth a budget-guarded edit. | `task_list.status_filter` marked DROPPED / no-op in the Minor-naming block. |
+| CD-m-4 | adopt | filename_stem framing already present; re-authoring risks re-inflating the line against the prefill budget. | `memory_view.name` scoped to appending the "(not the artifact title)" contrast only. |
+| Decision #3 | adopt (doc-only) | Exposing `max_results` is a signature change = creep against the budget-guarded surface; page size already in prose. | T4-page: doc-only; add fixed-10 page size to the Args line; `max_results` deferred to a family-parity workstream. |
+| days_ahead 1 vs 30 | adopt (document) | Distinct intents, not a drift bug; aligning would degrade one tool. | T4-cal: document the rationale in each `days_ahead` Args line; no behavior change. |
+
+## Gate 1 — PO + TL verdict (Tasks 4-remaining + 5, 2026-06-02)
+
+**Status: PASS.** Scoped to the remaining Task 4 items + all of Task 5. Converged at Cycle C1 — both
+reviewers returned `Blocking: none`.
+
+- **PO:** right problem (docstring-correctness pass closing the small-model surface audit against the
+  shipped `file_search` rubric), correct scope (pure wording + two semantic-alignment decisions, no
+  creep, no signature changes), value justified (every in-scope item is a verified real defect; the two
+  already-adequate items dropped/scoped). Decisions #3 and days_ahead resolved doc-only / document.
+- **TL:** current-state verified against source (post-3a/3b/3c + work_dir commit) — all file:line
+  citations confirmed; drift is only toward smaller scope. No discriminators, no new tools, no
+  docstring-asserting tests at risk. All 4 minor issues adopted.
+
+**Scope confirmed for implementation (all docstring/wording-only):**
+T4-maxreq (`web_research.max_requests` sentinel), T4-clamp (`web_search.max_results` + drop
+contradictory Caveats bullet), T4-fmt (`web_fetch.format` two-outcome wording), T4-minor
+(`memory_view.name` contrast only; `task_list.status_filter` DROPPED), T5-web (web_search↔web_research
+reciprocal steers).
+
+**➡️ Google items removed from this scope (2026-06-02, per user direction).** All Google Workspace
+items — T4-cal (calendar defaults / `days_back` / recurring caveat), T4-page (drive `page`),
+`google_gmail_draft.to`, and the Task-5 gmail + calendar sibling steers — MOVED to the dedicated
+Google-surface plan (`deferred-tool-stub-grouping`), which reworks the same surface (deferred-stub
+grouping + intended design, `RESEARCH-tools-peers-tiers.md` Part 6). Editing those docstrings in two
+plans would clobber. This plan's remaining scope is purely the non-Google wording items above.
+
+**Verification:** lint + existing tool behavioral tests (no eval needed — no signature/behavior change).
+Coordinate edits with the `prefill-trim` family so wording fixes stay tight.
+
+> Cleared to implement. Run: `/orchestrate-dev tool-surface-small-model-audit` (non-Google Task 4 + T5-web).
+
+## Delivery Summary — Tasks 4-remaining (non-Google) + T5-web (2026-06-02)
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| T4-maxreq — `web_research.max_requests` sentinel reword | lint clean + behavioral tests pass; no docstring-asserting test broke | ✓ pass |
+| T4-clamp — `web_search.max_results` 1-8 silent-clamp reword + drop contradictory Caveats bullet | same | ✓ pass |
+| T4-fmt — `web_fetch.format` two-outcome wording (CD-m-2) | same | ✓ pass |
+| T4-minor — `memory_view.name` "(not the artifact title)" contrast | same | ✓ pass |
+| T5-web — `web_search`↔`web_research` reciprocal steers | same | ✓ pass |
+
+**What shipped (docstring/wording only, no signature changes):**
+- `co_cli/tools/agents/delegation.py` — `web_research`: `max_requests` Args reworded (0 = configured
+  default budget of 10); "When NOT to use" gained the `web_search` quick-lookup steer.
+- `co_cli/tools/web/search.py` — `web_search`: `max_results` Args reworded to state the 1-8 silent
+  clamp; the contradictory "Max 8 results … capped regardless" Caveats bullet removed; intro gained
+  the reciprocal `web_research` steer.
+- `co_cli/tools/web/fetch.py` — `web_fetch`: `format` Args reworded to the real two-outcome behavior
+  (markdown converts; html/text return raw unchanged; non-HTML always as-is).
+- `co_cli/tools/memory/view.py` — `memory_view`: `name` Args appended "; not the artifact title".
+
+**Tests:** scoped — 33 passed, 0 failed (`test_flow_deferred_tool_stubs`, `test_flow_delegation_agent`,
+`test_flow_memory_view`, `test_agent_build_task_agent`, `test_flow_tool_result_markers`,
+`test_tool_io`). Log: `.pytest-logs/<ts>-scoped.log`. No test asserted any changed docstring string
+(grep-verified pre-edit).
+**Doc Sync:** clean / no-op — specs (`docs/specs/`) do not quote these docstrings verbatim (grep
+confirmed); no shared-module/API/schema change, so `/sync-doc` skipped per scope decision.
+
+**Overall: DELIVERED**
+All 5 non-Google items shipped; lint clean; scoped tests green. All Google items remain MOVED to the
+`deferred-tool-stub-grouping` plan; `task_list.status_filter` remains DROPPED.
+
+**Next step:** `/review-impl tool-surface-small-model-audit` — full suite + evidence scan → verdict.
+
+## Implementation Review — Tasks 4-remaining (non-Google) + T5-web (2026-06-02)
+
+Scope: the 5 non-Google docstring/wording items only. Stance: issues exist — PASS earned. The two
+substantive accuracy claims (T4-fmt two-outcome, T4-clamp silent-clamp) were cold-verified against
+source; the rest are non-factual wording.
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| T4-maxreq | lint + behavioral tests pass, no docstring-asserting test broke | ✓ pass | `delegation.py:83-84` — `max_requests` Args reworded ("Leave at 0 to use the configured default budget (10)"); matches `budget = max_requests or WEB_RESEARCH_SPEC.default_budget` (`:92`) with `default_budget=10` (`:50`) |
+| T4-clamp | same | ✓ pass | `search.py:310-311` Args "1-8 … silently clamped to 8" matches `_MAX_RESULTS = 8` (`:256`) + `capped = min(max_results, _MAX_RESULTS)` (`:319`); contradictory Caveats bullet removed (`:303-304` now only the API-key bullet) |
+| T4-fmt | same | ✓ pass | `fetch.py:151-153` two-outcome wording matches the sole transform branch `if "html" in content_type and format == "markdown"` (`:217`) — html/text and all non-HTML bypass conversion → raw decoded body |
+| T4-minor | same | ✓ pass | `view.py:34` — appended "; not the artifact title" to the existing filename_stem Args line (no re-author) |
+| T5-web | same | ✓ pass | `search.py:291-294` web_search→web_research steer; `delegation.py:73-76` web_research "When NOT to use"→web_search steer (reciprocal pair) |
+
+### Issues Found & Fixed
+No issues found. Scope-creep scan clean — `git diff` touches exactly the 4 declared files
+(`delegation.py`, `view.py`, `fetch.py`, `search.py`), no extras. No test asserts any changed
+docstring string (grep-verified). No mocks/fakes; no signature/behavior change.
+
+### Tests
+- Command: `uv run pytest -q` (full suite)
+- Result: **658 passed, 0 failed** (312.33s)
+- Log: `.pytest-logs/20260602-130601-review-impl.log`
+
+### Behavioral Verification
+- No user-facing behavior change — all five items are docstring/wording only (`success_signal: N/A`).
+  The model-visible tool *schema descriptions* update, but no code path changes.
+- Tool registration with the new docstrings confirmed green via the suite's `build_native_toolset`
+  path (`test_flow_deferred_tool_stubs`, `test_agent_build_task_agent` — passed). No `co status`/`logs`
+  command in this project; registration is the relevant surface and it is exercised by the suite.
+
+### Overall: PASS
+The 5 non-Google items are correct, complete, and fully tested; both substantive accuracy claims
+verified against source; full suite green; zero blocking findings. Ready for Gate 2 → `/ship`.

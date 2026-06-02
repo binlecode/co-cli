@@ -148,8 +148,9 @@ async def web_fetch(
 
     Args:
         url: Full URL to fetch (must start with http:// or https://).
-        format: Output format — "markdown" (default, converts HTML to markdown), "html" (raw HTML),
-            or "text" (raw decoded text, no conversion).
+        format: "markdown" (default) converts HTML to markdown; "html" and "text" both return the
+            raw decoded body unchanged. Ignored for JSON/XML/plain-text, which are always returned
+            as-is.
         timeout: Max seconds to wait for the HTTP response (default 15). Increase for slow sites.
     """
     if not url or not re.match(r"https?://", url.strip()):

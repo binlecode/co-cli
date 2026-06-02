@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.279]
+
+### Tool-surface small-model audit — Task 4 (non-Google) + Task 5 web steers
+
+Closes out the cross-tool small-model surface audit for the non-Google tools. Docstring/wording only — no signature or behavior changes.
+
+- **`web_research.max_requests`** — Args reworded so the magic `0` reads correctly ("Leave at 0 to use the configured default budget (10)") instead of the literal "0 = no requests".
+- **`web_search.max_results`** — Args now states the real 1-8 silent clamp ("Values above 8 are silently clamped to 8"); the contradictory "Max 8 … capped regardless of max_results" Caveats bullet removed.
+- **`web_fetch.format`** — Args corrected to the real two-outcome behavior: `markdown` converts HTML→markdown; `html`/`text` both return the raw decoded body unchanged; ignored for JSON/XML/plain-text. (The prior wording implied three distinct HTML renderings.)
+- **`memory_view.name`** — Args disambiguated from `memory_create.name_title` by appending "; not the artifact title".
+- **Sibling steers (`web_search` ↔ `web_research`)** — reciprocal when-to-use / when-NOT-to-use lines added to both docstrings (quick snippet lookup → `web_search`; multi-page read+synthesis → `web_research`).
+- **Scope move** — all Google Workspace surface items (calendar/drive/gmail docstrings + gmail/calendar steers) moved to the dedicated `deferred-tool-stub-grouping` plan; `task_list.status_filter` dropped (already adequate). Audit plan archived.
+
 ## [0.8.278]
 
 ### Tool-surface small-model audit — Task 4 (work_dir name + contract unification)

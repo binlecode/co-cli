@@ -774,6 +774,101 @@ Derived from convergence scores, parity matrix (§1 of `RESEARCH-tools-gaps-co-v
 
 ---
 
+## Part 6: co-cli External-Service Surfacing — Intended Design (Google Workspace)
+
+Added 2026-06-02 from a focused follow-on survey of how hermes and openclaw surface
+**external, auth-gated, optional service integrations** (hermes `send_message` /
+Home Assistant; openclaw `message` / media tools). Neither peer ships Google
+Workspace tools — Google/Drive/Gmail/Calendar remains co-cli-unique (§2.14, §3-unique)
+— so the comparison is against their *general* external-service pattern, not a
+like-for-like Google surface.
+
+**Sources (this section):** `hermes-agent/tools/registry.py:358-364` (check_fn schema
+omission), `hermes-agent/tools/homeassistant_tool.py:344-346,404-513`,
+`hermes-agent/tools/send_message_tool.py:138,177,1649-1672`,
+`hermes-agent/tools/toolsets.py:301-317`, `hermes-agent/hermes_cli/tools_config.py:97,1182-1183`;
+`openclaw/src/tools/availability.ts:75-153`, `openclaw/src/agents/openclaw-tools.media-factory-plan.ts:166-258`,
+`openclaw/src/agents/pi-tools.ts:661-668` (per-model V4A gate); co-cli
+`co_cli/deps.py:84-114`, `co_cli/tools/deferred_prompt.py`, `co_cli/tools/google/*.py`.
+
+### 6.1 Key finding — co's surfacing is already ahead of both peers for this case
+
+Both peers gate external services to **binary present/absent** (absent when
+uncredentialed; no stub, no schema). co does that **and** adds a **deferred-visibility
+tier** that neither peer has: a one-line stub in the per-turn prompt
+(`deferred_prompt.py`) with the full schema loaded on demand via `search_tools`. So
+the small-model intended design is *not* a peer port — it is a confirmation of co's
+existing architecture plus one new refinement.
+
+### 6.2 Decision 1 — Tiering: keep Google at `DEFERRED`, double-gated
+
+The tiering axis is **invocation frequency × credential dependence**, not "external vs
+internal":
+
+| Tier | Mechanism | Tools | Rationale |
+|---|---|---|---|
+| Always-visible | `VisibilityPolicyEnum.ALWAYS` | file_*, memory_*, web_*, shell, todo_*, session_* | Every-turn primitives — paying their schema cost always is correct |
+| Deferred + config-gated | `DEFERRED` + `requires_config="google_credentials_path"` + `check_fn=_google_available` | gmail_*, calendar_*, drive_* | Episodic + auth-dependent — a session that never touches Google pays only a one-line stub, or nothing when unconfigured |
+
+This mirrors hermes's hard `check_fn` credential gate (schema omitted entirely when the
+gate fails, `registry.py:358-364`) and openclaw's fully-absent media gating
+(`media-factory-plan.ts:166-258`). co must **not** copy hermes's "ship the full enabled
+set every turn" assumption (`model_tools.py:392`) — that is a frontier-context luxury
+that breaks a small local model.
+
+### 6.3 Decision 2 — Surface shape: dedicated monomorphic tools, NOT a uniform dispatch
+
+Keep the 7 dedicated Google tools (`calendar_list`/`search`, `gmail_list`/`search`/`draft`,
+`drive_search`/`read`). Do **not** collapse into a uniform `google(action=…)` surface.
+
+- hermes has no single doctrine, and its split rule vindicates co's: it collapses to one
+  action-dispatched tool **only when the operation is identical across backends**
+  (`send_message` over ~18 platforms — platform is a `target` string param, not a tool
+  boundary; `send_message_tool.py:138,177`), and keeps **dedicated per-op tools when the
+  operations genuinely differ** (Home Assistant = 4 tools in a discover-then-act flow;
+  `homeassistant_tool.py:404-513`).
+- Google list ≠ search ≠ read ≠ draft, across different services — these are *not* one
+  uniform operation over interchangeable backends. A `google(action=…)` surface would
+  reintroduce exactly the action-dispatch hazard removed from `memory_manage`/`skill_manage`
+  (Tasks 3a/3b) and violate `feedback_tool_split_small_model`.
+- openclaw collapses everything into action-dispatched tools, but that is an explicit
+  frontier-model choice (target `claude-sonnet-4-6`) — not to be copied.
+
+**Group for gating, split for calling:** adopt hermes's grouping-for-gating (each external
+service is its own small toolset of dedicated tools, individually toggled,
+`toolsets.py:301-317`) — Workspace authenticates, opts in, and appears/disappears as one
+unit, while the call surface stays dedicated-monomorphic.
+
+### 6.4 Decision 3 — Small-model ergonomics
+
+Neither peer optimizes for weak models; co's existing levers are the best practice:
+
+1. **The `DEFERRED` tier is the primary lever** — the small model's always-present
+   decision space stays ~14 core tools + compact stubs; Google schemas load only on demand.
+2. **Monomorphic split beats dispatch for selection** — dedicated `calendar_search` is one
+   name → one operation (one reasoning step), vs `google(action=…)` forcing tool-then-action
+   (two steps, the second unconstrained).
+3. **Sibling disambiguation steers** — for `DEFERRED` tools the one-line stub is the model's
+   only always-visible signal, so reciprocal when-to-use lines (calendar_list↔search,
+   gmail_list↔search) carry disproportionate weight for a weak model.
+
+### 6.5 The one new refinement worth building
+
+**Labeled grouping of deferred stubs** in `build_deferred_tool_awareness_prompt`
+(`deferred_prompt.py`): emit the deferred stubs under integration sub-headers (e.g.
+`Google Workspace (load before use): …`) so a weak model treats them as one coherent
+cluster instead of N loose lines. This is the genuinely new idea (no peer has it); it is
+the subject of a dedicated impl-ready plan. The Google docstring-correctness items
+(calendar defaults/`days_back`, drive `page`, gmail `draft.to`) and the Google sibling
+steers (gmail/calendar) are folded into that plan rather than the general tool-surface
+audit, since they touch the same surface the grouping refinement reworks.
+
+A soft opt-in layer (hermes `_DEFAULT_OFF_TOOLSETS` + credential-auto-enable,
+`tools_config.py:97,1182-1183`) is a lower-priority option — `DEFERRED` already reduces the
+uncredentialed cost to a single stub line, so the marginal benefit is small.
+
+---
+
 ## Appendix: Tool Name Mapping Across Peers
 
 Quick lookup for finding the equivalent tool across systems.

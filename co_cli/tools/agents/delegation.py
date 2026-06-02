@@ -72,7 +72,8 @@ async def web_research(
 
     When NOT to use: a single URL fetch or a factual question you can answer
     from memory or the knowledge base — use web_fetch or memory_search
-    directly instead.
+    directly instead; or a quick lookup where ranked snippets/URLs suffice —
+    use web_search (a single call, not a multi-step agent).
 
     Returns the agent's findings as a text result. Automatically retries once
     if the first search returns empty.
@@ -80,7 +81,8 @@ async def web_research(
     Args:
         query: Research question or topic.
         domains: Restrict the agent's web searches to these domains (default None = search the entire web).
-        max_requests: Max LLM requests (0 = config default).
+        max_requests: Upper bound on the agent's internal LLM calls. Leave at 0 to use the
+            configured default budget (10). Higher = more thorough but slower/costlier.
     """
     if ctx.deps.runtime.agent_depth >= MAX_AGENT_DEPTH:
         raise ModelRetry(

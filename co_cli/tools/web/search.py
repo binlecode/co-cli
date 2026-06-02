@@ -288,7 +288,9 @@ async def web_search(
     Use for up-to-date external information: documentation, release notes,
     API references, news, or anything not available in the local workspace.
     Returns ranked snippets with titles and URLs. For full page content,
-    pass a result URL to web_fetch.
+    pass a result URL to web_fetch. For a single quick lookup of snippets/URLs
+    use this tool; for a multi-page question needing reading + synthesis use
+    web_research.
 
     Do not guess or fabricate URLs — always use URLs from these results.
     Scope searches to specific sites with the domains parameter (e.g.
@@ -301,13 +303,13 @@ async def web_search(
     - count: number of results returned
 
     Caveats:
-    - Max 8 results per call (capped regardless of max_results value)
     - Requires BRAVE_SEARCH_API_KEY to be configured
 
     Args:
         query: Search query string (e.g. "python asyncio tutorial",
                "latest pydantic-ai release notes").
-        max_results: Number of results to return (default 5, max 8).
+        max_results: How many results to return, 1-8 (default 5). Values above 8 are silently
+            clamped to 8.
         domains: Restrict results to these domains, e.g. ["github.com"] (default None = search the entire web).
     """
     if not query or not query.strip():
