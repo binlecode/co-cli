@@ -162,7 +162,7 @@ The canonical inventory. New evals append a row here AND a tenet citation in the
 | `evals/eval_daily_chat.py` | W1 | A multi_turn_coherence · B tool_chain · C recall_reuse · D dream_propagates_to_recall · E tool_spill_summary | knowledge work — synthesis + voice; trusted — inspectable | A/D/E: LLM judge; B/C: structural |
 | `evals/eval_session_continuity.py` | W2 | A rotate · B clear · C list · D rehydrate_uses_context · E compact_quality_holds · F idempotent | continuity across sessions | A/B/C/F: structural; D/E: LLM judge |
 | `evals/eval_memory.py` | W3 | A create+index · B/C/D search ranking · E forget · F dream merge · G forget_propagates_to_recall | local + personal — durable + reversible | A/G: LLM judge; rest structural |
-| `evals/eval_skills.py` | W4 | A dispatch+env · B cleanup · C skill_manage · D shadow safety | operator (procedural capability) | A: LLM judge; rest structural |
+| `evals/eval_skills.py` | W4 | A dispatch+env · B cleanup · C skill create/patch/delete · D shadow safety | operator (procedural capability) | A: LLM judge; rest structural |
 | `evals/eval_background.py` | W5 | A launch · B tasks · C cancel · D spill | operator (async execution) | All structural |
 | `evals/eval_trust_visibility.py` | W6 | A approvals state · B unknown-slash safety · C deny_blocks_execution | trusted — approval + safety | A/B: structural; C: structural + judged side-effect assertion |
 | `evals/eval_groundedness.py` (phase 2) | W7 | tool_up_when_unsure · decline_when_unknown · resist_leading_prompt · cite_when_grounded | trusted — grounded + inspectable | All LLM judge |

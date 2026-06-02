@@ -7,9 +7,9 @@ What to capture:
 - References they mentioned: tools, docs, links, configurations that matter to their environment.
 
 How to save:
-- If no matching memory item exists: create one with memory_manage.
-- If a matching item exists: append or replace to keep it accurate and current.
-- On every memory_manage call, set source_type='session_review' so the item is tagged with its provenance.
+- If no matching memory item exists: create one with memory_create.
+- If a matching item exists: memory_append or memory_replace to keep it accurate and current.
+- On every memory_create call, set source_type='session_review' so the item is tagged with its provenance.
 
 Skip: session-local context, task-specific details, anything that only applies to today's work.
 

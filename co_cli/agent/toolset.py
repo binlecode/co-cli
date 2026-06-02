@@ -22,14 +22,25 @@ from co_cli.tools.google.gmail import (  # noqa: F401
     google_gmail_list,
     google_gmail_search,
 )
-from co_cli.tools.memory.manage import memory_manage  # noqa: F401
+from co_cli.tools.memory.manage import (  # noqa: F401
+    memory_append,
+    memory_create,
+    memory_delete,
+    memory_replace,
+)
 from co_cli.tools.memory.recall import memory_search  # noqa: F401
 from co_cli.tools.memory.view import memory_view  # noqa: F401
 from co_cli.tools.session.recall import session_search  # noqa: F401
 from co_cli.tools.session.view import session_view  # noqa: F401
 from co_cli.tools.shell.execute import shell_exec  # noqa: F401
 from co_cli.tools.system.capabilities import capabilities_check  # noqa: F401
-from co_cli.tools.system.skills import skill_manage, skill_view  # noqa: F401
+from co_cli.tools.system.skills import (  # noqa: F401
+    skill_create,
+    skill_delete,
+    skill_edit,
+    skill_patch,
+    skill_view,
+)
 from co_cli.tools.system.user_input import clarify  # noqa: F401
 from co_cli.tools.tasks.control import (  # noqa: F401
     task_cancel,

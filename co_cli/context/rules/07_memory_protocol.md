@@ -24,7 +24,7 @@ anything the user might reasonably expect you to already know.
 ## Explicit saves
 
 When the user explicitly asks to remember or save something — "remember I prefer X",
-"always do Y", "we decided Z", "save this URL", "remember this note" — call `memory_manage(action='create', ...)`
+"always do Y", "we decided Z", "save this URL", "remember this note" — call `memory_create(...)`
 synchronously in the same turn. Do not defer to the dream cycle; dream handles implicit
 patterns only.
 
@@ -53,7 +53,7 @@ is the substrate; the note is what the future self reasons over. Do
 this inline while the article is fresh in context, not at session end.
 
 **Correction.** When the user states something that contradicts a
-recalled memory item, propose `memory_manage(action='replace')` on
+recalled memory item, propose `memory_replace` on
 that item before continuing. Don't silently override the stale item —
 surface the change so the user can confirm or correct.
 
@@ -62,7 +62,7 @@ surface the change so the user can confirm or correct.
 `replace` or `delete` rather than working around it. Stale items left
 in place pollute future recall.
 
-**Dedup awareness.** `memory_manage(action='create')` dedups against
+**Dedup awareness.** `memory_create` dedups against
 existing items of the same kind. Read `SaveResult.action` on the
 return:
 - `saved` — new file written.
@@ -78,5 +78,5 @@ Don't fight the dedup by retrying with slight rephrasings.
 Don't save to memory:
 - Task progress, completed-work logs, session outcomes, or temporary TODO state — these are
   ephemeral; recall them later via `session_search`.
-- Procedures and reusable workflows — those belong in skills (`skill_manage(action='create')`),
+- Procedures and reusable workflows — those belong in skills (`skill_create`),
   not memory items. Memory holds facts; skills hold procedures.

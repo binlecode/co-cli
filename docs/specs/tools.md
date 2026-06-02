@@ -29,13 +29,13 @@ graph LR
 |-------|-------|-------|
 | Interaction & Session | `clarify`, `capabilities_check`, `todo_write`, `todo_read` | All ALWAYS |
 | Workspace & Files | `file_read`, `file_search`, `file_write`, `file_patch` | `file_search` finds files or greps contents; `file_write`/`file_patch` approval + lock |
-| Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_manage`, `skill_view`, `skill_manage` | `memory_manage`/`skill_manage` approval |
+| Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_create`, `memory_append`, `memory_replace`, `memory_delete`, `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` | memory write tools / skill write tools approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
 | Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval |
 | Delegation | `web_research` | DEFERRED; spawns a task agent |
 | Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | Gate: `google_credentials_path`; `google_gmail_draft` approval |
 
-**Total: 30 native tools** (18 ALWAYS · 12 DEFERRED · 5 explicit approval-gated · 7 config-gated; `shell_exec` may also prompt dynamically based on the command path)
+**Total: 36 native tools** (24 ALWAYS · 12 DEFERRED · 12 explicit approval-gated · 7 config-gated; `shell_exec` may also prompt dynamically based on the command path)
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 
@@ -274,8 +274,8 @@ The delegation tool (`web_research`) spawns a focused task agent. The agent surf
 | `co_cli/tools/files/write.py` | `file_write`, `file_patch` |
 | `co_cli/tools/memory/recall.py` | `memory_search`, `session_search` |
 | `co_cli/tools/memory/view.py` | `memory_view`, `session_view` |
-| `co_cli/tools/memory/manage.py` | `memory_manage` |
-| `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` |
+| `co_cli/tools/memory/manage.py` | `memory_create`, `memory_append`, `memory_replace`, `memory_delete` |
+| `co_cli/tools/system/skills.py` | `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` |
 | `co_cli/tools/web/search.py` | `web_search` |
 | `co_cli/tools/web/fetch.py` | `web_fetch` |
 | `co_cli/tools/web/_ssrf.py` | SSRF protection — URL safety checks, redirect guard, IP-pinning transport (`SSRFSafeNetworkBackend`, `make_ssrf_safe_transport`) |

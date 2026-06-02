@@ -26,8 +26,8 @@ flowchart LR
 | `get_skill_index()` | Model-facing subset — excludes hidden skills; source for `<available_skills>` manifest |
 | `render_skill_manifest()` | Renders `<available_skills>` XML block; emitted per-turn via `skill_manifest_prompt` so newly created skills are visible on the next turn |
 | `dispatch(raw_input, ctx)` | Routes slash commands — built-ins first, then `skill_index`, then error |
-| `refresh_skills(deps)` | Hot-reload: re-loads both tiers, replaces `deps.skill_index`; called by `skill_manage` and `/skills reload` |
-| `skill_manage` | Single model-callable write entry point — create, edit, patch, delete |
+| `refresh_skills(deps)` | Hot-reload: re-loads both tiers, replaces `deps.skill_index`; called by the skill write tools and `/skills reload` |
+| `skill_create` / `skill_edit` / `skill_patch` / `skill_delete` | Model-callable write tools — one monomorphic tool per operation |
 | `skill_view` | Model-callable reader — returns full skill body inline |
 
 ### Entry Points
@@ -49,9 +49,9 @@ The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name i
 The agent reads the `<available_skills>` manifest injected per-turn into the system prompt, identifies a matching skill, and calls `skill_view(name)` to load the full body. The body is returned as a tool result inside the current turn. The agent reads it and follows its phases as its procedure — no new turn, no dispatch, no REPL involvement. This is the primary path for agent-initiated skill use.
 
 **Path 3 — Model write.**
-The agent calls `skill_manage(action=...)` to create, edit, patch, or delete a user skill. Used for drift fixes (stale steps), promoting a reusable procedure to a new skill, or removing an obsolete one. `skill_manage` requires approval, runs the security scan, and calls `refresh_skills(deps)` on success so the change is live immediately.
+The agent calls `skill_create`, `skill_edit`, `skill_patch`, or `skill_delete` to write a user skill. Used for drift fixes (stale steps), promoting a reusable procedure to a new skill, or removing an obsolete one. Each tool requires approval, runs the security scan, and calls `refresh_skills(deps)` on success so the change is live immediately.
 
-The dream daemon's domain reviewers also write via `skill_manage` and `memory_manage` — they run in daemon-built `CoDeps` via `build_task_agent` with `requires_approval=False`. They are extensions of Path 3, not separate paths.
+The dream daemon's domain reviewers also write via the skill write tools (`skill_create`/`skill_edit`/`skill_patch` — not `skill_delete`) and the memory write tools (`memory_create`/`memory_append`/`memory_replace`) — they run in daemon-built `CoDeps` via `build_task_agent` with `requires_approval=False`. They are extensions of Path 3, not separate paths.
 
 ### Skill Model
 
@@ -210,7 +210,7 @@ Style: imperative voice (`Run X`, `Check Y`), concrete tool names in backticks, 
 
 ### Lint Rules
 
-Four advisory rules surfaced by `/skills lint` and attached to `skill_manage` success output as `lint_warnings`. Each finding is `R<n>: <message>`; lint never blocks a write.
+Four advisory rules surfaced by `/skills lint` and attached to `skill_create`/`skill_edit`/`skill_patch` success output as `lint_warnings`. Each finding is `R<n>: <message>`; lint never blocks a write.
 
 | Rule | Check | Why |
 |------|-------|-----|
@@ -231,9 +231,9 @@ Lint is collaborative — it catches well-meaning skills that won't perform well
 
 Three in-session reflexes govern skill quality during a task:
 
-- **Drift fix**: when a loaded skill has stale steps, patch immediately via `skill_manage(action='patch')` for surgical edits or `action='edit'` for structural overhauls.
+- **Drift fix**: when a loaded skill has stale steps, patch immediately via `skill_patch` for surgical edits or `skill_edit` for structural overhauls.
 - **Create**: after completing a multi-step task (3+ coherent steps), if the procedure is class-level reusable, promote it to a skill. Bar: "would I run this again for the same kind of task" — not one-offs.
-- **Offer-to-save**: after iterative work where no skill was loaded, briefly offer skill creation before invoking `skill_manage(action='create')`.
+- **Offer-to-save**: after iterative work where no skill was loaded, briefly offer skill creation before invoking `skill_create`.
 
 **Dream daemon reviewers.** After every `review_memory_nudge_interval` turns (memory domain) or `review_skill_nudge_interval` LLM iterations (skill domain), the REPL writes a KICK file to `$CO_HOME/daemons/dream/queue/` and nudges the dream daemon over a Unix socket. The daemon dequeues work, loads the session transcript up to the queued message count, and runs the appropriate domain reviewer agent via `build_task_agent` with `requires_approval=False`.
 
@@ -285,18 +285,18 @@ Curation preference order: update a skill loaded in the current session → upda
 
 ### Model-callable tools
 
-#### `skill_manage(action, name, ...)`
+The skills channel exposes four monomorphic write tools — one per operation, all in
+`co_cli/tools/system/skills.py`, all `approval=True`. `name` is required on every one; an
+invalid name (not matching `[a-z0-9_-]+`, ≤64 chars) is rejected before dispatch.
 
-Single write entry point for the skills channel. `co_cli/tools/system/skills.py`. `approval=True`; subject `tool:skill_manage:<action>:<name>`.
+| Tool | Subject | Behaviour |
+|------|---------|-----------|
+| `skill_create(name, content)` | `tool:skill_create:<name>` | Write new `<name>.md` to `user_skills_dir`; reject if exists; validate frontmatter (`description` required, ≤1024 chars); security scan; rollback on flag; reload. |
+| `skill_edit(name, content)` | `tool:skill_edit:<name>` | Full rewrite of an existing user-installed skill; validate + scan + rollback on flag; reload. |
+| `skill_patch(name, old_string, new_string, replace_all=False)` | `tool:skill_patch:<name>` | Find-and-replace within a skill body; `replace_all=False` enforces exactly one match; scan + rollback; reload. |
+| `skill_delete(name)` | `tool:skill_delete:<name>` | Remove a user-installed skill; reload; returns `shadowed_bundled=true` when a bundled skill of the same name becomes active. |
 
-| Action | Behaviour |
-|--------|-----------|
-| `create` | Write new `<name>.md` to `user_skills_dir`; reject if exists; validate frontmatter (`description` required, ≤1024 chars); security scan; rollback on flag; reload. |
-| `edit` | Full rewrite of an existing user-installed skill; validate + scan + rollback on flag; reload. |
-| `patch` | Find-and-replace within a skill body; `replace_all=False` enforces exactly one match; scan + rollback; reload. |
-| `delete` | Remove user-installed skill; reload; returns `shadowed_bundled=true` when a bundled skill of the same name becomes active. |
-
-`edit`, `patch`, and `delete` reject bundled-only skills ("copy to `~/.co-cli/skills/` first"). After every successful write, `refresh_skills(deps)` re-loads and re-indexes so the change is immediately dispatchable.
+`skill_edit`, `skill_patch`, and `skill_delete` reject bundled-only skills ("copy to `~/.co-cli/skills/` first"). After every successful write, `refresh_skills(deps)` re-loads and re-indexes so the change is immediately dispatchable.
 
 #### `skill_view(name)`
 
@@ -342,7 +342,7 @@ Returns a skill's full body, addressed by the `filename_stem` from the skill man
 | `co_cli/agent/_instructions.py` | `skill_manifest_prompt` — per-turn `@agent.instructions` callback that re-renders the manifest from live `ctx.deps.skill_index` |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_index`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer` |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
-| `co_cli/tools/system/skills.py` | `skill_view`, `skill_manage` — both call into `co_cli/skills/usage.py` on success |
+| `co_cli/tools/system/skills.py` | `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` — all call into `co_cli/skills/usage.py` on success |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review()` — daemon domain reviewers |
 | `co_cli/daemons/dream/prompts/memory_review.md` | memory reviewer instructions |
 | `co_cli/daemons/dream/prompts/skill_review.md` | skill reviewer instructions |
@@ -360,14 +360,14 @@ Returns a skill's full body, addressed by the `filename_stem` from the skill man
 | All bundled skills pass B1 (no TODO/FIXME/XXX markers) | `tests/test_flow_skill_bundled_library.py` |
 | Skill manifest renders correct entry count for bundled set | `tests/test_flow_skill_bundled_library.py` |
 | /skill-creator dispatches to DelegateToAgent | `tests/test_flow_skill_creator_dispatch.py` |
-| skill-creator body references `skill_manage(action='create')` | `tests/test_flow_skill_creator_dispatch.py` |
+| skill-creator body references `skill_create` | `tests/test_flow_skill_creator_dispatch.py` |
 | R1 fires on missing frontmatter | `tests/test_flow_skill_lint.py` |
 | R2 fires on missing, empty, or overlong description | `tests/test_flow_skill_lint.py` |
 | R3 fires on missing H1 title | `tests/test_flow_skill_lint.py` |
 | R4 fires when body exceeds 8000 chars | `tests/test_flow_skill_lint.py` |
 | B1 fires on TODO/FIXME/XXX markers | `tests/test_flow_skill_lint.py` |
 | Clean content produces no lint findings | `tests/test_flow_skill_lint.py` |
-| skill_manage success output includes lint_warnings when content has advisory findings | `tests/test_flow_skills_manage.py` |
+| skill-write success output includes lint_warnings when content has advisory findings | `tests/test_flow_skills_manage.py` |
 | Bundled skill renders as `<skill>` entry in manifest | `tests/test_flow_skill_manifest.py` |
 | User-installed skills appear in manifest | `tests/test_flow_skill_manifest.py` |
 | User skill shadows bundled skill with its own description | `tests/test_flow_skill_manifest.py` |
@@ -399,7 +399,7 @@ Returns a skill's full body, addressed by the `filename_stem` from the skill man
 | forget removes sidecar entry; no-op on unknown | `tests/test_flow_skill_usage.py` |
 | set_pinned creates stub when no record; toggles existing record | `tests/test_flow_skill_usage.py` |
 | bump_view swallows write failures (best-effort) | `tests/test_flow_skill_usage.py` |
-| skill_manage create/view/patch/edit/delete update sidecar counters | `tests/test_flow_skill_usage.py` |
+| skill_create/skill_view/skill_patch/skill_edit/skill_delete update sidecar counters | `tests/test_flow_skill_usage.py` |
 | /skills pin sets pinned flag; /skills unpin clears it | `tests/test_flow_skills_pin.py` |
 | /skills pin on bundled skill is rejected | `tests/test_flow_skills_pin.py` |
 | /skills pin on unknown skill is rejected | `tests/test_flow_skills_pin.py` |

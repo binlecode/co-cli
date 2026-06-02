@@ -1,6 +1,6 @@
 """Default source_type for agent-initiated saves must be 'manual', not 'detected'.
 
-Agent-initiated `memory_manage(create)` lands here when no source_type is passed.
+Agent-initiated `memory_create` lands here when no source_type is passed.
 The default reflects the de-facto writer (agent deliberately curating), not the
 legacy 'detected' label (background-reviewer pattern detection — no longer used).
 """

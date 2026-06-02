@@ -1,6 +1,7 @@
 """Model-callable skill discovery, inspection, and lifecycle tools.
 
-Hermes-parity port: skill_view (read surface) and skill_manage (write surface).
+Hermes-parity port: skill_view (read surface) and the monomorphic write tools
+skill_create / skill_edit / skill_patch / skill_delete.
 Read surface: hermes-agent/tools/skills_tool.py:1440-1512.
 Write surface: hermes-agent/tools/skill_manager_tool.py:647-720.
 
@@ -10,8 +11,8 @@ Co-cli's flat-file skill model has no linked files; skill_view returns the SKILL
 import json
 import math
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
@@ -41,8 +42,8 @@ async def skill_view(
 ) -> ToolReturn:
     """Load a skill's full SKILL.md content.
 
-    Call before skill_manage(action='edit') or skill_manage(action='patch')
-    to read current content — don't edit blind.
+    Call before skill_edit(name) or skill_patch(name, ...) to read current
+    content — don't edit blind.
 
     Args:
         name: Skill name, e.g. "deep-research" (the filename_stem from the skill manifest).
@@ -61,7 +62,7 @@ async def skill_view(
 
 
 # ---------------------------------------------------------------------------
-# skill_manage — write surface
+# skill write surface — skill_create / skill_edit / skill_patch / skill_delete
 # ---------------------------------------------------------------------------
 
 _NAME_RE: re.Pattern = re.compile(r"^[a-z0-9_-]+$")
@@ -244,7 +245,7 @@ def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
     if path is None:
         if (ctx.deps.skills_dir / f"{name}.md").exists():
             return tool_error(
-                f"Skill {name!r} is bundled and cannot be modified via skill_manage. "
+                f"Skill {name!r} is bundled and cannot be deleted. "
                 "Copy it to ~/.co-cli/skills/ first.",
                 ctx=ctx,
             )
@@ -267,84 +268,144 @@ def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
     )
 
 
-def _skill_manage_approval_subject(args: dict) -> ApprovalSubject:
-    action = args.get("action", "unknown")
-    name = args.get("name", "")
-    return ApprovalSubject(
-        tool_name="skill_manage",
-        kind=ApprovalKindEnum.TOOL,
-        value=f"tool:skill_manage:{action}:{name}",
-        display=f"skill_manage(action={action!r}, name={name!r})",
-        can_remember=True,
-    )
+def _subject_fn(tool_name: str, arg_key: str) -> Callable[[dict], ApprovalSubject]:
+    """Build an approval-subject fn that keys on a single name-bearing arg."""
+
+    def subject(args: dict) -> ApprovalSubject:
+        name = args.get(arg_key, "unknown")
+        return ApprovalSubject(
+            tool_name=tool_name,
+            kind=ApprovalKindEnum.TOOL,
+            value=f"tool:{tool_name}:{name}",
+            display=f"{tool_name}(name={name!r})",
+            can_remember=True,
+        )
+
+    return subject
 
 
-@agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS,
-    approval=True,
-    approval_subject_fn=_skill_manage_approval_subject,
-)
-async def skill_manage(
-    ctx: RunContext[CoDeps],
-    action: Literal["create", "edit", "patch", "delete"],
-    name: str = "",
-    content: str | None = None,
-    old_string: str | None = None,
-    new_string: str | None = None,
-    replace_all: bool = False,
-) -> ToolReturn:
-    """Create, edit, patch, or delete a user-installed skill.
-
-    Behavioral guidance:
-
-    Create when: a multi-step procedure (3+ coherent steps) succeeded and
-    is likely to recur for the same kind of task — or the user explicitly
-    asks to save a workflow. Name by task type, not the specific instance.
-    Content must conform to skill.md §6 (description, H1, **Invocation:**
-    line, at least one ## Phase N — <name> section).
-
-    Read first: call skill_view(name) before edit or patch to inspect
-    current content.
-
-    patch immediately when: you loaded and executed a skill and hit an
-    issue not covered by it — wrong command, missing step, stale output.
-    Fix the skill before finishing the task; don't leave it degraded.
-
-    offer-to-save: after difficult or iterative work, briefly offer the
-    user a save — "Want me to save this as a /<task-type> skill?" Confirm
-    before invoking create on their behalf.
-
-    Bundled skills are read-only; copy to ~/.co-cli/skills/ first to modify them.
-
-    Actions:
-      create  Write a new skill (requires content with valid frontmatter + description).
-      edit    Replace an existing user-installed skill's full content.
-      patch   Surgical find-and-replace within a skill body.
-      delete  Remove a user-installed skill.
-
-    Args:
-        action:      One of create | edit | patch | delete.
-        name:        Skill name.
-        content:     Full SKILL.md content for create/edit (frontmatter + body).
-        old_string:  Text to find for patch.
-        new_string:  Replacement text for patch.
-        replace_all: Replace all matches; default requires exactly one.
-    """
+def _require_valid_name(ctx: RunContext[CoDeps], name: str) -> ToolReturn | None:
+    """Return a tool_error when the skill name is invalid, else None."""
     if not _NAME_RE.match(name) or len(name) > 64:
         return tool_error(
             f"Invalid skill name {name!r}. "
             "Name must be lowercase letters, digits, hyphens, or underscores; max 64 chars.",
             ctx=ctx,
         )
-    if action == "create":
-        return _skill_create(ctx, name, content)
-    if action == "edit":
-        return _skill_edit(ctx, name, content)
-    if action == "patch":
-        return _skill_patch(ctx, name, old_string, new_string, replace_all)
-    if action == "delete":
-        return _skill_delete(ctx, name)
-    return tool_error(
-        f"Unknown action {action!r}. Valid actions: create, edit, patch, delete.",
-        ctx=ctx,
-    )
+    return None
+
+
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    approval=True,
+    approval_subject_fn=_subject_fn("skill_create", "name"),
+)
+async def skill_create(
+    ctx: RunContext[CoDeps],
+    name: str,
+    content: str,
+) -> ToolReturn:
+    """Create a new user-installed skill.
+
+    Create when: a multi-step procedure (3+ coherent steps) succeeded and is
+    likely to recur for the same kind of task — or the user explicitly asks to
+    save a workflow. Name by task type, not the specific instance.
+
+    offer-to-save: after difficult or iterative work, briefly offer the user a
+    save — "Want me to save this as a /<task-type> skill?" Confirm before
+    creating on their behalf.
+
+    Args:
+        name: Skill name (lowercase letters, digits, hyphens, underscores; max 64).
+        content: Full SKILL.md content — must conform to skill.md §6: frontmatter
+            with a non-empty description, H1, **Invocation:** line, at least one
+            ## Phase N — <name> section.
+    """
+    err = _require_valid_name(ctx, name)
+    if err is not None:
+        return err
+    return _skill_create(ctx, name, content)
+
+
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    approval=True,
+    approval_subject_fn=_subject_fn("skill_edit", "name"),
+)
+async def skill_edit(
+    ctx: RunContext[CoDeps],
+    name: str,
+    content: str,
+) -> ToolReturn:
+    """Replace an existing user-installed skill's full content.
+
+    Read first: call skill_view(name) before editing to inspect current content
+    — don't edit blind. Use skill_patch for a surgical find-and-replace; use this
+    for a structural overhaul.
+
+    Bundled skills are read-only; copy to ~/.co-cli/skills/ first to modify them.
+
+    Args:
+        name: Skill name (the filename_stem of an existing user skill).
+        content: Full replacement SKILL.md content (frontmatter + body).
+    """
+    err = _require_valid_name(ctx, name)
+    if err is not None:
+        return err
+    return _skill_edit(ctx, name, content)
+
+
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    approval=True,
+    approval_subject_fn=_subject_fn("skill_patch", "name"),
+)
+async def skill_patch(
+    ctx: RunContext[CoDeps],
+    name: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> ToolReturn:
+    """Surgical find-and-replace within an existing skill body.
+
+    patch immediately when: you loaded and executed a skill and hit an issue not
+    covered by it — wrong command, missing step, stale output. Fix the skill
+    before finishing the task; don't leave it degraded. Call skill_view(name)
+    first to read current content.
+
+    Bundled skills are read-only; copy to ~/.co-cli/skills/ first to modify them.
+
+    Args:
+        name: Skill name (the filename_stem of an existing user skill).
+        old_string: Text to find. Must match exactly once unless replace_all=True.
+        new_string: Replacement text.
+        replace_all: Replace every match (default False = require exactly one match).
+    """
+    err = _require_valid_name(ctx, name)
+    if err is not None:
+        return err
+    return _skill_patch(ctx, name, old_string, new_string, replace_all)
+
+
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    approval=True,
+    approval_subject_fn=_subject_fn("skill_delete", "name"),
+)
+async def skill_delete(
+    ctx: RunContext[CoDeps],
+    name: str,
+) -> ToolReturn:
+    """Delete a user-installed skill.
+
+    Bundled skills are read-only and cannot be deleted; only user skills under
+    ~/.co-cli/skills/ can be removed.
+
+    Args:
+        name: Skill name (the filename_stem of an existing user skill).
+    """
+    err = _require_valid_name(ctx, name)
+    if err is not None:
+        return err
+    return _skill_delete(ctx, name)

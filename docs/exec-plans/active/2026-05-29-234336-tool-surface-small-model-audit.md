@@ -175,25 +175,120 @@ and tests.
   - `memory_append(filename_stem, content)`
   - `memory_replace(filename_stem, section, content)`
   - `memory_delete(filename_stem)`
-  - Append/replace/delete already dispatch to separate `_handle_*` fns — only the surface is
-    conflated. Type `source_type` as the enum/Literal so invalid values are schema-rejected.
+  - Append/replace/delete already dispatch to separate `_handle_*` fns (`_handle_mutate` covers
+    both append and replace) — only the surface is conflated. Type `source_type` as
+    `SourceTypeEnum` so invalid values are schema-rejected.
+- **Integration touch-points (mandatory — zero-backward-compat removes `memory_manage`):**
+  - **Dream `memory_reviewer` (behavioral):** `daemons/dream/_reviewer.py:52-55` grants
+    `tool_names=("memory_search", "memory_manage")`; update to the new write tool(s) it actually
+    needs (`memory_create`). Reword its prompt `daemons/dream/prompts/memory_review.md:10,12`
+    (`create one with memory_manage` → `memory_create`; `on every memory_manage call set
+    source_type='session_review'`). Without this the dream daemon can no longer write memory.
+  - **Approval-subject fns (behavioral):** `_memory_manage_approval_subject` reads `args["action"]`
+    to build `tool:memory_manage:<action>:<name>`. The split has no `action` arg — give each new
+    tool its own subject fn (`tool:memory_create:<name_title>`, `tool:memory_append:<stem>`, etc.).
+  - **Display map:** `tools/display.py:23` `"memory_manage": "name"` → per-tool entries
+    (`memory_create`→`name_title`, append/replace/delete→`filename_stem`).
+  - **Spec `docs/specs/memory.md` (heavier than `tools.md`):** signature table row (`:105`),
+    architecture diagram (`:24,31`), article-accumulation prose (`:170,178,243,244`), and the
+    `co_cli/tools/memory/` surface line (`:39`).
+  - **`deps.py:157` comment** mentions `memory_manage(create|append|replace)` — update names.
 - **Fallback if unsplit:** every conditional Args line must state `REQUIRED for action=X; ignored
   otherwise. Default None.` and add an Examples block (create/append/replace/delete one-liners).
+- **Delivered (✓ DONE):** split into `memory_create(name_title, content, kind,
+  source_type=SourceTypeEnum.MANUAL, source_url=None)`, `memory_append(filename_stem, content)`,
+  `memory_replace(filename_stem, section, content)`, `memory_delete(filename_stem)`. `source_type`
+  typed as `SourceTypeEnum` (schema-rejects invalid values); per-tool monomorphic params, no
+  discriminator, `name` overload resolved (`name_title` vs `filename_stem`). Internal
+  `_handle_create`/`_handle_mutate`/`_handle_delete` retained as thin-wrapper targets; trace spans
+  renamed `co.memory.{memory_create,memory_mutate,memory_delete}`. Approval subjects now
+  per-tool via `_subject_fn(tool_name, arg_key)` (`tool:memory_create:<name_title>`, etc.).
+  Integration touch-points all updated: `agent/toolset.py` import, `tools/display.py` (4 entries),
+  dream `_reviewer.py` `MEMORY_REVIEW_SPEC.tool_names` + `prompts/memory_review.md`,
+  `deps.py` comment, rule prompt `context/rules/07_memory_protocol.md`, `skills/triage.md`.
+  Specs synced: `memory.md` (write table → 4 rows, diagram, tier table, surface line, growth-pipeline
+  prose, source_type table), `tools.md` (group, count 30→33, Files table), `dream.md` (×3),
+  `01-system.md` (×2), `skills.md`, `observability.md`. Evals reworded (`eval_memory.py`,
+  `eval_trust_visibility.py`, `eval_domain_review.py`, `_timeouts.py`). Tests rewritten across 6
+  files. Lint clean; full suite 654 passed.
 
-### 3b. `skill_manage(action=…)` → split
-- **File:** `co_cli/tools/system/skills.py:297-360`
-- **Critical issue:** `action` bundles create/edit/patch/delete; of 6 params, validity is
-  per-action. create/edit use `content`; patch uses `old_string`/`new_string`/`replace_all`;
-  delete uses only `name`.
-- **Dead/conditional params (HIGH each):** `content` (create/edit-only `:303,338`), `old_string`
-  (patch-only `:304,339`), `new_string` (patch-only `:305,340`), `replace_all` (patch-only
-  `:306,341`; default `False` not named inline).
-- **Required-as-optional (HIGH):** `name` defaults to `''` (`:300`) but every action requires a
-  valid name (`_NAME_RE` guard `:343`) — required field presented as optional.
-- **Fix (split):** `skill_create(name, content)`, `skill_edit(name, content)`,
-  `skill_patch(name, old_string, new_string, replace_all=False)`, `skill_delete(name)`. Internal
-  `_skill_create/_skill_edit/_skill_patch/_skill_delete` helpers exist (`:132-277`) → thin
-  wrappers. Make `name` required (`name: str`, no default) in all four.
+### 3b. `skill_manage(action=…)` → split — ✓ DONE
+- **File:** `co_cli/tools/system/skills.py:287-350` (decorator `:282-286`; signature `:287-295`;
+  docstring `:296-332`; dispatch `:333-350`).
+- **Critical issue:** `action` (`:289`, `Literal["create","edit","patch","delete"]`) bundles four
+  operations; of 6 params, validity is per-action. create/edit use `content`; patch uses
+  `old_string`/`new_string`/`replace_all`; delete uses only `name`.
+- **Dead/conditional params (HIGH each):** `content` (create/edit-only — Args `:328`, consumed in
+  `_skill_create:123`/`_skill_edit:156`), `old_string` (patch-only — Args `:329`, `_skill_patch:192`),
+  `new_string` (patch-only — Args `:330`, `_skill_patch:194`), `replace_all` (patch-only — Args `:331`,
+  `_skill_patch:210`; default `False` not named inline).
+- **Required-as-optional (HIGH):** `name` defaults to `""` (`:290`) but every action requires a
+  valid name (`_NAME_RE` guard `:333`) — a required field presented as optional.
+- **Fix (split):**
+  - `skill_create(name, content)`
+  - `skill_edit(name, content)`
+  - `skill_patch(name, old_string, new_string, replace_all=False)`
+  - `skill_delete(name)`
+  - Internal `_skill_create`/`_skill_edit`/`_skill_patch`/`_skill_delete` helpers already exist
+    (`:122`, `:155`, `:185`, `:242`) → thin wrappers, exactly as 3a wrapped `_handle_*`. Make `name`
+    required (`name: str`, no default) in all four. The `_NAME_RE` validation currently in the
+    `skill_manage` body (`:333-338`) moves into each wrapper (or a shared `_require_valid_name`
+    helper) since there is no longer a single dispatch entry. Mirror the existing decorator attrs
+    (`visibility=ALWAYS`, `approval=True`) per tool; do **not** add `is_concurrent_safe` — a skill
+    write triggers a global `refresh_skills`, so the writes are not independently concurrent-safe.
+  - **Wrappers add nothing beyond dispatch.** The existing helpers already own all the side-effects —
+    `model_requests_since_skill_review = 0` resets (`:151/181/238`), the `>= 30` `size_warning`
+    (`:146`), and the usage-counter calls (`record_create`/`bump_patch`/`forget`). These survive
+    untouched inside `_skill_create/_edit/_patch/_delete`; do NOT duplicate them into the wrappers
+    (double-bump). `test_skill_manage_resets.py` already covers the reset behavior.
+- **Integration touch-points (mandatory — zero-backward-compat removes `skill_manage`):**
+  - **`agent/toolset.py` import (`:37`):** `from co_cli.tools.system.skills import skill_manage,
+    skill_view` → `skill_create, skill_delete, skill_edit, skill_patch, skill_view`. Registration is
+    decorator + import only (no central list), same as 3a.
+  - **Approval-subject fns (behavioral):** `_skill_manage_approval_subject` (`skills.py:270-279`)
+    reads `args["action"]` to build `tool:skill_manage:<action>:<name>`. The split has no `action`
+    arg. Replace with the shipped `_subject_fn(tool_name, arg_key)` factory from
+    `tools/memory/manage.py:21-34` (added by 3a) — `_subject_fn("skill_create","name")`, etc. New
+    subjects: `tool:skill_create:<name>`, `tool:skill_edit:<name>`, `tool:skill_patch:<name>`,
+    `tool:skill_delete:<name>`. Delete the old `_skill_manage_approval_subject`.
+  - **Dream `skill_reviewer` (behavioral):** `daemons/dream/_reviewer.py:67-69`
+    `SKILL_REVIEW_SPEC.tool_names` grants `skill_manage`. Replace with the write tools it actually
+    uses — `skill_create`, `skill_edit`, `skill_patch` — plus the existing `skill_view`/`memory_search`.
+    Do **not** grant `skill_delete`: `prompts/skill_review.md:17` explicitly forbids deletion. Reword
+    that prompt line ("Call skill_manage(action='delete')" → "Delete a skill") so it no longer names
+    a now-nonexistent action. Without this grant change the dream skill reviewer can no longer write.
+  - **`skill_view` docstring (same file, `:42-48`):** the "Call before `skill_manage(action='edit')`
+    or `skill_manage(action='patch')`" steer must become `skill_edit`/`skill_patch`.
+  - **Display map:** `tools/display.py` `TOOL_START_DISPLAY_ARG` (`:15-34`) has **no** `skill_manage`
+    entry today. Add four entries `skill_create`/`skill_edit`/`skill_patch`/`skill_delete` → `"name"`
+    (3a's memory entries each map to that tool's real name-bearing arg — `name_title`/`filename_stem`;
+    here all four skill tools take `name`, so all four map to `"name"`).
+  - **Rule prompts:** `context/rules/06_skill_protocol.md` (4 refs — patch `:39`, edit `:41`, create
+    `:50`, create `:67`) and `context/rules/07_memory_protocol.md:81` (`skill_manage(action='create')`)
+    → split tool names.
+  - **skill-creator skill:** `skills/skill-creator.md` frontmatter description (`:2`) and body (`:47`)
+    reference `skill_manage(action='create')` → `skill_create`.
+  - **`deps.py:161` comment** mentions `skill_manage(create|edit|patch)` → update names.
+- **Spec sync (post-delivery via sync-doc, enumerated for completeness — mirrors 3a):**
+  - `docs/specs/skills.md` (heaviest): refresh_skills caller (`:29`), single-write-entry-point row
+    (`:30`), Path-3 prose (`:52`), dream-reviewer prose (`:54`), lint-attach prose (`:213`), drift-fix
+    prose (`:234`), offer-to-save prose (`:236`), the `skill_manage(action, name, ...)` signature
+    heading + subject line (`:288-290`), Files table (`:345`), verification rows (`:363,370,402`).
+  - `docs/specs/tools.md`: native-tool count **33 → 36**, Tool Groups row (`:32`), Files table (`:278`).
+  - `docs/specs/01-system.md`, `docs/specs/dream.md`: `skill_manage` references.
+- **Tests (rewrite per new surface):**
+  - `tests/test_flow_skills_manage.py` (~20 `skill_manage(action=…)` calls → split tools).
+  - `tests/tools/system/test_skill_manage_resets.py` (create/edit/patch reset + delete-no-reset).
+  - `tests/test_flow_skill_usage.py` (sidecar-counter integration via the tools).
+  - `tests/test_flow_skill_creator_dispatch.py` (assertion that the dispatched input references
+    `skill_create`, not `skill_manage`).
+  - Evals: `eval_domain_review.py` reword `skill_manage` → split names. `eval_skills.py` is mostly a
+    reword **except `case_w4_e_discovery` (`:527-601`)** — a gated re-flip diagnostic hard-keyed on
+    `deps.tool_index.get("skill_manage")` + a `DEFERRED`-visibility gate (`:588-600`). After the split
+    that key no longer exists, so it falls permanently into its inert SOFT_PASS branch and the
+    diagnostic goes un-revivable (it self-guards, so it won't redden the suite — it just dies silently).
+    Decide explicitly: **retarget the discovery probe at one split tool** (e.g. flip `skill_create` to
+    DEFERRED as the probe), or **retire W4.E** with a note. Not a blanket reword.
 - **Fallback if unsplit:** state per-action ignored params + defaults inline (the four HIGH
   rewrites above) and make `name` required.
 
@@ -310,7 +405,63 @@ Each near-duplicate pair needs reciprocal when-to-use / when-NOT-to-use lines.
    Recommendation: split (matches doctrine and the `file_search` precedent; internal handlers
    already exist). Splitting raises the native-tool count (3 tools → ~11), which trades token
    budget for correctness — weigh against the `prefill-trim` budget guard.
+   **Resolved at Gate 1 for Task 3b (2026-06-01): SPLIT.** `memory_manage` (3a) already shipped as a
+   split; leaving `skill_manage` discriminated would be incoherent, and the `_skill_*` helpers already
+   exist. The +3 native-tool count is doctrine-aligned (`feedback_tool_split_small_model`), not a
+   prefill regression. (3c `file_patch` remains open.)
 2. **`task_start` working-dir security contract** — enforce workspace boundary (behavior change)
    vs document absolute-path acceptance (doc-only).
 3. **`google_drive_search`** — expose `max_results` for family parity (signature change) vs
    document the fixed page size (doc-only).
+
+## Final — Team Lead
+
+Plan approved.
+
+## Gate 1 — PO + TL verdict (Task 3b, 2026-06-01)
+
+**Status: PASS.** Scoped to Task 3b (`skill_manage` split) only.
+
+- **PO:** right problem (polymorphic write tool, 1 critical + 5 HIGH, violates the small-model
+  monomorphic doctrine), correct scope (one split + integration touch-points, mirrors shipped 3a, no
+  creep), value justified (+3 native-tool count is doctrine-aligned, not a prefill regression).
+- **TL:** code refs verified; thin-wrapper-over-existing-helpers shape confirmed; all behavioral
+  touch-points covered (dream `skill_reviewer` grant + prompt, `_subject_fn` swap, `skill_view`
+  self-ref, display map, rules 06/07, skill-creator, `deps.py`); W4.E eval + wrappers-thin hazards
+  pinned.
+- **Open decision #1 resolved for 3b: SPLIT** (see updated note above).
+
+> Cleared to implement. Run: `/orchestrate-dev tool-surface-small-model-audit` (Task 3b).
+> Tasks 3c, 4, 5 and open decisions #2/#3 remain unapproved — out of this gate.
+
+## Delivery Summary — Task 3b (2026-06-01)
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| 3b — `skill_manage` → split | 4 monomorphic tools registered, `skill_manage` removed, scoped tests green | ✓ pass |
+
+**What shipped:**
+- `co_cli/tools/system/skills.py` — `skill_manage(action=…)` replaced by `skill_create(name, content)`,
+  `skill_edit(name, content)`, `skill_patch(name, old_string, new_string, replace_all=False)`,
+  `skill_delete(name)`. All `approval=True`, `name` required, validated via `_require_valid_name`.
+  Thin wrappers over the unchanged `_skill_*` helpers (no duplicated side-effects). Per-tool approval
+  subjects via the `_subject_fn(tool_name, arg_key)` factory; old `_skill_manage_approval_subject`
+  removed. `skill_view` docstring + module docstring + delete error message de-staled.
+- Integration: `agent/toolset.py` import; `tools/display.py` (+4 entries); dream `_reviewer.py`
+  `SKILL_REVIEW_SPEC` grant (create/edit/patch, not delete) + `prompts/skill_review.md` reword;
+  `context/rules/06_skill_protocol.md` (×3) + `07_memory_protocol.md`; `skills/skill-creator.md`
+  (×2); `deps.py` comment.
+- Tests/evals (Dev-1): `test_flow_skills_manage.py`, `test_skill_manage_resets.py`,
+  `test_flow_skill_usage.py`, `test_flow_skill_creator_dispatch.py` rewritten; `eval_skills.py`
+  (W4.E discovery probe retargeted to `skill_create`; W4.C/D renamed) + `eval_domain_review.py`.
+- Registration verified live: native index lists `skill_create/edit/patch/delete/view`; `skill_manage` absent.
+
+**Tests:** scoped — 85 passed (57 skill-split + 28 adjacent dream/pin/session-review), 0 failed.
+**Doc Sync:** fixed — skills.md, tools.md (count 33→36), 01-system.md, dream.md, uat_evals.md. Zero
+residual `skill_manage` in live surface (only an accurate test-file *path* reference remains).
+
+**Overall: DELIVERED**
+Task 3b shipped; surface is now monomorphic per the small-model doctrine. 3c (`file_patch`) and Tasks
+4/5 remain unstarted.
+
+**Next step:** `/review-impl tool-surface-small-model-audit` — full suite + evidence scan → verdict.

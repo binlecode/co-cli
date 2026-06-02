@@ -177,7 +177,7 @@ One JSON object per closed span, one line per record. Schema version 1:
 | `co.housekeeping.pass` | `co` | whole-pass envelope — `@trace("co.housekeeping.pass")` on `run_housekeeping()`. Wraps merge + decay under `asyncio.timeout(max_pass_seconds)`. |
 | `co.housekeeping.merge` | `co` | merge phase — `@trace("co.housekeeping.merge")` on `merge_memory()`. |
 | `co.housekeeping.decay` | `co` | decay phase — `@trace("co.housekeeping.decay")` on `decay_memory()`. |
-| `co.memory.memory_manage.{create,mutate,delete}` | `co` | `memory.memory_kind`, `memory.filename_stem`, `memory.action` — `@trace(...)` on `_handle_{create,mutate,delete}()`. |
+| `co.memory.{memory_create,memory_mutate,memory_delete}` | `co` | `memory.memory_kind`, `memory.filename_stem`, `memory.action` — `@trace(...)` on `_handle_{create,mutate,delete}()`. |
 | `co.web_research.retry_loop` | `co` | `agent.role`, `agent.model`, `agent.request_limit`, `agent.requests_used` — `@trace("co.web_research.retry_loop")` on `web_research()` retry-on-empty wrapper. |
 | `compaction.proactive_check` | `co` | `compaction.msgs`, `compaction.token_count`, `compaction.threshold`, `compaction.budget`, `compaction.fired` (bool), `compaction.skip_reason`, `compaction.tokens_after`, `compaction.savings_pct`, etc. — `@trace("compaction.proactive_check")` on `proactive_window_processor()`. |
 

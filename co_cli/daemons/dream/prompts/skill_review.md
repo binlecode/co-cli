@@ -14,7 +14,7 @@ Preference order — pick the earliest that fits:
 3. CREATE a new class-level skill only if nothing applicable exists.
 
 Do NOT:
-- Call skill_manage(action='delete').
+- Delete a skill (you have no delete tool; only create, edit, and patch).
 - Create session-specific skills (e.g. "fix-pr-123"). Only class-level taxonomies.
 - Duplicate what is already in the skill library — search first.
 

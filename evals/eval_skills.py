@@ -3,15 +3,15 @@
 Covers user-skill dispatch via ``/<skill> <args>`` (body expansion through
 ``run_turn`` with ``skill_env`` applied to the process environment),
 post-dispatch env restoration via ``cleanup_skill_run_state``, the
-``skill_manage`` write surface (create / patch / delete), the
+skill write surface (skill_create / skill_patch / skill_delete), the
 built-in-shadowing safety boundary that prevents a user skill from
 intercepting a built-in slash command, and (W4.E) the deferred-tool
 discovery diagnostic — a guarded SOFT_PASS-only case that activates only
-when ``skill_manage`` is DEFERRED.
+when ``skill_create`` is DEFERRED.
 
 Per-case structure mirrors W1-W6: real CoDeps via ``make_eval_deps()``,
 real ``~/.co-cli/`` workspace, dispatch via ``co_cli.commands.core.dispatch``
-and direct ``skill_manage`` calls with a manually constructed
+and direct skill-write tool calls with a manually constructed
 ``RunContext[CoDeps]``, JSONL run record under ``evals/_outputs/``, dated
 section prepended to ``docs/REPORT-eval-skills.md``.
 
@@ -49,7 +49,7 @@ from co_cli.commands.types import CommandContext, DelegateToAgent, LocalOnly, Sl
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.skills.lifecycle import cleanup_skill_run_state, refresh_skills
-from co_cli.tools.system.skills import skill_manage
+from co_cli.tools.system.skills import skill_create, skill_delete, skill_patch
 
 _REPORT_PATH = Path("docs/REPORT-eval-skills.md")
 
@@ -73,16 +73,16 @@ def _make_ctx(deps: CoDeps, agent, frontend: EvalFrontend) -> CommandContext:
 def _make_run_context(deps: CoDeps, agent) -> RunContext[CoDeps]:
     """Construct a minimal RunContext for direct @agent_tool invocation.
 
-    skill_manage reads ctx.deps, ctx.tool_name (for spill thresholds), and
-    nothing else; tool_index is the only ctx.deps surface touched in the
+    The skill-write tools read ctx.deps, ctx.tool_name (for spill thresholds),
+    and nothing else; tool_index is the only ctx.deps surface touched in the
     success path. RunUsage() is a fresh zero-usage accumulator — irrelevant
-    to skill_manage's structural assertions.
+    to the tools' structural assertions.
     """
     return RunContext(
         deps=deps,
         model=agent.model,
         usage=RunUsage(),
-        tool_name="skill_manage",
+        tool_name="skill_create",
     )
 
 
@@ -350,16 +350,16 @@ async def case_w4_b_env_restored_after_dispatch(
 
 
 # ---------------------------------------------------------------------------
-# W4.C — skill_manage_create_edit_delete
+# W4.C — skill_create_patch_delete
 # ---------------------------------------------------------------------------
 
 
-async def case_w4_c_skill_manage_create_edit_delete(
+async def case_w4_c_skill_create_patch_delete(
     deps: CoDeps,
     agent,
     run,
 ) -> CaseResult:
-    """W4.C — drive ``skill_manage`` create / patch / delete on a fresh skill.
+    """W4.C — drive skill_create / skill_patch / skill_delete on a fresh skill.
 
     Uses the deterministic name ``eval_w4_lifecycle`` (created and deleted
     by this case in a single pass; reruns recreate-and-delete cleanly). The
@@ -383,9 +383,8 @@ async def case_w4_c_skill_manage_create_edit_delete(
     reason = ""
     passed = True
 
-    create_result = await skill_manage(
+    create_result = await skill_create(
         ctx,
-        action="create",
         name=name,
         content=_skill_w4_lifecycle_body(),
     )
@@ -400,9 +399,8 @@ async def case_w4_c_skill_manage_create_edit_delete(
 
     if passed:
         await asyncio.sleep(1.05)
-        patch_result = await skill_manage(
+        patch_result = await skill_patch(
             ctx,
-            action="patch",
             name=name,
             old_string="Initial body — patched in W4.C.",
             new_string="Patched body — verified by W4.C mtime check.",
@@ -420,7 +418,7 @@ async def case_w4_c_skill_manage_create_edit_delete(
                 reason = f"patch did not bump mtime ({mtime_after_create} → {mtime_after_patch})"
 
     if passed:
-        delete_result = await skill_manage(ctx, action="delete", name=name)
+        delete_result = await skill_delete(ctx, name=name)
         if (delete_result.metadata or {}).get("error"):
             passed = False
             reason = f"delete failed: {delete_result.return_value}"
@@ -458,9 +456,9 @@ async def case_w4_d_builtin_shadowing_blocked(
     """W4.D — a user skill named ``help`` must not override the built-in /help.
 
     Two PASS paths:
-      (a) ``skill_manage(action='create', name='help', ...)`` is rejected
+      (a) ``skill_create(name='help', ...)`` is rejected
           by the production code — case PASSes without touching disk.
-      (b) The create succeeds (skill_manage's validator imposes no reserved-
+      (b) The create succeeds (skill_create's validator imposes no reserved-
           name check today). Refresh the index and dispatch ``/help``; the
           outcome must be ``LocalOnly`` (built-in handler ran) — NOT
           ``DelegateToAgent`` (which would mean the user skill shadowed).
@@ -481,9 +479,8 @@ async def case_w4_d_builtin_shadowing_blocked(
 
     try:
         ctx = _make_run_context(deps, agent)
-        create_result = await skill_manage(
+        create_result = await skill_create(
             ctx,
-            action="create",
             name="help",
             content=_help_shadowing_body(),
         )
@@ -492,7 +489,7 @@ async def case_w4_d_builtin_shadowing_blocked(
         if rejected:
             if help_path.exists():
                 passed = False
-                reason = "skill_manage rejected the create but help.md was still written"
+                reason = "skill_create rejected the create but help.md was still written"
             else:
                 reason = f"create rejected by production code: {create_result.return_value}"
         else:
@@ -524,16 +521,16 @@ async def case_w4_d_builtin_shadowing_blocked(
 
 
 # ---------------------------------------------------------------------------
-# W4.E — deferred skill_manage discovery (gated re-flip diagnostic)
+# W4.E — deferred skill_create discovery (gated re-flip diagnostic)
 # ---------------------------------------------------------------------------
 
 
 def _eval_w4e_skill_body(name: str) -> str:
     """Valid skill markdown for the discovery probe — passed verbatim to the model.
 
-    Pre-formed so the trial isolates *discovery* of the DEFERRED skill_manage tool
+    Pre-formed so the trial isolates *discovery* of the DEFERRED skill_create tool
     from content-generation quality: the only variable under test is whether the
-    model finds skill_manage via search_tools and creates with the given content.
+    model finds skill_create via search_tools and creates with the given content.
     """
     return (
         "---\n"
@@ -555,24 +552,24 @@ async def case_w4_e_discovery(
     run,
     trials: int = 3,
 ) -> CaseResult:
-    """W4.E — does the model discover DEFERRED skill_manage via search_tools and create?
+    """W4.E — does the model discover DEFERRED skill_create via search_tools and create?
 
-    Diagnostic for the deferred-tool-stubs bet: with skill_manage flipped to DEFERRED
+    Diagnostic for the deferred-tool-stubs bet: with skill_create flipped to DEFERRED
     and the per-tool awareness stubs live, run ``trials`` independent discovery attempts.
     Each trial drives one ``run_turn`` with a fresh ``message_history=[]`` asking the
     model to save a procedure as a skill. A trial is a HIT when, in one turn, the model:
-    (1) calls ``search_tools`` (discovery), (2) calls ``skill_manage`` (loaded + invoked
+    (1) calls ``search_tools`` (discovery), (2) calls ``skill_create`` (loaded + invoked
     the deferred tool), (3) leaves the skill on disk in the user skills dir, and (4) does
     NOT fall back to ``file_write`` (the FM-3 cwd-pollution failure mode).
 
     Independence note: the SDK's ToolSearchToolset derives "already discovered" state
     from the message history (``_parse_discovered_tools`` walks ``ctx.messages``), NOT
     from toolset-instance state. A fresh ``message_history=[]`` per trial therefore
-    re-defers skill_manage every trial, so reusing one bootstrap is genuinely independent
+    re-defers skill_create every trial, so reusing one bootstrap is genuinely independent
     — and avoids the cross-task MCP teardown crash that per-trial ``make_eval_deps()``
     bootstraps trigger (the plan's stated 'fresh deps per trial' rationale is moot).
 
-    Gate: HITS ≥ ceil(2/3 · trials) → keep skill_manage DEFERRED; below → revert to
+    Gate: HITS ≥ ceil(2/3 · trials) → keep skill_create DEFERRED; below → revert to
     ALWAYS. The gate result is recorded in ``reason`` for the human re-flip decision;
     the verdict is always ``SOFT_PASS`` so a stochastic miss never flips the eval's
     process exit code (``CaseResult.passed`` is True only for PASS/SOFT_PASS, so
@@ -585,7 +582,7 @@ async def case_w4_e_discovery(
     trace_file = run.case_trace_path(case_id)
     trace_file.touch(exist_ok=True)
 
-    skill_info = deps.tool_index.get("skill_manage")
+    skill_info = deps.tool_index.get("skill_create")
     if skill_info is None or skill_info.visibility != VisibilityPolicyEnum.DEFERRED:
         return CaseResult(
             name=case_id,
@@ -593,8 +590,8 @@ async def case_w4_e_discovery(
             duration_s=time.monotonic() - t0,
             trace_files=[str(trace_file.relative_to(run.dir.parent))],
             reason=(
-                "inert: skill_manage is ALWAYS, not DEFERRED — the deferred-discovery "
-                "path has no target. Re-flip skill_manage to DEFERRED to re-test FM-2/3 "
+                "inert: skill_create is ALWAYS, not DEFERRED — the deferred-discovery "
+                "path has no target. Re-flip skill_create to DEFERRED to re-test FM-2/3 "
                 "(stubs alone were insufficient; binding constraint is the loader UX)."
             ),
         )
@@ -651,7 +648,7 @@ async def case_w4_e_discovery(
                 continue
 
             searched = "search_tools" in tool_names
-            managed = "skill_manage" in tool_names
+            managed = "skill_create" in tool_names
             on_disk = skill_path.exists()
             polluted = "file_write" in tool_names
             hit = searched and managed and on_disk and not polluted
@@ -738,7 +735,7 @@ async def main() -> int:
             )
 
             try:
-                cr_c = await case_w4_c_skill_manage_create_edit_delete(deps, agent, run)
+                cr_c = await case_w4_c_skill_create_patch_delete(deps, agent, run)
             except Exception as exc:
                 cr_c = CaseResult(
                     name="W4.C",

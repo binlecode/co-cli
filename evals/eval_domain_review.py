@@ -120,11 +120,12 @@ async def case_dr_a_memory_review_extracts_persona(
 
     The fixture transcript contains two clear preference/persona statements
     (terse replies, type-hint technique). The memory reviewer should recognize
-    at least one as worth persisting and call memory_manage(create).
+    at least one as worth persisting and call memory_create.
 
     Assertion: memory_dir .md count increases after the review run.
-    No skill-write side-effect assertion here — skill_manage is not in
-    MEMORY_REVIEW_SPEC.tool_names, so it can't fire.
+    No skill-write side-effect assertion here — the skill-write tools
+    (skill_create / skill_edit / skill_patch) are not in
+    MEMORY_REVIEW_SPEC.tool_names, so they can't fire.
     """
     case_id = "DR.A"
     t0 = time.monotonic()
@@ -191,7 +192,7 @@ async def case_dr_b_skill_review_no_memory_persona_bleed(
 
     The fixture transcript contains a technique hint (type hints on refactor).
     The skill reviewer may create or patch a skill entry. What it must NOT do
-    is write persona/preference items — memory_manage is not in
+    is write persona/preference items — the memory write tools are not in
     SKILL_REVIEW_SPEC.tool_names, so persona writes are architecturally blocked.
 
     Assertions:

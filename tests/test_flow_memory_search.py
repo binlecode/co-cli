@@ -16,7 +16,7 @@ from co_cli.index.store import IndexStore
 from co_cli.memory.service import reindex, save_memory_item
 from co_cli.memory.store import _USER_PRIORITY_CAP, MemoryStore
 from co_cli.observability import tracing
-from co_cli.tools.memory.manage import memory_manage
+from co_cli.tools.memory.manage import memory_create
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -277,18 +277,17 @@ async def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_memory_manage_create_emits_span(isolated_spans_log: Path, tmp_path: Path) -> None:
-    """memory_manage(action='create') emits a co.memory.memory_manage.create record."""
+async def test_memory_create_emits_span(isolated_spans_log: Path, tmp_path: Path) -> None:
+    """memory_create emits a co.memory.memory_create span record."""
     index, memory = _make_stores(tmp_path)
     try:
         deps = _make_deps(tmp_path, index, memory)
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            await memory_manage(
+            await memory_create(
                 ctx,
-                action="create",
-                name="span test artifact",
+                name_title="span test artifact",
                 content="test content",
                 kind="note",
             )
@@ -301,8 +300,8 @@ async def test_memory_manage_create_emits_span(isolated_spans_log: Path, tmp_pat
     records = [
         json.loads(line) for line in isolated_spans_log.read_text().splitlines() if line.strip()
     ]
-    create_records = [r for r in records if r["name"] == "co.memory.memory_manage.create"]
-    assert create_records, "expected a co.memory.memory_manage.create span record"
+    create_records = [r for r in records if r["name"] == "co.memory.memory_create"]
+    assert create_records, "expected a co.memory.memory_create span record"
     attrs = create_records[0]["attributes"]
     assert attrs.get("memory.memory_kind") == "note"
     assert create_records[0]["status"] == "OK"

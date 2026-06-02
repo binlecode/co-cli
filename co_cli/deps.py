@@ -154,11 +154,11 @@ class CoSessionState:
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
     # Memory-domain turn counter: bumped +1 per turn by _post_turn_hook.
     # Tracks user-intent signal (one per turn, regardless of tool calls).
-    # Reset to 0 when a memory KICK fires or memory_manage(create|append|replace) runs.
+    # Reset to 0 when a memory KICK fires or memory_create/append/replace runs.
     turns_since_memory_review: int = 0
     # Skill-domain model-request counter: bumped +model_request_count per turn by _post_turn_hook.
     # Tracks agent-action signal (tool + reasoning steps, not just turns).
-    # Reset to 0 when a skill KICK fires or skill_manage(create|edit|patch) runs.
+    # Reset to 0 when a skill KICK fires or skill_create/skill_edit/skill_patch runs.
     model_requests_since_skill_review: int = 0
 
 

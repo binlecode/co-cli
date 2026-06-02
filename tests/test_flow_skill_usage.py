@@ -14,7 +14,13 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.skills import usage as skill_usage
 from co_cli.skills.loader import load_skills
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.system.skills import skill_manage, skill_view
+from co_cli.tools.system.skills import (
+    skill_create,
+    skill_delete,
+    skill_edit,
+    skill_patch,
+    skill_view,
+)
 
 _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
@@ -43,7 +49,7 @@ def _make_deps(tmp_path: Path, config=SETTINGS) -> CoDeps:
 
 
 def _make_ctx(deps: CoDeps) -> RunContext[CoDeps]:
-    return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="skill_manage")
+    return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="skill_create")
 
 
 # ---------------------------------------------------------------------------
@@ -258,15 +264,15 @@ def test_bump_view_swallows_write_failures(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# integration via skill_manage / skill_view tools
+# integration via skill_create / skill_edit / skill_patch / skill_delete / skill_view tools
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_skill_manage_create_then_view_produces_sidecar_entry(tmp_path: Path) -> None:
+async def test_skill_create_then_view_produces_sidecar_entry(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
-    await skill_manage(ctx, action="create", name="my-skill", content=_VALID_CONTENT)
+    await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
     record = skill_usage.read_record(deps, "my-skill")
     assert record is not None
     assert record["created_at"] is not None
@@ -290,13 +296,12 @@ async def test_skill_view_on_bundled_does_not_create_sidecar_entry(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_skill_manage_patch_bumps_patch_count(tmp_path: Path) -> None:
+async def test_skill_patch_bumps_patch_count(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
-    await skill_manage(ctx, action="create", name="my-skill", content=_VALID_CONTENT)
-    await skill_manage(
+    await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
+    await skill_patch(
         ctx,
-        action="patch",
         name="my-skill",
         old_string="Do the test task.",
         new_string="Do the patched task.",
@@ -308,25 +313,25 @@ async def test_skill_manage_patch_bumps_patch_count(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skill_manage_edit_bumps_patch_count(tmp_path: Path) -> None:
+async def test_skill_edit_bumps_patch_count(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
-    await skill_manage(ctx, action="create", name="my-skill", content=_VALID_CONTENT)
+    await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
     new_content = "---\ndescription: Edited skill\n---\n\nEdited body.\n"
-    await skill_manage(ctx, action="edit", name="my-skill", content=new_content)
+    await skill_edit(ctx, name="my-skill", content=new_content)
     record = skill_usage.read_record(deps, "my-skill")
     assert record is not None
     assert record["patch_count"] == 1
 
 
 @pytest.mark.asyncio
-async def test_skill_manage_delete_removes_sidecar_entry(tmp_path: Path) -> None:
+async def test_skill_delete_removes_sidecar_entry(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
-    await skill_manage(ctx, action="create", name="my-skill", content=_VALID_CONTENT)
+    await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
     assert skill_usage.read_record(deps, "my-skill") is not None
 
-    await skill_manage(ctx, action="delete", name="my-skill")
+    await skill_delete(ctx, name="my-skill")
     assert skill_usage.read_record(deps, "my-skill") is None
     assert not (tmp_path / "my-skill.usage.json").exists()
 

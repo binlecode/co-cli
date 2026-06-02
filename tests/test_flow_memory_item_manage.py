@@ -1,7 +1,7 @@
-"""Behavioral tests for memory_manage — delete, create, approval subjects, URL-keyed dedup.
+"""Behavioral tests for the memory write tools — delete, create, approval subjects, URL-keyed dedup.
 
-Exercises: delete removes artifact file + index entry, delete on missing file →
-tool_error, create rejects canon kind, approval subject shape for each action,
+Exercises: memory_delete removes artifact file + index entry, delete on missing file →
+tool_error, memory_create rejects canon kind, approval subject shape per tool,
 and the URL-keyed branch lit by `source_url` (web_fetch stamp, consolidation
 on re-save, Jaccard/manual fallback when absent).
 No LLM — real filesystem + real FTS5 only.
@@ -20,8 +20,9 @@ from co_cli.memory.item import load_memory_item
 from co_cli.memory.service import reindex, save_memory_item
 from co_cli.memory.store import MemoryStore
 from co_cli.tools.memory.manage import (
-    _memory_manage_approval_subject,
-    memory_manage,
+    _subject_fn,
+    memory_create,
+    memory_delete,
 )
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -57,7 +58,7 @@ def _make_ctx(deps: CoDeps) -> RunContext[CoDeps]:
 
 @pytest.mark.asyncio
 async def test_artifact_manage_delete_removes_file(tmp_path: Path) -> None:
-    """memory_manage(action='delete') must remove the artifact file from disk.
+    """memory_delete must remove the artifact file from disk.
 
     Regression guard: if delete is a no-op or uses the wrong path, the file
     persists and the artifact continues to appear in searches.
@@ -74,7 +75,7 @@ async def test_artifact_manage_delete_removes_file(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = await memory_manage(ctx, action="delete", name=saved.filename_stem)
+    result = await memory_delete(ctx, filename_stem=saved.filename_stem)
 
     assert not saved.path.exists(), "memory item file must be removed after delete"
     assert result.metadata is not None
@@ -84,7 +85,7 @@ async def test_artifact_manage_delete_removes_file(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_artifact_manage_delete_missing_artifact_returns_error(tmp_path: Path) -> None:
-    """memory_manage(action='delete') on a non-existent name must return tool_error.
+    """memory_delete on a non-existent name must return tool_error.
 
     Regression guard: a silent no-op on missing names would mask typos in
     filename_stem and leave the caller thinking the delete succeeded.
@@ -92,7 +93,7 @@ async def test_artifact_manage_delete_missing_artifact_returns_error(tmp_path: P
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = await memory_manage(ctx, action="delete", name="nonexistent-artifact-xyz")
+    result = await memory_delete(ctx, filename_stem="nonexistent-artifact-xyz")
 
     assert result.metadata is not None, "tool_error must populate metadata"
     assert result.metadata.get("error") is True, "tool_error must set error=True in metadata"
@@ -103,7 +104,7 @@ async def test_artifact_manage_delete_missing_artifact_returns_error(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None:
-    """memory_manage(action='delete') must remove the artifact from the FTS5 index.
+    """memory_delete must remove the artifact from the FTS5 index.
 
     Regression guard: if the index entry is not removed, memory_search would
     continue returning a result whose file no longer exists.
@@ -135,7 +136,7 @@ async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None
 
         deps = _make_deps(tmp_path, store=store)
         ctx = _make_ctx(deps)
-        await memory_manage(ctx, action="delete", name=saved.filename_stem)
+        await memory_delete(ctx, filename_stem=saved.filename_stem)
 
         hits_after = store.search("uniquetoken_to_find_in_index")
         assert not any(saved.filename_stem in h.path for h in hits_after), (
@@ -152,7 +153,7 @@ async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_artifact_manage_create_rejects_canon_memory_kind(tmp_path: Path) -> None:
-    """memory_manage(action='create') must reject memory_kind='canon' — canon is read-only.
+    """memory_create must reject kind='canon' — canon is read-only.
 
     Regression guard: adding CANON to MemoryKindEnum would silently admit it as a writable
     kind without this check.
@@ -165,9 +166,7 @@ async def test_artifact_manage_create_rejects_canon_memory_kind(tmp_path: Path) 
     )
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
 
-    result = await memory_manage(
-        ctx, action="create", name="test", content="test content", kind="canon"
-    )
+    result = await memory_create(ctx, name_title="test", content="test content", kind="canon")
 
     assert "canon" in result.return_value.lower(), "error message must mention the rejected kind"
     assert result.metadata is not None, "tool_error must populate metadata"
@@ -180,23 +179,23 @@ async def test_artifact_manage_create_rejects_canon_memory_kind(tmp_path: Path) 
 
 
 def test_approval_subject_create_shape() -> None:
-    """Approval subject for action='create' must use the tool:memory_manage:create:<name> key.
+    """memory_create's approval subject must use the tool:memory_create:<name_title> key.
 
     Regression guard: wrong key format breaks session-level approval rules —
     a remembered approval would not match future calls.
     """
-    subject = _memory_manage_approval_subject({"action": "create", "name": "my-note"})
+    subject = _subject_fn("memory_create", "name_title")({"name_title": "my-note"})
 
-    assert subject.tool_name == "memory_manage"
-    assert subject.value == "tool:memory_manage:create:my-note"
+    assert subject.tool_name == "memory_create"
+    assert subject.value == "tool:memory_create:my-note"
     assert subject.can_remember is True
 
 
 def test_approval_subject_delete_shape() -> None:
-    """Approval subject for action='delete' must use the tool:memory_manage:delete:<name> key."""
-    subject = _memory_manage_approval_subject({"action": "delete", "name": "old-note"})
+    """memory_delete's approval subject must use the tool:memory_delete:<filename_stem> key."""
+    subject = _subject_fn("memory_delete", "filename_stem")({"filename_stem": "old-note"})
 
-    assert subject.value == "tool:memory_manage:delete:old-note"
+    assert subject.value == "tool:memory_delete:old-note"
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +205,7 @@ def test_approval_subject_delete_shape() -> None:
 
 @pytest.mark.asyncio
 async def test_artifact_manage_create_with_source_url_stamps_web_fetch(tmp_path: Path) -> None:
-    """memory_manage(create, kind=article, source_url=…) routes to URL-keyed branch.
+    """memory_create(kind=article, source_url=…) routes to URL-keyed branch.
 
     Regression guard: if source_url is not threaded through to save_memory_item,
     the article is saved on the Jaccard path with source_type=manual, no URL-keyed
@@ -216,10 +215,9 @@ async def test_artifact_manage_create_with_source_url_stamps_web_fetch(tmp_path:
     ctx = _make_ctx(deps)
     url = "https://example.com/article-x"
 
-    result = await memory_manage(
+    result = await memory_create(
         ctx,
-        action="create",
-        name="example article",
+        name_title="example article",
         content="first capture of the page",
         kind="article",
         source_url=url,
@@ -240,7 +238,7 @@ async def test_artifact_manage_create_with_source_url_stamps_web_fetch(tmp_path:
 
 @pytest.mark.asyncio
 async def test_artifact_manage_create_with_same_source_url_consolidates(tmp_path: Path) -> None:
-    """A second memory_manage(create, …, source_url=X) consolidates onto the first.
+    """A second memory_create(…, source_url=X) consolidates onto the first.
 
     Regression guard: missing source_url plumbing → second call creates a duplicate
     file, fragmenting recall. The URL-keyed branch must preserve artifact_id and
@@ -250,10 +248,9 @@ async def test_artifact_manage_create_with_same_source_url_consolidates(tmp_path
     ctx = _make_ctx(deps)
     url = "https://example.com/article-y"
 
-    first = await memory_manage(
+    first = await memory_create(
         ctx,
-        action="create",
-        name="topic",
+        name_title="topic",
         content="initial body",
         kind="article",
         source_url=url,
@@ -262,10 +259,9 @@ async def test_artifact_manage_create_with_same_source_url_consolidates(tmp_path
     first_artifact_id = first.metadata["artifact_id"]
     first_path = Path(first.metadata["path"])
 
-    second = await memory_manage(
+    second = await memory_create(
         ctx,
-        action="create",
-        name="topic",
+        name_title="topic",
         content="revised body",
         kind="article",
         source_url=url,
@@ -294,7 +290,7 @@ async def test_artifact_manage_create_with_same_source_url_consolidates(tmp_path
 
 @pytest.mark.asyncio
 async def test_artifact_manage_create_without_source_url_uses_manual_path(tmp_path: Path) -> None:
-    """memory_manage(create, kind=article) without source_url stays on the Jaccard path.
+    """memory_create(kind=article) without source_url stays on the Jaccard path.
 
     Regression guard: a bug threading source_url unconditionally (e.g., empty string
     truthiness) would silently push every article through the URL-keyed branch.
@@ -302,10 +298,9 @@ async def test_artifact_manage_create_without_source_url_uses_manual_path(tmp_pa
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
 
-    result = await memory_manage(
+    result = await memory_create(
         ctx,
-        action="create",
-        name="manual article",
+        name_title="manual article",
         content="agent-curated body with no URL",
         kind="article",
     )

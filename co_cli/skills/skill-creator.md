@@ -1,5 +1,5 @@
 ---
-description: Promote a procedure into a reusable skill — verify reusability, dedup-check, draft to §6 shape, lint-check, and invoke skill_manage(action='create').
+description: Promote a procedure into a reusable skill — verify reusability, dedup-check, draft to §6 shape, lint-check, and invoke skill_create.
 argument-hint: <task-type-name>
 user-invocable: true
 ---
@@ -44,7 +44,7 @@ Fix R1/R2/R3 before writing (R1 and R2 are also enforced as hard blocks by `_val
 
 ## Phase 4 — Write
 
-Call `skill_manage(action='create', name=<task-type-name>, content=<body>)`. Any advisory findings come back as `lint_warnings` in the result.
+Call `skill_create(name=<task-type-name>, content=<body>)`. Any advisory findings come back as `lint_warnings` in the result.
 
 On success, `refresh_skills` makes the skill immediately dispatchable and searchable — confirm with `skill_view(<name>)`.
 

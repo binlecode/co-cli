@@ -36,9 +36,8 @@ up before executing. Don't substitute.
 
 If a skill you loaded has stale steps, wrong commands, missing
 pitfalls, or no longer matches the codebase, fix it immediately. Call
-`skill_manage(action='patch', name=<skill>, old_string=...,
-new_string=...)` for surgical fixes, or
-`skill_manage(action='edit', name=<skill>, content=...)` for structural
+`skill_patch(name=<skill>, old_string=..., new_string=...)` for surgical
+fixes, or `skill_edit(name=<skill>, content=...)` for structural
 overhauls. Don't wait to be asked. Unmaintained skills become
 liabilities.
 
@@ -47,7 +46,7 @@ liabilities.
 After completing a multi-step task (3+ coherent steps), consider
 whether the procedure is reusable. If yes — same steps you'd run for
 similar tasks — promote it to a skill with
-`skill_manage(action='create', name=<task-type>, content=<§6-body>)`.
+`skill_create(name=<task-type>, content=<§6-body>)`.
 Name by task type, not the specific instance. Content must conform to
 `skills.md` §6: description, H1, `**Invocation:**` line, at least one
 `## Phase N — <name>` section.
@@ -64,7 +63,7 @@ After difficult or iterative work where you executed a coherent
 procedure, briefly offer the user a skill creation suggestion:
 "This looked like a reusable procedure. Want me to save it as a
 /<task-type> skill?" Skip for simple one-offs. Confirm with the user
-before invoking `skill_manage(action='create')` on their behalf — the
+before invoking `skill_create` on their behalf — the
 Create reflex above covers autonomous creation; this rule covers
 collaborative creation.
 

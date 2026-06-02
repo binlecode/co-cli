@@ -57,10 +57,15 @@ def memory_item_to_frontmatter(item: MemoryItem) -> dict[str, Any]:
 
     Drops None, empty-list, and default-valued fields so files stay readable.
     Always keeps id, memory_kind, created_at (required identity).
+
+    Enum-typed fields (memory_kind, source_type) are coerced to plain strings:
+    yaml.dump dispatches on exact type, so a StrEnum member would otherwise
+    serialize as a ``!!python/object`` tag that ``yaml.safe_load`` refuses to
+    read back, silently orphaning the file.
     """
     frontmatter: dict[str, Any] = {
         "id": item.id,
-        "memory_kind": item.memory_kind,
+        "memory_kind": str(item.memory_kind),
         "created_at": item.created_at,
     }
     optional: list[tuple[str, Any]] = [
@@ -68,7 +73,7 @@ def memory_item_to_frontmatter(item: MemoryItem) -> dict[str, Any]:
         ("description", item.description),
         ("updated_at", item.updated_at),
         ("related", list(item.related)),
-        ("source_type", item.source_type),
+        ("source_type", str(item.source_type) if item.source_type else None),
         ("source_ref", item.source_ref),
         ("last_recalled_at", item.last_recalled_at),
         ("recall_count", item.recall_count),

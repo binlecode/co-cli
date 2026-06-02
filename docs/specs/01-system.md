@@ -49,7 +49,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Agent loop | [core-loop.md](core-loop.md) | Turn orchestration, approval mechanics, retries |
 | Prompt assembly | [prompt-assembly.md](prompt-assembly.md) | Instruction layers, history processors, recall injection |
 | Compaction | [compaction.md](compaction.md) | Spill, proactive summarization, session JSONL rewrite |
-| Memory | [memory.md](memory.md) | Memory tier: item storage, kind taxonomy, two-pass recall, `memory_manage` |
+| Memory | [memory.md](memory.md) | Memory tier: item storage, kind taxonomy, two-pass recall, `memory_create`/`append`/`replace`/`delete` |
 | Sessions | [sessions.md](sessions.md) | Transcript storage, chunking, `session_search` / `session_view` |
 | Dream | [dream.md](dream.md) | Daemon reviewer + clock-driven housekeeping (memory + skill merge, decay, archive) |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
@@ -135,7 +135,7 @@ Recall is search-driven and on-demand — nothing is wholesale injected into eve
 
 Memory and session are peer operational tiers sharing one index (`co-cli-search.db`, FTS5 + optional vec):
 
-- **Memory** (`~/.co-cli/memory/*.md`) — long-term declarative memory items: user preferences, rules, articles, notes. Model-writable via `memory_manage`. Extracted by the dream reviewer (in-session) and merged + decayed by the dream daemon's clock-driven housekeeping.
+- **Memory** (`~/.co-cli/memory/*.md`) — long-term declarative memory items: user preferences, rules, articles, notes. Model-writable via `memory_create`/`memory_append`/`memory_replace`/`memory_delete`. Extracted by the dream reviewer (in-session) and merged + decayed by the dream daemon's clock-driven housekeeping.
 - **Session** (`~/.co-cli/sessions/*.jsonl`) — past conversation transcripts. Append-only; chunked at write time. Recalled via BM25 chunk snippets with line citations; full turns fetched via `session_view`.
 
 Recall is always search-driven. Nothing is bulk-injected. Browse mode (empty query) returns recent-item metadata.
@@ -183,7 +183,7 @@ Dream runs are idempotent. The trigger is `session_end` by default; `manual` tri
 
 ### Skills
 
-Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through two model-callable tools: `skill_view`, `skill_manage`. All discoverable skills (bundled and user-installed) are declared via the `<available_skills>` manifest, emitted as a per-turn dynamic instruction so newly created skills become visible to the model on the next turn. Slash commands in the REPL dispatch to installed skills via the `skill_index` map on `CoDeps`.
+Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through model-callable tools: `skill_view` (read) and `skill_create`/`skill_edit`/`skill_patch`/`skill_delete` (write). All discoverable skills (bundled and user-installed) are declared via the `<available_skills>` manifest, emitted as a per-turn dynamic instruction so newly created skills become visible to the model on the next turn. Slash commands in the REPL dispatch to installed skills via the `skill_index` map on `CoDeps`.
 
 The REPL writes KICK files to `$CO_HOME/daemons/dream/queue/` at threshold-based intervals (configurable per domain: memory and skill). The dream daemon dequeues these and runs the appropriate reviewer agent out-of-process. The same daemon also runs scheduled-tick housekeeping over both the memory store and the user skill library (`merge_skills` + `decay_skills`) — see [dream.md](dream.md) for the full mechanics. Usage counters, `pinned`, and `recall_days` are persisted in per-skill sidecars at `~/.co-cli/skills/<name>.usage.json`.
 

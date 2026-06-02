@@ -50,7 +50,7 @@ name. Use TURN_BUDGET_S for soft per-case baseline assertions
 TOOL_TURN_BUDGET_S: int = 60
 """Per-case baseline budget for a turn that includes ≥ 1 tool call.
 
-Tool-using turns add tool-execution latency (memory_manage write,
+Tool-using turns add tool-execution latency (memory_create write,
 file_search scan, etc.) on top of the model call. 60s covers a warm 35B
 turn with one or two tool roundtrips; longer means either the model
 slowed or a tool blocked.

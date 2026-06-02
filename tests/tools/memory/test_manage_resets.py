@@ -1,7 +1,7 @@
-"""Unit tests: memory_manage create/append/replace reset turns_since_memory_review to 0.
+"""Unit tests: memory_create/append/replace reset turns_since_memory_review to 0.
 
 No LLM. No index_store. Real filesystem writes via real service layer.
-Verifies that each mutating action resets the session counter to 0.
+Verifies that each mutating tool resets the session counter to 0.
 """
 
 from __future__ import annotations
@@ -15,7 +15,12 @@ from tests._settings import SETTINGS
 
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.memory.service import save_memory_item
-from co_cli.tools.memory.manage import memory_manage
+from co_cli.tools.memory.manage import (
+    memory_append,
+    memory_create,
+    memory_delete,
+    memory_replace,
+)
 from co_cli.tools.shell_backend import ShellBackend
 
 
@@ -49,14 +54,13 @@ def _is_error(result) -> bool:
 
 @pytest.mark.asyncio
 async def test_create_resets_turns_since_memory_review(tmp_path: Path) -> None:
-    """memory_manage(action='create') resets turns_since_memory_review to 0 on success."""
+    """memory_create resets turns_since_memory_review to 0 on success."""
     deps = _make_deps(tmp_path, initial_turns=7)
     ctx = _make_ctx(deps)
 
-    result = await memory_manage(
+    result = await memory_create(
         ctx,
-        action="create",
-        name="Test Note",
+        name_title="Test Note",
         content="Some content for the test note.",
         kind="note",
     )
@@ -72,7 +76,7 @@ async def test_create_resets_turns_since_memory_review(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_append_resets_turns_since_memory_review(tmp_path: Path) -> None:
-    """memory_manage(action='append') resets turns_since_memory_review to 0 on success."""
+    """memory_append resets turns_since_memory_review to 0 on success."""
     deps = _make_deps(tmp_path, initial_turns=5)
     memory_dir = deps.memory_dir
 
@@ -84,10 +88,9 @@ async def test_append_resets_turns_since_memory_review(tmp_path: Path) -> None:
     )
     ctx = _make_ctx(deps)
 
-    result = await memory_manage(
+    result = await memory_append(
         ctx,
-        action="append",
-        name=saved.filename_stem,
+        filename_stem=saved.filename_stem,
         content="Appended content.",
     )
 
@@ -102,7 +105,7 @@ async def test_append_resets_turns_since_memory_review(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_replace_resets_turns_since_memory_review(tmp_path: Path) -> None:
-    """memory_manage(action='replace') resets turns_since_memory_review to 0 on success."""
+    """memory_replace resets turns_since_memory_review to 0 on success."""
     deps = _make_deps(tmp_path, initial_turns=3)
     memory_dir = deps.memory_dir
 
@@ -114,12 +117,11 @@ async def test_replace_resets_turns_since_memory_review(tmp_path: Path) -> None:
     )
     ctx = _make_ctx(deps)
 
-    result = await memory_manage(
+    result = await memory_replace(
         ctx,
-        action="replace",
-        name=saved.filename_stem,
-        content="New content here.",
+        filename_stem=saved.filename_stem,
         section="Old content here.",
+        content="New content here.",
     )
 
     assert not _is_error(result), f"Expected success, got error: {result}"
@@ -133,7 +135,7 @@ async def test_replace_resets_turns_since_memory_review(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_delete_does_not_reset_turns_since_memory_review(tmp_path: Path) -> None:
-    """memory_manage(action='delete') does not reset turns_since_memory_review."""
+    """memory_delete does not reset turns_since_memory_review."""
     deps = _make_deps(tmp_path, initial_turns=4)
     memory_dir = deps.memory_dir
 
@@ -145,7 +147,7 @@ async def test_delete_does_not_reset_turns_since_memory_review(tmp_path: Path) -
     )
     ctx = _make_ctx(deps)
 
-    result = await memory_manage(ctx, action="delete", name=saved.filename_stem)
+    result = await memory_delete(ctx, filename_stem=saved.filename_stem)
 
     assert not _is_error(result), f"Expected success, got error: {result}"
     # delete does not reset the counter

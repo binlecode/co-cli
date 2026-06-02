@@ -71,6 +71,37 @@ def test_save_memory_item_straight_save_creates_file_and_indexes(tmp_path):
         store.close()
 
 
+def test_save_memory_item_enum_kind_serializes_as_plain_string(tmp_path):
+    """An enum memory_kind must serialize to a plain YAML string, not a python-object tag.
+
+    Regression guard: pydantic-ai coerces the `kind: MemoryKind` Literal to a
+    MemoryKindEnum member, which yaml.dump (dispatching on exact type) would
+    otherwise emit as `!!python/object/apply:...MemoryKindEnum`. yaml.safe_load
+    refuses to construct that, so load_memory_item parses empty frontmatter and
+    the file is silently orphaned (missing 'id'/'created_at') — invisible to
+    /memory list, /memory forget, and load_memory_items.
+    """
+    from co_cli.memory.item import MemoryKindEnum
+
+    memory_dir = tmp_path / "memory"
+    result = save_memory_item(
+        memory_dir,
+        content="staging deploy id is STG_DEPLOY_42",
+        memory_kind=MemoryKindEnum.USER,
+        title="enum kind note",
+    )
+
+    raw = result.path.read_text(encoding="utf-8")
+    assert "!!python/object" not in raw, (
+        f"frontmatter must not contain a python-object tag for memory_kind:\n{raw}"
+    )
+    assert "memory_kind: user" in raw, f"memory_kind must serialize as plain string:\n{raw}"
+
+    item = load_memory_item(result.path)
+    assert item.memory_kind == "user"
+    assert isinstance(item.memory_kind, str)
+
+
 def test_save_memory_item_url_keyed_dedup_updates_existing(tmp_path):
     """save_memory_item with the same source_url must update, not create a duplicate.
 

@@ -79,7 +79,7 @@ Draft a structured ticket.
 **Workaround:** <from Phase 3>
 ```
 
-Present the ticket to the user and ask if it should be filed (e.g. via `memory_manage` or an issue tracker tool). Do not file without confirmation.
+Present the ticket to the user and ask if it should be filed (e.g. via `memory_create` or an issue tracker tool). Do not file without confirmation.
 
 ## Rules
 

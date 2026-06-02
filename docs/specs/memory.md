@@ -8,27 +8,27 @@ Memory is one of five operational tiers in the agent loop: **doctrine** ([person
 
 ## 1. Functional Architecture
 
-Memory holds long-term declarative memory items: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_manage`), kind-typed (user / rule / article / note), and subject to lifecycle (decay, daemon housekeeping merge).
+Memory holds long-term declarative memory items: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_create`/`memory_append`/`memory_replace`/`memory_delete`), kind-typed (user / rule / article / note), and subject to lifecycle (decay, daemon housekeeping merge).
 
 Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, bundled skill manifest) is injected once at agent construction. Memory items are loaded on-demand through the recall tool surface, keeping context bounded and recall purposeful.
 
 ### Memory vs. files on disk
 
-Memory holds only co's **own curated** declarative items. External file- or folder-based knowledge (a notes vault, a docs tree) is **not** memory and is never re-indexed into the memory DB — a mirrored second copy goes stale and reimplements (worse) what the filesystem already holds. Such data is reached through the file tools ([tools.md](tools.md): `file_search` / `file_read`), which read the filesystem live; `memory_search` covers only the curated memory corpus. The dividing line is **ownership + curation, not file format**: co owns and curates it → memory pipeline; co only reads someone else's folder → file tools. Promoting an external note into durable memory is a deliberate `memory_manage` act, never automatic.
+Memory holds only co's **own curated** declarative items. External file- or folder-based knowledge (a notes vault, a docs tree) is **not** memory and is never re-indexed into the memory DB — a mirrored second copy goes stale and reimplements (worse) what the filesystem already holds. Such data is reached through the file tools ([tools.md](tools.md): `file_search` / `file_read`), which read the filesystem live; `memory_search` covers only the curated memory corpus. The dividing line is **ownership + curation, not file format**: co owns and curates it → memory pipeline; co only reads someone else's folder → file tools. Promoting an external note into durable memory is a deliberate `memory_create` act, never automatic.
 
 ```mermaid
 flowchart TD
     MemoryFiles["memory items\n(~/.co-cli/memory/*.md)"] -->|"source='memory'"| IndexDB["co-cli-search.db\n(IndexStore + FTS5 + optional vec)"]
     IndexDB --> MemSearch["memory_search()"]
     IndexDB --> MemView["memory_view()"]
-    MemManage["memory_manage()"] --> MemoryFiles
+    MemManage["memory_create/append/replace/delete()"] --> MemoryFiles
 ```
 
 ### Tier ontology
 
 | Tier | Storage | Mutation | Indexing |
 | --- | --- | --- | --- |
-| **memory** (this spec) | `~/.co-cli/memory/*.md` | `memory_manage(action=create/append/replace/delete)` | FTS5 BM25 + optional hybrid; paragraph-aware chunking |
+| **memory** (this spec) | `~/.co-cli/memory/*.md` | `memory_create` / `memory_append` / `memory_replace` / `memory_delete` | FTS5 BM25 + optional hybrid; paragraph-aware chunking |
 | **session** ([sessions.md](sessions.md)) | `~/.co-cli/sessions/*.jsonl` | append-only via `persist_session_history` | sliding-window token chunks |
 
 Canon scenes (`souls/{role}/canon/*.md`) coexist in the same DB under `source='canon'` for personality auto-injection, but are never returned by any model-callable tool. Skills live on their own tier.
@@ -36,7 +36,7 @@ Canon scenes (`souls/{role}/canon/*.md`) coexist in the same DB under `source='c
 ## 2. Architecture layers
 
 ```
-co_cli/tools/memory/     Agent surface — memory_search, memory_view, memory_manage
+co_cli/tools/memory/     Agent surface — memory_search, memory_view, memory_create/append/replace/delete
         ↓
 co_cli/memory/           Domain — MemoryStore (kinds, decay, two-pass search)
         ↓
@@ -102,7 +102,10 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `memory_manage(ctx, action, name, content=None, kind=None, section=None, source_type=None, source_url=None)` | `co_cli/tools/memory/manage.py` | Async tool — `create`/`append`/`replace`/`delete`; `approval=True`; subject `tool:memory_manage:<action>:<name>`. On `create` with `source_url=…` + `kind="article"`: URL-keyed dedup branch fires — re-saves consolidate (same `artifact_id`, `existing.related` preserved) instead of duplicating; `source_type` defaults to `web_fetch` and `decay_protected=True`. |
+| `memory_create(ctx, name_title, content, kind, source_type=SourceTypeEnum.MANUAL, source_url=None)` | `co_cli/tools/memory/manage.py` | Async tool — `approval=True`; subject `tool:memory_create:<name_title>`. `name_title` is the new artifact's title (the `filename_stem` is derived). With `source_url=…` + `kind="article"`: URL-keyed dedup branch fires — re-saves consolidate (same `artifact_id`, `existing.related` preserved) instead of duplicating; `source_type` defaults to `web_fetch` and `decay_protected=True`. Resets `turns_since_memory_review = 0`. |
+| `memory_append(ctx, filename_stem, content)` | `co_cli/tools/memory/manage.py` | Async tool — `approval=True`; subject `tool:memory_append:<filename_stem>`. Appends to an existing artifact body; `filename_stem` from a `memory_search` hit. Resets `turns_since_memory_review = 0`. |
+| `memory_replace(ctx, filename_stem, section, content)` | `co_cli/tools/memory/manage.py` | Async tool — `approval=True`; subject `tool:memory_replace:<filename_stem>`. Replaces `section` (must appear exactly once) with `content`. Resets `turns_since_memory_review = 0`. |
+| `memory_delete(ctx, filename_stem)` | `co_cli/tools/memory/manage.py` | Async tool — `approval=True`; subject `tool:memory_delete:<filename_stem>`. Removes the artifact file and its index entries. Does **not** reset `turns_since_memory_review`. |
 
 ### Domain API
 
@@ -161,13 +164,13 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 | --- | --- |
 | `co_cli/tools/memory/recall.py` | `memory_search` — ranked recall |
 | `co_cli/tools/memory/view.py` | `memory_view` — full memory item body reader |
-| `co_cli/tools/memory/manage.py` | `memory_manage` — write surface |
+| `co_cli/tools/memory/manage.py` | `memory_create` / `memory_append` / `memory_replace` / `memory_delete` — write surface |
 
 ## 6. Growth pipeline and curation discipline
 
 Memory growth has two distinct accumulation modes:
 
-- **Article accumulation (agent-mediated)** — `web_fetch` produces transient content; the agent decides whether the page is worth keeping and then calls `memory_manage(action="create", kind="article", source_url=…, content=…)`. There is **no** automatic `web_fetch → save_memory_item` wire — the two tools are isolated and the agent composes them. Passing `source_url` enables URL-keyed dedup: re-saves of the same URL consolidate onto the existing article (same `artifact_id`, content updated, `existing.related` preserved) and the item is stamped `source_type=web_fetch`, `source_ref=<url>`, `decay_protected=True`. Absent `source_url`, articles fall back to the Jaccard-dedup path with `source_type=manual`, identical to notes/rules.
+- **Article accumulation (agent-mediated)** — `web_fetch` produces transient content; the agent decides whether the page is worth keeping and then calls `memory_create(kind="article", source_url=…, content=…)`. There is **no** automatic `web_fetch → save_memory_item` wire — the two tools are isolated and the agent composes them. Passing `source_url` enables URL-keyed dedup: re-saves of the same URL consolidate onto the existing article (same `artifact_id`, content updated, `existing.related` preserved) and the item is stamped `source_type=web_fetch`, `source_ref=<url>`, `decay_protected=True`. Absent `source_url`, articles fall back to the Jaccard-dedup path with `source_type=manual`, identical to notes/rules.
 - **Derivative accumulation (deliberate)** — `kind=note` and `kind=rule` items, written through deliberate agent curation. The note/rule tier accumulates only via the inline curation discipline (below) and the session-end reviewer.
 
 ```
@@ -175,7 +178,7 @@ Memory growth has two distinct accumulation modes:
                                     │
    agent decides: worth keeping?    │
                                     ▼
-   memory_manage(create, kind=article, source_url=…)
+   memory_create(kind=article, source_url=…)
                                     │
                                     ▼
    save_memory_item URL-keyed branch:
@@ -194,7 +197,7 @@ Memory growth has two distinct accumulation modes:
               │ ─ promote: article → note/rule  │
               │ ─ correct: replace on contradict│
               │ ─ drift:   replace/delete stale │
-              │ (memory_manage create / replace)│
+              │ (memory_create / memory_replace)│
               └─────────────────────────────────┘
                                     │
    session_end ─────────────────────┤
@@ -240,8 +243,8 @@ Six values populate `MemoryItem.source_type`:
 
 | source_type | Producer | Meaning |
 | --- | --- | --- |
-| `web_fetch` | `save_memory_item` URL-keyed branch, fired when the agent calls `memory_manage(create, kind=article, source_url=…)` | curated article saved with a URL for dedup; re-saves with the same URL consolidate (same `artifact_id`, existing `related` preserved). `web_fetch` itself does not write memory — the agent composes the two tools. |
-| `manual` | agent inline saves via `memory_manage(create)` | default for agent-curated notes/rules/articles without URL |
+| `web_fetch` | `save_memory_item` URL-keyed branch, fired when the agent calls `memory_create(kind=article, source_url=…)` | curated article saved with a URL for dedup; re-saves with the same URL consolidate (same `artifact_id`, existing `related` preserved). `web_fetch` itself does not write memory — the agent composes the two tools. |
+| `manual` | agent inline saves via `memory_create` | default for agent-curated notes/rules/articles without URL |
 | `obsidian` | Obsidian vault sync | external read-only source |
 | `drive` | Google Drive sync | external read-only source |
 | `consolidated` | dream merge (`_housekeeping.merge_memory`) | output of duplicate-collapse pass |

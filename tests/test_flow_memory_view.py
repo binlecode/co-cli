@@ -157,12 +157,12 @@ async def test_memory_view_metadata_includes_kind_name_path(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_memory_view_body_matches_after_append(tmp_path: Path) -> None:
-    """memory_view must return updated body after memory_manage appends content.
+    """memory_view must return updated body after memory_append appends content.
 
     Failure mode: view returning stale cached content rather than the current on-disk
     body causes the agent to work with out-of-date artifact state.
     """
-    from co_cli.tools.memory.manage import memory_manage
+    from co_cli.tools.memory.manage import memory_append
 
     store = _make_store(tmp_path)
     try:
@@ -177,10 +177,9 @@ async def test_memory_view_body_matches_after_append(tmp_path: Path) -> None:
         ctx = _ctx(deps)
 
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            await memory_manage(
+            await memory_append(
                 ctx,
-                action="append",
-                name=stem,
+                filename_stem=stem,
                 content="appended extra line here",
             )
 

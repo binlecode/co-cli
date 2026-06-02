@@ -70,9 +70,9 @@ Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, 
 
 | Tool call | Effect |
 |---|---|
-| `memory_manage(action ∈ {create, append, replace})` | `turns_since_memory_review = 0` |
-| `skill_manage(action ∈ {create, edit, patch})` | `model_requests_since_skill_review = 0` |
-| `delete` (either tool) | no reset |
+| `memory_create` / `memory_append` / `memory_replace` | `turns_since_memory_review = 0` |
+| `skill_create` / `skill_edit` / `skill_patch` | `model_requests_since_skill_review = 0` |
+| `memory_delete` / `skill_delete` | no reset |
 | No crossover | memory tool never touches skill counter; skill tool never touches memory counter |
 
 **Session-end always-fire** in `_drain_and_cleanup`: both KICKs (memory + skill) fire regardless of counter state at REPL shutdown.
@@ -179,8 +179,8 @@ Two specs in `co_cli/daemons/dream/_reviewer.py`:
 
 | Spec | Tool surface | Prompt |
 |---|---|---|
-| `MEMORY_REVIEW_SPEC` | `memory_search`, `memory_manage` | `daemons/dream/prompts/memory_review.md` |
-| `SKILL_REVIEW_SPEC` | `skill_view`, `skill_manage`, `memory_search`; `include_skill_manifest=True` | `daemons/dream/prompts/skill_review.md` |
+| `MEMORY_REVIEW_SPEC` | `memory_search`, `memory_create`, `memory_append`, `memory_replace` | `daemons/dream/prompts/memory_review.md` |
+| `SKILL_REVIEW_SPEC` | `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `memory_search`; `include_skill_manifest=True` | `daemons/dream/prompts/skill_review.md` |
 
 **Memory review** — focused on persona, preferences, and references extracted from the transcript.
 
@@ -635,8 +635,8 @@ Internal caps (housekeeping — apply to both domains):
 
 | Property | Test file |
 |---|---|
-| `memory_manage` reset — no crossover; `delete` does not reset | `tests/tools/memory/test_manage_resets.py` |
-| `skill_manage` reset — `create`/`edit`/`patch` reset; `delete` does not | `tests/tools/system/test_skill_manage_resets.py` |
+| memory write reset — `memory_create`/`append`/`replace` reset; `memory_delete` does not | `tests/tools/memory/test_manage_resets.py` |
+| skill-write reset — `skill_create`/`skill_edit`/`skill_patch` reset; `skill_delete` does not | `tests/tools/system/test_skill_manage_resets.py` |
 | Memory recall updates on `memory_search`; backward-compat load | `tests/tools/memory/test_recall_metrics.py` |
 | Skill recall sidecar `recall_days`; deduplication; backward-compat | `tests/skills/test_usage_recall_days.py` |
 | `.tmp` skip filter and FIFO drain order; `last_error` injection on `failed/` move | `tests/daemons/dream/test_queue.py` |

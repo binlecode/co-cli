@@ -51,7 +51,9 @@ MEMORY_REVIEW_SPEC = TaskAgentSpec(
     instructions=_memory_review_instructions,
     tool_names=(
         "memory_search",
-        "memory_manage",
+        "memory_create",
+        "memory_append",
+        "memory_replace",
     ),
     output_type=SessionReviewOutput,
     default_budget=REVIEW_MAX_ITERATIONS,
@@ -64,7 +66,9 @@ SKILL_REVIEW_SPEC = TaskAgentSpec(
     instructions=_skill_review_instructions,
     tool_names=(
         "skill_view",
-        "skill_manage",
+        "skill_create",
+        "skill_edit",
+        "skill_patch",
         "memory_search",
     ),
     output_type=SessionReviewOutput,

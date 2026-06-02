@@ -1,6 +1,7 @@
-"""Memory management tool — `memory_manage` for create, append, replace, delete."""
+"""Memory write tools — `memory_create`, `memory_append`, `memory_replace`, `memory_delete`."""
 
 import logging
+from collections.abc import Callable
 from typing import Literal
 
 from pydantic_ai import RunContext
@@ -17,92 +18,134 @@ from co_cli.tools.tool_io import tool_error, tool_output
 logger = logging.getLogger(__name__)
 
 
-def _memory_manage_approval_subject(args: dict) -> ApprovalSubject:
-    action = args.get("action", "unknown")
-    name = args.get("name", "unknown")
-    return ApprovalSubject(
-        tool_name="memory_manage",
-        kind=ApprovalKindEnum.TOOL,
-        value=f"tool:memory_manage:{action}:{name}",
-        display=f"memory_manage(action={action!r}, name={name!r})",
-        can_remember=True,
+def _subject_fn(tool_name: str, arg_key: str) -> Callable[[dict], ApprovalSubject]:
+    """Build an approval-subject fn that keys on a single name-bearing arg."""
+
+    def subject(args: dict) -> ApprovalSubject:
+        name = args.get(arg_key, "unknown")
+        return ApprovalSubject(
+            tool_name=tool_name,
+            kind=ApprovalKindEnum.TOOL,
+            value=f"tool:{tool_name}:{name}",
+            display=f"{tool_name}(name={name!r})",
+            can_remember=True,
+        )
+
+    return subject
+
+
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    approval=True,
+    approval_subject_fn=_subject_fn("memory_create", "name_title"),
+    is_concurrent_safe=True,
+    retries=1,
+)
+async def memory_create(
+    ctx: RunContext[CoDeps],
+    name_title: str,
+    content: str,
+    kind: MemoryKind,
+    source_type: SourceTypeEnum = SourceTypeEnum.MANUAL,
+    source_url: str | None = None,
+) -> ToolReturn:
+    """Save a new memory artifact.
+
+    Args:
+        name_title: Title for the new artifact (becomes its display name; the
+            filename_stem is derived from it). Not a filename_stem — that exists
+            only after the artifact is saved.
+        content: The artifact body.
+        kind: One of user | rule | article | note.
+        source_type: Provenance tag (default 'manual').
+        source_url: When set, enables URL-keyed dedup: a re-save with the same URL
+            consolidates onto the existing article instead of duplicating. Default None.
+    """
+    return await _handle_create(
+        ctx,
+        name=name_title,
+        content=content,
+        kind=kind,
+        source_type=source_type,
+        source_url=source_url,
     )
 
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
     approval=True,
-    approval_subject_fn=_memory_manage_approval_subject,
+    approval_subject_fn=_subject_fn("memory_append", "filename_stem"),
     is_concurrent_safe=True,
     retries=1,
 )
-async def memory_manage(
+async def memory_append(
     ctx: RunContext[CoDeps],
-    action: Literal["create", "append", "replace", "delete"],
-    name: str,
-    content: str | None = None,
-    kind: MemoryKind | None = None,
-    section: str | None = None,
-    source_type: str | None = None,
-    source_url: str | None = None,
+    filename_stem: str,
+    content: str,
 ) -> ToolReturn:
-    """Create, update, or delete a memory artifact.
-
-    action='create'  — save a new artifact (requires content + kind).
-    action='append'  — add content to the end of an existing artifact body.
-    action='replace' — replace a passage (section) in an existing artifact.
-    action='delete'  — remove the artifact and its index entries.
-
-    For append/replace/delete, name is the filename_stem from memory_search.
+    """Append content to the end of an existing memory artifact's body.
 
     Args:
-        action: One of create | append | replace | delete.
-        name: For create — the artifact title. Otherwise the filename_stem.
-        content: Body for create/append, or replacement text for replace.
-        kind: Required for create. One of user | rule | article | note.
-        section: For replace — the exact passage to replace; must appear exactly once.
-        source_type: For create — provenance tag; defaults to 'manual'.
-        source_url: For create — when set, enables URL-keyed dedup: a re-save with
-            the same URL consolidates onto the existing article instead of duplicating.
+        filename_stem: The filename_stem from a memory_search hit (not the title).
+        content: Text to append to the end of the artifact body.
     """
-    if action == "create":
-        return await _handle_create(
-            ctx,
-            name=name,
-            content=content,
-            kind=kind,
-            source_type=source_type,
-            source_url=source_url,
-        )
-    if action == "append":
-        return await _handle_mutate(ctx, filename_stem=name, op="append", content=content)
-    if action == "replace":
-        return await _handle_mutate(
-            ctx, filename_stem=name, op="replace", content=content, target=section or ""
-        )
-    if action == "delete":
-        return await _handle_delete(ctx, filename_stem=name)
-    return tool_error(
-        f"Unknown action: {action!r}. Valid values: create, append, replace, delete",
-        ctx=ctx,
+    return await _handle_mutate(ctx, filename_stem=filename_stem, op="append", content=content)
+
+
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    approval=True,
+    approval_subject_fn=_subject_fn("memory_replace", "filename_stem"),
+    is_concurrent_safe=True,
+    retries=1,
+)
+async def memory_replace(
+    ctx: RunContext[CoDeps],
+    filename_stem: str,
+    section: str,
+    content: str,
+) -> ToolReturn:
+    """Replace a passage in an existing memory artifact.
+
+    Args:
+        filename_stem: The filename_stem from a memory_search hit (not the title).
+        section: The exact passage to replace; must appear exactly once in the body.
+        content: The replacement text.
+    """
+    return await _handle_mutate(
+        ctx, filename_stem=filename_stem, op="replace", content=content, target=section
     )
 
 
-@trace("co.memory.memory_manage.create")
+@agent_tool(
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    approval=True,
+    approval_subject_fn=_subject_fn("memory_delete", "filename_stem"),
+    is_concurrent_safe=True,
+    retries=1,
+)
+async def memory_delete(
+    ctx: RunContext[CoDeps],
+    filename_stem: str,
+) -> ToolReturn:
+    """Delete a memory artifact and its index entries.
+
+    Args:
+        filename_stem: The filename_stem from a memory_search hit (not the title).
+    """
+    return await _handle_delete(ctx, filename_stem=filename_stem)
+
+
+@trace("co.memory.memory_create")
 async def _handle_create(
     ctx: RunContext[CoDeps],
     *,
     name: str,
-    content: str | None,
-    kind: str | None,
-    source_type: str | None = None,
+    content: str,
+    kind: str,
+    source_type: SourceTypeEnum = SourceTypeEnum.MANUAL,
     source_url: str | None = None,
 ) -> ToolReturn:
-    if content is None:
-        return tool_error("content is required for action='create'", ctx=ctx)
-    if kind is None:
-        return tool_error("kind is required for action='create'", ctx=ctx)
-
     valid_kinds = {e.value for e in MemoryKindEnum if e != MemoryKindEnum.CANON}
     if kind not in valid_kinds:
         return tool_error(
@@ -120,7 +163,7 @@ async def _handle_create(
         content=content,
         memory_kind=kind,
         title=name,
-        source_type=source_type or SourceTypeEnum.MANUAL.value,
+        source_type=str(source_type),
         source_url=source_url,
         consolidation_similarity_threshold=ctx.deps.config.memory.consolidation_similarity_threshold,
         index_store=ctx.deps.index_store,
@@ -163,18 +206,15 @@ async def _handle_create(
     )
 
 
-@trace("co.memory.memory_manage.mutate")
+@trace("co.memory.memory_mutate")
 async def _handle_mutate(
     ctx: RunContext[CoDeps],
     *,
     filename_stem: str,
     op: Literal["append", "replace"],
-    content: str | None,
+    content: str,
     target: str = "",
 ) -> ToolReturn:
-    if content is None:
-        return tool_error(f"content is required for action='{op}'", ctx=ctx)
-
     memory_dir = ctx.deps.memory_dir
     span = current_span()
     span.set_attribute("memory.filename_stem", filename_stem)
@@ -219,7 +259,7 @@ async def _handle_mutate(
         return tool_error(str(exc), ctx=ctx)
 
 
-@trace("co.memory.memory_manage.delete")
+@trace("co.memory.memory_delete")
 async def _handle_delete(
     ctx: RunContext[CoDeps],
     *,

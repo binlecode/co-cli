@@ -1,12 +1,13 @@
 """UAT eval — Workflow 3: Memory recall and curation.
 
-Covers `memory_search`, `session_search`, `memory_view`, `memory_manage`
+Covers `memory_search`, `session_search`, `memory_view`, and the memory write
+tools (`memory_create`/`memory_append`/`memory_replace`/`memory_delete`)
 via agent calls, plus the `/memory list|forget` user surface and the dream
 cycle's merge/decay/archive. Validates BM25/hybrid recall, write-time
 indexing, on-disk artifact lifecycle, and dream-cycle content preservation.
 
 Per plan section W3, case ordering is a hard contract:
-  W3.A seeds `eval_W3_fact` (agent-driven via memory_manage).
+  W3.A seeds `eval_W3_fact` (agent-driven via memory_create).
   W3.B/C/D read it (search, recall, list).
   W3.E forgets it (boundary).
   W3.F uses its own pre-seeded `eval_W3_dupA` / `eval_W3_dupB` pair to exercise
@@ -52,6 +53,7 @@ from co_cli.context.orchestrate import run_turn
 from co_cli.daemons.dream._housekeeping import merge_memory
 from co_cli.daemons.dream._state import HousekeepingState
 from co_cli.deps import CoDeps
+from co_cli.session.filename import session_filename
 from co_cli.tools.memory.recall import memory_search
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -127,7 +129,7 @@ def _seed_dup_artifact(
 ) -> Path:
     """Write a knowledge .md file with canonical frontmatter and reindex into FTS.
 
-    Bypasses ``memory_manage`` so the filename_stem is exactly the one we
+    Bypasses the memory write tools so the filename_stem is exactly the one we
     request — ``save_artifact`` slugifies the title and appends a random uuid
     suffix, which loses deterministic-stem semantics needed for W3.F's pair.
     """
@@ -135,19 +137,19 @@ def _seed_dup_artifact(
     knowledge_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = knowledge_dir / f"{filename_stem}.md"
     artifact_id = str(uuid4())
-    created = datetime.now(UTC).isoformat()
+    created_at = datetime.now(UTC).isoformat()
     frontmatter = {
         "id": artifact_id,
         "memory_kind": "note",
         "title": title,
-        "created_at": created,
+        "created_at": created_at,
     }
     yaml_lines = [
         "---",
         f"id: {artifact_id}",
         "memory_kind: note",
         f"title: {title}",
-        f"created: '{created}'",
+        f"created_at: '{created_at}'",
         "---",
         "",
         body.strip(),
@@ -159,6 +161,36 @@ def _seed_dup_artifact(
     if deps.memory_store is not None:
         deps.memory_store.reindex_one(artifact_path, body, markdown_content, frontmatter)
     return artifact_path
+
+
+def _seed_past_session(deps: CoDeps, *, token: str) -> Path:
+    """Write a canonical past-session JSONL containing ``token`` and index it.
+
+    ``session_search`` excludes the *current* session at query time, so a case
+    that needs a findable hit must seed a separate past session (distinct uuid8,
+    earlier timestamp) — re-indexing the active session can never surface it.
+    """
+    active = deps.session.session_path
+    sessions_dir = Path(active).parent if active else (deps.memory_dir.parent / "sessions")
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    created_at = datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
+    session_id = uuid4().hex[:8]
+    path = sessions_dir / session_filename(created_at, session_id)
+    record = [
+        {
+            "timestamp": created_at.isoformat(),
+            "parts": [
+                {
+                    "part_kind": "user-prompt",
+                    "content": f"Earlier the user noted: the staging deploy id is {token}.",
+                }
+            ],
+        }
+    ]
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    if deps.session_store is not None:
+        deps.session_store.index_session(path)
+    return path
 
 
 def _purge_dup_pair(deps: CoDeps) -> None:
@@ -246,7 +278,7 @@ async def case_w3_a_agent_chooses_to_save(
     frontend: EvalFrontend,
     run: EvalRun,
 ) -> CaseResult:
-    """W3.A — agent calls memory_manage(create) for a clearly-durable fact.
+    """W3.A — agent calls memory_create for a clearly-durable fact.
 
     Cleans any prior W3.A artifact first so disk membership cleanly attributes
     to this run. Drives one ``run_turn`` and inspects the resulting tool-call
@@ -286,23 +318,18 @@ async def case_w3_a_agent_chooses_to_save(
         model_call_seconds = turn_trace.model_call_seconds
         token_usage = dict(turn_trace.token_usage)
 
-        manage_calls = _extract_tool_calls_by_name(turn_trace.tool_calls, "memory_manage")
-        create_calls = [
-            (args, result) for args, result in manage_calls if args.get("action") == "create"
-        ]
+        create_calls = _extract_tool_calls_by_name(turn_trace.tool_calls, "memory_create")
         if not create_calls:
             passed = False
             tool_names = sorted({rec.tool_name for rec in turn_trace.tool_calls})
-            reason = (
-                f"no memory_manage(action='create') tool call found; tools used: {tool_names!r}"
-            )
+            reason = f"no memory_create tool call found; tools used: {tool_names!r}"
         else:
             fact_path = _find_fact_path(deps)
             if fact_path is None:
                 passed = False
                 reason = (
                     f"no on-disk artifact matched glob {_FACT_GLOB_PREFIX}*.md after "
-                    "memory_manage(create); save_artifact() may have failed silently"
+                    "memory_create; save_artifact() may have failed silently"
                 )
             else:
                 body = fact_path.read_text(encoding="utf-8")
@@ -479,37 +506,26 @@ async def case_w3_c_session_search_finds_prior_turn(
     frontend: EvalFrontend,
     run: EvalRun,
 ) -> CaseResult:
-    """W3.C — session_search hits the current session after W3.A's turn was indexed.
+    """W3.C — session_search surfaces a prior (non-current) session containing the fact.
 
-    Bootstrap excludes the active session from the index, so we re-index it
-    explicitly via ``memory_store.index_session(session_path)`` before driving
-    the turn — otherwise the search has nothing to find.
+    ``session_search`` excludes the *active* session at query time, so this case
+    seeds a separate past session carrying the fact token and indexes it — the
+    search must then return that past session as a hit.
     """
     case_id = "W3.C"
     t0 = time.monotonic()
     trace_file = run.case_trace_path(case_id)
 
-    session_path = deps.session.session_path
-    if session_path is None or not Path(session_path).exists():
+    try:
+        _seed_past_session(deps, token=_FACT_TOKEN)
+    except Exception as exc:
         return CaseResult(
             name=case_id,
             verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
-            reason="active session_path missing — prior turns not persisted",
+            reason=f"seed_past_session failed: {type(exc).__name__}: {exc}",
             trace_files=[str(trace_file.relative_to(run.dir.parent))],
         )
-
-    if deps.memory_store is not None:
-        try:
-            deps.memory_store.index_session(Path(session_path))
-        except Exception as exc:
-            return CaseResult(
-                name=case_id,
-                verdict=Verdict.FAIL,
-                duration_s=time.monotonic() - t0,
-                reason=f"index_session failed: {type(exc).__name__}: {exc}",
-                trace_files=[str(trace_file.relative_to(run.dir.parent))],
-            )
 
     # Explicit tool-and-query phrasing: an earlier "Search past sessions for…"
     # phrasing left tool choice ambiguous and the agent skipped tooling
@@ -832,7 +848,7 @@ async def case_w3_g_forget_propagates_to_recall(
     frontend: EvalFrontend,
     run: EvalRun,
 ) -> CaseResult:
-    """W3.G — memory_manage(delete) propagates through FTS; re-search finds nothing.
+    """W3.G — memory_delete propagates through FTS; re-search finds nothing.
 
     Three turns with shared history: recall seed → agent-driven delete → re-recall
     judged for absence. SOFT_FAIL when judge says agent still surfaces the token.
@@ -892,11 +908,10 @@ async def case_w3_g_forget_propagates_to_recall(
             passed = False
             reason = f"turn 0: agent did not call memory_search; tools={t0_tool_names!r}"
 
-        # Turn 1: delete — agent should call memory_manage(delete) using the stem
+        # Turn 1: delete — agent should call memory_delete using the stem
         if passed:
             t1_input = (
-                f"Now delete the memory item with filename_stem `{_W3G_STEM}` "
-                "using memory_manage with action=delete."
+                f"Now delete the memory item with filename_stem `{_W3G_STEM}` using memory_delete."
             )
             async with asyncio.timeout(CALL_TIMEOUT_S):
                 t1_result, t1_trace = await record_turn(
