@@ -30,7 +30,7 @@ from co_cli.tools.background import (
 )
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.shell_env import SAFE_ENV_VARS, build_subprocess_env
-from co_cli.tools.tasks.control import task_list, task_start
+from co_cli.tools.tasks.control import task_cancel, task_list, task_start, task_status
 
 
 def _make_task_ctx(tmp_path: Path) -> RunContext[CoDeps]:
@@ -294,3 +294,110 @@ async def test_task_list_status_filter_returns_only_matching_tasks(tmp_path: Pat
     assert result.metadata.get("count") == 1
     assert running_id in result.return_value
     assert completed_id not in result.return_value
+
+
+# ---------------------------------------------------------------------------
+# task_status — targeted inspection of a known task
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_task_status_returns_status_and_output_for_completed_task(
+    tmp_path: Path,
+) -> None:
+    """task_status must return status, exit_code, and tail output for a completed task."""
+    logs_dir = tmp_path / "logs"
+    session = CoSessionState()
+    task_id = make_task_id()
+    state = _make_state(task_id, "echo hello-status-test", str(tmp_path))
+    session.background_tasks[task_id] = state
+
+    await spawn_task(state, session, logs_dir=logs_dir)
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+
+    deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=session)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_status")
+
+    result = await task_status(ctx, task_id=task_id)
+
+    assert result.metadata is not None
+    assert result.metadata.get("status") == "completed"
+    assert result.metadata.get("exit_code") == 0
+    output_lines = result.metadata.get("output_lines", [])
+    assert any("hello-status-test" in line for line in output_lines)
+
+
+@pytest.mark.asyncio
+async def test_task_status_not_found_returns_not_found_status(tmp_path: Path) -> None:
+    """task_status with an unknown task_id returns status='not_found', not an error."""
+    deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=CoSessionState())
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_status")
+
+    result = await task_status(ctx, task_id="nonexistent-id-xyz")
+
+    assert result.metadata is not None
+    assert result.metadata.get("status") == "not_found"
+    assert result.metadata.get("error") is not True
+
+
+# ---------------------------------------------------------------------------
+# task_cancel — stop a running task
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_task_cancel_cancels_running_task(tmp_path: Path) -> None:
+    """task_cancel must kill a running task and report status='cancelled'."""
+    logs_dir = tmp_path / "logs"
+    session = CoSessionState()
+    task_id = make_task_id()
+    state = _make_state(task_id, "while true; do echo tick; sleep 0.1; done", str(tmp_path))
+    session.background_tasks[task_id] = state
+
+    await spawn_task(state, session, logs_dir=logs_dir)
+    async with asyncio.timeout(BG_TASK_TEARDOWN_TIMEOUT_SECS):
+        while not (
+            state.log_path and state.log_path.exists() and state.log_path.stat().st_size > 0
+        ):
+            await asyncio.sleep(0.05)
+
+    deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=session)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_cancel")
+
+    result = await task_cancel(ctx, task_id=task_id)
+
+    assert result.metadata is not None
+    assert result.metadata.get("status") == "cancelled"
+    assert state.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_task_cancel_not_found_returns_not_found_status(tmp_path: Path) -> None:
+    """task_cancel with unknown task_id returns status='not_found'."""
+    deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=CoSessionState())
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_cancel")
+
+    result = await task_cancel(ctx, task_id="nonexistent-xyz")
+
+    assert result.metadata is not None
+    assert result.metadata.get("status") == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_task_cancel_already_completed_returns_current_status(tmp_path: Path) -> None:
+    """task_cancel on a completed task is a no-op that reports the existing status."""
+    session = CoSessionState()
+    task_id = make_task_id()
+    state = _make_state(task_id, "echo done", str(tmp_path))
+    state.status = "completed"
+    session.background_tasks[task_id] = state
+
+    deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=session)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_cancel")
+
+    result = await task_cancel(ctx, task_id=task_id)
+
+    assert result.metadata is not None
+    assert result.metadata.get("status") == "completed"
+    assert state.status == "completed"

@@ -287,10 +287,9 @@ async def web_search(
 
     Use for up-to-date external information: documentation, release notes,
     API references, news, or anything not available in the local workspace.
-    Returns ranked snippets with titles and URLs. For full page content,
-    pass a result URL to web_fetch. For a single quick lookup of snippets/URLs
-    use this tool; for a multi-page question needing reading + synthesis use
-    web_research.
+    Returns ranked snippets with titles and URLs. Use this tool for a quick
+    lookup when ranked snippets/URLs suffice; to read the full content of a
+    result, pass its URL to web_fetch.
 
     Do not guess or fabricate URLs — always use URLs from these results.
     Scope searches to specific sites with the domains parameter (e.g.

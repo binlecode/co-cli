@@ -1,10 +1,12 @@
-"""Unit tests for CircuitBreaker state machine."""
+"""Behavioral tests for CircuitBreaker state machine."""
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import time
 
 from co_cli.index._circuit import CircuitBreaker
+
+_TINY = 0.01
 
 
 def _breaker(*, threshold: int = 3, initial: float = 5.0, max_s: float = 10.0) -> CircuitBreaker:
@@ -34,72 +36,63 @@ def test_opens_at_threshold():
 
 
 def test_cooldown_doubles_on_extra_failures():
-    cb = _breaker(threshold=2, initial=5.0, max_s=100.0)
+    # Use tiny cooldowns (0.01s initial, 0.1s max) so test completes quickly.
+    cb = CircuitBreaker(failure_threshold=2, initial_cooldown_s=_TINY, max_cooldown_s=0.1)
     err = RuntimeError("x")
 
-    with patch("co_cli.index._circuit.time") as mock_time:
-        mock_time.monotonic.return_value = 0.0
-        cb.on_failure(err)
-        cb.on_failure(err)
-        # open_until = 0 + 5s (2^0 * 5)
-        mock_time.monotonic.return_value = 4.9
-        assert cb.is_open()
+    cb.on_failure(err)
+    cb.on_failure(err)
+    assert cb.is_open()
 
-        cb.on_failure(err)
-        # open_until = 4.9 + 10s (2^1 * 5)
-        mock_time.monotonic.return_value = 14.8
-        assert cb.is_open()
+    # Third failure doubles the cooldown — still open immediately after
+    cb.on_failure(err)
+    assert cb.is_open()
 
-        mock_time.monotonic.return_value = 15.0
-        assert not cb.is_open()
+    # Wait past the doubled cooldown (2 * 0.01 = 0.02s); use a safe margin
+    time.sleep(_TINY * 4)
+    assert not cb.is_open()
 
 
 def test_cooldown_capped_at_max():
-    cb = _breaker(threshold=2, initial=5.0, max_s=10.0)
+    # max_s=0.03 — many failures cannot push cooldown above this cap
+    cb = CircuitBreaker(failure_threshold=2, initial_cooldown_s=_TINY, max_cooldown_s=0.03)
     err = RuntimeError("x")
 
-    with patch("co_cli.index._circuit.time") as mock_time:
-        mock_time.monotonic.return_value = 0.0
-        for _ in range(10):
-            cb.on_failure(err)
-        # Despite many failures cooldown is capped at 10s
-        mock_time.monotonic.return_value = 9.9
-        assert cb.is_open()
-        mock_time.monotonic.return_value = 10.1
-        assert not cb.is_open()
+    for _ in range(10):
+        cb.on_failure(err)
+
+    assert cb.is_open()
+    # Wait past the cap
+    time.sleep(0.05)
+    assert not cb.is_open()
 
 
 def test_open_until_expires_half_open():
-    cb = _breaker(threshold=2, initial=5.0, max_s=10.0)
+    cb = CircuitBreaker(failure_threshold=2, initial_cooldown_s=_TINY, max_cooldown_s=0.05)
     err = RuntimeError("x")
 
-    with patch("co_cli.index._circuit.time") as mock_time:
-        mock_time.monotonic.return_value = 0.0
-        cb.on_failure(err)
-        cb.on_failure(err)
-        assert cb.is_open()
+    cb.on_failure(err)
+    cb.on_failure(err)
+    assert cb.is_open()
 
-        mock_time.monotonic.return_value = 5.1
-        assert not cb.is_open()
+    time.sleep(_TINY * 2)
+    assert not cb.is_open()
 
 
 def test_success_resets_to_closed():
-    cb = _breaker(threshold=2)
+    cb = CircuitBreaker(failure_threshold=2, initial_cooldown_s=_TINY, max_cooldown_s=0.05)
     err = RuntimeError("x")
 
-    with patch("co_cli.index._circuit.time") as mock_time:
-        mock_time.monotonic.return_value = 0.0
-        cb.on_failure(err)
-        cb.on_failure(err)
-        assert cb.is_open()
+    cb.on_failure(err)
+    cb.on_failure(err)
+    assert cb.is_open()
 
-        mock_time.monotonic.return_value = 5.1
-        cb.on_success()
-        assert not cb.is_open()
+    time.sleep(_TINY * 2)
+    cb.on_success()
+    assert not cb.is_open()
 
-        # A fresh failure cycle must trip the threshold again
-        mock_time.monotonic.return_value = 5.1
-        cb.on_failure(err)
-        assert not cb.is_open()
-        cb.on_failure(err)
-        assert cb.is_open()
+    # A fresh failure cycle must trip the threshold again
+    cb.on_failure(err)
+    assert not cb.is_open()
+    cb.on_failure(err)
+    assert cb.is_open()

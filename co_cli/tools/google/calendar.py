@@ -11,9 +11,8 @@ from co_cli.tools.google._auth import _get_google_service, _google_available
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _CALENDAR_NOT_CONFIGURED = (
-    "Calendar: not configured. "
-    "Set google_credentials_path in settings or run: "
-    "gcloud auth application-default login"
+    "Calendar: not configured. Run `co google auth` to authorize, "
+    "or set google_credentials_path in settings to an existing token."
 )
 
 
@@ -84,7 +83,6 @@ def _fetch_events(service, **kwargs) -> list[dict]:
     is_read_only=True,
     is_concurrent_safe=True,
     integration="google_calendar",
-    requires_config="google_credentials_path",
     retries=3,
     check_fn=_google_available,
 )
@@ -97,8 +95,10 @@ def google_calendar_list(
     """List calendar events in a time window around today. Auto-paginates
     internally — all matching events up to max_results are returned in one call.
 
-    Use this for schedule overviews (today, this week). For keyword search
-    across events, use google_calendar_search instead.
+    Use this for schedule overviews (today, this week) — its near-term default
+    window (days_ahead=1) suits a today/this-week glance. For keyword search
+    across events with a forward month default window, use google_calendar_search
+    instead.
 
     Returns a dict with:
     - display: pre-formatted event list with times, title, location, attendees,
@@ -110,9 +110,10 @@ def google_calendar_list(
     - Recurring events are expanded into individual occurrences
 
     Args:
-        days_back: Days in the past to include (default 0 = today onward).
-        days_ahead: Days ahead to include (default 1 = today only).
-                    Use 7 for a week, 30 for a month.
+        days_back: How many past days to include before today (default 0 =
+                   start from today at 00:00).
+        days_ahead: Days ahead to include (default 1 = a today/this-week
+                    overview window). Use 7 for a week, 30 for a month.
         max_results: Max events to return (default 25, max 250).
     """
     service, err = _get_google_service(ctx, "calendar", "v3", _CALENDAR_NOT_CONFIGURED)
@@ -156,7 +157,6 @@ def google_calendar_list(
     is_read_only=True,
     is_concurrent_safe=True,
     integration="google_calendar",
-    requires_config="google_credentials_path",
     retries=3,
     check_fn=_google_available,
 )
@@ -171,8 +171,10 @@ def google_calendar_search(
     Auto-paginates internally — all matching events up to max_results are
     returned in one call.
 
-    Use this when looking for specific meetings or topics. For a general
-    schedule overview, use google_calendar_list instead.
+    Use this when looking for specific meetings or topics — its default window
+    hunts a forward month (days_ahead=30). For a general near-term schedule
+    overview with a today/this-week default window, use google_calendar_list
+    instead.
 
     Returns a dict with:
     - display: pre-formatted event list with times, title, location, attendees,
@@ -181,13 +183,15 @@ def google_calendar_search(
 
     Caveats:
     - Searches primary calendar only
-    - To find events in the past, increase days_back (default is 0 = today onward)
+    - Recurring events are expanded into individual occurrences
+    - To find events in the past, increase days_back (default 0 starts from
+      today at 00:00, so past events are excluded)
 
     Args:
         query: Keywords to match (e.g. "standup", "1:1 with Alice", "sprint review").
-        days_back: Days in the past to search (default 0 = today onward).
-                   Use 365 for a full year of history.
-        days_ahead: Days ahead to search (default 30).
+        days_back: How many past days to include before today (default 0 =
+                   start from today at 00:00). Use 365 for a full year of history.
+        days_ahead: Days ahead to search (default 30 = a forward month hunt).
         max_results: Max events to return (default 25, max 250).
     """
     service, err = _get_google_service(ctx, "calendar", "v3", _CALENDAR_NOT_CONFIGURED)

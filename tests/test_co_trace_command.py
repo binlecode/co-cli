@@ -41,7 +41,8 @@ def _make_record(
     }
 
 
-def test_read_records_filters_by_trace_id(tmp_path: Path) -> None:
+def test_render_trace_filters_by_trace_id(tmp_path: Path, capsys) -> None:
+    """render_trace for t_a must include root_a/child_a and exclude root_b."""
     log = tmp_path / "spans.jsonl"
     _write_record(
         log, _make_record(trace_id="t_a", span_id="s_1", parent_span_id=None, name="root_a")
@@ -53,12 +54,15 @@ def test_read_records_filters_by_trace_id(tmp_path: Path) -> None:
         log, _make_record(trace_id="t_a", span_id="s_3", parent_span_id="s_1", name="child_a")
     )
 
-    records = trace_view._read_records_for_trace("t_a", log_path=log)
-    assert len(records) == 2
-    assert {r["name"] for r in records} == {"root_a", "child_a"}
+    trace_view.render_trace("t_a", log_path=log)
+    out = capsys.readouterr().out
+    assert "root_a" in out
+    assert "child_a" in out
+    assert "root_b" not in out
 
 
-def test_read_records_includes_rotated_backups(tmp_path: Path) -> None:
+def test_render_trace_includes_rotated_backups(tmp_path: Path, capsys) -> None:
+    """render_trace must include records from backup log files (spans.jsonl.1)."""
     base = tmp_path / "spans.jsonl"
     backup = tmp_path / "spans.jsonl.1"
     _write_record(
@@ -69,13 +73,17 @@ def test_read_records_includes_rotated_backups(tmp_path: Path) -> None:
         base, _make_record(trace_id="t_a", span_id="s_2", parent_span_id="s_1", name="from_live")
     )
 
-    records = trace_view._read_records_for_trace("t_a", log_path=base)
-    names = {r["name"] for r in records}
-    assert names == {"from_backup", "from_live"}
+    trace_view.render_trace("t_a", log_path=base)
+    out = capsys.readouterr().out
+    assert "from_backup" in out
+    assert "from_live" in out
 
 
-def test_build_tree_parent_child_structure(tmp_path: Path) -> None:
-    records = [
+def test_render_trace_children_sorted_by_start_ts(tmp_path: Path, capsys) -> None:
+    """render_trace must display child1 (earlier start_ts) before child2."""
+    log = tmp_path / "spans.jsonl"
+    _write_record(
+        log,
         _make_record(
             trace_id="t",
             span_id="root",
@@ -83,6 +91,9 @@ def test_build_tree_parent_child_structure(tmp_path: Path) -> None:
             name="root",
             start_ts="2026-05-17T00:00:00.000000Z",
         ),
+    )
+    _write_record(
+        log,
         _make_record(
             trace_id="t",
             span_id="child2",
@@ -90,6 +101,9 @@ def test_build_tree_parent_child_structure(tmp_path: Path) -> None:
             name="child2",
             start_ts="2026-05-17T00:00:02.000000Z",
         ),
+    )
+    _write_record(
+        log,
         _make_record(
             trace_id="t",
             span_id="child1",
@@ -97,6 +111,9 @@ def test_build_tree_parent_child_structure(tmp_path: Path) -> None:
             name="child1",
             start_ts="2026-05-17T00:00:01.000000Z",
         ),
+    )
+    _write_record(
+        log,
         _make_record(
             trace_id="t",
             span_id="grand",
@@ -104,14 +121,14 @@ def test_build_tree_parent_child_structure(tmp_path: Path) -> None:
             name="grand",
             start_ts="2026-05-17T00:00:01.500000Z",
         ),
-    ]
-    roots = trace_view._build_tree(records)
-    assert len(roots) == 1
-    root = roots[0]
-    assert root["name"] == "root"
-    # Children sorted by start_ts: child1 before child2
-    assert [c["name"] for c in root["children"]] == ["child1", "child2"]
-    assert [c["name"] for c in root["children"][0]["children"]] == ["grand"]
+    )
+
+    trace_view.render_trace("t", log_path=log)
+    out = capsys.readouterr().out
+    # child1 must appear before child2 in output (sorted by start_ts)
+    assert out.index("child1") < out.index("child2")
+    # grand must appear nested under child1 (between child1 and child2)
+    assert out.index("child1") < out.index("grand") < out.index("child2")
 
 
 def test_render_trace_prints_tree(tmp_path: Path, capsys) -> None:

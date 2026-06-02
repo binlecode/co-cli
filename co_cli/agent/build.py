@@ -65,8 +65,9 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
     """Build a task agent from a spec.
 
     Resolves spec.tool_names against TOOL_REGISTRY_BY_NAME, filtered by
-    _config_requirement_met (Google tools drop out without
-    credentials). Unknown tool names raise ValueError at build time.
+    _config_requirement_met (drops a tool whose requires_config names an absent
+    config field; no tool currently sets one — Google tools self-gate per-turn via
+    check_fn instead). Unknown tool names raise ValueError at build time.
     All resolved tools are registered with requires_approval=False.
 
     When spec.include_skill_manifest is True, prepends the rendered skill

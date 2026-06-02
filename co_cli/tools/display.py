@@ -32,7 +32,6 @@ TOOL_START_DISPLAY_ARG: dict[str, str] = {
     "skill_patch": "name",
     "skill_delete": "name",
     "session_view": "session_id",
-    "web_research": "query",
     "task_start": "command",
     "task_status": "task_id",
 }

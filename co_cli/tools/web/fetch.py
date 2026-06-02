@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import html2text
 import httpx
+import trafilatura
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
@@ -86,6 +87,30 @@ def _html_to_markdown(html: str) -> str:
     # 0 disables line wrapping
     converter.body_width = 0
     return converter.handle(html)
+
+
+def _extract_main_content(html: str, url: str) -> str | None:
+    """Extract main-article markdown from HTML; None when nothing usable extracted.
+
+    Fail-open: any extraction error returns None so the caller falls back to
+    full-page conversion. Drops nav/header/footer/sidebar boilerplate so the
+    model receives content, not chrome. favor_recall=True biases toward keeping
+    borderline content rather than over-pruning — safer for doc/reference pages.
+    """
+    try:
+        extracted = trafilatura.extract(
+            html,
+            url=url,
+            output_format="markdown",
+            include_links=True,
+            include_tables=True,
+            favor_recall=True,
+        )
+    except Exception:
+        return None
+    if not extracted or not extracted.strip():
+        return None
+    return extracted
 
 
 def _build_fetch_headers(hostname: str | None) -> dict[str, str]:
@@ -215,7 +240,8 @@ async def web_fetch(
     text = raw_bytes.decode(resp.encoding or "utf-8", errors="replace")
 
     if "html" in content_type and format == "markdown":
-        text = _html_to_markdown(text)
+        extracted = _extract_main_content(text, final_url)
+        text = extracted if extracted is not None else _html_to_markdown(text)
 
     truncated = len(text) > _MAX_FETCH_CHARS
     if truncated:

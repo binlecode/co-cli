@@ -32,7 +32,6 @@ from co_cli.config.web import WEB_ENV_MAP, WebSettings
 # (it sets SETTINGS_FILE, SEARCH_DB, etc.) — cannot be moved into fill_from_env.
 USER_DIR = Path(os.getenv("CO_HOME", Path.home() / ".co-cli"))
 GOOGLE_TOKEN_PATH = USER_DIR / "google_token.json"
-ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
 SETTINGS_FILE = USER_DIR / "settings.json"
 SEARCH_DB = USER_DIR / "co-cli-search.db"
 LOGS_DIR = USER_DIR / "logs"
@@ -48,6 +47,7 @@ DREAM_QUEUE_FAILED_DIR = DREAM_QUEUE_DIR / "failed"
 DREAM_LOG_DIR = LOGS_DIR / "dream"
 DREAM_RUN_TAG = DREAM_DAEMON_DIR / "run.tag"
 # Flat defaults (Settings-level, not grouped)
+DEFAULT_GOOGLE_CLIENT_SECRET_PATH = "~/env-secrets/google_client_secret.json"
 DEFAULT_THEME = "light"
 DEFAULT_PERSONALITY = "tars"
 DEFAULT_TOOL_RETRIES = 3
@@ -99,6 +99,7 @@ class Settings(BaseModel):
     # Flat — integration paths
     brave_search_api_key: str | None = Field(default=None)
     google_credentials_path: str | None = Field(default=None)
+    google_client_secret_path: str = Field(default=DEFAULT_GOOGLE_CLIENT_SECRET_PATH)
     memory_path: str | None = Field(default=None)
     workspace_path: str | None = Field(default=None)
     # Read-only reference roots for file_read / file_search (write anchor stays workspace_path).
@@ -144,6 +145,7 @@ class Settings(BaseModel):
         flat_env_map = {
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
+            "google_client_secret_path": "GOOGLE_CLIENT_SECRET_PATH",
             "memory_path": "CO_MEMORY_PATH",
             "workspace_path": "CO_WORKSPACE_PATH",
             "theme": "CO_THEME",

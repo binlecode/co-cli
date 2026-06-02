@@ -9,7 +9,6 @@ from co_cli.display.core import console, make_table
 
 _DELEGATION_TOOLS = frozenset(
     {
-        "web_research",
         "task_start",
     }
 )

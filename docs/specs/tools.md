@@ -32,18 +32,35 @@ graph LR
 | Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_create`, `memory_append`, `memory_replace`, `memory_delete`, `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` | memory write tools / skill write tools approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
 | Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval |
-| Delegation | `web_research` | DEFERRED; spawns a task agent |
-| Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | Gate: `google_credentials_path`; `google_gmail_draft` approval |
+| Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | DEFERRED; per-turn visibility hides them until a credential exists (`co google auth`); `google_gmail_draft` approval |
 
-**Total: 36 native tools** (24 ALWAYS · 12 DEFERRED · 12 explicit approval-gated · 7 config-gated; `shell_exec` may also prompt dynamically based on the command path)
+**Total: 36 native tools** (24 ALWAYS · 12 DEFERRED · 12 explicit approval-gated · 7 Google tools visibility-gated per turn by credential presence; `shell_exec` may also prompt dynamically based on the command path)
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
+
+### Google credential setup & tool visibility
+
+The seven Google tools register unconditionally but are **hidden per turn** until a credential exists on disk. `_google_available` (`co_cli/tools/google/_auth.py`) is wired as each tool's `check_fn` (a pydantic-ai `prepare` hook), so **visibility, not registration, gates them** — a user with no Google setup never sees them, and a freshly-authorized token surfaces them on the next `co chat` with no settings.json edit.
+
+**What makes them visible to the model, per turn:**
+- Before first resolution: an explicit `google_credentials_path` file exists, **or** the default token `GOOGLE_TOKEN_PATH` (`~/.co-cli/google_token.json`) exists.
+- After resolution: creds are present and not permanently expired (an expired-but-refreshable token still shows — `googleapiclient` auto-refreshes on the first API call).
+
+**Acquiring a credential — `co google auth` is the sole acquisition path.** No gcloud, no ADC: gcloud's built-in OAuth client cannot grant Workspace user scopes, so `ensure_google_credentials` only *reads* a token (explicit path → default `GOOGLE_TOKEN_PATH` → `None`); it never acquires one. `co google auth` runs `InstalledAppFlow` with the user's own OAuth **Desktop-app** client (`google_client_secret_path`, default `~/env-secrets/google_client_secret.json`) and writes an authorized-user token to `GOOGLE_TOKEN_PATH` (chmod 0600). Two modes:
+- default — local browser via `run_local_server(port=0)`.
+- `--no-browser` — prints the consent URL and reads the pasted code or full redirect URL, for machines with no local browser (SSH/remote).
+
+**Least-privilege scopes** — `ALL_GOOGLE_SCOPES` is the single source both *requested* at auth and *required* at load, so the two can never drift: `gmail.readonly`, `gmail.compose`, `drive.readonly`, `calendar.readonly` — no `gmail.modify`/`gmail.send` or write scopes.
+
+**Verify — `co google check`** loads the resolved token, attempts a scope-validating refresh, and prints a granted-vs-required diff; a shortfall (or a `RefreshError`) exits non-zero with the terminal "re-authorize by running `co google auth`" guidance, mirroring the tool-layer `handle_google_api_error` classification. No `co google` command prints secrets (`client_secret`/`refresh_token`/token).
+
+**At call time**, a scope/auth failure is terminal, not retried: `handle_google_api_error` classifies a `google.auth` `RefreshError` as a terminal `tool_error` pointing at `co google auth`, while transient 403/404/429/5xx still raise `ModelRetry`.
 
 ### Shared Entry Points
 
 `CoToolLifecycle` (`co_cli/tools/lifecycle.py`) is the pydantic-ai capability registered on the orchestrator agent. It fires four hooks per tool call: `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute`. All tool instrumentation and safety guards run through these hooks — no inline per-tool branching.
 
-Task-agent lifecycle — `fork_deps`, `build_task_agent`, `run_attempt`, `run_standalone` — is owned by [agents.md](agents.md). Tool-side concerns end at `fork_deps`: it forwards `tool_index` for approval and span-attribute lookup and explicitly excludes `toolset` so the orchestrator's combined routing surface never propagates to a task agent.
+Task-agent lifecycle — `fork_deps`, `build_task_agent`, `run_standalone` — is owned by [agents.md](agents.md). Tool-side concerns end at `fork_deps`: it forwards `tool_index` for approval and span-attribute lookup and explicitly excludes `toolset` so the orchestrator's combined routing surface never propagates to a task agent.
 
 ### `file_search` contract (presence-based mode)
 
@@ -195,10 +212,6 @@ tool call dispatched
 `is_concurrent_safe=True` means "safe to dispatch in parallel." `ResourceLockStore` fail-fast
 on shared mutation keys is a complementary guard — both layers apply.
 
-### Delegation Agents
-
-The delegation tool (`web_research`) spawns a focused task agent. The agent surface, spec records, runner semantics, depth check, single-span retry topology, and per-agent tool surfaces are owned by [agents.md](agents.md). Tools.md scope ends at the orchestrator hand-off via `fork_deps`.
-
 ## 3. Config
 
 | Setting | Env Var | Default | Description |
@@ -209,11 +222,10 @@ The delegation tool (`web_research`) spawns a focused task agent. The agent surf
 | `web.fetch_blocked_domains` | `CO_WEB_FETCH_BLOCKED_DOMAINS` | `[]` | Domain blocklist |
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Required for `web_search` |
 | `file_search_paths` | — | `[]` | Read-only reference roots for `file_read`/`file_search` (e.g. a notes vault). Empty → `[workspace_dir]`; non-empty is authoritative and total. `file_write`/`file_patch` never widen to these roots |
-| `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Registration gate for Google tools |
+| `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Explicit path to a Google token; if set+present it surfaces the Google tools. Otherwise the default `GOOGLE_TOKEN_PATH` (written by `co google auth`) is used. Tools are gated per-turn by credential presence, not registration |
 | `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | Memory item directory |
 | `mcp_servers` | `CO_MCP_SERVERS` | 2 defaults | MCP server definitions |
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Default agent retry budget |
-| `max_requests` tool arg | — | 10 / 8 / 3 | Per-call delegation request cap (research / analysis / reasoning); defaults are function-local |
 
 ## 4. Public Interface
 
@@ -247,7 +259,7 @@ The delegation tool (`web_research`) spawns a focused task agent. The agent surf
 | `CoToolLifecycle(AbstractCapability[CoDeps])` | `co_cli/tools/lifecycle.py` | pydantic-ai capability — fires `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute` on every tool call |
 | `resolve_approval_subject(tool_name, args) -> ApprovalSubject` | `co_cli/tools/approvals.py` | Maps a tool call to its approval-subject kind (`shell`, `path`, `domain`, `tool`) |
 | `ApprovalSubject`, `SessionApprovalRule`, `ApprovalKindEnum` | `co_cli/deps.py` | Approval-subject record types and remembered-rule shape |
-| `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt stub list (one `` - `name`: one-liner `` per DEFERRED tool) telling the model to load a tool via `search_tools` first; emitted via `deferred_tool_awareness_prompt` in `co_cli/agent/_instructions.py` |
+| `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt stub list (one `` - `name`: one-liner `` per DEFERRED tool) grouped by integration family under sub-headers (native primitives first with no sub-header, then e.g. `Google Workspace (load before use):`) telling the model to load a tool via `search_tools` first; emitted via `deferred_tool_awareness_prompt` in `co_cli/agent/_instructions.py` |
 
 ### Delegation handoff
 
@@ -255,7 +267,7 @@ The delegation tool (`web_research`) spawns a focused task agent. The agent surf
 |--------|--------|----------|
 | `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds an isolated `CoDeps` for a task agent; forwards `tool_index`, excludes `toolset`, increments `agent_depth` |
 
-> Runners (`run_standalone`, `run_attempt`) live in [agents.md § 4](agents.md).
+> The `run_standalone` runner lives in [agents.md § 4](agents.md).
 
 ## 5. Files
 
@@ -266,11 +278,10 @@ The delegation tool (`web_research`) spawns a focused task agent. The agent surf
 | `co_cli/agent/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |
 | `co_cli/tools/lifecycle.py` | `CoToolLifecycle` — all four per-call hooks |
 | `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
-| `co_cli/tools/deferred_prompt.py` | per-tool awareness stub list for DEFERRED tools |
+| `co_cli/tools/deferred_prompt.py` | per-tool awareness stub list for DEFERRED tools, grouped by integration family under sub-headers |
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator, `TOOL_REGISTRY` self-populating list, `TOOL_REGISTRY_BY_NAME` lookup dict |
 | `co_cli/tools/tool_io.py` | `tool_output()`, `tool_error()`, `spill_if_oversized()`, `spill_with_span()`, `check_tool_results_size()` |
 | `co_cli/tools/shell_policy.py` | `shell_exec` and `task_start` command-safety policy |
-| `co_cli/tools/agents/delegation.py` | `web_research` tool; `WEB_RESEARCH_SPEC` |
 | `co_cli/tools/files/read.py` | `file_read`, `file_search` |
 | `co_cli/tools/files/write.py` | `file_write`, `file_patch` |
 | `co_cli/tools/memory/recall.py` | `memory_search`, `session_search` |
@@ -283,6 +294,8 @@ The delegation tool (`web_research`) spawns a focused task agent. The agent surf
 | `co_cli/tools/google/drive.py` | `google_drive_search`, `google_drive_read` |
 | `co_cli/tools/google/gmail.py` | `google_gmail_list`, `google_gmail_search`, `google_gmail_draft` |
 | `co_cli/tools/google/calendar.py` | `google_calendar_list`, `google_calendar_search` |
+| `co_cli/tools/google/_auth.py` | `_google_available` (per-turn visibility `check_fn`), `ensure_google_credentials` (read-only resolution), `ALL_GOOGLE_SCOPES` (least-privilege scope set) |
+| `co_cli/commands/google.py` | `co google auth` (sole acquisition path; browser or `--no-browser`) and `co google check` (scope-validating verify) CLI commands |
 
 ## 6. Test Gates
 

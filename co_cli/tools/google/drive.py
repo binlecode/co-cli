@@ -11,9 +11,8 @@ from co_cli.tools.google._auth import _get_google_service, _google_available
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _DRIVE_NOT_CONFIGURED = (
-    "Drive: not configured. "
-    "Set google_credentials_path in settings or run: "
-    "gcloud auth application-default login"
+    "Drive: not configured. Run `co google auth` to authorize, "
+    "or set google_credentials_path in settings to an existing token."
 )
 
 
@@ -64,7 +63,6 @@ def _format_drive_results(
     is_read_only=True,
     is_concurrent_safe=True,
     integration="google_drive",
-    requires_config="google_credentials_path",
     retries=3,
     check_fn=_google_available,
 )
@@ -92,7 +90,9 @@ def google_drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> T
 
     Args:
         query: Search keywords (e.g. "weekly meeting", "Q4 budget report").
-        page: Page number (1-based, default 1). Use 1 for first page, 2 for next, etc.
+        page: 1-based page number (default 1). Returns 10 results per page.
+              Must be requested sequentially — page N requires page N-1 fetched
+              earlier this session; you cannot jump ahead.
     """
     service, err = _get_google_service(ctx, "drive", "v3", _DRIVE_NOT_CONFIGURED)
     if err:
@@ -131,7 +131,6 @@ def google_drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> T
     is_read_only=True,
     is_concurrent_safe=True,
     integration="google_drive",
-    requires_config="google_credentials_path",
     retries=3,
     check_fn=_google_available,
 )

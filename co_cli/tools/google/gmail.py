@@ -12,9 +12,8 @@ from co_cli.tools.google._auth import _get_google_service, _google_available
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _GMAIL_NOT_CONFIGURED = (
-    "Gmail: not configured. "
-    "Set google_credentials_path in settings or run: "
-    "gcloud auth application-default login"
+    "Gmail: not configured. Run `co google auth` to authorize, "
+    "or set google_credentials_path in settings to an existing token."
 )
 
 
@@ -52,7 +51,6 @@ def _format_messages(service, message_ids: list[dict]) -> str:
     is_read_only=True,
     is_concurrent_safe=True,
     integration="google_gmail",
-    requires_config="google_credentials_path",
     retries=3,
     check_fn=_google_available,
 )
@@ -93,12 +91,14 @@ def google_gmail_list(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
     is_read_only=True,
     is_concurrent_safe=True,
     integration="google_gmail",
-    requires_config="google_credentials_path",
     retries=3,
     check_fn=_google_available,
 )
 def google_gmail_search(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolReturn:
     """Search emails in Gmail using Gmail search syntax.
+
+    For a plain most-recent-inbox overview with no filters, use
+    google_gmail_list instead.
 
     Supports the full Gmail query language. Common operators:
     - from:alice, to:bob — sender/recipient
@@ -145,7 +145,6 @@ def google_gmail_search(ctx: RunContext[CoDeps], query: str, max_results: int = 
     approval=True,
     is_concurrent_safe=True,
     integration="google_gmail",
-    requires_config="google_credentials_path",
     retries=1,
     check_fn=_google_available,
 )
@@ -159,7 +158,8 @@ def google_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
     Returns a confirmation string with the recipient, subject, and draft ID.
 
     Args:
-        to: Recipient email address (e.g. "alice@example.com").
+        to: Recipient email address. For multiple recipients, comma-separate
+            them (e.g. "alice@example.com, bob@example.com").
         subject: Email subject line.
         body: Email body as plain text.
     """

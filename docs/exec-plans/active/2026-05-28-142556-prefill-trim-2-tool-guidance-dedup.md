@@ -64,13 +64,26 @@ trimming.
 ## Behavioral Constraints
 
 (Inherits all parent Behavioral Constraints.) Load-bearing for this child:
+- **Prerequisite — sequenced after `drop-web-research-add-fetch-extraction`
+  (`2026-06-02-160319`, another team, in progress).** That plan removes the `web_research` tool
+  and the `web_search`↔`web_research` steer clause from `web_search`'s docstring, and adds
+  trafilatura content extraction to `web_fetch` (code, not its docstring). This child MUST start
+  from the **post-drop tree**: do **not** preserve or re-add any `web_research` steer (it is gone
+  upstream), and re-measure `web_search`/`web_fetch` against the post-drop docstrings before
+  trimming. The drop only removes a DEFERRED tool, so the ALWAYS bucket (TASK-4's subject) is
+  unaffected; only the registry count and the DEFERRED bucket shrink.
 - **Canonical-home seam guard.** Any guidance removed from rule `04` MUST survive in exactly one
   docstring that is NOT trimmed away here. Explicit per-tool check for `web_fetch`, `web_search`,
   `file_read`.
 - **Conservative trim, NOT hermes-brevity** — keep routing/when-to-use cues; the model is small.
-- Preserve injunctions: `web_fetch` "Use URLs from search results or the user's message; do not
-  fabricate URLs". (`file_patch`'s "Requires `file_read` … first" injunction is out of scope — that
-  tool is no longer trimmed here; the injunction lives in its post-3c docstring and stays.)
+- Preserve injunctions, verbatim from the **current** docstring (do not paraphrase): `web_fetch`'s
+  "Accepts any URL — from the user's message, from web_search results, or from tool output. Never
+  guess or fabricate URLs yourself." (note it includes the "from tool output" clause — keep it).
+  (`file_patch`'s "Requires `file_read` … first" injunction is out of scope — that tool is no longer
+  trimmed here; the injunction lives in its post-3c docstring and stays.)
+- **Keep `web_fetch`'s Shell-fallback cue** (`fetch.py:133–135`: retry blocked/403/Cloudflare fetches
+  with `curl -sL <url>`). It is a when-to-use/fallback routing cue, NOT a `Returns:` enumeration or
+  passive caveat — condense it, do not drop it.
 - Keep `shell_exec` untouched (canonical routing home). Keep griffe `Args:` formatting.
 - Rule ordering invariant (`assembly.py:56-61`) holds — no renumbering.
 - **Superseded inherited constraint.** The parent's "memory tool surface unchanged — three separate
@@ -139,14 +152,22 @@ path.
 
 ### TASK-2 — routing/web/file docstring trim
 
-**Prerequisites:** TASK-1 (for the seam-guard overlap check).
+**Prerequisites:** TASK-1 (for the seam-guard overlap check); **`drop-web-research-add-fetch-extraction`
+shipped** — `web_search.py`/`fetch.py` are at their post-drop state before this task edits them.
 
 **Files:** `co_cli/tools/web/fetch.py`, `co_cli/tools/web/search.py`, `co_cli/tools/files/read.py`
 (`file_read` only — `file_search` is child 3's). **`co_cli/tools/files/write.py` (`file_patch`) is no
 longer in scope** — Task 3c already shrank it below the trim heuristic.
 
 **Action:** Trim desc (drop `Returns:`/enforced caveats) and params `Args:` per tool; for
-`web_fetch`/`web_search`/`file_read` verify the cue removed from rule `04` survives here.
+`web_fetch`/`web_search`/`file_read` verify the cue removed from rule `04` survives here. For
+`web_search` specifically: the `web_research` steer clause is already **removed upstream** by the drop
+plan — do NOT preserve or re-add it; trim the post-drop docstring as-is (its desc has shrunk
+accordingly, so re-measure before trimming). For `web_fetch` specifically: preserve the fabricate-URLs
+injunction verbatim (incl. "from tool output") and keep the Shell-fallback cue (`fetch.py:133–135`)
+condensed — both are routing-load-bearing, not trimmable caveats. (The drop plan changed `web_fetch`'s
+**code**, not its docstring, so the docstring is still child 2's to trim — but confirm the line refs
+post-drop.)
 
 **done_when:**
 - `uv run pytest tests/ -k "web or file" -x` passes.
@@ -185,12 +206,15 @@ current registry which already includes child 3's trims, both the memory and ski
 `name + description + minified-params-JSON`; cross-reference visibility via
 `deps.tool_index[name].visibility`. Assertions:
 - ALWAYS-bucket total ≤ measured post-child-2-trim value + ~400-char headroom. **Baseline before
-  child 2's trims: 22,470 chars (2026-06-02), reflecting both splits + the 3c V4A removal.**
-  Re-measure after TASK-1–3 and pin the ceiling to that number.
+  child 2's trims: 22,470 chars (2026-06-02), reflecting both splits + the 3c V4A removal.** The
+  `web_research` drop does **not** change this number — `web_research` was DEFERRED, so it never
+  counted toward the ALWAYS bucket; only the DEFERRED bucket shrinks (~−1,268 chars). Re-measure
+  after TASK-1–3 (on the post-drop tree) and pin the ALWAYS ceiling to that number.
 - Each ToolDefinition has a non-empty description.
-- `len(tools) >= 28` (registry is **29** now — `memory_manage`→4 `+3`, `skill_manage`→4 `+3`,
-  `knowledge_analyze` removed `−1`, off the parent's 25/26). Floor is one below current to guard
-  against accidental drops, not pin the exact boundary.
+- `len(tools) >= 27` (registry is **28** now — was 29 before the `web_research` drop `−1`:
+  `memory_manage`→4 `+3`, `skill_manage`→4 `+3`, `knowledge_analyze` removed `−1`, `web_research`
+  removed `−1`, off the parent's 25/26). Floor is one below current to guard against accidental
+  drops, not pin the exact boundary.
 - Max per-ALWAYS-tool ≤ a measured ceiling. Post-3c the top ALWAYS tool by total is `file_search`
   (~2,100 chars; child 3's, already trimmed), with `shell_exec` (~1,956, the untouched canonical
   home) next — `file_patch` is no longer the max (it dropped to ~1,274). Set the per-tool cap from
@@ -268,6 +292,25 @@ removal) shipped from `tool-surface-small-model-audit`. Drift found and correcte
 
 TASK-1 (rule dedup) is unaffected by the drift; TASK-2 shrinks from four docstrings to three. Plan is
 Gate-1-ready against the current tree.
+
+## Plan Refresh — 2026-06-02 (sequenced after `drop-web-research-add-fetch-extraction`)
+
+This child now **follows the delivery** of `2026-06-02-160319-drop-web-research-add-fetch-extraction.md`
+(another team, in progress). That plan drops the `web_research` tool + its in-turn delegation machinery
+and adds trafilatura content extraction to `web_fetch`. Impact on this child:
+
+- **Hard ordering:** this child starts from the **post-drop tree**. Both plans edit `web/search.py` and
+  `web/fetch.py` — they must not run concurrently; the drop ships first.
+- **Steer inversion (supersedes the earlier Gate-1 nit).** The `web_search`↔`web_research` reciprocal
+  steer (added by `tool-surface` T5-web) is **removed upstream** by the drop. TASK-2 must NOT preserve
+  or re-add it — earlier review guidance to "preserve the steer" is void. `web_search`'s desc shrinks
+  when the steer clause is removed, so re-measure before trimming.
+- **`web_fetch`:** the drop changes `web_fetch`'s **code** (extraction), not its docstring — the
+  docstring stays this child's to trim; re-confirm the Shell-fallback line ref post-drop.
+- **Counts:** registry **29 → 28** (`web_research −1`); DEFERRED bucket shrinks (~−1,268 chars);
+  **ALWAYS bucket unchanged** (`web_research` was DEFERRED). TASK-4 floor updated `>= 28` → `>= 27`;
+  the ALWAYS ceiling re-measure is unaffected by the drop and still taken after TASK-1–3.
+- TASK-1 (rules `03`/`04`) is entirely unaffected by the drop.
 
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?

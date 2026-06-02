@@ -81,7 +81,6 @@ MEMORY_DIR        = USER_DIR / memory
 SESSIONS_DIR      = USER_DIR / sessions
 TOOL_RESULTS_DIR  = USER_DIR / tool-results
 GOOGLE_TOKEN_PATH = USER_DIR / google_token.json
-ADC_PATH          = ~/.config/gcloud/application_default_credentials.json
 ```
 
 `_ensure_dirs()` creates these on first call to `get_settings()`.
@@ -148,7 +147,8 @@ Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is)
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | Consecutive identical tool calls before agent is halted (2–10) |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | Max agent self-reflection passes per turn (1–10) |
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `None` | Brave Search API key |
-| `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` | Path to Google OAuth credentials JSON |
+| `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` | Path to an existing Google authorized-user token JSON (read-only; `co google auth` writes the default `GOOGLE_TOKEN_PATH`) |
+| `google_client_secret_path` | `GOOGLE_CLIENT_SECRET_PATH` | `~/env-secrets/google_client_secret.json` | Path to the user's OAuth Desktop-app client JSON, consumed by `co google auth` |
 | `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | Override for the memory items directory |
 | `workspace_path` | `CO_WORKSPACE_PATH` | `None` | Write/cwd anchor: where `file_write`/`file_patch` land and the base for relative paths |
 | `file_search_paths` | — | `[]` | Read-only reference roots for `file_read`/`file_search` (e.g. a notes vault). Empty → `[workspace_dir]`; non-empty is authoritative and total (no implicit workspace append). Writes never widen to these roots |
@@ -325,7 +325,6 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `SESSIONS_DIR` | `co_cli/config/core.py` | `USER_DIR / sessions` |
 | `TOOL_RESULTS_DIR` | `co_cli/config/core.py` | `USER_DIR / tool-results` |
 | `GOOGLE_TOKEN_PATH` | `co_cli/config/core.py` | `USER_DIR / google_token.json` |
-| `ADC_PATH` | `co_cli/config/core.py` | `~/.config/gcloud/application_default_credentials.json` |
 
 ### LLM constants and model factory
 
@@ -369,4 +368,3 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | Provider/model availability reflected in capabilities surface | `tests/test_flow_capability_checks.py` |
 | Degradation state surfaces in capability checks | `tests/test_flow_capability_checks.py` |
 | Compaction budget resolves from `model_max_ctx` | `tests/test_flow_compaction_summarization.py` |
-| Delegation agents share `model` handle | `tests/test_flow_agent_delegation.py` |

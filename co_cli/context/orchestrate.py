@@ -175,9 +175,8 @@ def _merge_segment_usage(
 ) -> None:
     """Merge one segment's usage into deps.runtime.turn_usage (the authoritative accumulator).
 
-    Called after every _execute_stream_segment() completes. Delegation sub-agent
-    tools accumulate via merge_delegation_usage; this one is owned by the foreground
-    orchestrator.
+    Called after every _execute_stream_segment() completes; this accumulator is
+    owned by the foreground orchestrator.
     """
     if usage is None:
         return

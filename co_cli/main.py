@@ -100,6 +100,7 @@ def _setup_observability() -> None:
 
 
 from co_cli.commands.dream import dream_app
+from co_cli.commands.google import google_app
 
 app = typer.Typer(
     help="Co — personal AI operator · local-first · approval-first",
@@ -107,6 +108,7 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 app.add_typer(dream_app, name="dream")
+app.add_typer(google_app, name="google")
 
 
 @app.callback()

@@ -12,7 +12,6 @@ from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
 
 # Import all tool modules to trigger @agent_tool self-registration into TOOL_REGISTRY.
-from co_cli.tools.agents.delegation import web_research  # noqa: F401
 from co_cli.tools.files.read import file_read, file_search  # noqa: F401
 from co_cli.tools.files.write import file_patch, file_write  # noqa: F401
 from co_cli.tools.google.calendar import google_calendar_list, google_calendar_search  # noqa: F401
@@ -91,8 +90,10 @@ def _build_native_toolset(
     Tools are registered with defer_loading derived from VisibilityPolicyEnum. The SDK's
     ToolSearchToolset (auto-added by Agent) handles deferred visibility.
 
-    Integration tools (google) are excluded when the relevant config field
-    is absent — they would fail at runtime regardless.
+    A tool whose requires_config names an absent config field is excluded; no tool
+    currently sets one. Google tools self-gate per-turn via check_fn=_google_available
+    (wired as a prepare hook), so they register here unconditionally and hide each turn
+    until a credential exists on disk.
 
     Returns (native_toolset, native_index) where native_index maps each tool name
     to its ToolInfo metadata.

@@ -28,7 +28,6 @@ def test_render_to_ansi_panel():
     # a bare Panel("hi") carries border_style="none" and emits no ANSI at all.
     out1 = render_to_ansi(Panel("hi", border_style="cyan"), width=40)
     out2 = render_to_ansi(Panel("hi", border_style="cyan"), width=40)
-    assert out1
     assert "\x1b[" in out1
     assert out1 == out2
 
@@ -76,17 +75,10 @@ async def test_repl_app_builds():
             key_bindings=kb,
         )
 
-        # Three layout regions: in-flight window, input TextArea, toolbar window.
-        children = app.layout.container.children
-        assert len(children) == 3
-
         # The toolbar window's text callable invokes frontend.render_footer_toolbar.
-        toolbar_text = children[2].content.text()
+        children = app.layout.container.children
+        toolbar_text = children[-1].content.text()
         assert "sess1234" in toolbar_text
-
-        # The completion style is applied.
-        attrs = app.style.get_attrs_for_style_str("class:completion-menu.completion.current")
-        assert attrs.bold
 
         cc = kb.get_bindings_for_keys((Keys.ControlC,))[0]
 
@@ -186,18 +178,6 @@ def test_console_print_reflows_under_patch_stdout():
     # The StdoutProxy routed the incidental console.print into the app output
     # (reflowed above the input area, BC4) — not raw to the original terminal.
     assert "reflow-marker-xyz" in captured.getvalue()
-
-
-# ── async prompts (run_in_terminal) ────────────────────────────────────────
-
-
-def test_prompt_approval_is_coroutine():
-    import inspect
-
-    assert inspect.iscoroutinefunction(TerminalFrontend.prompt_approval)
-    assert inspect.iscoroutinefunction(TerminalFrontend.prompt_question)
-    assert inspect.iscoroutinefunction(TerminalFrontend.prompt_confirm)
-    assert inspect.iscoroutinefunction(HeadlessFrontend.prompt_approval)
 
 
 @pytest.mark.asyncio

@@ -58,7 +58,7 @@ Registered in `build_orchestrator()` (`co_cli/agent/build.py`) from `ORCHESTRATO
 | --- | --- | --- |
 | `safety_prompt` | doom loop or shell-error streak active | warning text injected into instructions context |
 | `current_time_prompt` | always | current date and time string (`"Current time: Monday, April 28, 2026 08:13 AM"`) |
-| `deferred_tool_awareness_prompt` | any `VisibilityPolicyEnum.DEFERRED` tools present | per-tool stub list (one `` - `name`: one-liner `` line per deferred tool) telling the model to load a tool via `search_tools` before calling it; wraps `build_deferred_tool_awareness_prompt(ctx.deps.tool_index)` |
+| `deferred_tool_awareness_prompt` | any `VisibilityPolicyEnum.DEFERRED` tools present | per-tool stub list (one `` - `name`: one-liner `` line per deferred tool) grouped by integration family — native primitives first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header (e.g. `Google Workspace`) — telling the model to load a tool via `search_tools` before calling it; wraps `build_deferred_tool_awareness_prompt(ctx.deps.tool_index)` |
 | `skill_manifest_prompt` | `skill_index` non-empty | `<available_skills>` XML manifest of bundled + user-installed skills; wraps `render_skill_manifest(ctx.deps.skill_index, ctx.deps.skills_dir, ctx.deps.user_skills_dir)` |
 
 These layers are **not** persisted into `message_history`. They are emitted as `InstructionPart(dynamic=True)` in registration order, joined by `\n\n` and appended after the static literal in the system prompt block — see §2.3 for how cache-aware providers separate them from the cached prefix.
@@ -125,7 +125,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | --- | --- | --- |
 | `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules, joined with `\n\n`; called once at agent construction |
 | `build_toolset_guidance(tool_index) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE`) |
-| `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a per-tool stub list (one `` - `name`: one-line purpose `` per `DEFERRED` tool, name-only when description is empty); empty when no deferred tools exist. Called per-turn via `deferred_tool_awareness_prompt` |
+| `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a per-tool stub list (one `` - `name`: one-line purpose `` per `DEFERRED` tool, name-only when description is empty) grouped by integration family: native primitives render first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header. Family key = segment before first `_` for native integrations (so all `google_*` cluster), whole string for MCP integrations; deterministic ordering. Empty when no deferred tools exist. Called per-turn via `deferred_tool_awareness_prompt` |
 | `render_skill_manifest(skill_index, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block. Called per-turn via `skill_manifest_prompt` |
 
 ### Personality asset loaders
@@ -158,4 +158,4 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `co_cli/agent/_instructions.py` |
-| `co_cli/tools/deferred_prompt.py` | `build_deferred_tool_awareness_prompt()` — per-tool stub list (name + one-liner) for deferred tools; called per-turn from `deferred_tool_awareness_prompt` |
+| `co_cli/tools/deferred_prompt.py` | `build_deferred_tool_awareness_prompt()` — per-tool stub list (name + one-liner) for deferred tools, grouped by integration family under sub-headers; called per-turn from `deferred_tool_awareness_prompt` |

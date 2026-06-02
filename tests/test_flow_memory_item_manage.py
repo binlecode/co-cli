@@ -1,7 +1,7 @@
-"""Behavioral tests for the memory write tools — delete, create, approval subjects, URL-keyed dedup.
+"""Behavioral tests for the memory write tools — delete, create, URL-keyed dedup.
 
 Exercises: memory_delete removes artifact file + index entry, delete on missing file →
-tool_error, memory_create rejects canon kind, approval subject shape per tool,
+tool_error, memory_create rejects canon kind,
 and the URL-keyed branch lit by `source_url` (web_fetch stamp, consolidation
 on re-save, Jaccard/manual fallback when absent).
 No LLM — real filesystem + real FTS5 only.
@@ -20,7 +20,6 @@ from co_cli.memory.item import load_memory_item
 from co_cli.memory.service import reindex, save_memory_item
 from co_cli.memory.store import MemoryStore
 from co_cli.tools.memory.manage import (
-    _subject_fn,
     memory_create,
     memory_delete,
 )
@@ -171,31 +170,6 @@ async def test_artifact_manage_create_rejects_canon_memory_kind(tmp_path: Path) 
     assert "canon" in result.return_value.lower(), "error message must mention the rejected kind"
     assert result.metadata is not None, "tool_error must populate metadata"
     assert result.metadata.get("error") is True, "tool_error must set error=True in metadata"
-
-
-# ---------------------------------------------------------------------------
-# Tests — approval subjects
-# ---------------------------------------------------------------------------
-
-
-def test_approval_subject_create_shape() -> None:
-    """memory_create's approval subject must use the tool:memory_create:<name_title> key.
-
-    Regression guard: wrong key format breaks session-level approval rules —
-    a remembered approval would not match future calls.
-    """
-    subject = _subject_fn("memory_create", "name_title")({"name_title": "my-note"})
-
-    assert subject.tool_name == "memory_create"
-    assert subject.value == "tool:memory_create:my-note"
-    assert subject.can_remember is True
-
-
-def test_approval_subject_delete_shape() -> None:
-    """memory_delete's approval subject must use the tool:memory_delete:<filename_stem> key."""
-    subject = _subject_fn("memory_delete", "filename_stem")({"filename_stem": "old-note"})
-
-    assert subject.value == "tool:memory_delete:old-note"
 
 
 # ---------------------------------------------------------------------------

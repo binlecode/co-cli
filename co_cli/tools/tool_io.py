@@ -314,9 +314,24 @@ def handle_google_api_error(
 ) -> ToolReturn:
     """Route Google API errors to tool_error or ModelRetry.
 
+    RefreshError → terminal (credential invalid or missing required scopes — no
+        retry can fix it; the user must re-authorize)
     401 → terminal (auth failure, user must fix credentials)
     403/404/429/5xx → ModelRetry (transient or permission issue worth retrying)
     """
+    from google.auth.exceptions import RefreshError
+
+    # A token refresh failure (missing scope, revoked/expired refresh token) is a
+    # permanent config error: it carries no HTTP status and renders as a stringified
+    # tuple, so type is the authoritative signal. Classify it terminal before the
+    # status checks so it never falls through to the retryable catch-all.
+    if isinstance(e, RefreshError):
+        return tool_error(
+            f"{label}: the Google credential is invalid or missing required scopes. "
+            "Re-authorize by running `co google auth` to grant: gmail.readonly, "
+            "gmail.compose, drive.readonly, calendar.readonly.",
+            ctx=ctx,
+        )
     status = http_status_code(e)
     if status == 401:
         return tool_error(f"{label}: authentication error (401). Check credentials.", ctx=ctx)

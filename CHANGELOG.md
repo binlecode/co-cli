@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.280]
+
+### Google auth: least-privilege scopes + `co google auth` as sole acquisition path
+
+Makes co's Google credential path best-practice. `co google auth` is now the only way co acquires a Workspace credential — gcloud/ADC legs are gone (gcloud's built-in OAuth client cannot grant Workspace user scopes).
+
+- **Least-privilege scopes.** `ALL_GOOGLE_SCOPES` dropped from the restricted `gmail.modify` to `gmail.readonly` + `gmail.compose` + `drive.readonly` + `calendar.readonly` — the minimal floor for what the tools call. No mail modify/delete/send authority.
+- **`co google auth`** — runs `InstalledAppFlow` with the user's own OAuth Desktop-app client (`google_client_secret_path`, default `~/env-secrets/google_client_secret.json`) and writes an authorized-user token to `GOOGLE_TOKEN_PATH` (chmod 0600). Default uses a local browser; `--no-browser` prints the consent URL and reads the pasted code for headless/SSH machines.
+- **`co google check`** — verifies an existing token against the required scope set with a scope-validating refresh; prints a granted-vs-required diff and the actionable re-auth guidance on a shortfall. No command prints secrets.
+- **Terminal scope/auth failure.** `handle_google_api_error` classifies a `google.auth` `RefreshError` as a terminal `tool_error` pointing at `co google auth` (was silently retried as the catch-all `ModelRetry`); transient 403/404/429/5xx still retry.
+- **Per-turn visibility.** The seven Google tools dropped `requires_config` and self-gate per turn via `check_fn=_google_available` — visible only when a credential exists on disk (explicit `google_credentials_path` file or the default `GOOGLE_TOKEN_PATH`). The misleading ADC branch was removed from `co doctor` and the orphaned `ADC_PATH` constant deleted.
+
+### Bundled: web_research removal + `web_fetch` content extraction
+
+This release also lands the in-flight `drop-web-research-add-fetch-extraction` work (interleaved in shared files, shipped together): the in-turn `web_research` delegation tool and its `run_attempt`/`MAX_AGENT_DEPTH` machinery are removed; `web_fetch` gains `trafilatura`-based HTML content extraction.
+
 ## [0.8.279]
 
 ### Tool-surface small-model audit — Task 4 (non-Google) + Task 5 web steers

@@ -251,7 +251,7 @@ def _check_tei(url: str) -> CheckResult:
         return CheckResult(ok=False, status="error", detail=f"not reachable — {err}")
 
 
-def _check_google(creds: str | None, token_path: Path, adc_path: Path) -> CheckResult:
+def _check_google(creds: str | None, token_path: Path) -> CheckResult:
     if creds and os.path.exists(os.path.expanduser(creds)):
         return CheckResult(
             ok=True, status="ok", detail="configured (credentials file)", extra={"path": creds}
@@ -259,10 +259,6 @@ def _check_google(creds: str | None, token_path: Path, adc_path: Path) -> CheckR
     if token_path.exists():
         return CheckResult(
             ok=True, status="ok", detail="configured (token.json)", extra={"path": str(token_path)}
-        )
-    if adc_path.exists():
-        return CheckResult(
-            ok=True, status="ok", detail="configured (ADC)", extra={"path": str(adc_path)}
         )
     return CheckResult(ok=True, status="warn", detail="not configured")
 
@@ -312,14 +308,14 @@ def check_runtime(
     config and integration state with session state from deps. No startup policy —
     failures are recorded as findings, not raised as exceptions.
     """
-    from co_cli.config.core import ADC_PATH, GOOGLE_TOKEN_PATH
+    from co_cli.config.core import GOOGLE_TOKEN_PATH
 
     # IO checks
     _emit_progress(progress, "Doctor: checking provider and model availability...")
     provider_result = _check_agent_llm(deps.config)
 
     _emit_progress(progress, "Doctor: checking configured integrations...")
-    google_result = _check_google(deps.config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
+    google_result = _check_google(deps.config.google_credentials_path, GOOGLE_TOKEN_PATH)
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
     _emit_progress(progress, "Doctor: checking knowledge backend...")

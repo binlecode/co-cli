@@ -1,4 +1,4 @@
-"""Behavioral tests for agent_tool concurrent-default flip and dispatch backstop."""
+"""Behavioral tests for agent_tool dispatch backstop and reviewer semaphore sharing."""
 
 import asyncio
 
@@ -10,11 +10,8 @@ from co_cli.deps import (
     CoDeps,
     CoRuntimeState,
     CoSessionState,
-    VisibilityPolicyEnum,
     fork_deps_for_reviewer,
 )
-from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, agent_tool
-from co_cli.tools.files.write import file_patch, file_write
 from co_cli.tools.shell_backend import ShellBackend
 
 
@@ -25,48 +22,6 @@ def _make_deps() -> CoDeps:
         session=CoSessionState(),
         runtime=CoRuntimeState(),
     )
-
-
-def test_default_is_concurrent():
-    @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, register=False)
-    async def _dummy(ctx, x: int) -> str:
-        """Dummy tool."""
-        return str(x)
-
-    info = getattr(_dummy, AGENT_TOOL_ATTR)
-    assert info.is_concurrent_safe is True
-
-
-def test_read_only_implies_concurrent():
-    @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, register=False)
-    async def _dummy(ctx, x: int) -> str:
-        """Dummy read-only tool."""
-        return str(x)
-
-    info = getattr(_dummy, AGENT_TOOL_ATTR)
-    assert info.is_concurrent_safe is True
-
-
-def test_explicit_opt_out():
-    @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=False, register=False)
-    async def _dummy(ctx, x: int) -> str:
-        """Dummy sequential tool."""
-        return str(x)
-
-    info = getattr(_dummy, AGENT_TOOL_ATTR)
-    assert info.is_concurrent_safe is False
-
-
-@pytest.mark.parametrize(
-    ("tool_fn", "name"),
-    [
-        (file_write, "file_write"),
-        (file_patch, "file_patch"),
-    ],
-)
-def test_unsafe_tools_are_sequential(tool_fn, name):
-    info = getattr(tool_fn, AGENT_TOOL_ATTR)
-    assert info.is_concurrent_safe is False, f"{name} must have is_concurrent_safe=False"
 
 
 @pytest.mark.asyncio

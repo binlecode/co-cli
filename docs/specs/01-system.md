@@ -58,7 +58,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Config | [config.md](config.md) | Settings model, env vars, load pipeline |
 | Observability | [observability.md](observability.md) | Structured JSON-line spans log, `@trace` decorator, `co tail` / `co trace` viewers |
 | Self-planning | [self-planning.md](self-planning.md) | `todo_write` / `todo_read` plan state, compaction snapshot, rehydration on `/resume` |
-| Agents | [agents.md](agents.md) | Agent construction, orchestrator, delegation agent, judge model |
+| Agents | [agents.md](agents.md) | Agent construction, orchestrator, daemon task agents |
 | UAT Evals | [uat_evals.md](uat_evals.md) | End-to-end quality contract: eval registry, rubric discipline, gating policy |
 
 ### Package Dependency Direction (one-way rule)
@@ -271,7 +271,7 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | `co_cli/agent/build.py` | Agent builders (`build_orchestrator()`, `build_task_agent()`) |
 | `co_cli/agent/spec.py` | `OrchestratorSpec` and `TaskAgentSpec` declarative records |
 | `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` — always-present primary agent record |
-| `co_cli/agent/run.py` | Task-agent runners: `run_standalone` (daemon) plus `run_attempt`, the in-turn primitive driven by tool wrappers |
+| `co_cli/agent/run.py` | Task-agent runner: `run_standalone` (daemon) |
 | `co_cli/agent/core.py` | Toolset composition helpers (`build_native_toolset`, `build_mcp_entries`, `assemble_routing_toolset`) |
 | `co_cli/agent/toolset.py` | Native toolset construction and tool registry |
 | `co_cli/agent/mcp.py` | MCP toolset wiring and discovery |
@@ -289,4 +289,3 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | Degraded startup (missing memory backend) does not abort | `tests/test_flow_capability_checks.py` |
 | Turn produces a non-empty model response | `tests/test_flow_chat_loop.py` |
 | Tool call executes within a turn | `tests/test_flow_chat_loop.py` |
-| Delegation agents share `model` handle | `tests/test_flow_delegation_discovery.py` |

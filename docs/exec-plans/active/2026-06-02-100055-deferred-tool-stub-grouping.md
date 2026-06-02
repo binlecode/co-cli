@@ -97,11 +97,16 @@ grouping behavior beyond what falls out of the family resolver; touching ALWAYS 
 
 Group emitted stubs by an **integration family** derived from `ToolInfo.integration`:
 
-1. **Family key:** for a tool with `integration` set, the family is the segment before the first
-   `_` (`google_calendar` → `google`, `google_gmail` → `google`, `google_drive` → `google`;
-   `context7` → `context7`). Tools with `integration is None` fall into a sentinel "general" family.
+1. **Family key:** for a **native** tool (`ToolInfo.source != MCP`) with `integration` set, the family
+   is the segment before the first `_` (`google_calendar` → `google`, `google_gmail` → `google`,
+   `google_drive` → `google`). Tools with `integration is None` fall into a sentinel "general" family.
    This makes all `google_*` integrations collapse into one family **by construction** — adding a new
-   Google integration needs no code change.
+   Google integration needs no code change. **MCP-sourced tools must NOT be prefix-split:** their
+   `integration` is the user-configured server prefix (`co_cli/agent/mcp.py:150`, `prefix or None`),
+   an arbitrary string that can itself contain `_` (e.g. a `data_api` server would mis-key to `data`,
+   and a `google_*`-prefixed server would be wrongly absorbed into the Google Workspace cluster).
+   So for `source == ToolSourceEnum.MCP`, use the **whole `integration` string** as the family key
+   (no split). `context7` → family `context7` either way; `data_api` → family `data_api` (intact).
 2. **Family label:** a small presentation map `_FAMILY_LABELS = {"google": "Google Workspace", …}`
    resolves the friendly header; unmapped families fall back to a title-cased family key
    (`context7` → "Context7"). This map is **presentation-only** — an unmapped family still groups and
@@ -144,7 +149,7 @@ Pure wording edits, no signature changes (all verified against source in the aud
 
 ## Tasks
 
-### TASK-1 — group deferred stubs by integration family
+### ✓ DONE TASK-1 — group deferred stubs by integration family
 - **files:** `co_cli/tools/deferred_prompt.py`, `tests/test_flow_deferred_tool_stubs.py`
 - **prerequisites:** none
 - **done_when:** a behavioral test builds a `tool_index` containing the three distinct Google
@@ -152,14 +157,16 @@ Pure wording edits, no signature changes (all verified against source in the aud
   `build_deferred_tool_awareness_prompt`, and asserts (a) a single `Google Workspace` sub-header
   precedes all google_*-integration stubs, (b) all google stub lines fall under it, (c) the
   `None`-integration tool renders under the general (no-sub-header) section, (d) the MCP tool renders
-  under a non-empty fallback family sub-header (title-cased family key — CD-m-1), (e) output is
-  **deterministic** — calling twice yields byte-identical strings (CD-m-1), and (f) the full existing
+  under a non-empty fallback family sub-header (title-cased family key — CD-m-1), (d2) an MCP tool
+  whose integration prefix contains `_` (e.g. `data_api`) keeps its **whole prefix** as the family —
+  it is NOT split to `data` and NOT merged into any native family (TL-g1: source-aware guard),
+  (e) output is **deterministic** — calling twice yields byte-identical strings (CD-m-1), and (f) the full existing
   suite in `tests/test_flow_deferred_tool_stubs.py` still passes (completeness, no-ALWAYS-leak,
   set==deferred, one-line cap, empty contract, search_tools directive).
 - **success_signal:** a small model sees the deferred Google tools presented as one labeled
   "Google Workspace" cluster instead of 7 interleaved loose lines.
 
-### TASK-2 — Google docstring-correctness + sibling steers
+### ✓ DONE TASK-2 — Google docstring-correctness + sibling steers
 - **files:** `co_cli/tools/google/calendar.py`, `co_cli/tools/google/drive.py`,
   `co_cli/tools/google/gmail.py`
 - **prerequisites:** none (independent of TASK-1; both edit the Google surface but different files —
@@ -183,11 +190,16 @@ Pure wording edits, no signature changes (all verified against source in the aud
 
 ## Resolved Decisions (Gate-1 C1)
 
-1. **Family-key derivation → prefix-before-first-`_` + label map (no schema change).** Complete-by-
-   construction (new `google_*` auto-joins). It is a mild heuristic (a hypothetical `home_assistant`
-   would key as `home`), but co has only `google_*` + MCP integrations today, so it is safe now;
-   revisit with an explicit `integration_family` field on `@agent_tool`/`ToolInfo` only if a
-   non-`google` multi-segment native integration is added.
+1. **Family-key derivation → prefix-before-first-`_` for native tools + whole-string for MCP + label
+   map (no schema change).** Complete-by-construction (new `google_*` auto-joins). The prefix-split is
+   a mild heuristic for *native* integrations (a hypothetical native `home_assistant` would key as
+   `home`), acceptable because co has only `google_*` native integrations today; revisit with an
+   explicit `integration_family` field on `@agent_tool`/`ToolInfo` only if a non-`google` multi-segment
+   native integration is added. **MCP integrations are exempt from the split** (TL Gate-1 amendment
+   2026-06-02): MCP `integration` is a user-configured prefix (`mcp.py:150`) that can contain `_`, so
+   splitting it would fragment one server (`data_api` → `data`) or wrongly absorb a `google_*`-prefixed
+   server into the Google cluster. Gate the split on `ToolInfo.source != ToolSourceEnum.MCP`; MCP tools
+   use their whole `integration` string as the family key.
 2. **General (no-integration) section → render first with no sub-header.** Preserves today's
    appearance for `web_research`/`task_list`/`capabilities_check` and is terser (fewer per-turn
    tokens) than an explicit "Built-in" header.
@@ -207,3 +219,48 @@ general section renders first with no sub-header).
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev deferred-tool-stub-grouping`
+
+---
+
+## Delivery Summary — 2026-06-02
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | grouping test asserts Google cluster (a), all google stubs under it (b), general section (c), MCP fallback family (d), multi-segment MCP prefix not split (d2), deterministic output (e), full existing suite passes (f) | ✓ pass |
+| TASK-2 | google tool tests + lint pass; no "today onward" remains; search recurring-events caveat; drive `page` Args names sequential contract + page-size 10; gmail search names `google_gmail_list`; `draft.to` names comma-separated recipients | ✓ pass |
+
+**Implementation notes:**
+- TASK-1 (TL): `build_deferred_tool_awareness_prompt` now buckets deferred stubs by integration family. Added `_family_key` (Gate-1 source-aware guard: native integrations split on first `_` so all `google_*` cluster; MCP integrations keep their whole prefix so `data_api` is never fragmented to `data` and a `google_*`-prefixed MCP server is never absorbed into the native Google family), `_family_label` (`_FAMILY_LABELS` map + title-cased fallback), and `_stub_line`. General (no-integration) tools render first under the top directive with no sub-header; families render under `<label> (load before use):`, ordered alphabetically by label, names sorted within — fully deterministic. Stub-line format and empty-string contract unchanged.
+- TASK-2 (Dev-1): docstring/wording only, no signatures touched. calendar `days_back` reworded at all 3 sites away from "today onward"; `days_ahead` rationale documented (list near-term default 1, search forward-month default 30, deliberately unaligned); recurring-events caveat added to search for parity; list↔search steers cross-reference the differing windows. drive `page` Args now carries the session-scoped sequential contract + fixed page-size 10. gmail search gained the reciprocal `google_gmail_list` steer; `draft.to` documents comma-separated recipients.
+
+**Tests:** scoped — 14 passed, 0 failed (`test_flow_deferred_tool_stubs.py` 10 incl. new grouping test; `test_agent_build_task_agent.py` 4). No Google-specific behavioral tests exist (docstring-only edits); lint + grep signals are TASK-2's full done_when and all pass.
+**Doc Sync:** fixed — `prompt-assembly.md` (3 edits) and `tools.md` (2 edits) updated to document family grouping; other specs clean.
+
+**Overall: DELIVERED**
+Both tasks pass `done_when`, lint clean, scoped tests green, docs synced. The Gate-1 source-aware MCP guard is implemented and covered by assertion (d2).
+
+---
+
+## Implementation Review — 2026-06-02
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | grouping test asserts (a)–(f) incl. d2 source-aware MCP guard + deterministic output | ✓ pass | `deferred_prompt.py:64-66` `_family_key` gates `if info.source == ToolSourceEnum.MCP: return integration` before the native `split("_",1)[0]` — MCP `data_api` never split, `google_*`-prefixed MCP never absorbed; general first no-sub-header `:115-116`; empty contract `:109`; deterministic `sorted(tool_index):99` + `sorted(families,key=_family_label):117`. Caller chain `_instructions.py:22-31` → `orchestrator.py:62`. 10/10 tests pass |
+| TASK-2 | grep signals + no signature change | ✓ pass | no "today onward" in `calendar.py` (grep empty); `days_back` docstring matches code `.replace(hour=0,…):126-129,207-208`; recurring-events caveat parity `calendar.py:189`; drive `page` sequential+size-10 matches `_resolve_page_token:20-29` + `pageSize:107`; gmail search names `google_gmail_list:104`; `draft.to` comma-separated valid via RFC-5322 To header `:176`. All 7 signatures unchanged; diff is docstring-text-only |
+
+### Issues Found & Fixed
+No issues found. Per-task evidence subagents and a cold adversarial re-review (13 claims, 0 downgraded) confirmed every PASS against source. The one latent edge surfaced — an MCP server named *exactly* `google` would merge into the Google cluster — is benign (deterministic; requires exact-name, not prefix; docstring correctly scopes the guard to prefixed integrations) and not a defect.
+
+### Tests
+- Command: `uv run pytest -q`
+- Result: 659 passed, 0 failed (1 warning), 318.57s
+- Log: `.pytest-logs/*-review-impl.log`
+
+### Behavioral Verification
+- `co status`: N/A — no such command in this CLI.
+- Real prompt-assembly path (`build_native_toolset(SETTINGS)` → `build_deferred_tool_awareness_prompt`): ✓ general section renders 5 native deferred tools with no sub-header (today's look preserved); deterministic (byte-identical 2nd call).
+- `success_signal` verified (TASK-1): with the Google config gate set, all 7 `google_*` tools register and render as one labeled `Google Workspace (load before use):` cluster beneath the general section — a small model sees one capability cluster, not 7 loose lines. TASK-2 `success_signal` N/A (docstring-only).
+
+### Overall: PASS
+Both tasks fully implemented and verified against source; full suite green; lint clean; the Gate-1 source-aware MCP guard confirmed by adversarial review and the success_signal verified on the real production path. Ready for Gate 2 → `/ship`.

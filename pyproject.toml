@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.8.279"
+version = "0.8.280"
 description = "Co — your trusted local personal intelligence company"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,6 +19,7 @@ dependencies = [
     "typer>=0.21.1",
     "httpx>=0.28.1",
     "html2text>=2025.4.15",
+    "trafilatura>=2.0.0",
     "pysqlite3>=0.6.0",
     "sqlite-vec>=0.1.6",
     "ollama>=0.6.1",
