@@ -72,7 +72,7 @@ Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, 
 |---|---|
 | `memory_manage(action ∈ {create, append, replace})` | `turns_since_memory_review = 0` |
 | `skill_manage(action ∈ {create, edit, patch})` | `model_requests_since_skill_review = 0` |
-| `delete`, `write_file`, `remove_file` | no reset |
+| `delete` (either tool) | no reset |
 | No crossover | memory tool never touches skill counter; skill tool never touches memory counter |
 
 **Session-end always-fire** in `_drain_and_cleanup`: both KICKs (memory + skill) fire regardless of counter state at REPL shutdown.

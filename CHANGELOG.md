@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.274]
+
+### Prefill-trim child 3 — data/reflexive tool schema trim
+
+Trims the ALWAYS-tool schema budget by cutting docstring (desc + params) bloat on the data and reflexive tools, and removes `skill_manage`'s non-functional hermes-parity stubs from the signature. Reference-not-routing content, near-zero behavioral risk; all load-bearing injunctions preserved.
+
+- **`memory_manage`** — params `Args:` prose tightened (1,765 → 1,200 chars); `replace` "section must appear exactly once" injunction kept.
+- **`skill_manage`** — dropped the four non-functional stubs (`write_file`/`remove_file` actions, `file_path`/`file_content` params) and the now-orphaned dispatch branch, `_skill_patch` `file_path` branch, and `_LINKED_FILE_ERROR` constant; params trimmed; action-routing description left intact (stays ALWAYS).
+- **`clarify`, `todo_write`, `todo_read`, `memory_search`, `memory_view`, `file_search`** — desc/params trimmed; clarify one-call-only and todo_write single-`in_progress` injunctions preserved.
+- **`docs/specs/dream.md`** — fixed the inline tool-write-reset table row that still named the removed `write_file`/`remove_file` actions.
+- **Tests** — removed two tests pinning the deleted `_LINKED_FILE_ERROR` stub surface.
+
+ALWAYS bucket at delivery: 25,612 → 21,941 chars (~−918 tok).
+
 ## [0.8.272]
 
 ### Tool-surface small-model audit — Task 1 (Pattern 5: dead params & broken references)

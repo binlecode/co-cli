@@ -206,3 +206,58 @@ file surfaced the second.
 **Overall: DELIVERED**
 Both tasks passed all `done_when` gates; lint clean; scoped + full suites green. The schema-budget
 guard remains child 2's deliverable (ships last). Ready for `/review-impl`.
+
+## Implementation Review — 2026-06-01
+
+Reviewed against current HEAD. The delivery was committed across two commits (`ef9bb78a`
+skill_manage stub removal, `dc0141ed` memory/todo docstring trims) and then **left unshipped**
+while sibling prefill-trim children + the tool-surface audit landed on top — so some measured
+numbers have drifted from the delivery snapshot (noted below). The delivered code itself is intact
+and correct in HEAD.
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | memory_manage params < 1,400 | ✓ pass | audit: memory_manage params **1,200** < 1,400 |
+| TASK-1 | skill_manage params < 950 | ✓ pass | audit: skill_manage params **768** < 950 (trimmed further by later commits) |
+| TASK-1 | skill_manage stub removal clean | ✓ pass | `skills.py:289` action `Literal["create","edit","patch","delete"]`; no `write_file`/`remove_file`/`file_path`/`file_content`; `_LINKED_FILE_ERROR` and orphaned dispatch branch gone (grep: 0 refs in `co_cli/`) |
+| TASK-1 | removed-surface tests deleted | ✓ pass | grep tests/: 0 refs to `write_file_stub`/`_LINKED_FILE_ERROR`/`remove_file` |
+| TASK-1 | injunctions preserved | ✓ pass | clarify "one call only … result IS the user's answers" (`user_input.py:40`); memory_manage replace "must appear exactly once" (`manage.py:63`); todo_write "Only ONE item may be 'in_progress' … rejected" (`rw.py:217`) |
+| TASK-1 | scoped pytest green | ✓ pass | `-k "memory or todo or clarify or skill or file"`: 271 passed, 0 failed |
+| TASK-2 | full suite green | ✓ pass | full suite: **654 passed, 0 failed** (337s) |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Doc-code mismatch: inline-reset table still names removed `write_file`/`remove_file` actions. Delivery's "Doc Sync" note claimed this row was fixed, but `b1560820` fixed only the *Test Coverage* row — dream.md has two such rows, this one was missed. | `docs/specs/dream.md:75` | minor | Fixed — row now reads `` `delete` (either tool) | no reset `` |
+
+### Divergences noted (no code action — correct as-is)
+- **`category` arg removed beyond this plan's stated scope.** This plan's Behavioral Constraints +
+  Out of scope both say `category` *stays*, and the Delivery Summary states "category parity arg
+  unchanged" — but commit `ef9bb78a` deliberately dropped it alongside the other non-functional
+  stubs (its commit message names `category` explicitly). The code is clean and correct; `category`
+  was silently-ignored dead surface, so its removal is an improvement made as a deliberate separate
+  decision. No restore — re-adding dead surface would contradict the plan's own trimming intent.
+  The Delivery Summary's "unchanged" claim is inaccurate as history.
+- **`file_search` params drifted 985 → 1,739.** The plan trimmed file_search prose to 985; the later
+  multi-root file-read feature (`6390d73c`, its own shipped work) re-expanded the params JSON. Not a
+  regression from this plan — the prose-only trim was correct at delivery; subsequent feature work
+  legitimately grew the schema. Out of this plan's scope.
+
+### Tests
+- Command: `uv run pytest -x`
+- Result: 654 passed, 0 failed
+- Log: `.pytest-logs/*-review-impl.log`
+
+### Behavioral Verification
+- `uv run co status`: N/A — this project exposes only `chat`/`tail`/`trace`/`dream` (no `status`
+  command). System health verified instead by the schema audit building **all** ALWAYS tool schemas
+  without error (griffe parses every trimmed docstring) and the 271 scoped flow tests.
+- `success_signal` verified at tool level: skill_manage create/view/patch round-trip
+  (`test_flow_skills_manage`), clarify one-call-only resume (`test_clarify_resume_returns_answers_as_tool_output`),
+  memory recall + todo flows — all green in the scoped run.
+
+### Overall: PASS
+All `done_when` gates met in current HEAD; injunctions and signature cleanup verified by file:line
+evidence; full suite green; one stale spec row fixed. Two divergences (`category`, `file_search`)
+are out-of-plan-scope artifacts of later shipped work, not defects. Ready for `/ship`.
