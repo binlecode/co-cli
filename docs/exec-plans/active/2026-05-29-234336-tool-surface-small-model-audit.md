@@ -465,3 +465,41 @@ Task 3b shipped; surface is now monomorphic per the small-model doctrine. 3c (`f
 4/5 remain unstarted.
 
 **Next step:** `/review-impl tool-surface-small-model-audit` — full suite + evidence scan → verdict.
+
+## Implementation Review — Task 3b (2026-06-01)
+
+Scope: Task 3b only. Stance: issues exist — PASS earned. Two parallel evidence subagents (production
+code + tests/evals) plus targeted adversarial verification of the two highest-risk false-PASS
+candidates (dream-reviewer grant resolution; helper-guard reachability).
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| 3b | 4 tools registered, `skill_manage` gone, scoped tests green | ✓ pass | `skills.py:303-411` — 4 tools, `name: str` required, each `approval=True` + `_subject_fn(<tool>, "name")`; wrappers `return _skill_*(...)` to sync helpers (`:123/156/186/243`); old `_skill_manage_approval_subject` removed; native index = `[skill_create,delete,edit,patch,view]`, `skill_manage` absent |
+| 3b (integration) | touch-points wired | ✓ pass | `toolset.py:37-43` import; `display.py:30-33` 4 entries; `_reviewer.py:67-72` grants create/edit/patch (NOT delete — verified resolves to real tools, no silent break); `skill_review.md:17` reworded; rules 06/07, skill-creator, `deps.py:161` zero `skill_manage` |
+| 3b (tests/evals) | green, no mocks | ✓ pass | 4 test files: zero `skill_manage(` calls, no mocks/monkeypatch, real CoDeps + tmp filesystem; `test_flow_skill_creator_dispatch.py:52` asserts `skill_create`; `eval_skills.py:585` W4.E probe retargeted to `skill_create` (stays inert SOFT_PASS since ALWAYS); `eval_domain_review.py:127` consistent with SKILL_REVIEW_SPEC |
+
+### Issues Found & Fixed
+No blocking issues found. One non-blocking note (no action): `_skill_create/_skill_edit/_skill_patch`
+retain `str | None` params with defensive `if not content`/`if new_string is None` guards now
+unreachable from the required-`str` wrapper surface — pre-existing, type-compatible, not a
+split-introduced regression. The empty-`new_string` deletion path remains intact (guard checks
+`is None`, not falsiness).
+
+### Tests
+- Command: `uv run pytest -q` (full suite)
+- Result: **654 passed, 0 failed** (289.68s)
+- Log: `.pytest-logs/<ts>-review-impl-3b.log`
+- Spec count `12 explicit approval-gated` verified accurate (full-surface basis incl. config-gated `google_gmail_draft`; default-config live count is 11).
+
+### Behavioral Verification
+- No `co status`/`logs` command in this project; `co chat` is the user-facing entry.
+- `co chat` boots clean with the new surface: 7 skills loaded, tools register, `✓ Ready` (only the
+  environmental TEI-reranker fallback shows "degraded" — unrelated to 3b).
+- Skill-tool behavior exercised end-to-end by `test_flow_skills_manage.py` (real filesystem writes,
+  no mocks). `success_signal` (model sees four monomorphic skill tools, not one discriminated tool)
+  confirmed via the native tool index.
+
+### Overall: PASS
+Task 3b is correct, complete, and fully tested. Surface is monomorphic per the small-model doctrine;
+zero blocking findings; full suite green. Ready for Gate 2 → `/ship`.
