@@ -28,7 +28,7 @@ graph LR
 | Group | Tools | Notes |
 |-------|-------|-------|
 | Interaction & Session | `clarify`, `capabilities_check`, `todo_write`, `todo_read` | All ALWAYS |
-| Workspace & Files | `file_read`, `file_search`, `file_write`, `file_patch` | `file_search` finds files or greps contents; `file_write`/`file_patch` approval + lock |
+| Workspace & Files | `file_read`, `file_search`, `file_write`, `file_patch` | `file_search` finds files or greps contents; `file_write`/`file_patch` approval + lock; whole-file delete is `shell_exec` (`rm`), not a dedicated tool |
 | Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_create`, `memory_append`, `memory_replace`, `memory_delete`, `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` | memory write tools / skill write tools approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
 | Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval |
@@ -72,11 +72,12 @@ There is no overloaded `pattern` argument, no `target` switch, no `file_glob`, n
 
 `shell_exec` runs each command as a fresh `sh -c` subprocess whose working directory is anchored to `workspace_dir` — the same write/cwd anchor as `file_write` / `file_patch`. There is no separate shell-cwd anchor and no backend-held state; `ShellBackend` is stateless and the cwd is supplied per call.
 
-- **Default cwd is `workspace_dir`.** An explicit cwd is always passed, so a configured `workspace_path` takes effect even when no `workdir` is given.
-- **`workdir` scopes to a sub-directory under the workspace.** It is resolved through the write boundary, so a `workdir` that escapes `workspace_dir` (e.g. `../..`) is rejected — read scope (`file_search_roots`) never widens shell cwd.
-- **No cwd persistence across calls (settled — by design).** A `cd` in one call does **not** carry to the next; each call starts fresh at the anchored cwd. To run in a sub-directory, either pass `workdir`, or chain within one command (`cd build && make`). This is deliberate, not a gap: stateless calls are reproducible and approval-legible — what runs is fully determined by the call itself, with no hidden accumulated cwd that could silently relocate the shell or drift outside the boundary. It also matches the peer majority (openclaw and hermes are stateless for a model-issued `cd`; only one surveyed peer auto-persists `cd` drift, and it does so to solve a concurrent-agent isolation problem co does not have).
+- **Default cwd is `workspace_dir`.** An explicit cwd is always passed, so a configured `workspace_path` takes effect even when no `work_dir` is given.
+- **`work_dir` scopes to a sub-directory under the workspace.** It is resolved through the write boundary, so a `work_dir` that escapes `workspace_dir` (e.g. `../..`) is rejected — read scope (`file_search_roots`) never widens shell cwd.
+- **No cwd persistence across calls (settled — by design).** A `cd` in one call does **not** carry to the next; each call starts fresh at the anchored cwd. To run in a sub-directory, either pass `work_dir`, or chain within one command (`cd build && make`). This is deliberate, not a gap: stateless calls are reproducible and approval-legible — what runs is fully determined by the call itself, with no hidden accumulated cwd that could silently relocate the shell or drift outside the boundary. It also matches the peer majority (openclaw and hermes are stateless for a model-issued `cd`; only one surveyed peer auto-persists `cd` drift, and it does so to solve a concurrent-agent isolation problem co does not have).
+- **`task_start` shares the same `work_dir` contract.** The background-task tool takes the same `work_dir` param with the same anchor: `None` = `workspace_dir`, a relative sub-directory is resolved through the write boundary, and an escaping path (e.g. `../..`) is rejected before the task spawns. The `/background` REPL slash command (no `work_dir` param) likewise anchors to `workspace_dir`, so every shell-launch path — foreground, background tool, and slash command — shares one cwd anchor.
 
-Implementation: `co_cli/tools/shell/execute.py` (`shell_exec`), `co_cli/tools/shell_backend.py` (`ShellBackend`).
+Implementation: `co_cli/tools/shell/execute.py` (`shell_exec`), `co_cli/tools/shell_backend.py` (`ShellBackend`), `co_cli/tools/tasks/control.py` (`task_start`).
 
 ## 2. Core Logic
 

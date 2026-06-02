@@ -22,21 +22,24 @@ params together, per tool — one docstring, one edit). The overlap set (`web_fe
 `file_read`) is edited in both the rule and the docstring here, so the canonical-home seam guard
 is contained entirely within this plan.
 
-### Current-state baseline (re-measured 2026-06-01, `tmp/audit_tool_schemas.py`)
+### Current-state baseline (re-measured 2026-06-02, `tmp/audit_tool_schemas.py`)
 
-The ALWAYS bucket moved since child 3 shipped, because two surface changes from the
-`tool-surface-small-model-audit` plan landed afterward and re-shaped the registry:
+The ALWAYS bucket moved again since the 2026-06-01 measurement, because three surface changes from
+the `tool-surface-small-model-audit` plan have now all shipped and re-shaped the registry:
 
 - `memory_manage` (1 tool) was **split into `memory_create`/`memory_append`/`memory_replace`/`memory_delete`** (4 ALWAYS tools, +3 net).
+- `skill_manage` (1 tool) was **split into `skill_create`/`skill_edit`/`skill_patch`/`skill_delete`** (Task 3b, +3 net) — landed after the prior baseline.
 - `knowledge_analyze` was **deleted** (−1, it was DEFERRED).
+- `file_patch` **V4A multi-file mode was removed** (Task 3c, Option B) — the docstring shrank
+  dramatically and `file_patch` is now a single monomorphic single-file-replace tool.
 
-Measured now: **26 tools registered** (was 25 in the parent baseline); **ALWAYS bucket = 22,211 chars
-(~5,552 tok) across 21 ALWAYS tools**; DEFERRED = 4,043 chars across 5 tools. Note the ALWAYS bucket
-is *higher* than child 3's post-trim 21,941 chars — the memory split re-inflated it (4 schemas where
-there was 1). **The TASK-4 guard ceiling must re-baseline on this current measured number, not on
-child 3's figure.** Child 2's own edit targets (`file_patch` desc 1,025/params 1,086 — still the #1
-tool; `web_fetch` desc 1,019; `web_search` desc 796; `file_read` desc 626/params 898) are all
-untrimmed and unstarted — the core scope holds.
+Measured now: **29 tools registered**; **ALWAYS bucket = 22,470 chars (~5,617 tok)**; DEFERRED =
+4,153 chars. **The TASK-4 guard ceiling must re-baseline on this current measured number.** Child 2's
+remaining edit targets are `web_fetch` (desc 1,019), `web_search` (desc 796), and `file_read`
+(desc 626/params 898). **`file_patch` is NO LONGER a target** — post-3c it measures desc 477/params
+787 (rank #9, below the desc>600 / params>800 trim heuristic), so its docstring was effectively
+trimmed by the V4A removal. The current #1 desc is `shell_exec` (1,317 chars), but that is the
+**untouched canonical routing home** by design — not a trim target.
 
 ## Problem & Outcome
 
@@ -50,11 +53,13 @@ with params `Args:` tightened. Expected ~−175 tok (rule) + ~−700–1,000 tok
 Tool routing validated via `eval_mindset_selection.py` — this is the empirical check on the
 tool-home principle.
 
-**Saving target reaffirmed (post-refresh).** The parent's child-2 projection (~−175 rule + ~−700–
-1,000 docstrings) still holds in absolute terms: the memory split that re-inflated the ALWAYS bucket
-touched *memory* schemas, not child 2's targets (`file_patch`/`web_fetch`/`web_search`/`file_read`),
-which remain at their pre-trim sizes. If anything the value case is stronger — the bucket now sits
-*above* child 3's post-trim figure, so trimming these four routing tools matters more, not less.
+**Saving target (post-3c refresh).** The parent's child-2 projection assumed four docstring targets
+including `file_patch`. Task 3c's V4A removal already shrank `file_patch` below the trim heuristic, so
+child 2's docstring scope is now **three tools** (`web_fetch`/`web_search`/`file_read`). The rule-side
+saving (~−175 tok) is unchanged; the docstring saving is correspondingly smaller (~−500–700 tok over
+three tools instead of four) because the largest target already self-trimmed. The remaining three
+routing docstrings are untouched and still carry `Returns:` enumerations and enforced caveats worth
+trimming.
 
 ## Behavioral Constraints
 
@@ -63,8 +68,9 @@ which remain at their pre-trim sizes. If anything the value case is stronger —
   docstring that is NOT trimmed away here. Explicit per-tool check for `web_fetch`, `web_search`,
   `file_read`.
 - **Conservative trim, NOT hermes-brevity** — keep routing/when-to-use cues; the model is small.
-- Preserve injunctions: `file_patch` "Requires `file_read` on each affected file before patching";
-  `web_fetch` "Use URLs from search results or the user's message; do not fabricate URLs".
+- Preserve injunctions: `web_fetch` "Use URLs from search results or the user's message; do not
+  fabricate URLs". (`file_patch`'s "Requires `file_read` … first" injunction is out of scope — that
+  tool is no longer trimmed here; the injunction lives in its post-3c docstring and stays.)
 - Keep `shell_exec` untouched (canonical routing home). Keep griffe `Args:` formatting.
 - Rule ordering invariant (`assembly.py:56-61`) holds — no renumbering.
 - **Superseded inherited constraint.** The parent's "memory tool surface unchanged — three separate
@@ -96,22 +102,20 @@ plan said "strengthen 03:6"; the file has since gained the `## Verification` hea
 lands in that section, not a bare line 6.)
 
 ### Routing/web/file docstring trim (desc + params per tool)
-`web_fetch`, `web_search`, `file_read`, `file_patch`. Drop `Returns:` enumerations and enforced
-caveats; tighten `Args:` to noun-phrase + constraint; keep one when-to-use clause + injunctions.
-(`file_read` is in `co_cli/tools/files/read.py`; `file_patch` in `co_cli/tools/files/write.py`.)
-**`file_search` is NOT in this plan** — it was child 3's (params-audit owner). **Child 3 has
-shipped**, so the prior read.py sequencing hazard is resolved: `file_search` is already trimmed and
-`file_read` (same module) is now child 2's to edit freely — no concurrent-edit conflict remains.
+`web_fetch`, `web_search`, `file_read`. Drop `Returns:` enumerations and enforced caveats; tighten
+`Args:` to noun-phrase + constraint; keep one when-to-use clause + injunctions. (`file_read` is in
+`co_cli/tools/files/read.py`.) **`file_search` is NOT in this plan** — it was child 3's (params-audit
+owner). **Child 3 has shipped**, so the prior read.py sequencing hazard is resolved: `file_search` is
+already trimmed and `file_read` (same module) is now child 2's to edit freely — no concurrent-edit
+conflict remains.
 
-**Coordination — `file_patch` split (draft plan).** The `tool-surface-small-model-audit` plan
-(`active/2026-05-29-234336-…`, Task 3c, **not yet Gate-1 approved**) proposes splitting `file_patch`
-into `file_patch` (single-file replace) + `file_apply_patch` (V4A). Child 2 only *trims*
-`file_patch`'s docstring; it does not split. If the split lands first, child 2 trims both resulting
-docstrings; if child 2 lands first, the split inherits the trimmed wording. Resolve ordering at
-Gate 1 — do not let a docstring trim and a signature split clobber each other (same file,
-`files/write.py`). **Default if the split is not yet Gate-1 approved:** child 2 proceeds and trims
-the current single `file_patch` docstring; the split, if/when approved, inherits the trimmed prose.
-There is no deadlock — child 2 is approval-ready and surgical, so it does not wait on the draft.
+**`file_patch` dropped from scope — resolved by Task 3c.** The earlier draft proposed splitting
+`file_patch` into `file_patch` (single-file replace) + `file_apply_patch` (V4A). **That split did
+NOT happen.** Task 3c of `tool-surface-small-model-audit` shipped **Option B** instead: V4A multi-file
+mode was removed entirely and `file_patch` stayed a single monomorphic single-file-replace tool
+(`file_apply_patch` never existed). The V4A removal already shrank `file_patch`'s docstring below the
+trim heuristic (desc 477/params 787, rank #9), so there is no docstring left for child 2 to trim and
+no signature-clobber hazard. **`file_patch` is out of child 2's scope.**
 
 ## Tasks
 
@@ -138,7 +142,8 @@ path.
 **Prerequisites:** TASK-1 (for the seam-guard overlap check).
 
 **Files:** `co_cli/tools/web/fetch.py`, `co_cli/tools/web/search.py`, `co_cli/tools/files/read.py`
-(`file_read` only — `file_search` is child 3's), `co_cli/tools/files/write.py` (`file_patch`).
+(`file_read` only — `file_search` is child 3's). **`co_cli/tools/files/write.py` (`file_patch`) is no
+longer in scope** — Task 3c already shrank it below the trim heuristic.
 
 **Action:** Trim desc (drop `Returns:`/enforced caveats) and params `Args:` per tool; for
 `web_fetch`/`web_search`/`file_read` verify the cue removed from rule `04` survives here.
@@ -168,8 +173,8 @@ tools; read-before-patch honored.
 
 **Prerequisites:** TASK-1–TASK-3. (Child 3's prerequisite is satisfied — it has shipped — so the
 ceiling is now set from a single re-measurement *after* child 2's TASK-1–3 land, taken from the
-current registry which already includes child 3's trims, the memory split, and the
-`knowledge_analyze` removal.)
+current registry which already includes child 3's trims, both the memory and skill splits, the
+`knowledge_analyze` removal, and the Task 3c V4A removal.)
 
 **Files:** `tests/test_orchestrator_schema_budget.py` (NEW; sibling to `test_flow_prompt_assembly.py`).
 
@@ -180,15 +185,16 @@ current registry which already includes child 3's trims, the memory split, and t
 `name + description + minified-params-JSON`; cross-reference visibility via
 `deps.tool_index[name].visibility`. Assertions:
 - ALWAYS-bucket total ≤ measured post-child-2-trim value + ~400-char headroom. **Baseline before
-  child 2's trims: 22,211 chars / 21 ALWAYS tools (2026-06-01).** Re-measure after TASK-1–3 and pin
-  the ceiling to that number — do NOT reuse child 3's stale 21,941 (the memory split re-inflated the
-  bucket above it).
+  child 2's trims: 22,470 chars (2026-06-02), reflecting both splits + the 3c V4A removal.**
+  Re-measure after TASK-1–3 and pin the ceiling to that number.
 - Each ToolDefinition has a non-empty description.
-- `len(tools) >= 25` (registry is **26** now — was 25 in the parent baseline; `memory_manage`→4
-  tools `+3`, `knowledge_analyze` removed `−1`). Floor is one below current to guard against
-  accidental drops, not pin the exact boundary.
-- Max per-ALWAYS-tool ≤ a measured ceiling (current top ALWAYS tool is `file_patch` at 2,121 chars
-  — set the per-tool cap from the post-trim max, with headroom).
+- `len(tools) >= 28` (registry is **29** now — `memory_manage`→4 `+3`, `skill_manage`→4 `+3`,
+  `knowledge_analyze` removed `−1`, off the parent's 25/26). Floor is one below current to guard
+  against accidental drops, not pin the exact boundary.
+- Max per-ALWAYS-tool ≤ a measured ceiling. Post-3c the top ALWAYS tool by total is `file_search`
+  (~2,100 chars; child 3's, already trimmed), with `shell_exec` (~1,956, the untouched canonical
+  home) next — `file_patch` is no longer the max (it dropped to ~1,274). Set the per-tool cap from
+  the post-trim max, with headroom.
 
 **done_when:** `uv run pytest tests/test_orchestrator_schema_budget.py -x` passes; the asserted
 ceiling reflects the post-child-2 re-measurement (which already includes child 3 + the memory split).
@@ -222,9 +228,9 @@ edits.
 - `skill_manage` visibility/discovery (child 1b — `2026-05-28-164327-deferred-tool-stubs.md`);
   data/memory/todo/clarify docstring trims (child 3, shipped); rules `05`/`06`/`07` (child 4). The
   cumulative schema-budget guard is **in scope here** (TASK-4) — it ships with the last family child.
-- `shell_exec` trim (canonical home). Splitting `file_patch` (that is the `tool-surface` plan's
-  Task 3c, not this one — see the coordination note in High-Level Design). Consolidating the memory
-  tools back into one (the surface is now four monomorphic tools by deliberate design).
+- `shell_exec` trim (canonical home). `file_patch` (Task 3c's V4A removal already shrank it below the
+  trim heuristic — see the resolved coordination note in High-Level Design). Consolidating the memory
+  or skill tools back into one (both surfaces are now four monomorphic tools by deliberate design).
 
 ## Open Questions
 
@@ -243,6 +249,25 @@ file_patch split is unapproved), CD-m-2 (rejected — informational only; the pl
 two relevant injunctions and does not over-scope). All refreshed factual claims (26 tools, ALWAYS
 22,211 chars / 21 tools, file_patch #1 at 2,121, rule line refs, corrected grep, unwrap chain) were
 independently verified live by Core Dev.
+
+## Plan Refresh — 2026-06-02 (pre-Gate-1 re-verification)
+
+Re-verified against the live tree after Task 3b (`skill_manage` split) and Task 3c (`file_patch` V4A
+removal) shipped from `tool-surface-small-model-audit`. Drift found and corrected in this plan:
+
+- **Registry:** 26 → **29 tools**; ALWAYS bucket 22,211 → **22,470 chars** (`tmp/audit_tool_schemas.py`).
+- **`file_patch` dropped from TASK-2 scope.** It is no longer the #1 tool — Task 3c's V4A removal shrank
+  it to desc 477/params 787 (rank #9), below the trim heuristic. The earlier "split vs trim" coordination
+  note is resolved: the split never happened (Option B removed V4A; `file_apply_patch` never existed).
+- **TASK-4 numbers re-baselined:** ALWAYS ceiling 22,470; `len(tools) >= 28`; per-tool max example moved
+  off `file_patch` (now `file_search` ~2,100 / `shell_exec` ~1,956).
+- Rule-`04` line references (File tools 61–73, Shell 75–87, stale-data cue 71–73, Track-convergence 37–41)
+  re-checked against the current file — **still accurate**. The `04` "## File tools" block additionally
+  carries two stale references (`file_find` — no such tool; a `glob` filter — the param is `path`) that
+  TASK-1's deletion of that block sweeps away as a side effect.
+
+TASK-1 (rule dedup) is unaffected by the drift; TASK-2 shrinks from four docstrings to three. Plan is
+Gate-1-ready against the current tree.
 
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?

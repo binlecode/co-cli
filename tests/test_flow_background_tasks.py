@@ -37,6 +37,7 @@ def _make_task_ctx(tmp_path: Path) -> RunContext[CoDeps]:
     deps = CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
+        workspace_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
     )
     return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_start")
@@ -227,6 +228,32 @@ async def test_task_start_denies_rm_rf(tmp_path: Path) -> None:
     result = await task_start(ctx, command="rm -rf /", description="should be denied")
     assert _is_error(result)
     assert "task_start blocked" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_task_start_work_dir_scopes_to_subdir(tmp_path: Path) -> None:
+    """A relative work_dir anchors the task cwd under the workspace dir."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    ctx = _make_task_ctx(tmp_path)
+
+    result = await task_start(ctx, command="true", description="scoped", work_dir="sub")
+
+    assert not _is_error(result)
+    task_id = result.metadata["task_id"]
+    state = ctx.deps.session.background_tasks[task_id]
+    assert Path(state.cwd).resolve() == sub.resolve()
+
+
+@pytest.mark.asyncio
+async def test_task_start_work_dir_escape_rejected(tmp_path: Path) -> None:
+    """A work_dir resolving outside the workspace is rejected before spawn (BC-1, no escape)."""
+    ctx = _make_task_ctx(tmp_path)
+
+    result = await task_start(ctx, command="true", description="escape", work_dir="../..")
+
+    assert _is_error(result)
+    assert not ctx.deps.session.background_tasks
 
 
 # ---------------------------------------------------------------------------

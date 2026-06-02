@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 from co_cli.commands.types import CommandContext
 from co_cli.display.core import console
@@ -22,7 +21,7 @@ async def _cmd_background(ctx: CommandContext, args: str) -> None:
     state = BackgroundTaskState(
         task_id=task_id,
         command=cmd,
-        cwd=str(Path.cwd()),
+        cwd=str(ctx.deps.workspace_dir),
         description=cmd,
         status="running",
         started_at=datetime.now(UTC).isoformat(),

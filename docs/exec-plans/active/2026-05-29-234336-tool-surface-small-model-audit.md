@@ -455,15 +455,45 @@ reference docs. Every site below is removed/reconciled in this task.
 ## Task 4 — cross-family naming & semantic alignment
 
 ### Working-directory: one name, one contract (HIGH ×2)
-- `shell_exec.workdir` (`shell/execute.py:18`) — workspace-relative, traversal-guarded via
-  `enforce_workspace_boundary`.
-- `task_start.working_directory` (`tasks/control.py:38`) — any absolute path, **no** boundary
-  check.
-- **Fix:** pick one name (`working_directory`) and one path contract across both. Either enforce
-  the workspace boundary in `task_start` too, or explicitly document that it accepts absolute
-  paths (currently silent). Suggested `shell_exec` wording: `working_directory: Subdirectory
-  relative to the workspace root (e.g. "src/api"). Default None = workspace root. Absolute paths
-  and ".." traversal are rejected.`
+
+**Naming — ✓ RESOLVED & IMPLEMENTED (2026-06-02, ahead of Gate 1).** Both params renamed to
+**`work_dir`**. Name chosen against the house `_dir` convention, not the plan's original
+`working_directory` proposal: the codebase has 20+ `_dir`-suffixed identifiers (`workspace_dir`,
+`memory_dir`, `sessions_dir`, `tool_results_dir`, `user_skills_dir`, …) and `_directory` appeared
+exactly 3 times — all the lone `task_start.working_directory` outlier. `workdir` (shell_exec) also
+violated the convention (no underscore). Standardizing on `working_directory` would have propagated
+the outlier and demoted the dominant pattern; `work_dir` follows the convention, keeps `dir` as a
+sanctioned standard shorthand (`feedback_naming_no_abbreviations`), and stays disambiguated from
+`workspace_dir` (the project root / write anchor) — `work_dir` is an optional per-call subdirectory
+*under* it.
+  - `shell_exec.work_dir` (`shell/execute.py:18`) — workspace-relative, traversal-guarded via
+    `enforce_write_boundary`.
+  - `shell_exec.work_dir` (`shell/execute.py:18`) and `task_start.work_dir` (`tasks/control.py:38`)
+    now share both name and contract.
+  - Delivered: param + body + docstrings on both tools, `tests/test_flow_shell_exec.py` (kwargs +
+    test names), and `docs/specs/tools.md` (cwd-anchoring bullets) all renamed; lint clean; 15
+    shell/task tests green. Pure rename, no behavior change.
+
+**Contract — ✓ RESOLVED & IMPLEMENTED (2026-06-02; decision #2 → option (a) enforce).** `task_start`
+previously accepted any `work_dir` unchecked and defaulted `None → Path.cwd()` (two divergences from
+`shell_exec`, which boundary-guards and defaults `None → workspace_dir`). One name + two contracts is
+a Pattern-6 small-model hazard, and the unguarded path was a real escape gap — *worse* on a detached,
+longer-lived background command than on the foreground sibling. Conformed by mirroring the
+`shell_exec` block (`execute.py:72-79`) into `task_start`:
+  - `tasks/control.py` — added the `enforce_write_boundary` import; `cwd` now boundary-guards
+    `work_dir` (rejects absolute / `..` → `tool_error`) and defaults `None → workspace_dir`. The
+    boundary check runs before the task is registered/spawned, so a rejected path leaves no task.
+  - `commands/background.py` — the `/background` slash command anchor changed `Path.cwd()` →
+    `ctx.deps.workspace_dir` (per user decision); dropped the now-unused `Path` import. Every
+    shell-launch path (foreground tool, background tool, slash command) now shares the `workspace_dir`
+    anchor.
+  - `docs/specs/tools.md` — extended the `shell_exec` working-directory section to state `task_start`
+    shares the contract and `/background` shares the anchor.
+  - Tests: added `test_task_start_work_dir_scopes_to_subdir` + `test_task_start_work_dir_escape_rejected`
+    (`tests/test_flow_background_tasks.py`); `_make_task_ctx` now sets `workspace_dir=tmp_path`.
+  - **Behavior change:** background tasks can no longer run outside the workspace, and `None` now
+    anchors to `workspace_dir` rather than the process launch dir (identical in the common
+    no-`workspace_path` case). **Uncommitted** — to be committed with the rest of Task 4 (or on request).
 
 ### `google_calendar` defaults: reconcile (HIGH/LOW)
 - `days_ahead` defaults to **1** in `google_calendar_list` (`calendar.py:94`) but **30** in
@@ -502,8 +532,9 @@ reference docs. Every site below is removed/reconciled in this task.
 ### Minor naming (LOW)
 - `task_list.status_filter` (`tasks/control.py:203`): keep the name; tighten Args to mirror the
   row schema and enumerate the four status values.
-- `memory_view.name` (`memory/view.py:34`): tighten to disambiguate from `memory_manage` — `name:
-  The filename_stem from a memory_search hit (not the artifact title).`
+- `memory_view.name` (`memory/view.py:34`): tighten to disambiguate from `memory_create.name_title`
+  (`memory_manage` was split in 3a) — `name: The filename_stem from a memory_search hit (not the
+  artifact title).`
 - `google_gmail_draft.to` (`gmail.py:162`): state comma-separated multiple-recipient support.
 
 ---
@@ -556,6 +587,10 @@ Each near-duplicate pair needs reciprocal when-to-use / when-NOT-to-use lines.
    See Task 3c for the full A/B/B′ weigh and the hermes-aligned surface.
 2. **`task_start` working-dir security contract** — enforce workspace boundary (behavior change)
    vs document absolute-path acceptance (doc-only).
+   **✓ RESOLVED & IMPLEMENTED (2026-06-02): option (a) ENFORCE.** Both params renamed to `work_dir`
+   per the house `_dir` convention, and `task_start` now boundary-guards `work_dir` + defaults
+   `None → workspace_dir`, matching `shell_exec`; the `/background` slash command was aligned to the
+   `workspace_dir` anchor too. See Task 4 Working-directory for the full delivery.
 3. **`google_drive_search`** — expose `max_results` for family parity (signature change) vs
    document the fixed page size (doc-only).
 

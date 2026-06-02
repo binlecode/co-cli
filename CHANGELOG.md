@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.278]
+
+### Tool-surface small-model audit — Task 4 (work_dir name + contract unification)
+
+Unifies the foreground/background working-directory surface under one name and one path contract, per the small-model monomorphic doctrine.
+
+- **`work_dir` rename (house `_dir` convention).** `shell_exec.workdir` and `task_start.working_directory` both renamed to `work_dir` — the codebase convention is the `_dir` suffix (20+ identifiers: `workspace_dir`, `memory_dir`, `sessions_dir`, …); `working_directory`/`workdir` were the lone outliers. Distinct from `workspace_dir` (the project root): `work_dir` is an optional per-call subdirectory under it.
+- **`task_start` contract conformed to `shell_exec`.** `task_start.work_dir` is now boundary-guarded via `enforce_write_boundary` (rejects absolute / `..`-traversal paths → `tool_error`) and defaults `None → workspace_dir` (was `Path.cwd()`, unchecked). Closes a real escape gap — a detached background command could previously run anywhere on disk. The `/background` REPL slash command anchor likewise moved `Path.cwd()` → `workspace_dir`, so every shell-launch path shares one cwd anchor.
+- **`docs/specs/tools.md`** — working-directory section extended to document the shared `task_start`/`/background` contract; `file_patch` row notes whole-file delete is `shell_exec` (`rm`).
+- **Tests** — added `task_start` `work_dir` scope + escape-rejection tests; renamed `workdir` kwargs/tests across `test_flow_shell_exec.py`.
+
+### Shell exit-code classification
+
+Benign non-zero shell exits (grep with no matches, diff finding differences) now come back as normal tool output instead of errors, so the model does not mistake a successful "found nothing" for a failure and retry-loop. Real errors (grep exit 2, command-not-found exit 127) stay classified as errors with an explanatory exit-meaning header. New `co_cli/tools/shell/_exit_codes.py` (`benign_exit_note`, `shell_exit_meaning`).
+
 ## [0.8.276]
 
 ### Tool-surface small-model audit — Task 3c (file_patch V4A removal)

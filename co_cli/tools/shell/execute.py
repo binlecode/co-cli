@@ -7,6 +7,7 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.files.fs_guards import enforce_write_boundary
+from co_cli.tools.shell._exit_codes import benign_exit_note, shell_exit_meaning
 from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 async def shell_exec(
-    ctx: RunContext[CoDeps], cmd: str, timeout: int = 120, workdir: str | None = None
+    ctx: RunContext[CoDeps], cmd: str, timeout: int = 120, work_dir: str | None = None
 ) -> ToolReturn:
     """Execute a shell command and return combined stdout + stderr as text.
 
@@ -39,15 +40,17 @@ async def shell_exec(
 
     On failure, the tool returns the exit code and combined output as a tool
     result — read it to diagnose the failure (wrong flags, missing binary,
-    permission issue) and retry with a corrected command. Consider platform
-    differences: macOS uses BSD utilities (stat -f, not -c; sed -i '' not -i).
+    permission issue) and retry with a corrected command. Benign non-zero exits
+    (grep finding no matches, diff finding differences) come back as normal
+    output, not failures — do not retry them. Consider platform differences:
+    macOS uses BSD utilities (stat -f, not -c; sed -i '' not -i).
 
     Args:
         cmd: Shell command string (e.g. "git log --oneline -10",
              "python scripts/run.py", "uv run pytest").
         timeout: Max seconds to wait (default 120). Increase for builds or
                  long scripts (e.g. 300). Capped by shell_max_timeout.
-        workdir: Optional subdirectory (relative to workspace root) to run the
+        work_dir: Optional subdirectory (relative to workspace root) to run the
                  command in. Default None = the workspace root. Prevents
                  directory traversal.
     """
@@ -68,11 +71,11 @@ async def shell_exec(
     # Shell cwd is anchored to the workspace dir — the same write/cwd anchor as
     # file_write/file_patch (BC-1). An explicit cwd is always passed (the backend
     # holds no default), so a configured workspace_path takes effect even when no
-    # workdir is given.
+    # work_dir is given.
     workspace_dir = ctx.deps.workspace_dir
-    if workdir is not None:
+    if work_dir is not None:
         try:
-            resolved_cwd = str(enforce_write_boundary(Path(workdir), workspace_dir))
+            resolved_cwd = str(enforce_write_boundary(Path(work_dir), workspace_dir))
         except ValueError as e:
             return tool_error(str(e), ctx=ctx)
     else:
@@ -86,7 +89,15 @@ async def shell_exec(
         )
         if exit_code == 0:
             return tool_output(output, ctx=ctx)
-        return tool_error(f"exit {exit_code}:\n{output}", ctx=ctx)
+        # Benign non-zero exits (grep with no matches, diff with differences)
+        # ran correctly — return them as normal output so the model does not
+        # mistake a successful "found nothing" for a failure and loop.
+        note = benign_exit_note(cmd, exit_code)
+        if note is not None:
+            return tool_output(f"[ran OK — {note}]\n{output}", ctx=ctx)
+        meaning = shell_exit_meaning(exit_code)
+        header = f"exit {exit_code} ({meaning})" if meaning else f"exit {exit_code}"
+        return tool_error(f"{header}:\n{output}", ctx=ctx)
     except RuntimeError as e:
         raise ModelRetry(
             f"Shell: command timed out after {effective}s. "

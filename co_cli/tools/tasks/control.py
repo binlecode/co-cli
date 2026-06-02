@@ -25,6 +25,7 @@ from co_cli.tools.background import (
     spawn_task,
     tail_log,
 )
+from co_cli.tools.files.fs_guards import enforce_write_boundary
 from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
@@ -35,7 +36,7 @@ async def task_start(
     ctx: RunContext[CoDeps],
     command: str,
     description: str,
-    working_directory: str | None = None,
+    work_dir: str | None = None,
 ) -> ToolReturn:
     """Start a long-running background shell command without blocking the chat.
 
@@ -54,13 +55,22 @@ async def task_start(
     Args:
         command: Shell command to run (e.g. "uv run pytest", "grep -r foo src/").
         description: Human-readable description of what this task does.
-        working_directory: Working directory for the command. Defaults to cwd.
+        work_dir: Optional subdirectory (relative to workspace root) to run the
+                 command in. Default None = the workspace root. Absolute paths
+                 and ".." traversal are rejected.
     """
     policy = evaluate_shell_command(command, ctx.deps.config.shell.safe_commands)
     if policy.decision is ShellDecisionEnum.DENY:
         return tool_error(f"task_start blocked: {policy.reason}", ctx=ctx)
 
-    cwd = working_directory or str(Path.cwd())
+    workspace_dir = ctx.deps.workspace_dir
+    if work_dir is not None:
+        try:
+            cwd = str(enforce_write_boundary(Path(work_dir), workspace_dir))
+        except ValueError as e:
+            return tool_error(str(e), ctx=ctx)
+    else:
+        cwd = str(workspace_dir)
 
     span = current_span()
     span.set_attribute("task.command", command)
