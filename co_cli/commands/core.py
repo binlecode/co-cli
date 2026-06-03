@@ -10,6 +10,7 @@ from co_cli.commands.cancel import _cmd_cancel
 from co_cli.commands.clear import _cmd_clear
 from co_cli.commands.compact import _cmd_compact
 from co_cli.commands.dream import handle_dream_slash
+from co_cli.commands.filescope import _cmd_filescope
 from co_cli.commands.help import _cmd_help
 from co_cli.commands.history import _cmd_history
 from co_cli.commands.memory import _cmd_memory
@@ -43,6 +44,11 @@ BUILTIN_COMMANDS["help"] = SlashCommand("help", "List available slash commands",
 BUILTIN_COMMANDS["clear"] = SlashCommand("clear", "Clear conversation history", _cmd_clear)
 BUILTIN_COMMANDS["new"] = SlashCommand("new", "Start a fresh session", _cmd_new)
 BUILTIN_COMMANDS["tools"] = SlashCommand("tools", "List registered agent tools", _cmd_tools)
+BUILTIN_COMMANDS["filescope"] = SlashCommand(
+    "filescope",
+    "Show file search roots (read scope) and the workspace write anchor",
+    _cmd_filescope,
+)
 BUILTIN_COMMANDS["history"] = SlashCommand(
     "history", "Show delegation history (delegation agents + background tasks)", _cmd_history
 )

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.290]
+
+### filescope-command — read-only `/filescope` slash command
+
+Adds a `/filescope` built-in that prints the active filesystem scope — the resolved `file_search_roots` (read scope) and the `workspace_dir` (write anchor) — so a misconfigured or empty `file_search_paths` is no longer invisible until searches quietly miss.
+
+- **`co_cli/commands/filescope.py`** (new) — `_cmd_filescope` reads `deps.file_search_roots` / `deps.workspace_dir` and prints a numbered read-scope list plus the write anchor. A root failing `Path.exists()` is flagged `(missing)`; the unconfigured single-root case is labeled as default (workspace-only) scope. Read-only, returns `None` (`LocalOnly`); paths print with `soft_wrap=True` so long paths don't wrap.
+- **`co_cli/commands/core.py`** — registers `BUILTIN_COMMANDS["filescope"]`, auto-wiring `/help` listing and tab-completion.
+- **`docs/specs/tui.md`** — `/filescope` row added to the built-in slash-command table.
+
 ## [0.8.288]
 
 ### rules-block-trim-finish — complete the conservative rules-block trim + single-source pytest timeouts
