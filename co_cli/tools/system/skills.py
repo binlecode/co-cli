@@ -296,7 +296,7 @@ def _require_valid_name(ctx: RunContext[CoDeps], name: str) -> ToolReturn | None
 
 
 @agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS,
+    visibility=VisibilityPolicyEnum.DEFERRED,
     approval=True,
     approval_subject_fn=_subject_fn("skill_create", "name"),
 )
@@ -389,7 +389,7 @@ async def skill_patch(
 
 
 @agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS,
+    visibility=VisibilityPolicyEnum.DEFERRED,
     approval=True,
     approval_subject_fn=_subject_fn("skill_delete", "name"),
 )

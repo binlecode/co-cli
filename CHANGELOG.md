@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.284]
+
+### defer-skill-write-tools — `skill_create`/`skill_delete` moved off the ALWAYS surface
+
+Progressive-disclosure trim for the small-model tool surface. `skill_create` and `skill_delete` — deliberate, rarely-first-turn actions — move from `ALWAYS` to `DEFERRED`; the model discovers them on demand via `search_tools` and stays aware of them through the per-turn deferred-tool stub. `skill_view`/`skill_edit`/`skill_patch` stay `ALWAYS` so the immediate drift-fix path needs no discovery round-trip. ALWAYS surface 24 → 22 tools (`skill_*` hot-surface names 5 → 3); ALWAYS schema bucket 20,988 → 19,800 chars.
+
+- **Two decorators flipped** (`co_cli/tools/system/skills.py`): `skill_create`, `skill_delete` → `VisibilityPolicyEnum.DEFERRED`; approval + subject-fn unchanged. Dream daemon unaffected (`build_task_agent` registers by explicit name, ignores visibility).
+- **Schema-budget guard re-pinned** (`tests/test_orchestrator_schema_budget.py`): `ALWAYS_BUCKET_CEILING` 21,400 → 20,200 to lock the win.
+- **Spec sync** (`docs/specs/skills.md`): Path 3 records the always-loaded vs deferred split.
+- **End-to-end validated** with a live model: agent issues `search_tools` then calls the deferred `skill_create` successfully (both hinted and unprompted).
+- **Test hygiene** (`tests/test_flow_deferred_tool_stubs.py`): trimmed structural string-shape tests to the one functional discovery-completeness guard.
+
 ## [0.8.282]
 
 ### prefill-trim-2 — tool-guidance de-duplication + cumulative schema-budget guard

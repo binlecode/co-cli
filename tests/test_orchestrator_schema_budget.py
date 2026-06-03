@@ -28,9 +28,9 @@ from pydantic_ai.result import RunUsage
 from co_cli.bootstrap.core import create_deps
 from co_cli.deps import VisibilityPolicyEnum
 
-# Measured 2026-06-02 via tmp/audit_tool_schemas.py after prefill-trim-2 TASK-1 through 3:
-# ALWAYS bucket = 20,988 chars (was 22,589 pre-trim). +~400-char headroom.
-ALWAYS_BUCKET_CEILING = 21_400
+# Measured 2026-06-02 after defer-skill-write-tools (skill_create + skill_delete → DEFERRED):
+# ALWAYS bucket = 19,800 chars (was 20,988 pre-defer; 22,589 pre-trim). +~400-char headroom.
+ALWAYS_BUCKET_CEILING = 20_200
 # Measured max ALWAYS tool: file_search = 2,111 chars (child 3's, already trimmed),
 # shell_exec = 1,966 (untouched canonical routing home). +headroom.
 PER_ALWAYS_TOOL_CEILING = 2_300
