@@ -17,6 +17,7 @@ from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.context.history_processors import sanitize_surrogate_codepoints_messages
+from co_cli.observability.tracing import current_span
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class SurrogateRecoveryModel(WrapperModel):
             log.warning(
                 "Recovered from UnicodeEncodeError via sanitize-retry (request)",
             )
+            current_span().add_event("surrogate_recovery", {"method": "request"})
             sanitized = sanitize_surrogate_codepoints_messages(messages)
             return await self.wrapped.request(sanitized, model_settings, model_request_parameters)
 
@@ -61,6 +63,7 @@ class SurrogateRecoveryModel(WrapperModel):
             log.warning(
                 "Recovered from UnicodeEncodeError via sanitize-retry (request_stream)",
             )
+            current_span().add_event("surrogate_recovery", {"method": "request_stream"})
         sanitized = sanitize_surrogate_codepoints_messages(messages)
         async with self.wrapped.request_stream(
             sanitized, model_settings, model_request_parameters, run_context

@@ -169,6 +169,7 @@ One JSON object per closed span, one line per record. Schema version 1:
 | `co.turn` | `agent` (wrapping) | `co.user_prompt.chars`, `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens`, `turn.model_requests` (int) — root span for every user turn; `@trace("co.turn", new_trace=True)` on `run_turn()`. On terminal `ModelHTTPError`, adds a `provider_error` event with `http.status_code` and `error.body` (capped at 500 chars). |
 | `invoke_agent {name}` | `agent` | `co.agent.role`, `co.agent.model`, `co.agent.request_limit`, `co.agent.requests_used`, `co.agent.final_result` — emitted by `ObservabilityCapability.before_run`/`after_run`. |
 | `chat {model}` | `model` | `co.model.name`, `co.model.input` (JSON list of message dicts preserving role + part types incl. `thinking`), `co.model.output` (same shape), `co.model.tokens.input`, `co.model.tokens.output`, `co.model.finish_reason` — emitted by `ObservabilityCapability.before_model_request`/`after_model_request`. |
+| `llm_call {model}` | `model` | Same attribute keys as `chat {model}` (BC-1 parity — renders identically) but emitted by the direct-call primitive `llm_call()` (`co_cli/llm/call.py`) via explicit `push_span`/`pop_span`, NOT the agent loop. Covers the compaction summarizer, dream merges, and eval judge calls. The distinct name keeps direct calls separable from agent turns; the span nests under the active parent (e.g. `compaction.proactive_check`). Reuses `serialize_messages`/`serialize_response` from `capability.py`. |
 | `tool {name}` | `tool` | `co.tool.name`, `co.tool.args` (JSON string), `co.tool.result` (JSON string, size-capped), `co.tool.result_size`, `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.args_chars` — `co.tool.{name,args,result}` from `ObservabilityCapability`, the rest from `CoToolLifecycle` via `current_span().set_attribute()`. |
 | `background_task_execute` | `co` | `task.command`, `task.description`, `task.cwd` — `@trace("background_task_execute")` on `task_start`. |
 | `tool_budget.resolved` | `co` | `budget.context_window_tokens`, `budget.spill_ratio`, `budget.tool_call_limit`, `budget.spill_threshold_chars`, `budget.spill_threshold_tokens` — emitted once at bootstrap by `@trace("tool_budget.resolved")` on `_emit_tool_budget_span()`. |
@@ -179,6 +180,7 @@ One JSON object per closed span, one line per record. Schema version 1:
 | `co.housekeeping.decay` | `co` | decay phase — `@trace("co.housekeeping.decay")` on `decay_memory()`. |
 | `co.memory.{memory_create,memory_mutate,memory_delete}` | `co` | `memory.memory_kind`, `memory.filename_stem`, `memory.action` — `@trace(...)` on `_handle_{create,mutate,delete}()`. |
 | `compaction.proactive_check` | `co` | `compaction.msgs`, `compaction.token_count`, `compaction.threshold`, `compaction.budget`, `compaction.fired` (bool), `compaction.skip_reason`, `compaction.tokens_after`, `compaction.savings_pct`, etc. — `@trace("compaction.proactive_check")` on `proactive_window_processor()`. |
+| `index.search` | `co` | `co.index.query_len`, `co.index.sources`, `co.index.kinds`, `co.index.limit`, `co.index.hits` — emitted per `IndexStore.search()` invocation (`co_cli/index/store.py`) so recall work (FTS5/BM25 + embedding + hybrid merge) is attributable under the `memory_search`/`session_search` tool span. `co.index.hits` is THIS invocation's returned count: a kinds-filtered `memory_search` calls `search()` twice → one span each, neither being the tool's final merged/capped list. |
 
 ### Events on existing spans
 
@@ -192,6 +194,8 @@ These small attribute-only blocks were previously zero-duration spans; they are 
 | `tool_budget.spill_tool_result` | active span | `tool.name`, `spill.threshold_chars`, `spill.content_chars`, `spill.fired`, `spill.forced`, `spill.savings_chars` |
 | `tool_budget.enforce_request_size` | active model span | `request.threshold_tokens`, `request.tokens_before`, `request.tokens_after`, `request.spilled_count`, `request.spill_fired`, `request.skip_reason` (one of `""`, `below_threshold`, `no_candidates`, `all_spilled`, `fallback_to_summarize`) |
 | `provider_error` | active `co.turn` span | `http.status_code`, `error.body` (capped at 500 chars) |
+| `surrogate_recovery` | active model span (`chat` or `llm_call`) | `method` (`request` / `request_stream`) — emitted when `SurrogateRecoveryModel` catches a `UnicodeEncodeError`, re-sanitizes, and retries (`co_cli/llm/surrogate_recovery_model.py`). Makes recovery frequency visible in the trace. |
+| `compaction_fallback` | active `compaction.proactive_check` span | `reason` (one of `model_absent`, `circuit_breaker_open`, `summarizer_error`, `empty_summary`) — emitted when a compaction pass degrades to a static marker instead of an LLM summary (`co_cli/context/compaction.py`). Distinct reason per cause so a silent degradation is separable at triage. |
 
 ### Live Tail Viewer (`co tail`)
 

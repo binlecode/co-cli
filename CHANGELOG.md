@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.292]
+
+### structural-logging-gap-fill — span coverage for non-agent processing paths
+
+Three processing paths that bypass the agent loop emitted zero structural spans, so direct LLM calls, sanitize-retry recovery, and index retrieval were untrackable in `co tail` / `co trace`. The compaction summarizer — a hot-path direct LLM call — was the costliest blind spot (the 71.95s scare ran untraced).
+
+- **`co_cli/llm/call.py`** — `llm_call()` wraps `model_request` in an `llm_call {model}` span (`kind="model"`) at attribute parity with the agent-path `chat` span (`co.model.name/input/output`, `co.model.tokens.input/output`, `co.model.finish_reason`). Distinct name keeps direct calls separable from agent turns; nests under any active parent. Covers the compaction summarizer, dream merges, and eval judge calls at once.
+- **`co_cli/observability/capability.py`** — lifted `serialize_messages`/`serialize_response` to public (importable) surface, reused by the direct-call span. Distinct from `context/summarization.py`'s same-named human-readable serializer.
+- **`co_cli/index/store.py`** — `IndexStore.search()` emits an `index.search` span per invocation (query_len, sources, kinds, limit, hits) so recall work is attributable under the `memory_search`/`session_search` tool span.
+- **`co_cli/llm/surrogate_recovery_model.py`** — emits a `surrogate_recovery` event on the active model span when sanitize-retry fires (both `request` + `request_stream`).
+- **`co_cli/context/compaction.py`** — `CompactionFallbackReason` enum + `compaction_fallback` event with a distinct reason per degradation branch (`model_absent`, `circuit_breaker_open`, `summarizer_error`, `empty_summary`), so a silent degradation to a static marker is visible in the trace.
+
 ## [0.8.290]
 
 ### filescope-command — read-only `/filescope` slash command

@@ -60,8 +60,14 @@ def _agent_name(ctx: RunContext[CoDeps]) -> str:
     return ctx.agent.name or "<unknown>"
 
 
-def _serialize_messages(messages: list[ModelMessage]) -> str:
-    """Serialize message history to a compact JSON string preserving roles + part types."""
+def serialize_messages(messages: list[ModelMessage]) -> str:
+    """Serialize message history to a compact JSON string preserving roles + part types.
+
+    Public (importable) surface: the direct-call span in ``co_cli.llm.call`` reuses
+    this to populate ``co.model.input`` at parity with the agent-path ``chat`` span.
+    Distinct from ``co_cli.context.summarization.serialize_messages`` (which renders
+    human-readable redacted text for summarizer prompts, not compact span JSON).
+    """
     out: list[dict[str, Any]] = []
     for msg in messages:
         kind = getattr(msg, "kind", "request")
@@ -102,7 +108,11 @@ def _serialize_response_parts(parts: list[ModelResponsePart]) -> list[dict[str, 
     return serialized
 
 
-def _serialize_response(response: ModelResponse) -> str:
+def serialize_response(response: ModelResponse) -> str:
+    """Serialize a ModelResponse's parts to compact JSON for span ``co.model.output``.
+
+    Public (importable) surface — reused by the direct-call span in ``co_cli.llm.call``.
+    """
     return json.dumps(_serialize_response_parts(list(response.parts)), default=str)
 
 
@@ -174,7 +184,7 @@ class ObservabilityCapability(AbstractCapability[CoDeps]):
             kind="model",
             attributes={
                 "co.model.name": request_context.model.model_name,
-                "co.model.input": _serialize_messages(list(request_context.messages)),
+                "co.model.input": serialize_messages(list(request_context.messages)),
             },
         )
         return request_context
@@ -189,7 +199,7 @@ class ObservabilityCapability(AbstractCapability[CoDeps]):
         usage = response.usage
         pop_span(
             attributes={
-                "co.model.output": _serialize_response(response),
+                "co.model.output": serialize_response(response),
                 "co.model.tokens.input": getattr(usage, "input_tokens", 0),
                 "co.model.tokens.output": getattr(usage, "output_tokens", 0),
                 "co.model.name": response.model_name,

@@ -15,6 +15,7 @@ Submodule map:
 from __future__ import annotations
 
 import logging
+from enum import StrEnum
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
@@ -110,6 +111,30 @@ PROBE_EVERY counts thereafter (23, 33, …). A successful probe resets the count
 """
 
 
+class CompactionFallbackReason(StrEnum):
+    """Why a compaction pass degraded to a static marker instead of an LLM summary.
+
+    Emitted as the ``reason`` on the ``compaction_fallback`` span event so a silent
+    degradation (the 71.95s-scare failure mode) is attributable in ``co trace``
+    rather than surfacing only as a log line. Each cause is distinct — a single
+    opaque reason would make all four look identical at triage.
+    """
+
+    MODEL_ABSENT = "model_absent"
+    CIRCUIT_BREAKER_OPEN = "circuit_breaker_open"
+    SUMMARIZER_ERROR = "summarizer_error"
+    EMPTY_SUMMARY = "empty_summary"
+
+
+def _emit_compaction_fallback(reason: CompactionFallbackReason) -> None:
+    """Attach a ``compaction_fallback`` event (with reason) to the active span.
+
+    No-op when no span is active (``current_span()`` returns the documented no-op),
+    so callers outside an active trace are safe.
+    """
+    current_span().add_event("compaction_fallback", {"reason": reason.value})
+
+
 def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
     """Decide whether the LLM summarizer may run for the next compaction pass.
 
@@ -121,6 +146,7 @@ def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
     """
     if not ctx.deps.model:
         log.info("Compaction: model absent, using static marker")
+        _emit_compaction_fallback(CompactionFallbackReason.MODEL_ABSENT)
         return (False, False)
 
     count = ctx.deps.runtime.compaction_skip_count
@@ -131,6 +157,7 @@ def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
     if skips_since_trip != 0 and skips_since_trip % _COMPACTION_BREAKER_PROBE_EVERY == 0:
         return (True, True)
     log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
+    _emit_compaction_fallback(CompactionFallbackReason.CIRCUIT_BREAKER_OPEN)
     return (False, False)
 
 
@@ -193,6 +220,7 @@ async def _gated_summarize_or_none(
         log.warning(
             "Compaction summarization failed — falling back to static marker", exc_info=True
         )
+        _emit_compaction_fallback(CompactionFallbackReason.SUMMARIZER_ERROR)
         ctx.deps.runtime.compaction_skip_count += 1
         return None
     if not _is_valid_summary(summary_text):
@@ -200,6 +228,7 @@ async def _gated_summarize_or_none(
             "Compaction summarizer returned empty output — counting as failure (count=%d)",
             ctx.deps.runtime.compaction_skip_count + 1,
         )
+        _emit_compaction_fallback(CompactionFallbackReason.EMPTY_SUMMARY)
         ctx.deps.runtime.compaction_skip_count += 1
         return None
     ctx.deps.runtime.compaction_skip_count = 0

@@ -26,6 +26,7 @@ from co_cli.index._retrieval import RetrievalService, SearchResult
 from co_cli.index.chunk import Chunk
 from co_cli.index.schema import SCHEMA_SQL
 from co_cli.index.search_util import kind_clause
+from co_cli.observability.tracing import pop_span, push_span
 
 if TYPE_CHECKING:
     from co_cli.config.core import Settings
@@ -509,15 +510,38 @@ class IndexStore:
         created_before: str | None = None,
         limit: int = 5,
     ) -> list[SearchResult]:
-        """Ranked search facade — delegates to the private RetrievalService."""
-        return self._retrieval.search(
-            query,
-            sources=sources,
-            kinds=kinds,
-            created_after=created_after,
-            created_before=created_before,
-            limit=limit,
+        """Ranked search facade — delegates to the private RetrievalService.
+
+        Emits an ``index.search`` span per invocation so recall work (FTS5/BM25 +
+        embedding + hybrid merge) is attributable in ``co trace`` under the
+        ``memory_search`` / ``session_search`` tool span. ``co.index.hits`` is
+        THIS invocation's returned count — callers that search twice (e.g.
+        ``MemoryStore.search_memory_items`` kinds-filtered path) emit one span per
+        call, none of which is the tool's final merged/capped list.
+        """
+        push_span(
+            "index.search",
+            attributes={
+                "co.index.query_len": len(query),
+                "co.index.sources": sources,
+                "co.index.kinds": kinds,
+                "co.index.limit": limit,
+            },
         )
+        try:
+            results = self._retrieval.search(
+                query,
+                sources=sources,
+                kinds=kinds,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit,
+            )
+        except BaseException as exc:
+            pop_span(status="ERROR", status_msg=str(exc))
+            raise
+        pop_span(attributes={"co.index.hits": len(results)})
+        return results
 
     def probe(self) -> None:
         """Health check — raises on first error found."""
