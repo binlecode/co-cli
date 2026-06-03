@@ -42,11 +42,10 @@ from evals._timeouts import (
     TOOL_TURN_BUDGET_S,
     TURN_BUDGET_S,
 )
-from evals._trace import record_turn
+from evals._trace import record_turn, response_text
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
-    TextPart,
     ToolCallPart,
     ToolReturnPart,
 )
@@ -79,17 +78,6 @@ class _TurnSlice:
     new_messages: list[Any]
     assistant_text: str
     tool_calls: list[ToolCallPart]
-
-
-def _assistant_text_from(messages: list[Any]) -> str:
-    """Concatenate ``TextPart.content`` across the given assistant messages."""
-    parts: list[str] = []
-    for msg in messages:
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, TextPart):
-                    parts.append(part.content or "")
-    return " ".join(parts)
 
 
 def _tool_calls_from(messages: list[Any]) -> list[ToolCallPart]:
@@ -233,7 +221,7 @@ async def _drive_turns(
                 result=result,
                 trace=trace,
                 new_messages=new_msgs,
-                assistant_text=_assistant_text_from(new_msgs),
+                assistant_text=response_text(result),
                 tool_calls=_tool_calls_from(new_msgs),
             )
         )

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.286]
+
+### eval-infra-output-sync — prune to workflow evals + read canonical `turn_result.output`
+
+Eval suite pruned 9 → 6 (kept the labeled Workflow evals: daily_chat, session_continuity, memory, skills, background, trust_visibility; removed the 3 non-workflow evals `mindset_selection`/`domain_review`/`research_direct` + their dead REPORTs). Fixed the response-reading drift: evals reconstructed the agent's reply from message `TextPart`s, which read empty on qwen3.6's length-retry/thinking-budget turns and caused spurious FAILs (eval_skills W4.A was 2/4 flaky). New shared `response_text(turn_result)` accessor in `evals/_trace.py` reads the canonical `AgentRunResult.output`; routed skills/session_continuity/daily_chat through it and added a trace `assistant_text` fallback. W4.A now PASS 2/2.
+
 ## [0.8.284]
 
 ### defer-skill-write-tools — `skill_create`/`skill_delete` moved off the ALWAYS surface

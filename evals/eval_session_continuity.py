@@ -51,7 +51,7 @@ from evals._timeouts import (
     MULTI_TURN_COMPACT_BUDGET_S,
     TURN_BUDGET_S,
 )
-from evals._trace import record_turn
+from evals._trace import record_turn, response_text
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from co_cli.commands.compact import _cmd_compact
@@ -99,22 +99,6 @@ def _contains_any_compaction_marker(history: list[Any]) -> bool:
             ):
                 return True
     return False
-
-
-def _last_assistant_text(messages: list[Any]) -> str:
-    """Concatenate ``TextPart`` content from the last ``ModelResponse`` in messages."""
-    from pydantic_ai.messages import ModelResponse, TextPart
-
-    for msg in reversed(messages):
-        if not isinstance(msg, ModelResponse):
-            continue
-        chunks: list[str] = []
-        for part in msg.parts:
-            if isinstance(part, TextPart):
-                chunks.append(part.content or "")
-        if chunks:
-            return "".join(chunks)
-    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +406,7 @@ async def case_w2_d_resume_helpers_rehydrate(
             model_call_seconds += followup_trace.model_call_seconds
             for k, v in followup_trace.token_usage.items():
                 token_usage[k] = token_usage.get(k, 0) + v
-            followup_text = _last_assistant_text(followup_result.messages)
+            followup_text = response_text(followup_result)
         except Exception as exc:
             passed = False
             reason = f"follow-up turn failed: {type(exc).__name__}: {exc}"

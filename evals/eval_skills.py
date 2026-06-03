@@ -39,9 +39,8 @@ from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
 from evals._timeouts import CALL_TIMEOUT_S, TOOL_TURN_BUDGET_S
-from evals._trace import record_turn
+from evals._trace import record_turn, response_text
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.usage import RunUsage
 
 from co_cli.commands.core import dispatch
@@ -84,17 +83,6 @@ def _make_run_context(deps: CoDeps, agent) -> RunContext[CoDeps]:
         usage=RunUsage(),
         tool_name="skill_create",
     )
-
-
-def _response_text(messages) -> str:
-    """Concatenate every assistant ``TextPart`` from a TurnResult.messages list."""
-    out: list[str] = []
-    for msg in messages:
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, TextPart):
-                    out.append(part.content)
-    return " ".join(out)
 
 
 def _skill_w4_lifecycle_body() -> str:
@@ -248,7 +236,7 @@ async def case_w4_a_dispatch_user_skill(
             passed = False
             reason = f"turn outcome = {turn_result.outcome!r}, expected 'continue'"
         else:
-            text = _response_text(turn_result.messages)
+            text = response_text(turn_result)
             if token_value not in text:
                 passed = False
                 reason = (

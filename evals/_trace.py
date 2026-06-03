@@ -71,6 +71,20 @@ def _hash_text(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
 
+def response_text(turn_result: Any) -> str:
+    """The agent's final response text — pydantic-ai's canonical ``AgentRunResult.output``.
+
+    Reads ``turn_result.output`` (str in practice; the value the production REPL
+    renders) instead of reconstructing from message ``TextPart``s. qwen3.6's
+    length-retry / thinking-budget path doesn't always land the final text as a
+    clean ``TextPart`` in ``all_messages()``, so a message-walk reads empty even
+    when ``.output`` resolves. Returns "" for a non-str / ``None`` output
+    (``output`` is ``str | DeferredToolRequests`` in practice); never raises.
+    """
+    output = getattr(turn_result, "output", None)
+    return output if isinstance(output, str) else ""
+
+
 def _extract_messages(messages: list[Any]) -> tuple[str, list[ToolCallRecord], str | None]:
     """Walk pydantic-ai messages → (assistant_text, tool_calls, thinking)."""
     assistant_parts: list[str] = []
@@ -204,6 +218,8 @@ async def record_turn(
         if turn_result is not None:
             msgs = getattr(turn_result, "messages", None) or []
             assistant_text, tool_calls, thinking_raw = _extract_messages(msgs)
+            if not assistant_text:
+                assistant_text = response_text(turn_result)
             if verbose_thinking:
                 thinking = thinking_raw
             usage_dict = _extract_usage(getattr(turn_result, "usage", None))
