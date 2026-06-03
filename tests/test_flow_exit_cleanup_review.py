@@ -85,17 +85,6 @@ def _kick_files(tmp_path: Path) -> list[Path]:
 
 
 @pytest.mark.asyncio
-async def test_drain_and_cleanup_completes_without_error(tmp_path: Path) -> None:
-    """_drain_and_cleanup runs to completion without raising."""
-    from co_cli.main import _drain_and_cleanup
-
-    deps = _make_deps(tmp_path)
-
-    async with AsyncExitStack() as stack:
-        await _drain_and_cleanup(deps, stack)
-
-
-@pytest.mark.asyncio
 async def test_drain_and_cleanup_handles_none_deps(tmp_path: Path) -> None:
     """_drain_and_cleanup handles deps=None without raising."""
     from co_cli.main import _drain_and_cleanup

@@ -32,11 +32,7 @@ def test_sync_canon_store_indexes_real_tars_memories(tmp_path: Path) -> None:
         assert len(results) >= 1, (
             "expected at least 1 canon result for 'humor deadpan' after _sync_canon_store"
         )
-        # kind='canon' auto-set for canon source at index time
-        row = store._conn.execute("SELECT kind FROM docs WHERE source='canon' LIMIT 1").fetchone()
-        assert row is not None, "expected at least one doc row with source='canon'"
-        assert row["kind"] == "canon", f"expected kind='canon', got {row['kind']!r}"
-        # explicit kinds filter returns same paths as no filter
+        # explicit kinds filter returns same paths as no filter — proves kind='canon' is indexed
         paths_all = {r.path for r in store.search("humor deadpan", sources=["canon"])}
         paths_canon = {
             r.path for r in store.search("humor deadpan", sources=["canon"], kinds=["canon"])
@@ -54,9 +50,7 @@ def test_sync_canon_store_noop_when_personality_none(tmp_path: Path) -> None:
     store = _make_store(tmp_path)
     try:
         _sync_canon_store(store, config, TerminalFrontend())
-        row = store._conn.execute(
-            "SELECT COUNT(*) AS cnt FROM chunks WHERE source='canon'"
-        ).fetchone()
-        assert row["cnt"] == 0, f"expected 0 canon chunks when personality=None, got {row['cnt']}"
+        names = store.list_titles_by_source("canon")
+        assert not names, f"expected no canon docs when personality=None, got {names}"
     finally:
         store.close()

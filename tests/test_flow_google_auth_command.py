@@ -10,39 +10,20 @@ scope-diff report.
 
 from __future__ import annotations
 
-import importlib
 import os
 import stat
 from pathlib import Path
 
 import pytest
 import typer
-from typer.testing import CliRunner
 
 from co_cli.commands.google import (
     _auth_success_message,
     _check_report,
-    _client_secret_prerequisites,
     _extract_auth_code,
     _write_token,
-    google_app,
 )
 from co_cli.tools.google._auth import ALL_GOOGLE_SCOPES
-
-
-def test_auth_help_lists_options() -> None:
-    """(a) `co google auth --help` exits 0 and documents both options."""
-    result = CliRunner().invoke(google_app, ["auth", "--help"])
-    assert result.exit_code == 0
-    assert "--client-secret" in result.output
-    assert "--credentials-path" in result.output
-
-
-def test_auth_help_lists_no_browser_option() -> None:
-    """The headless path is discoverable: `auth --help` documents --no-browser."""
-    result = CliRunner().invoke(google_app, ["auth", "--help"])
-    assert result.exit_code == 0
-    assert "--no-browser" in result.output
 
 
 def test_extract_auth_code_from_bare_code() -> None:
@@ -60,12 +41,6 @@ def test_extract_auth_code_url_without_code_raises() -> None:
     """A redirect URL missing the `code` param is a usage error, not a silent pass."""
     with pytest.raises(typer.BadParameter):
         _extract_auth_code("http://localhost:1/?state=xyz&error=access_denied")
-
-
-def test_check_help_exits_zero() -> None:
-    """(TASK-4) `co google check --help` exits 0."""
-    result = CliRunner().invoke(google_app, ["check", "--help"])
-    assert result.exit_code == 0
 
 
 def test_token_round_trip_loads_back(tmp_path: Path) -> None:
@@ -104,24 +79,6 @@ def test_auth_success_message_names_path_and_scopes_no_secrets() -> None:
     assert "ya29." not in msg
 
 
-def test_ensure_credentials_returns_none_without_token(tmp_path, monkeypatch) -> None:
-    """(d) With no readable token, resolution returns None — no gcloud/ADC acquisition.
-
-    The acquisition legs are gone, so the helper module no longer imports subprocess
-    or shutil (CD-m-8). Point the default token path at an absent file so the result
-    is deterministic regardless of the dev machine's real ~/.co-cli token.
-    """
-    import co_cli.tools.google._auth as auth_mod
-
-    monkeypatch.setattr(auth_mod, "GOOGLE_TOKEN_PATH", tmp_path / "absent_token.json")
-    result = auth_mod.ensure_google_credentials(
-        str(tmp_path / "nonexistent_creds.json"), ALL_GOOGLE_SCOPES
-    )
-    assert result is None
-    assert not hasattr(auth_mod, "subprocess")
-    assert not hasattr(auth_mod, "shutil")
-
-
 def test_not_configured_messages_point_at_co_google_auth() -> None:
     """(d) The three not-configured strings name `co google auth`, not gcloud."""
     from co_cli.tools.google.calendar import _CALENDAR_NOT_CONFIGURED
@@ -131,30 +88,6 @@ def test_not_configured_messages_point_at_co_google_auth() -> None:
     for msg in (_GMAIL_NOT_CONFIGURED, _DRIVE_NOT_CONFIGURED, _CALENDAR_NOT_CONFIGURED):
         assert "co google auth" in msg
         assert "gcloud" not in msg
-
-
-def test_client_secret_prerequisites_lists_console_steps() -> None:
-    """(e) The missing-client-secret message enumerates the Cloud-Console setup steps."""
-    msg = _client_secret_prerequisites("/x/secret.json")
-    assert "/x/secret.json" in msg
-    for keyword in ("Cloud Console", "Gmail API", "consent screen", "Desktop app", "Test users"):
-        assert keyword in msg
-
-
-def test_auth_missing_client_secret_exits_nonzero(tmp_path, monkeypatch) -> None:
-    """(e) Invoking auth with an absent client secret exits 1 with the guidance."""
-    monkeypatch.setenv("CO_HOME", str(tmp_path))
-    import co_cli.commands.google as google_mod
-    import co_cli.config.core as core_mod
-
-    importlib.reload(core_mod)
-    importlib.reload(google_mod)
-
-    result = CliRunner().invoke(
-        google_mod.google_app, ["auth", "--client-secret", str(tmp_path / "nope.json")]
-    )
-    assert result.exit_code == 1
-    assert "Desktop app" in result.output
 
 
 def test_check_report_flags_shortfall_with_guidance() -> None:

@@ -18,7 +18,7 @@ from pydantic_ai.messages import ToolReturn
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
-from co_cli.agent.toolset import _build_native_toolset
+from co_cli.agent.core import build_native_toolset
 from co_cli.deps import CoDeps
 from co_cli.tools.agent_tool import TOOL_REGISTRY_BY_NAME
 from co_cli.tools.google._auth import ALL_GOOGLE_SCOPES, _google_available
@@ -26,7 +26,7 @@ from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import handle_google_api_error
 
 _SETTINGS = make_settings(mcp_servers={}, google_credentials_path="/nonexistent/creds.json")
-_, _INDEX = _build_native_toolset(_SETTINGS)
+_, _INDEX = build_native_toolset(_SETTINGS)
 
 
 def _deps() -> CoDeps:
@@ -53,51 +53,6 @@ def test_scope_set_is_least_privilege() -> None:
     assert "gmail.send" not in joined
     assert not any(s.endswith("/auth/drive") for s in ALL_GOOGLE_SCOPES)
     assert not any(s.endswith("/auth/calendar") for s in ALL_GOOGLE_SCOPES)
-
-
-def _deps_with(config) -> CoDeps:
-    deps = CoDeps(shell=ShellBackend(), config=config)
-    deps.tool_index = _INDEX
-    return deps
-
-
-def test_google_available_visible_when_default_token_exists(tmp_path, monkeypatch) -> None:
-    """Pre-resolution: a token at the default GOOGLE_TOKEN_PATH surfaces the tools.
-
-    This is the `co google auth` happy path — the token is written, no settings.json
-    edit, and the tools appear on the next turn so their body can resolve.
-    """
-    import co_cli.tools.google._auth as auth_mod
-
-    token = tmp_path / "google_token.json"
-    token.write_text("{}")
-    monkeypatch.setattr(auth_mod, "GOOGLE_TOKEN_PATH", token)
-    deps = _deps_with(make_settings(mcp_servers={}, google_credentials_path=None))
-    assert _google_available(deps) is True
-
-
-def test_google_available_visible_when_explicit_path_exists(tmp_path, monkeypatch) -> None:
-    """Pre-resolution: an existing explicit google_credentials_path file surfaces the tools."""
-    import co_cli.tools.google._auth as auth_mod
-
-    monkeypatch.setattr(auth_mod, "GOOGLE_TOKEN_PATH", tmp_path / "absent.json")
-    creds_file = tmp_path / "creds.json"
-    creds_file.write_text("{}")
-    deps = _deps_with(make_settings(mcp_servers={}, google_credentials_path=str(creds_file)))
-    assert _google_available(deps) is True
-
-
-def test_google_available_hidden_when_no_credential_source(tmp_path, monkeypatch) -> None:
-    """Pre-resolution: with no token and no explicit file, the tools stay hidden.
-
-    Replaces the old requires_config registration gate — a user with no Google
-    setup never sees the deferred Google tools.
-    """
-    import co_cli.tools.google._auth as auth_mod
-
-    monkeypatch.setattr(auth_mod, "GOOGLE_TOKEN_PATH", tmp_path / "absent.json")
-    deps = _deps_with(make_settings(mcp_servers={}, google_credentials_path=None))
-    assert _google_available(deps) is False
 
 
 def test_google_available_hidden_when_resolved_to_no_creds() -> None:

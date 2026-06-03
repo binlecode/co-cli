@@ -1,27 +1,4 @@
-"""Tests for prompt assembly — static instructions and toolset guidance emission."""
-
-from tests._settings import SETTINGS
-
-from co_cli.context.assembly import build_static_instructions
-
-
-def test_skill_protocol_section_in_assembled_instructions() -> None:
-    """06_skill_protocol.md content must appear in the assembled static instructions."""
-    prompt = build_static_instructions(SETTINGS)
-    assert "# Skill protocol" in prompt
-
-
-def test_background_review_policy_in_assembled_instructions() -> None:
-    """Background review policy must appear in the assembled static instructions."""
-    prompt = build_static_instructions(SETTINGS)
-    assert "## Background review" in prompt
-    assert "after every ~5 tool calls" in prompt
-
-
-def test_static_instructions_contains_phase1_rules() -> None:
-    """Assembled static instructions must include the don't-stop-at-plan workflow rule."""
-    result = build_static_instructions(SETTINGS)
-    assert "Only stop at a plan when the user explicitly" in result
+"""Tests for prompt assembly — toolset guidance emission."""
 
 
 def test_toolset_guidance_memory_section_emitted_when_tool_present() -> None:

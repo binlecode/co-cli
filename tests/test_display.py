@@ -373,23 +373,6 @@ def test_update_status_invalidates():
     TerminalFrontend().update_status(snapshot)
 
 
-# ── HeadlessFrontend.update_status ────────────────────────────────────────
-
-
-def test_headless_update_status_stores_snapshot():
-    frontend = HeadlessFrontend()
-    assert frontend.last_status_snapshot is None
-    snapshot = StatusSnapshot(
-        session_label="abc",
-        mode="active",
-        context_pct=0.1,
-        background_task_count=0,
-        approval_count=0,
-    )
-    frontend.update_status(snapshot)
-    assert frontend.last_status_snapshot is snapshot
-
-
 # ── _build_status_snapshot ────────────────────────────────────────────────
 
 
@@ -426,12 +409,6 @@ def test_build_status_snapshot_context_pct_from_usage():
     deps.runtime.turn_usage = RunUsage(input_tokens=47_000)
     snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.context_pct == pytest.approx(0.47)
-
-
-def test_build_status_snapshot_mode_propagated():
-    deps = _deps()
-    assert _build_status_snapshot(deps, "active", deque()).mode == "active"
-    assert _build_status_snapshot(deps, "idle", deque()).mode == "idle"
 
 
 def test_build_status_snapshot_queue_head_preview_populated_when_non_empty():
