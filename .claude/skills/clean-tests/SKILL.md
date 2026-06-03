@@ -7,7 +7,7 @@ description: Keep the suite focused on functional behavior verification. Purge d
 
 **Invocation:** `/clean-tests [path]`
 
-**Mission:** every surviving test must catch a real regression in co-cli's system functionality or agent behavior. The target: tool contracts, agent loop mechanics, approval logic, memory/session operations, config loading, security boundaries, CLI command behavior, compaction, and skill management. Delete anything that doesn't — structural checks, library/SDK verification, trivial passthroughs, and mocked behavior are all noise.
+**Mission:** every surviving test must catch a real regression in co-cli's system functionality or agent behavior. The target: tool contracts, agent loop mechanics, approval logic, memory/session operations, config loading, security boundaries, CLI command behavior, compaction, and skill management. Delete anything that doesn't — structural checks, library/SDK verification, trivial passthroughs, and mocked behavior are all noise. Two axes decide a test's fate: **noise** (rules 1–10, auto-removed) and **criticality** (the Criticality gate — is the guarded regression worth gating on?). A genuine, unique behavioral test can still be cut if the failure it guards is too trivial for a critical-path suite.
 
 **Default stance:** violations exist. PASS is earned, not assumed.
 
@@ -97,7 +97,7 @@ Cross-reference against `ls tests/test_flow_*.py`. Any `@agent_tool` function wi
 
 Process in **batches of 5 files**.
 
-**Large suite (> ~30 files):** fan the *read + annotate + private-call inventory* out to **read-only** audit subagents, one per domain group (e.g. compaction, memory, skills, agent-loop, tools/IO/session, bootstrap/display/CLI, daemons/integration). Each returns its annotation table + cross-file subsumption notes and must NOT edit, delete, or write any file. The orchestrator resolves cross-file subsumption and executes **every** deletion/fix itself — keeping source-verification and cross-file safety in one place. Subagents systematically over-flag rule 6; treat their DELETE rows as candidates, not decisions, and re-verify each against source (see Same-branch proof) before removing.
+**Large suite (> ~30 files):** fan the *read + annotate + private-call inventory* out to **read-only** audit subagents, one per cohesive domain group. Each returns its annotation table + cross-file subsumption notes and must NOT edit, delete, or write any file. The orchestrator resolves cross-file subsumption and executes **every** deletion/fix itself — keeping source-verification and cross-file safety in one place. Subagents systematically over-flag rule 6; treat their DELETE rows as candidates, not decisions, and re-verify each against source (see Same-branch proof) before removing.
 
 **For each batch:**
 
@@ -143,12 +143,22 @@ A KEEP requires naming the concrete failure mode: e.g. "guards path-traversal bo
 
 Subsumption and duplication are claims about the **production code path**, not the test text. Two tests that look alike often hit different branches. Before flagging, open the production function and prove it:
 
-- **Read the branch.** A single regex / dispatch that handles several inputs in one path = same branch → flag the redundant one (e.g. `,\s*([}\]])` strips trailing commas in both objects and arrays). A function that *branches on the input* = **distinct paths, keep both**, even when the assertions read identically (e.g. `_file_search_marker` branches on `args.get("content")` → content-search vs listing are different code with different output; `_repair_json_args` Pass 5 re-strips a comma *after* balancing a brace, which the no-comma unclosed test never reaches).
-- **A single-call test does not subsume an accumulation / re-trigger test.** count→2 (no-reset), fires-again-after-reset (re-arm), and "valid item in a rejected batch is also discarded" (all-or-nothing) each guard a failure mode a one-shot test never exercises.
-- **A terminal/integration test does not subsume a unit test unless it asserts the same observable.** "Drives the same function" is not enough — check the assertion. A drain test that is the *sole* proof a hook is invoked is not subsumed by a test of the hook in isolation.
-- **A constraint-rejection or computed-relationship assertion is behavioral, not structural.** `pytest.raises(ValidationError)` on a removed/forbidden field is rule 10 (library-enforced) → delete; but a Literal-rejection that is the *only* guard against a downstream corruption path passes the deletion test → keep. `span.attr == len(results)` ties a computed value → keep; `span.attr == <echoed input>` is wiring → rule 4.
+- **Read the branch.** One regex / dispatch that handles several inputs through a single code path = same branch → flag the redundant test. A function that *branches on its input* (mode dispatch, key-presence check, type switch, a later normalization/repair pass) = distinct paths → keep both, even when the assertions read identically.
+- **A single-call test does not subsume an accumulation / re-trigger test.** No-reset (count accumulates), re-arm (fires again after reset), and all-or-nothing (a valid item in a rejected batch is also discarded) each guard a failure mode a one-shot test never exercises.
+- **A terminal/integration test does not subsume a unit test unless it asserts the same observable.** "Drives the same function" is not enough — check the assertion. A test that is the *sole* proof one component invokes another is not subsumed by a test of either component in isolation.
+- **A constraint-rejection or computed-relationship assertion is behavioral, not structural.** Asserting a library rejects a removed/forbidden field is rule 10 (library-enforced) → delete; but a constraint-rejection that is the *only* guard against a downstream corruption path passes the deletion test → keep. An assertion tying an emitted value to a *computed* quantity is behavioral → keep; an assertion tying it to an *echoed input* is wiring → rule 4.
 
 This is the single most common clean-tests error: deleting a test that *looks* like a duplicate but guards a distinct branch. When in doubt, read the source, not the test.
+
+### Criticality gate — severity of the guarded regression
+
+The deletion test asks *whether* a regression would go undetected; this asks *whether it is worth gating on*. A test that survives rules 1–10 can still guard a failure too trivial for a critical-path suite. Tier every surviving test by the severity of the regression it guards:
+
+- **Critical** — security/safety boundary; data loss or corruption; core control-flow or state-machine correctness; a silent wrong result reaching the user; a cross-process, durability, or coordination invariant.
+- **Important** — public/tool contract correctness; accuracy of a stored or retrieved value; resolution/precedence logic; error classification and recovery.
+- **Low** — presentation/formatting output; telemetry, log, or trace *shape*; a pinned constant or default value; one more enumerated input on logic an earlier test already covers; a defensive no-op or smoke check.
+
+Low-tier tests are removal candidates even when behavioral and unique. The cut line is a maintainer decision — a strategy call on how much low-severity regression may ship silently — set per run, never an automatic delete. Default: report the stratification (counts + the Low list, each with its guarded failure mode); remove only at or below the stated line.
 
 ### Blocking — default DELETE
 
@@ -184,7 +194,7 @@ Fix only when: (a) unique coverage AND (b) the fix is rerouting through a public
 1. **Fix BROKEN files** (Pass 0a): update import or delete.
 2. **Merge duplicate files** (Pass 0d): copy unique tests to canonical file; delete non-canonical. If canonical doesn't exist, rename the more complete file then merge.
 3. **Delete rule-failed files**.
-4. **Trim candidates**: strip weak sub-assertion, keep behavioral core. **Graft-then-delete**: if a test flagged for deletion (rule 5/6) carries one unique assertion the survivor lacks — e.g. move-not-copy `not src.exists()`, a specific propagated value, an FTS-only field — graft that assertion onto the survivor *first*, then delete. Never lose a unique observable just because the test is otherwise redundant. After deleting a test, remove imports/constants/helpers it solely used (lint catches these — fix them, don't blanket `--fix` real findings away).
+4. **Trim candidates**: strip weak sub-assertion, keep behavioral core. **Graft-then-delete**: if a test flagged for deletion (rule 5/6) carries one unique assertion the survivor lacks — a stricter post-condition, a propagated value, a distinct side effect — graft that assertion onto the survivor *first*, then delete. Never lose a unique observable just because the test is otherwise redundant. After deleting a test, remove imports/constants/helpers it solely used (lint catches these — fix them, don't blanket `--fix` real findings away).
 5. **Backfill missing test files** (Pass 0e + Pass 3 depth gaps): for each zero-coverage `@agent_tool` surface, create `test_flow_<pkg>_<module>.py`. Each new file must include:
    - At least one success-path test per tool function.
    - At least one rejection/error-path test per tool function.
@@ -267,6 +277,8 @@ Tests fixed: N total
 Minor findings: N (noted/deferred)
 Degenerate LLM tests: N — [list]
 Trim candidates resolved: N
+Criticality stratification (when requested): Critical N | Important N | Low N
+  Cut line: <tier> — Low-tier removed: N (candidates: N — [list w/ guarded failure mode])
 Tests moved to canonical files: N
 Zero-coverage surfaces backfilled: N — [list]
 Coverage depth gaps fixed: N — [list]
