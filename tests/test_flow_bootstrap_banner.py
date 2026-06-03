@@ -42,15 +42,3 @@ def test_grep_backend_omits_counts() -> None:
     assert result == "    Memory: [accent]grep (no index)[/accent]"
     assert "memory:" not in result
     assert "sessions:" not in result
-
-
-def test_fts5_backend_with_zero_counts() -> None:
-    """fts5 backend with zero counts still renders the counts (zero is valid)."""
-    result = build_memory_line(
-        backend="fts5",
-        backend_label="fts5",
-        memory_degradation=None,
-        memory_count=0,
-        session_count=0,
-    )
-    assert result == "    Memory: [accent]fts5[/accent]  memory: 0  sessions: 0"

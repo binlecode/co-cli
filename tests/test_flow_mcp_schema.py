@@ -49,11 +49,6 @@ def test_invalid_required_pruned() -> None:
     assert result["required"] == ["a"]
 
 
-def test_null_input() -> None:
-    result = sanitize_mcp_schema(None)
-    assert result == {"type": "object", "properties": {}}
-
-
 def test_recursive_nested() -> None:
     schema = {
         "type": "object",

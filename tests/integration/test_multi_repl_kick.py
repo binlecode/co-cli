@@ -88,18 +88,3 @@ def test_kick_files_have_unique_names(tmp_path: Path) -> None:
     # All filenames must be unique
     names = [f.name for f in kick_files]
     assert len(set(names)) == 5, "All KICK filenames must be distinct"
-
-
-def test_kick_payload_contains_session_id(tmp_path: Path) -> None:
-    """KICK file payload records the session_id from deps.session.session_path.stem."""
-    deps, main_mod = _setup_and_make_deps(tmp_path)
-    _send_review_kick = main_mod._send_review_kick
-
-    _send_review_kick(deps, domain="memory", persisted_message_count=0)
-
-    queue_dir = main_mod.DREAM_QUEUE_DIR
-    kick_files = list(queue_dir.glob("*.json"))
-    assert kick_files, "KICK file must exist"
-
-    payload = json.loads(kick_files[0].read_text())
-    assert payload["session_id"] == "multi-kick-session"

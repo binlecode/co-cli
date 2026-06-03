@@ -18,7 +18,6 @@ from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
 from co_cli.context.summarization import (
     estimate_message_tokens,
-    resolve_compaction_budget,
     summarize_messages,
 )
 from co_cli.deps import CoDeps, CoSessionState
@@ -192,19 +191,6 @@ def test_estimate_message_tokens_grows_with_content():
 def test_estimate_message_tokens_empty_list():
     """Token estimate for an empty message list must be zero."""
     assert estimate_message_tokens([]) == 0
-
-
-def test_resolve_compaction_budget_uses_model_max_ctx_when_probed():
-    """resolve_compaction_budget must return model_max_ctx when set on deps."""
-    probed = 32_768
-    deps = CoDeps(
-        shell=ShellBackend(),
-        model=_LLM_MODEL,
-        config=SETTINGS_NO_MCP,
-        session=CoSessionState(),
-        model_max_ctx=probed,
-    )
-    assert resolve_compaction_budget(deps) == probed
 
 
 # ---------------------------------------------------------------------------

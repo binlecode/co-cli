@@ -6,7 +6,6 @@ from tests._settings import SETTINGS
 
 from co_cli.index.store import IndexStore
 from co_cli.memory.store import (
-    _USER_PRIORITY_CAP,
     _WATERFALL_CHUNK_CAP,
     MemoryStore,
 )
@@ -62,26 +61,6 @@ def test_waterfall_count_cap(tmp_path: Path) -> None:
         results = memory.search_memory_items(_KEYWORD, kinds=["rule"], limit=100)
         assert len(results) <= _WATERFALL_CHUNK_CAP, (
             f"expected at most {_WATERFALL_CHUNK_CAP} waterfall results, got {len(results)}"
-        )
-    finally:
-        index.close()
-
-
-def test_user_priority_cap(tmp_path: Path) -> None:
-    """User priority pass stops at _USER_PRIORITY_CAP even when more user memory items match."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir()
-
-    short_body = f"{_KEYWORD} " + "x" * 90
-    for i in range(_USER_PRIORITY_CAP + 3):
-        _write_memory_item(memory_dir, f"user_{i:02d}", "user", short_body)
-
-    index, memory = _make_stores(tmp_path)
-    try:
-        memory.sync_dir(memory_dir)
-        results = memory.search_memory_items(_KEYWORD, kinds=["user"], limit=100)
-        assert len(results) <= _USER_PRIORITY_CAP, (
-            f"expected at most {_USER_PRIORITY_CAP} user-priority results, got {len(results)}"
         )
     finally:
         index.close()

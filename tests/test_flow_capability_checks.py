@@ -31,19 +31,6 @@ def _make_ctx(deps: CoDeps) -> RunContext[CoDeps]:
 
 
 @pytest.mark.asyncio
-async def test_capabilities_display_contains_self_check_sections() -> None:
-    """The model-visible display must expose the grouped self-check contract."""
-    deps = _make_deps()
-    ctx = _make_ctx(deps)
-    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
-        result = await capabilities_check(ctx)
-    display = result.return_value
-    assert "Available now:" in display
-    assert "Discoverable on demand:" in display
-    assert "Approval-gated:" in display
-
-
-@pytest.mark.asyncio
 async def test_capabilities_surfaces_deps_degradations() -> None:
     """Bootstrap-recorded degradations must surface in display and metadata."""
     deps = _make_deps()

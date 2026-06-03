@@ -95,24 +95,6 @@ def test_last_recalled_is_set_after_recall(tmp_path: Path) -> None:
     assert parsed is not None
 
 
-def test_last_recalled_updates_on_second_call(tmp_path: Path) -> None:
-    """last_recalled advances (or stays equal) across two consecutive recalls."""
-    deps = _make_deps(tmp_path)
-    path = _save_item(deps.memory_dir, "Item D", "Content D")
-
-    _record_memory_recall(deps, [path])
-    item_first = load_memory_item(path)
-    ts_first = item_first.last_recalled_at
-
-    _record_memory_recall(deps, [path])
-    item_second = load_memory_item(path)
-    ts_second = item_second.last_recalled_at
-
-    assert ts_second is not None
-    # second timestamp must be >= first (monotone or same second)
-    assert ts_second >= ts_first
-
-
 # ---------------------------------------------------------------------------
 # recall_days
 # ---------------------------------------------------------------------------

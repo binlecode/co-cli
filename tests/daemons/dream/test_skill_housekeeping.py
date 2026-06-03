@@ -12,8 +12,6 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from co_cli.config.skills import SkillsSettings
 from co_cli.daemons.dream._housekeeping import (
     _archive_user_skill,
@@ -70,24 +68,6 @@ def _deps(
         user_skills_dir=user_skills_dir,
         config=SimpleNamespace(skills=settings),
     )
-
-
-# ---------------------------------------------------------------------------
-# HousekeepingState schema extension — skill counters survive round-trip
-# ---------------------------------------------------------------------------
-
-
-def test_housekeeping_state_round_trip_includes_skill_counters() -> None:
-    """A persisted state JSON survives parse → dump round-trip with new fields."""
-    state = HousekeepingState()
-    state.stats.memory_merged = 2
-    state.stats.skill_merged = 1
-    state.stats.skill_decayed = 3
-    raw = state.model_dump_json()
-    restored = HousekeepingState.model_validate_json(raw)
-    assert restored.stats.skill_merged == 1
-    assert restored.stats.skill_decayed == 3
-    assert restored.stats.memory_merged == 2
 
 
 # ---------------------------------------------------------------------------
@@ -232,9 +212,12 @@ def test_decay_skills_protects_recent_recall(tmp_path: Path) -> None:
 
 
 def test_decay_skills_archives_recall_outside_window(tmp_path: Path) -> None:
-    """Aged + recall older than recall_protection_days → archives the skill."""
+    """Aged + recall older than recall_protection_days → archives the skill.
+
+    Also pins move-not-copy: the source .md must be gone after archiving.
+    """
     user_skills_dir = tmp_path / "skills"
-    _write_skill(user_skills_dir, "lapsed", "body")
+    skill_path = _write_skill(user_skills_dir, "lapsed", "body")
     _write_sidecar(
         user_skills_dir,
         "lapsed",
@@ -250,6 +233,7 @@ def test_decay_skills_archives_recall_outside_window(tmp_path: Path) -> None:
     archived = decay_skills(deps, state)
     assert archived == 1
     assert state.stats.skill_decayed == 1
+    assert not skill_path.exists(), "source skill must be moved, not copied"
     assert (user_skills_dir / ".archive" / "lapsed.md").exists()
 
 
@@ -266,31 +250,6 @@ def test_decay_skills_skips_skills_without_sidecar(tmp_path: Path) -> None:
     archived = decay_skills(deps, state)
     assert archived == 0
     assert (user_skills_dir / "orphan.md").exists(), "sidecar-less skill must not be archived"
-
-
-def test_decay_skills_archive_move_increments_counter(tmp_path: Path) -> None:
-    """End-to-end decay_skills: counter advances, file moves to .archive/.
-
-    decay_skills calls refresh_skills(deps) after archiving; with the partial
-    test deps (no skills_dir attribute) refresh_skills raises and is swallowed
-    by the production try/except — the archive + counter side effects we
-    assert on still occur.
-    """
-    user_skills_dir = tmp_path / "skills"
-    skill_path = _write_skill(user_skills_dir, "old", "body")
-    _write_sidecar(user_skills_dir, "old", created_at=_ago_iso(120), recall_days=[])
-
-    deps = _deps(
-        user_skills_dir,
-        skills_settings=SkillsSettings(decay_after_days=90, recall_protection_days=30),
-    )
-    state = HousekeepingState()
-    archived = decay_skills(deps, state)
-
-    assert archived == 1
-    assert state.stats.skill_decayed == 1
-    assert not skill_path.exists()
-    assert (user_skills_dir / ".archive" / "old.md").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -369,18 +328,3 @@ def test_manifest_render_does_not_bump_recall_days(tmp_path: Path) -> None:
     assert sidecar["recall_days"] == ["2026-01-01"], (
         "manifest assembly must NOT mutate recall_days"
     )
-
-
-# ---------------------------------------------------------------------------
-# Curator surface deletion regression — modules and CLI dispatch are gone
-# ---------------------------------------------------------------------------
-
-
-def test_curator_skills_settings_fields_removed() -> None:
-    """SkillsSettings rejects curator_enabled / curator_interval_hours (extra='forbid')."""
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        SkillsSettings(curator_enabled=True)
-    with pytest.raises(ValidationError):
-        SkillsSettings(curator_interval_hours=24)

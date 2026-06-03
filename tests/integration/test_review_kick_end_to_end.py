@@ -121,8 +121,12 @@ def test_skill_kick_file_created_when_threshold_reached(tmp_path: Path) -> None:
     assert payload["session_id"] == "test-session-abc"
 
 
-def test_kick_file_has_all_required_fields(tmp_path: Path) -> None:
-    """KICK file payload contains domain, session_id, persisted_message_count, created_at."""
+def test_kick_payload_carries_runtime_persisted_message_count(tmp_path: Path) -> None:
+    """KICK payload threads the actual deps.runtime.persisted_message_count value.
+
+    The threshold tests assert presence of the field; this pins that the real
+    runtime value (7) is what lands in the payload, not a default or stale count.
+    """
     deps = _make_deps(tmp_path, memory_interval=1, skill_interval=100)
     deps.runtime.persisted_message_count = 7
 
@@ -136,7 +140,6 @@ def test_kick_file_has_all_required_fields(tmp_path: Path) -> None:
     assert kick_files, "KICK file must exist"
 
     payload = json.loads(kick_files[0].read_text())
-    assert set(payload.keys()) >= {"domain", "session_id", "persisted_message_count", "created_at"}
     assert payload["persisted_message_count"] == 7
 
 

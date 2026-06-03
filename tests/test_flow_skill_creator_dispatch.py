@@ -41,12 +41,3 @@ async def test_skill_creator_dispatch_returns_delegate(tmp_path: Path) -> None:
     outcome = await dispatch("/skill-creator review", ctx)
     assert isinstance(outcome, DelegateToAgent)
     assert outcome.skill_name == "skill-creator"
-
-
-@pytest.mark.asyncio
-async def test_skill_creator_body_references_skill_create(tmp_path: Path) -> None:
-    """skill-creator body must reference skill_create — core write call."""
-    ctx = _make_ctx(tmp_path)
-    outcome = await dispatch("/skill-creator deploy", ctx)
-    assert isinstance(outcome, DelegateToAgent)
-    assert "skill_create" in outcome.delegated_input

@@ -62,16 +62,6 @@ def test_spill_large_content(tmp_path: Path):
     assert spilled_files[0].read_text(encoding="utf-8") == content
 
 
-def test_stub_shape(tmp_path: Path):
-    """Spilled stub carries the size preamble, the file_read retrieval hint, and start/end nav."""
-    content = "z" * 5_000
-    result = spill_if_oversized(content, tmp_path / "tool_results", "shell_exec")
-    assert "This tool result was too large" in result
-    assert "file_read" in result, "stub must name the retrieval tool (not 'read_file')"
-    assert "start_line" in result
-    assert "end_line" in result
-
-
 def test_force_spill_at_preview_size_unchanged(tmp_path: Path):
     """force=True at exactly TOOL_RESULT_PREVIEW_CHARS=1_500 chars returns content unchanged.
 

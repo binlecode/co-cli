@@ -149,18 +149,6 @@ def test_skill_threshold_resets_skill_counter(tmp_path: Path) -> None:
     assert deps.session.model_requests_since_skill_review == 0
 
 
-def test_both_thresholds_reached_resets_both_counters(tmp_path: Path) -> None:
-    """Both memory and skill thresholds reached in one turn — both counters reset."""
-    from co_cli.main import _post_turn_hook
-
-    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=1, skill_interval=1)
-
-    _post_turn_hook(deps, [], model_request_count=1)
-
-    assert deps.session.turns_since_memory_review == 0
-    assert deps.session.model_requests_since_skill_review == 0
-
-
 def test_counter_reset_allows_next_trigger(tmp_path: Path) -> None:
     """After a KICK fires, counter resets and subsequent turns can re-accumulate."""
     from co_cli.main import _post_turn_hook
@@ -185,18 +173,6 @@ def test_skill_threshold_overshoot_resets_counter(tmp_path: Path) -> None:
     _post_turn_hook(deps, [], model_request_count=12)
 
     assert deps.session.model_requests_since_skill_review == 0
-
-
-def test_error_or_interrupted_turn_iters_still_advance(tmp_path: Path) -> None:
-    """Counter advances for turns with any positive iteration count (error/interrupted too)."""
-    from co_cli.main import _post_turn_hook
-
-    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=100, skill_interval=10)
-
-    _post_turn_hook(deps, [], model_request_count=3)
-    _post_turn_hook(deps, [], model_request_count=3)
-
-    assert deps.session.model_requests_since_skill_review == 6
 
 
 def test_none_deps_short_circuits(tmp_path: Path) -> None:

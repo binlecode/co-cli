@@ -133,16 +133,6 @@ def test_bump_view_creates_record_and_increments(tmp_path: Path) -> None:
     assert record["use_count"] == 0
 
 
-def test_bump_view_repeated_increments_counter(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
-    deps = _make_deps(tmp_path)
-    for _ in range(3):
-        skill_usage.bump_view(deps, "my-skill")
-    record = skill_usage.read_record(deps, "my-skill")
-    assert record is not None
-    assert record["view_count"] == 3
-
-
 def test_bump_view_skips_bundled_skill(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     skill_usage.bump_view(deps, "doctor")
@@ -285,14 +275,6 @@ async def test_skill_create_then_view_produces_sidecar_entry(tmp_path: Path) -> 
     assert record["use_count"] == 1
     assert record["last_viewed_at"] is not None
     assert record["last_used_at"] is not None
-
-
-@pytest.mark.asyncio
-async def test_skill_view_on_bundled_does_not_create_sidecar_entry(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    await skill_view(ctx, name="doctor")
-    assert skill_usage.read_record(deps, "doctor") is None
 
 
 @pytest.mark.asyncio

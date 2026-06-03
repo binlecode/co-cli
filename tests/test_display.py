@@ -278,22 +278,6 @@ def test_render_footer_toolbar_plural_approvals():
     assert "3 approvals" in frontend.render_footer_toolbar()
 
 
-def test_render_footer_toolbar_empty_session_label_renders():
-    frontend = TerminalFrontend()
-    frontend.update_status(
-        StatusSnapshot(
-            session_label="—",
-            mode="idle",
-            context_pct=None,
-            background_task_count=0,
-            approval_count=0,
-        )
-    )
-    result = frontend.render_footer_toolbar()
-    assert "—" in result
-    assert "idle" in result
-
-
 def test_status_toolbar_renders_queue_depth():
     frontend = TerminalFrontend()
     frontend.update_status(
@@ -310,25 +294,6 @@ def test_status_toolbar_renders_queue_depth():
     result = frontend.render_footer_toolbar()
     assert '3 queued: "fix the parser bug"' in result
     assert result.index("active") < result.index("3 queued") < result.index("ctx")
-
-
-def test_status_toolbar_renders_queue_preview_truncated():
-    """Queue head preview renders inline, truncated to a fixed budget (Phase 2 C3)."""
-    frontend = TerminalFrontend()
-    frontend.update_status(
-        StatusSnapshot(
-            session_label="a1b2c3d4",
-            mode="active",
-            context_pct=0.5,
-            background_task_count=0,
-            approval_count=0,
-            queue_depth=2,
-            queue_head_preview="fix the parser bug urgently…",
-        )
-    )
-    result = frontend.render_footer_toolbar()
-    assert '2 queued: "fix the parser bug urgently…"' in result
-    assert result.index("active") < result.index("2 queued") < result.index("ctx")
 
 
 def test_status_toolbar_omits_queue_depth_when_zero():

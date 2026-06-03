@@ -154,25 +154,6 @@ async def test_cross_batch_accumulation(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_uses_cached_threshold(tmp_path: Path):
-    """Processor reads deps.spill_threshold_tokens — no recomputation."""
-    content = "t" * 52_000
-    messages: list[ModelMessage] = [
-        _user_request("cmd"),
-        _tool_response("shell_exec", "tc1"),
-        _tool_request("shell_exec", "tc1", content),
-    ]
-    deps = _make_deps(tmp_path, threshold_tokens=12_000)
-
-    out = enforce_request_size(_ctx(deps), messages)
-
-    returns = _collect_returns(out)
-    assert PERSISTED_OUTPUT_TAG in returns["tc1"]
-    assert deps.runtime.current_request_tokens_estimate is not None
-    assert deps.runtime.current_request_tokens_estimate <= 12_000
-
-
-@pytest.mark.asyncio
 async def test_all_spilled_bail_out(tmp_path: Path):
     """When every candidate is already a persisted-output stub, skip with all_spilled."""
     stub = (

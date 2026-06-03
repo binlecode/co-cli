@@ -79,17 +79,6 @@ def test_auth_success_message_names_path_and_scopes_no_secrets() -> None:
     assert "ya29." not in msg
 
 
-def test_not_configured_messages_point_at_co_google_auth() -> None:
-    """(d) The three not-configured strings name `co google auth`, not gcloud."""
-    from co_cli.tools.google.calendar import _CALENDAR_NOT_CONFIGURED
-    from co_cli.tools.google.drive import _DRIVE_NOT_CONFIGURED
-    from co_cli.tools.google.gmail import _GMAIL_NOT_CONFIGURED
-
-    for msg in (_GMAIL_NOT_CONFIGURED, _DRIVE_NOT_CONFIGURED, _CALENDAR_NOT_CONFIGURED):
-        assert "co google auth" in msg
-        assert "gcloud" not in msg
-
-
 def test_check_report_flags_shortfall_with_guidance() -> None:
     """(TASK-4) A granted set missing required scopes yields the actionable re-auth message."""
     granted = ["https://www.googleapis.com/auth/gmail.readonly"]

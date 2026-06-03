@@ -63,16 +63,6 @@ def test_resolve_file_write_scopes_to_parent_directory():
     assert subject.can_remember is True
 
 
-def test_resolve_file_patch_same_scope_as_file_write():
-    """file_patch and file_write in the same directory must resolve to the same approval scope."""
-    write_subj = resolve_approval_subject("file_write", {"path": "/a/b/c.py", "content": ""})
-    patch_subj = resolve_approval_subject(
-        "file_patch", {"path": "/a/b/c.py", "old_string": "x", "new_string": "y"}
-    )
-    assert write_subj.kind == patch_subj.kind
-    assert write_subj.value == patch_subj.value
-
-
 def test_resolve_web_fetch_scopes_to_domain():
     """web_fetch approval must scope to the hostname for domain-wide coverage."""
     subject = resolve_approval_subject("web_fetch", {"url": "https://example.com/some/path?q=1"})

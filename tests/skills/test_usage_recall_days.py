@@ -1,11 +1,14 @@
-"""Unit tests for bump_recall: ISO date appended to recall_days, deduplication.
+"""Unit tests for bump_recall gating: usage-tracking kill-switch and
+non-agent-created skip.
+
+The recall_days append/dedup behavior is covered canonically by
+tests/daemons/dream/test_skill_housekeeping.py::test_bump_recall_appends_today_to_recall_days.
 
 No LLM. Real filesystem writes via real sidecar I/O.
 """
 
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 
 from tests._settings import SETTINGS
@@ -50,53 +53,6 @@ def _make_deps(tmp_path: Path) -> CoDeps:
         user_skills_dir=user_skills_dir,
         tool_results_dir=tmp_path / "tool-results",
     )
-
-
-# ---------------------------------------------------------------------------
-# Append today's date
-# ---------------------------------------------------------------------------
-
-
-def test_bump_recall_adds_today_iso_date(tmp_path: Path) -> None:
-    """bump_recall appends today's ISO date string to recall_days."""
-    deps = _make_deps(tmp_path)
-    skill_usage.bump_recall(deps, "test-recall-skill")
-
-    record = skill_usage.read_record(deps, "test-recall-skill")
-    assert record is not None
-    today = date.today().isoformat()
-    assert today in record["recall_days"]
-
-
-def test_bump_recall_starts_from_empty_list(tmp_path: Path) -> None:
-    """Before any bump_recall call, no sidecar exists."""
-    deps = _make_deps(tmp_path)
-
-    assert skill_usage.read_record(deps, "test-recall-skill") is None
-
-    skill_usage.bump_recall(deps, "test-recall-skill")
-
-    record = skill_usage.read_record(deps, "test-recall-skill")
-    assert record is not None
-    assert len(record["recall_days"]) == 1
-
-
-# ---------------------------------------------------------------------------
-# Deduplication
-# ---------------------------------------------------------------------------
-
-
-def test_bump_recall_deduplicates_same_day(tmp_path: Path) -> None:
-    """Calling bump_recall twice on the same day keeps only one entry for today."""
-    deps = _make_deps(tmp_path)
-
-    skill_usage.bump_recall(deps, "test-recall-skill")
-    skill_usage.bump_recall(deps, "test-recall-skill")
-
-    record = skill_usage.read_record(deps, "test-recall-skill")
-    assert record is not None
-    today = date.today().isoformat()
-    assert record["recall_days"].count(today) == 1
 
 
 # ---------------------------------------------------------------------------

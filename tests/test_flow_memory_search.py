@@ -16,7 +16,6 @@ from co_cli.index.store import IndexStore
 from co_cli.memory.service import reindex, save_memory_item
 from co_cli.memory.store import _USER_PRIORITY_CAP, MemoryStore
 from co_cli.observability import tracing
-from co_cli.tools.memory.manage import memory_create
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -277,20 +276,19 @@ async def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_memory_create_emits_span(isolated_spans_log: Path, tmp_path: Path) -> None:
-    """memory_create emits a co.memory.memory_create span record."""
-    index, memory = _make_stores(tmp_path)
+async def test_index_search_emits_retrieval_span(isolated_spans_log: Path, tmp_path: Path) -> None:
+    """IndexStore.search emits exactly one index.search span whose co.index.hits
+    equals the result count returned by that invocation."""
+    index, _memory = _make_stores(tmp_path)
     try:
-        deps = _make_deps(tmp_path, index, memory)
-        ctx = _ctx(deps)
-
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            await memory_create(
-                ctx,
-                name_title="span test artifact",
-                content="test content",
-                kind="note",
-            )
+        _seed(
+            tmp_path / "memory",
+            index,
+            content="retrievalspanmarker content about indexing",
+            kind="note",
+            title="retrieval span test",
+        )
+        results = index.search("retrievalspanmarker", limit=5)
     finally:
         index.close()
 
@@ -300,8 +298,8 @@ async def test_memory_create_emits_span(isolated_spans_log: Path, tmp_path: Path
     records = [
         json.loads(line) for line in isolated_spans_log.read_text().splitlines() if line.strip()
     ]
-    create_records = [r for r in records if r["name"] == "co.memory.memory_create"]
-    assert create_records, "expected a co.memory.memory_create span record"
-    attrs = create_records[0]["attributes"]
-    assert attrs.get("memory.memory_kind") == "note"
-    assert create_records[0]["status"] == "OK"
+    search_records = [r for r in records if r["name"] == "index.search"]
+    assert len(search_records) == 1, (
+        f"expected exactly one index.search span, got {len(search_records)}"
+    )
+    assert search_records[0]["attributes"]["co.index.hits"] == len(results)

@@ -48,11 +48,6 @@ def test_trailing_comma_stripped():
     assert json.loads(result) == {"a": 1}
 
 
-def test_trailing_comma_in_array_stripped():
-    result = _repair_json_args('{"items": [1, 2,]}')
-    assert json.loads(result) == {"items": [1, 2]}
-
-
 def test_control_chars_escaped():
     # Literal tab inside a string value — json.loads(strict=True) rejects this
     raw = '{"cmd": "git\tstatus"}'

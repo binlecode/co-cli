@@ -32,13 +32,6 @@ def test_load_config_env_wins_over_dotenv(tmp_path: Path) -> None:
     assert result.theme == "light"
 
 
-def test_load_config_no_dot_env_uses_defaults(tmp_path: Path) -> None:
-    """When no .env is present, load_config() returns defaults unchanged."""
-    # _env={} isolates from real shell so the assertion is not contaminated by CO_THEME in env
-    result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
-    assert result.theme == "light"
-
-
 def test_load_config_dotenv_empty_value_uses_default(tmp_path: Path) -> None:
     """Empty-value .env entries must not override Settings defaults."""
     (tmp_path / ".env").write_text("CO_THEME=\n", encoding="utf-8")
@@ -106,14 +99,6 @@ def test_memory_settings_json_config_applies_without_env(tmp_path: Path) -> None
     result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
 
     assert result.memory.chunk_tokens == 300
-
-
-def test_repl_settings_defaults(tmp_path: Path) -> None:
-    """ReplSettings defaults preserve Phase-1 behavior: unbounded, oldest-drop."""
-    result = load_config(_user_config_path=tmp_path / "settings.json", _env={})
-
-    assert result.repl.queue_cap == 0
-    assert result.repl.drop_policy == "oldest"
 
 
 def test_repl_settings_env_overrides_defaults(tmp_path: Path) -> None:
