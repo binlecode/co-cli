@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.288]
+
+### rules-block-trim-finish — complete the conservative rules-block trim + single-source pytest timeouts
+
+Banked the full conservative rules-block trim (child 4 of prefill-trim) with zero adherence regression. The numbered behavioral-rules block rides every cold prefill and every post-compaction state, so duplicated guidance is a recurring context-budget tax.
+
+- **`06_skill_protocol.md`** — manifest-scan cue collapsed from 3× to one canonical home (`## Discovery`); the two upstream echoes thinned to a lead-in; `## Background review` mechanism prose compressed to its behavioral cue. All load-bearing cues intact (`skill_view`/`skill_patch`/`skill_edit`/`skill_create`, the 3+-step create bar, create-on-behalf confirm, the distinct `## Create` "search first" dedup). ~3,194 → 2,710 chars.
+- **`05_workflow.md` / `07_memory_protocol.md`** (carried from prefill-trim-4) — blocker-loop cue deduped to one home; `Triggers:` recall line and the 4-way `SaveResult.action` enum collapsed to the behavioral cue.
+- **Instruction-budget guard re-pinned** (`tests/test_instruction_budget.py`): `build_static_instructions` re-measured post-trim = 23,352 chars; `INSTRUCTION_BLOCK_CEILING` 24,200 → 23,750 (tightened, never raised).
+- **Adherence gate** held across all three trimmed files (skills + memory evals on the v0.8.286-fixed harness; no domain regressed).
+- **Single-source pytest timeouts** (user-directed): the per-test pytest-timeout ceiling moved out of `pyproject.toml` into `tests/_timeouts.py` (`PYTEST_PER_TEST_TIMEOUT_SECS = 180`), applied via a new `tests/conftest.py` `pytest_configure` hook. Removed a redundant `@pytest.mark.timeout(180)` and expressed the one legitimate override relative to the constant — the only literal pytest-timeout number now lives in `_timeouts.py`.
+
 ## [0.8.286]
 
 ### eval-infra-output-sync — prune to workflow evals + read canonical `turn_result.output`

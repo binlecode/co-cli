@@ -2,13 +2,10 @@
 
 Skills sit at a different operational tier than memory. Memory holds
 facts you recall to inform reasoning during a task; skills hold
-procedures that define how to structure the task itself. Before any
-multi-step task, check the skill surface first; recall facts within
-whatever procedure applies.
+procedures that define how to structure the task itself.
 
 The skill manifest (the <available_skills> block in this prompt)
-covers all skills: bundled and user-installed. Scan it before any
-multi-step task.
+covers all skills: bundled and user-installed.
 
 ## Discovery
 
@@ -69,11 +66,6 @@ collaborative creation.
 
 ## Background review
 
-A separate review agent runs in the background
-after every ~5 tool calls (when enabled). It scans the conversation
-for drift you missed in-flight, patterns worth saving as new skills,
-and user-correction signals worth memorializing as knowledge
-artifacts. Don't double up: focus the `## Drift` and `## Create`
-reflexes on the obvious, in-the-moment cases; trust the background
-review to catch the rest. The review runs as a background task — it
-doesn't block your next turn.
+A background review agent catches what you miss in-flight. Don't
+double up: focus the `## Drift` and `## Create` reflexes on the
+obvious, in-the-moment cases; trust the background review for the rest.

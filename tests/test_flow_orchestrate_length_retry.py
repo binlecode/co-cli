@@ -9,7 +9,10 @@ import pytest
 from pydantic_ai.messages import ModelResponse
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
-from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
+from tests._timeouts import (
+    LLM_COMPACTION_SUMMARY_TIMEOUT_SECS,
+    PYTEST_PER_TEST_TIMEOUT_SECS,
+)
 
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.core import build_native_toolset
@@ -44,7 +47,8 @@ _AGENT = build_orchestrator(ORCHESTRATOR_SPEC, _make_deps())
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(200)
+# Length-retry runs ≥2 sequential LLM calls; raise the default ceiling with headroom.
+@pytest.mark.timeout(PYTEST_PER_TEST_TIMEOUT_SECS + 20)
 async def test_length_retry_completes_truncated_noreason_response() -> None:
     """run_turn must auto-retry with doubled max_tokens when finish_reason='length'.
 

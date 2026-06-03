@@ -26,8 +26,9 @@ review; otherwise proceed to execution after decomposing.
 After each tool result, evaluate progress and continue until all sub-goals are
 met. After each step, check: did this move closer to the goal? If multiple
 distinct attempts at the same sub-goal have not produced progress, that
-sub-goal is blocked — surface it rather than exhausting budget on variations
-that cannot converge.
+sub-goal is blocked — surface the blocker rather than exhausting budget on
+variations that cannot converge. Retrying the same failed action is not
+persistence, it is a loop.
 
 ## Completeness
 Before ending a turn, verify every stated sub-goal has been addressed.
@@ -42,10 +43,6 @@ Before finishing, run a quick validation pass:
 - **Format/schema**: requested structure or schema is fully respected.
 - **Side-effect safety**: file writes, state changes, or external calls stay within the expected scope.
 - **Blockers**: no unresolved blocker is being silently dropped.
-
-If a sub-goal cannot make progress after a genuine attempt, surface the
-blocker and move forward — retrying the same failed action is not persistence,
-it is a loop.
 
 ## When NOT to over-plan
 Not every message needs planning — direct questions get direct answers.

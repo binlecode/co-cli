@@ -1,35 +1,26 @@
-"""Shared asyncio.timeout constants for test files.
+"""Shared timeout budgets for tests — the single source of truth.
 
-Single source of truth for all per-await timeouts. Import from here instead
-of hardcoding numbers inline so a single edit relaxes or tightens a budget
-across every test that uses it.
+Two layers, both test-specific and both owned here. Neither belongs in
+pyproject.toml, which carries only infra-level pytest config (addopts,
+testpaths, pythonpath, asyncio loop scope, and ``session_timeout`` — the
+whole-run wall-clock guard).
 
-## Two-layer timeout model
+Layer 1 — per-await ``asyncio.timeout(N)`` budgets (LLM_*, HTTP_*, FILE_DB_*,
+BG_TASK_*). Every IO-bound await is wrapped with one of these constants. That
+is the primary guard — it fires from inside the test and identifies exactly
+which call ran over. Import from here instead of hardcoding numbers inline so
+a single edit relaxes or tightens a budget across every test that uses it.
 
-Every IO-bound await is wrapped with asyncio.timeout(N) using a constant from
-this file. That is the primary guard — it fires from inside the test and
-identifies exactly which call ran over.
-
-pytest-timeout (pyproject.toml: timeout = 120) is the safety net. It catches:
-- sync code that hangs (fixture setup, subprocess, file IO with no await)
-- an await that was accidentally left unwrapped
-
-Why 180s: the largest single per-await budget is LLM_TOOL_CONTEXT_TIMEOUT_SECS
-doubled by callers (50s x 2 = 100s for approval-roundtrip tool tests). The
-pytest ceiling additionally covers infra prep around the wrapped await —
-notably ensure_ollama_warm()'s mid-suite KV-cache flush, which can take
-~50s after a heavy preceding test. 180s = 100s wrapped + ~50s flush + small
-overhead. Per-call budgets remain warm-only and never include cold start;
-that separation is preserved here. A test that legitimately needs more than
-180s total must wrap each sequential LLM call with its own asyncio.timeout
-and use @pytest.mark.timeout(N) to raise the outer safety net to
-N = sum(per-call budgets) + infra prep + overhead. Raise individual constants
-if warm-call latency increases; raise the pytest ceiling only when correctly-wrapped
-sequential calls plus infra prep exceed it.
+Layer 2 — the per-test pytest-timeout ceiling (``PYTEST_PER_TEST_TIMEOUT_SECS``),
+the safety net for sync hangs (fixture setup, subprocess, file IO with no
+await) and awaits accidentally left unwrapped. ``conftest.pytest_configure``
+applies it to ``config.option.timeout``; it is deliberately NOT set in
+pyproject.toml, because it is a calibrated *testing* budget (derived from the
+Layer-1 constants below), not infra config.
 
 Usage::
 
-    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
+    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await summarize_messages(...)
@@ -76,6 +67,25 @@ tokens before the tool_calls array typically lands in 20-40s on local 27-35B
 hardware. 50s gives ~25% headroom; multi-step tests double via *2.
 Use for tool-selection tests (test_tool_calling_functional) and approval-flow tests
 (test_commands) that require the production tool set.
+"""
+
+# Per-test pytest-timeout ceiling (Layer 2 — applied via conftest, not pyproject.toml)
+PYTEST_PER_TEST_TIMEOUT_SECS: int = 180
+"""Per-test pytest-timeout safety-net ceiling. Applied by ``conftest.pytest_configure``.
+
+Derived from the Layer-1 budgets above, not an infra constant — which is why
+it lives here and not in pyproject.toml. The largest single per-await budget is
+LLM_TOOL_CONTEXT_TIMEOUT_SECS doubled by callers (50s x 2 = 100s for
+approval-roundtrip tool tests). The ceiling additionally covers infra prep
+around the wrapped await — notably ensure_ollama_warm()'s mid-suite KV-cache
+flush, which can take ~50s after a heavy preceding test. So
+≈ 100s wrapped + ~50s flush + small overhead = 180s. Per-call budgets remain
+warm-only and never include cold start; that separation is preserved here. A
+test that legitimately needs more than this ceiling must wrap each sequential
+LLM call with its own asyncio.timeout and use @pytest.mark.timeout(N) to raise
+the outer safety net to N = sum(per-call budgets) + infra prep + overhead.
+Raise individual constants if warm-call latency increases; raise this ceiling
+only when correctly-wrapped sequential calls plus infra prep exceed it.
 """
 
 # HTTP / external services

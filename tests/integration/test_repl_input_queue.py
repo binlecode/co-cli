@@ -84,7 +84,6 @@ async def _wait_running(app, *, timeout: float = 10.0) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(180)
 async def test_typed_ahead_enqueues_and_drains_under_real_turn(tmp_path: Path) -> None:
     # ensure_ollama_warm is infrastructure prep — outside any asyncio.timeout.
     await ensure_ollama_warm(TEST_LLM.model)

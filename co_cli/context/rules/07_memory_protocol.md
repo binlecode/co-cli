@@ -18,9 +18,6 @@ Load a memory item's full body with `memory_view(name)`; for verbatim past-sessi
 turns, `session_view(session_id, start, end)`. Don't reach for `file_read` to retrieve
 memory item bodies.
 
-Triggers: past session references, user preferences, standing rules, prior decisions,
-anything the user might reasonably expect you to already know.
-
 ## Explicit saves
 
 When the user explicitly asks to remember or save something — "remember I prefer X",
@@ -62,16 +59,9 @@ surface the change so the user can confirm or correct.
 `replace` or `delete` rather than working around it. Stale items left
 in place pollute future recall.
 
-**Dedup awareness.** `memory_create` dedups against
-existing items of the same kind. Read `SaveResult.action` on the
-return:
-- `saved` — new file written.
-- `skipped` — a near-duplicate already exists; nothing written. The
-  existing note already carries the finding; move on.
-- `merged` / `appended` — your content was folded into the existing
-  item; it now also carries your additions.
-
-Don't fight the dedup by retrying with slight rephrasings.
+**Dedup awareness.** `memory_create` dedups against existing items of
+the same kind; read `SaveResult.action` on the return to see the
+outcome. Don't fight the dedup by retrying with slight rephrasings.
 
 ## Anti-patterns
 
