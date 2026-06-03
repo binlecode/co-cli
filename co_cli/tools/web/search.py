@@ -285,31 +285,16 @@ async def web_search(
 ) -> ToolReturn:
     """Search the web for current or external information via Brave Search.
 
-    Use for up-to-date external information: documentation, release notes,
-    API references, news, or anything not available in the local workspace.
-    Returns ranked snippets with titles and URLs. Use this tool for a quick
-    lookup when ranked snippets/URLs suffice; to read the full content of a
-    result, pass its URL to web_fetch.
-
-    Do not guess or fabricate URLs — always use URLs from these results.
-    Scope searches to specific sites with the domains parameter (e.g.
-    domains=["docs.python.org"]).
-
-    Returns a dict with:
-    - display: numbered results with title, snippet, and URL — show directly
-      to the user
-    - results: list of {title, url, snippet} dicts
-    - count: number of results returned
-
-    Caveats:
-    - Requires BRAVE_SEARCH_API_KEY to be configured
+    Use for up-to-date external information not in the local workspace:
+    documentation, release notes, API references, news. Returns ranked
+    snippets with URLs; to read a result's full content, pass its URL to
+    web_fetch. Do not guess or fabricate URLs — use only URLs from results.
 
     Args:
         query: Search query string (e.g. "python asyncio tutorial",
                "latest pydantic-ai release notes").
-        max_results: How many results to return, 1-8 (default 5). Values above 8 are silently
-            clamped to 8.
-        domains: Restrict results to these domains, e.g. ["github.com"] (default None = search the entire web).
+        max_results: How many results to return, 1-8 (default 5). Values above 8 are clamped to 8.
+        domains: Restrict results to these domains, e.g. ["github.com"] (default None = entire web).
     """
     if not query or not query.strip():
         raise ModelRetry("Query is required for web_search.")

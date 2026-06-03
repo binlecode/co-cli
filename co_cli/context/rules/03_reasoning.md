@@ -11,6 +11,9 @@ environment variables); file contents and existence; git state (current branch,
 staged files, recent commits); and any current fact that may have changed since
 training.
 
+For facts that may be stale — software versions, API schemas, release notes,
+current events, pricing — use web_search or web_fetch to verify before citing.
+
 Before using a library, framework, or CLI tool, check relevant dependency files
 (`pyproject.toml`, `package.json`, `requirements.txt`, `Cargo.toml`, etc.) when
 present to verify the dependency is actually available. Never assume it is

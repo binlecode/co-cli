@@ -404,27 +404,20 @@ async def file_read(
 ) -> ToolReturn:
     """Read a file's contents for targeted inspection, with optional line range.
 
-    Use for reading known files. Use start_line/end_line to read large files in
-    sections — if the response ends with a continuation hint, call file_read again
-    with start_line set to the indicated value. If the file is not found, the error
-    message includes similar filenames from the same directory to help correct typos.
+    Use for reading known files. To read a large file in sections, pass
+    start_line/end_line; if the response ends with a continuation hint, call
+    again with start_line set to the indicated value.
 
     When NOT to use: when the file location is unknown — use file_search first to locate it.
 
-    Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
-    up to 500 lines are returned; use start_line to continue reading.
-
     Args:
-        path: A path relative to the workspace root (the default base), OR an
-            absolute path under any configured file-search root — the form
-            file_search prints when more than one root is active. Relative paths
-            anchor to the workspace root.
-        start_line: First line to include (1-indexed, inclusive). Default None →
-            read from the top, up to 500 lines (a continuation hint follows if the
-            file is longer). Set it to read a specific section or to continue past
-            the hint.
-        end_line: Last line to include (1-indexed, inclusive). Default None → read
-            through line 500 (or end of file). Set it to bound the section's end.
+        path: Path relative to the workspace root, or an absolute path under a
+            configured file-search root (the form file_search prints when more
+            than one root is active).
+        start_line: First line to include, 1-indexed inclusive. Default None →
+            read from the top, up to 500 lines.
+        end_line: Last line to include, 1-indexed inclusive. Default None → read
+            through line 500 or end of file.
     """
     try:
         refetch_attempt = Path(path).resolve().is_relative_to(ctx.deps.tool_results_dir.resolve())

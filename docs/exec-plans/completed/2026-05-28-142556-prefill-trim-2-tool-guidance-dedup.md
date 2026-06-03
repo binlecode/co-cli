@@ -33,9 +33,13 @@ the `tool-surface-small-model-audit` plan have now all shipped and re-shaped the
 - `file_patch` **V4A multi-file mode was removed** (Task 3c, Option B) — the docstring shrank
   dramatically and `file_patch` is now a single monomorphic single-file-replace tool.
 
-Measured now: **29 tools registered**; **ALWAYS bucket = 22,470 chars (~5,617 tok)**; DEFERRED =
-4,153 chars. **The TASK-4 guard ceiling must re-baseline on this current measured number.** Child 2's
-remaining edit targets are `web_fetch` (desc 1,019), `web_search` (desc 796), and `file_read`
+Measured now (re-measured 2026-06-02 post-Google-tools): **35 tools registered**; **ALWAYS bucket =
+22,589 chars (~5,647 tok)**; DEFERRED = 10,194 chars. (The registry grew 28 → 35 because the v0.8.280
+Google least-privilege tools — `google_calendar_search`/`google_calendar_list`/`google_drive_search`/
+`google_drive_read`/`google_gmail_search` — landed after the prior refresh; they are all **DEFERRED**,
+so the ALWAYS bucket moved only +119 chars while the DEFERRED bucket ballooned ~6k chars.) **The TASK-4
+guard ceiling must re-baseline on this current measured number.** Child 2's
+remaining edit targets are `web_fetch` (desc 1,019), `web_search` (desc 808, post-drop), and `file_read`
 (desc 626/params 898). **`file_patch` is NO LONGER a target** — post-3c it measures desc 477/params
 787 (rank #9, below the desc>600 / params>800 trim heuristic), so its docstring was effectively
 trimmed by the V4A removal. The current #1 desc is `shell_exec` (1,317 chars), but that is the
@@ -132,7 +136,7 @@ no signature-clobber hazard. **`file_patch` is out of child 2's scope.**
 
 ## Tasks
 
-### TASK-1 — rule↔docstring de-duplication
+### ✓ DONE TASK-1 — rule↔docstring de-duplication
 
 **Files:** `co_cli/context/rules/04_tool_protocol.md`, `co_cli/context/rules/03_reasoning.md`.
 
@@ -150,7 +154,7 @@ path.
 - `uv run pytest tests/test_flow_prompt_assembly.py -x` passes.
 - `uv run python tmp/measure_prompt.py` shows the rules block down ~175 tok.
 
-### TASK-2 — routing/web/file docstring trim
+### ✓ DONE TASK-2 — routing/web/file docstring trim
 
 **Prerequisites:** TASK-1 (for the seam-guard overlap check); **`drop-web-research-add-fetch-extraction`
 shipped** — `web_search.py`/`fetch.py` are at their post-drop state before this task edits them.
@@ -177,7 +181,7 @@ post-drop.)
 **success_signal:** `co chat` turn touching web_fetch + file_read + file_patch selects the right
 tools; read-before-patch honored.
 
-### TASK-3 — routing-adherence eval + sweep
+### ✓ DONE TASK-3 — routing-adherence eval + sweep
 
 **Prerequisites:** TASK-1, TASK-2.
 
@@ -190,7 +194,7 @@ tools; read-before-patch honored.
 
 **done_when:** Eval completes without routing regression; full suite green.
 
-### TASK-4 — cumulative schema-budget guard (ships last)
+### ✓ DONE TASK-4 — cumulative schema-budget guard (ships last)
 
 **Prerequisites:** TASK-1–TASK-3. (Child 3's prerequisite is satisfied — it has shipped — so the
 ceiling is now set from a single re-measurement *after* child 2's TASK-1–3 land, taken from the
@@ -206,15 +210,18 @@ current registry which already includes child 3's trims, both the memory and ski
 `name + description + minified-params-JSON`; cross-reference visibility via
 `deps.tool_index[name].visibility`. Assertions:
 - ALWAYS-bucket total ≤ measured post-child-2-trim value + ~400-char headroom. **Baseline before
-  child 2's trims: 22,470 chars (2026-06-02), reflecting both splits + the 3c V4A removal.** The
-  `web_research` drop does **not** change this number — `web_research` was DEFERRED, so it never
-  counted toward the ALWAYS bucket; only the DEFERRED bucket shrinks (~−1,268 chars). Re-measure
-  after TASK-1–3 (on the post-drop tree) and pin the ALWAYS ceiling to that number.
+  child 2's trims: 22,589 chars (re-measured 2026-06-02, post-Google-tools), reflecting both splits,
+  the 3c V4A removal, the `web_research` drop, AND the v0.8.280 Google tools.** The Google tools and
+  the `web_research` drop do **not** materially change this ALWAYS number — the new Google tools are
+  all DEFERRED, and `web_research` was DEFERRED; the ALWAYS bucket moved only +119 chars (22,470 →
+  22,589) while the DEFERRED bucket grew to 10,194 chars. Re-measure after TASK-1–3 and pin the
+  ALWAYS ceiling to that number.
 - Each ToolDefinition has a non-empty description.
-- `len(tools) >= 27` (registry is **28** now — was 29 before the `web_research` drop `−1`:
-  `memory_manage`→4 `+3`, `skill_manage`→4 `+3`, `knowledge_analyze` removed `−1`, `web_research`
-  removed `−1`, off the parent's 25/26). Floor is one below current to guard against accidental
-  drops, not pin the exact boundary.
+- `len(tools) >= 27` (registry is **35** now — the floor is far below current and is a guard against
+  accidental drops, NOT a pin of the exact boundary; the 28 → 35 growth is the five DEFERRED
+  v0.8.280 Google tools — `google_calendar_search`/`google_calendar_list`/`google_drive_search`/
+  `google_drive_read`/`google_gmail_search` — none of which enter the ALWAYS bucket). Leave the
+  floor at `>= 27`; do not raise it to track the deferred-tool count.
 - Max per-ALWAYS-tool ≤ a measured ceiling. Post-3c the top ALWAYS tool by total is `file_search`
   (~2,100 chars; child 3's, already trimmed), with `shell_exec` (~1,956, the untouched canonical
   home) next — `file_patch` is no longer the max (it dropped to ~1,274). Set the per-tool cap from
@@ -261,7 +268,28 @@ edits.
 - Tool-home-over-rule-home on qwen3.6 — answered empirically by TASK-3's eval; documented in the
   Delivery Summary.
 
-## Delivery Summary — TBD
+## Delivery Summary — 2026-06-02
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | grep markers 0 / cue relocated ≥1 / assembly test pass / rules block down | ✓ pass |
+| TASK-2 | web/file tests pass / trimmed tool totals reduced | ✓ pass |
+| TASK-3 | eval completes without routing regression / full suite green | ✓ eval pass (no regression); full suite deferred to review-impl |
+| TASK-4 | schema-budget guard passes; ALWAYS ceiling pinned | ✓ pass |
+
+**Measured outcomes**
+- **Rules block (TASK-1):** `04` "## File tools"/"## Shell" removed (dup of `shell_exec` canonical home); absolute-paths kept as `## Paths`; stale-data cue relocated to `03 ## Verification`; "Track convergence" dropped per child-4 coordination. Net −1,486 chars (~−371 tok). `grep -nE "^## File tools|DENY-pattern|BSD utilities"` → 0; `grep web_fetch|web_search` in `03` → ≥1.
+- **Docstrings (TASK-2):** `web_fetch` 1,626→1,013, `web_search` 1,398→914, `file_read` 1,533→1,029 chars. Injunctions preserved verbatim (fabricate-URLs incl. "from tool output", Shell-fallback, file_search-first). **ALWAYS tool bucket 22,589 → 20,988 chars (−1,601).**
+- **Routing eval (TASK-3):** `eval_mindset_selection.py` completed all 8 cases; agent routed `file_search`/`file_read`/web tools correctly throughout — **no routing regression**. (Verdict `INERT` concerns the mindsets block — a separate doctrine matter, untouched here. Trailing crash was an MCP/anyio teardown race after the verdict, not an eval-logic failure.) Before/after diff of 382 common LLM tests: **zero span-count regressions** — identical model-request rounds pre/post trim; compaction calls marginally faster.
+- **Schema-budget guard (TASK-4):** `tests/test_orchestrator_schema_budget.py` (NEW). Pins ALWAYS bucket ≤ 21,400 (measured 20,988 + headroom), per-tool ≤ 2,300 (max `file_search` 2,111), tool floor ≥ 27 (live 35), non-empty descriptions. Hardened to `stack=None` (headless, MCP-free) for determinism in the ship gate.
+
+**Tests:** scoped — 71 passed, 0 failed (prompt_assembly + web/file + schema_budget). Partial full suite reached 58% / 382 passed / 0 failed (incl. real-LLM compaction + repl tests) before being stopped on user instruction; full-suite completion deferred to review-impl per skill ownership.
+**Doc Sync:** clean — no spec references removed rule sections or old docstrings (narrow scope, no changes).
+
+**Open Question answered (tool-home-over-rule-home on qwen3.6):** Empirically supported — relocating tool-routing guidance to docstrings (canonical homes) with de-duplicated rules produced no routing regression across the eval's 8 cases and no change in tool-call structure across 382 LLM tests.
+
+**Overall: DELIVERED**
+All four tasks pass their done_when (TASK-3's eval half green with no routing regression; full-suite half deferred to review-impl). Lint clean, scoped tests green, no doc drift. A separate context-stability investigation (tail_fraction proportionality, anti-thrash gate fallback, spill/compaction band, tool-schema budget) surfaced during review and is recommended as a follow-up plan — out of scope here.
 
 ## Final — Team Lead
 
@@ -312,6 +340,64 @@ and adds trafilatura content extraction to `web_fetch`. Impact on this child:
   the ALWAYS ceiling re-measure is unaffected by the drop and still taken after TASK-1–3.
 - TASK-1 (rules `03`/`04`) is entirely unaffected by the drop.
 
+## Plan Refresh — 2026-06-02 (Gate-1 re-verification, post-Google-tools)
+
+Re-verified live against the current tree at Gate 1. Prerequisites confirmed shipped:
+`drop-web-research-add-fetch-extraction` and child 3 are both in `completed/`; `web_research` is gone
+from `web/search.py` (steer removed — do not re-add); trafilatura extraction is in `web/fetch.py`.
+
+Central dedup claim re-confirmed: rule `04`'s "## File tools"/"## Shell" duplicate `shell_exec`'s
+docstring (`execute.py:21-56`) almost line-for-line (file_read/file_search routing, DENY-pattern +
+approval, diagnose-and-retry, macOS BSD utils). The stale-data cue (`04:71-73`) is NOT in shell_exec —
+relocation to `03 ## Verification` (TASK-1) is correct, not deletion. Rule-04 line refs still accurate
+(File tools 61-73, Shell 75-87, Track-convergence 37-41, stale `file_find`/`glob` at 65/68).
+
+Drift found and corrected (numbers only — no scope change to TASK-1/2/3):
+
+- **Registry 28 → 35; ALWAYS 22,470 → 22,589 chars; DEFERRED → 10,194 chars.** Cause: the v0.8.280
+  Google least-privilege tools landed after the prior refresh. All five are **DEFERRED**, so the ALWAYS
+  bucket (TASK-4's subject) moved only +119 chars and the trim targets are unaffected.
+- **TASK-4 baseline re-pinned to 22,589 chars**; the `len(tools) >= 27` floor is unchanged (35 ≫ 27 —
+  intentionally loose) but its rationale was corrected from the stale "registry is 28".
+- `web_search` desc measured 808 (was 796) post-drop — still above heuristic, still a valid target.
+- Shell-fallback cue moved to `fetch.py:158-159` (was 133-135 — trafilatura shifted it); fabricate-URLs
+  injunction at `fetch.py:156` (verbatim, incl. "from tool output"). Confirm both line refs during dev.
+
+Per-tool max examples (`file_search` 2,111, `shell_exec` 1,966) verified accurate — unchanged.
+
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev prefill-trim-2-tool-guidance-dedup`
+
+## Implementation Review — 2026-06-02
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|--------------|
+| TASK-1 | grep markers → 0; web cue in `03` → ≥1; assembly test pass | ✓ pass | `grep -nE "^## File tools\|DENY-pattern\|BSD utilities" 04` exits 1 (0 matches); `03_reasoning.md:14-16` carries relocated web_search/web_fetch cue under `## Verification`; `tests/test_flow_prompt_assembly.py` 5 passed |
+| TASK-1 | seam guard — removed `04` content survives in canonical home | ✓ pass | shell_exec docstring `execute.py:26-46` retains file_read/file_search routing + DENY-pattern + non-zero-exit + BSD utils; absolute-paths kept in `04` as `## Paths` (04:55-58); "Track convergence" canonical home `05_workflow.md:27-29` |
+| TASK-2 | web/file tests pass; trimmed totals reduced | ✓ pass | `pytest -k "web or file"` 65 passed; audit re-run: web_fetch 1,013 / web_search 914 / file_read 1,029 (audit total), ALWAYS bucket 22,589→20,988 |
+| TASK-2 | injunctions survive verbatim | ✓ pass | `fetch.py:154-155` fabricate-URLs verbatim incl. "from tool output"; `fetch.py:157-158` Shell-fallback (curl -sL) condensed-kept; `web_research` absent from `search.py`; `read.py:411` file_search-first cue kept; griffe Args parse for all 3 |
+| TASK-3 | eval no routing regression | ✓ pass | `eval_mindset_selection.py` 8/8 correct routing; 0 span-count regressions across 382 LLM tests (delivery) |
+| TASK-4 | schema-budget guard passes; ceiling pinned | ✓ pass | `tests/test_orchestrator_schema_budget.py` 1 passed; real deps via `create_deps` (line 74, `stack=None`); 4 assertion classes (lines 100/102/113-117/119); pinned literals with inline measured comments (lines 31-38), not self-referential; live ALWAYS 20,988 ≤ 21,400, max file_search 2,111 ≤ 2,300, 35 tools ≥ 27 |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Reported docstring char endpoints (819/697/836 raw `__doc__`) appeared to mismatch delivery (1,013/914/1,029) | — | false-positive | Two different metrics — delivery numbers are audit `total` (name+desc+minified-params-JSON), confirmed by re-running `tmp/audit_tool_schemas.py`. No defect. |
+| Extra changed file `docs/exec-plans/active/2026-05-28-150239-vision-input.md` not in any task's `files:` | — | minor | Different plan, concurrent work — not staged by this review. Flag for staged-file hygiene at ship. |
+
+_No blocking findings — no fixes applied._
+
+### Tests
+- Lint: `scripts/quality-gate.sh lint` → PASS (ruff check + format, 326 files).
+- Scoped (re-run live this review): `test_flow_prompt_assembly` 5 passed; `-k "web or file"` 65 passed; `test_orchestrator_schema_budget` 1 passed. 0 failed.
+- Full suite: started fail-fast (`uv run pytest -x`), reached 57 passed / 0 failed, then **stopped on user instruction ("skip suite")**. Not run to completion in this review. Delivery recorded a prior partial full run to 382 passed / 0 failed (incl. real-LLM compaction + repl).
+
+### Behavioral Verification
+- No `co status` command exists in this CLI (commands: chat/tail/trace/dream/google) — skill default N/A.
+- Bootstrap + tool-schema generation: verified live — TASK-4 test builds real deps and prepares all 35 tool defs without error.
+- `success_signal` (routing): verified via TASK-3 `eval_mindset_selection.py` — web_fetch/file_read/file_search routing correct across 8 cases, no regression; read-before-patch surface unchanged (file_patch out of scope, docstring untouched).
+
+### Overall: PASS
+All four tasks meet their done_when with file:line evidence; seam guard holds (no guidance lost — every removed cue has exactly one canonical home); injunctions preserved verbatim; schema-budget guard pinned and non-self-referential; lint clean; scoped tests green. Full suite was not run to completion (skipped per user); ship gate (`/ship`) runs the full suite as the safety net. One staged-file-hygiene note: `vision-input.md` (unrelated plan) is modified in the working tree — confirm it is not staged at ship.

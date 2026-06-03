@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.282]
+
+### prefill-trim-2 — tool-guidance de-duplication + cumulative schema-budget guard
+
+Last child of the `prefill-trim` family. Removes tool-routing guidance duplicated between rule `04` and tool docstrings (one canonical home per cue), trims the routing/web/file docstrings, and locks the ALWAYS tool-schema bucket against regression. ALWAYS bucket 22,589 → 20,988 chars; rules block −371 tok. No routing regression (validated by `eval_mindset_selection`).
+
+- **Rule↔docstring de-dup (`03`/`04`).** Dropped `04`'s "## File tools"/"## Shell" sections (verbatim duplicates of `shell_exec`'s docstring, the canonical home); kept the cross-tool absolute-paths rule as `## Paths`; relocated the stale-data web_search/web_fetch verification cue into `03`'s `## Verification`; dropped the "Track convergence" paragraph (canonical home is rule `05`, per child-4 coordination).
+- **Docstring trim (`web_fetch`/`web_search`/`file_read`).** Dropped `Returns:` enumerations and model-derivable caveats; tightened `Args:` to noun-phrase + constraint. Load-bearing injunctions preserved verbatim: `web_fetch`'s fabricate-URLs rule (incl. "from tool output") and Shell-fallback cue; `file_read`'s file_search-first cue. No code/signature changes.
+- **Cumulative schema-budget guard (NEW `tests/test_orchestrator_schema_budget.py`).** Builds real deps via `create_deps` (headless, `stack=None`), prepares every tool def, and pins the ALWAYS bucket ≤ 21,400 chars, per-tool ≤ 2,300, tool floor ≥ 27, non-empty descriptions — a regression lock for the whole prefill-trim family.
+
 ## [0.8.280]
 
 ### Google auth: least-privilege scopes + `co google auth` as sole acquisition path

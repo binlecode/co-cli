@@ -148,35 +148,20 @@ async def web_fetch(
 ) -> ToolReturn:
     """Fetch a web page and return its content as readable markdown text.
 
-    Returns the fetched page content directly — HTML is converted to markdown,
-    JSON and XML are returned as-is. This is a direct HTTP fetch, not an
-    extraction or summarization step.
+    Use to read the full content of a known URL — HTML is converted to
+    markdown, JSON and XML are returned as-is.
 
     Accepts any URL — from the user's message, from web_search results, or
     from tool output. Never guess or fabricate URLs yourself.
 
-    Shell fallback: if fetch returns 403 or is blocked by Cloudflare, retry
-    with shell: curl -sL <url>. Use the shell fallback only for
-    fetch failures or site-specific blocking, not as the default path.
-
-    Returns a dict with:
-    - display: page content as markdown text — show directly to the user
-    - url: final URL after redirects
-    - content_type: the response Content-Type
-    - truncated: true if content was cut to fit size limits
-
-    Caveats:
-    - Only fetches text-based content (HTML, JSON, XML, plain text). Binary
-      formats (images, PDFs, zip) are rejected
-    - Content is truncated at ~100K characters
-    - Domain allow/block lists from settings are enforced
+    If fetch returns 403 or is blocked by Cloudflare, retry with shell
+    (curl -sL <url>) — only for fetch failures, not as the default path.
 
     Args:
         url: Full URL to fetch (must start with http:// or https://).
-        format: "markdown" (default) converts HTML to markdown; "html" and "text" both return the
-            raw decoded body unchanged. Ignored for JSON/XML/plain-text, which are always returned
-            as-is.
-        timeout: Max seconds to wait for the HTTP response (default 15). Increase for slow sites.
+        format: "markdown" (default) converts HTML to markdown; "html" and "text" return the raw
+            decoded body. Ignored for JSON/XML/plain-text, returned as-is.
+        timeout: Max seconds to wait for the response (default 15). Increase for slow sites.
     """
     if not url or not re.match(r"https?://", url.strip()):
         raise ModelRetry("web_fetch requires an http:// or https:// URL.")
