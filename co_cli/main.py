@@ -23,7 +23,6 @@ from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import (
     create_deps,
-    init_session_index,
     maybe_autospawn_dream,
     restore_session,
 )
@@ -594,8 +593,7 @@ async def _chat_loop(
         completer.update(build_completer_entries(deps.skill_index))
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
-        current_session_path = restore_session(deps, frontend)
-        init_session_index(deps, current_session_path, frontend)
+        restore_session(deps, frontend)
         _sweep_tool_results(deps)
         from co_cli.skills.index import get_skill_index
 

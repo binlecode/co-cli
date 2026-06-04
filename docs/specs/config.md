@@ -181,8 +181,6 @@ user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 | `memory.tei_rerank_batch_size` | `CO_MEMORY_TEI_RERANK_BATCH_SIZE` | `50` | Reranker batch size (overridden by TEI `/info` response) |
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Token size per memory chunk |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Token overlap between chunks |
-| `memory.session_chunk_tokens` | `CO_MEMORY_SESSION_CHUNK_TOKENS` | `400` | Token size per session chunk |
-| `memory.session_chunk_overlap` | `CO_MEMORY_SESSION_CHUNK_OVERLAP` | `80` | Token overlap between session chunks |
 | `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | Max memory items before decay |
 | `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Minimum item age before decay eligibility |
 | `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged item from decay |

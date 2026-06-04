@@ -171,7 +171,8 @@ def _seed_past_session(deps: CoDeps, *, token: str) -> Path:
     earlier timestamp) — re-indexing the active session can never surface it.
     """
     active = deps.session.session_path
-    sessions_dir = Path(active).parent if active else (deps.memory_dir.parent / "sessions")
+    has_real_active = active is not None and active != Path(".")
+    sessions_dir = active.parent if has_real_active else (deps.memory_dir.parent / "sessions")
     sessions_dir.mkdir(parents=True, exist_ok=True)
     created_at = datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
     session_id = uuid4().hex[:8]
@@ -188,8 +189,6 @@ def _seed_past_session(deps: CoDeps, *, token: str) -> Path:
         }
     ]
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
-    if deps.session_store is not None:
-        deps.session_store.index_session(path)
     return path
 
 

@@ -116,11 +116,13 @@ def _extract_part(
         tool_name = _to_str(part.get("tool_name"))
         if not tool_name:
             return None
+        rendered_args = _render_tool_args(part.get("args"))
+        content = f"{tool_name} {rendered_args}".strip()
         return ExtractedMessage(
             line_index=line_idx,
             part_index=part_idx,
             role="tool-call",
-            content=tool_name,
+            content=content,
             timestamp=ts,
             tool_name=tool_name,
         )
@@ -140,6 +142,29 @@ def _extract_part(
         )
 
     return None
+
+
+def _render_tool_args(args: object) -> str:
+    """Render tool-call arguments as readable text so their values are searchable.
+
+    pydantic-ai serializes ToolCallPart.args as a JSON string; decode it to a
+    compact JSON rendering (literal unicode) so leaf values match a recall query
+    as decoded text — the searchable+citable content surface includes the
+    arguments, not just the tool name. Non-JSON or empty args fall back to the
+    raw string.
+    """
+    if args is None:
+        return ""
+    if isinstance(args, str):
+        text = args.strip()
+        if not text:
+            return ""
+        try:
+            decoded = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return text
+        return json.dumps(decoded, ensure_ascii=False)
+    return json.dumps(args, ensure_ascii=False)
 
 
 def _to_str(value: object) -> str | None:

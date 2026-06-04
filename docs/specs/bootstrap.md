@@ -10,7 +10,6 @@ CLI start
   -> create_deps
   -> build_orchestrator(ORCHESTRATOR_SPEC, deps)
   -> restore_session
-  -> init_session_index
   -> enter REPL
       -> local command or agent turn
       -> approvals / tools / persistence / post-turn writes as needed
@@ -60,8 +59,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │      static, toolset guidance, personality critique), registers per-turn instructions
 │      (safety, current_time, deferred_tool_awareness, skill_manifest), and attaches history processors.
 │
-├─ restore_session(deps, frontend) → current_session_path
-├─ init_session_index(deps, current_session_path, frontend)
+├─ restore_session(deps, frontend)
 ├─ frontend.on_status("  {skill_count} skill(s) loaded")
 ├─ [if restored path exists] console.print("Previous session available — /resume to continue")
 ├─ display_welcome_banner(deps)
@@ -152,7 +150,7 @@ When degradation happens, bootstrap records the reason in `deps.degradations`. D
 
 ### Step 9. Sync the knowledge store
 
-If a `MemoryStore` exists, bootstrap syncs every `.md` file under `knowledge_dir` into the index under a single `source="memory"` label — extracted facts and articles alike are indexed into `docs` + `chunks_fts` (and `chunks_vec` in hybrid mode). Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and raises a startup error instead of silently losing indexed retrieval and session recall.
+If a `MemoryStore` exists, bootstrap syncs every `.md` file under `knowledge_dir` into the index under a single `source="memory"` label — extracted facts and articles alike are indexed into `docs` + `chunks_fts` (and `chunks_vec` in hybrid mode). Sync is hash-based, so unchanged files are skipped. A sync failure closes the store and raises a startup error instead of silently losing indexed memory retrieval.
 
 ### Step 9b. Sync canon scenes
 
@@ -189,27 +187,11 @@ else:
     deps.session.session_path = new_session_path(deps.sessions_dir)  # path only, no file write
 ```
 
-No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing session lifecycle are owned by [sessions.md](sessions.md).
-
-### Step 12b. Initialise the session index
-
-After `restore_session()` returns, `init_session_index()` syncs past sessions into the unified `MemoryStore`. The current session path is excluded from sync.
-
-```text
-if deps.memory_store is None: print status, return
-remove legacy session-index.db if present  # superseded by unified chunks pipeline
-deps.memory_store.sync_sessions(sessions_dir, exclude=current_session_path)
-
-on failure:
-    log warning
-    print status  # session_search returns empty for session channel
-```
-
-Session data is derived and rebuildable: restarting re-syncs from `*.jsonl` files. The unified DB at `~/.co-cli/co-cli-search.db` holds both knowledge artifacts and session transcripts under separate `source=` labels.
+No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing session lifecycle are owned by [sessions.md](sessions.md). There is no session-index step: `session_search` reads the transcript files directly (see [sessions.md](sessions.md)), so past sessions need no startup sync.
 
 ### Step 13. Print startup status and enter the REPL boundary
 
-After session restore, `_chat_loop()` reports loaded skill count, optionally shows the resume hint when a transcript exists, queries `deps.memory_store.count_docs("knowledge")` and `count_docs("session")` for the indexed item counts, then calls `display_welcome_banner(deps, knowledge_count=..., session_count=...)`. The banner shows a `Memory:` row with the backend label, optional degradation notice, and both counts (omitted when the store is `None`). After the banner, `render_security_findings(check_security())` prints any security posture warnings, then the transient status line clears. The banner and security warnings together form the boundary between bootstrap and normal interactive operation.
+After session restore, `_chat_loop()` reports loaded skill count, optionally shows the resume hint when a transcript exists, queries `deps.memory_store.count()` (memory items) and `deps.session_store.count()` (number of `*.jsonl` transcript files) for the banner counts, then calls `display_welcome_banner(deps, memory_count=..., session_count=...)`. The banner shows a `Memory:` row with the backend label, optional degradation notice, and both counts (memory count omitted when the memory store is `None`). After the banner, `render_security_findings(check_security())` prints any security posture warnings, then the transient status line clears. The banner and security warnings together form the boundary between bootstrap and normal interactive operation.
 
 Everything from `create_deps()` through banner display runs inside `_chat_loop()` cleanup guards. If startup exits early, the shell backend, background tasks, pending extraction work, and MCP stack still unwind.
 
@@ -223,7 +205,6 @@ Everything from `create_deps()` through banner display runs inside `_chat_loop()
 | Memory backend construction fails | hybrid may degrade to `fts5`; `fts5` failure aborts startup unless `memory.search_backend="grep"` was explicitly configured |
 | Memory sync fails | close the index and abort startup with a memory sync error |
 | Session restore fails to find usable state | create a new session |
-| Session index sync fails | log warning, print status, keep `deps.session_store`; session tier may be incomplete until next successful sync |
 | One skill file fails to load | skip that file and continue loading others |
 
 ## 3. Config
@@ -249,18 +230,17 @@ These settings most directly affect bootstrap behavior.
 | --- | --- | --- |
 | `create_deps(frontend, stack) -> CoDeps` | `co_cli/bootstrap/core.py` | Async — assembles the runtime context from settings (validates config, probes model, builds tool registry, connects MCP, loads skills, builds memory store) |
 | `restore_session(deps, frontend) -> Path` | `co_cli/bootstrap/core.py` | Picks the most recent `*.jsonl` under `sessions_dir` and writes it to `deps.session.session_path`; mints a new path when none exists |
-| `init_session_index(deps, current_session_path, frontend) -> None` | `co_cli/bootstrap/core.py` | Syncs past transcripts into `MemoryStore` under `source='session'`; excludes the in-progress transcript |
 | `probe_ollama_model(host, model) -> ProbeResult` | `co_cli/bootstrap/check.py` | Posts to `/api/show`; returns `num_ctx` and capabilities for floor validation |
 | `check_security() -> list[SecurityFinding]` | `co_cli/bootstrap/security.py` | Runs the once-per-session security posture checks consumed by `render_security_findings()` |
 | `render_security_findings(findings) -> None` | `co_cli/bootstrap/security.py` | Prints any findings to the console at REPL handoff |
-| `display_welcome_banner(deps, *, knowledge_count, session_count) -> None` | `co_cli/bootstrap/banner.py` | Renders the boundary banner; `Memory:` row shows backend + degradation + indexed counts |
+| `display_welcome_banner(deps, *, memory_count, session_count) -> None` | `co_cli/bootstrap/banner.py` | Renders the boundary banner; `Memory:` row shows backend + degradation + counts |
 
 ## 5. Files
 
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | Owns module-load logging and telemetry setup, `_chat_loop()` startup orchestration, and the REPL boundary |
-| `co_cli/bootstrap/core.py` | Owns `create_deps()`, `restore_session()`, and `init_session_index()` |
+| `co_cli/bootstrap/core.py` | Owns `create_deps()` and `restore_session()` |
 | `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama model probe checks |
 | `co_cli/bootstrap/banner.py` | Renders the welcome banner that marks bootstrap completion |
 | `co_cli/bootstrap/security.py` | Security posture checks run once at startup (`check_security`, `render_security_findings`) |

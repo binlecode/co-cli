@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.298]
+
+### session-search-ripgrep — session recall moves from the hybrid index to file-based ripgrep
+
+Session-transcript search leaves the shared hybrid `IndexStore` (FTS5 + sqlite-vec) for file-based ripgrep over `~/.co-cli/sessions/*.jsonl`. Curated memory + canon stay on the hybrid index, untouched. This applies co's curated-vs-uncurated search dichotomy (uncurated transcripts → lexical, no index) and removes the highest-volume, lowest-value-density corpus from the embedding pipeline.
+
+- **File-based search module (TASK-1).** New `co_cli/session/_search.py`: ripgrep (`--fixed-strings --ignore-case --no-config --no-ignore --hidden`, Python line-scan fallback when `rg` is absent) over the raw JSONL, mapped back through `extract_messages` to a readable, line-cited snippet. Returns `SessionHit` with `path`=uuid8 and 1-indexed `start_line==end_line`, ranked `(match_count desc, recency desc)`. Structural-JSON-key matches are dropped (no readable content to cite). `SessionStore` rewritten file-based: `search()` delegates, `count()` globs `*.jsonl`; no `IndexStore`, `index_session`, `sync`, or chunker.
+- **Indexing wiring removed (TASK-2).** Deleted `chunker.py`, `init_session_index` + its boot call, the orphaned `session_chunk_*` config fields + env map, and the dead eval `index_session` seed. `SessionStore` is now constructed unconditionally (no index dependency).
+- **Tool-call args are searchable (review follow-up).** `extract_messages` now renders a tool-call's decoded arguments into its content, so a term that occurred only as an agent-synthesized tool input (a saved memory, file path, command) is recalled with a citation and shown in `session_view` — not just the tool name. Closes a content-surface gap inherited from the prior indexed design.
+- **Tool contract unchanged.** `session_search` / `session_view` keep their names, args, and result shape; the agent-facing surface and `recall.py` logic are untouched.
+- **Docs synced** across `sessions.md`, `memory.md`, `01-system.md`, `bootstrap.md`, `config.md` off the file-based backend.
+
 ## [0.8.296]
 
 ### antithrash-static-marker-fallback — anti-thrash gate degrades to a static marker, never a no-op (ISSUE-2)

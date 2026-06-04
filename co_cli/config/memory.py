@@ -30,8 +30,6 @@ MEMORY_ENV_MAP: dict[str, str] = {
     "max_item_count": "CO_MEMORY_MAX_ITEM_COUNT",
     "decay_after_days": "CO_MEMORY_DECAY_AFTER_DAYS",
     "recall_protection_days": "CO_MEMORY_RECALL_PROTECTION_DAYS",
-    "session_chunk_tokens": "CO_MEMORY_SESSION_CHUNK_TOKENS",
-    "session_chunk_overlap": "CO_MEMORY_SESSION_CHUNK_OVERLAP",
     "recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
 }
 
@@ -60,6 +58,4 @@ class MemorySettings(BaseModel):
     max_item_count: int = Field(default=300, ge=1)
     decay_after_days: int = Field(default=90, ge=1)
     recall_protection_days: int = Field(default=30, ge=1)
-    session_chunk_tokens: int = Field(default=400, ge=64)
-    session_chunk_overlap: int = Field(default=80, ge=0)
     recall_half_life_days: int = Field(default=DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS, ge=1)

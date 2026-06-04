@@ -1,4 +1,9 @@
-"""Tests for session_search — ranked FTS over past session transcripts."""
+"""Tests for session_search — file-based lexical (ripgrep) recall over transcripts.
+
+The store is file-based: no IndexStore, no chunk pipeline, no embeddings. These
+tests exercise the real ripgrep path (or its Python fallback) over JSONL files
+written to a temp CO_HOME, asserting the agent-facing tool contract is stable.
+"""
 
 import asyncio
 import json
@@ -11,30 +16,15 @@ from tests._settings import SETTINGS
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.index.store import IndexStore
 from co_cli.session.store import SessionStore
 from co_cli.tools.session.recall import _SESSIONS_CHANNEL_CAP, session_search
 from co_cli.tools.shell_backend import ShellBackend
 
-_FTS5_CONFIG = SETTINGS.memory.model_copy(
-    update={
-        "search_backend": "fts5",
-        "embedding_provider": "none",
-        "cross_encoder_reranker_url": None,
-    }
-)
-_TEST_SETTINGS = SETTINGS.model_copy(update={"memory": _FTS5_CONFIG})
-
 _SESSION_TIMESTAMP = "2026-01-01-T120000Z"
 
 
-def _make_stores(tmp_path: Path) -> tuple[IndexStore, SessionStore]:
-    index = IndexStore(config=_TEST_SETTINGS, db_path=tmp_path / "search.db")
-    return index, SessionStore(index=index, config=_TEST_SETTINGS)
-
-
 def _make_session_file(sessions_dir: Path, uuid8: str, content: str) -> Path:
-    """Create a minimal pydantic-ai JSONL session file with searchable content."""
+    """Create a minimal pydantic-ai JSONL session file with a user-prompt turn."""
     sessions_dir.mkdir(parents=True, exist_ok=True)
     path = sessions_dir / f"{_SESSION_TIMESTAMP}-{uuid8}.jsonl"
     line = json.dumps([{"parts": [{"part_kind": "user-prompt", "content": content}]}])
@@ -42,15 +32,21 @@ def _make_session_file(sessions_dir: Path, uuid8: str, content: str) -> Path:
     return path
 
 
+def _make_store(sessions_dir: Path) -> SessionStore:
+    return SessionStore(config=SETTINGS, sessions_dir=sessions_dir)
+
+
 def _make_deps(
-    tmp_path: Path, index: IndexStore, store: SessionStore, sessions_dir: Path
+    sessions_dir: Path, store: SessionStore, current_path: Path | None = None
 ) -> CoDeps:
+    session_state = CoSessionState()
+    if current_path is not None:
+        session_state.session_path = current_path
     return CoDeps(
         shell=ShellBackend(),
-        config=_TEST_SETTINGS,
-        session=CoSessionState(),
+        config=SETTINGS,
+        session=session_state,
         sessions_dir=sessions_dir,
-        index_store=index,
         session_store=store,
     )
 
@@ -60,145 +56,159 @@ def _ctx(deps: CoDeps) -> RunContext[CoDeps]:
 
 
 @pytest.mark.asyncio
-async def test_session_search_returns_chunk_cited_hit(tmp_path: Path) -> None:
-    """session_search must return chunk-cited hits with the expected field set.
+async def test_tool_keyword_search_returns_readable_line_cited_hit(tmp_path: Path) -> None:
+    """Keyword search returns the right session id, the matched line, and a readable snippet.
 
-    Failure mode: missing start_line/end_line breaks agents that follow up with
-    session_view(session_id, start_line, end_line) to read verbatim turns.
+    Failure mode: a filesystem path instead of the uuid8 session_id, a wrong/absent
+    line citation, or a JSON-escaped snippet breaks the session_view follow-up.
     """
     sessions_dir = tmp_path / "sessions"
-    index, store = _make_stores(tmp_path)
-    try:
-        uuid8 = "aabb1122"
-        path = _make_session_file(sessions_dir, uuid8, "sesquniquetoken8z discussion here")
-        store.index_session(path)
+    phrase = "the rate limiter regression we discussed"
+    _make_session_file(sessions_dir, "aabb1122", f"Earlier note: {phrase} yesterday.")
+    _make_session_file(sessions_dir, "ccdd3344", "an unrelated session about deploy config")
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store)
+    ctx = _ctx(deps)
 
-        deps = _make_deps(tmp_path, index, store, sessions_dir)
-        ctx = _ctx(deps)
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, query=phrase)
 
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await session_search(ctx, query="sesquniquetoken8z")
-
-        results = result.metadata.get("results", [])
-        assert results, "expected at least one session hit"
-        r = results[0]
-        for field in (
-            "session_id",
-            "when",
-            "source",
-            "chunk_text",
-            "start_line",
-            "end_line",
-            "score",
-        ):
-            assert field in r, f"missing field {field!r} in hit: {r}"
-        assert "channel" not in r, f"hit must not carry 'channel' field: {r}"
-    finally:
-        index.close()
+    results = result.metadata.get("results", [])
+    assert results, "expected a keyword hit for the seeded phrase"
+    hit = results[0]
+    assert hit["session_id"] == "aabb1122"
+    assert hit["start_line"] == hit["end_line"] == 1
+    assert phrase in hit["chunk_text"]
+    assert "\\u" not in hit["chunk_text"], f"snippet must be readable, not JSON-escaped: {hit!r}"
 
 
 @pytest.mark.asyncio
-async def test_session_search_empty_query_returns_browse_metadata(tmp_path: Path) -> None:
-    """Empty-query session_search must return session metadata without running FTS.
+async def test_tool_skips_structural_json_key_match(tmp_path: Path) -> None:
+    """A query occurring only as a transcript JSON key (part_kind) returns no session.
 
-    Failure mode: empty query falls through to FTS and returns empty or errors
-    when there are sessions to browse.
+    Failure mode: structural-key noise surfaces arbitrary JSON as a hit instead of
+    being dropped — the agent gets a meaningless session with no readable snippet.
     """
     sessions_dir = tmp_path / "sessions"
-    index, store = _make_stores(tmp_path)
-    try:
-        path = _make_session_file(sessions_dir, "ccdd3344", "some past session content")
-        store.index_session(path)
+    _make_session_file(sessions_dir, "aabb1122", "a normal conversation about caching")
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store)
+    ctx = _ctx(deps)
 
-        deps = _make_deps(tmp_path, index, store, sessions_dir)
-        ctx = _ctx(deps)
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, query="part_kind")
 
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await session_search(ctx, query="")
+    assert result.metadata.get("results", []) == []
 
-        results = result.metadata.get("results", [])
-        assert results, "expected at least one browse result"
-        r = results[0]
-        assert "session_id" in r, f"browse result must include session_id: {r}"
-        assert "when" in r, f"browse result must include when: {r}"
-        assert "channel" not in r, f"browse result must not carry 'channel': {r}"
-    finally:
-        index.close()
+
+def _make_tool_call_session_file(
+    sessions_dir: Path, uuid8: str, tool_name: str, args: dict
+) -> Path:
+    """Create a session JSONL file whose only content is one tool-call part."""
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    path = sessions_dir / f"{_SESSION_TIMESTAMP}-{uuid8}.jsonl"
+    line = json.dumps(
+        [{"parts": [{"part_kind": "tool-call", "tool_name": tool_name, "args": json.dumps(args)}]}]
+    )
+    path.write_text(line + "\n", encoding="utf-8")
+    return path
 
 
 @pytest.mark.asyncio
-async def test_session_search_excludes_current_session(tmp_path: Path) -> None:
-    """session_search must not return the current session in results.
+async def test_tool_recalls_term_only_in_tool_call_args(tmp_path: Path) -> None:
+    """session_search recalls a session when the term occurs only in tool-call args.
 
-    Failure mode: current session appears in recall results → agent recalls its
-    own in-progress conversation as a past session hit.
+    Behavior: the agent stored a fact via a tool (knowledge_manage) and never typed
+    it in prose. Searching that term must still surface the past session with a line
+    citation — agent-synthesized tool inputs are recallable, not lost.
     """
     sessions_dir = tmp_path / "sessions"
-    index, store = _make_stores(tmp_path)
-    try:
-        current_uuid8 = "current1"
-        other_uuid8 = "other111"
-        shared_token = "sharedtokenxq7v"
+    _make_tool_call_session_file(
+        sessions_dir,
+        "aabb1122",
+        "knowledge_manage",
+        {"action": "create", "content": "User's deploy ID is DEPLOY_77."},
+    )
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store)
+    ctx = _ctx(deps)
 
-        current_path = _make_session_file(
-            sessions_dir, current_uuid8, f"{shared_token} current session"
-        )
-        other_path = _make_session_file(sessions_dir, other_uuid8, f"{shared_token} other session")
-        store.index_session(current_path)
-        store.index_session(other_path)
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, query="DEPLOY_77")
 
-        # CoSessionState with current session path set
-        session_state = CoSessionState()
-        session_state.session_path = current_path
-
-        deps = CoDeps(
-            shell=ShellBackend(),
-            config=_TEST_SETTINGS,
-            session=session_state,
-            sessions_dir=sessions_dir,
-            index_store=index,
-            session_store=store,
-        )
-        ctx = _ctx(deps)
-
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await session_search(ctx, query=shared_token)
-
-        results = result.metadata.get("results", [])
-        returned_ids = [r["session_id"] for r in results]
-        assert current_uuid8 not in returned_ids, (
-            f"current session {current_uuid8!r} must be excluded from results: {returned_ids}"
-        )
-    finally:
-        index.close()
+    results = result.metadata.get("results", [])
+    assert results, "term occurring only in tool-call args must be recalled"
+    hit = results[0]
+    assert hit["session_id"] == "aabb1122"
+    assert hit["start_line"] == hit["end_line"] == 1
+    assert "DEPLOY_77" in hit["chunk_text"], f"snippet must surface the arg value: {hit!r}"
 
 
 @pytest.mark.asyncio
-async def test_session_search_per_query_cap_honoured(tmp_path: Path) -> None:
-    """session_search must cap unique sessions at _SESSIONS_CHANNEL_CAP.
-
-    Failure mode: unbounded session results flood the context and exceed
-    the cap that keeps recall focused.
-    """
+async def test_tool_empty_query_browses_recent_sessions(tmp_path: Path) -> None:
+    """Empty-query session_search returns recent-session metadata."""
     sessions_dir = tmp_path / "sessions"
-    index, store = _make_stores(tmp_path)
-    try:
-        cap_token = "captoken_mk9r"
-        for i in range(_SESSIONS_CHANNEL_CAP + 2):
-            uuid8 = f"sess{i:04d}"
-            path = _make_session_file(sessions_dir, uuid8, f"{cap_token} session number {i}")
-            store.index_session(path)
+    _make_session_file(sessions_dir, "ccdd3344", "some past session content")
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store)
+    ctx = _ctx(deps)
 
-        deps = _make_deps(tmp_path, index, store, sessions_dir)
-        ctx = _ctx(deps)
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, query="")
 
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await session_search(ctx, query=cap_token)
+    results = result.metadata.get("results", [])
+    assert results, "expected at least one browse result"
+    assert results[0]["session_id"] == "ccdd3344"
+    assert results[0]["when"] == "2026-01-01"
 
-        results = result.metadata.get("results", [])
-        unique_ids = {r["session_id"] for r in results}
-        assert len(unique_ids) <= _SESSIONS_CHANNEL_CAP, (
-            f"unique sessions must be capped at {_SESSIONS_CHANNEL_CAP}, got {len(unique_ids)}"
-        )
-    finally:
-        index.close()
+
+@pytest.mark.asyncio
+async def test_tool_excludes_current_session(tmp_path: Path) -> None:
+    """session_search must not return the current in-progress session."""
+    sessions_dir = tmp_path / "sessions"
+    shared_token = "sharedtokenxq7v"
+    current_path = _make_session_file(sessions_dir, "current1", f"{shared_token} current session")
+    _make_session_file(sessions_dir, "other111", f"{shared_token} other session")
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store, current_path=current_path)
+    ctx = _ctx(deps)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, query=shared_token)
+
+    returned_ids = [r["session_id"] for r in result.metadata.get("results", [])]
+    assert "current1" not in returned_ids, f"current session must be excluded, got {returned_ids}"
+    assert "other111" in returned_ids, "the other session should still be recalled"
+
+
+@pytest.mark.asyncio
+async def test_tool_keyword_search_caps_unique_sessions(tmp_path: Path) -> None:
+    """session_search caps unique sessions at _SESSIONS_CHANNEL_CAP."""
+    sessions_dir = tmp_path / "sessions"
+    cap_token = "captoken_mk9r"
+    for i in range(_SESSIONS_CHANNEL_CAP + 2):
+        _make_session_file(sessions_dir, f"sess{i:04d}", f"{cap_token} session number {i}")
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store)
+    ctx = _ctx(deps)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, query=cap_token)
+
+    unique_ids = {r["session_id"] for r in result.metadata.get("results", [])}
+    assert len(unique_ids) == _SESSIONS_CHANNEL_CAP
+
+
+@pytest.mark.asyncio
+async def test_tool_no_match_returns_empty_message(tmp_path: Path) -> None:
+    """A keyword with no match returns the empty-result message, not an error."""
+    sessions_dir = tmp_path / "sessions"
+    _make_session_file(sessions_dir, "aabb1122", "a session about something else entirely")
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store)
+    ctx = _ctx(deps)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, query="nonexistent_phrase_zzz9")
+
+    assert result.metadata.get("results", []) == []

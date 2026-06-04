@@ -1,4 +1,4 @@
-"""Session recall tool — chunk-cited BM25 search over past session transcripts."""
+"""Session recall tool — line-cited lexical search over past session transcripts."""
 
 import logging
 from typing import Any
@@ -53,9 +53,9 @@ def _search_sessions(
     query: str,
     span: Any,
 ) -> list[dict]:
-    """Chunked recall over session transcripts via SessionStore.
+    """Lexical recall over session transcripts via SessionStore.
 
-    Returns chunk-cited dicts. Capped at _SESSIONS_CHANNEL_CAP unique sessions.
+    Returns line-cited dicts. Capped at _SESSIONS_CHANNEL_CAP unique sessions.
     """
     store = ctx.deps.session_store
     if store is None:
@@ -65,7 +65,7 @@ def _search_sessions(
     try:
         raw = store.search(query, limit=_SESSIONS_CHANNEL_CAP * 5)
     except Exception as e:
-        logger.warning("Session chunk search failed: %s", e)
+        logger.warning("Session search failed: %s", e)
         span.set_attribute("memory.sessions.count", 0)
         return []
 
@@ -138,7 +138,7 @@ async def session_search(
     turns with session_view(session_id, start_line, end_line).
 
     Args:
-        query: FTS5 keyword query. Default "" browses recent `limit` sessions; non-empty runs BM25 chunk-cited search.
+        query: Keyword query. Default "" browses recent `limit` sessions; non-empty runs case-insensitive substring search with line citations.
         limit: Max sessions returned in browse mode (default 3). Keyword search always returns at most 3 sessions regardless of this value.
     """
     span = current_span()

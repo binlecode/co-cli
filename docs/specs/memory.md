@@ -4,7 +4,7 @@
 
 Foundation spec for the memory tier — long-term declarative memory items (user preferences, rules, articles, notes) that the agent accumulates and recalls.
 
-Memory is one of five operational tiers in the agent loop: **doctrine** ([personality.md](personality.md), identity), **tools** ([tools.md](tools.md), capability), **skills** ([skills.md](skills.md), procedure), **memory** (this file — long-term declarative artifacts), and **session** ([sessions.md](sessions.md) — past conversation transcripts). Memory and session are peer tiers sharing the same index infrastructure but with distinct domain logic, mutation models, and lifecycle policies.
+Memory is one of five operational tiers in the agent loop: **doctrine** ([personality.md](personality.md), identity), **tools** ([tools.md](tools.md), capability), **skills** ([skills.md](skills.md), procedure), **memory** (this file — long-term declarative artifacts), and **session** ([sessions.md](sessions.md) — past conversation transcripts). Memory and session are peer tiers with distinct domain logic, mutation models, and lifecycle policies — memory is curated and hybrid-indexed; session transcripts are uncurated and searched lexically over the raw files (no shared index).
 
 ## 1. Functional Architecture
 
@@ -29,7 +29,7 @@ flowchart TD
 | Tier | Storage | Mutation | Indexing |
 | --- | --- | --- | --- |
 | **memory** (this spec) | `~/.co-cli/memory/*.md` | `memory_create` / `memory_append` / `memory_replace` / `memory_delete` | FTS5 BM25 + optional hybrid; paragraph-aware chunking |
-| **session** ([sessions.md](sessions.md)) | `~/.co-cli/sessions/*.jsonl` | append-only via `persist_session_history` | sliding-window token chunks |
+| **session** ([sessions.md](sessions.md)) | `~/.co-cli/sessions/*.jsonl` | append-only via `persist_session_history` | none — file-based lexical (ripgrep) search |
 
 Canon scenes (`souls/{role}/canon/*.md`) coexist in the same DB under `source='canon'` for personality auto-injection, but are never returned by any model-callable tool. Skills live on their own tier.
 
@@ -53,7 +53,7 @@ co_cli/index/            Infrastructure facade — IndexStore (public) + retriev
 | --- | --- | --- |
 | `hybrid` | FTS5 BM25 + sqlite-vec cosine, RRF merge (k=60) | Configured, TEI reranker reachable, embedding provider configured/reachable, and sqlite-vec available |
 | `fts5` | BM25 over chunked text only | Explicitly configured, or hybrid degrades before store construction |
-| `grep` | In-memory substring over memory item title+content | `memory_store` is `None`; sessions return `[]` in this state |
+| `grep` | In-memory substring over memory item title+content | `memory_store` is `None` (session search is independent — always file-based) |
 
 Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
 
@@ -76,7 +76,7 @@ Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross
 | `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | recent-recall window that protects an aged item from decay |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | lifecycle setting; not currently consumed by recall ranking |
 
-Session chunking settings live alongside memory settings under `config.memory.session_chunk_*` since both tiers share the index infrastructure. See [sessions.md](sessions.md) for session-specific config.
+Session search is file-based (ripgrep) and has no configurable settings; the `memory.*` knobs above govern the memory/canon hybrid index only. See [sessions.md](sessions.md) for the session tier.
 
 ### Paths
 
@@ -85,7 +85,7 @@ Session chunking settings live alongside memory settings under `config.memory.se
 | `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory/` | memory item source-of-truth directory |
 | `sessions_dir` | — | `~/.co-cli/sessions/` | transcript directory |
 | `tool_results_dir` | — | `~/.co-cli/tool-results/` | spill directory for oversized tool results |
-| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | unified retrieval DB (memory + session + canon) |
+| `memory_db_path` | — | `~/.co-cli/co-cli-search.db` | hybrid retrieval DB (memory + canon; sessions are file-based, not indexed here) |
 
 ## 4. Public Interface
 

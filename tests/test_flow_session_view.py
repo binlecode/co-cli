@@ -127,9 +127,9 @@ async def test_session_view_line_range_returns_correct_turns(tmp_path: Path) -> 
     )
     output_lines = result.metadata.get("lines", [])
     line_numbers = [entry["line"] for entry in output_lines]
-    # Lines 2 and 3 should be returned
-    assert 1 not in line_numbers, "line 1 must not appear when start_line=2"
-    assert 4 not in line_numbers, "line 4 must not appear when end_line=3"
+    assert line_numbers == [2, 3], (
+        f"only the requested lines 2-3 must be returned, got {line_numbers}"
+    )
 
 
 @pytest.mark.asyncio
@@ -155,4 +155,36 @@ async def test_session_view_verbatim_content_preserved(tmp_path: Path) -> None:
     content_preview = output_lines[0].get("content_preview", "")
     assert unique_text in content_preview, (
         f"verbatim content must appear in output: {content_preview!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_view_shows_tool_call_arguments(tmp_path: Path) -> None:
+    """session_view surfaces a tool-call's arguments, not just the tool name.
+
+    Failure mode: the agent reads back a past tool call and sees only the tool name,
+    losing the file path / command / saved content it needs to act on.
+    """
+    sessions_dir = tmp_path / "sessions"
+    uuid8 = "toolargs"
+    args = json.dumps({"action": "create", "content": "User's deploy ID is DEPLOY_77."})
+    record = [
+        {"parts": [{"part_kind": "tool-call", "tool_name": "knowledge_manage", "args": args}]}
+    ]
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / f"{_SESSION_TIMESTAMP}-{uuid8}.jsonl").write_text(
+        json.dumps(record) + "\n", encoding="utf-8"
+    )
+
+    deps = _make_deps(tmp_path, sessions_dir=sessions_dir)
+    ctx = _ctx(deps)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_view(ctx, session_id=uuid8, start_line=1, end_line=1)
+
+    output_lines = result.metadata.get("lines", [])
+    assert output_lines, "expected the tool-call turn in output"
+    content_preview = output_lines[0].get("content_preview", "")
+    assert "DEPLOY_77" in content_preview, (
+        f"tool-call args must appear in the view: {content_preview!r}"
     )

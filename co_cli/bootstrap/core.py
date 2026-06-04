@@ -394,14 +394,15 @@ async def create_deps(
 
     index_store = _discover_index_backend(config, on_status, degradations)
 
+    from co_cli.session.store import SessionStore as _SS
+
+    session_store: SessionStore = _SS(config=config, sessions_dir=paths["sessions_dir"])
+
     memory_store: MemoryStore | None = None
-    session_store: SessionStore | None = None
     if index_store is not None:
         from co_cli.memory.store import MemoryStore as _MS
-        from co_cli.session.store import SessionStore as _SS
 
         memory_store = _MS(index=index_store, config=config)
-        session_store = _SS(index=index_store, config=config)
         try:
             _sync_memory_domain(memory_store, config, on_status, paths["memory_dir"])
         except RuntimeError:
@@ -487,26 +488,6 @@ def maybe_autospawn_dream(deps: CoDeps, frontend: TerminalFrontend) -> None:
         pass
     except Exception as exc:
         logger.warning("dream auto-spawn failed: %s", exc)
-
-
-def init_session_index(
-    deps: CoDeps,
-    current_session_path: Path,
-    frontend: TerminalFrontend,
-) -> None:
-    """Sync past sessions into the unified chunks pipeline.
-
-    The current session is excluded so the in-progress transcript is never
-    indexed mid-session.
-    """
-    if deps.session_store is None:
-        frontend.on_status("  Session index unavailable — memory store missing")
-        return
-    try:
-        deps.session_store.sync(deps.sessions_dir, exclude=current_session_path)
-    except Exception as exc:
-        logger.warning("Session sync failed: %s", exc)
-        frontend.on_status(f"  Session index sync failed — {exc}")
 
 
 @trace("restore_session")
