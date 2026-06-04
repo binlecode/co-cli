@@ -17,10 +17,16 @@ from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
 from co_cli.context.summarization import (
+    SUMMARY_BUDGET_CEIL,
+    SUMMARY_BUDGET_FLOOR,
+    SUMMARY_BUDGET_RATIO,
+    _build_summarizer_prompt,
     effective_request_tokens,
     estimate_message_tokens,
+    resolve_summary_budget,
     summarize_messages,
 )
+from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
@@ -213,6 +219,58 @@ def test_effective_request_tokens_default_floor_is_messages_only():
     """With the default floor (0), the estimate equals estimate_message_tokens (floor-blind deps)."""
     messages = [ModelRequest(parts=[UserPromptPart(content="hello world")])]
     assert effective_request_tokens(_DEPS, messages) == estimate_message_tokens(messages)
+
+
+# ---------------------------------------------------------------------------
+# Summary output budget — deterministic, no LLM
+# ---------------------------------------------------------------------------
+
+
+def _messages_of_token_size(approx_tokens: int) -> list[ModelRequest]:
+    """A single-message fixture whose estimate_message_tokens ≈ approx_tokens."""
+    return [ModelRequest(parts=[UserPromptPart(content="x" * (approx_tokens * CHARS_PER_TOKEN))])]
+
+
+def test_resolve_summary_budget_clamps_to_floor_for_small_region():
+    """A small dropped region resolves to the floor, not a tiny proportional value.
+
+    Failure mode: an unclamped budget hands a tiny region a sub-template cap
+    (e.g. 25 tokens) that truncates the summary mid-structure.
+    """
+    small = _messages_of_token_size(100)
+    assert resolve_summary_budget(small) == SUMMARY_BUDGET_FLOOR
+
+
+def test_resolve_summary_budget_clamps_to_ceil_for_large_region():
+    """A large dropped region resolves to the ceiling, not an unbounded value.
+
+    Failure mode: an unclamped budget lets a huge region drive the cap past the
+    noreason ceiling, defeating the whole proportional-bounding intent.
+    """
+    large = _messages_of_token_size(int(SUMMARY_BUDGET_CEIL / SUMMARY_BUDGET_RATIO) + 10_000)
+    assert resolve_summary_budget(large) == SUMMARY_BUDGET_CEIL
+
+
+def test_resolve_summary_budget_grows_with_region_in_mid_range():
+    """Between the floor and ceil knees the budget grows with the region — proving
+    the proportional branch runs rather than a flat clamp at either bound.
+
+    Failure mode: resolve_summary_budget ignores region size (returns a constant),
+    so the summary no longer tracks how much was compacted.
+    """
+    floor_knee = SUMMARY_BUDGET_FLOOR / SUMMARY_BUDGET_RATIO
+    ceil_knee = SUMMARY_BUDGET_CEIL / SUMMARY_BUDGET_RATIO
+    smaller = _messages_of_token_size(int(floor_knee + (ceil_knee - floor_knee) / 3))
+    larger = _messages_of_token_size(int(floor_knee + 2 * (ceil_knee - floor_knee) / 3))
+    budget_smaller = resolve_summary_budget(smaller)
+    budget_larger = resolve_summary_budget(larger)
+    assert SUMMARY_BUDGET_FLOOR < budget_smaller < budget_larger < SUMMARY_BUDGET_CEIL
+
+
+def test_build_summarizer_prompt_carries_target_line():
+    """The assembled prompt states the concrete token target so the model has a goal."""
+    prompt = _build_summarizer_prompt(None, personality_active=False, budget=3500)
+    assert "Target ~3500 tokens" in prompt
 
 
 # ---------------------------------------------------------------------------

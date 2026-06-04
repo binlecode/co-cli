@@ -71,6 +71,7 @@ from evals._timeouts import MULTI_TURN_COMPACT_BUDGET_S
 from evals._trace import record_turn
 
 from co_cli.context.orchestrate import run_turn
+from co_cli.context.summarization import SUMMARY_BUDGET_FLOOR
 from co_cli.observability import tracing
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-context-stability.md"
@@ -90,6 +91,14 @@ _NUM_TURNS = 10
 # would fire far more. Generous relative to _NUM_TURNS so normal LLM variance
 # never trips it; a true runaway blows past it.
 _MAX_PROACTIVE_PASSES = _NUM_TURNS * 3
+
+# Mandatory trailing template section (summarization.py _SUMMARIZE_PROMPT). It is
+# emitted even when the task just completed ("say so"), so it is the truncation
+# canary: if the hard output cap cut the summary mid-structure (the Mode-B failure
+# the summary-output-length-control plan prevents), this trailing header is the
+# first casualty. ## Critical Context is "Skip if none" — legitimately absent for
+# the high-entropy fixture — so it is logged, not gated.
+_MANDATORY_TRAILING_SECTION = "## Next Step"
 
 
 def _high_entropy_block(approx_tokens: int) -> str:
@@ -140,6 +149,81 @@ def _read_proactive_spans(spans_log: Path) -> list[dict[str, Any]]:
         if rec.get("name") == _PROACTIVE_SPAN_NAME:
             out.append(rec)
     return out
+
+
+def _summary_text_from_output(model_output: str | None) -> str:
+    """Extract the summary text from a child ``llm_call`` span's ``co.model.output``.
+
+    ``co.model.output`` is the compact-JSON serialization of the response parts
+    (``serialize_response`` → ``[{"type": "text", "content": "<summary>"}]``). Join
+    every text part's content so the trailing ``## Section`` headers are searchable.
+    """
+    if not model_output:
+        return ""
+    try:
+        parts = json.loads(model_output)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(parts, list):
+        return ""
+    return "\n".join(p.get("content", "") for p in parts if p.get("type") == "text")
+
+
+def _read_summarizer_passes(spans_log: Path) -> list[dict[str, Any]]:
+    """Per-summarizer-pass records correlated across the proactive_check / llm_call spans.
+
+    The summary output budget lands on the parent ``compaction.proactive_check`` span
+    (``co.compaction.summary.budget`` / ``.cap`` / ``.focus``); the produced summary and
+    its output token count land on the child ``llm_call <model>`` span
+    (``co.model.tokens.output`` / ``co.model.output``) — the two cannot share a span
+    (the llm_call span is pushed/popped inside ``llm_call``). Correlate the child to its
+    parent via ``parent_span_id`` and merge into one record per real summarizer pass.
+
+    Only passes carrying ``co.compaction.summary.budget`` are real summarizer calls —
+    static-marker / circuit-breaker passes never invoke the summarizer, so they have no
+    budget attribute and are excluded.
+    """
+    if not spans_log.exists():
+        return []
+    records = [
+        json.loads(line)
+        for line in spans_log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for rec in records:
+        if rec.get("name", "").startswith("llm_call ") and rec.get("parent_span_id"):
+            children_by_parent.setdefault(rec["parent_span_id"], []).append(rec)
+
+    passes: list[dict[str, Any]] = []
+    for rec in records:
+        if rec.get("name") != _PROACTIVE_SPAN_NAME:
+            continue
+        attrs = rec.get("attributes", {})
+        if "co.compaction.summary.budget" not in attrs:
+            continue
+        child = next(
+            (
+                c
+                for c in children_by_parent.get(rec["span_id"], [])
+                if c.get("attributes", {}).get("co.model.tokens.output") is not None
+            ),
+            None,
+        )
+        if child is None:
+            continue
+        child_attrs = child["attributes"]
+        passes.append(
+            {
+                "budget": attrs["co.compaction.summary.budget"],
+                "cap": attrs["co.compaction.summary.cap"],
+                "focus": bool(attrs.get("co.compaction.summary.focus")),
+                "output_tokens": child_attrs["co.model.tokens.output"],
+                "summary": _summary_text_from_output(child_attrs.get("co.model.output")),
+                "savings_pct": attrs.get("compaction.savings_pct"),
+            }
+        )
+    return passes
 
 
 def _setup_isolated_spans_log(run_dir: Path) -> Path:
@@ -380,6 +464,130 @@ async def case_cs_a_text_pressure_bounded(
 
 
 # ---------------------------------------------------------------------------
+# CS.B — summary_output_bounded_proportionally
+# ---------------------------------------------------------------------------
+
+
+async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseResult:
+    """Analyze CS.A's summarizer passes — output bounded by the proportional cap.
+
+    No extra LLM cost: re-reads the same spans CS.A produced. Each real summarizer
+    pass carries ``budget`` / ``cap`` / ``focus`` on its ``compaction.proactive_check``
+    span and ``output_tokens`` / the produced summary on its child ``llm_call`` span.
+
+    Hard assertions (within authority — the cap override is honored end-to-end through
+    Ollama, and the cap never truncates the structure):
+      - every summarizer ``output_tokens`` ≤ its derived ``cap`` (the proportional
+        ``max_tokens`` override flowed through the Ollama root-vs-max_completion_tokens
+        lockstep — a broken lockstep would let output run to the flat 8192 ceiling);
+      - every summary still contains its mandatory trailing ``## Next Step`` section
+        (the cap did not cut the structure short — the Mode-B no-truncation guarantee);
+      - at least one cap-applied pass ran with ``focus`` set (focus pushes length up
+        while the cap pushes down — the worst case for the no-truncation guarantee;
+        on the proactive path focus is the norm, so this exercises it).
+
+    Conditional / logged (not gated — depends on organic load, not authority):
+      - a small dropped region exercising the FLOOR budget (cap 2600): confirmed
+        no mid-template truncation if it occurs, logged as not-exercised otherwise;
+      - per-pass ``budget`` / ``cap`` / ``output_tokens`` and the overshoot ratio
+        (``output_tokens / budget``) and cap pressure (``output_tokens / cap``) — the
+        tuning signal for SUMMARY_CAP_OVERSHOOT_RATIO;
+      - ## Critical Context presence (skip-if-none, legitimately absent).
+    """
+    case_id = "CS.B"
+    t0 = time.monotonic()
+    passes = _read_summarizer_passes(spans_log)
+
+    floor_budget = min((p["budget"] for p in passes), default=None)
+
+    # Per-pass tuning telemetry (logged, never gated).
+    pass_lines: list[str] = []
+    for i, p in enumerate(passes):
+        overshoot = p["output_tokens"] / p["budget"] if p["budget"] else 0.0
+        cap_pressure = p["output_tokens"] / p["cap"] if p["cap"] else 0.0
+        has_critical = "## Critical Context" in p["summary"]
+        pass_lines.append(
+            f"  pass {i}: budget={p['budget']} cap={p['cap']} "
+            f"output_tokens={p['output_tokens']} focus={p['focus']} "
+            f"overshoot={overshoot:.2f} cap_pressure={cap_pressure:.2f} "
+            f"savings_pct={p['savings_pct']} critical_ctx={has_critical}"
+        )
+    for line in pass_lines:
+        logging.getLogger(__name__).info(line)
+
+    passed = True
+    reason = ""
+
+    if not passes:
+        # No real summarizer pass exercised the budget path (load did not open the
+        # gate / cross the trigger). The feature is unvalidated this run — a review
+        # signal, not a hard failure, since it is load-dependent not authority-bound.
+        verdict = Verdict.SOFT_FAIL
+        reason = (
+            "no real summarizer pass observed — budget bounding not exercised this run "
+            "(load did not trigger a gated proactive summary); TASK-3 unit tests own the "
+            "deterministic budget/cap guarantee"
+        )
+    else:
+        over_cap = [p for p in passes if p["output_tokens"] > p["cap"]]
+        truncated = [p for p in passes if _MANDATORY_TRAILING_SECTION not in p["summary"]]
+        focus_passes = [p for p in passes if p["focus"]]
+
+        if over_cap:
+            passed = False
+            worst = max(over_cap, key=lambda p: p["output_tokens"] - p["cap"])
+            reason = (
+                f"{len(over_cap)} summarizer pass(es) exceeded the proportional cap "
+                f"(worst: output_tokens={worst['output_tokens']} > cap={worst['cap']}) "
+                "— the max_tokens override was NOT honored (Ollama lockstep broken)"
+            )
+        elif truncated:
+            passed = False
+            reason = (
+                f"{len(truncated)} summarizer pass(es) missing the mandatory trailing "
+                f"'{_MANDATORY_TRAILING_SECTION}' section — the cap truncated the summary "
+                "mid-structure (Mode-B failure)"
+            )
+        elif not focus_passes:
+            # Focus is the norm on the proactive path; its total absence means the
+            # worst-case (focus-up vs cap-down) was not exercised — review signal.
+            verdict = Verdict.SOFT_FAIL
+            reason = (
+                "no cap-applied pass ran with focus set — the focus-vs-cap worst case "
+                "was not exercised this run (focus is normally the proactive-path norm)"
+            )
+            passed = True
+        if passed and reason == "":
+            verdict = Verdict.PASS
+        elif passed:
+            verdict = Verdict.SOFT_FAIL
+        else:
+            verdict = Verdict.FAIL
+
+    # Diagnostics — always surfaced so the run is never read as a silent pass.
+    floor_note = (
+        f"FLOOR-budget pass exercised (budget={SUMMARY_BUDGET_FLOOR}, no mid-template truncation)"
+        if floor_budget == SUMMARY_BUDGET_FLOOR
+        else f"no FLOOR-budget pass this run (smallest budget={floor_budget})"
+    )
+    focus_count = sum(1 for p in passes if p["focus"])
+    diag = f"summarizer_passes={len(passes)} focus_passes={focus_count} | {floor_note}" + (
+        "\n" + "\n".join(pass_lines) if pass_lines else ""
+    )
+    reason = diag if not reason else f"{reason} || {diag}"
+
+    duration = time.monotonic() - t0
+    result = CaseResult(
+        name=case_id,
+        verdict=verdict,
+        duration_s=duration,
+        reason=reason,
+    )
+    run.append(result)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -433,6 +641,14 @@ async def main() -> int:
             print(
                 f"[context-stability] {case_a.name}: "
                 f"{'PASS' if case_a.passed else 'FAIL'} — {case_a.reason or 'ok'}"
+            )
+
+            # CS.B re-reads the spans CS.A just produced — no extra LLM cost.
+            case_b = await case_cs_b_summary_output_bounded(run, spans_log)
+            cases.append(case_b)
+            print(
+                f"[context-stability] {case_b.name}: "
+                f"{case_b.verdict.value.upper()} — {case_b.reason or 'ok'}"
             )
 
             iso = run.iso

@@ -68,6 +68,7 @@ _LENGTH_RETRY_BOOST = 2
 assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
 
 from co_cli.config.core import REASONING_DISPLAY_SUMMARY
+from co_cli.config.llm import cap_output_tokens
 from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
 from co_cli.deps import CoDeps
@@ -628,16 +629,10 @@ def _length_retry_settings(
     if not any(isinstance(p, TextPart) for p in result.response.parts):
         return None
     boosted = min(current_max * _LENGTH_RETRY_BOOST, _LENGTH_RETRY_CEILING)
-    new_settings: dict = {**active_settings, "max_tokens": boosted}
-    # Ollama ignores max_completion_tokens (pydantic-ai's mapping of max_tokens) and instead
-    # honors max_tokens when injected via extra_body (merged to the request root by the openai
-    # client). Boost max_tokens inside extra_body in lockstep so the continuation segment
-    # actually gets the expanded output budget on Ollama.
-    extra = dict(new_settings.get("extra_body") or {})
-    if "max_tokens" in extra:
-        extra["max_tokens"] = boosted
-        new_settings["extra_body"] = extra
-    return new_settings  # type: ignore[return-value]
+    # cap_output_tokens applies the Ollama lockstep (scalar + extra_body["max_tokens"]
+    # mirror) so the boosted output budget actually reaches Ollama, which honors
+    # max_tokens only at the request root via extra_body, not OpenAI's max_completion_tokens.
+    return cap_output_tokens(active_settings, boosted)
 
 
 def _history_with_pending_user_input(turn_state: _TurnState) -> list[ModelMessage]:

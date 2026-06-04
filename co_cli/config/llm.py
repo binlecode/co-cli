@@ -68,7 +68,7 @@ _LLM_SETTINGS: dict[str, Any] = {
                 },
             },
             # Noreason: used by summarization (context/summarization.py),
-            # memory merge (memory/dream.py), and judge calls (evals/_judge.py).
+            # memory merge (daemons/dream/_housekeeping.py), and judge calls (evals/_judge.py).
             # think=False + reasoning_effort=none suppresses thinking on the
             # OpenAI-compat path — validated in production via the OpenAI SDK.
             # temperature=0.3: enough entropy for fluent multi-section prose
@@ -188,6 +188,27 @@ def _gemini_settings(inference: dict[str, Any]) -> ModelSettings:
     if thinking_config := inference.get("thinking_config"):
         kwargs["google_thinking_config"] = dict(thinking_config)
     return GoogleModelSettings(**kwargs)
+
+
+def cap_output_tokens(settings: ModelSettings, max_tokens: int) -> ModelSettings:
+    """Return a copy of *settings* with the output cap set to *max_tokens*, in lockstep.
+
+    Centralizes the Ollama lockstep rule (otherwise only inline in the ``_LLM_SETTINGS``
+    literals): Ollama honors ``max_tokens`` only at the JSON request root via ``extra_body``,
+    not OpenAI's ``max_completion_tokens`` (which the scalar maps to), so the scalar and
+    ``extra_body["max_tokens"]`` must move together. The ``extra_body`` mirror is set ONLY
+    when ``extra_body`` already carries ``max_tokens`` (the Ollama shape); Gemini settings
+    have no ``extra_body`` and get only the scalar.
+
+    Returns a plain dict copy. ``GoogleModelSettings`` is a TypedDict whose type is erased at
+    runtime regardless, and pydantic-ai consumes it via cast + ``.get()`` — so the plain-dict
+    return is intentional and safe for the Google path. Does not mutate the input.
+    """
+    out = dict(settings)
+    out["max_tokens"] = max_tokens
+    if isinstance(out.get("extra_body"), dict) and "max_tokens" in out["extra_body"]:
+        out["extra_body"] = {**out["extra_body"], "max_tokens": max_tokens}
+    return out  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------

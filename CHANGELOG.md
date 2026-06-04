@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.300]
+
+### summary-output-length-control — bound the compaction summary proportionally to what it compresses
+
+The summarizer's output was capped only by the flat noreason ceiling (8192 on Ollama), independent of input size, with no length target in the prompt — so a small dropped region could be replaced by a near-ceiling summary (near-zero net savings) or a rambling one could be hard-truncated mid-structure, silently dropping the trailing `## Next Step` / `## Critical Context` sections. The summary is now bounded proportionally to the region it compresses.
+
+- **Lockstep cap helper (TASK-1).** New `cap_output_tokens(settings, max_tokens)` in `config/llm.py` centralizes the Ollama lockstep rule (scalar `max_tokens` + `extra_body["max_tokens"]` move together; Ollama honors only the root value via `extra_body`, not OpenAI's `max_completion_tokens`). Gemini gets the scalar only; pure, non-mutating.
+- **Proportional budget + prompt target (TASK-2).** `resolve_summary_budget(messages)` = `clamp(0.25 × estimate_tokens, 2000, 6000)` drives two levers: a `Target ~N tokens` line in the prompt (replaces the bare "Be concise") and a hard `max_tokens = min(ceil(budget × 1.3), noreason_ceiling)` override on the summarizer `llm_call` (worst case 7800 < 8192, so the cap never raises the ceiling). FLOOR=2000 keeps the worst-case cap (2600) clear of the template scaffold + mandatory verbatim quotes, so a small region never truncates mid-structure. Budget/cap/focus surfaced on the parent compaction span for trace-driven tuning. memory-merge and judge calls keep the unmodified noreason settings — only the summarizer is capped.
+- **Lockstep dedup (review follow-up).** `orchestrate.py`'s length-retry path (`_length_retry_settings`) now reuses `cap_output_tokens` instead of a third inline copy of the lockstep rule.
+- **Tests + eval.** Deterministic functional tests for the clamp branches, the lockstep helper (real config-derived settings), and the prompt target line; `eval_context_stability.py` gains case CS.B — re-reads the existing run's spans (no extra LLM cost) to assert every summarizer `output_tokens ≤ cap` end-to-end, trailing `## Next Step` survives, and the FLOOR + focus worst cases are exercised, logging the `budget/cap/output_tokens` tuning triple.
+- **Docs synced** — `compaction.md §2.6` gains a "Summary output budget" subsection with the as-shipped constants.
+
 ## [0.8.298]
 
 ### session-search-ripgrep — session recall moves from the hybrid index to file-based ripgrep

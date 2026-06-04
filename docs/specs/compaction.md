@@ -566,6 +566,25 @@ After the turn, `_finalize_turn()` reads `compaction_applied_this_turn` and pass
   ## Critical Context        †
 ```
 
+**Summary output budget.** The summarizer output is bounded *proportionally to the region it compresses* (`resolve_summary_budget` in `summarization.py`), instead of drifting toward the flat noreason ceiling (8192 on Ollama):
+
+```
+budget = clamp(SUMMARY_BUDGET_RATIO × estimate_message_tokens(dropped), FLOOR, CEIL)
+```
+
+`budget` drives two levers:
+- **Prompt target (soft)** — the prompt carries `Target ~{budget} tokens` (replaces the old bare "Be concise"), giving the model a goal rather than letting it fill toward the ceiling.
+- **Hard cap (load-bearing)** — `max_tokens = min(ceil(budget × SUMMARY_CAP_OVERSHOOT_RATIO), noreason_ceiling)` passed to the summarizer `llm_call` via `model_settings` (`cap_output_tokens` in `config/llm.py`), applied in Ollama lockstep (scalar + `extra_body["max_tokens"]` together; Gemini sets only the scalar). memory-merge and judge calls keep the unmodified `settings_noreason` — only the summarizer call is capped. The cushion is overshoot tolerance, not a bare cut-off margin — a named constant tunable from traces (the summarizer's parent `compaction.proactive_check` span carries `co.compaction.summary.budget` / `.cap` / `.focus`; the child `llm_call` span carries `co.model.tokens.output`).
+
+| Const | Value | Effect |
+|---|---|---|
+| `SUMMARY_BUDGET_RATIO` | 0.25 | aim the summary at ~¼ of the compressed region |
+| `SUMMARY_BUDGET_FLOOR` | 2 000 | cap floor = 2 000 × 1.3 = **2 600** — clears the fixed-section template scaffold + the two mandatory verbatim quotes (`## Active Task`, `## Next Step`), so a small region never truncates mid-structure |
+| `SUMMARY_BUDGET_CEIL` | 6 000 | cap ceil = 6 000 × 1.3 = **7 800 < 8 192** noreason ceiling — bloat bounded, override never exceeds the hard ceiling |
+| `SUMMARY_CAP_OVERSHOOT_RATIO` | 1.3 | overshoot cushion: hard cap = `budget × this`. Deliberately loose (a bare cut-off margin would be ~1.04–1.13); named for trace-driven tuning |
+
+(Origin and full peer comparison: `docs/reference/RESEARCH-summarization-prompting-peer-survey.md`.)
+
 **Circuit breaker.**
 
 | `compaction_skip_count` | Behavior |

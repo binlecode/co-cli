@@ -11,6 +11,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
 
+from co_cli.config.llm import LlmSettings, cap_output_tokens
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.call import llm_call
 from co_cli.llm.factory import build_model
@@ -79,6 +80,44 @@ async def test_reasoning_model_settings_drive_real_call():
             model_settings=settings,
         )
     assert "PONG" in result.upper()
+
+
+# ---------------------------------------------------------------------------
+# cap_output_tokens — deterministic, no LLM (real config-derived settings)
+# ---------------------------------------------------------------------------
+
+
+def test_cap_output_tokens_locksteps_real_ollama_noreason():
+    """Capping the real Ollama noreason settings moves the scalar AND the
+    extra_body mirror together, and leaves the caller's base settings untouched.
+
+    Failure mode: the override sets only the OpenAI scalar (which Ollama maps to
+    max_completion_tokens and ignores) while extra_body['max_tokens'] keeps the
+    8192 ceiling — so the summary is never actually capped.
+    """
+    base = SETTINGS_NO_MCP.llm.noreason_model_settings()
+    capped = cap_output_tokens(base, 5000)
+    assert capped["max_tokens"] == 5000
+    assert capped["extra_body"]["max_tokens"] == 5000
+    # The shared noreason settings must not be mutated — memory-merge / judge
+    # calls reuse this object and must keep the unmodified ceiling.
+    assert base["max_tokens"] != 5000
+    assert base["extra_body"]["max_tokens"] != 5000
+
+
+def test_cap_output_tokens_gemini_noreason_scalar_only():
+    """Capping the real Gemini noreason settings sets only the scalar — Gemini has
+    no extra_body, and the helper must not invent one.
+
+    Failure mode: an extra_body mirror is added unconditionally, corrupting the
+    Gemini settings shape pydantic-ai's Google path expects.
+    """
+    gemini_noreason = LlmSettings(
+        provider="gemini", model="gemini-3-flash-preview"
+    ).noreason_model_settings()
+    capped = cap_output_tokens(gemini_noreason, 5000)
+    assert capped["max_tokens"] == 5000
+    assert "extra_body" not in capped
 
 
 @pytest.fixture

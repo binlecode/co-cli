@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -23,11 +24,13 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from co_cli.config.llm import cap_output_tokens
 from co_cli.config.observability import redact_text
 from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
+from co_cli.observability.tracing import current_span
 
 # ---------------------------------------------------------------------------
 # Token estimation
@@ -65,6 +68,46 @@ def estimate_message_tokens(messages: list[ModelMessage]) -> int:
 # ---------------------------------------------------------------------------
 # Budget resolution
 # ---------------------------------------------------------------------------
+
+# Summary output budget — bounds the summarizer output proportionally to the
+# region it compresses, instead of letting it drift toward the flat noreason
+# ceiling (8192 on Ollama). hermes-informed (its _SUMMARY_RATIO=0.20,
+# _MIN_SUMMARY_TOKENS=2000, max_tokens=budget*1.3), with RATIO nudged up and
+# CEIL pulled down so the worst-case cap stays under co's 8192 noreason ceiling.
+# All tunable from traces (see resolve_summary_budget / summarize_messages) —
+# adjust the constants, not the mechanism.
+#
+# Aim the summary at ~1/4 of the compressed region.
+SUMMARY_BUDGET_RATIO = 0.25
+# Floor mirrors hermes _MIN_SUMMARY_TOKENS; high enough that the worst-case cap
+# (2000 * 1.3 = 2600) comfortably clears the fixed-section template scaffold plus
+# the two mandatory verbatim quotes (## Active Task, ## Next Step), so a small
+# region never truncates mid-structure (the Mode-B failure this guards against).
+SUMMARY_BUDGET_FLOOR = 2_000
+# Ceil pulled down from hermes' 12000 to fit co's 8192 ceiling: 6000 * 1.3 = 7800 < 8192.
+SUMMARY_BUDGET_CEIL = 6_000
+# Overshoot-tolerance cushion (not a bare cut-off margin — a margin would be
+# ~1.04-1.13): hard cap = budget * this. Deliberately loose because over-running
+# a summary target slightly is cheap while truncating a trailing section is not.
+# Tunable from traces (output_tokens / budget = overshoot); headroom to ~1.36
+# before CEIL * ratio reaches 8192.
+SUMMARY_CAP_OVERSHOOT_RATIO = 1.3
+# Defensive fallback for the noreason output ceiling when a future noreason
+# settings entry omits max_tokens (every current config carries it: Ollama 8192,
+# Gemini 16384). Matches the Ollama default so a missing entry never raises the cap.
+_NOREASON_CEILING_FALLBACK = 8_192
+
+
+def resolve_summary_budget(messages: list[ModelMessage]) -> int:
+    """Token budget for a summary of *messages*, proportional to their size.
+
+    ``clamp(SUMMARY_BUDGET_RATIO * estimate_message_tokens(messages), FLOOR, CEIL)``.
+    Drives both the prompt's ``Target ~N tokens`` line (a goal) and the per-call
+    ``max_tokens`` cap (load-bearing), so the recap tracks the compacted region
+    instead of drifting toward the flat noreason ceiling.
+    """
+    raw = SUMMARY_BUDGET_RATIO * estimate_message_tokens(messages)
+    return max(SUMMARY_BUDGET_FLOOR, min(SUMMARY_BUDGET_CEIL, math.ceil(raw)))
 
 
 def resolve_compaction_budget(deps: CoDeps) -> int:
@@ -159,9 +202,18 @@ _SUMMARIZE_PROMPT = (
     "section has no real content from the conversation, OMIT THE SECTION ENTIRELY — "
     "do NOT write the header followed by 'None.', '[None]', 'N/A', or any "
     "placeholder. A section header with placeholder text is WRONG. Simply omit it.\n\n"
-    "Be concise — this replaces the original messages to save context space.\n"
-    "Prioritize recent actions and unfinished work over completed early steps."
 )
+
+
+def _length_priority_tail(budget: int) -> str:
+    """Length-control tail: a concrete token target (a goal, not just a ceiling)
+    plus the recency-priority guidance. Replaces the old bare "Be concise" so the
+    model aims at a budget proportional to the compacted region rather than
+    drifting toward the flat output ceiling."""
+    return (
+        f"Target ~{budget} tokens — this replaces the original messages to save context space.\n"
+        "Prioritize recent actions and unfinished work over completed early steps."
+    )
 
 
 _PERSONALITY_COMPACTION_ADDENDUM = (
@@ -232,13 +284,16 @@ def serialize_messages(
 def _build_summarizer_prompt(
     context: str | None,
     personality_active: bool,
+    budget: int,
     focus: str | None = None,
 ) -> str:
     """Assemble the final summarizer prompt from _SUMMARIZE_PROMPT + optional context + personality.
 
-    Assembly order: focus → template → context addendum → personality addendum.
+    Assembly order: focus → template → length target → context addendum → personality addendum.
     Personality is always last (tone modifier); context provides factual input.
     Focus narrows scope and leads the prompt so the LLM prioritises it.
+    ``budget`` sets the ``Target ~N tokens`` line so the model aims at a length
+    proportional to the compacted region.
     """
     parts = []
     if focus:
@@ -249,6 +304,7 @@ def _build_summarizer_prompt(
             f"Allocate ~60-70% of the summary to the focus topic.\n\n"
         )
     parts.append(_SUMMARIZE_PROMPT)
+    parts.append(_length_priority_tail(budget))
     if context:
         parts.append(f"\n\n=== ADDITIONAL CONTEXT ===\n{context}\n=== END ADDITIONAL CONTEXT ===")
     if personality_active:
@@ -272,9 +328,34 @@ async def summarize_messages(
 
     Used by both the sliding-window processor and ``/compact``.
     Returns the summary text, or raises on failure (caller handles fallback).
+
+    Output length is bounded proportionally to the region being compressed:
+    ``budget = resolve_summary_budget(messages)`` drives the prompt's
+    ``Target ~N tokens`` line, and ``cap = min(budget * overshoot, noreason ceiling)``
+    hard-caps the call via ``cap_output_tokens`` (Ollama lockstep preserved) — so
+    the recap no longer drifts toward the flat 8192 ceiling regardless of how
+    little was compacted. memory-merge and judge calls keep the unmodified
+    ``settings_noreason``; only this summarizer call passes a capped override.
     """
-    task_prompt = _build_summarizer_prompt(context, personality_active, focus)
+    budget = resolve_summary_budget(messages)
+    base_ceiling = deps.model.settings_noreason.get("max_tokens", _NOREASON_CEILING_FALLBACK)
+    cap = min(math.ceil(budget * SUMMARY_CAP_OVERSHOOT_RATIO), base_ceiling)
+    # budget/cap land on the active parent span (e.g. compaction.proactive_check),
+    # not the llm_call child span where output_tokens lives — they cannot share a
+    # span (the llm_call span is pushed/popped inside llm_call). Same trace, so
+    # output_tokens/budget (overshoot) and output_tokens vs cap (cap pressure) are
+    # recoverable via `co trace`. This is the signal for tuning SUMMARY_CAP_OVERSHOOT_RATIO.
+    span = current_span()
+    span.set_attribute("co.compaction.summary.budget", budget)
+    span.set_attribute("co.compaction.summary.cap", cap)
+    # focus pushes summary length UP (the FOCUS directive allocates ~60-70% to the
+    # topic) while the cap pushes DOWN — the worst case for the no-truncation
+    # guarantee. Surfaced so a focus-active cap-bound pass is identifiable in traces.
+    span.set_attribute("co.compaction.summary.focus", bool(focus))
+
+    task_prompt = _build_summarizer_prompt(context, personality_active, budget, focus)
     serialized = serialize_messages(messages, deps.config.observability.redact_patterns)
+    settings = cap_output_tokens(deps.model.settings_noreason, cap)
     # Needed only for the /compact command path, which has no outer segment timeout.
     # On the proactive path the segment timeout already caps this call.
     async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
@@ -282,4 +363,5 @@ async def summarize_messages(
             deps,
             f"TURNS TO SUMMARIZE:\n{serialized}",
             instructions=f"{_SUMMARIZER_SYSTEM_PROMPT}\n\n{task_prompt}",
+            model_settings=settings,
         )
