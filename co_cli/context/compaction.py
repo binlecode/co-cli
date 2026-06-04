@@ -278,13 +278,18 @@ async def compact_messages(
     bounds: CompactionBoundaries,
     *,
     focus: str | None = None,
+    summarize: bool = True,
 ) -> tuple[list[ModelMessage], str | None]:
     """Compact ``messages[head_end:tail_start]`` into a marker; assemble result.
 
-    Slices by ``bounds``, runs the gated summarizer over the dropped middle,
-    builds the marker, and assembles ``head | marker | [todo_snapshot] |
-    [deferred-tool discoveries] | tail``. Returns ``(result, summary_text)``;
-    ``summary_text`` is None when the summarizer fell back to a static marker.
+    Slices by ``bounds`` and assembles ``head | marker | [todo_snapshot] |
+    [deferred-tool discoveries] | tail``. When ``summarize`` is True (default),
+    runs the gated summarizer over the dropped middle so the marker carries an
+    LLM recap; when ``summarize`` is False, the summarizer is skipped entirely
+    and ``summary_text`` stays None, driving ``build_compaction_marker`` down
+    its static-marker branch (no LLM call). Returns ``(result, summary_text)``;
+    ``summary_text`` is None when the summarizer fell back to a static marker
+    *or* when ``summarize=False`` forced the static path.
 
     Does NOT write runtime — the caller commits via ``commit_compaction`` as
     its last step (Task-3 invariant: any exception before commit leaves
@@ -294,7 +299,7 @@ async def compact_messages(
     head = messages[:head_end]
     dropped = messages[head_end:tail_start]
     tail = messages[tail_start:]
-    summary_text = await _gated_summarize_or_none(ctx, dropped, focus=focus)
+    summary_text = await _gated_summarize_or_none(ctx, dropped, focus=focus) if summarize else None
     has_tail = len(tail) > 0
     marker = build_compaction_marker(len(dropped), summary_text, has_tail=has_tail)
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
@@ -336,21 +341,31 @@ def _record_proactive_outcome(
     summary_text: str | None,
     *,
     token_count: int,
+    summary_skipped: bool = False,
 ) -> None:
     """Apply proactive-specific post-compaction policy.
 
-    Fires the closing status callback (3-way: success / no-model / summarizer-
-    failed), computes savings using ``token_count`` (the trigger's
-    ``max(local, reported)``), emits execution OTEL attributes onto the
-    wrapper span, updates the anti-thrash counter, then commits runtime as
-    the final step. Any exception before ``commit_compaction`` leaves runtime
-    untouched — single-writer atomicity for the "applied" fields.
+    Fires the closing status callback, computes savings using ``token_count``
+    (the trigger's ``max(local, reported)``), emits execution OTEL attributes
+    onto the wrapper span, updates the anti-thrash counter, then commits
+    runtime as the final step. Any exception before ``commit_compaction``
+    leaves runtime untouched — single-writer atomicity for the "applied"
+    fields.
+
+    The closing status callback has four cases. ``summary_skipped`` is True
+    only on the anti-thrash static fallback, where the summarizer was *never
+    run by design* — so it must NOT report "Summarizer failed". A successful
+    summary reports "Compacted."; a missing model reports unavailability; a
+    genuine summarizer failure (model present, summary came back None, not a
+    deliberate skip) keeps the "Summarizer failed" wording.
     """
     cfg = ctx.deps.config.compaction
 
     if (cb := ctx.deps.runtime.status_callback) is not None:
         if summary_text is not None:
             cb("Compacted.")
+        elif summary_skipped:
+            cb("Compacted (static marker).")
         elif ctx.deps.model is None:
             cb("LLM compaction unavailable — used static marker.")
         else:
@@ -458,8 +473,11 @@ async def proactive_window_processor(
     Registered as the last history processor on the orchestrator agent. Fires
     before each ModelRequestNode when token pressure exceeds compaction_ratio.
     Anti-thrash gate engages after ``proactive_thrash_window`` consecutive low-
-    yield runs; once tripped, the system stops auto-compacting and surfaces
-    a user-actionable hint pointing at /compact and /new.
+    yield runs; once tripped, compaction degrades to a cheap static-marker pass
+    (drop the region, insert a marker, no LLM summary) instead of paying for
+    another low-yield summarization — it never stops trimming. "Whether to
+    compact at all" is owned solely by the below-threshold check and the
+    boundary-``None`` guard.
 
     Fail-open: any Exception returns ``messages`` unchanged so the agent loop
     proceeds. asyncio.CancelledError (via BaseException) propagates.
@@ -538,14 +556,21 @@ async def proactive_window_processor(
             len(messages),
         )
 
+        # Anti-thrash gate: after proactive_thrash_window consecutive low-yield
+        # summary passes, demote to a cheap static-marker compaction instead of
+        # paying for another LLM summary. The gate flips summarize off — it
+        # never short-circuits the trim. The shared boundary→compact→record tail
+        # below runs for both paths so the None-boundary guard, token_count, and
+        # span writes stay uniform; only the summarize flag (and the resulting
+        # marker content) differs.
+        summarize = True
         if (
             ctx.deps.runtime.consecutive_low_yield_proactive_compactions
             >= cfg.proactive_thrash_window
         ):
-            log.info("Compaction: anti-thrashing gate active, skipping")
-            span.set_attribute("compaction.fired", False)
+            log.info("Compaction: anti-thrashing gate active, using static marker")
             span.set_attribute("compaction.skip_reason", "anti_thrash_gate")
-            return messages
+            summarize = False
 
         bounds = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
         if bounds is None:
@@ -573,11 +598,20 @@ async def proactive_window_processor(
         )
 
         focus = _resolve_proactive_focus(ctx, messages)
-        result, summary_text = await compact_messages(ctx, messages, bounds, focus=focus)
+        result, summary_text = await compact_messages(
+            ctx, messages, bounds, focus=focus, summarize=summarize
+        )
         if summary_text is not None:
             log.info("Sliding window: summarised %d messages inline", dropped_count)
 
-        _record_proactive_outcome(ctx, messages, result, summary_text, token_count=token_count)
+        _record_proactive_outcome(
+            ctx,
+            messages,
+            result,
+            summary_text,
+            token_count=token_count,
+            summary_skipped=not summarize,
+        )
         return result
     except Exception:
         log.warning("Mid-turn compaction failed — skipping", exc_info=True)

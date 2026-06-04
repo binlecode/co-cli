@@ -4,7 +4,7 @@ Production path: co_cli/context/compaction.py:proactive_window_processor
 
 Test 1: no LLM — below threshold, returns early.
 Test 2: LLM call — above threshold, compaction applied.
-Test 3: no LLM — anti-thrash gate fires, returns early.
+Test 3: no LLM — anti-thrash gate fires, falls back to a static-marker compaction.
 Tests 4-8: _summarization_gate_open circuit breaker cadence (counts 0-2, 3-12, 13, 14-22, 23).
 """
 
@@ -24,6 +24,8 @@ from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 from co_cli.context.compaction import (
     _COMPACTION_BREAKER_PROBE_EVERY,
     _COMPACTION_BREAKER_TRIP,
+    STATIC_MARKER_PREFIX,
+    SUMMARY_MARKER_PREFIX,
     CompactionFallbackReason,
     _record_proactive_outcome,
     _resolve_proactive_focus,
@@ -134,12 +136,19 @@ async def test_processor_applies_compaction_when_above_threshold() -> None:
 
 
 @pytest.mark.asyncio
-async def test_anti_thrash_gate_skips_compaction_after_consecutive_low_yield() -> None:
-    """Processor returns messages unchanged when the anti-thrash gate is active.
+async def test_anti_thrash_gate_falls_back_to_static_marker() -> None:
+    """Anti-thrash gate falls back to a static-marker compaction, never a no-op.
 
-    No LLM call — gate fires before the planner is reached.
-    Failure mode: gate mis-wired → even when thrash_window is exceeded, the
-    summarizer still fires, burning context budget on low-yield passes.
+    No LLM call — when the gate trips, the summarizer is skipped (summarize=False)
+    and the dropped region is replaced by a static marker. This is the
+    deterministic, Ollama-free path: no ensure_ollama_warm, no asyncio.timeout.
+    The static marker (not a summary marker) is the observable proof that no
+    summarization ran, and the closing status string truthfully reports an
+    intentional static-marker compaction — never the "Summarizer failed" wording,
+    which would be a lie for a deliberate skip where the summarizer never ran.
+
+    Failure mode: gate mis-wired back to the old no-op → text/reasoning context
+    grows unbounded toward the hard limit, recovered only after the model errors.
     """
     settings = _tight_settings()
     deps = CoDeps(
@@ -149,17 +158,41 @@ async def test_anti_thrash_gate_skips_compaction_after_consecutive_low_yield() -
         session=CoSessionState(),
         model_max_ctx=200,
     )
-    # Trip the anti-thrash gate to exactly the trip threshold
+    # Trip the anti-thrash gate to exactly the trip threshold.
     deps.runtime.consecutive_low_yield_proactive_compactions = (
         settings.compaction.proactive_thrash_window
     )
+    captured: list[str] = []
+    deps.runtime.status_callback = captured.append
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
 
     result = await proactive_window_processor(ctx, messages)
 
-    assert result is messages, "Gate must return original messages unchanged"
-    assert deps.runtime.compaction_applied_this_turn is False
+    # The bug this fix kills: the gate used to no-op, leaving the history
+    # untrimmed so it grew toward the hard limit. A shorter history proves the
+    # gate now trims instead of passing the conversation through unchanged.
+    assert len(result) < len(messages), "Anti-thrash gate must trim the history, not no-op"
+
+    # A static marker (not a summary marker) in the dropped region's slot is the
+    # observable proof that the expensive summarizer never ran on this path.
+    marker_contents = [
+        part.content
+        for msg in result
+        for part in getattr(msg, "parts", [])
+        if isinstance(getattr(part, "content", None), str)
+    ]
+    assert any(c.startswith(STATIC_MARKER_PREFIX) for c in marker_contents), (
+        "Dropped region must be replaced by a static marker (cheap, no LLM)"
+    )
+    assert not any(c.startswith(SUMMARY_MARKER_PREFIX) for c in marker_contents), (
+        "No summary marker — the summarizer must not run on the anti-thrash path"
+    )
+
+    # The user-facing status must reflect an intentional static-marker compaction,
+    # not a summarizer failure — the summarizer was skipped by design here.
+    assert "Compacted (static marker)." in captured
+    assert "Summarizer failed — used static marker." not in captured
 
 
 # --- Floor-aware trigger tests (ISSUE-1.5) ---

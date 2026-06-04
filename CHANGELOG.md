@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.296]
+
+### antithrash-static-marker-fallback — anti-thrash gate degrades to a static marker, never a no-op (ISSUE-2)
+
+The proactive anti-thrash gate was a compaction kill-switch: after `proactive_thrash_window` consecutive low-yield summary passes it returned the conversation unchanged, so text/reasoning context (uncapped by the tool-return evict path) grew toward the 64k hard limit until the model errored. This demotes the gate from a *trim-or-not* switch to a *summary-vs-static-marker* choice — it never stops trimming.
+
+- **Static-marker fallback (TASK-1/2).** New keyword-only `compact_messages(..., summarize=True)`; when `False` the gated summarizer is skipped entirely and the dropped region is replaced by the existing `static_marker` (no LLM call), reusing the marker/`todo_snapshot`/deferred-tool/tail assembly unchanged. `proactive_window_processor`'s anti-thrash branch now sets `summarize=False` and falls through the shared `plan_compaction_boundaries → compact_messages → _record_proactive_outcome` tail instead of `return messages`. "Whether to compact at all" is now owned solely by the threshold check and the boundary-`None` guard.
+- **Truthful status (CD-M-1).** A `summary_skipped` flag threads into `_record_proactive_outcome` so the deliberate-skip path reports **"Compacted (static marker)."** instead of the misleading "Summarizer failed — used static marker." Circuit-breaker state (`compaction_skip_count`) is untouched on this path.
+- **Loop-stability eval (TASK-4).** New `evals/eval_context_stability.py` — real-LLM UAT driving sustained text/reasoning pressure at the real 64k window; asserts the proactive loop stays bounded (no overflow, every fired pass reduces tokens, post-pass below trigger). Anti-thrash trip is gate-conditional (non-engagement logged); the deterministic tripped-state guarantee lives in the unit test.
+- **Centralized eval settings.** New `evals/_settings.py` — `EVAL_MAX_CTX` sourced from `load_config().llm.max_ctx` with an `eval_max_ctx(override)` lever, so evals share one system-sourced settings surface and never coin a window inline.
+- **Specs synced.** `docs/specs/compaction.md` updated from the old banner/no-op model to static-marker demotion (`summarize=False`).
+
 ## [0.8.294]
 
 ### context-stability — floor-aware compaction trigger + proportional tail (ISSUE-1/1.5)
