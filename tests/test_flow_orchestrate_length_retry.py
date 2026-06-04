@@ -17,7 +17,7 @@ from tests._timeouts import (
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.core import build_native_toolset
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
-from co_cli.context.orchestrate import run_turn
+from co_cli.context.orchestrate import _check_output_limits, _TurnState, run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend
 from co_cli.llm.factory import build_model
@@ -91,3 +91,38 @@ async def test_length_retry_completes_truncated_noreason_response() -> None:
         f"expected at least one length-retry segment; "
         f"got {len(model_responses)} ModelResponse(s) in history"
     )
+
+
+@pytest.mark.asyncio
+async def test_overflow_warning_uses_provider_input_count() -> None:
+    """Overflow warning fires off the provider's real input count, not a chars/4 estimate.
+
+    After dropping ``last_reported_input_tokens``, ``_check_output_limits`` re-sources the
+    final request's input tokens straight from the ``AgentRunResult``'s last ``ModelResponse``
+    (provider ground-truth). Run a real turn, then shrink ``model_max_ctx`` below the
+    provider-reported input so the ratio crosses 1.0 and the "Context limit reached" status
+    fires carrying that exact provider count.
+    """
+    deps = _make_deps()
+    await ensure_ollama_warm(TEST_LLM.model)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        result = await _AGENT.run(
+            "Say hello.",
+            deps=deps,
+            model_settings=SETTINGS_NO_MCP.llm.noreason_model_settings(),
+        )
+
+    provider_input = result.response.usage.input_tokens
+    assert provider_input > 0, "provider must report a non-zero input token count"
+
+    # Shrink the window below the provider-reported input so ratio >= 1.0.
+    deps.model_max_ctx = provider_input - 1
+    frontend = SilentFrontend()
+    turn_state = _TurnState(current_input=None, current_history=[], latest_result=result)
+
+    _check_output_limits(turn_state, deps, frontend)
+
+    assert any(
+        f"Context limit reached ({provider_input:,} / {deps.model_max_ctx:,} tokens)" in s
+        for s in frontend.statuses
+    ), f"expected provider-count overflow warning; got {frontend.statuses}"

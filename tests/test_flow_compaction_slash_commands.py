@@ -20,10 +20,9 @@ def _resp(content: str) -> ModelResponse:
 
 
 @pytest.mark.asyncio
-async def test_cmd_clear_wipes_history_and_resets_compaction_state() -> None:
-    """/clear must return empty history and reset the tracked input-token field."""
+async def test_cmd_clear_wipes_history() -> None:
+    """/clear must return empty history (drops the conversation)."""
     runtime = CoRuntimeState()
-    runtime.last_reported_input_tokens = 42_000
 
     deps = CoDeps(
         shell=ShellBackend(), config=SETTINGS_NO_MCP, session=CoSessionState(), runtime=runtime
@@ -35,4 +34,3 @@ async def test_cmd_clear_wipes_history_and_resets_compaction_state() -> None:
     result = await _cmd_clear(ctx, "")
 
     assert result == []
-    assert deps.runtime.last_reported_input_tokens is None

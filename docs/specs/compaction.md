@@ -14,7 +14,7 @@ USER PROMPT
   │
   ▼
 run_turn() (orchestrate.py:run_turn)
-  ├── reset_for_turn()                # clears: turn_usage, status_callback, compaction_applied_this_turn,
+  ├── reset_for_turn()                # clears: status_callback, compaction_applied_this_turn,
   │                                   #          current_request_tokens_estimate
   └── while True:
         await _execute_stream_segment(...)
@@ -64,7 +64,7 @@ _finalize_turn()  (main.py)
 |---|---|---|---|---|
 | **L0** | `lifecycle.wrap_tool_execute` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
 | **L1** | `tool_output()` in native tools, `lifecycle.after_tool_execute` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
-| **L2** | `enforce_request_size` history processor | `max(static_floor_tokens + estimate_message_tokens, runtime.last_reported_input_tokens) > deps.spill_threshold_tokens` | Force-spill largest unspilled string `ToolReturnPart`s, largest-first, until aggregate ≤ threshold | No |
+| **L2** | `enforce_request_size` history processor | `static_floor_tokens + estimate_message_tokens > deps.spill_threshold_tokens` (realtime-local, no provider-reported floor) | Force-spill largest unspilled string `ToolReturnPart`s, largest-first, until aggregate ≤ threshold | No |
 | **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail`. When the anti-thrash gate is tripped, the same assembly runs with `summarize=False` (static marker, no LLM) — the gate demotes the pass, it never skips it | Yes (static marker fallback when anti-thrash-tripped or breaker-open) |
 | **Recovery** | `run_turn` overflow branch | `is_context_overflow(e)` AND `overflow_recovery_attempted == False` | `strip_all_tool_returns`; if still over budget, planner + `compact_messages` + `commit_compaction` on stripped history | Yes (static marker fallback) |
 | **Manual** | `/compact [focus]` slash command | User-invoked | `compact_messages` with full-history bounds `(0, n, n)` + `commit_compaction`; same degradation policy as L3 | Yes (static marker fallback) |
@@ -204,18 +204,17 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Per-turn fields a
 
 | Field | Written by | Read by | Reset by |
 |---|---|---|---|
-| `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `proactive_window_processor` (zeros `reported`); `_finalize_turn` (drives transcript rewrite) | `reset_for_turn` |
-| `current_request_tokens_estimate` | `enforce_request_size` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch) | `reset_for_turn` |
+| `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `main.py` (session-branching via `TurnResult.history_compacted`); `proactive_window_processor` (OTEL span attr only) | `reset_for_turn` |
+| `current_request_tokens_estimate` | `enforce_request_size` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch); `main.py` `_build_status_snapshot` (status-line context %) | `reset_for_turn`; `/new`, `/clear` |
 | `tool_call_limit_run_step`, `tool_calls_in_model_request` | `lifecycle.wrap_tool_execute` per call | L0 cap check + telemetry span | `lifecycle.wrap_tool_execute` on `ctx.run_step` change |
-| `last_reported_input_tokens` | `TokenTrackingCapability.after_model_request` from `ModelResponse.usage.input_tokens` (>0); overwritten by `commit_compaction` with the floor-inclusive local post-compaction estimate | `proactive_window_processor` (cross-turn `reported`); `enforce_request_size` (L2 trigger); `_finalize_turn` (OTEL ratio) | `/new`, `/clear` |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
 | `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; anti-thrash static-marker demotion (`summarize=False`) | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact` |
 
 **Sole callback into the frontend.** `runtime.status_callback` is set by `run_turn` to `frontend.on_status` and is the only frontend hook the processor chain sees — used by `_gated_summarize_or_none` to print "Compacting conversation…" (opening, gate-open paths only) and by `proactive_window_processor` to emit the closing status ("Compacted." / "Compacted (static marker)." for the anti-thrash deliberate skip / "LLM compaction unavailable — used static marker." / "Summarizer failed — used static marker.") via the `_record_proactive_outcome` helper. Recovery and `/compact` emit their own status messaging upstream (via `frontend.on_status` in `orchestrate.py` and `console.print` in the slash command, respectively). Tool progress goes through the separate `tool_progress_callback`.
 
-**Tracked input-token field replaces message-history scanning.** `runtime.last_reported_input_tokens` is the single source of "latest provider-reported input_tokens." Written by `TokenTrackingCapability` after every successful model request whose response carries `usage.input_tokens > 0`. `commit_compaction` overwrites it with the floor-inclusive local post-compaction estimate so the next trigger pass sees the compacted size, not the pre-compaction provider value.
+**Realtime-local trigger, no provider-reported floor.** Both compaction triggers (L2 spill, L3 summarize) key off a single realtime-local count, `effective_request_tokens(deps, messages) = static_floor_tokens + estimate_message_tokens(messages)` (see §2.5) — there is no provider-reported floor. This matches the two chain-shaped peers (hermes-agent, openclaw), which drive the identical spill→summarize ladder off a realtime recount with no provider-usage dependency. A successful L2 spill deterministically lowers this same value, so L3 re-reads the lowered payload and fast-paths when the spill already fit — the spill-first / summarize-fallback ordering is structural, not band-tuned.
 
-The reported value is **floor-inclusive** (it counts the full input the provider saw — static instructions + tool schemas + history) and is current **cross-turn** by construction. But it is stale or absent *within-turn* in three windows: in-turn growth before the next response updates it; after a within-turn compaction zeroes it (the `compaction_applied_this_turn` short-circuit); and when a response carries no usage. In those windows the local estimate is the sole signal, and `estimate_message_tokens` counts **only the message list** — it omits the static prefill floor. To avoid undercounting live size by up to one floor (~12K tokens), the L2/L3 triggers combine `max(static_floor_tokens + estimate_message_tokens, reported)` — the local half is made floor-inclusive via `effective_request_tokens` (see §2.5). `deps.static_floor_tokens` is the bootstrap-measured floor (static instructions + ALWAYS-visibility tool schemas), immutable after bootstrap like `spill_threshold_tokens`.
+`estimate_message_tokens` counts **only the message list** — it omits the static prefill floor. `effective_request_tokens` adds `deps.static_floor_tokens` (the bootstrap-measured floor: static instructions + ALWAYS-visibility tool schemas, immutable after bootstrap like `spill_threshold_tokens`) so the trigger cannot undercount live size by one floor (~12K tokens). The sanctioned remedy for any residual `chars/4` undercount is improving the estimator (e.g. openclaw-style CJK/JSON adjustment), never reintroducing a provider-usage floor. The provider's real input count is still used — but only for the post-turn overflow telemetry (see core-loop.md), re-sourced on demand from the turn's `AgentRunResult`, not carried as a runtime status var.
 
 ## 2. Core Logic
 
@@ -373,14 +372,14 @@ L2's per-request cap. Operates on the **full message list** at `ModelRequestNode
 
 **Algorithm.**
 
-1. `total = max(deps.static_floor_tokens + estimate_message_tokens(messages), deps.runtime.last_reported_input_tokens or 0)` — folds the floor-inclusive local estimate (static prefill floor + message list) with the latest provider-reported input-token count to bias toward earlier spilling and to backstop a stale/zeroed/missing report (see §1.5).
+1. `total = deps.static_floor_tokens + estimate_message_tokens(messages)` — the floor-inclusive realtime-local estimate (static prefill floor + message list); no provider-reported floor (see §1.5).
 2. If `total ≤ deps.spill_threshold_tokens`, fast-path.
 3. Walk every `ModelRequest`, collect all `ToolReturnPart`s with string content as candidates. Filter spillable: those whose content does not start with `PERSISTED_OUTPUT_TAG`.
 4. Sort spillable largest-first by `len(content)`.
-5. Force-spill via `spill_if_oversized(content, deps.tool_results_dir, tool_name, force=True)` until aggregate ≤ threshold or candidates exhaust. Track replacements by `id(part)`. The loop accumulator is tracked in message-only local-char space (`starting_tokens = estimate_message_tokens(messages)` — the non-spillable floor is excluded from the spill budget); the floor-inclusive `max(static_floor_tokens + local, reported)` is the trigger only, not the loop baseline. After spill, `effective_after = max(static_floor_tokens + local_after, reported)` reconstructs the conservative floor-inclusive post-spill estimate for the terminal span and `fallback_to_summarize` gate.
+5. Force-spill via `spill_if_oversized(content, deps.tool_results_dir, tool_name, force=True)` until aggregate ≤ threshold or candidates exhaust. Track replacements by `id(part)`. The loop accumulator is tracked in message-only local-char space (`starting_tokens = estimate_message_tokens(messages)` — the non-spillable floor is excluded from the spill budget); the floor-inclusive `static_floor_tokens + local` is the trigger only, not the loop baseline. After spill, `effective_after = static_floor_tokens + local_after` reconstructs the floor-inclusive post-spill estimate for the terminal span and `fallback_to_summarize` gate.
 6. Apply rewrites via `_rewrite_tool_returns(messages, len(messages), replacement_for=lambda p: spilled.get(id(p)))` — only messages with rewritten parts are rebuilt; unchanged messages pass through verbatim.
 
-**Span.** `tool_budget.enforce_request_size` — emitted by tracer `co-cli.tool_budget` on every call. Attributes: `budget.context_window_tokens`, `request.threshold_tokens / tokens_before / local_tokens / static_floor_tokens / reported_tokens / tokens_after / candidates_count / spillable_count / spilled_count / spill_errors / spill_fired (bool) / skip_reason`.
+**Span.** `tool_budget.enforce_request_size` — emitted by tracer `co-cli.tool_budget` on every call. Attributes: `budget.context_window_tokens`, `request.threshold_tokens / tokens_before / local_tokens / static_floor_tokens / tokens_after / candidates_count / spillable_count / spilled_count / spill_errors / spill_fired (bool) / skip_reason`.
 
 **Threshold.** `deps.spill_threshold_tokens = int(spill_ratio × model_max_ctx)`, computed once at bootstrap and cached on `CoDeps`. The `compaction.spill_ratio` knob is validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths. (Runtime side effect on `current_request_tokens_estimate`: see §1.5.)
 
@@ -418,16 +417,11 @@ AFTER enforce_request_size
 ```text
 proactive_window_processor — full path
 
-  ─ STEP 1: token counting (combine local + provider-reported) ─
-    local_estimate    = effective_request_tokens(deps, messages)
-                          = static_floor_tokens + estimate_message_tokens(messages)
-                          ↑ floor-inclusive: backstops a stale/zeroed/missing report
-    reported_estimate = (
-        0  if compaction_applied_this_turn
-        else runtime.last_reported_input_tokens or 0
-    )
-    token_count = max(local_estimate, reported_estimate)
-                    ↑ biases toward earlier compaction
+  ─ STEP 1: token counting (realtime-local, no provider-reported floor) ─
+    token_count = effective_request_tokens(deps, messages)
+                    = static_floor_tokens + estimate_message_tokens(messages)
+                    ↑ floor-inclusive realtime local; a successful L2 spill lowers
+                      this same value, so a fitting spill suppresses this summarize
 
   ─ STEP 2: gates (cheap, fail fast) ─────────────────────────────
     if token_count ≤ compaction_ratio × budget
@@ -465,7 +459,7 @@ proactive_window_processor — full path
 
   ─ STEP 5: post-compaction feedback (anti-thrash counter) ───────
     savings = (tokens_before − tokens_after) / tokens_before
-                tokens_before = max(local, reported)              (local floor-inclusive)
+                tokens_before = token_count                       (floor-inclusive realtime local)
                 tokens_after  = static_floor_tokens + estimate_message_tokens(result)
                 ↑ both bases floor-inclusive — no savings overstatement
     if savings ≥ min_proactive_savings
@@ -476,7 +470,6 @@ proactive_window_processor — full path
   ─ STEP 6: commit (last step before return) ─────────────────────
     commit_compaction(ctx, result)           ← sole writer of:
       runtime.compaction_applied_this_turn  = True
-      runtime.last_reported_input_tokens    = tokens_after
 ```
 
 All STEPs above live inside `proactive_window_processor` — the trigger gates (threshold + anti-thrash gate), trigger-check OTEL span, and the post-compaction policy (savings, status callback, OTEL execution attributes, thrash counter, commit) are co-located. STEP 4 calls `compact_messages` — the shared assembly primitive also used by recovery PATH 2 and `/compact`. STEPs 5–6 are bundled in the private helper `_record_proactive_outcome`, which is proactive-only (recovery and `/compact` skip it: they don't track savings, don't fire the closing callback, and `/compact` resets the thrash counter unconditionally upstream). See §2.6 for the assembly logic, enrichment helper, summarizer LLM call, and circuit breaker.
@@ -486,9 +479,7 @@ All STEPs above live inside `proactive_window_processor` — the trigger gates (
 **Token counting:**
 - `estimate_message_tokens(messages)` — `total_chars // CHARS_PER_TOKEN` over text parts and JSON-serialized `ToolCallPart.args`. Args are included because `evict_old_tool_results` clears return content only, never call args. Counts the **message list only** — the static prefill floor is not in `messages`. Unchanged consumers: the L2 spill-loop accumulator and `dedup_tool_results`.
 - `deps.static_floor_tokens` — bootstrap-measured floor: `estimate_text_tokens(build_static_instructions(config))` + ALWAYS-visibility tool-schema tokens (measured by `measure_always_schema_budget`). Immutable after bootstrap, like `spill_threshold_tokens`. Because it is measured live from config + toolset, it auto-updates when rules or tools change.
-- `effective_request_tokens(deps, messages)` — `static_floor_tokens + estimate_message_tokens(messages)`; the floor-inclusive local estimate used by the L2 and L3 triggers (and `commit_compaction`'s post-compaction overwrite) so a stale/zeroed/missing report cannot undercount live size by one floor (see §1.5).
-- `runtime.last_reported_input_tokens` — latest provider-reported `ModelResponse.usage.input_tokens`, written by `TokenTrackingCapability`; overwritten by `commit_compaction` with the floor-inclusive local post-compaction estimate; zeroed by the trigger when `compaction_applied_this_turn` (within-turn re-trigger short-circuit).
-- effective token count — `max(effective_request_tokens(deps, messages), reported)`; biases toward earlier compaction.
+- `effective_request_tokens(deps, messages)` — `static_floor_tokens + estimate_message_tokens(messages)`; the floor-inclusive realtime-local estimate that **is** the L2 and L3 trigger (no provider-reported floor), so the static prefill floor cannot undercount live size by one floor (see §1.5).
 
 **Budget resolution.** `resolve_compaction_budget(deps)` returns `deps.model_max_ctx` (Ollama probe capped by `config.llm.max_ctx`, set at bootstrap).
 
@@ -536,7 +527,7 @@ proactive_window_processor          recover_overflow_history          /compact s
                              ← restores the deferred-tool discovery state the SDK rebuilds from history; orphans dropped
 ```
 
-**Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn` and the only post-compaction overwriter of `last_reported_input_tokens` (written floor-inclusive via `effective_request_tokens` so the stored value matches a real provider report's scope); the token estimate is computed before any field write so a token-estimator failure leaves runtime untouched (single-writer atomicity).
+**Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn`; it has no other side effects.
 
 | Caller | Calls | Extra side effects (all proactive-only) |
 |---|---|---|
@@ -712,7 +703,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | Symbol | Source | Contract |
 |---|---|---|
 | `compact_messages(ctx, messages, bounds, focus, summarize=True) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer (skipped when `summarize=False` → static marker, no LLM), assembles `head \| marker \| [todo_snapshot] \| [deferred-tool discoveries] \| tail`; does NOT write runtime |
-| `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn`; overwrites `last_reported_input_tokens` with the floor-inclusive local post-compaction estimate |
+| `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn`; no other side effects |
 
 ### Compaction entry points
 
@@ -797,9 +788,10 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `proactive_window_processor` below-threshold fast path: messages object returned unchanged, no compaction | `tests/test_flow_compaction_proactive.py` |
 | `proactive_window_processor` above-threshold compaction: result shorter than input, compaction marker present | `tests/test_flow_compaction_proactive.py` |
 | `proactive_window_processor` anti-thrashing gate: falls back to a static-marker compaction (trims, no LLM) after consecutive low-yield passes — never a no-op | `tests/test_flow_compaction_proactive.py` |
-| Floor-aware trigger: fires on the floor-inclusive size when the provider report is stale/zero (would not fire floor-blind) | `tests/test_flow_compaction_proactive.py` |
-| Floor-aware trigger: a fresh floor-inclusive report below threshold still drives the decision — the floor adds no premature compaction | `tests/test_flow_compaction_proactive.py` |
-| Savings basis: reported-driven low-yield pass increments the thrash counter (floor-inclusive `tokens_after` — no overstatement) | `tests/test_flow_compaction_proactive.py` |
+| Floor-aware trigger: fires on the floor-inclusive realtime size (static floor + message list), not the message list alone | `tests/test_flow_compaction_proactive.py` |
+| Realtime-only trigger: a small payload does not compact even when the prior response reports a high provider input count | `tests/test_flow_compaction_proactive.py` |
+| Spill→summarize chain: after L2 spill fits the payload, L3 fast-paths (below_threshold, zero summarizer calls) | `tests/test_flow_compaction_proactive.py` |
+| Savings basis: low-yield pass increments the thrash counter (both bases floor-inclusive — no overstatement) | `tests/test_flow_compaction_proactive.py` |
 | Circuit breaker cadence: counts 0–2 open, 3–12 closed, 13 probe, 14–22 closed, 23 probe | `tests/test_flow_compaction_proactive.py` |
 | Circuit breaker counter resets to 0 after a successful (non-empty) LLM compaction | `tests/test_flow_compaction_proactive.py` |
 | Boundary planner: valid `(head_end, tail_start, dropped_count)` for 3-turn history | `tests/test_flow_compaction_boundaries.py` |
@@ -821,4 +813,4 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | Overflow recovery — pairing: every `tool_call_id` in `ToolCallPart`s matches a `ToolReturnPart` (both paths) | `tests/test_flow_compaction_recovery.py` |
 | `strip_all_tool_returns` idempotent on already-marked content | `tests/test_flow_compaction_recovery.py` |
 | `is_context_overflow`: 413 is unconditional; 400 requires overflow evidence in body | `tests/test_flow_http_error_classifier.py` |
-| `/clear` resets compaction runtime field (`last_reported_input_tokens`) to initial state | `tests/test_flow_compaction_slash_commands.py` |
+| `/clear` wipes conversation history (returns empty list) | `tests/test_flow_compaction_slash_commands.py` |

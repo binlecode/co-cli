@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic_ai import Agent, DeferredToolRequests
 
-from co_cli.context.token_tracking import TokenTrackingCapability
 from co_cli.deps import CoDeps
 from co_cli.observability.capability import ObservabilityCapability
 from co_cli.tools.lifecycle import CoToolLifecycle
@@ -52,7 +51,7 @@ def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> Agent[CoDeps, An
         # span outermost so CoToolLifecycle.after_tool_execute can attach
         # attributes via current_span() before the span closes (LIFO after_*).
         # See co_cli.observability.capability module docstring.
-        capabilities=[ObservabilityCapability(), TokenTrackingCapability(), CoToolLifecycle()],
+        capabilities=[ObservabilityCapability(), CoToolLifecycle()],
     )
 
     for per_turn in spec.per_turn_instructions:
@@ -109,7 +108,7 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
         # span outermost so CoToolLifecycle.after_tool_execute can attach
         # attributes via current_span() before the span closes (LIFO after_*).
         # See co_cli.observability.capability module docstring.
-        capabilities=[ObservabilityCapability(), TokenTrackingCapability(), CoToolLifecycle()],
+        capabilities=[ObservabilityCapability(), CoToolLifecycle()],
     )
     for fn in tool_fns:
         agent.tool(fn, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match

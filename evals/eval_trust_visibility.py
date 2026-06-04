@@ -146,10 +146,11 @@ async def case_w6_b_unknown_slash_local_only(
 ) -> CaseResult:
     """W6.B — unknown slash returns LocalOnly and never burns tokens.
 
-    Snapshots `deps.runtime.turn_usage` before and after dispatching
-    `/this_is_not_a_command`. The production handler prints "Unknown
-    command" to console and returns `LocalOnly()` — it must not invoke
-    the LLM, so turn_usage stays unchanged.
+    Snapshots `deps.runtime.current_request_tokens_estimate` before and after
+    dispatching `/this_is_not_a_command`. That estimate is written only by
+    `enforce_request_size` when a real model request runs; the production handler
+    prints "Unknown command" to console and returns `LocalOnly()` — it must not
+    invoke the LLM, so the estimate stays unchanged.
     """
     case_id = "W6.B"
     t0 = time.monotonic()
@@ -159,22 +160,22 @@ async def case_w6_b_unknown_slash_local_only(
     reason = ""
     passed = True
 
-    usage_before = deps.runtime.turn_usage
+    estimate_before = deps.runtime.current_request_tokens_estimate
     ctx = _make_ctx(deps, agent, frontend)
     outcome = await dispatch("/this_is_not_a_command", ctx)
-    usage_after = deps.runtime.turn_usage
+    estimate_after = deps.runtime.current_request_tokens_estimate
 
     if not isinstance(outcome, LocalOnly):
         passed = False
         reason = f"unknown slash returned {type(outcome).__name__}, expected LocalOnly"
-    elif usage_after is not usage_before:
+    elif estimate_after != estimate_before:
         passed = False
         reason = (
-            f"turn_usage changed (before={usage_before!r}, after={usage_after!r}) — "
-            "unknown slash reached the LLM"
+            f"request-token estimate changed (before={estimate_before!r}, "
+            f"after={estimate_after!r}) — unknown slash reached the LLM"
         )
     else:
-        reason = "unknown slash short-circuited locally; turn_usage unchanged"
+        reason = "unknown slash short-circuited locally; no model request ran"
 
     return CaseResult(
         name=case_id,

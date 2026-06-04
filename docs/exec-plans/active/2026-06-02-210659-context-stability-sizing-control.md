@@ -2,9 +2,11 @@
 
 > **Status: PARTIAL DELIVERY — pre-Gate-1 for the remainder.** ISSUE-1 (proportional tail,
 > `tail_fraction 0.20→0.10`) and ISSUE-1.5 (floor-aware trigger estimate) are **shipped**; ISSUE-4a's
-> instruction-block guard already exists (via the `rules-block-trim-finish` sibling plan). This plan
-> now tracks the remaining dynamics issues (2, 3, 5), the tool-schema reduction (4b), and the
-> loop-stability eval. Baseline numbers below reflect the post-delivery shipped state.
+> instruction-block guard already exists (via the `rules-block-trim-finish` sibling plan); **ISSUE-2
+> (anti-thrash static-marker fallback) was extracted to its own plan —
+> `docs/exec-plans/active/2026-06-03-220905-antithrash-static-marker-fallback.md` — and is no longer
+> tracked here.** This plan now tracks the remaining dynamics issues (3, 5), the tool-schema reduction
+> (4b), and the loop-stability eval. Baseline numbers below reflect the post-delivery shipped state.
 
 ## Context
 
@@ -73,25 +75,26 @@ Cross-checked against the peer survey (hermes-agent, openclaw, opencode, codex):
   items are a separate axis; this plan is entirely **within-session request-window dynamics** (see Out
   of scope).
 - **Per-issue peer position** (detail in each ISSUE block): ISSUE-5 — co is the lone peer outlier with
-  an uncapped live tool-output path. ISSUE-2 — beyond parity: no peer fixes the anti-thrash no-op.
-  ISSUE-3 — no peer reference; co's spill→summarize ladder is co-specific, tune via the eval. ISSUE-4b —
-  co's per-tool schemas are already the leanest surveyed; the lever is deferral, not docstring squeeze.
+  an uncapped live tool-output path. ISSUE-3 (now the drop-reported plan) — co is the lone chain-shaped
+  peer carrying a provider-reported floor (`max(local, reported)`) in its compaction trigger; hermes and
+  openclaw drive the same spill→summarize chain off realtime-local only. ISSUE-4b — co's per-tool schemas are already the leanest surveyed; the
+  lever is deferral, not docstring squeeze. (ISSUE-2's beyond-parity anti-thrash fix moved to its
+  extracted plan.)
 - **Architecture confirmation.** Co's per-request compaction cadence already does (more aggressively)
   what openclaw's mid-turn precheck does — this plan adds **no new cadence**, only threshold tuning.
 
 ## Problem & Outcome
 
-**Problem.** Gap-prone compaction logic still makes total context unstable: a single gate
-(anti-thrash) can disable compaction entirely, spill and summarize have no separating margin, and a
-single tool read can inject an unbounded inline chunk. The fixed floor — the highest-leverage latency
-lever — is now guarded on its instruction half but tool schemas remain over-eager. Together these
-produce middle-section dilution and growth-to-overflow under realistic multi-turn load. (The tail
-disproportion and the floor-blind trigger are now fixed — see Delivered.)
+**Problem.** Gap-prone compaction logic still makes total context unstable: spill and summarize have no
+separating margin, and a single tool read can inject an unbounded inline chunk. The fixed floor — the
+highest-leverage latency lever — is now guarded on its instruction half but tool schemas remain
+over-eager. Together these produce middle-section dilution and growth-to-overflow under realistic
+multi-turn load. (The tail disproportion and the floor-blind trigger are now fixed — see Delivered; the
+anti-thrash no-op is handled by the extracted ISSUE-2 plan.)
 
-**Outcome.** Compaction degrades gracefully (never to a no-op); spill reliably runs before LLM
-summarization; large tool reads cannot single-handedly dominate the middle; tool schemas keep
-shrinking; and a loop-stability test proves the window stays bounded — and the agent stays coherent —
-under a long multi-turn conversation.
+**Outcome.** Spill reliably runs before LLM summarization; large tool reads cannot single-handedly
+dominate the middle; tool schemas keep shrinking; and a loop-stability test proves the window stays
+bounded — and the agent stays coherent — under a long multi-turn conversation.
 
 **Failure cost:** silently, the agent loop grows context past 32,768 in long multi-turn sessions until
 the model returns a context-overflow error; the reactive last-resort recovery
@@ -102,17 +105,20 @@ answer quality from a diluted middle.
 
 **Latency dimension (not just stability).** ISSUE-1.5 (shipped) made the trigger floor-aware. The
 remaining fixes are also a per-turn latency lever: an LLM summarization pass dominates a turn's
-wall-clock. ISSUE-2 (static-marker fallback) and ISSUE-3 (spill-first band) avoid/defer the
-summarization call; ISSUE-4b (schema reduction) cuts latency on *every* prefill-bound call.
+wall-clock. ISSUE-3 (now the drop-reported plan — realtime-only trigger) suppresses the avoidable
+summarization call after a spill fits the payload; ISSUE-4b (schema reduction) cuts
+latency on *every* prefill-bound call.
 
 ## High-Level Design
 
 Both fronts are localized — no new abstractions:
-- **Dynamics (ISSUE-2/3/5).** All ratio knobs live in `co_cli/config/compaction.py`, consumed by
+- **Dynamics (ISSUE-3/5).** All ratio knobs live in `co_cli/config/compaction.py`, consumed by
   `co_cli/context/compaction.py` (proactive trigger + boundaries) and
   `co_cli/context/history_processors.py` (spill/evict/dedup), plus the per-tool spill threshold in
-  `co_cli/tools/`. Adjust the ISSUE-3 band, the ISSUE-2 gate behavior (static-marker fallback), and the
-  ISSUE-5 emission cap. (The tail re-size and the floor-aware trigger estimate are already shipped.)
+  `co_cli/tools/`. ISSUE-3 was split out and superseded by the drop-reported plan (remove `reported`
+  from both triggers — no ratio change); this plan keeps the ISSUE-5 emission cap. (The tail re-size and
+  the floor-aware trigger estimate are already shipped; the anti-thrash gate behavior is the extracted
+  ISSUE-2 plan.)
 - **Floor (ISSUE-4).** Reduce tool schemas via deferral (ISSUE-4b). The instruction-half guard
   (ISSUE-4a) already exists; no source change to rules.
 - **Validation.** A new loop-stability eval exercises the dynamics the synthetic-fixture unit tests do
@@ -123,111 +129,10 @@ the analysis and the work that resolves it stay together. Cross-cutting validati
 
 ## Issues, Fixes & Implementation
 
-### ISSUE-2 — Anti-thrash gate disables compaction entirely (no-op → growth)
-Compaction has two ways to trim the conversation. The **expensive** way (LLM summarization) asks the model
-to summarize the dropped region — it costs a full model call but keeps the *meaning* of what was cut. The
-**cheap** way (static marker) just drops the region and leaves a stub — free and instant, but it discards the
-meaning. "Thrashing" is when the loop keeps paying for the *expensive* way while getting almost nothing back:
-pass after pass fires, each costs an LLM call, each frees <10% (the OS sense — all effort spent on overhead,
-no real progress).
+### ISSUE-2 — Anti-thrash gate disables compaction entirely (no-op → growth) — SHIPPED ELSEWHERE
+Extracted and shipped: `docs/exec-plans/completed/2026-06-03-220905-antithrash-static-marker-fallback.md`.
 
-Detecting that is the right instinct; the bug is the **response**. `co_cli/context/compaction.py` (the
-anti-thrash gate, currently a bare `return messages`): when
-`consecutive_low_yield_proactive_compactions >= proactive_thrash_window (2)`,
-`proactive_window_processor` **returns messages unchanged**. It doesn't stop paying for the *expensive* trim
-— it stops trimming **at all**. Text/reasoning context then grows unbounded toward 64k, bounded only by
-reactive `_attempt_overflow_recovery` (fires *after* the model errors). (Tool-return bloat is still capped by
-`evict_old_tool_results` keep-recent-5; text/reasoning is not.)
-
-**Logic (verified source).** The counter is maintained in `_record_proactive_outcome`: after each fired pass
-it computes `savings = (token_count - tokens_after) / token_count` (now on a floor-inclusive basis after
-ISSUE-1.5) and, if `savings < cfg.min_proactive_savings` (0.10), increments
-`consecutive_low_yield_proactive_compactions`, else resets it to 0. On the *next* request the anti-thrash
-gate sees the counter `>= proactive_thrash_window` and bare-`return messages` — no boundary plan, no marker,
-no token reduction.
-
-Walk the two reasons a pass is repeatedly low-yield — **neither makes the no-op the right move:**
-- **Verbose summary, real droppable region (the no-op is *harmful*).** The region was large but the LLM
-  summary came back nearly as large, so net savings <10%. The right move is to drop the region and insert a
-  static marker (no summary) — which saves *more* than the verbose-summary version. The no-op throws that
-  saving away.
-- **Middle genuinely exhausted (the no-op is *redundant*).** Almost nothing left to drop. But this case is
-  **already handled upstream** — `plan_compaction_boundaries` returns `None` and `proactive_window_processor`
-  skips before the anti-thrash gate matters.
-
-So there is **no scenario where the no-op is correct**: it is either redundant (exhausted middle — the
-boundary-`None` guard already skips) or harmful (verbose summary — should static-marker). Contrast the
-**circuit breaker** (`_COMPACTION_BREAKER_TRIP=3`, `_COMPACTION_BREAKER_PROBE_EVERY=10`): after summarizer
-*failures* it still emits a `static_marker` (compacts, no LLM) — it never no-ops. The two gates are
-independent (Appendix F); only anti-thrash leaves the hole.
-
-**Fix.** Demote the counter from a *compaction kill-switch* to an *LLM-budget guard*: it should decide only
-"pay for the expensive LLM summary, or use the free static marker" — never "stop trimming." When the gate
-trips, **fall back to a static-marker compaction** (drop the region, insert a marker — no LLM call), reusing
-the circuit-breaker's existing `static_marker` path, so compaction is never a full no-op. "Whether to compact
-at all" is already answered upstream by the threshold and the boundary-`None` guard, so the counter has no
-business gating it. (*How eagerly* to retry the expensive path after falling back — bounce back every pass
-vs. stay on the cheap path and re-probe occasionally — is a tuning choice owned by this task and the eval.)
-
-**Peer framing — this is BEYOND parity, not catch-up.** Among surveyed peers, only hermes-agent has an
-anti-thrash heuristic at all (same shape: skip if the last 2 compressions each saved <10%), and **it
-shares co's exact no-op hole** — it skips rather than forcing a cheap compaction, leaning on a 600s
-cooldown to recover. Openclaw and codex have no anti-thrash gate. So no surveyed peer solves ISSUE-2;
-co's static-marker-on-thrash fix would be **novel**.
-
-**Implementation.**
-- **Files:** `co_cli/context/compaction.py`, `tests/test_flow_compaction_proactive.py`.
-- **Action:** Replace the `anti_thrash_gate` early-return-unchanged with a static-marker compaction pass.
-  **Mechanism (CD-M-1):** the existing surface cannot force the static path — when the gate trips, the model
-  is present and `compaction_skip_count < _COMPACTION_BREAKER_TRIP`, so `_summarization_gate_open` returns
-  `(True, _)` and `compact_messages` would still fire the LLM via `_gated_summarize_or_none`. Add a
-  `summarize: bool = True` parameter to `compact_messages` that, when `False`, skips
-  `_gated_summarize_or_none` and passes `summary_text=None` (static marker), reusing the rest of the
-  assembly intact (marker, `todo_snapshot`, deferred-tool discoveries, tail). In the anti-thrash branch,
-  plan boundaries and call `compact_messages(..., summarize=False)`, then `commit_compaction`.
-- **prerequisites:** none.
-- **done_when:** the existing test `test_anti_thrash_gate_skips_compaction_after_consecutive_low_yield`
-  (which currently asserts `result is messages` / `compaction_applied_this_turn is False` — the old no-op)
-  is **rewritten** to assert the static marker was inserted, the dropped region removed, message tokens
-  reduced, no summarizer LLM call made, and `compaction_applied_this_turn is True`;
-  `uv run pytest tests/test_flow_compaction_proactive.py -x` passes.
-- **success_signal:** in the loop-stability eval, the anti-thrash gate engaging never yields a pass that
-  returns messages unchanged — every triggered pass reduces token count.
-
-### ISSUE-3 — Zero band between spill and summarize (`spill_ratio == compaction_ratio`)
-Both default 0.50, so cheap tool-return spill and expensive LLM summarization fire at the **same**
-32,768 point; only processor order gives spill first crack.
-
-**Logic (verified source).** Both layers share the `int(ratio × model_max_ctx)` basis: L2's
-`deps.spill_threshold_tokens = int(spill_ratio × model_max_ctx)` = 32,768 (`deps.py`), L3's
-`token_threshold = int(budget × compaction_ratio)` = 32,768 (`compaction.py`). Equal thresholds
-mean the only thing that gives spill first crack is **processor order** in the chain
-(`enforce_request_size` before `proactive_window_processor`). Critically, L2 spills **only**
-string-content `ToolReturnPart`s (`_collect_tool_return_candidates`, `history_processors.py`) — so a
-**text/reasoning-heavy** middle has zero spill candidates and goes straight to L3. The band only helps
-tool-output pressure; that is exactly why the eval needs a separate text-heavy phase to exercise ISSUE-2.
-
-**Fix.** Lower `spill_ratio` below `compaction_ratio` (e.g. spill 0.40 / compaction 0.50) so spill
-runs with margin and can pull total under the summarize trigger before LLM summarization fires. The
-validator already enforces `spill_ratio <= compaction_ratio`; this just makes the default a real band.
-
-**Peer framing — no external reference; tune empirically.** No surveyed peer spills tool output to disk
-at all (opencode truncates in place at 2K, openclaw at 8K head-only) — the recoverable spill→summarize
-**two-tier ladder is co-specific**. So there is **no peer-derived number** for the band width; the
-0.40-vs-0.45 `spill_ratio` choice is owned entirely by the eval.
-
-**Implementation.**
-- **Files:** `co_cli/config/compaction.py`, `tests/test_flow_compaction_processor_chain.py`.
-- **Action:** Set `spill_ratio` default below `compaction_ratio` (proposed 0.40 / 0.50); keep the
-  validator invariant (`spill_ratio <= compaction_ratio`) and update the `spill_ratio` field docstring.
-- **prerequisites:** none.
-- **done_when:** resolved `spill_threshold_tokens < compaction trigger` (26,214 < 32,768 at 0.40/0.50);
-  a chain test that constructs **tool-return (spillable) pressure specifically** — `enforce_request_size`
-  spills only string-content `ToolReturnPart`s, so a generic-token fixture would not exercise the band —
-  shows spill fires and resolves pressure before proactive summarization within the band;
-  `uv run pytest tests/test_flow_compaction_processor_chain.py -x` passes.
-- **success_signal:** in the loop-stability eval, spill-to-disk passes precede LLM-summarization passes
-  under tool-output pressure, not the reverse.
+### ISSUE-3 — split out and superseded; see `docs/exec-plans/active/2026-06-04-130800-drop-reported-realtime-trigger.md` (root cause was `reported` in the trigger `max()`, not the spill/summarize band).
 
 ### ISSUE-4 — The fixed floor is the highest-leverage lever; instruction half guarded, schemas are not
 The floor (~11,438 tok) is ~33% of the trigger and present in every post-compaction state, so reducing
@@ -294,22 +199,28 @@ preview) where peers **truncate** (lossy). So this is parity on bounding plus a 
   middle in the loop-stability eval.
 
 ### Loop-stability eval — cross-cutting validation
-Validates the combined behavior of ISSUE-2/3/5 and the shipped tail+floor work; not tied to a single issue.
-- **Files:** `evals/eval_context_stability.py` (NEW).
-- **Action:** Drive a long multi-turn conversation (real LLM, real tools, large tool outputs) past the
-  trigger and assert: no context-overflow error, bounded number of compaction passes, post-pass total
-  stays below the trigger, anti-thrash never produces a no-op. Include **two distinct pressure phases**:
-  (a) tool-output-heavy load (exercises spill / ISSUE-3 / ISSUE-5), and (b) a **reasoning/text-heavy phase
-  that engages the anti-thrash gate** — a text middle has no spillable `ToolReturnPart` candidates, so this
-  is the only phase that actually exercises ISSUE-2's previously-unreproduced no-op→growth path. Real
+Validates the combined behavior of ISSUE-3/5 and the shipped tail+floor work; not tied to a single issue.
+- **Files:** `evals/eval_context_stability.py` (EXTEND — the file is **created by the extracted ISSUE-2
+  plan** with a text/reasoning-heavy phase; this plan adds the tool-output-heavy phase below).
+- **Action:** Add a **tool-output-heavy** pressure phase to the eval: drive a long multi-turn
+  conversation (real LLM, real tools, large tool outputs) past the trigger and assert no
+  context-overflow error, bounded number of compaction passes, post-pass total stays below the trigger,
+  and that spill-to-disk passes precede LLM-summarization passes under tool-output pressure (drop-reported
+  trigger / ISSUE-5 emission cap). A tool-output-heavy middle has spillable `ToolReturnPart` candidates, so this
+  phase exercises spill before summarize — the opposite of the extracted plan's text-heavy phase. Real
   everything (per `feedback_eval_real_world_data`).
-- **prerequisites:** ISSUE-2, ISSUE-3, ISSUE-5 fixes required. (ISSUE-1 + ISSUE-1.5 already shipped; this
-  eval is also the coherence gate for the shipped `tail_fraction 0.10` — see Open Questions.)
+- **prerequisites:** the drop-reported plan
+  (`docs/exec-plans/active/2026-06-04-130800-drop-reported-realtime-trigger.md`, which superseded ISSUE-3)
+  and ISSUE-5 fixes required. The extracted ISSUE-2 plan must ship first (it
+  creates the eval file and lands the anti-thrash fix this eval's bounded-loop assertion relies on).
+  (ISSUE-1 + ISSUE-1.5 already shipped; this eval is also the **hard coherence gate** for the shipped
+  `tail_fraction 0.10` — the extracted plan deliberately logs coherence rather than gating, leaving the
+  revert lever here — see Open Questions.)
 - **done_when:** `uv run python evals/eval_context_stability.py` runs to completion with the loop bounded
-  (no overflow error, every triggered pass reduces tokens, post-pass total below trigger), the anti-thrash
-  phase (b) confirms a static-marker pass reduced tokens rather than no-op'ing, **AND** the agent still
-  completes the multi-turn task correctly after compaction — a coherence assertion (e.g. the agent recalls
-  a fact stated before the first compaction; a **soft, real-LLM single-run gate per CD-m-4**, not
+  (no overflow error, every triggered pass reduces tokens, post-pass total below trigger), the
+  tool-output phase confirms spill precedes summarization under tool-output pressure, **AND** the agent
+  still completes the multi-turn task correctly after compaction — a coherence assertion (e.g. the agent
+  recalls a fact stated before the first compaction; a **soft, real-LLM single-run gate**, not
   machine-deterministic), so a bounded-but-incoherent loop fails the eval; result block documented in the
   Delivery Summary.
 
@@ -344,9 +255,9 @@ Validates the combined behavior of ISSUE-2/3/5 and the shipped tail+floor work; 
   design). A *different axis* — belongs to the dream daemon and any future subagent work.
 
 ## Open Questions
-- ISSUE-3 band width (0.40 vs 0.45 spill_ratio) — tune against the loop-stability eval. **No peer reference
-  exists** (co's spill→summarize ladder is co-specific; no peer spills to disk), so this number is owned
-  entirely by the eval — do not seek a peer-derived value.
+- ISSUE-3 (drop-reported plan) — resolved there: ratios stay 0.50/0.50, no band; the fix is removing
+  `reported` from both triggers so a spill deterministically suppresses an unnecessary summarize. See
+  `docs/exec-plans/active/2026-06-04-130800-drop-reported-realtime-trigger.md`.
 - **ISSUE-1 coherence (now an eval validation item, not a pre-ship gate):** `tail_fraction 0.10` shipped
   ahead of the eval, halving the preserved recent reasoning chain (13,107→6,554 tok). That tail may be
   *intentional* small-model coherence headroom. The loop-stability eval must gate on coherence-preserved,
@@ -370,7 +281,7 @@ Modelfile `num_ctx = 65_536`).
 | Knob | Default | Site that applies it | Resolved |
 |---|---|---|---|
 | `compaction_ratio` | 0.50 | `compaction.py` `token_threshold = int(budget * cfg.compaction_ratio)` | 32,768 tok |
-| `spill_ratio` | 0.50 | `deps.spill_threshold_tokens = int(spill_ratio * model_max_ctx)` (`deps.py`), used in `history_processors.py` | 32,768 tok |
+| `spill_ratio` | 0.50 | `deps.spill_threshold_tokens = int(spill_ratio * model_max_ctx)` (`deps.py`), used in `history_processors.py` | 32,768 tok (stays 0.50 — the drop-reported plan needs no band) |
 | `tail_fraction` | **0.10** | `_compaction_boundaries.py` `tail_budget = tail_fraction * budget` | **6,554 tok** |
 | `static_floor_tokens` | — (bootstrap-measured) | `bootstrap/core.py`; added to the local estimate via `effective_request_tokens` | ~10,788 tok |
 | `min_proactive_savings` | 0.10 | low-yield test in `_record_proactive_outcome` | — |
@@ -417,9 +328,11 @@ expensive, each request:
   skips. **This path does NOT no-op.**
 - **Anti-thrash gate**: after `proactive_thrash_window = 2` consecutive *low-yield*
   (<`min_proactive_savings` 0.10) passes — counter maintained in `_record_proactive_outcome` —
-  `proactive_window_processor` **returns messages unchanged** — the no-op. This is ISSUE-2: unlike the
-  breaker, it has no static-marker fallback, so text/reasoning context (not bounded by layer 2) can grow
-  to overflow. **No surveyed peer fixes this** — the ISSUE-2 fix is beyond-parity.
+  `proactive_window_processor` **returns messages unchanged** — the no-op. Unlike the breaker, it has no
+  static-marker fallback, so text/reasoning context (not bounded by layer 2) can grow to overflow. This
+  no-op is fixed by the **extracted ISSUE-2 plan**
+  (`docs/exec-plans/active/2026-06-03-220905-antithrash-static-marker-fallback.md`); the description here
+  is the current (pre-fix) loop state for reference.
 
 ### E. Trigger-basis — floor-aware (ISSUE-1.5, shipped)
 

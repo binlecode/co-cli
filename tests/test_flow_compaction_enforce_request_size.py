@@ -225,8 +225,14 @@ async def test_already_spilled_excluded_but_counted(tmp_path: Path):
     assert PERSISTED_OUTPUT_TAG in returns["tc_fresh"]
 
 
-def test_high_reported_local_small_nothing_spilled(tmp_path: Path):
-    """Reported tokens dominate but local content is small: nothing gets spilled."""
+def test_small_realtime_no_spill_despite_high_provider_usage(tmp_path: Path):
+    """Trigger keys off the realtime payload, not a stale-high provider count.
+
+    The prior ModelResponse reports ``input_tokens=20_000`` (what the old
+    ``last_reported_input_tokens`` floor read from), but the actual string content
+    is tiny. The realtime trigger is below threshold, so nothing spills — proving
+    the removed ``max(.., reported)`` floor no longer inflates the decision.
+    """
     small_content = "result: " + "x" * 200
     messages: list[ModelMessage] = [
         _user_request("run"),
@@ -237,16 +243,23 @@ def test_high_reported_local_small_nothing_spilled(tmp_path: Path):
         _tool_request("shell_exec", "tc1", small_content),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
-    deps.runtime.last_reported_input_tokens = 20_000
 
     result = enforce_request_size(_ctx(deps), messages)
 
+    assert result is messages
     returns = _collect_returns(result)
     assert not returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)
+    assert deps.runtime.current_request_tokens_estimate <= 8_000
 
 
-def test_high_reported_large_local_spills(tmp_path: Path):
-    """Both reported and local tokens exceed threshold: spill fires on the large return."""
+def test_large_realtime_spills_and_post_spill_estimate_is_realtime(tmp_path: Path):
+    """Spill fires on realtime payload; post-spill estimate is realtime, not floored.
+
+    Exercises the post-spill ``effective_after`` site: after the large return spills
+    and the realtime payload drops under threshold, the recorded estimate reflects
+    that realtime value (no ``max(.., reported)`` pinning it high). A stale-high
+    provider count on the prior response must not force a fallback-to-summarize.
+    """
     big_content = "data: " + "y" * 40_000
     messages: list[ModelMessage] = [
         _user_request("run"),
@@ -257,9 +270,9 @@ def test_high_reported_large_local_spills(tmp_path: Path):
         _tool_request("shell_exec", "tc1", big_content),
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
-    deps.runtime.last_reported_input_tokens = 20_000
 
     result = enforce_request_size(_ctx(deps), messages)
 
     returns = _collect_returns(result)
     assert returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)
+    assert deps.runtime.current_request_tokens_estimate <= 8_000

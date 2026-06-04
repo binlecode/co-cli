@@ -10,7 +10,6 @@ interaction here.
 import asyncio
 import logging
 import time
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -101,7 +100,7 @@ class TurnResult:
     # Kept Any: callers pattern-match on interrupted/outcome, not on output type directly.
     output: Any = None
     # usage: pydantic-ai RunUsage object. Kept Any: callers never inspect fields directly;
-    # usage is forwarded opaquely to _merge_segment_usage and span attributes.
+    # usage is forwarded opaquely to span attributes.
     usage: Any = None
     streamed_text: bool = False
     # Count of ModelResponses across all segments in this turn.
@@ -149,7 +148,7 @@ class _TurnState:
     latest_result: SessionRunResult | None = None
     latest_streamed_text: bool = False
     # latest_usage: pydantic-ai RunUsage object. Kept Any: forwarded opaquely to
-    # _merge_segment_usage and span attributes; callers never inspect fields directly.
+    # span attributes; callers never inspect fields directly.
     latest_usage: Any = None
     tool_approval_decisions: ToolApprovalDecisions | None = None
     # cross-turn outcome flags
@@ -162,32 +161,6 @@ class _TurnState:
     # Set by _run_approval_loop when consecutive_tool_cap_violations crosses the threshold.
     # Read by run_turn to drive the hard-stop exit.
     tool_cap_hard_stop: bool = False
-
-
-# ---------------------------------------------------------------------------
-# _merge_segment_usage — accumulate one stream segment's usage into the per-turn total
-# ---------------------------------------------------------------------------
-
-
-def _merge_segment_usage(
-    deps: CoDeps,
-    # usage: pydantic-ai RunUsage object. Kept Any: forwarded opaquely; never inspected here.
-    usage: Any | None,
-) -> None:
-    """Merge one segment's usage into deps.runtime.turn_usage (the authoritative accumulator).
-
-    Called after every _execute_stream_segment() completes; this accumulator is
-    owned by the foreground orchestrator.
-    """
-    if usage is None:
-        return
-    # Deepcopy on first assignment: pydantic-ai mutates the passed-in usage object
-    # (including its `details` dict) in place across segments, so aliasing turn_usage
-    # to latest_usage would make later incr() calls self-referential and double-count.
-    if deps.runtime.turn_usage is None:
-        deps.runtime.turn_usage = deepcopy(usage)
-    else:
-        deps.runtime.turn_usage.incr(usage)
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +399,6 @@ async def _execute_stream_segment(
     turn_state.latest_streamed_text = renderer.streamed_text
     turn_state.latest_usage = result.usage()
     turn_state.tool_approval_decisions = None
-    _merge_segment_usage(deps, turn_state.latest_usage)
 
 
 async def _run_approval_loop(
@@ -564,7 +536,7 @@ def _check_output_limits(
         frontend.on_status(
             "Response truncated at output token ceiling — use /compact to free context."
         )
-    latest_input = deps.runtime.last_reported_input_tokens or 0
+    latest_input = latest_result.response.usage.input_tokens or 0
     if latest_input > 0:
         ratio = latest_input / deps.model_max_ctx
         current_span().add_event(

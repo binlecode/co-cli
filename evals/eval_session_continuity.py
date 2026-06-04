@@ -463,8 +463,8 @@ def _inflation_target_messages(deps: Any) -> int:
     """Measured per-run target: enough turns to push history past compaction_ratio.
 
     Starting N is 10 per the plan; the trigger depends on the configured
-    ``compaction_ratio`` and the live prompt size. Compaction reads
-    ``max(estimate_message_tokens, runtime.last_reported_input_tokens)`` against
+    ``compaction_ratio`` and the live prompt size. Compaction reads the
+    realtime-local ``effective_request_tokens`` estimate against
     ``compaction_ratio * model_max_ctx``. With default ``compaction_ratio=0.5``
     and a 32k context, a fresh agent on a warm 35B local emits ~10-15k prompt
     tokens per response, so 8-12 brief turns reliably crosses the threshold.

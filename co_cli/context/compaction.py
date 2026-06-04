@@ -317,21 +317,14 @@ def commit_compaction(
     ctx: RunContext[CoDeps],
     result: list[ModelMessage],
 ) -> None:
-    """Atomically write the two runtime "applied" fields.
+    """Mark that compaction ran this turn.
 
-    Single writer of ``compaction_applied_this_turn`` and
-    ``last_reported_input_tokens`` (overwrite with the post-compaction local
-    estimate so the next trigger pass doesn't see the stale pre-compaction
-    provider value). The estimate is floor-inclusive so the stored "reported"
-    matches a real provider report's scope. Token estimate is computed before
-    any write so a token-estimator failure leaves runtime untouched
-    (partial-commit prevention).
+    Single writer of ``compaction_applied_this_turn`` — drives session-branching
+    (main.py) and the ``proactive_window_processor`` OTEL span attribute.
 
     Callers must invoke this as the last step before returning.
     """
-    post_token_estimate = effective_request_tokens(ctx.deps, result)
     ctx.deps.runtime.compaction_applied_this_turn = True
-    ctx.deps.runtime.last_reported_input_tokens = post_token_estimate
 
 
 def _record_proactive_outcome(
@@ -346,7 +339,7 @@ def _record_proactive_outcome(
     """Apply proactive-specific post-compaction policy.
 
     Fires the closing status callback, computes savings using ``token_count``
-    (the trigger's ``max(local, reported)``), emits execution OTEL attributes
+    (the trigger's realtime-local ``effective_request_tokens``), emits execution OTEL attributes
     onto the wrapper span, updates the anti-thrash counter, then commits
     runtime as the final step. Any exception before ``commit_compaction``
     leaves runtime untouched — single-writer atomicity for the "applied"
@@ -491,18 +484,11 @@ async def proactive_window_processor(
             return messages
         cfg = ctx.deps.config.compaction
 
-        if ctx.deps.runtime.compaction_applied_this_turn:
-            reported = 0
-        else:
-            reported = ctx.deps.runtime.last_reported_input_tokens or 0
-
-        # Trigger uses max(local, reported) to bias toward earlier compaction. The local is
-        # floor-inclusive (static prefill + message list) so a stale/zeroed/missing report can't
-        # undercount live input by one floor within-turn. Savings uses the same effective-before so
-        # reported-driven triggers don't appear low-yield when local estimate is near the
-        # post-compaction value.
-        tokens_before_local = effective_request_tokens(ctx.deps, messages)
-        token_count = max(tokens_before_local, reported)
+        # Trigger is the realtime-local count (floor-inclusive: static prefill + message list),
+        # no provider-reported floor — peer-aligned with hermes/openclaw. A successful L2 spill
+        # deterministically lowers this same value, so L3 re-reads the lowered payload and
+        # fast-paths when the spill already fit. Savings reuses the same effective-before.
+        token_count = effective_request_tokens(ctx.deps, messages)
         token_threshold = int(budget * cfg.compaction_ratio)
 
         tool_calls_in_history = sum(
@@ -514,10 +500,8 @@ async def proactive_window_processor(
         )
 
         log.debug(
-            "Proactive check: msgs=%d local=%d reported=%d count=%d threshold=%d tool_calls=%d",
+            "Proactive check: msgs=%d count=%d threshold=%d tool_calls=%d",
             len(messages),
-            tokens_before_local,
-            reported,
             token_count,
             token_threshold,
             tool_calls_in_history,
@@ -525,8 +509,7 @@ async def proactive_window_processor(
 
         span = current_span()
         span.set_attribute("compaction.msgs", len(messages))
-        span.set_attribute("compaction.local_tokens", tokens_before_local)
-        span.set_attribute("compaction.reported_tokens", reported)
+        span.set_attribute("compaction.local_tokens", token_count)
         span.set_attribute("compaction.token_count", token_count)
         span.set_attribute("compaction.threshold", token_threshold)
         span.set_attribute("compaction.budget", budget)

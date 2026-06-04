@@ -445,8 +445,9 @@ def _build_status_snapshot(
     stem = deps.session.session_path.stem
     session_label = stem[-8:] if stem else "—"
     context_pct: float | None = None
-    if deps.runtime.turn_usage is not None and deps.model_max_ctx > 0:
-        context_pct = deps.runtime.turn_usage.input_tokens / deps.model_max_ctx
+    estimate = deps.runtime.current_request_tokens_estimate
+    if estimate is not None and deps.model_max_ctx > 0:
+        context_pct = estimate / deps.model_max_ctx
     return StatusSnapshot(
         session_label=session_label,
         mode=mode,

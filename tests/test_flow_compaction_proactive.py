@@ -15,7 +15,15 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
@@ -33,10 +41,12 @@ from co_cli.context.compaction import (
     is_compaction_marker,
     proactive_window_processor,
 )
+from co_cli.context.history_processors import enforce_request_size
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.observability import tracing
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 _LLM_MODEL = build_model(SETTINGS_NO_MCP.llm)
 
@@ -199,13 +209,13 @@ async def test_anti_thrash_gate_falls_back_to_static_marker() -> None:
 
 
 @pytest.mark.asyncio
-async def test_floor_aware_trigger_fires_when_report_stale() -> None:
-    """Trigger fires on the floor-inclusive size when the provider report is stale/zero.
+async def test_floor_aware_trigger_fires_on_static_floor() -> None:
+    """Trigger fires on the floor-inclusive realtime size, not the message list alone.
 
     model_max_ctx=700 → threshold=350. The 4-turn history is ~320 message-only tokens (below
-    threshold, so the floor-blind local would NOT fire), but the ~12k static prefill floor is real
-    input. With reported=0 (within-turn reset / missing report), a floor-aware local sees
-    static_floor + 320 > 350 and compacts. Without the floor, this history grows uncounted.
+    threshold, so the floor-blind local would NOT fire), but the static prefill floor is real
+    input. A floor-aware local sees static_floor + 320 > 350 and compacts. Without the floor,
+    this history grows uncounted.
     """
     deps = CoDeps(
         shell=ShellBackend(),
@@ -215,7 +225,6 @@ async def test_floor_aware_trigger_fires_when_report_stale() -> None:
         model_max_ctx=700,
         static_floor_tokens=100,
     )
-    deps.runtime.last_reported_input_tokens = 0
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
 
@@ -228,12 +237,13 @@ async def test_floor_aware_trigger_fires_when_report_stale() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fresh_reported_unchanged_by_floor() -> None:
-    """A fresh floor-inclusive report still drives the trigger — the floor adds no premature fire.
+async def test_small_realtime_no_compaction_despite_high_provider_usage() -> None:
+    """L3 keys off the realtime payload, not a stale-high provider count.
 
-    The provider report already includes the floor, so when it is fresh the local floor-aware
-    estimate stays below it and max() picks the report. A small history with reported=300 (< the
-    350 threshold) must not compact — same as before this change.
+    The trailing ModelResponse reports input_tokens=20_000 (what the removed
+    max(.., reported) floor used to read from), but the realtime payload is a
+    two-message history far below the 350 threshold. The trigger ignores the
+    provider count and does not compact — the L3 analogue of the L2 no-spill case.
     """
     deps = CoDeps(
         shell=ShellBackend(),
@@ -243,20 +253,24 @@ async def test_fresh_reported_unchanged_by_floor() -> None:
         model_max_ctx=700,
         static_floor_tokens=100,
     )
-    deps.runtime.last_reported_input_tokens = 300
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
-    messages = [_req("hello"), _resp("hi")]
+    messages = [
+        _req("hello"),
+        ModelResponse(parts=[TextPart(content="hi")], usage=RequestUsage(input_tokens=20_000)),
+    ]
 
     result = await proactive_window_processor(ctx, messages)
 
-    assert result is messages, "Fresh report below threshold must not compact"
+    assert result is messages, (
+        "Small realtime payload must not compact despite high provider usage"
+    )
     assert deps.runtime.compaction_applied_this_turn is False
 
 
 def test_savings_uses_floor_inclusive_basis() -> None:
-    """Low-yield reported-driven pass increments the thrash counter when savings use one basis.
+    """Low-yield pass increments the thrash counter when savings use a floor-inclusive basis.
 
-    The trigger's token_count is floor-inclusive (from a fresh report). Computing savings against a
+    The trigger's token_count is the floor-inclusive realtime estimate. Computing savings against a
     floor-EXCLUDED tokens_after would overstate yield and falsely reset the counter on a genuinely
     low-yield pass. With both sides floor-inclusive, savings = (1000 - (500+450))/1000 = 5% < the
     10% min, so the counter correctly increments.
@@ -398,72 +412,62 @@ async def test_successful_compaction_resets_skip_count() -> None:
 
 
 @pytest.mark.asyncio
-async def test_thrash_counter_not_incremented_for_reported_driven_compaction() -> None:
-    """Reported-dominant trigger must not produce a false low-yield event.
+async def test_l3_fastpaths_after_l2_spill_fits_payload(tmp_path: Path) -> None:
+    """Chain: a successful L2 spill deterministically suppresses an L3 summarize.
 
-    When provider-reported input_tokens >> local char-based estimate, the
-    compaction marker preamble overhead causes local_after > local_before
-    even when the LLM produces a concise summary. With the old savings formula
-    (local_before as denominator), savings would be negative, tripping the thrash
-    counter for a legitimate compaction. The fix uses max(local, reported) as
-    the effective-before, so effective savings = (reported - local_after) / reported
-    which is clearly positive whenever local_after < reported.
+    This is the behavioral heart of dropping ``reported`` from the trigger. Before
+    the spill the realtime payload is well over the summarize threshold; L2 spills
+    the oversized tool return to disk, dropping the realtime payload below threshold.
+    L3 then re-reads the *same* lowered realtime count and fast-paths
+    (below_threshold) — running zero summarizer LLM calls — even though the prior
+    ModelResponse reports a high provider input count (the stale-high signal the
+    removed ``max(.., reported)`` floor used to read). No provider-reported floor
+    keeps L3 firing after the spill already fit the payload.
 
-    Failure mode: two consecutive reported-driven compactions trip the anti-thrash
-    gate (proactive_thrash_window=2) and silence proactive compaction for the session.
+    model_max_ctx=4000 → L3 threshold=2000; spill_threshold=2000. One ~10k-token
+    tool return spills to a ~400-token persisted-output stub, landing under both.
     """
-    settings = _tight_settings()
+    big_content = "data: " + "y" * 40_000
+    messages: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="run")]),
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="shell_exec", args={}, tool_call_id="tc1")],
+            usage=RequestUsage(input_tokens=20_000),
+        ),
+        ModelRequest(
+            parts=[ToolReturnPart(tool_name="shell_exec", content=big_content, tool_call_id="tc1")]
+        ),
+    ]
     deps = CoDeps(
         shell=ShellBackend(),
         model=_TIGHT_MODEL,
-        config=settings,
+        config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_ctx=4000,
+        spill_threshold_tokens=2000,
+        tool_results_dir=tmp_path,
     )
-    # Simulate what TokenTrackingCapability.after_model_request would have written
-    # from the trailing ModelResponse's usage. The proactive processor reads this
-    # field, not the scan of message.usage values.
-    deps.runtime.last_reported_input_tokens = 2000
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
 
-    # 4-turn meaningful conversation — local estimate ~119 tokens, just above threshold
-    # of 100 (model_max_ctx=200, compaction_ratio=0.50). last_reported_input_tokens=2000
-    # (reported >> local), so token_count = max(119, 2000) = 2000.
-    #
-    # After compaction the marker preamble overhead pushes local_after > local_before
-    # (~522 tokens for the result vs ~119 for the input), making local savings negative.
-    # OLD savings formula: (119 - 522) / 119 ≈ -338%  → counter increments (bug).
-    # NEW savings formula: (2000 - 522) / 2000 ≈  74%  → counter stays at 0 (fixed).
-    messages = [
-        _req("Tell me about machine learning."),
-        _resp("Machine learning is a branch of AI that enables systems to learn from data."),
-        _req("What algorithms are commonly used?"),
-        _resp("Common algorithms include linear regression, decision trees, and neural networks."),
-        _req("How does gradient descent work?"),
-        _resp(
-            "Gradient descent minimizes loss by iteratively updating parameters "
-            "in the direction of the negative gradient."
-        ),
-        _req("What is overfitting?"),
-        ModelResponse(
-            parts=[
-                TextPart(
-                    content="Overfitting occurs when a model learns training data "
-                    "too well and fails to generalize to new data."
-                )
-            ],
-            usage=RequestUsage(input_tokens=2000),
-        ),
+    after_spill = enforce_request_size(ctx, messages)
+    spilled = [
+        part.content
+        for msg in after_spill
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+        if isinstance(part, ToolReturnPart) and isinstance(part.content, str)
     ]
+    assert any(c.startswith(PERSISTED_OUTPUT_TAG) for c in spilled), (
+        "L2 must spill the oversized return to disk"
+    )
 
-    await ensure_ollama_warm(TEST_LLM.model)
-    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
-        result = await proactive_window_processor(ctx, messages)
+    result = await proactive_window_processor(ctx, after_spill)
 
-    assert result is not messages, "Compaction must have fired"
-    assert deps.runtime.compaction_applied_this_turn is True
-    assert deps.runtime.consecutive_low_yield_proactive_compactions == 0, (
-        "Reported-driven compaction must not increment the thrash counter"
+    assert result is after_spill, (
+        "L3 must fast-path (below_threshold) after the spill fit the payload — no summarize"
+    )
+    assert deps.runtime.compaction_applied_this_turn is False, (
+        "a fitting spill must not trigger a summarizer LLM call"
     )
 
 

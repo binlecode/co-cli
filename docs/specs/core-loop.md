@@ -136,7 +136,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 
 | `deps.runtime` field | Why it is not in `_TurnState` |
 | --- | --- |
-| `turn_usage` | authoritative per-turn accumulator shared across foreground and sub-agent tool calls |
+| `current_request_tokens_estimate` | realtime-local request size written by `enforce_request_size` each request; read for the status-line context % and compaction-trigger telemetry |
 | `safety_state` | updated by the `safety_prompt` dynamic instruction before each model-bound segment |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
@@ -176,7 +176,6 @@ Normal-exit contract:
 3. `turn_state.latest_result` must be non-`None`, otherwise `_execute_stream_segment()` raises `RuntimeError`.
 4. `turn_state.latest_usage = result.usage()`
 5. `turn_state.tool_approval_decisions = None`
-6. `_merge_turn_usage()` adds the segment usage into `deps.runtime.turn_usage`
 
 Reasoning display is purely a frontend concern:
 
@@ -287,7 +286,7 @@ Compaction behavior:
 
 - `proactive_window_processor()` gathers side-channel context via `gather_compaction_context()` (active session todos only — ≤10 items, capped at 1,500 chars; file paths and prior summaries are recoverable LLM-side and intentionally omitted; see [self-planning.md](self-planning.md)), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds `cfg.compaction_ratio` (0.50) of the budget
-- token count is `max(effective_request_tokens, reported)` — the floor-inclusive local estimate (`deps.static_floor_tokens + estimate_message_tokens()`, where the message estimate counts `ToolCallPart.args` and `(dict, list)` content) maxed against the provider-reported `input_tokens` from the latest `ModelResponse`. The provider value is floor-inclusive and current cross-turn, but stale/zeroed/missing within-turn; making the local half floor-inclusive (adding the bootstrap-measured static-instruction + ALWAYS-schema floor) keeps the trigger from undercounting live size by one floor when the local estimate is the sole signal (see [compaction.md](compaction.md) §1.5)
+- token count is `effective_request_tokens` — the floor-inclusive realtime-local estimate (`deps.static_floor_tokens + estimate_message_tokens()`, where the message estimate counts `ToolCallPart.args` and `(dict, list)` content); no provider-reported floor (peer-aligned with hermes/openclaw). Adding the bootstrap-measured static-instruction + ALWAYS-schema floor keeps the trigger from undercounting live size by one floor (see [compaction.md](compaction.md) §1.5)
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: returns `deps.model_max_ctx` directly (Ollama probe result capped by `llm.max_ctx`, set at bootstrap)
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_skip_count`) trips at `_COMPACTION_BREAKER_TRIP` (3) consecutive failures; tripped state uses static markers but probes the LLM once every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
@@ -319,7 +318,7 @@ Error matrix:
 Output-limit diagnostics happen only after a successful final segment:
 
 1. if `latest_result.response.finish_reason == "length"`, show a truncation status message
-2. if `deps.model_max_ctx` is set, compare `runtime.last_reported_input_tokens / deps.model_max_ctx`
+2. if `deps.model_max_ctx` is set, compare `latest_result.response.usage.input_tokens / deps.model_max_ctx` — the provider's real input count for the final request, re-sourced on demand from the last `ModelResponse` (not carried as a runtime status var)
 3. emit either a warning or overflow message based on `ctx_warn_threshold` and `ctx_overflow_threshold`
 
 Interrupt handling is conservative:

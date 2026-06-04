@@ -5,7 +5,6 @@ from collections import deque
 from pathlib import Path
 
 import pytest
-from pydantic_ai.usage import RunUsage
 from rich.panel import Panel
 from tests._settings import SETTINGS_NO_MCP
 
@@ -348,16 +347,16 @@ def test_build_status_snapshot_empty_session_path_produces_dash():
     assert snapshot.session_label == "—"
 
 
-def test_build_status_snapshot_no_turn_usage_produces_none_context_pct():
+def test_build_status_snapshot_no_estimate_produces_none_context_pct():
     deps = _deps(model_max_ctx=200_000)
-    assert deps.runtime.turn_usage is None
+    assert deps.runtime.current_request_tokens_estimate is None
     snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.context_pct is None
 
 
 def test_build_status_snapshot_zero_max_ctx_produces_none_context_pct():
     deps = _deps(model_max_ctx=0)
-    deps.runtime.turn_usage = RunUsage(input_tokens=5_000)
+    deps.runtime.current_request_tokens_estimate = 5_000
     snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.context_pct is None
 
@@ -369,9 +368,9 @@ def test_build_status_snapshot_session_label_from_path_stem():
     assert snapshot.session_label == "a1b2c3d4"
 
 
-def test_build_status_snapshot_context_pct_from_usage():
+def test_build_status_snapshot_context_pct_from_realtime_estimate():
     deps = _deps(model_max_ctx=100_000)
-    deps.runtime.turn_usage = RunUsage(input_tokens=47_000)
+    deps.runtime.current_request_tokens_estimate = 47_000
     snapshot = _build_status_snapshot(deps, "idle", deque())
     assert snapshot.context_pct == pytest.approx(0.47)
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.302]
+
+### drop-reported-realtime-trigger — compaction triggers key off a single realtime-local count, no provider-reported floor
+
+Both compaction triggers compared against `max(local_estimate, last_reported_input_tokens)`, where `reported` is a provider-reported usage snapshot carried from the *previous* model response. A successful L2 spill lowers the realtime payload but cannot lower `reported`, so L3 would re-read the stale-high `reported` and fire an LLM summarization the spilled payload no longer required — papered over by a post-compaction overwrite of `reported`. The floor is now removed; co aligns with its chain-shaped peers (hermes/openclaw), which drive the same spill→summarize chain off a bare `chars/4` realtime count. The overflow backstop (HTTP 400/413 recovery) is unchanged and remains the safety net.
+
+- **L2 spill trigger (TASK-1).** `enforce_request_size` drops `max(.., reported)` at both read sites (the entry trigger and the post-spill `effective_after`); the trigger is now `static_floor_tokens + estimate_message_tokens`. The `request.reported_tokens` span attr is removed.
+- **L3 summarize trigger + commit (TASK-2).** `proactive_window_processor` drops the `reported` fetch and the `compaction_applied_this_turn → reported = 0` branch; `token_count = effective_request_tokens(...)`. A successful spill deterministically suppresses an unnecessary summarize. `commit_compaction` is reduced to a single `compaction_applied_this_turn = True` write — the post-compaction `reported` overwrite (and its sole-purpose estimate) are deleted.
+- **Full field removal (TASK-3).** The lone non-trigger consumer (overflow telemetry) re-sources the provider's real input count straight from the `AgentRunResult` it already holds (`latest_result.response.usage.input_tokens` — the last `ModelResponse`, not accumulated `RunUsage`), so `last_reported_input_tokens`, the `TokenTrackingCapability` writer (both chat + task registrations), `token_tracking.py`, and the `/clear`/`/new` resets all go — no `chars/4` degradation in the warning.
+- **Status-line context-% re-based (TASK-5).** The status-line "context used %" moves off the accumulator `turn_usage.input_tokens` (a response-snapshot-as-status-var that over-counted on multi-request turns) onto the realtime `current_request_tokens_estimate`; `turn_usage` + `_merge_segment_usage` are removed. `latest_usage` (spans/`TurnResult`) is untouched.
+- **Tests + docs.** Trigger tests carry an authentic stale-high provider signal as a prior `ModelResponse(usage.input_tokens=20_000)` and prove both triggers ignore it; a chain test runs L2 spill → L3 fast-path with **zero summarizer LLM calls**; overflow warning verified off the provider count. `compaction.md` / `core-loop.md` reconciled; parent context-stability plan's ISSUE-3 reduced to a pointer (root cause was `reported` in the trigger `max()`, not the spill/summarize band).
+
 ## [0.8.300]
 
 ### summary-output-length-control — bound the compaction summary proportionally to what it compresses
