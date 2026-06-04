@@ -68,12 +68,14 @@ def _discover_index_backend(
 
     Two-tier resolution with fail-fast on FTS unavailability:
       1. hybrid  — sqlite-vec + embedding provider (richest search)
-      2. fts5    — SQLite FTS5 index (minimum required for session recall)
+      2. fts5    — SQLite FTS5 index (minimum required for memory + canon recall)
       3. grep    — explicit opt-in only (search_backend: grep in config)
 
-    FTS5 is the minimum required backend. If the configured backend is fts5 or
-    hybrid and FTS5 fails to initialise, bootstrap raises rather than silently
-    degrading — a grep fallback would lose the session recall channel entirely.
+    This backend serves memory + canon recall only; session recall is file-based
+    ripgrep and does not use the index. FTS5 is the minimum required backend. If
+    the configured backend is fts5 or hybrid and FTS5 fails to initialise,
+    bootstrap raises rather than silently degrading — a grep fallback would lose
+    the hybrid memory recall channel entirely.
     """
     if config.memory.search_backend == "grep":
         return None
