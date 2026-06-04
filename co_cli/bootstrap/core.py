@@ -429,6 +429,15 @@ async def create_deps(
         **paths,
     )
     deps.runtime.background_status_callback = on_status
+
+    from co_cli.bootstrap.schema_budget import measure_always_schema_budget
+    from co_cli.context.assembly import build_static_instructions
+    from co_cli.context.tokens import CHARS_PER_TOKEN, estimate_text_tokens
+
+    instruction_tokens = estimate_text_tokens(build_static_instructions(config))
+    schema_budget = await measure_always_schema_budget(deps)
+    deps.static_floor_tokens = instruction_tokens + schema_budget.total_chars // CHARS_PER_TOKEN
+
     return deps
 
 

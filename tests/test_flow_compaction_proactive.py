@@ -25,6 +25,7 @@ from co_cli.context.compaction import (
     _COMPACTION_BREAKER_PROBE_EVERY,
     _COMPACTION_BREAKER_TRIP,
     CompactionFallbackReason,
+    _record_proactive_outcome,
     _resolve_proactive_focus,
     _summarization_gate_open,
     is_compaction_marker,
@@ -159,6 +160,90 @@ async def test_anti_thrash_gate_skips_compaction_after_consecutive_low_yield() -
 
     assert result is messages, "Gate must return original messages unchanged"
     assert deps.runtime.compaction_applied_this_turn is False
+
+
+# --- Floor-aware trigger tests (ISSUE-1.5) ---
+
+
+@pytest.mark.asyncio
+async def test_floor_aware_trigger_fires_when_report_stale() -> None:
+    """Trigger fires on the floor-inclusive size when the provider report is stale/zero.
+
+    model_max_ctx=700 → threshold=350. The 4-turn history is ~320 message-only tokens (below
+    threshold, so the floor-blind local would NOT fire), but the ~12k static prefill floor is real
+    input. With reported=0 (within-turn reset / missing report), a floor-aware local sees
+    static_floor + 320 > 350 and compacts. Without the floor, this history grows uncounted.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_TIGHT_MODEL,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        model_max_ctx=700,
+        static_floor_tokens=100,
+    )
+    deps.runtime.last_reported_input_tokens = 0
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
+    messages = _above_threshold_messages()
+
+    await ensure_ollama_warm(TEST_LLM.model)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        result = await proactive_window_processor(ctx, messages)
+
+    assert result is not messages, "Floor-inclusive size crossed the threshold — must compact"
+    assert deps.runtime.compaction_applied_this_turn is True
+
+
+@pytest.mark.asyncio
+async def test_fresh_reported_unchanged_by_floor() -> None:
+    """A fresh floor-inclusive report still drives the trigger — the floor adds no premature fire.
+
+    The provider report already includes the floor, so when it is fresh the local floor-aware
+    estimate stays below it and max() picks the report. A small history with reported=300 (< the
+    350 threshold) must not compact — same as before this change.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_TIGHT_MODEL,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        model_max_ctx=700,
+        static_floor_tokens=100,
+    )
+    deps.runtime.last_reported_input_tokens = 300
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
+    messages = [_req("hello"), _resp("hi")]
+
+    result = await proactive_window_processor(ctx, messages)
+
+    assert result is messages, "Fresh report below threshold must not compact"
+    assert deps.runtime.compaction_applied_this_turn is False
+
+
+def test_savings_uses_floor_inclusive_basis() -> None:
+    """Low-yield reported-driven pass increments the thrash counter when savings use one basis.
+
+    The trigger's token_count is floor-inclusive (from a fresh report). Computing savings against a
+    floor-EXCLUDED tokens_after would overstate yield and falsely reset the counter on a genuinely
+    low-yield pass. With both sides floor-inclusive, savings = (1000 - (500+450))/1000 = 5% < the
+    10% min, so the counter correctly increments.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_TIGHT_MODEL,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        static_floor_tokens=500,
+    )
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
+    # result estimate = 1800 chars // 4 = 450 tokens; tokens_after = 500 + 450 = 950.
+    result = [_resp("x" * 1800)]
+
+    _record_proactive_outcome(ctx, [_req("q")], result, "a summary", token_count=1000)
+
+    assert deps.runtime.consecutive_low_yield_proactive_compactions == 1, (
+        "Floor-inclusive savings (5%) is below the 10% min — counter must increment"
+    )
 
 
 # --- Circuit breaker gate tests ---

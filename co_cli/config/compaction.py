@@ -30,16 +30,20 @@ class CompactionSettings(BaseModel):
             "Fraction of budget above which the proactive mid-turn trigger fires. "
             "Post-compact state ≈ tail_fraction + head (~3%) + marker (~3%); "
             "headroom per pass ≈ compaction_ratio - post_compact_state. "
-            "At 0.50 with a 32k context, trigger fires at ~16k tokens; "
-            "tail budget = 20% × 32k ≈ 6.5k tokens; headroom per pass ≈ 24%."
+            "At 0.50 with a 32k context, the trigger fires at ~16k tokens; "
+            "tail budget = tail_fraction × 32k ≈ 3.2k tokens (≈20% of the 16k trigger); "
+            "headroom per pass ≈ 34% (message-only; the live trigger also counts the fixed "
+            "instruction+schema floor, which this estimate excludes)."
         ),
     )
     tail_fraction: float = Field(
-        default=0.20,
+        default=0.10,
         description=(
             "Fraction of budget targeted for the preserved tail in plan_compaction_boundaries. "
-            "Must be < compaction_ratio. Cross-compaction memory lives in the iterative "
-            "summary marker, so the tail carries only the recent reasoning chain."
+            "Sized so the tail is ~20% of the operational budget (compaction_ratio × budget): "
+            "at 0.10 with compaction_ratio 0.50, tail = 0.10 × budget = 20% of the trigger point, "
+            "not 20% of the full window. Must be < compaction_ratio. Cross-compaction memory "
+            "lives in the iterative summary marker, so the tail carries only the recent reasoning chain."
         ),
     )
     spill_ratio: float = Field(

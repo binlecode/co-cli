@@ -6,10 +6,10 @@ bloat is a silent, recurring context-budget tax. This guard pins the measured
 post-trim ALWAYS total and per-tool max so a re-bloated docstring or a new
 ALWAYS tool fails CI instead of quietly growing the prefill.
 
-Measurement mirrors ``tmp/audit_tool_schemas.py``: build deps via
-``create_deps``, unwrap the toolset to the inner ``FunctionToolset.tools``
-dict, call each tool's ``prepare_tool_def(ctx)``, and cross-reference
-visibility via ``deps.tool_index[name].visibility``.
+Measurement is factored into ``co_cli.bootstrap.schema_budget.measure_always_schema_budget`` — the
+single source of truth shared with the runtime floor measurement (``create_deps`` folds the same
+bucket into ``deps.static_floor_tokens``). This guard pins the measured chars; the runtime converts
+them to tokens.
 
 The pinned ceilings below were re-measured after the prefill-trim-2
 tool-guidance-dedup landing (TASK-1 through 3). Re-run ``tmp/audit_tool_schemas.py``
@@ -18,15 +18,12 @@ and update them whenever an ALWAYS tool's surface intentionally changes.
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import pytest
-from pydantic_ai._run_context import RunContext
-from pydantic_ai.result import RunUsage
 
 from co_cli.bootstrap.core import create_deps
-from co_cli.deps import VisibilityPolicyEnum
+from co_cli.bootstrap.schema_budget import measure_always_schema_budget
+from co_cli.context.assembly import build_static_instructions
+from co_cli.context.tokens import CHARS_PER_TOKEN, estimate_text_tokens
 
 # Measured 2026-06-02 after defer-skill-write-tools (skill_create + skill_delete → DEFERRED):
 # ALWAYS bucket = 19,800 chars (was 20,988 pre-defer; 22,589 pre-trim). +~400-char headroom.
@@ -39,32 +36,6 @@ PER_ALWAYS_TOOL_CEILING = 2_300
 MIN_TOOL_COUNT = 27
 
 
-def _unwrap_function_toolset(toolset: Any) -> Any:
-    """Walk toolset wrappers to the inner FunctionToolset holding a .tools dict.
-
-    Mirrors the proven unwrap in tmp/audit_tool_schemas.py: handles the
-    FilteredToolset / CombinedToolset / wrapped chain.
-    """
-    inner: Any = toolset
-    for _ in range(12):
-        if hasattr(inner, "tools") and isinstance(inner.tools, dict):
-            return inner
-        if hasattr(inner, "toolsets"):
-            for sub in inner.toolsets:
-                cur = sub
-                for _ in range(8):
-                    if hasattr(cur, "tools") and isinstance(cur.tools, dict):
-                        return cur
-                    cur = getattr(cur, "wrapped", None)
-                    if cur is None:
-                        break
-            return None
-        inner = getattr(inner, "wrapped", None)
-        if inner is None:
-            return None
-    return inner
-
-
 @pytest.mark.asyncio
 async def test_always_bucket_within_budget() -> None:
     """ALWAYS-visibility tool schemas (name+desc+params) stay under the pinned ceiling."""
@@ -73,50 +44,39 @@ async def test_always_bucket_within_budget() -> None:
     # environments and avoids the Context7 stdio teardown race.
     deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
 
-    inner = _unwrap_function_toolset(deps.toolset)
-    assert inner is not None, "could not unwrap toolset to a FunctionToolset"
-    assert hasattr(inner, "tools"), "unwrapped toolset has no .tools dict"
+    budget = await measure_always_schema_budget(deps)
 
-    always_total = 0
-    per_tool_totals: dict[str, int] = {}
-    empty_desc: list[str] = []
-    tool_count = 0
-    for name, tool in inner.tools.items():
-        ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name=name)  # type: ignore[arg-type]
-        tdef = await tool.prepare_tool_def(ctx)
-        if tdef is None:
-            continue
-        tool_count += 1
-        desc = tdef.description or ""
-        if not desc.strip():
-            empty_desc.append(name)
-        params_json = json.dumps(tdef.parameters_json_schema or {}, separators=(",", ":"))
-        total = len(tdef.name) + len(desc) + len(params_json)
-        per_tool_totals[name] = total
-        info = deps.tool_index.get(name)
-        if info is not None and info.visibility == VisibilityPolicyEnum.ALWAYS:
-            always_total += total
+    assert not budget.empty_descriptions, (
+        f"tools with empty description: {budget.empty_descriptions}"
+    )
 
-    assert not empty_desc, f"tools with empty description: {empty_desc}"
-
-    assert tool_count >= MIN_TOOL_COUNT, (
-        f"registry shrank to {tool_count} tools (floor {MIN_TOOL_COUNT}) — "
+    assert budget.tool_count >= MIN_TOOL_COUNT, (
+        f"registry shrank to {budget.tool_count} tools (floor {MIN_TOOL_COUNT}) — "
         "a tool may have been dropped accidentally"
     )
 
-    always_tools = {
-        name: total
-        for name, total in per_tool_totals.items()
-        if (info := deps.tool_index.get(name)) is not None
-        and info.visibility == VisibilityPolicyEnum.ALWAYS
-    }
-    max_name = max(always_tools, key=always_tools.__getitem__)
-    assert always_tools[max_name] <= PER_ALWAYS_TOOL_CEILING, (
-        f"ALWAYS tool '{max_name}' grew to {always_tools[max_name]} chars "
+    max_name = max(budget.per_tool_chars, key=budget.per_tool_chars.__getitem__)
+    assert budget.per_tool_chars[max_name] <= PER_ALWAYS_TOOL_CEILING, (
+        f"ALWAYS tool '{max_name}' grew to {budget.per_tool_chars[max_name]} chars "
         f"(ceiling {PER_ALWAYS_TOOL_CEILING}) — trim its docstring"
     )
 
-    assert always_total <= ALWAYS_BUCKET_CEILING, (
-        f"ALWAYS tool-schema bucket grew to {always_total} chars "
+    assert budget.total_chars <= ALWAYS_BUCKET_CEILING, (
+        f"ALWAYS tool-schema bucket grew to {budget.total_chars} chars "
         f"(ceiling {ALWAYS_BUCKET_CEILING}) — a docstring re-bloated or a new ALWAYS tool landed"
     )
+
+
+@pytest.mark.asyncio
+async def test_static_floor_tokens_measured_at_bootstrap() -> None:
+    """deps.static_floor_tokens is the measured (not literal) instruction + ALWAYS-schema floor."""
+    deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
+
+    budget = await measure_always_schema_budget(deps)
+    expected = (
+        estimate_text_tokens(build_static_instructions(deps.config))
+        + budget.total_chars // CHARS_PER_TOKEN
+    )
+
+    assert deps.static_floor_tokens > 0
+    assert deps.static_floor_tokens == expected

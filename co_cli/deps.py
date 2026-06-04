@@ -18,6 +18,7 @@ from co_cli.config.core import (
     USER_DIR,
     Settings,
 )
+from co_cli.config.llm import DEFAULT_MAX_CTX
 from co_cli.tools.file_read_tracker import FileReadTracker
 
 if TYPE_CHECKING:
@@ -317,11 +318,18 @@ class CoDeps:
 
     # Effective context window size — single source of truth, set unconditionally at bootstrap.
     # Ollama: read from the loaded Modelfile via /api/show, capped by max_ctx (probe-failure
-    # fallback: max_ctx). Other providers: max_ctx ceiling.
-    model_max_ctx: int = 0
+    # fallback: max_ctx). Other providers: max_ctx ceiling. Defaults to the configured ceiling
+    # so a deps built outside bootstrap still resolves a usable budget (never a 0-divide / 0-budget).
+    model_max_ctx: int = DEFAULT_MAX_CTX
     # Bootstrap-cached: int(spill_ratio x model_max_ctx). Immutable after bootstrap.
     # Read by enforce_request_size; never recomputed at read sites.
     spill_threshold_tokens: int = 0
+    # Bootstrap-cached: measured static-instruction tokens + ALWAYS-schema tokens — the
+    # floor-inclusive prefill present on every request, absent from the `messages` list. Added to
+    # the local estimate at the L2/L3 compaction triggers so a stale/zeroed/missing provider report
+    # cannot undercount live input by one floor. Immutable after bootstrap; defaults 0 (floor-blind)
+    # for ad-hoc/test deps.
+    static_floor_tokens: int = 0
 
     # Runtime degradation state — mutated during bootstrap, read-only after
     degradations: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))

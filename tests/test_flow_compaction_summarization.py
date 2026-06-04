@@ -17,6 +17,7 @@ from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
 from co_cli.context.summarization import (
+    effective_request_tokens,
     estimate_message_tokens,
     summarize_messages,
 )
@@ -191,6 +192,27 @@ def test_estimate_message_tokens_grows_with_content():
 def test_estimate_message_tokens_empty_list():
     """Token estimate for an empty message list must be zero."""
     assert estimate_message_tokens([]) == 0
+
+
+def test_effective_request_tokens_adds_static_floor():
+    """effective_request_tokens adds the bootstrap-measured floor to the message-list estimate."""
+    messages = [ModelRequest(parts=[UserPromptPart(content="hi " * 100)])]
+    base = estimate_message_tokens(messages)
+
+    floored = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+        static_floor_tokens=5000,
+    )
+    assert effective_request_tokens(floored, messages) == 5000 + base
+
+
+def test_effective_request_tokens_default_floor_is_messages_only():
+    """With the default floor (0), the estimate equals estimate_message_tokens (floor-blind deps)."""
+    messages = [ModelRequest(parts=[UserPromptPart(content="hello world")])]
+    assert effective_request_tokens(_DEPS, messages) == estimate_message_tokens(messages)
 
 
 # ---------------------------------------------------------------------------

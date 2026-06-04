@@ -6,7 +6,8 @@ Shared by both the sliding-window history processor (``history_processors.py``) 
 Public API:
     summarize_messages        — async, LLM-based conversation summarization
     resolve_compaction_budget — sync, resolves token budget from model spec + config
-    estimate_message_tokens   — sync, rough char-based token estimate
+    estimate_message_tokens   — sync, rough char-based token estimate (message list only)
+    effective_request_tokens  — sync, floor-inclusive local estimate for the compaction triggers
 """
 
 from __future__ import annotations
@@ -75,6 +76,18 @@ def resolve_compaction_budget(deps: CoDeps) -> int:
     own trigger policy.
     """
     return deps.model_max_ctx
+
+
+def effective_request_tokens(deps: CoDeps, messages: list[ModelMessage]) -> int:
+    """Floor-inclusive local estimate: static prefill floor + message-list tokens.
+
+    The L2/L3 compaction triggers compare this against ``max(.., reported)``.
+    ``estimate_message_tokens`` counts only the message list; the bootstrap-measured static floor
+    (``deps.static_floor_tokens`` — static instructions + ALWAYS schemas) is real input the
+    provider counts but is absent from ``messages``. Adding it closes the within-turn undercount
+    window where a stale/zeroed/missing report leaves the floor-blind local as the sole signal.
+    """
+    return deps.static_floor_tokens + estimate_message_tokens(messages)
 
 
 # ---------------------------------------------------------------------------

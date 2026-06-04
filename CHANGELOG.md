@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.294]
+
+### context-stability — floor-aware compaction trigger + proportional tail (ISSUE-1/1.5)
+
+Partial delivery of the context-stability-sizing-control plan. The L2/L3 compaction triggers undercounted live input within-turn, and the preserved tail was sized against the full window rather than the operational budget — together diluting the compressible middle and letting long sessions drift toward overflow.
+
+- **Floor-aware trigger (ISSUE-1.5).** The trigger local estimate is now floor-inclusive via new `effective_request_tokens(deps, messages) = static_floor_tokens + estimate_message_tokens(messages)`. `deps.static_floor_tokens` is measured live at bootstrap (static instructions + ALWAYS-visibility tool schemas, ~10,788 tok) via new `co_cli/bootstrap/schema_budget.py`. Closes the within-turn undercount where a stale/zeroed/missing provider report left the floor-blind local as the sole signal — the trigger no longer fires up to one floor (~11k tok) late.
+- **Savings basis fixed.** Post-compaction `savings` and the `commit_compaction` overwrite now use a floor-inclusive `tokens_after`, removing the overstatement that biased the anti-thrash low-yield detector.
+- **Proportional tail (ISSUE-1).** `compaction.tail_fraction` default lowered `0.20 → 0.10` so the preserved tail is ~20% of the operational budget (was 40%). Combined with the floor-aware work, the compressible middle widens from ~23.5% to ~47% of the trigger.
+- **Shared schema-budget helper.** `measure_always_schema_budget` factored out of `tests/test_orchestrator_schema_budget.py` so bootstrap and the regression guard read one source of truth; `estimate_text_tokens` added to `co_cli/context/tokens.py`.
+- **Specs synced.** `docs/specs/compaction.md` and `docs/specs/core-loop.md` updated to the floor-aware trigger (the "always current by construction" claim is now scoped to cross-turn; within-turn is backstopped by the floor-inclusive local).
+
 ## [0.8.292]
 
 ### structural-logging-gap-fill — span coverage for non-agent processing paths

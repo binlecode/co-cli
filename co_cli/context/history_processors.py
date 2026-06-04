@@ -375,7 +375,8 @@ def enforce_request_size(
     actually carry.
 
     Algorithm:
-      1. ``total = max(estimate_message_tokens, runtime.last_reported_input_tokens)``.
+      1. ``total = max(static_floor_tokens + estimate_message_tokens, runtime.last_reported_input_tokens)``
+         — the local half is floor-inclusive so a stale/zeroed/missing report can't undercount.
       2. If ``total <= deps.spill_threshold_tokens``, fast-path.
       3. Collect ``ToolReturnPart`` candidates with string content; filter
          spillable (content does not start with ``PERSISTED_OUTPUT_TAG``).
@@ -396,7 +397,7 @@ def enforce_request_size(
 
     local_total = estimate_message_tokens(messages)
     reported_total = deps.runtime.last_reported_input_tokens or 0
-    trigger = max(local_total, reported_total)
+    trigger = max(deps.static_floor_tokens + local_total, reported_total)
     candidates = _collect_tool_return_candidates(messages)
     spillable = [p for p in candidates if not p.content.startswith(PERSISTED_OUTPUT_TAG)]
 
@@ -405,6 +406,7 @@ def enforce_request_size(
         "request.threshold_tokens": threshold,
         "request.tokens_before": trigger,
         "request.local_tokens": local_total,
+        "request.static_floor_tokens": deps.static_floor_tokens,
         "request.reported_tokens": reported_total,
         "request.candidates_count": len(candidates),
         "request.spillable_count": len(spillable),
@@ -446,7 +448,7 @@ def enforce_request_size(
         tool_results_dir=deps.tool_results_dir,
     )
 
-    effective_after = max(local_after, reported_total)
+    effective_after = max(deps.static_floor_tokens + local_after, reported_total)
 
     if not spilled_by_id:
         _emit_terminal(

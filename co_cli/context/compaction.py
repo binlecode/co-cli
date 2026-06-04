@@ -50,6 +50,7 @@ from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.history_processors import strip_all_tool_returns
 from co_cli.context.summarization import (
+    effective_request_tokens,
     estimate_message_tokens,
     resolve_compaction_budget,
     summarize_messages,
@@ -316,12 +317,14 @@ def commit_compaction(
     Single writer of ``compaction_applied_this_turn`` and
     ``last_reported_input_tokens`` (overwrite with the post-compaction local
     estimate so the next trigger pass doesn't see the stale pre-compaction
-    provider value). Token estimate is computed before any write so a
-    token-estimator failure leaves runtime untouched (partial-commit prevention).
+    provider value). The estimate is floor-inclusive so the stored "reported"
+    matches a real provider report's scope. Token estimate is computed before
+    any write so a token-estimator failure leaves runtime untouched
+    (partial-commit prevention).
 
     Callers must invoke this as the last step before returning.
     """
-    post_token_estimate = estimate_message_tokens(result)
+    post_token_estimate = effective_request_tokens(ctx.deps, result)
     ctx.deps.runtime.compaction_applied_this_turn = True
     ctx.deps.runtime.last_reported_input_tokens = post_token_estimate
 
@@ -353,7 +356,7 @@ def _record_proactive_outcome(
         else:
             cb("Summarizer failed — used static marker.")
 
-    tokens_after = estimate_message_tokens(result)
+    tokens_after = effective_request_tokens(ctx.deps, result)
     savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
     log.debug(
         "Compaction result: tokens %d→%d (saved %.0f%%) msgs %d→%d",
@@ -475,10 +478,12 @@ async def proactive_window_processor(
         else:
             reported = ctx.deps.runtime.last_reported_input_tokens or 0
 
-        # Trigger uses max(local, reported) to bias toward earlier compaction.
-        # Savings uses the same effective-before so reported-driven triggers don't
-        # appear low-yield when local estimate is near the post-compaction value.
-        tokens_before_local = estimate_message_tokens(messages)
+        # Trigger uses max(local, reported) to bias toward earlier compaction. The local is
+        # floor-inclusive (static prefill + message list) so a stale/zeroed/missing report can't
+        # undercount live input by one floor within-turn. Savings uses the same effective-before so
+        # reported-driven triggers don't appear low-yield when local estimate is near the
+        # post-compaction value.
+        tokens_before_local = effective_request_tokens(ctx.deps, messages)
         token_count = max(tokens_before_local, reported)
         token_threshold = int(budget * cfg.compaction_ratio)
 
