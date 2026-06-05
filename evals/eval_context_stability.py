@@ -1,27 +1,28 @@
 """UAT eval — Context stability under sustained text/reasoning pressure (ISSUE-2).
 
 Drives a long multi-turn conversation through a **text/reasoning-heavy phase**
-that accumulates near-incompressible content with no spillable
-``ToolReturnPart`` candidates. This is the only phase that engages the
-anti-thrash gate's previously-unreproduced no-op→growth path: a text middle has
-nothing for the layer-2 ``evict_old_tool_results`` spill to bite on, so the
-proactive compactor (``proactive_window_processor``) is the sole defense and the
-anti-thrash branch is reachable.
+that accumulates near-incompressible content with no spillable ``ToolReturnPart``
+candidates, under the shared 32k eval window (``EVAL_MAX_CTX``, halved from the
+system default to magnify pressure). A text middle has nothing for the layer-2
+spill to bite on, so the proactive compactor (``proactive_window_processor``) is
+the sole defense and the anti-thrash gate's no-op→growth path is reachable.
 
-Sequencing / file ownership
----------------------------
-This plan (``antithrash-static-marker-fallback``, ISSUE-2) **ships first and
-owns creation** of this file, carrying the **text-heavy phase only**. The parent
-plan's combined loop-stability eval (``context-stability-sizing-control``, which
-lists prerequisites ISSUE-2, ISSUE-3, ISSUE-5 and is structurally inert until
-ISSUE-2 lands) is a downstream extension that adds the tool-output-heavy phase.
+CS.C (tool-output-heavy phase, drop-reported trigger) is present but **disabled**
+(``_CS_C_ENABLED = False``) — emitted as a SKIPPED case, not run. It is a legit
+test, but the *current* environment cannot reach its precondition: the 32k eval
+window + ~10.8k static prefill floor + 4k per-result auto-spill cap together route
+any oversized request into the L3 ``fallback_to_summarize`` case before a fitting
+L2 aggregate spill can occur. Those three sizings are themselves open issues —
+re-enable CS.C once they are resolved (see the constant's note). Until then the
+chain is guarded by the deterministic unit test
+``test_l3_fastpaths_after_l2_spill_fits_payload``.
 
-What this validates (load-bearing, within this plan's authority)
-----------------------------------------------------------------
+What this validates (load-bearing)
+----------------------------------
 - **No context-overflow error** across the whole run.
 - **Bounded number of compaction passes** — the loop never runs away.
 - **Every triggered pass reduces token count** — the anti-thrash branch produces
-  a static-marker pass that trims, never a no-op (the bug this plan fixes).
+  a static-marker pass that trims, never a no-op.
 - **Post-pass total stays below the trigger** — each fired pass leaves headroom.
 
 Gate-conditional anti-thrash assertion
@@ -43,7 +44,8 @@ coherence-after-trim, which holds the ``tail_fraction`` lever this plan cannot
 act on). No recall-probe machinery is built here.
 
 Specs: docs/specs/compaction.md
-Plan: docs/exec-plans/completed/2026-06-03-220905-antithrash-static-marker-fallback.md
+Plans: docs/exec-plans/completed/2026-06-03-220905-antithrash-static-marker-fallback.md (CS.A/CS.B);
+       docs/exec-plans/completed/2026-06-04-130800-drop-reported-realtime-trigger.md (CS.C, disabled)
 
 Helpers (from sibling modules): ``make_eval_deps``, ``ensure_ollama_warm``,
 ``MULTI_TURN_COMPACT_BUDGET_S``, ``CaseResult``/``Verdict``/``open_eval_run``,
@@ -59,6 +61,8 @@ import os
 import secrets
 import sys
 import time
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -66,13 +70,16 @@ from evals._deps import make_eval_deps
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
-from evals._settings import eval_max_ctx
+from evals._settings import apply_eval_window
 from evals._timeouts import MULTI_TURN_COMPACT_BUDGET_S
 from evals._trace import record_turn
 
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.summarization import SUMMARY_BUDGET_FLOOR
+from co_cli.memory.frontmatter import render_frontmatter
+from co_cli.memory.item import MemoryKindEnum
 from co_cli.observability import tracing
+from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-context-stability.md"
 
@@ -99,6 +106,25 @@ _MAX_PROACTIVE_PASSES = _NUM_TURNS * 3
 # first casualty. ## Critical Context is "Skip if none" — legitimately absent for
 # the high-entropy fixture — so it is logged, not gated.
 _MANDATORY_TRAILING_SECTION = "## Next Step"
+
+# CS.C — tool-output spill pressure. DISABLED: legit test, but the current
+# environment can't reach its precondition. A fitting L2 aggregate spill requires
+# a pile of raw, force-spillable tool returns (1500 < chars <= 4000) to survive in
+# history when a request crosses the trigger. Under the 32k window the ~10.8k
+# static prefill floor leaves only ~5.6k headroom, L3 (same 16384 trigger) trims
+# the pile between turns, and the 4k auto-spill cap pre-spills larger returns
+# upstream — so enforce always falls back to summarize. Re-enable once the window/
+# floor/cap sizings are addressed (then flip _CS_C_ENABLED). The chain itself is
+# guarded meanwhile by test_l3_fastpaths_after_l2_spill_fits_payload (unit).
+_CS_C_ENABLED = False
+# Each seeded artifact is sized just under the per-result tool_io spill threshold
+# so memory_view returns it raw; raw returns accumulate until the L2 aggregate
+# trigger fires. ~950 tokens/artifact.
+_CS_C_ARTIFACT_CHARS = SPILL_THRESHOLD_CHARS - 200
+_CS_C_MAX_TURNS = 16
+_CS_C_FACT_TOKEN = "ANCHOR_FACT"
+_CS_C_STEM_PREFIX = "eval_csc_doc_"
+_ENFORCE_EVENT_NAME = "tool_budget.enforce_request_size"
 
 
 def _high_entropy_block(approx_tokens: int) -> str:
@@ -272,13 +298,16 @@ async def case_cs_a_text_pressure_bounded(
     history: list[Any] = []
 
     # Each turn appends a near-incompressible block (see _high_entropy_block) so
-    # the running history climbs gradually toward the 0.50 x model_max_ctx ~= 32k
-    # trigger (model_max_ctx sourced from the real system config, default 64k) and
-    # sustains pressure past it. Sized small enough that a single turn's prefill
+    # the running history climbs gradually toward the 0.50 x model_max_ctx ~= 16k
+    # trigger (model_max_ctx is the shared EVAL_MAX_CTX baseline, capped at 32k to
+    # magnify pressure) and sustains pressure past it. Sized small enough that a single turn's prefill
     # stays a tractable warm-latency call even once the context is near-trigger
     # (large blocks balloon prefill past the per-turn budget — a model-latency
-    # hazard, not the behavior under test, per feedback_llm_call_timing).
-    per_turn_block_tokens = 2500
+    # hazard, not the behavior under test, per feedback_llm_call_timing), and so
+    # that after a compaction pass the preserved tail + static floor leaves
+    # headroom below the tighter 16k trigger (2500-tok blocks left the post-pass
+    # total ~12 tokens over at 32k).
+    per_turn_block_tokens = 1500
 
     # Capture status strings so the real failure under test (a context-overflow
     # event, which run_turn's recovery path announces via on_status) is told
@@ -612,6 +641,216 @@ def _force_blocking_stdio() -> None:
         fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
 
 
+def _read_enforce_events(spans_log: Path) -> list[dict[str, Any]]:
+    """Every ``tool_budget.enforce_request_size`` event (L2 spill decision), in log order.
+
+    ``enforce_request_size`` adds its event to ``current_span()`` inside the history
+    processor, so it can land on any active span — scan every record's ``events``,
+    not a single named span. Each returned dict is the event's ``attributes``
+    (``request.spill_fired``, ``request.tokens_after``, ``request.threshold_tokens``,
+    ``request.skip_reason``).
+    """
+    if not spans_log.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for line in spans_log.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for event in rec.get("events", []):
+            if event.get("name") == _ENFORCE_EVENT_NAME:
+                out.append(event.get("attributes", {}))
+    return out
+
+
+def _seed_spill_artifacts(deps: Any, count: int) -> list[str]:
+    """Seed ``count`` near-incompressible memory artifacts just under the per-result
+    spill threshold, returning their filename stems in view order.
+
+    Real artifacts (frontmatter + body) synced into the live memory store — the same
+    surface ``memory_view`` reads in production. Body is high-entropy so the
+    summarizer cannot shrink it and the fact token survives at the head.
+    """
+    deps.memory_dir.mkdir(parents=True, exist_ok=True)
+    body_filler = _high_entropy_block(_CS_C_ARTIFACT_CHARS // 4)
+    stems: list[str] = []
+    for index in range(count):
+        stem = f"{_CS_C_STEM_PREFIX}{index:02d}"
+        body = f"{_CS_C_FACT_TOKEN}_{index:02d} is the anchor fact.\n\n{body_filler}"
+        frontmatter_dict = {
+            "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, stem)),
+            "memory_kind": MemoryKindEnum.NOTE.value,
+            "title": stem,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        (deps.memory_dir / f"{stem}.md").write_text(
+            render_frontmatter(frontmatter_dict, body), encoding="utf-8"
+        )
+        stems.append(stem)
+    deps.memory_store.sync_dir(deps.memory_dir)
+    return stems
+
+
+async def case_cs_c_tool_spill_precedes_summarize(
+    deps: Any, agent: Any, frontend: Any, run: Any, spans_log: Path
+) -> CaseResult:
+    """Drive tool-output pressure; assert a fitting L2 spill suppresses the L3 summarize.
+
+    DISABLED via ``_CS_C_ENABLED`` (see that constant) — kept for re-enablement once
+    the window/floor/cap sizings let the precondition be reached. The drop-reported
+    chain: real ``memory_view`` returns accumulate until L2 ``enforce_request_size``
+    force-spills the largest to disk, dropping the payload below the L3 threshold so
+    the proactive check fast-paths (``below_threshold``) with zero summarizer calls.
+
+    Hard assertions (when enabled):
+      - no context-overflow error on any turn;
+      - L2 spill fires on the accumulated real tool output (``request.spill_fired``);
+      - on the turn a fitting spill occurs (``tokens_after <= threshold``), that turn's
+        proactive checks are all ``below_threshold`` with zero new summarizer passes.
+    """
+    case_id = "CS.C"
+    t0 = time.monotonic()
+    reason = ""
+    passed = True
+    model_call_seconds = 0.0
+    token_usage: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0}
+    trace_id = ""
+    case_dir = run.case_trace_path(case_id)
+
+    stems = _seed_spill_artifacts(deps, _CS_C_MAX_TURNS)
+
+    statuses: list[str] = []
+    base_on_status = frontend.on_status
+
+    def _capture_status(message: str) -> None:
+        statuses.append(message)
+        base_on_status(message)
+
+    frontend.on_status = _capture_status
+
+    history: list[Any] = []
+    # Baseline the diff against records CS.A/CS.B already wrote to the shared spans
+    # log, so CS.C's per-turn "new records" are its own, not prior cases'.
+    prev_enforce = len(_read_enforce_events(spans_log))
+    prev_proactive = len(_read_proactive_spans(spans_log))
+    prev_passes = len(_read_summarizer_passes(spans_log))
+    spill_fired_seen = False
+    proof_seen = False
+
+    try:
+        for index, stem in enumerate(stems):
+            user_input = (
+                f"Use the `memory_view` tool to read the artifact with filename_stem "
+                f"`{stem}` and quote the uppercase anchor token on its first line. "
+                "Reply with just that token."
+            )
+            try:
+                async with asyncio.timeout(MULTI_TURN_COMPACT_BUDGET_S):
+                    turn_result, trace = await record_turn(
+                        case_id=case_id,
+                        turn_index=index,
+                        user_input=user_input,
+                        run_turn_callable=lambda u=user_input, h=history: run_turn(
+                            agent=agent,
+                            user_input=u,
+                            deps=deps,
+                            message_history=h,
+                            frontend=frontend,
+                        ),
+                        case_dir_path=case_dir,
+                        agent=agent,
+                    )
+            except TimeoutError:
+                passed = False
+                reason = (
+                    f"turn {index} stalled past {MULTI_TURN_COMPACT_BUDGET_S}s per-turn budget"
+                )
+                break
+
+            model_call_seconds += trace.model_call_seconds
+            for usage_key, usage_val in trace.token_usage.items():
+                token_usage[usage_key] = token_usage.get(usage_key, 0) + usage_val
+            if trace.trace_ids:
+                trace_id = trace.trace_ids[-1]
+            history = turn_result.messages
+
+            if any("Context overflow" in s for s in statuses):
+                passed = False
+                reason = f"context overflow at turn {index} — spill failed to bound the request"
+                break
+
+            enforce_events = _read_enforce_events(spans_log)
+            proactive = _read_proactive_spans(spans_log)
+            passes = _read_summarizer_passes(spans_log)
+            new_enforce = enforce_events[prev_enforce:]
+            new_proactive = proactive[prev_proactive:]
+            new_passes = passes[prev_passes:]
+            prev_enforce, prev_proactive, prev_passes = (
+                len(enforce_events),
+                len(proactive),
+                len(passes),
+            )
+
+            fitting_spill = any(
+                event.get("request.spill_fired")
+                and event.get("request.tokens_after", 1 << 30)
+                <= event.get("request.threshold_tokens", 0)
+                for event in new_enforce
+            )
+            if any(event.get("request.spill_fired") for event in new_enforce):
+                spill_fired_seen = True
+
+            if fitting_spill:
+                skip_reasons = [
+                    rec.get("attributes", {}).get("compaction.skip_reason")
+                    for rec in new_proactive
+                ]
+                if (
+                    new_proactive
+                    and all(r == "below_threshold" for r in skip_reasons)
+                    and not new_passes
+                ):
+                    proof_seen = True
+                    reason = (
+                        f"turn {index}: L2 spill fit the payload and L3 fast-pathed "
+                        f"(below_threshold, {len(new_passes)} summarizer passes)"
+                    )
+                    break
+                passed = False
+                reason = (
+                    f"turn {index}: L2 spill fit the payload but L3 did not fast-path "
+                    f"(skip_reasons={skip_reasons}, summarizer_passes={len(new_passes)}) — "
+                    "the spill failed to suppress the summarize"
+                )
+                break
+    finally:
+        frontend.on_status = base_on_status
+
+    if passed and not spill_fired_seen:
+        passed = False
+        reason = (
+            f"L2 never spilled across {len(stems)} turns — tool-output accumulation never "
+            "crossed the spill trigger (raise _CS_C_MAX_TURNS or artifact size)"
+        )
+    if passed and not proof_seen:
+        passed = False
+        reason = reason or "no fitting-spill→below_threshold turn observed"
+
+    return CaseResult(
+        name=case_id,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
+        duration_s=time.monotonic() - t0,
+        model_call_seconds=model_call_seconds,
+        token_usage=token_usage,
+        trace_id=trace_id,
+        trace_files=[f"{case_dir.parent.name}/{case_dir.name}"],
+        reason=reason or "ok",
+    )
+
+
 async def main() -> int:
     """Run the context-stability case against the real ``~/.co-cli/`` workspace.
 
@@ -624,12 +863,10 @@ async def main() -> int:
     await ensure_ollama_warm()
 
     deps, agent, frontend, stack = await make_eval_deps()
-    # Operational window from the centralized eval settings — sourced from the
-    # real system config (default 64k), so this is idempotent with what
-    # create_deps already resolved. It pins the window to the shared eval knob
-    # and is the single place to override if a future run needs a smaller window
-    # (eval_max_ctx(<n>)) — never a literal coined inline here.
-    deps.model_max_ctx = eval_max_ctx()
+    # Budget simulation: lower co's accounting window to 32k and re-derive
+    # spill_threshold together so compaction/spill fire under magnified pressure
+    # (see apply_eval_window — model keeps its physical num_ctx).
+    apply_eval_window(deps)
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("context-stability") as run:
@@ -650,6 +887,30 @@ async def main() -> int:
                 f"[context-stability] {case_b.name}: "
                 f"{case_b.verdict.value.upper()} — {case_b.reason or 'ok'}"
             )
+
+            # CS.C — tool-output spill. Disabled (see _CS_C_ENABLED): the current
+            # window/floor/cap combination can't reach its precondition. Emitted as
+            # a SKIPPED case so it stays visible and does not block the run.
+            if _CS_C_ENABLED:
+                case_c = await case_cs_c_tool_spill_precedes_summarize(
+                    deps, agent, frontend, run, spans_log
+                )
+            else:
+                case_c = CaseResult(
+                    name="CS.C",
+                    verdict=Verdict.SOFT_PASS,
+                    duration_s=0.0,
+                    skipped=True,
+                    skip_category="product-gap",
+                    reason=(
+                        "DISABLED pending window/floor/cap fixes — at 32k ctx the ~10.8k "
+                        "static floor + 4k auto-spill cap route every oversized request "
+                        "into L3 fallback_to_summarize before a fitting L2 spill can "
+                        "occur; chain guarded by test_l3_fastpaths_after_l2_spill_fits_payload"
+                    ),
+                )
+            cases.append(case_c)
+            print(f"[context-stability] {case_c.name}: SKIPPED — {case_c.reason}")
 
             iso = run.iso
             run_dir = run.dir

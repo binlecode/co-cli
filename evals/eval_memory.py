@@ -37,6 +37,7 @@ from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, EvalRun, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
+from evals._settings import apply_eval_window
 from evals._timeouts import (
     CALL_TIMEOUT_S,
     DREAM_CYCLE_BUDGET_S,
@@ -1019,6 +1020,7 @@ async def main() -> int:
     """
     await ensure_ollama_warm()
     deps, agent, frontend, stack = await make_eval_deps()
+    apply_eval_window(deps)
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("memory") as run:

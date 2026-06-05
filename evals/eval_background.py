@@ -34,6 +34,7 @@ from pathlib import Path
 from evals._deps import make_eval_deps
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._report import prepend_report
+from evals._settings import apply_eval_window
 from evals._timeouts import (
     BG_TASK_COMPLETION_TIMEOUT_SECS,
     BG_TASK_TEARDOWN_TIMEOUT_SECS,
@@ -478,6 +479,7 @@ async def case_w5_d_output_capture_truncation(deps, agent, frontend) -> CaseResu
 
 async def main() -> int:
     deps, agent, frontend, stack = await make_eval_deps()
+    apply_eval_window(deps)
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("background") as run:

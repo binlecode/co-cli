@@ -27,6 +27,7 @@ from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._report import prepend_report
+from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S
 from evals._trace import record_turn
 
@@ -303,6 +304,7 @@ async def main() -> int:
     """
     await ensure_ollama_warm()
     deps, agent, frontend, stack = await make_eval_deps()
+    apply_eval_window(deps)
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("trust_visibility") as run:
