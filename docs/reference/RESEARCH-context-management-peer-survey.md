@@ -1,132 +1,101 @@
-# Agentic Context & History Management — Peer Survey
+# Agentic Context Management — Peer Comparison & Gap Analysis
 
-Breadth survey across peer repos in `~/workspace_genai/` of how each manages the agent's **working context** — the messages, tool calls, and tool results that flow through the model each turn, how that history is windowed and compacted, and how context is kept bounded across long-running and background agentic loops.
+How peer agents keep the model's **working context** bounded — tool-result lifecycle, history-window selection, compaction/summarization, and long-loop context — and where co's design lags, leads, or has open questions.
 
-**Structure.** Sections "Peer Survey" through "Dimension Alignment" are the breadth map across all peers. The "Hermes vs. Openclaw — Compaction Depth Dive" section is the line-level mechanics for the two richest compaction implementations (trigger thresholds, tail budgets, tool-pair repair, summarizer prompts) — every constant and line number there re-verified against source HEAD.
+**Out of scope:** long-term declarative memory, personality, approvals/sandboxing, model routing, skill lifecycle.
 
-**Scope.** In: agent loop / turn accumulation, tool-call result lifecycle in context, conversation-history window selection, compaction/summarization, long-running and background-loop context. Out (separate subsystems, separate research): long-term declarative memory (semantic stores, decay), personality/character schema, tool approval / permissions / sandboxing, model routing / provider extensibility, skill & plugin lifecycle.
+Peers at HEAD (re-verified 2026-06-03, unchanged since): `hermes-agent bb4703c76`, `openclaw 323c9760d3` (on PI `@earendil-works/pi-coding-agent` v0.75.1 — PI owns the core loop), `opencode a78605f8e`, `codex 9fe55d68e6`.
 
-Every claim below is grounded in source at these HEADs (verified 2026-05-27): `hermes-agent` `bb4703c76`, `openclaw` `323c9760d3` (built on `@earendil-works/pi-coding-agent` v0.75.1 — PI owns the core loop), `opencode` `a78605f8e`, `codex` `9fe55d68e6`.
+## Core mechanisms
 
-## Peer Survey — Context & History Lens
+### co — layered budget stack (`co_cli/context/`, spec `docs/specs/compaction.md`)
+Runs per LLM-request, not per turn (pressure rises mid-turn from a single tool batch). Five layers, cheap → expensive:
+- **L0 admission** — `MAX_TOOL_CALLS_PER_MODEL_REQUEST=3`; rejects excess tool calls per response (bounds fan-out for small-model coherence).
+- **L1 spill** — `spill_if_oversized` at emit time: tool output >`SPILL_THRESHOLD_CHARS=4000` is persisted to `tool-results/<sha16>.txt` behind a placeholder + preview. **Recoverable** — content survives off-context, not discarded.
+- **L2 force-spill** — `spill_largest_tool_results` processor: when request tokens > `spill_ratio×budget` (0.50), spills largest unspilled tool returns largest-first until under threshold.
+- **L3 LLM compaction** — `proactive_window_processor` at `compaction_ratio×budget` (0.50): summarizes the middle, assembles `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail` (`tail_fraction=0.10`). Anti-thrash skips after 2 consecutive passes that each yielded <10% savings; circuit breaker after 3 summarizer failures, then periodic probes; static-marker fallback. ~13-section iterative summary template (Active Task copied verbatim, carries prior summary forward).
+- **Recovery + Manual** — on HTTP 400/413, `strip_all_tool_returns` then retry; if still over, plan boundaries + `compact_messages`. `/compact [focus]` runs the same primitive over full history.
+- **Standing processors** — `dedup_tool_results` (collapse identical returns to a back-reference) + `evict_old_tool_results` (keep 5 most recent per tool) run ahead of L2/L3.
 
-| Repo | Context & history mechanisms |
-|------|------------------------------|
-| `hermes-agent` | • **agent loop**: extracted `conversation_loop.py` (callback-driven streaming, `IterationBudget`, `_try_activate_fallback()` model chaining)<br>• **tool-call context**: tool outputs preserved in full during live turns; pruned only when compaction fires (no live cap) — `conversation_loop.py:3429`<br>• **compaction** (`context_compressor.py`): fires at 50% of context window (`threshold_percent=0.50`, :515), protected head = first 3 (`protect_first_n=3`, :516), tail budget = 20% of threshold (`summary_target_ratio=0.20`, :518), forward/backward tool-pair boundary alignment (:1299, :1329), orphan repair stubbing summarized tool_calls (`_sanitize_tool_pairs`, :1239), dedup + content-stub + arg-truncation prepass (:736/:773/:797), **13-section** summary template (:961-1013) on a dedicated aux model with fallback to main (:888)<br>• **long-loop**: `trajectory_compressor.py` distills post-session JSONL; croniter cron scheduler (`cron/scheduler.py`, 60s tick) — jobs as JSON in `~/.hermes/cron/jobs.json`, per-job timestamped `.md` output under `output/<job_id>/` (`cron/jobs.py:39,45,1103`)<br>HEAD `bb4703c76` |
-| `openclaw` | • **compaction orchestration** (on top of PI's loop, `src/agents/compaction.ts`): adaptive chunk ratios `BASE_CHUNK_RATIO=0.4` → `MIN_CHUNK_RATIO=0.15` (:20-21), `SAFETY_MARGIN=1.2` (:22), mid-turn precheck (`preemptive-compaction.ts:41`), staged multi-phase summarization chunk→merge via `MERGE_SUMMARIES_INSTRUCTIONS` (:25-38, :466-530), 3-retry backoff (:339) + size-fallback chain (:402-464)<br>• **tool-call context**: live delivery cap `TOOL_RESULT_MAX_CHARS=8000` head-only (`pi-embedded-subscribe.tools.ts:17`), UTF-16-safe truncation (`truncateUtf16Safe`, :24)<br>• **loop detection**: `tool-loop-detection.ts:467` (`detectToolCallLoop`, circuit-breaker thresholds 10/20/30)<br>• **long-loop**: post-compaction transcript rotation (`compaction-successor-transcript.ts`) keeps the active file bounded; lane-queued compaction (`compact.queued.ts:125-130`); grace-period deadline extension for in-flight runs (`compaction-timeout.ts:16`); handoff snapshot (`compaction.ts:602`, 4K-token cap :619, leader/subordinate framing :43-57)<br>HEAD `323c9760d3` · PI v0.75.1 |
-| `opencode` | • **agent loop**: FIFO prompt queue (`runtime.queue.ts:36,100` — `queue.shift()`), `AbortController` interrupts (:161,188), dual entry (remote-attach `runInteractiveMode` vs in-process `runInteractiveLocalMode`, `runtime.ts:6-7`)<br>• **tool-call context**: **in-place truncation only** — `truncateToolOutput()` (`message-v2.ts:281`), `TOOL_OUTPUT_MAX_CHARS=2000` on the compaction path (`compaction.ts:37,408`). No disk spill or content-addressed placeholder; oversized output is dropped inline (media goes to `FilePart` attachments)<br>• **compaction**: events `Compaction.Started`/`Ended` with `reason: auto\|manual` (`session-event.ts:332`, `compaction.ts:604`) — a `Compaction.Delta` type is declared but **never emitted**; compaction runs **sequentially** in the prompt loop (`prompt.ts:1310`), not concurrently with streaming<br>HEAD `a78605f8e` |
-| `codex` | • **compaction**: dual-layer — `compact_large_tool_schema()` tool-schema trimming to ≤4KB (`tools/src/json_schema.rs:199`) + history-replacement checkpoint (`CompactionCheckpointTracePayload` / `CompactionInstalled` event, `rollout-trace/src/compaction.rs:78,138`)<br>• **multi-agent history provenance**: `AgentThread.origin = AgentOrigin::Spawned` upward lineage (`model/session.rs:33,55`) + `RolloutTrace.interaction_edges` directed graph (`model/mod.rs:87`, `runtime.rs:305`) with edge kinds SpawnAgent / AssignAgentTask / SendMessage / AgentResult / CloseAgent — long multi-agent runs keep auditable context lineage<br>HEAD `9fe55d68e6` |
+### hermes-agent — single-shot 50% compaction (`agent/context_compressor.py`)
+- No live tool-output cap; full outputs preserved until compaction fires.
+- Fires post-response at 50% of window; **anti-thrash** skip if last 2 passes saved <10%.
+- Window: protected head (first 3), tail = 20% of threshold, last-user-message safeguard, forward/backward tool-pair boundary alignment, orphan-repair stub for summarized tool_calls.
+- Three-pass prepass before summarizer: dedup (md5 of content), content-stub (>200 chars → 1-line), arg-truncation (>500 chars).
+- Dedicated aux summary model (fallback to main on error); 13-section template, secrets redacted via preamble; 600s cooldown on failure.
+- **Long-loop:** `trajectory_compressor.py` distills finished-session JSONL; cron jobs run as isolated agentic loops with their own JSONL.
 
-## Dimension Alignment
+### openclaw — adaptive multi-phase compaction (`src/agents/`, on PI)
+- Live tool-output cap `TOOL_RESULT_MAX_CHARS=8000` head-only, UTF-16-safe truncation; separate context ceiling caps one result at ≤30% of window.
+- No internal threshold — invoked by runner on PI overflow; optional mid-turn precheck.
+- Window: token-share chunking (adaptive ratio 0.4→0.15, safety margin 1.2), pending-tool-call set prevents mid-pair boundaries, oldest chunks dropped with tool-pair repair.
+- Staged chunk→summarize→merge; `toolResult.details` stripped pre-summary; explicit identifier-preservation policy (strict/off/custom); main session model; 3-retry backoff + size-fallback chain.
+- **Long-loop:** post-compaction transcript rotation keeps active file bounded; lane-queued compaction; grace-period deadline extension; 4K-token handoff snapshot with leader/subordinate framing.
 
-Which peers to study for each context/history concern:
+### opencode — truncate-in-place (`session/`)
+- Tool output truncated in place only: `truncateToolOutput`, `TOOL_OUTPUT_MAX_CHARS=2000` on compaction path. No spill, no content-addressed recovery; oversized output dropped inline (media → `FilePart` attachments).
+- Compaction emits `Compaction.Started`/`Ended` (`reason: auto|manual`), runs sequentially in the prompt loop, not concurrent with streaming.
 
-| Concern | Primary peers |
-|---|---|
-| Agent loop & turn accumulation | • `hermes-agent` — `conversation_loop.py`, iteration budget + fallback chaining<br>• `opencode` — FIFO queue, `AbortController` |
-| Tool-call result lifecycle in context | • `openclaw` — live 8K head-only cap, UTF-16-safe<br>• `hermes-agent` — compaction-time dedup / content-stub / arg-truncation<br>• `opencode` — in-place truncation only (`truncateToolOutput`, 2K cap) |
-| Conversation-history window selection | • `hermes-agent` — protected head + 20% tail budget, tool-pair boundary alignment, orphan repair<br>• `openclaw` — token-share chunking, tool-pair-aware boundary |
-| Compaction trigger & summarization | • `hermes-agent`, `openclaw` — both, depth in the Compaction Depth Dive section below<br>• `codex` — dual-layer schema-trim + checkpoint<br>• `opencode` — event-based (`Started`/`Ended`), sequential |
-| Long-running / background-loop context | • `hermes-agent` — cron jobs as isolated loops, `trajectory_compressor`<br>• `openclaw` — transcript rotation, grace period, handoff snapshot |
-| Multi-agent history provenance | • `codex` — `AgentThread`/`AgentOrigin` lineage + `RolloutTrace` interaction-edge graph |
+### codex — schema-trim + checkpoint + provenance (`tools/`, `model/`, `rollout-trace/`)
+- Dual-layer: tool-schema trimming to ≤4KB + history-replacement checkpoint (`CompactionInstalled` event).
+- **Multi-agent provenance:** `AgentThread.origin = AgentOrigin::Spawned` lineage + `RolloutTrace.interaction_edges` directed graph (SpawnAgent / AssignAgentTask / SendMessage / AgentResult / CloseAgent) — keeps auditable context lineage across spawned agents.
 
-## Hermes vs. Openclaw — Compaction Depth Dive
+## Comparison matrix
 
-Line-level compaction mechanics for the two richest implementations. Opencode is materially thinner (truncate-in-place only — `TOOL_OUTPUT_MAX_CHARS=2000`, `session/message-v2.ts:281`; sequential `Started`/`Ended` events) and codex is schema-trim + checkpoint; neither warrants a depth dive. All constants and line numbers below re-verified against `hermes-agent` `bb4703c76` (`agent/context_compressor.py` unless noted) and `openclaw` `323c9760d3` (`src/agents/` unless noted) on 2026-05-27.
+| Dimension | co | hermes | openclaw | opencode | codex |
+|---|---|---|---|---|---|
+| Cadence | per-request | post-response | runner/PI overflow | sequential in loop | checkpoint |
+| Trigger | `ratio×budget` (0.50) | 50% of window | overflow + optional precheck | overflow | overflow |
+| Mid-turn precheck | no (per-request L0/L2 cap growth) | no | yes | no | — |
+| Anti-thrash | yes (<10% savings skip) | yes (<10%, last 2) | no | — | — |
+| Protected head | first turn (pinned) | first 3 | first N/chunk | — | — |
+| Tail budget | 10% of budget (≈20% of trigger) | 20% of threshold | adaptive chunk 0.4→0.15 | — | — |
+| Tool-pair guard | deferred-tool preservation | fwd+back alignment + orphan stub | pending-set + repair on drop | — | — |
+| **Live tool cap** | **spill to disk @4K (recoverable)** | none | 8K head-only (lossy) | 2K in-place (lossy) | schema-trim only |
+| Force-spill tier | L2 largest-first | — | — | — | — |
+| Pre-summary dedup | `dedup_tool_results` | md5 dedup + content-stub + arg-trunc | `details` strip | — | — |
+| Keep-recent evict | 5 per tool | — | — | — | — |
+| Summary model | main (gated) | aux, fallback to main | main | — | — |
+| Summary template | ~13-section, iterative | 13-section, iterative | merge/identifier/handoff instr | — | — |
+| Marker builder | single dispatch-on-summary (`build_compaction_marker`) | single dispatch (`_with_summary_prefix`) | single (`compactionSummary` msg) | single (always summarizes) | marker item + separate summary part |
+| Marker sentinel | text prefix (`STATIC/SUMMARY_MARKER_PREFIX`) | text prefix (`SUMMARY_PREFIX` + legacy) | structural (`role`) | boundary id (`tail_start_id`) | text prefix (`SUMMARY_PREFIX`) |
+| No-LLM-drop content | **content-free stub** (tail+todos survive) | deterministic breadcrumb extraction | terse "summary unavailable" string | n/a (always summarizes) | empty marker + recent user msgs kept |
+| Failure handling | breaker (3 fails) + probe + static | 600s cooldown + static | 3-retry backoff + size-fallback | — | — |
+| Per-session distillation | rejected by design | yes (`trajectory_compressor`) | — | — | — |
+| Transcript rotation | **no** (in-place rewrite) | no | yes | — | — |
+| Background-loop isolation | by design — split-brain daemon (shares state) | yes (cron loops) | yes (handoff) | — | — |
+| Multi-agent provenance | n/a — no subagents | — | leader/subordinate | — | yes (lineage + edge graph) |
 
-### Trigger
+## Marker construction & no-LLM-drop logic
 
-- **Hermes:** `should_compress(prompt_tokens)` fires at `max(int(context_length * threshold_percent), MINIMUM_CONTEXT_LENGTH)` — default 50% of the window (`threshold_percent=0.50`, :515; computed :501/:554). Post-response only. **Anti-thrash:** if the last two compressions each saved <10%, skip to avoid a loop (:617-628).
-- **Openclaw:** no internal threshold — invoked by the runner on PI overflow. Adaptive chunk ratio `BASE_CHUNK_RATIO=0.4` (`compaction.ts:20`) floored at `MIN_CHUNK_RATIO=0.15` (:21); when average message size is large the ratio drops via `reduction = min(avgRatio*2, BASE−MIN)`, `ratio = max(MIN, BASE−reduction)` (:298-299). `SAFETY_MARGIN=1.2` divides every token estimate (:22). Optional mid-turn precheck (`preemptive-compaction.ts:41`).
+How each agent builds the single replacement message that stands in for a dropped/summarized region, and — the axis that actually differs — what that message preserves when **no LLM summary** is produced (skip, failure, or cooldown). Verified at peer HEADs 2026-06-03.
 
-### History window / message selection
+- **co** — one dispatcher `build_compaction_marker(dropped_count, summary_text, *, has_tail)` (`co_cli/context/_compaction_markers.py:104`) branches on `summary_text is None`: `summary_marker` wraps the LLM recap, `static_marker` (`:46`) is a **content-free** fixed placeholder (`STATIC_MARKER_PREFIX` + "{n} earlier messages were removed — treat as background, do not redo/re-answer" + `has_tail` trailer). Both prefixes are recognised by `is_compaction_marker` (`:113`) so a later pass treats a marker as a boundary, not fresh content. `compact_messages` assembles `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail` identically for both branches — only marker *content* differs. The static (no-LLM) path is reached today by the **circuit breaker** (3 summarizer failures) and **model-absent**; it preserves nothing from the dropped middle beyond the verbatim tail + side-channel `todo_snapshot` + unlocked deferred-tool discoveries. (ISSUE-2 / `antithrash-static-marker-fallback` plan routes the anti-thrash gate into this same static path.)
+- **hermes-agent** — one dispatcher `_with_summary_prefix(summary)` (`agent/context_compressor.py:1533`); both the LLM path and the no-LLM fallback flow through it and get the same `SUMMARY_PREFIX` sentinel (literal prefix match excludes an existing marker from the next summarization window, `:1539`). The no-LLM fallback is **not** content-free: `_build_static_fallback_summary` (`:1001`) deterministically extracts recent user asks / tool outcomes / errors / touched files from the dropped region into the 13-section template (capped 8K chars). Summarizer failure / 600s cooldown → drop region + insert this deterministic recap (not left intact, not empty). Orphan tool-call repair stub: `"[Result from earlier conversation — see context summary above]"` (`:1620`).
+- **openclaw** — one `compactionSummary` session message (`src/agents/cli-runner/session-history.ts:309`); no distinct static path. Retry-exhaustion fallback is a terse string `"Context contained {n} messages (… oversized). Summary unavailable due to size limits."` (`src/agents/compaction.ts:459`) — still the same message type, no recap of content. Recognition is **structural** (message `role`), not a text prefix; prior summaries re-fed for re-distillation are wrapped in `<previous-compaction-summary>` XML (`compaction-safeguard.ts:75`). Split tool pairs: orphaned result dropped, synthetic error `toolResult` `"[openclaw] missing tool result …"` inserted (`session-transcript-repair.ts:213`).
+- **opencode** — single-path, **always summarizes** (no static placeholder). Compaction boundary tracked by `tail_start_id` id, not a text marker; summary stored as an assistant message via a structured template ("keep every section even when empty; do not mention that context was compacted", `session/compaction.ts:44`). In-place tool-output truncation marker: `"[Tool output truncated for compaction: omitted {n} chars]"` (`session/message-v2.ts:52`).
+- **codex** — two-phase: a `CompactionMarker` conversation item with an **intentionally empty body** as a pure structural boundary (`rollout-trace/src/reducer/conversation.rs:317` — comment: keep empty so renderers can't mistake the boundary for prompt content), plus the LLM summary as a separate `Summary` part. `SUMMARY_PREFIX` text sentinel via `is_summary_message → starts_with` (`core/src/compact.rs:415`). On a no-/empty-summary drop it still **retains recent user messages verbatim** (up to `COMPACT_USER_MESSAGE_MAX_TOKENS=20_000`, `compact.rs:476`); summary text falls back to `"(no summary available)"`.
 
-- **Hermes:** protected head = first `protect_first_n=3` (:516). Tail = `tail_token_budget = threshold_tokens × summary_target_ratio` (`summary_target_ratio=0.20`, :518; derived :506-507). Last-user-message safeguard pulls the boundary back when the most recent user turn would be compressed (`_ensure_last_user_message_in_tail`, :1366-1411, bug #10896). Tool-pair integrity: `_align_boundary_forward` (:1299) slides past orphaned results; `_align_boundary_backward` (:1329) keeps a tool_call/result group whole. Orphan repair `_sanitize_tool_pairs` (:1239) inserts the stub `"[Result from earlier conversation — see context summary above]"` (:1290) for orphaned tool_calls.
-- **Openclaw:** token-share chunking into `DEFAULT_PARTS=2` (`compaction.ts:24`) by token budget, not message count. A pending-tool-call set prevents a chunk boundary mid tool-pair. Messages whose `tokens × SAFETY_MARGIN` exceeds 50% of the window are flagged non-summarizable. Handoff context is limited to `maxHistoryShare` (50%, or 20% for handoff); oldest chunks are dropped with tool-pair repair after each drop.
+**Best-practice synthesis.** (1) **Single dispatch-on-summary builder is universal** — every peer funnels both the LLM and no-LLM cases through one builder (co/hermes/openclaw a single message builder; codex one marker item + a separate summary part). None maintains two parallel marker-construction paths; co's `summarize=False`-into-the-same-builder approach is the surveyed-standard shape. (2) **Sentinel to prevent re-summarization** — co/hermes/codex use a text prefix; openclaw uses the structural role; opencode uses a boundary id. All have *some* idempotency marker. (3) **The real divergence is what a no-LLM drop preserves.** hermes (deterministic breadcrumb extraction) and codex (recent-user-message retention) preserve continuity from the dropped region without an LLM; co's `static_marker` and openclaw's fallback string are **content-free** (co keeps only tail + todos + deferred-tool state). This is the single axis where co sits below the richest peers on the no-summary path — a candidate enrichment (deterministic breadcrumb in `static_marker` for *all* no-LLM paths: breaker, model-absent, anti-thrash), not a correctness gap.
 
-### Tool-output truncation
+## Gap analysis
 
-- **Live path — Hermes:** none; outputs are preserved in full until compaction fires.
-- **Live path — Openclaw** (`pi-embedded-subscribe.tools.ts`): head-only cap `TOOL_RESULT_MAX_CHARS=8000` (:17), error cap `TOOL_ERROR_MAX_CHARS=400` first-line-only (:18), `truncateUtf16Safe` to avoid broken surrogate pairs (:24). A separate context ceiling lives in `pi-embedded-runner/tool-result-truncation.ts`: `DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS=16000` (:40), `MAX_TOOL_RESULT_CONTEXT_SHARE=0.3` (:31, one result ≤30% of the window), `MIN_KEEP_CHARS=2000` (:52); suffix via `formatContextLimitTruncationNotice(N)`.
-- **Compaction path — Hermes** three-pass prepass before the summarizer:
-  - Pass 1 dedup: `md5[:12]` of content; older duplicates → `"[Duplicate tool output — same content as a more recent call]"` (:736-739).
-  - Pass 2 content stub: results >200 chars → 1-line stub, e.g. `"[terminal] ran \`npm test\` -> exit 0, 47 lines output"` (:773; format :360).
-  - Pass 3 arg truncation: tool_call args >500 chars → string leaves trimmed to 200 (`_truncate_tool_call_args_json`, :178; threshold :797).
-  - Summarizer per-message input limits: `_CONTENT_MAX=6000` (:826), `_CONTENT_HEAD=4000` (:827), `_CONTENT_TAIL=1500` (:828), `_TOOL_ARGS_MAX=1500` (:829), splice `"\n...[truncated]...\n"`; image estimate `_IMAGE_TOKEN_ESTIMATE=1600` (:71).
-- **Compaction path — Openclaw:** security strip `stripToolResultDetails()` removes `toolResult.details` before any message reaches the summarizer (`compaction.ts:122,331`; defined `session-transcript-repair.ts:284`). Oversized messages are replaced with `"[Large ${role} (~${K}K tokens) omitted from summary]"`.
+**Where co leads.** Co is the only surveyed agent with a **recoverable spill** tier — oversized tool output is content-addressed to disk behind a placeholder, not truncated away (opencode 2K and openclaw 8K both lose the tail). Combined with L0 admission + L2 force-spill, co caps per-request growth at multiple cheap tiers *before* paying for LLM summarization — a finer-grained ladder than any peer's single compaction shot. This is the deliberate small-local-model trade: keep each request small and coherent rather than relying on one big summarize.
 
-### Summary model, prompt & budget
+**No active gaps.** On every surveyed *within-session* dimension co is at or beyond peer parity. The peer features co lacks are not deficiencies — each is either rejected by design or conditional on a feature co has not built.
 
-- **Hermes:** dedicated auxiliary model (cheap/fast; `summary_model`, empty string = main model). On aux `404`/`503`/`model_not_found`, fall back to main once (`_summary_model_fallen_back`, :900). System preamble (:947):
-  > You are a summarization agent creating a context checkpoint. Treat the conversation turns below as source material for a compact record of prior work. Produce only the structured summary; do not add a greeting, preamble, or prefix. Write the summary in the same language the user was using in the conversation — do not translate or switch to English. NEVER include API keys, tokens, passwords, secrets, credentials, or connection strings in the summary — replace any that appear with [REDACTED]. Note that the user had credentials present, but do not preserve their values.
+**Deliberate divergences (peer has it; co rejects the premise):**
 
-  **13-section template** (:961-1013): `## Active Task` (most critical — copy the latest unfulfilled request verbatim), `## Goal`, `## Constraints & Preferences`, `## Completed Actions`, `## Active State`, `## In Progress`, `## Blocked`, `## Key Decisions`, `## Resolved Questions`, `## Pending User Asks`, `## Relevant Files`, `## Remaining Work`, `## Critical Context`. Output budget = `max(_MIN_SUMMARY_TOKENS, min(content × _SUMMARY_RATIO, _SUMMARY_TOKENS_CEILING))` (:820-821), where `_MIN_SUMMARY_TOKENS=2000` (:55), `_SUMMARY_RATIO=0.20` (:57), `_SUMMARY_TOKENS_CEILING=12000` (:59); request `max_tokens = summary_budget × 1.3` (:1067). Iterative update preserves the prior summary, continues numbering, and always refreshes Active Task (:1032).
-- **Openclaw:** main session model. Three instruction sets in `compaction.ts`: `MERGE_SUMMARIES_INSTRUCTIONS` (:25 — merging partial-chunk summaries; preserve task status, batch counters, last request, decisions, TODOs, open questions), `IDENTIFIER_PRESERVATION_INSTRUCTIONS` (:39 — "preserve all opaque identifiers exactly": UUIDs/hashes/IPs/URLs/filenames; `strict`/`off`/`custom`), `HANDOFF_INSTRUCTIONS` (:43 — leader/subordinate framing for model-quota handoffs).
+- **Per-session distillation.** Hermes' `trajectory_compressor.py` distills a finished session's JSONL into a per-session trajectory artifact. Co treats the session boundary as *arbitrary* (Ctrl+C, lunch, task-switch, context limit), not a semantic unit, so precomputing a recap keyed to that boundary produces an artifact whose value is bounded by the arbitrariness of its scope (canon: a `session_summary` daemon task was cut at Gate 1 on exactly this principle). Co retains cross-session knowledge **content-driven, not boundary-driven**: the dream reviewer fires `memory_review` (generalization → durable facts) and `skill_review` (procedural extraction) over recent transcript *content* on a counter cadence + session-end always-fire, and finished transcripts stay BM25-searchable on demand (`session_search`/`session_view`). Co answers over content on whatever range the user cares about; hermes precomputes an answer keyed to an arbitrary cut.
 
-### Post-compaction & retry
+- **Background-loop context isolation.** Hermes runs cron jobs as independent agents, each with its own isolated JSONL; openclaw hands a bounded snapshot between runs. Co's dream daemon is **not** an external background flow — it is a *split-brain of the main agent*: one agent's curation function extracted into a separate process for non-blocking concurrency, sharing all long-term state (memory, skills, sessions, index). Its reviewers are the same agent (`build_task_agent`), run stateless single passes over REPL-produced transcripts, and write back into the shared stores. Isolating its context would *defeat the purpose* — it shares stores precisely so its generalizations feed the same memory the REPL reads. Hermes' isolated-per-job loop is a different architecture (an independent agent on its own task), not a capability co is missing. (Bounding is a non-issue too: within-session compaction L0–L3 applies to any agent loop, daemon included.)
 
-- **Hermes post-compaction:** the summary is reinserted as a standalone message in whichever role preserves alternation, or prepended to the first tail message with the separator `"--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"` (:1693). The system message gets a one-time compaction note (:1638) that also asserts persistent memory (MEMORY.md, USER.md) stays authoritative regardless of compaction. No transcript rotation.
-- **Hermes retry:** transient summary failures enter a **600s cooldown** (`_SUMMARY_FAILURE_COOLDOWN_SECONDS=600`, :76 — not 60s; middle turns drop without summary), static fallback `"{SUMMARY_PREFIX}\nSummary generation was unavailable. {n} message(s) were removed..."` (:1656). Aux→main retry once on model errors; anti-thrash skip after 2 sub-10% compressions.
-- **Openclaw post-compaction:** lane-queued execution (session + global lane) prevents concurrent compaction; a grace period extends an in-flight run's deadline rather than cancelling (`compaction-timeout.ts:16`); staged multi-phase summarization chunk→summarize→merge (`compaction.ts:466-530`); post-compaction hooks (`runPostCompactionSideEffects`); transcript rotation keeps the active file bounded (`compaction-successor-transcript.ts`); handoff snapshot at a 4K-token cap with leader/subordinate framing (`compaction.ts:602`).
-- **Openclaw retry:** 3-attempt backoff (`minDelayMs=500`, `maxDelayMs=5000`, `jitter=0.2`; `compaction.ts:339,352-355`), aborts immediately on abort/timeout. Fallback chain (:402-464): full summarize → extract oversized + summarize only the small messages → static `"Context contained N messages (M oversized)..."`.
+**Conditional (only bites if co builds the triggering feature):**
 
-### Dimension comparison
+- **Multi-agent provenance.** Codex tracks `AgentThread`/`AgentOrigin` lineage + an interaction-edge graph; openclaw uses leader/subordinate handoff framing. Co spawns no subagents, so there is no lineage to track — relevant prior art only *if* co ever adds subagent spawning and needs to reconstruct which agent produced which context.
 
-| Dimension | Hermes | Openclaw |
-|---|---|---|
-| **Trigger condition** | `prompt_tokens ≥ 50% of context` (:515) | Runner-explicit on PI overflow |
-| **Anti-thrashing** | Skip if last 2 compressions <10% savings (:617-628) | N/A |
-| **Mid-turn precheck** | No | Optional (`preemptive-compaction.ts:41`) |
-| **Protected head** | First 3 messages (`protect_first_n=3`, :516) | First N per chunk |
-| **Tail budget** | 20% of threshold tokens (`summary_target_ratio=0.20`, :518) | Adaptive chunking (0.4→0.15) |
-| **Tail floor** | Min 3 messages | Tool-pair-aware boundary |
-| **Tool-pair guard** | Forward + backward boundary alignment (:1299/:1329) | Pending-set tracked during chunking |
-| **Orphan repair** | Stub inserted for orphaned tool_calls (:1239/:1290) | Tool-pair repair after chunk drop |
-| **Live tool output cap** | None (preserved in full) | 8000 chars head-only (:17) |
-| **Live truncation encoding** | N/A | UTF-16 safe (`truncateUtf16Safe`) |
-| **Live disk offload** | No | No |
-| **Compaction tool output cap** | 6K/msg = 4K head + 1.5K tail (:826-828) | 16K chars; ≤30% context-share (:40/:31) |
-| **Pre-compaction tool dedup** | Yes — md5[:12], older copies stubbed (:736) | No |
-| **Pre-compaction arg truncation** | Yes — args >500 chars → 200-char leaves (:797) | No |
-| **Media / detail stripped for compaction** | Secrets redacted via preamble (:947) | `toolResult.details` stripped (:331) |
-| **Summary model** | Aux model; fallback to main (:888/:900) | Main session model |
-| **Summary template** | 13-section, Active Task most critical (:961-1013) | Instruction sets (merge / identifier / handoff) |
-| **Identifier preservation** | Implicit (copy exact requests) | Explicit policy — `strict`/`off`/`custom` (:39) |
-| **Iterative update** | Yes — preserve + continue numbering (:1032) | Yes — via `MERGE_SUMMARIES_INSTRUCTIONS` (:25) |
-| **Summary reinsertion** | Standalone or prepended to tail with separator (:1693) | Staged merge output fed back to PI |
-| **Transcript rotation** | No | Yes — post-compaction file rotation |
-| **Lane queuing** | No | Yes — session lane + global lane |
-| **Grace period** | No | Yes — deadline extension (`compaction-timeout.ts:16`) |
-| **Retry on summary failure** | 600s cooldown; 1 aux→main retry (:76) | 3 retries, 500ms–5s backoff (:352-355) |
-| **Static fallback** | `"{N} message(s) removed, summary unavailable"` (:1656) | `"Context contained N messages (M oversized)"` (:402-464) |
-| **Handoff snapshot** | No | Yes — 4K-token cap, leader/subordinate framing (:602) |
+**Likely non-gaps (in-place rewrite is sufficient):**
 
-## Co's Current Position
+- **Transcript rotation.** Openclaw rotates the active transcript file after compaction; co rewrites `sessions.md` in place. For interactive sessions this is fine — only worth revisiting if a single background run produces an unbounded JSONL.
 
-Co already runs a layered budget stack (see `docs/specs/compaction.md` §1.2) that covers most of what the peers do per-turn:
-
-- **L0** — `MAX_TOOL_CALLS_PER_MODEL_REQUEST=3` admission cap (bounds worst-case fan-out per response; sized for small-model coherence).
-- **L1** — `spill_if_oversized` emit-time persistence to `tool-results/<sha16>.txt` behind a placeholder + preview. Note: **no surveyed peer persists tool output this way** — opencode and openclaw both *truncate* oversized output in place (opencode `truncateToolOutput`, `TOOL_OUTPUT_MAX_CHARS=2000`; openclaw `TOOL_RESULT_MAX_CHARS=8000`) rather than spilling it to a content-addressed store, so the recoverable-spill design is co-specific.
-- **L2** — `enforce_request_size` history processor: force-spills the largest unspilled tool returns until the upcoming request is under threshold.
-- **L3** — `proactive_window_processor`: LLM compaction assembled as `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail`, with anti-thrash guard and static-marker fallback.
-- **History processors** — `dedup_tool_results` (collapse identical returns) + `evict_old_tool_results` (keep 5 most recent per tool) run ahead of L2/L3.
-- **Manual** — `/compact [focus]` over full-history bounds.
-
-Where co has **no peer-parity mechanism**:
-- No cross-session **trajectory compression** (hermes `trajectory_compressor.py`) — co compacts in-place within a session but does not distill a finished session's JSONL.
-- No **transcript rotation** (openclaw) — co rewrites the transcript in place on compaction (`sessions.md`); the active JSONL is not rotated.
-- No **multi-agent history provenance** (codex `AgentThread`/`AgentOrigin` lineage + `RolloutTrace` interaction-edge graph) — co has no subagent context lineage.
-
-## Open Research Areas
-
-Context/history gaps where peer patterns are the relevant prior art:
-
-1. **Cross-session / long-loop trajectory compression** — hermes `trajectory_compressor.py` distills post-session JSONL into a compact trajectory. Co compacts *within* a live session but has no post-session distillation for recurring or background loops. Most relevant to the dream daemon and any future scheduled-agent loop, which accumulate transcript without an end-of-run summarization step.
-
-2. **Transcript growth under long loops** — openclaw rotates the transcript after compaction to keep the active file bounded; co rewrites in place (`sessions.md`) and never rotates. Research whether unbounded session JSONL is a real cost for very long or background runs, or whether in-place rewrite is sufficient.
-
-3. **Background / cron loop context isolation** — hermes runs cron jobs as independent agentic loops, each with its own JSONL and timestamped output, isolated from interactive sessions. Co's dream daemon is the closest analog. Study how a background loop should manage a bounded context separate from the interactive REPL's.
-
-4. **Multi-agent history provenance** — codex's `AgentThread`/`AgentOrigin` lineage + `RolloutTrace` interaction-edge graph track subagent provenance across spawned threads. Co has no multi-agent context lineage today — relevant prior art if co ever spawns subagents and needs to reconstruct *which* agent produced *which* context.
-
-5. **Compaction trigger model** — co fires L3 post-response at `compaction_ratio × budget`. Openclaw additionally supports a mid-turn precheck (`preemptive-compaction.ts:41`) that can compact before a turn completes when context is already near the limit. Open question: does mid-turn precheck buy anything for co's small-local-model target, or do L0 + L2 already cap per-turn growth tightly enough to make it redundant?
+- **Mid-turn precheck.** Openclaw can compact before a turn completes. Co's L0 (cap 3 tool calls/response) + L2 (force-spill) already bound per-turn growth tightly, so a precheck likely buys little for the small-model target — but unconfirmed.

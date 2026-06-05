@@ -149,7 +149,7 @@ async def case_w6_b_unknown_slash_local_only(
 
     Snapshots `deps.runtime.current_request_tokens_estimate` before and after
     dispatching `/this_is_not_a_command`. That estimate is written only by
-    `enforce_request_size` when a real model request runs; the production handler
+    `spill_largest_tool_results` when a real model request runs; the production handler
     prints "Unknown command" to console and returns `LocalOnly()` — it must not
     invoke the LLM, so the estimate stays unchanged.
     """

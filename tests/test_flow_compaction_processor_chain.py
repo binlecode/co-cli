@@ -1,6 +1,6 @@
 """Integration test for the registered history-processor chain ordering.
 
-Verifies the contract introduced by the L2 consolidation: enforce_request_size
+Verifies the contract introduced by the L2 consolidation: spill_largest_tool_results
 spills tool returns before proactive_window_processor decides to summarize.
 When spill alone can resolve the pressure, proactive fast-paths and never
 runs the LLM summarizer; when spill can't (text-heavy pressure with few tool
@@ -29,8 +29,8 @@ from tests._settings import SETTINGS_NO_MCP
 from co_cli.context.compaction import is_compaction_marker, proactive_window_processor
 from co_cli.context.history_processors import (
     dedup_tool_results,
-    enforce_request_size,
     evict_old_tool_results,
+    spill_largest_tool_results,
 )
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
@@ -59,7 +59,7 @@ async def _run_chain(ctx: RunContext, messages: list[ModelMessage]) -> list[Mode
     """Run the four registered history processors in their registered order."""
     out = dedup_tool_results(ctx, messages)
     out = evict_old_tool_results(ctx, out)
-    out = enforce_request_size(ctx, out)
+    out = spill_largest_tool_results(ctx, out)
     return await proactive_window_processor(ctx, out)
 
 
@@ -109,11 +109,11 @@ def _spilled_count(messages: list[ModelMessage]) -> int:
 
 @pytest.mark.asyncio
 async def test_spill_resolves_pressure_proactive_fast_paths(tmp_path: Path):
-    """Tool-return-heavy pressure: enforce_request_size spills, proactive fast-paths.
+    """Tool-return-heavy pressure: spill_largest_tool_results spills, proactive fast-paths.
 
     Budget = 800 tokens; spill threshold = 400 tokens; compaction threshold = 0.50 * 800 = 400.
     Three 24K-char shell returns (≈ 6K tokens each, 18K total) blow past both thresholds.
-    After enforce_request_size spills until aggregate ≤ 400, proactive sees a request well
+    After spill_largest_tool_results spills until aggregate ≤ 400, proactive sees a request well
     under its 400-token trigger and fast-paths without inserting a compaction marker.
     """
     content = "x" * 24_000
@@ -144,7 +144,7 @@ async def test_text_pressure_unspillable_proactive_fires(tmp_path: Path):
     """Text-heavy pressure with no spillable tool returns: proactive must fire (static marker).
 
     Budget = 800 tokens; spill threshold = 400 tokens. The history is text-only across
-    multiple turns — no ToolReturnParts, so enforce_request_size has no candidates and
+    multiple turns — no ToolReturnParts, so spill_largest_tool_results has no candidates and
     sets skip_reason='no_candidates'. Proactive then sees the same pressure and fires
     summarization (static-marker fallback because model=None), inserting a compaction marker.
     """

@@ -1,4 +1,4 @@
-"""Tests for enforce_request_size — per-request size control history processor.
+"""Tests for spill_largest_tool_results — per-request size control history processor.
 
 Replaces the old per-batch L2 hook (``_enforce_request_budget``). The processor
 runs at every ``ModelRequestNode`` entry, after dedup/evict, before
@@ -23,7 +23,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.context.history_processors import enforce_request_size
+from co_cli.context.history_processors import spill_largest_tool_results
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
@@ -35,7 +35,7 @@ def _make_deps(
     threshold_tokens: int,
     model_max_ctx: int = 131_072,
 ) -> CoDeps:
-    """Build a minimal CoDeps suitable for enforce_request_size tests."""
+    """Build a minimal CoDeps suitable for spill_largest_tool_results tests."""
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS_NO_MCP,
@@ -89,7 +89,7 @@ async def test_below_threshold_fast_path(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=50_000)
 
-    out = enforce_request_size(_ctx(deps), messages)
+    out = spill_largest_tool_results(_ctx(deps), messages)
 
     assert out is messages
     returns = _collect_returns(out)
@@ -116,7 +116,7 @@ async def test_force_spill_largest_first(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=5_000)
 
-    out = enforce_request_size(_ctx(deps), messages)
+    out = spill_largest_tool_results(_ctx(deps), messages)
 
     returns = _collect_returns(out)
     assert returns["tc_small"] == content_small, "smallest must remain unspilled"
@@ -146,7 +146,7 @@ async def test_cross_batch_accumulation(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=6_000)
 
-    out = enforce_request_size(_ctx(deps), messages)
+    out = spill_largest_tool_results(_ctx(deps), messages)
 
     returns = _collect_returns(out)
     spilled = sum(1 for c in returns.values() if PERSISTED_OUTPUT_TAG in c)
@@ -171,7 +171,7 @@ async def test_all_spilled_bail_out(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=100)
 
-    out = enforce_request_size(_ctx(deps), messages)
+    out = spill_largest_tool_results(_ctx(deps), messages)
 
     assert out is messages, "messages must be returned unchanged"
     returns = _collect_returns(out)
@@ -190,7 +190,7 @@ async def test_no_candidates_text_only_history(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=100)
 
-    out = enforce_request_size(_ctx(deps), messages)
+    out = spill_largest_tool_results(_ctx(deps), messages)
 
     assert out is messages, "no rewrite when there are no tool returns to spill"
 
@@ -218,7 +218,7 @@ async def test_already_spilled_excluded_but_counted(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=4_000)
 
-    out = enforce_request_size(_ctx(deps), messages)
+    out = spill_largest_tool_results(_ctx(deps), messages)
 
     returns = _collect_returns(out)
     assert returns["tc_stub"] == stub, "already-spilled stub must not be re-spilled"
@@ -244,7 +244,7 @@ def test_small_realtime_no_spill_despite_high_provider_usage(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
 
-    result = enforce_request_size(_ctx(deps), messages)
+    result = spill_largest_tool_results(_ctx(deps), messages)
 
     assert result is messages
     returns = _collect_returns(result)
@@ -271,7 +271,7 @@ def test_large_realtime_spills_and_post_spill_estimate_is_realtime(tmp_path: Pat
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
 
-    result = enforce_request_size(_ctx(deps), messages)
+    result = spill_largest_tool_results(_ctx(deps), messages)
 
     returns = _collect_returns(result)
     assert returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)

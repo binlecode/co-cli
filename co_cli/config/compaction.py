@@ -49,7 +49,7 @@ class CompactionSettings(BaseModel):
     spill_ratio: float = Field(
         default=0.50,
         description=(
-            "Fraction of context window above which enforce_request_size spills tool returns "
+            "Fraction of context window above which spill_largest_tool_results spills tool returns "
             "to disk. Must be ≤ compaction_ratio so that after spilling, total tokens fall to "
             "or below the proactive trigger and proactive_window_processor fast-paths instead "
             "of firing LLM summarization. Spill is the primary cheap response; proactive's "

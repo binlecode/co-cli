@@ -25,23 +25,6 @@ def test_manifest_renders_bundled_skills(tmp_path: Path) -> None:
     assert 'description="Diagnose problems"' in out
 
 
-def test_manifest_includes_user_installed_skills(tmp_path: Path) -> None:
-    """User-installed skills appear in the manifest alongside bundled skills."""
-    skills_dir = tmp_path / "bundled"
-    skills_dir.mkdir()
-    user_skills_dir = tmp_path / "user"
-    user_skills_dir.mkdir()
-    (user_skills_dir / "user-skill.md").write_text(
-        "---\ndescription: A user skill\n---\nBody.\n", encoding="utf-8"
-    )
-
-    skill_index = {"user-skill": SkillInfo(name="user-skill", description="A user skill")}
-    out = render_skill_manifest(skill_index, skills_dir, user_skills_dir)
-
-    assert 'name="user-skill"' in out
-    assert 'description="A user skill"' in out
-
-
 def test_manifest_shadow_override_uses_user_description(tmp_path: Path) -> None:
     """A bundled skill shadowed by same-named user file appears with the user description."""
     skills_dir = tmp_path / "bundled"

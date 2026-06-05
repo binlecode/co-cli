@@ -1,5 +1,152 @@
 # REPORT: memory
 
+## Run 2026-06-03T13:13:09+00:00
+
+**Summary:** 6 PASS · 0 FAIL · 0 SOFT_PASS · 1 SOFT_FAIL · 0 SKIP (total 7)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| W3.A | PASS | 40.25s | 40.25s | 23867 | agent saved eval-w3-fact-02c77a70.md; FTS rows=1 |
+| W3.B | PASS | 21.76s | 21.37s | 24089 | W3.A hit at rank 1/5; snippet contains STG_DEPLOY_42 |
+| W3.C | PASS | 8.80s | 8.80s | 23922 | 1 session_search call(s); at least one returned hits |
+| W3.D | PASS | 0.01s | 0.00s | - | /memory list enumerates 'eval-w3-fact-02c77a70' among 9 artifacts |
+| W3.E | PASS | 0.00s | 0.00s | - | file removed; FTS rows for eval-w3-fact-02c77a70.md cleared |
+| W3.F | PASS | 1.73s | 0.00s | - | both tokens preserved across survivors+archive; merged=1 |
+| W3.G | SOFT_FAIL | 83.26s | 80.48s | 86299 | seed_deleted=True | judge.score=0 [judge_model_same_as_agent] The agent reported that search results for 'W3G_MARKER_XK42' still exist in archived files, failing the requirement to r |
+
+### Review signals
+
+- **W3.G** [SOFT_FAIL] — seed_deleted=True | judge.score=0 [judge_model_same_as_agent] The agent reported that search results for 'W3G_MARKER_XK42' still exist in archived files, failing the requirement to r
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | W3.G | 80.48s |
+| 2 | W3.A | 40.25s |
+| 3 | W3.B | 21.37s |
+
+### Regression vs prior run
+
+- W3.A: verdict FAIL → PASS
+- W3.A: model-call ↓ 50.0s → 40.3s (-9.8s)
+- W3.B: verdict FAIL → PASS
+- W3.B: model-call ↓ 50.0s → 21.4s (-28.6s)
+- W3.C: model-call ↓ 28.9s → 8.8s (-20.1s)
+- W3.G: verdict FAIL → SOFT_FAIL
+- W3.G: model-call ↑ 50.0s → 80.5s (+30.5s)
+
+### Trace files
+
+- **W3.A** — [case_W3.A.jsonl](../evals/_outputs/memory-20260603T131309Z/case_W3.A.jsonl)
+- **W3.B** — [case_W3.B.jsonl](../evals/_outputs/memory-20260603T131309Z/case_W3.B.jsonl)
+- **W3.C** — [case_W3.C.jsonl](../evals/_outputs/memory-20260603T131309Z/case_W3.C.jsonl)
+- **W3.D** — [case_W3.D.jsonl](../evals/_outputs/memory-20260603T131309Z/case_W3.D.jsonl)
+- **W3.E** — [case_W3.E.jsonl](../evals/_outputs/memory-20260603T131309Z/case_W3.E.jsonl)
+- **W3.F** — [case_W3.F.jsonl](../evals/_outputs/memory-20260603T131309Z/case_W3.F.jsonl)
+- **W3.G** — [case_W3.G.jsonl](../evals/_outputs/memory-20260603T131309Z/case_W3.G.jsonl)
+
+---
+
+## Run 2026-06-03T13:07:44+00:00
+
+**Summary:** 4 PASS · 3 FAIL · 0 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 7)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| W3.A | FAIL | 50.00s | 50.00s | 11858 | no memory_create tool call found; tools used: [] |
+| W3.B | FAIL | 50.00s | 50.00s | - | agent did not call memory_search; tools used: [] |
+| W3.C | PASS | 28.88s | 28.88s | 23965 | 1 session_search call(s); at least one returned hits |
+| W3.D | PASS | 0.01s | 0.00s | - | /memory list enumerates 'eval-w3-fact-b7e5b778' among 8 artifacts |
+| W3.E | PASS | 0.00s | 0.00s | - | file removed; FTS rows for eval-w3-fact-b7e5b778.md cleared |
+| W3.F | PASS | 3.64s | 0.00s | - | both tokens preserved across survivors+archive; merged=1 |
+| W3.G | FAIL | 50.00s | 50.00s | - | turn 0: agent did not call memory_search; tools=[] |
+
+### Review signals
+
+_(no review signals this run)_
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | W3.G | 50.00s |
+| 2 | W3.A | 50.00s |
+| 3 | W3.B | 50.00s |
+
+### Regression vs prior run
+
+- W3.A: verdict PASS → FAIL
+- W3.A: model-call ↑ 39.5s → 50.0s (+10.5s)
+- W3.B: verdict PASS → FAIL
+- W3.B: model-call ↑ 22.7s → 50.0s (+27.3s)
+- W3.C: model-call ↑ 8.7s → 28.9s (+20.2s)
+- W3.G: verdict SOFT_FAIL → FAIL
+- W3.G: model-call ↓ 122.2s → 50.0s (-72.2s)
+
+### Trace files
+
+- **W3.A** — [case_W3.A.jsonl](../evals/_outputs/memory-20260603T130744Z/case_W3.A.jsonl)
+- **W3.B** — [case_W3.B.jsonl](../evals/_outputs/memory-20260603T130744Z/case_W3.B.jsonl)
+- **W3.C** — [case_W3.C.jsonl](../evals/_outputs/memory-20260603T130744Z/case_W3.C.jsonl)
+- **W3.D** — [case_W3.D.jsonl](../evals/_outputs/memory-20260603T130744Z/case_W3.D.jsonl)
+- **W3.E** — [case_W3.E.jsonl](../evals/_outputs/memory-20260603T130744Z/case_W3.E.jsonl)
+- **W3.F** — [case_W3.F.jsonl](../evals/_outputs/memory-20260603T130744Z/case_W3.F.jsonl)
+- **W3.G** — [case_W3.G.jsonl](../evals/_outputs/memory-20260603T130744Z/case_W3.G.jsonl)
+
+---
+
+## Run 2026-06-03T13:03:53+00:00
+
+**Summary:** 6 PASS · 0 FAIL · 0 SOFT_PASS · 1 SOFT_FAIL · 0 SKIP (total 7)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| W3.A | PASS | 39.47s | 39.47s | 23643 | agent saved eval-w3-fact-b290c0f9.md; FTS rows=1 |
+| W3.B | PASS | 22.98s | 22.65s | 24075 | W3.A hit at rank 1/5; snippet contains STG_DEPLOY_42 |
+| W3.C | PASS | 8.70s | 8.70s | 23908 | 1 session_search call(s); at least one returned hits |
+| W3.D | PASS | 0.01s | 0.00s | - | /memory list enumerates 'eval-w3-fact-b290c0f9' among 8 artifacts |
+| W3.E | PASS | 0.00s | 0.00s | - | file removed; FTS rows for eval-w3-fact-b290c0f9.md cleared |
+| W3.F | PASS | 1.75s | 0.00s | - | both tokens preserved across survivors+archive; merged=1 |
+| W3.G | SOFT_FAIL | 129.56s | 122.16s | 60800 | seed_deleted=True | judge.score=0 [judge_model_same_as_agent] The transcript ends after the deletion step and does not show the required second search for 'W3G_MARKER_XK42' to verify |
+
+### Review signals
+
+- **W3.G** [SOFT_FAIL] — seed_deleted=True | judge.score=0 [judge_model_same_as_agent] The transcript ends after the deletion step and does not show the required second search for 'W3G_MARKER_XK42' to verify
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | W3.G | 122.16s |
+| 2 | W3.A | 39.47s |
+| 3 | W3.B | 22.65s |
+
+### Regression vs prior run
+
+- W3.A: model-call ↓ 41.0s → 39.5s (-1.5s)
+- W3.B: model-call ↓ 24.5s → 22.7s (-1.8s)
+- W3.C: model-call ↓ 9.9s → 8.7s (-1.2s)
+- W3.G: model-call ↑ 89.0s → 122.2s (+33.2s)
+
+### Trace files
+
+- **W3.A** — [case_W3.A.jsonl](../evals/_outputs/memory-20260603T130353Z/case_W3.A.jsonl)
+- **W3.B** — [case_W3.B.jsonl](../evals/_outputs/memory-20260603T130353Z/case_W3.B.jsonl)
+- **W3.C** — [case_W3.C.jsonl](../evals/_outputs/memory-20260603T130353Z/case_W3.C.jsonl)
+- **W3.D** — [case_W3.D.jsonl](../evals/_outputs/memory-20260603T130353Z/case_W3.D.jsonl)
+- **W3.E** — [case_W3.E.jsonl](../evals/_outputs/memory-20260603T130353Z/case_W3.E.jsonl)
+- **W3.F** — [case_W3.F.jsonl](../evals/_outputs/memory-20260603T130353Z/case_W3.F.jsonl)
+- **W3.G** — [case_W3.G.jsonl](../evals/_outputs/memory-20260603T130353Z/case_W3.G.jsonl)
+
+---
+
 ## Run 2026-06-02T01:50:39+00:00
 
 **Summary:** 7 PASS · 0 FAIL · 0 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 7)

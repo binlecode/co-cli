@@ -18,8 +18,8 @@ from co_cli.agent.spec import OrchestratorSpec
 from co_cli.context.compaction import proactive_window_processor
 from co_cli.context.history_processors import (
     dedup_tool_results,
-    enforce_request_size,
     evict_old_tool_results,
+    spill_largest_tool_results,
 )
 
 if TYPE_CHECKING:
@@ -65,7 +65,7 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
     history_processors=(
         dedup_tool_results,
         evict_old_tool_results,
-        enforce_request_size,
+        spill_largest_tool_results,
         proactive_window_processor,
     ),
 )

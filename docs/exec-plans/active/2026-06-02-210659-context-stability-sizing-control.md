@@ -23,7 +23,7 @@ Resolved thresholds against the current loop:
 | Control | Site | Resolved |
 |---|---|---|
 | Per-tool-result spill | `tool_io.SPILL_THRESHOLD_CHARS` | 4,000 chars (`file_read`/`*_view` = ∞) |
-| Request-level tool spill | `enforce_request_size`, `spill_ratio 0.50` | 32,768 tok (`deps.spill_threshold_tokens`) |
+| Request-level tool spill | `spill_largest_tool_results`, `spill_ratio 0.50` | 32,768 tok (`deps.spill_threshold_tokens`) |
 | Proactive summarize | `proactive_window_processor`, `compaction_ratio 0.50` | 32,768 tok |
 | **Trigger local estimate** | `effective_request_tokens` (**floor-aware, shipped**) | `static_floor_tokens + estimate_message_tokens` |
 | Preserved tail target | `tail_fraction 0.10` (**shipped, was 0.20**) | 6,554 tok (≈20% of the 32,768 trigger) |
@@ -173,7 +173,7 @@ lever is **deferring more ALWAYS tools**, not squeezing docstrings that are alre
 
 ### ISSUE-5 — `file_read`/`*_view` exempt from per-emission spill (`spill_threshold_chars = ∞`)
 A large read lands fully inline (up to `_READ_MAX_LINES=2000 × _READ_MAX_LINE_CHARS=2000`); only the
-next request's `enforce_request_size` force-spills it. A single read can dominate the middle between
+next request's `spill_largest_tool_results` force-spills it. A single read can dominate the middle between
 passes.
 
 **Fix.** Replace `∞` with a high-but-finite per-emission spill threshold for `file_read` (and the
@@ -310,7 +310,7 @@ expensive, each request:
 1. **`dedup_tool_results`** — collapse identical-content tool returns to back-references.
 2. **`evict_old_tool_results`** — content-clear compactable tool returns beyond `COMPACTABLE_KEEP_RECENT
    = 5` per tool name. Bounds *tool-return* bloat only.
-3. **`enforce_request_size`** — at `spill_threshold_tokens` (32,768), force-spill the largest unspilled
+3. **`spill_largest_tool_results`** — at `spill_threshold_tokens` (32,768), force-spill the largest unspilled
    `ToolReturnPart`s to disk (`force=True` bypasses the 4,000-char per-tool threshold). Trigger basis
    `max(static_floor_tokens + estimate_message_tokens, last_reported_input_tokens)` (floor-aware after
    ISSUE-1.5).

@@ -1,5 +1,91 @@
 # REPORT: context-stability
 
+## Run 2026-06-05T03:53:09+00:00
+
+**Summary:** 2 PASS · 1 FAIL · 0 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 3)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| CS.A | PASS | 154.41s | 154.39s | 193848 | turns=10 fired_passes=6 anti_thrash_passes=2 overflow=False | anti-thrash gate ENGAGED on 2 pass(es), each a static-marker compaction that reduced tokens |
+| CS.B | PASS | 0.00s | 0.00s | - | summarizer_passes=4 focus_passes=4 | FLOOR-budget pass exercised (budget=2000, no mid-template truncation)
+  pass 0: budget=2000 cap=2600 output_tokens=274 focus=True overshoot=0.14 cap_pressure=0.11 savings_pct=6.9 critical_ctx=True
+  pass 1: budget=2000 cap=2600 output_tokens=355 focus=True overshoot=0.18 cap_pressure=0.14 savings_pct=8.8 critical_ctx=True
+  pass 2: budget=2000 cap=2600 output_tokens=333 focus=True overshoot=0.17 cap_pressure=0.13 savings_pct=7.3 critical_ctx=True
+  pass 3: budget=2000 cap=2600 output_tokens=322 focus=True overshoot=0.16 cap_pressure=0.12 savings_pct=9.1 critical_ctx=True |
+| CS.C | FAIL | 412.48s | 409.16s | 652812 | L2 never spilled across 16 turns — tool-output accumulation never crossed the spill trigger (raise _CS_C_MAX_TURNS or artifact size) |
+
+### Review signals
+
+_(no review signals this run)_
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | CS.C | 409.16s |
+| 2 | CS.A | 154.39s |
+
+### Regression vs prior run
+
+- CS.A: verdict FAIL → PASS
+- CS.A: model-call ↓ 331.9s → 154.4s (-177.5s)
+- CS.C: new case (no prior run)
+
+### Trace files
+
+- **CS.A** — [case_CS.A.jsonl](../evals/_outputs/context-stability-20260605T035309Z/case_CS.A.jsonl) · `co trace t_1702b924ea819eb6`
+- **CS.B** — _(no trace)_
+- **CS.C** — [case_CS.C.jsonl](../evals/_outputs/context-stability-20260605T035309Z/case_CS.C.jsonl) · `co trace t_2936d2d2cb49f9a5`
+
+---
+
+## Run 2026-06-05T00:40:37+00:00
+
+**Summary:** 1 PASS · 2 FAIL · 0 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 3)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| CS.A | FAIL | 331.94s | 331.93s | 212843 | post-pass total 16396 not below trigger 16384 (skip_reason=None) || turns=10 fired_passes=8 anti_thrash_passes=0 overflow=False |
+| CS.B | PASS | 0.00s | 0.00s | - | summarizer_passes=8 focus_passes=8 | FLOOR-budget pass exercised (budget=2000, no mid-template truncation)
+  pass 0: budget=2000 cap=2600 output_tokens=207 focus=True overshoot=0.10 cap_pressure=0.08 savings_pct=11.9 critical_ctx=True
+  pass 1: budget=2000 cap=2600 output_tokens=324 focus=True overshoot=0.16 cap_pressure=0.12 savings_pct=13.4 critical_ctx=True
+  pass 2: budget=2000 cap=2600 output_tokens=358 focus=True overshoot=0.18 cap_pressure=0.14 savings_pct=14.3 critical_ctx=True
+  pass 3: budget=2000 cap=2600 output_tokens=378 focus=True overshoot=0.19 cap_pressure=0.15 savings_pct=13.7 critical_ctx=True
+  pass 4: budget=2000 cap=2600 output_tokens=388 focus=True overshoot=0.19 cap_pressure=0.15 savings_pct=13.6 critical_ctx=True
+  pass 5: budget=2000 cap=2600 output_tokens=421 focus=True overshoot=0.21 cap_pressure=0.16 savings_pct=13.5 critical_ctx=True
+  pass 6: budget=2000 cap=2600 output_tokens=458 focus=True overshoot=0.23 cap_pressure=0.18 savings_pct=13.5 critical_ctx=True
+  pass 7: budget=2000 cap=2600 output_tokens=487 focus=True overshoot=0.24 cap_pressure=0.19 savings_pct=13.4 critical_ctx=True |
+| CS.C | FAIL | 430.75s | 425.70s | 612823 | L2 never spilled across 16 turns — tool-output accumulation never crossed the spill trigger (raise _CS_C_MAX_TURNS or artifact size) |
+
+### Review signals
+
+_(no review signals this run)_
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | CS.C | 425.70s |
+| 2 | CS.A | 331.93s |
+
+### Regression vs prior run
+
+- CS.A: verdict PASS → FAIL
+- CS.A: model-call ↓ 477.7s → 331.9s (-145.8s)
+- CS.C: new case (no prior run)
+
+### Trace files
+
+- **CS.A** — [case_CS.A.jsonl](../evals/_outputs/context-stability-20260605T004037Z/case_CS.A.jsonl) · `co trace t_e1d45f3b071aa984`
+- **CS.B** — _(no trace)_
+- **CS.C** — [case_CS.C.jsonl](../evals/_outputs/context-stability-20260605T004037Z/case_CS.C.jsonl) · `co trace t_8917316532c95776`
+
+---
+
 ## Run 2026-06-04T13:42:32+00:00
 
 **Summary:** 2 PASS · 0 FAIL · 0 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 2)

@@ -8,7 +8,7 @@ one part changed.
 Registered processors:
     dedup_tool_results          — collapses identical-content tool returns to back-references
     evict_old_tool_results      — content-clears compactable tool results by recency
-    enforce_request_size        — force-spills largest unspilled tool returns when full
+    spill_largest_tool_results  — force-spills largest unspilled tool returns when full
                                   request exceeds spill_threshold_tokens
 
 Recovery helpers (not registered as processors):
@@ -361,7 +361,7 @@ def _spill_largest_first(
     return spilled_by_id, aggregate, spilled_count, spill_errors
 
 
-def enforce_request_size(
+def spill_largest_tool_results(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
@@ -384,7 +384,7 @@ def enforce_request_size(
       5. Force-spill via ``spill_if_oversized(..., force=True)`` until aggregate
          falls to or below the threshold or candidates exhaust.
 
-    Skip reasons surfaced via the ``tool_budget.enforce_request_size`` event:
+    Skip reasons surfaced via the ``tool_budget.spill_largest_tool_results`` event:
       - ``below_threshold``      -- total under threshold; nothing to do.
       - ``no_candidates``        -- no string ``ToolReturnPart``s present.
       - ``all_spilled``          -- every candidate is already on disk.
@@ -427,7 +427,7 @@ def enforce_request_size(
             }
         )
         deps.runtime.current_request_tokens_estimate = tokens_after
-        current_span().add_event("tool_budget.enforce_request_size", event_attrs)
+        current_span().add_event("tool_budget.spill_largest_tool_results", event_attrs)
 
     if trigger <= threshold:
         _emit_terminal("below_threshold", tokens_after=trigger)

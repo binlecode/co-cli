@@ -113,7 +113,7 @@ _MANDATORY_TRAILING_SECTION = "## Next Step"
 # history when a request crosses the trigger. Under the 32k window the ~10.8k
 # static prefill floor leaves only ~5.6k headroom, L3 (same 16384 trigger) trims
 # the pile between turns, and the 4k auto-spill cap pre-spills larger returns
-# upstream — so enforce always falls back to summarize. Re-enable once the window/
+# upstream — so the spill always falls back to summarize. Re-enable once the window/
 # floor/cap sizings are addressed (then flip _CS_C_ENABLED). The chain itself is
 # guarded meanwhile by test_l3_fastpaths_after_l2_spill_fits_payload (unit).
 _CS_C_ENABLED = False
@@ -124,7 +124,7 @@ _CS_C_ARTIFACT_CHARS = SPILL_THRESHOLD_CHARS - 200
 _CS_C_MAX_TURNS = 16
 _CS_C_FACT_TOKEN = "ANCHOR_FACT"
 _CS_C_STEM_PREFIX = "eval_csc_doc_"
-_ENFORCE_EVENT_NAME = "tool_budget.enforce_request_size"
+_SPILL_EVENT_NAME = "tool_budget.spill_largest_tool_results"
 
 
 def _high_entropy_block(approx_tokens: int) -> str:
@@ -641,10 +641,10 @@ def _force_blocking_stdio() -> None:
         fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
 
 
-def _read_enforce_events(spans_log: Path) -> list[dict[str, Any]]:
-    """Every ``tool_budget.enforce_request_size`` event (L2 spill decision), in log order.
+def _read_spill_events(spans_log: Path) -> list[dict[str, Any]]:
+    """Every ``tool_budget.spill_largest_tool_results`` event (L2 spill decision), in log order.
 
-    ``enforce_request_size`` adds its event to ``current_span()`` inside the history
+    ``spill_largest_tool_results`` adds its event to ``current_span()`` inside the history
     processor, so it can land on any active span — scan every record's ``events``,
     not a single named span. Each returned dict is the event's ``attributes``
     (``request.spill_fired``, ``request.tokens_after``, ``request.threshold_tokens``,
@@ -661,7 +661,7 @@ def _read_enforce_events(spans_log: Path) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         for event in rec.get("events", []):
-            if event.get("name") == _ENFORCE_EVENT_NAME:
+            if event.get("name") == _SPILL_EVENT_NAME:
                 out.append(event.get("attributes", {}))
     return out
 
@@ -701,7 +701,7 @@ async def case_cs_c_tool_spill_precedes_summarize(
 
     DISABLED via ``_CS_C_ENABLED`` (see that constant) — kept for re-enablement once
     the window/floor/cap sizings let the precondition be reached. The drop-reported
-    chain: real ``memory_view`` returns accumulate until L2 ``enforce_request_size``
+    chain: real ``memory_view`` returns accumulate until L2 ``spill_largest_tool_results``
     force-spills the largest to disk, dropping the payload below the L3 threshold so
     the proactive check fast-paths (``below_threshold``) with zero summarizer calls.
 
@@ -734,7 +734,7 @@ async def case_cs_c_tool_spill_precedes_summarize(
     history: list[Any] = []
     # Baseline the diff against records CS.A/CS.B already wrote to the shared spans
     # log, so CS.C's per-turn "new records" are its own, not prior cases'.
-    prev_enforce = len(_read_enforce_events(spans_log))
+    prev_spill = len(_read_spill_events(spans_log))
     prev_proactive = len(_read_proactive_spans(spans_log))
     prev_passes = len(_read_summarizer_passes(spans_log))
     spill_fired_seen = False
@@ -782,14 +782,14 @@ async def case_cs_c_tool_spill_precedes_summarize(
                 reason = f"context overflow at turn {index} — spill failed to bound the request"
                 break
 
-            enforce_events = _read_enforce_events(spans_log)
+            spill_events = _read_spill_events(spans_log)
             proactive = _read_proactive_spans(spans_log)
             passes = _read_summarizer_passes(spans_log)
-            new_enforce = enforce_events[prev_enforce:]
+            new_spill = spill_events[prev_spill:]
             new_proactive = proactive[prev_proactive:]
             new_passes = passes[prev_passes:]
-            prev_enforce, prev_proactive, prev_passes = (
-                len(enforce_events),
+            prev_spill, prev_proactive, prev_passes = (
+                len(spill_events),
                 len(proactive),
                 len(passes),
             )
@@ -798,9 +798,9 @@ async def case_cs_c_tool_spill_precedes_summarize(
                 event.get("request.spill_fired")
                 and event.get("request.tokens_after", 1 << 30)
                 <= event.get("request.threshold_tokens", 0)
-                for event in new_enforce
+                for event in new_spill
             )
-            if any(event.get("request.spill_fired") for event in new_enforce):
+            if any(event.get("request.spill_fired") for event in new_spill):
                 spill_fired_seen = True
 
             if fitting_spill:

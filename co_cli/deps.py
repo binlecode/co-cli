@@ -186,7 +186,7 @@ class CoRuntimeState:
     # Reset to 0 per turn by reset_for_turn(); also reset to 0 when a non-violating
     # CallToolsNode fires (so only unbroken consecutive violations trigger the hard-stop).
     consecutive_tool_cap_violations: int = 0
-    # Written by enforce_request_size (all exit paths); read by proactive_window_processor
+    # Written by spill_largest_tool_results (all exit paths); read by proactive_window_processor
     # for OTEL diagnostics only (no logic branches on it).
     current_request_tokens_estimate: int | None = None
     # Circuit breaker for inline compaction summarisation.
@@ -319,7 +319,7 @@ class CoDeps:
     # so a deps built outside bootstrap still resolves a usable budget (never a 0-divide / 0-budget).
     model_max_ctx: int = DEFAULT_MAX_CTX
     # Bootstrap-cached: int(spill_ratio x model_max_ctx). Immutable after bootstrap.
-    # Read by enforce_request_size; never recomputed at read sites.
+    # Read by spill_largest_tool_results; never recomputed at read sites.
     spill_threshold_tokens: int = 0
     # Bootstrap-cached: measured static-instruction tokens + ALWAYS-schema tokens — the
     # floor-inclusive prefill present on every request, absent from the `messages` list. Added to

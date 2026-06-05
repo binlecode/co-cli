@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.306]
+
+### rename-enforce-request-size — L2 history processor renamed to `spill_largest_tool_results`
+
+The L2 history processor was named `enforce_request_size` — an abstract metric (`request_size`) as object and a generic verb (`enforce`) that hid the mechanism, inherited from a retired per-batch hook (`_enforce_request_budget`). Its two siblings follow `<verb>_tool_results` (`dedup_tool_results`, `evict_old_tool_results`). Renamed to `spill_largest_tool_results` so the chain self-documents: object (tool_results), action (spill), selection (largest). Hard rename, no alias (zero-backward-compat).
+
+- **Function + OTEL event.** `enforce_request_size` → `spill_largest_tool_results`; span event `tool_budget.enforce_request_size` → `tool_budget.spill_largest_tool_results`. The runtime field `current_request_tokens_estimate` is unaffected (not named after the function).
+- **Source.** `context/history_processors.py` (def + docstring + `add_event`), `agent/orchestrator.py` (import + registration), `deps.py`, `tools/lifecycle.py`, `config/compaction.py`.
+- **Tests.** `tests/test_flow_compaction_enforce_request_size.py` → `tests/test_flow_compaction_spill_largest_tool_results.py` (git mv); call-sites in `processor_chain` and `proactive` tests updated.
+- **Evals + script.** `eval_context_stability.py` (event-name constant + helper `_read_spill_events`), `eval_trust_visibility.py`, `scripts/calibrate_spill_size.py` (the span-name SQL filter moves with the event).
+- **Specs.** `compaction.md` (diagram box re-padded), `core-loop.md`, `prompt-assembly.md`, `observability.md`.
+
 ## [0.8.304]
 
 ### token-usage-tracking-refactor — durable per-turn token ledger + `/usage` command

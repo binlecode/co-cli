@@ -8,7 +8,7 @@ from production traces — no synthetic data.
 Inputs:
   1. SQLite spans DB (``~/.co-cli/co-cli-logs.db``):
      - ``tool_budget.spill_tool_result``  — per-tool result size + spill outcome
-     - ``tool_budget.enforce_request_size`` — per-request aggregate trigger
+     - ``tool_budget.spill_largest_tool_results`` — per-request aggregate trigger
      - ``co.tool``                        — args size (``co.tool.args_chars``),
                                             spill re-fetch attempts on file_read
      - ``co.turn``                        — user prompt size (``co.user_prompt.chars``)
@@ -110,9 +110,9 @@ def _query_l1_spans(
 def _query_l2_spans(
     conn: sqlite3.Connection, since_micros: int | None, *, include_pytest: bool
 ) -> list[dict]:
-    """Per-request enforce_request_size spans — aggregate trigger frequency."""
+    """Per-request spill_largest_tool_results spans — aggregate trigger frequency."""
     sql, params = _build_query(
-        "name = 'tool_budget.enforce_request_size'",
+        "name = 'tool_budget.spill_largest_tool_results'",
         since_micros=since_micros,
         include_pytest=include_pytest,
     )
@@ -241,7 +241,7 @@ def _aggregate_per_tool(l1_spans: list[dict]) -> dict[str, dict]:
 
 
 def _aggregate_l2(l2_spans: list[dict]) -> dict:
-    """Aggregate enforce_request_size span statistics."""
+    """Aggregate spill_largest_tool_results span statistics."""
     skip_reasons: Counter[str] = Counter()
     pressure_before: list[int] = []
     pressure_after: list[int] = []
@@ -355,7 +355,7 @@ def _format_report(
         lines.append(f"- **`{tool}`** — {msg}")
     lines.append("")
 
-    lines.append("## L2 — enforce_request_size aggregate")
+    lines.append("## L2 — spill_largest_tool_results aggregate")
     lines.append("")
     lines.append(f"- total requests scanned: **{l2['total_requests']:,}**")
     lines.append(f"- spill fired: **{l2['spill_fired']:,}**")

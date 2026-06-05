@@ -20,7 +20,7 @@ flowchart TD
 
     E --> F["agent.run_stream_events"]
     F --> G["SDK appends ModelRequest + resolves instruction parts<br/>(static + @agent.instructions)"]
-    G --> H["history processors 1..4<br/>(dedup → evict → enforce_request_size → proactive_window)"]
+    G --> H["history processors 1..4<br/>(dedup → evict → spill_largest_tool_results → proactive_window)"]
     H --> I["provider HTTP"]
     I --> J{"tool approvals needed?"}
     J -->|yes| K["_run_approval_loop → deferred_tool_results"]
@@ -136,7 +136,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 
 | `deps.runtime` field | Why it is not in `_TurnState` |
 | --- | --- |
-| `current_request_tokens_estimate` | realtime-local request size written by `enforce_request_size` each request; read for the status-line context % and compaction-trigger telemetry |
+| `current_request_tokens_estimate` | realtime-local request size written by `spill_largest_tool_results` each request; read for the status-line context % and compaction-trigger telemetry |
 | `safety_state` | updated by the `safety_prompt` dynamic instruction before each model-bound segment |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
@@ -258,7 +258,7 @@ The main agent is built with four registered history processors (pure transforme
 
 1. `dedup_tool_results`
 2. `evict_old_tool_results`
-3. `enforce_request_size`
+3. `spill_largest_tool_results`
 4. `proactive_window_processor`
 
 Two functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
@@ -272,7 +272,7 @@ Processor roles:
 | --- | --- |
 | `dedup_tool_results` | collapses identical `(tool_name, content-hash)` `ToolReturnPart`s in the pre-tail region into back-references pointing at the latest `tool_call_id` |
 | `evict_old_tool_results` | content-clears tool returns older than the 5-most-recent per tool name; replaces with a semantic marker; protects the last turn (from last `UserPromptPart` onward) |
-| `enforce_request_size` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; the cheap (non-LLM) path that fires before `proactive_window_processor` |
+| `spill_largest_tool_results` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; the cheap (non-LLM) path that fires before `proactive_window_processor` |
 | `proactive_window_processor` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 
 Preflight is called before every model-bound segment but not on approval-resume segments (SDK skips `ModelRequestNode` on resume, so preflight would inject into a non-model path). Preflight injections are ephemeral — they are not stored back to `turn_state.current_history`, so retry iterations always start from the clean history without accumulated injections.
@@ -399,7 +399,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- | --- |
 | `proactive_window_processor(ctx, messages)` | `co_cli/context/compaction.py` | History processor — L3 LLM compaction with anti-thrash gate |
 | `recover_overflow_history(ctx, messages, budget, tail_fraction)` | `co_cli/context/compaction.py` | Async — strip-then-summarize overflow recovery on HTTP 400/413 |
-| `dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size` | `co_cli/context/history_processors.py` | Registered history processors run in order before every model request |
+| `dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results` | `co_cli/context/history_processors.py` | Registered history processors run in order before every model request |
 | `strip_all_tool_returns(messages)` | `co_cli/context/history_processors.py` | Replaces every `ToolReturnPart` content with a per-tool semantic marker; idempotent |
 | `safety_prompt(ctx)`, `current_time_prompt(ctx)` | `co_cli/agent/_instructions.py` | Dynamic `@agent.instructions` callbacks evaluated per request |
 
@@ -416,7 +416,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
 | `co_cli/context/compaction.py` | public entry points (`proactive_window_processor` for L3; overflow-recovery entry point `recover_overflow_history` — single-tier strip-then-summarize); backed by private submodules `_compaction_boundaries.py` (planner) and `_compaction_markers.py` (marker builders and enrichment) |
-| `co_cli/context/history_processors.py` | registered history processors (`dedup_tool_results`, `evict_old_tool_results`, `enforce_request_size`) and the `strip_all_tool_returns` recovery helper |
+| `co_cli/context/history_processors.py` | registered history processors (`dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results`) and the `strip_all_tool_returns` recovery helper |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/agent/core.py` | main agent factory |

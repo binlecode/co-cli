@@ -41,7 +41,7 @@ from co_cli.context.compaction import (
     is_compaction_marker,
     proactive_window_processor,
 )
-from co_cli.context.history_processors import enforce_request_size
+from co_cli.context.history_processors import spill_largest_tool_results
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.observability import tracing
@@ -449,7 +449,7 @@ async def test_l3_fastpaths_after_l2_spill_fits_payload(tmp_path: Path) -> None:
     )
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
 
-    after_spill = enforce_request_size(ctx, messages)
+    after_spill = spill_largest_tool_results(ctx, messages)
     spilled = [
         part.content
         for msg in after_spill

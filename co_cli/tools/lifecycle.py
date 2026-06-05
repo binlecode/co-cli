@@ -148,7 +148,7 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
     - before_node_run: dedup duplicate tool calls within one ModelResponse
     - wrap_tool_execute: per-call cap brake (N times per model turn)
     - after_node_run: tool-call-limit event on the active capability span.
-      Per-request size enforcement lives in ``enforce_request_size``
+      Per-request size enforcement lives in ``spill_largest_tool_results``
       (history processor at MRN entry), not here.
     - before_tool_validate: syntactic JSON repair for malformed model output
     - before_tool_execute: path normalization for file tools
