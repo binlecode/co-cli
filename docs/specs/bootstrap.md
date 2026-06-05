@@ -24,8 +24,9 @@ Canonical startup flow for `co-cli`, from settings resolution to the point where
 co_cli.main  (module import)
 │
 ├─ settings resolved via config/display imports
-├─ setup_file_logging(...settings.observability...)        # co-cli.jsonl
-├─ setup_spans_log(LOGS_DIR / "co-cli-spans.jsonl", ...)   # co-cli-spans.jsonl
+├─ setup_observability(LOGS_DIR, app_log_name="co-cli.jsonl",   # shared coordinator:
+│      spans_log_name="co-cli-spans.jsonl", errors_log_name="errors.jsonl", settings=...)
+│      → co-cli.jsonl (app) + co-cli-spans.jsonl (spans) + noisy-logger suppression
 │
 co_cli.main.chat() → asyncio.run(_chat_loop())
 │

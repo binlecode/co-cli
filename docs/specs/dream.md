@@ -26,7 +26,7 @@ The broader persistent cognition model lives in [memory.md](memory.md). Startup 
                   │    daemons/dream.pid, dream.lock              │
                   │    sessions/<id>.jsonl                        │
                   │    memory/*.md     skills/.usage.json         │
-                  │    logs/dream/<ts>.log                        │
+                  │    logs/co-dream.jsonl + co-dream-spans.jsonl │
                   └───────────────────────────────────────────────┘
 
    Ollama (off-diagram): shared serializer; no coordination API. REPL fires
@@ -117,7 +117,8 @@ co dream start
   → acquire advisory flock on dream.lock (POSIX-only)
   → spawn_detached: subprocess.Popen(co dream start --foreground, start_new_session=True)
   → child installs SIGTERM/SIGINT handlers (set shutdown asyncio.Event) FIRST
-  → child attaches FileHandler to root logger → $CO_HOME/logs/dream/<ts>.log
+  → child wires observability via setup_observability() → rotating JSONL
+        $CO_HOME/logs/co-dream.jsonl (INFO+ app log) + co-dream-spans.jsonl (spans)
   → child writes DREAM_PID_FILE (pid, origin, session_id, started_at)
   → child calls create_deps(on_status=logger.info, stack=None)  [headless bootstrap]
   → child runs main_loop(deps, queue_dir, state, cfg, shutdown)
@@ -484,7 +485,7 @@ co dream stop [--force]
 co dream run                # request a one-shot housekeeping pass
 ```
 
-For log streaming: `tail -f $CO_HOME/logs/dream/*.log`.
+The daemon wires the same observability stack as the main app via `setup_observability()`: a rotating JSONL app log `co-dream.jsonl` (INFO+; WARNING+ records land here too — there is no separate dream errors file) and a span stream `co-dream-spans.jsonl`, both directly under `$CO_HOME/logs/`. For app-log streaming: `tail -f $CO_HOME/logs/co-dream.jsonl`. Note: `co tail` / `co trace` read only `co-cli-spans.jsonl`, so dream spans are inspectable via `jq` over `co-dream-spans.jsonl`, not the live viewers.
 
 ---
 

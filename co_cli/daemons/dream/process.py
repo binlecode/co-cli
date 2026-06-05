@@ -15,11 +15,12 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from co_cli.config.core import (
-    DREAM_LOG_DIR,
     DREAM_PID_FILE,
     DREAM_QUEUE_DIR,
     DREAM_QUEUE_DONE_DIR,
     DREAM_QUEUE_FAILED_DIR,
+    LOGS_DIR,
+    get_settings,
 )
 from co_cli.daemons.dream._loop import main_loop
 from co_cli.daemons.dream._process import (
@@ -31,6 +32,7 @@ from co_cli.daemons.dream._process import (
 )
 from co_cli.daemons.dream._queue import list_queue_files
 from co_cli.daemons.dream._state import DaemonState
+from co_cli.observability.setup import setup_observability
 
 
 def start_daemon(
@@ -162,8 +164,8 @@ async def _run_foreground(co_home: Path, origin: str, session_id: str) -> None:
 
     Order matters: signal handlers install first so SIGTERM during the
     (potentially several-second) create_deps call still triggers clean shutdown.
-    File logging is wired before write_pid so any crash from this point is
-    captured in $CO_HOME/logs/dream/<ts>.log.
+    Observability is wired before write_pid so any crash from this point is
+    captured in $CO_HOME/logs/co-dream.jsonl.
     """
     from co_cli.bootstrap.core import create_deps
 
@@ -172,10 +174,16 @@ async def _run_foreground(co_home: Path, origin: str, session_id: str) -> None:
     done_dir = DREAM_QUEUE_DONE_DIR
     failed_dir = DREAM_QUEUE_FAILED_DIR
 
-    for directory in (queue_dir, done_dir, failed_dir, pid_file.parent, DREAM_LOG_DIR):
+    for directory in (queue_dir, done_dir, failed_dir, pid_file.parent):
         directory.mkdir(parents=True, exist_ok=True)
 
-    _install_daemon_log_handler()
+    setup_observability(
+        LOGS_DIR,
+        app_log_name="co-dream.jsonl",
+        spans_log_name="co-dream-spans.jsonl",
+        errors_log_name=None,
+        settings=get_settings(),
+    )
 
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -196,25 +204,3 @@ async def _run_foreground(co_home: Path, origin: str, session_id: str) -> None:
         await main_loop(deps, queue_dir, state, deps.config.dream, shutdown)
     finally:
         pid_file.unlink(missing_ok=True)
-
-
-def _install_daemon_log_handler() -> None:
-    """Attach a FileHandler to the root logger writing to DREAM_LOG_DIR/<ts>.log.
-
-    Idempotent: subsequent calls within the same process (e.g., test reuse) are
-    no-ops based on a sentinel attribute on the handler.
-    """
-    from datetime import UTC, datetime
-
-    root = logging.getLogger()
-    for handler in root.handlers:
-        if getattr(handler, "_dream_daemon_handler", False):
-            return
-
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    log_path = DREAM_LOG_DIR / f"{ts}.log"
-    handler = logging.FileHandler(log_path, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    handler._dream_daemon_handler = True  # type: ignore[attr-defined]
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)

@@ -52,14 +52,12 @@ from co_cli.display.core import (
     set_theme,
 )
 from co_cli.fileio.atomic import atomic_write_text
-from co_cli.observability.file_logging import setup_file_logging
-from co_cli.observability.tracing import setup_log as setup_spans_log
+from co_cli.observability.setup import setup_observability
 from co_cli.session.persistence import persist_session_history
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
 
 _VERSION = project_info().version
-_SUPPRESS_LOGGERS = ["openai", "httpx", "anthropic", "hpack"]
 
 
 def _send_review_kick(deps: CoDeps, *, domain: str, persisted_message_count: int) -> None:
@@ -82,20 +80,13 @@ def _send_review_kick(deps: CoDeps, *, domain: str, persisted_message_count: int
 
 
 def _setup_observability() -> None:
-    setup_file_logging(
-        log_dir=LOGS_DIR,
-        level=settings.observability.log_level,
-        max_size_mb=settings.observability.log_max_size_mb,
-        backup_count=settings.observability.log_backup_count,
+    setup_observability(
+        LOGS_DIR,
+        app_log_name="co-cli.jsonl",
+        spans_log_name="co-cli-spans.jsonl",
+        errors_log_name="errors.jsonl",
+        settings=settings,
     )
-    setup_spans_log(
-        log_path=LOGS_DIR / "co-cli-spans.jsonl",
-        max_size_mb=settings.observability.spans_log_max_size_mb,
-        backup_count=settings.observability.spans_log_backup_count,
-        redact_patterns=settings.observability.redact_patterns,
-    )
-    for logger_name in _SUPPRESS_LOGGERS:
-        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 from co_cli.commands.dream import dream_app

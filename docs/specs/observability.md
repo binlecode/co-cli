@@ -47,17 +47,22 @@ Run `co chat` in one terminal and `co tail` in another to watch the agent→mode
 
 ### Instrumentation Setup (`main.py`)
 
-Telemetry is bootstrapped at module load time, before any agent is created. Two separate rotating JSONL streams are configured: one for application log records, one for spans.
+Telemetry is bootstrapped at module load time, before any agent is created. Both the main app and the dream daemon route through one shared coordinator, `setup_observability()` (in `observability/setup.py`), so the two processes can never drift in how they wire logging. Each passes its own filenames — the main app uses `co-cli*`, the dream daemon uses `co-dream*` — because `RotatingFileHandler` is not multi-process safe and the two processes run concurrently.
 
 ```
-setup_file_logging(LOGS_DIR, level, max_size_mb, backup_count)        # co-cli.jsonl (app log)
-setup_spans_log(LOGS_DIR / "co-cli-spans.jsonl",                       # co-cli-spans.jsonl
-                max_size_mb=spans_log_max_size_mb,                     # spans only
-                backup_count=spans_log_backup_count,
-                redact_patterns=settings.observability.redact_patterns)
-for logger_name in ["openai", "httpx", "anthropic", "hpack"]:          # co_cli.* loggers unaffected
-    logging.getLogger(logger_name).setLevel(WARNING)
+setup_observability(LOGS_DIR,                              # shared coordinator (observability/setup.py)
+                    app_log_name="co-cli.jsonl",           # co-cli.jsonl (app log, INFO+)
+                    spans_log_name="co-cli-spans.jsonl",   # co-cli-spans.jsonl (spans)
+                    errors_log_name="errors.jsonl",        # errors.jsonl (WARNING+); None to skip
+                    settings=settings)
+# coordinator internally:
+#   setup_file_logging(...)   → app log + (optional) errors log on root
+#   setup_spans_log(...)      → span stream on the dedicated spans logger
+#   for name in SUPPRESS_LOGGERS: getLogger(name).setLevel(WARNING)
+#   SUPPRESS_LOGGERS = ["openai", "httpx", "anthropic", "hpack"]   (co_cli.* unaffected)
 ```
+
+The dream daemon calls the same coordinator from `_run_foreground` with `app_log_name="co-dream.jsonl"`, `spans_log_name="co-dream-spans.jsonl"`, and `errors_log_name=None` (no dedicated dream errors file — WARNING+ records still land in the INFO+ `co-dream.jsonl`). `co tail` / `co trace` read only `co-cli-spans.jsonl`, so dream spans are `jq`-inspectable over `co-dream-spans.jsonl` rather than visible in the live viewers. See [dream.md](dream.md).
 
 `setup_spans_log()` (in `tracing.py`) installs a `RotatingFileHandler` on the dedicated `co_cli.observability.spans` logger with `propagate=False`, so span output never appears in the application log. Application logging (`co-cli.jsonl`) and span logging (`co-cli-spans.jsonl`) are two disjoint streams.
 
@@ -299,8 +304,9 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
+| `setup_observability(log_dir, *, app_log_name, spans_log_name, settings, errors_log_name=None) -> None` | `co_cli/observability/setup.py` | Shared bootstrap for every process: calls `setup_file_logging` + `setup_log`, then raises `SUPPRESS_LOGGERS` (`openai`/`httpx`/`anthropic`/`hpack`) to WARNING. Main app passes `co-cli*` + `errors.jsonl`; dream daemon passes `co-dream*` + `errors_log_name=None`. Idempotent |
 | `setup_log(log_path, *, max_size_mb, backup_count, redact_patterns) -> None` | `co_cli/observability/tracing.py` | Configures the `co_cli.observability.spans` rotating JSONL handler with `propagate=False`; compiles and stores redact patterns; idempotent |
-| `setup_file_logging(logs_dir, log_level, log_max_size_mb, log_backup_count) -> None` | `co_cli/observability/file_logging.py` | Attaches two `RotatingFileHandler`s to root logger (`co-cli.jsonl` INFO+, `errors.jsonl` WARNING+); idempotent |
+| `setup_file_logging(log_dir, level="INFO", max_size_mb=5, backup_count=3, *, app_log_name="co-cli.jsonl", errors_log_name="errors.jsonl") -> None` | `co_cli/observability/file_logging.py` | Attaches rotating JSONL handlers to root logger: app log (INFO+) at `app_log_name`, errors log (WARNING+, 2 MB/2 backups) at `errors_log_name`; errors handler skipped when `errors_log_name=None`; idempotent |
 
 ### Tracing primitives
 
@@ -333,13 +339,16 @@ All data stays local. Tool responses and full conversation history are captured 
 |------|---------|
 | `co_cli/observability/tracing.py` | `setup_log`, `@trace` decorator, `current_span`, `push_span`/`pop_span`, `new_trace`, `set_session_context`/`clear_session_context`, `run_with_context`; contextvars-based span stack; redaction pipeline; JSON-line emit via dedicated logger |
 | `co_cli/observability/capability.py` | `ObservabilityCapability` — pydantic-ai capability emitting agent/model/tool records on lifecycle hooks; replaces `Agent.instrument_all(...)` |
-| `co_cli/observability/file_logging.py` | `setup_file_logging()` — attaches two rotating JSONL handlers to root logger: `co-cli.jsonl` (INFO+) and `errors.jsonl` (WARNING+, 2 MB/2 backups hardcoded) |
+| `co_cli/observability/setup.py` | `setup_observability()` shared coordinator + `SUPPRESS_LOGGERS`; the single wiring path for both the main app and the dream daemon |
+| `co_cli/observability/file_logging.py` | `setup_file_logging()` — attaches rotating JSONL handlers to root logger: app log (INFO+, caller-named, default `co-cli.jsonl`) and optional errors log (WARNING+, 2 MB/2 backups hardcoded, default `errors.jsonl`, skipped when `errors_log_name=None`) |
 | `co_cli/observability/tail.py` | `run_tail()` — JSONL follow loop, per-kind attribute extraction, `--detail` rendering for agent/model/tool |
 | `co_cli/observability/trace_view.py` | `render_trace()` — snapshot tree builder; reads live log + rotated backups; sorts siblings by `start_ts`; depth-uncapped indented render |
-| `co_cli/main.py` | `@app.command()` wrappers for `tail` and `trace`; module-level `_setup_observability()` bootstraps both file logging and spans logging |
+| `co_cli/main.py` | `@app.command()` wrappers for `tail` and `trace`; module-level `_setup_observability()` calls the `setup_observability()` coordinator with the `co-cli*` filenames |
 | `co_cli/config/core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
 | `co_cli/config/observability.py` | `ObservabilitySettings` — file-logging settings, spans-log settings, redaction patterns |
 | `co_cli/agent/build.py` | Wires `[ObservabilityCapability(), CoToolLifecycle()]` into agent construction; ordering invariant documented at the wiring site |
 | `~/.co-cli/logs/co-cli.jsonl` | Rotating app log — INFO+ Python `logging` records (`"kind": "log"`); independent stream from spans |
 | `~/.co-cli/logs/co-cli-spans.jsonl` | Rotating spans log — one JSON line per closed span |
 | `~/.co-cli/logs/errors.jsonl` | Rotating WARNING+ app log — 2 MB / 2 backups; for fast error triage |
+| `~/.co-cli/logs/co-dream.jsonl` | Dream daemon's rotating app log (INFO+, includes WARNING+); written via the same coordinator, no separate errors file |
+| `~/.co-cli/logs/co-dream-spans.jsonl` | Dream daemon's rotating span stream — `jq`-inspectable; not read by `co tail` / `co trace` |

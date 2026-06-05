@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.303]
+
+### fix-dream-logging — dream daemon emits structured JSONL via a shared observability coordinator
+
+The dream daemon attached a single plain-text `FileHandler` to the root logger writing to an unbounded per-run `logs/dream/<ts>.log`. Because `setup_spans_log` was never called in the daemon process, the spans logger kept `propagate=True` and span records leaked to root, where the plain-text formatter mangled them into non-JSON lines invisible to `co tail`/`co trace`. The daemon now routes through the same observability stack as the main app.
+
+- **Shared coordinator (`co_cli/observability/setup.py`).** New `setup_observability(log_dir, *, app_log_name, spans_log_name, settings, errors_log_name=None)` wires the app log + separated span stream (`propagate=False`) + noisy-logger suppression in one place, so the daemon and main app can never re-diverge. Both `main.py:_setup_observability()` and `dream/process.py:_run_foreground()` call it.
+- **Parameterized `setup_file_logging`.** Gains keyword-only `app_log_name="co-cli.jsonl"` and `errors_log_name="errors.jsonl" | None` (errors handler skipped when `None`); defaults preserve the main app exactly.
+- **Dream daemon wiring.** Produces rotating JSONL `co-dream.jsonl` (INFO+, captures WARNING+ too — no separate errors file) and `co-dream-spans.jsonl` directly under `logs/`, with `co-*` filenames distinct from the main app's (`RotatingFileHandler` is not multi-process safe). `DREAM_LOG_DIR` and `_install_daemon_log_handler` removed. Note: `co tail`/`co trace` still read only `co-cli-spans.jsonl`; dream spans are `jq`-inspectable over `co-dream-spans.jsonl`.
+- **Dedup bugfix.** Both handler dedup sites (`file_logging.py`, `tracing.py`) compared against `str(log_path)` while `RotatingFileHandler.baseFilename` is always the abspath — a relative `log_dir` defeated dedup and double-attached the handler. Now compared against `os.path.abspath(log_path)`.
+
 ## [0.8.302]
 
 ### drop-reported-realtime-trigger — compaction triggers key off a single realtime-local count, no provider-reported floor

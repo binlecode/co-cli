@@ -318,7 +318,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `USER_DIR` | `co_cli/config/core.py` | `CO_HOME` env var or `~/.co-cli/` |
 | `SETTINGS_FILE` | `co_cli/config/core.py` | `USER_DIR / settings.json` |
 | `SEARCH_DB` | `co_cli/config/core.py` | `USER_DIR / co-cli-search.db` |
-| `LOGS_DIR` | `co_cli/config/core.py` | `USER_DIR / logs` (holds `co-cli.jsonl` and `co-cli-spans.jsonl`) |
+| `LOGS_DIR` | `co_cli/config/core.py` | `USER_DIR / logs` (holds `co-cli.jsonl`, `co-cli-spans.jsonl`, and the dream daemon's `co-dream.jsonl` / `co-dream-spans.jsonl`) |
 | `MEMORY_DIR` | `co_cli/config/core.py` | `USER_DIR / memory` |
 | `SESSIONS_DIR` | `co_cli/config/core.py` | `USER_DIR / sessions` |
 | `TOOL_RESULTS_DIR` | `co_cli/config/core.py` | `USER_DIR / tool-results` |

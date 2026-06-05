@@ -1,20 +1,22 @@
 """Rotating JSONL log handler for Python ``logging`` output.
 
-Writes two files under ``log_dir``:
-- ``co-cli.jsonl`` — INFO+ records (Python ``logging`` output only)
-- ``errors.jsonl`` — WARNING+ only; fixed 2 MB / 2 backups for fast error triage
+Writes up to two files under ``log_dir`` (filenames are caller-controlled):
+- the app log (default ``co-cli.jsonl``) — INFO+ records (Python ``logging`` output only)
+- the errors log (default ``errors.jsonl``) — WARNING+ only; fixed 2 MB / 2 backups
+  for fast error triage. Optional: pass ``errors_log_name=None`` to skip it.
 
 Each line is a JSON object: ``{"ts", "kind": "log", "level", "logger", "msg"}``,
 plus ``"exc_info"`` when a record carries exception info.
 
-Span/trace data is a separate stream: ``co-cli-spans.jsonl`` under the same
-``log_dir``, written by ``co_cli.observability.tracing`` with ``propagate=False``
-so the two files stay disjoint.
+Span/trace data is a separate stream (default ``co-cli-spans.jsonl``) under the
+same ``log_dir``, written by ``co_cli.observability.tracing`` with
+``propagate=False`` so the two files stay disjoint.
 """
 
 import json
 import logging
 import logging.handlers
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,22 +85,30 @@ def setup_file_logging(
     level: str = "INFO",
     max_size_mb: int = 5,
     backup_count: int = 3,
+    *,
+    app_log_name: str = "co-cli.jsonl",
+    errors_log_name: str | None = "errors.jsonl",
 ) -> None:
     """Attach rotating JSONL handlers to the root logger.
 
-    Writes two files under ``log_dir``:
-    - ``co-cli.jsonl`` — INFO+ (configurable); captures Python logging records
-      (``"kind": "log"``) and OTel span records (``"kind": "span"``).
-    - ``errors.jsonl`` — WARNING+ only; fixed 2 MB / 2 backups.
+    Writes up to two files under ``log_dir``:
+    - the app log (default ``co-cli.jsonl``) — INFO+ (configurable); captures
+      Python logging records (``"kind": "log"``).
+    - the errors log (default ``errors.jsonl``) — WARNING+ only; fixed 2 MB /
+      2 backups. Skipped entirely when ``errors_log_name`` is ``None``; WARNING+
+      records are still captured in the app log (which is INFO+).
 
-    Idempotent — calling more than once with the same ``log_dir`` is safe;
+    Idempotent — calling more than once with the same filenames is safe;
     duplicate handlers are not added.
 
     Args:
         log_dir: Directory where log files are written.
-        level: Minimum level for ``co-cli.jsonl`` (e.g. ``"INFO"``, ``"DEBUG"``).
-        max_size_mb: Maximum file size in MB before rotation (``co-cli.jsonl`` only).
-        backup_count: Rotated backup files to keep (``co-cli.jsonl`` only).
+        level: Minimum level for the app log (e.g. ``"INFO"``, ``"DEBUG"``).
+        max_size_mb: Maximum file size in MB before rotation (app log only).
+        backup_count: Rotated backup files to keep (app log only).
+        app_log_name: Filename of the INFO+ app log under ``log_dir``.
+        errors_log_name: Filename of the WARNING+ errors log under ``log_dir``,
+            or ``None`` to skip the dedicated errors handler.
     """
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -113,7 +123,7 @@ def setup_file_logging(
 
     _attach_handler(
         root,
-        log_dir / "co-cli.jsonl",
+        log_dir / app_log_name,
         level=numeric_level,
         max_bytes=max_bytes,
         backup_count=backup_count,
@@ -121,14 +131,15 @@ def setup_file_logging(
     )
 
     # Dedicated WARNING+ file for fast error triage without wading through span JSON
-    _attach_handler(
-        root,
-        log_dir / "errors.jsonl",
-        level=logging.WARNING,
-        max_bytes=2 * 1024 * 1024,
-        backup_count=2,
-        formatter=formatter,
-    )
+    if errors_log_name is not None:
+        _attach_handler(
+            root,
+            log_dir / errors_log_name,
+            level=logging.WARNING,
+            max_bytes=2 * 1024 * 1024,
+            backup_count=2,
+            formatter=formatter,
+        )
 
 
 def _attach_handler(
@@ -141,7 +152,9 @@ def _attach_handler(
     formatter: logging.Formatter,
 ) -> None:
     """Add a ``RotatingFileHandler`` to ``logger`` — skip if already present."""
-    target = str(log_path)
+    # RotatingFileHandler stores baseFilename as an absolute path, so dedup must
+    # compare against the abspath — a relative log_path would otherwise never match.
+    target = os.path.abspath(log_path)
     for existing in logger.handlers:
         if (
             isinstance(existing, logging.handlers.RotatingFileHandler)

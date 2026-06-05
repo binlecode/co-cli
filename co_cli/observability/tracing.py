@@ -23,6 +23,7 @@ import inspect
 import json
 import logging
 import logging.handlers
+import os
 import re
 import secrets
 import time
@@ -63,7 +64,7 @@ def setup_log(
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-    target = str(log_path)
+    target = os.path.abspath(log_path)
     for existing in logger.handlers:
         if (
             isinstance(existing, logging.handlers.RotatingFileHandler)
