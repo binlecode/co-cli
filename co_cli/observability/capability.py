@@ -42,6 +42,7 @@ from pydantic_ai.tools import ToolDefinition
 
 from co_cli.deps import CoDeps
 from co_cli.observability.tracing import pop_span, push_span
+from co_cli.session.usage import record_usage
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
@@ -197,6 +198,7 @@ class ObservabilityCapability(AbstractCapability[CoDeps]):
         response: ModelResponse,
     ) -> ModelResponse:
         usage = response.usage
+        record_usage(ctx.deps, usage)
         pop_span(
             attributes={
                 "co.model.output": serialize_response(response),

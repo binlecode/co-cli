@@ -713,6 +713,7 @@ async def run_turn(
       "error"    — unrecoverable error, display and prompt
     """
     deps.runtime.reset_for_turn()
+    deps.usage_accumulator.reset()
     deps.runtime.status_callback = frontend.on_status
     frontend.on_status("Co is thinking...")
     turn_state = _TurnState(

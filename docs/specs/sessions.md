@@ -68,6 +68,15 @@ _search_sessions(query) → SessionStore.search(query, limit=15)
 
 Browse mode (`session_search(query='')`) skips the search path and returns recent-session metadata (id, date, title, file size) via `_browse_recent()`. The current session is excluded in both modes.
 
+### Durable token-usage ledger
+
+Provider-reported token usage is recorded to a durable append-only ledger at `~/.co-cli/usage.jsonl` (the `USAGE_LOG` config constant; `usage_log_path` on `CoDeps`). This is **write-only observational accounting** — it never feeds compaction triggers or the status-line context-% (those stay on the realtime `current_request_tokens_estimate`; see [core-loop.md](core-loop.md)).
+
+- **Capture.** Token counts come from the provider-reported usage (`response.usage` / `RunUsage` — ground truth, never `chars/4`), accumulated into a turn-scoped `UsageAccumulator` shared by reference across `fork_deps` so subagent and compaction-summarizer tokens roll into the active turn. Capture happens at both model-call chokepoints (agent loop via `ObservabilityCapability.after_model_request`, direct calls via `llm_call`) through `record_usage(deps, usage)`.
+- **Per-turn flush.** At the turn boundary the turn's totals are appended as one JSON line, then the accumulator is reset (see [core-loop.md](core-loop.md)). One line per turn; append-only, no read-modify-write, no TTL (matches the transcript no-TTL policy).
+- **Record shape.** `{turn_ended_at, origin, session_id, input_tokens, output_tokens}`. `origin` is `"session"` (a real turn, keyed by the 8-char session id) or `"daemon"` (dream-daemon model spend, `session_id` null — see [dream.md](dream.md)). Cross-process appends from the session and daemon processes are atomic: each line is well under `PIPE_BUF` and writes use `O_APPEND`.
+- **Reporting.** `/usage` (no arg) sums the current session's `origin="session"` lines; `/usage week|month|total` sums a rolling window (`turn_ended_at` cutoff) split into Session / Daemon / Total, with daemon counted toward the total but never folded into the session figure. See [tui.md](tui.md).
+
 ## 4. Config
 
 Session search is file-based and has no configurable settings — there are no chunk, embedding, or backend knobs. The `memory.*` retrieval settings in [memory.md §3](memory.md) govern the memory/canon hybrid index only; sessions ignore them.
@@ -112,6 +121,10 @@ Result shape for `session_search`:
 | `persist_session_history(...)` | `co_cli/session/persistence.py` | Append-only writer; on compaction rewrites the file in place |
 | `append_messages(path, messages)` | `co_cli/session/persistence.py` | Tail-append used by `_finalize_turn` |
 | `load_transcript(path)` | `co_cli/session/persistence.py` | Reads a JSONL transcript back into pydantic-ai messages |
+| `UsageAccumulator` | `co_cli/session/usage.py` | Turn-scoped token tally (`input_tokens`/`output_tokens`, `add`/`reset`); fork-shared by reference |
+| `record_usage(deps, usage)` | `co_cli/session/usage.py` | Best-effort bump of `deps.usage_accumulator` from a provider usage object |
+| `append_turn(ledger_path, *, origin, session_id, input_tokens, output_tokens, turn_ended_at)` | `co_cli/session/usage.py` | Best-effort append of one ledger line; no-op when both counts are 0 |
+| `aggregate(ledger_path, *, since, session_id, origin)` | `co_cli/session/usage.py` | Streams the ledger → `UsageWindow` (Session / Daemon / Total totals + distinct-session count) |
 | `session_filename(created_at, session_id)` | `co_cli/session/filename.py` | Builds `YYYY-MM-DD-THHMMSSZ-<uuid8>.jsonl` |
 | `parse_session_filename(name)` | `co_cli/session/filename.py` | Parses session filename into `(uuid8, timestamp)` |
 | `find_latest_session(sessions_dir)` | `co_cli/session/filename.py` | Returns most recent transcript path by filename order |
@@ -140,6 +153,7 @@ Result shape for `session_search`:
 | `co_cli/session/_search.py` | ripgrep lexical search + Python fallback; `SessionHit`, `search_sessions()` |
 | `co_cli/session/filename.py` | filename parsing/generation, latest-session discovery |
 | `co_cli/session/persistence.py` | transcript append/load, in-place rewrite on compaction |
+| `co_cli/session/usage.py` | durable token-usage ledger: `UsageAccumulator`, `record_usage`, `append_turn`, `aggregate` |
 | `co_cli/session/browser.py` | session listing and picker metadata |
 | `co_cli/session/transcript.py` | JSONL line parser: `ExtractedMessage`, `extract_messages()` |
 | `co_cli/tools/session/recall.py` | `session_search` — recall and browse modes |

@@ -23,11 +23,36 @@ from co_cli.daemons.dream._state import (
     HousekeepingState,
     load_housekeeping_state,
 )
+from co_cli.session.usage import ORIGIN_DAEMON, append_turn
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
 
 logger = logging.getLogger(__name__)
+
+
+def _flush_daemon_usage(deps: CoDeps) -> None:
+    """Append one daemon-origin ledger line for the just-completed cycle, then reset.
+
+    Daemon lines carry ``origin="daemon"`` and a null ``session_id`` — the daemon
+    has no session_path, so its tokens are counted in the combined total but never
+    attributed to any session. ``append_turn`` is best-effort and no-ops on zero
+    tokens, so no guard is needed here.
+
+    Cross-process append safety: the session process and this daemon process both
+    append to the same ``~/.co-cli/usage.jsonl``. Each line is well under
+    ``PIPE_BUF`` (4096 B) and writes use ``O_APPEND``, so POSIX guarantees atomic,
+    non-interleaved appends across the two processes.
+    """
+    append_turn(
+        deps.usage_log_path,
+        origin=ORIGIN_DAEMON,
+        session_id=None,
+        input_tokens=deps.usage_accumulator.input_tokens,
+        output_tokens=deps.usage_accumulator.output_tokens,
+        turn_ended_at=datetime.now(UTC),
+    )
+    deps.usage_accumulator.reset()
 
 
 def scheduled_tick_due(state: HousekeepingState, cfg: DreamSettings) -> bool:
@@ -87,6 +112,7 @@ async def main_loop(
         files = list_queue_files(queue_dir)
         if not files:
             await _maybe_housekeep(deps, cfg)
+            _flush_daemon_usage(deps)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(shutdown.wait(), timeout=cfg.poll_interval_seconds)
             continue
@@ -103,6 +129,7 @@ async def main_loop(
             async with asyncio.timeout(cfg.review_timeout_seconds):
                 await _process_kick_file(deps, item_path, payload, state)
             move_to_done(item_path, queue_dir / "done")
+            _flush_daemon_usage(deps)
         except Exception as exc:
             attempts = payload.get("attempts", 0) + 1
             payload["attempts"] = attempts

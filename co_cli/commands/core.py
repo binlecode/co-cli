@@ -33,6 +33,7 @@ from co_cli.commands.types import (
     ReplaceTranscript,
     SlashOutcome,
 )
+from co_cli.commands.usage import _cmd_usage
 from co_cli.display.core import console
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,9 @@ BUILTIN_COMMANDS["reasoning"] = SlashCommand(
     "reasoning",
     "Show or set reasoning display: /reasoning [off|summary|full|next]",
     _cmd_reasoning,
+)
+BUILTIN_COMMANDS["usage"] = SlashCommand(
+    "usage", "Show token usage: /usage [week|month|total]", _cmd_usage
 )
 
 

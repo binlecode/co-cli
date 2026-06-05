@@ -338,7 +338,10 @@ Interrupt handling is conservative:
 `_finalize_turn()` then performs the remaining non-orchestration work:
 
 1. `append_messages()` — positional tail slice of new messages written to `deps.session.session_path`
-2. print a generic error banner when `turn_result.outcome == "error"`
+2. flush the turn's token usage — `_flush_turn_usage(deps)` appends one `origin="session"` line to the durable usage ledger (`deps.usage_log_path`), keyed by the 8-char session id, then resets `deps.usage_accumulator` for the next turn
+3. print a generic error banner when `turn_result.outcome == "error"`
+
+The same flush runs on the slash-command transcript-replacement path: the `/compact` branch of `_apply_command_outcome()` flushes its summarizer tokens (so they are not mis-attributed to the next real turn), while `/resume` and other no-LLM swaps just reset the accumulator. The accumulator is also reset at turn start in `run_turn()` (alongside `reset_for_turn()`). Usage capture is **write-only observational accounting** fed by provider-reported `RunUsage` — it never feeds compaction triggers or the status-line context-% (those stay on `current_request_tokens_estimate`). See [sessions.md](sessions.md) for the ledger schema and `/usage` reporting.
 
 Skill dispatch is intentionally scoped to one delegated turn:
 

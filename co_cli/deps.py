@@ -13,10 +13,12 @@ from co_cli.config.core import (
     MEMORY_DIR,
     SESSIONS_DIR,
     TOOL_RESULTS_DIR,
+    USAGE_LOG,
     USER_DIR,
     Settings,
 )
 from co_cli.config.llm import DEFAULT_MAX_CTX
+from co_cli.session.usage import UsageAccumulator
 from co_cli.tools.file_read_tracker import FileReadTracker
 
 if TYPE_CHECKING:
@@ -248,6 +250,7 @@ _DEFAULT_USER_SKILLS_DIR = USER_DIR / "skills"
 _DEFAULT_MEMORY_DIR = MEMORY_DIR
 _DEFAULT_SESSIONS_DIR = SESSIONS_DIR
 _DEFAULT_TOOL_RESULTS_DIR = TOOL_RESULTS_DIR
+_DEFAULT_USAGE_LOG = USAGE_LOG
 
 
 @dataclass
@@ -303,6 +306,12 @@ class CoDeps:
     user_skills_dir: Path = field(default_factory=lambda: _DEFAULT_USER_SKILLS_DIR)
     sessions_dir: Path = field(default_factory=lambda: _DEFAULT_SESSIONS_DIR)
     tool_results_dir: Path = field(default_factory=lambda: _DEFAULT_TOOL_RESULTS_DIR)
+    # Durable token-usage ledger path (~/.co-cli/usage.jsonl) — append-only per-turn record
+    usage_log_path: Path = field(default_factory=lambda: _DEFAULT_USAGE_LOG)
+    # Turn-scoped token accumulator — fork-shared by reference (like file_tracker) so
+    # subagent/summarizer tokens roll into the active turn; main loop owns reset at the
+    # turn boundary. Write-only accounting; never feeds compaction or the status-line.
+    usage_accumulator: UsageAccumulator = field(default_factory=UsageAccumulator, repr=False)
 
     # Effective context window size — single source of truth, set unconditionally at bootstrap.
     # Ollama: read from the loaded Modelfile via /api/show, capped by max_ctx (probe-failure
@@ -352,6 +361,7 @@ def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
         "user_skills_dir": USER_DIR / "skills",
         "sessions_dir": SESSIONS_DIR,
         "tool_results_dir": TOOL_RESULTS_DIR,
+        "usage_log_path": USAGE_LOG,
         "memory_dir": Path(config.memory_path) if config.memory_path else MEMORY_DIR,
     }
 
@@ -366,6 +376,8 @@ def fork_deps(base: CoDeps) -> CoDeps:
     Intentionally shared fields (by reference, not copied):
       file_tracker        — cross-agent staleness detection (mtime + partial-read state)
       resource_locks      — cross-agent lock coordination
+      tool_dispatch_sem   — single session-wide concurrent-tool-call cap across all agents
+      usage_accumulator   — turn-scoped token tally; subagent tokens roll into parent's turn
       degradations        — read-only after bootstrap
     These are safe to share because per-turn mutable state (CoRuntimeState) is always fresh.
 
@@ -403,6 +415,8 @@ def fork_deps(base: CoDeps) -> CoDeps:
         user_skills_dir=base.user_skills_dir,
         sessions_dir=base.sessions_dir,
         tool_results_dir=base.tool_results_dir,
+        usage_log_path=base.usage_log_path,
+        usage_accumulator=base.usage_accumulator,
         model_max_ctx=base.model_max_ctx,
         spill_threshold_tokens=base.spill_threshold_tokens,
         degradations=base.degradations,

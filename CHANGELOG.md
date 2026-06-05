@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.304]
+
+### token-usage-tracking-refactor — durable per-turn token ledger + `/usage` command
+
+Provider-reported token usage was captured at the model-call boundary but immediately discarded (forwarded to ephemeral spans, dropped at turn end). There was no durable record of what a session — or the user across days — had spent. This adds a durable ledger fed by ground-truth `RunUsage` and a `/usage` reporting command.
+
+- **Usage module (`co_cli/session/usage.py`).** New `UsageAccumulator` (turn-scoped token tally), `record_usage(deps, usage)` (best-effort bump), append-only ledger primitives `append_turn` / `aggregate` → origin-split `UsageWindow` (Session / Daemon / Total + distinct-session count). All I/O best-effort; never blocks a turn.
+- **Fork-shared capture.** `CoDeps` gains `usage_accumulator` (shared by reference across `fork_deps`, like `file_tracker`) and `usage_log_path` (`USAGE_LOG = ~/.co-cli/usage.jsonl`). Captured at both model-call chokepoints — `ObservabilityCapability.after_model_request` (agent loop) and `llm_call` (direct calls) — so chat, subagent, and compaction-summarizer tokens all roll into the active turn.
+- **Per-turn flush.** `_finalize_turn` appends one `origin="session"` ledger line then resets; the `/compact` transcript-replacement branch flushes its summarizer tokens (no mis-attribution to the next turn); turn-start reset in `run_turn`. Write-only observational accounting — never feeds compaction triggers or the status-line context-%.
+- **Daemon spend.** The dream daemon (separate process) captures its own model spend via the same hooks and flushes `origin="daemon"`, `session_id=null` lines at each cycle boundary — counted toward windowed/total figures but never folded into any session.
+- **`/usage` command.** No arg → current-session totals (daemon excluded); `week|month|total` → rolling-window Session / Daemon / Total split with a distinct-session count. Append-only, no TTL; cross-process appends atomic (`O_APPEND`, line < `PIPE_BUF`).
+
 ## [0.8.303]
 
 ### fix-dream-logging — dream daemon emits structured JSONL via a shared observability coordinator

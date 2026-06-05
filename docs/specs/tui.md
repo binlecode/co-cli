@@ -212,6 +212,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `/cancel` | `<task-id>` | Cancel a running background task | `None` |
 | `/queue` | `[list\|clear\|pop [n]]` | Inspect or prune pending REPL input-queue items; mid-turn bypass runs immediately without enqueueing | `None` |
 | `/reasoning` | `[off\|summary\|full\|next]` | Show or set reasoning display mode | `None` |
+| `/usage` | `[week\|month\|total]` | Show token usage: no arg = current session totals (daemon excluded); a window shows a Session / Daemon / Total split with a distinct-session count | `None` |
 
 #### `/reasoning` detail
 

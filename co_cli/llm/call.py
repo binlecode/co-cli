@@ -10,6 +10,7 @@ from pydantic_ai.settings import ModelSettings
 
 from co_cli.observability.capability import serialize_messages, serialize_response
 from co_cli.observability.tracing import pop_span, push_span
+from co_cli.session.usage import record_usage
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
@@ -69,6 +70,7 @@ async def llm_call(
         pop_span(status="ERROR", status_msg=str(exc))
         raise
     usage = response.usage
+    record_usage(deps, usage)
     pop_span(
         attributes={
             "co.model.output": serialize_response(response),

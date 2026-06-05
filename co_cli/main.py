@@ -54,6 +54,7 @@ from co_cli.display.core import (
 from co_cli.fileio.atomic import atomic_write_text
 from co_cli.observability.setup import setup_observability
 from co_cli.session.persistence import persist_session_history
+from co_cli.session.usage import ORIGIN_SESSION, append_turn
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
 
@@ -108,6 +109,26 @@ def _default(ctx: typer.Context):
         _start_chat(theme=None, verbose=False, reasoning_display=None)
 
 
+def _flush_turn_usage(deps: CoDeps) -> None:
+    """Append the turn's accumulated token usage to the durable ledger, then reset.
+
+    Best-effort (append_turn swallows its own errors). The line is session-origin,
+    keyed by the active short session id; reset clears the accumulator for the next turn.
+    """
+    accumulator = deps.usage_accumulator
+    session_path = deps.session.session_path
+    if session_path is not None:
+        append_turn(
+            deps.usage_log_path,
+            origin=ORIGIN_SESSION,
+            session_id=session_path.stem[-8:],
+            input_tokens=accumulator.input_tokens,
+            output_tokens=accumulator.output_tokens,
+            turn_ended_at=datetime.now(UTC),
+        )
+    deps.usage_accumulator.reset()
+
+
 async def _finalize_turn(
     turn_result: TurnResult,
     message_history: list[ModelMessage],
@@ -134,6 +155,8 @@ async def _finalize_turn(
         frontend.on_status(
             f"Session write failed — conversation may not be saved. Check disk space. ({e})"
         )
+
+    _flush_turn_usage(deps)
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":
@@ -293,8 +316,13 @@ def _apply_command_outcome(
                 frontend.on_status(
                     f"Session write failed — conversation may not be saved. Check disk space. ({e})"
                 )
+            # /compact's summarizer ran via llm_call, so the accumulator holds its tokens —
+            # flush them as this turn's line, else they mis-attribute to the next real turn.
+            _flush_turn_usage(deps)
         else:
             deps.runtime.persisted_message_count = len(outcome.history)
+            # /resume and other no-LLM transcript swaps: reset defensively (normally 0 here).
+            deps.usage_accumulator.reset()
         return True, outcome.history, "", {}
     if isinstance(outcome, DelegateToAgent):
         saved_env: dict[str, str | None] = {k: os.environ.get(k) for k in outcome.skill_env}
