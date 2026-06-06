@@ -172,6 +172,12 @@ lever is **deferring more ALWAYS tools**, not squeezing docstrings that are alre
 - **success_signal:** per-call prefill on a trivial turn measures below the current ~11.4k-tok floor.
 
 ### ISSUE-5 — `file_read`/`*_view` exempt from per-emission spill (`spill_threshold_chars = ∞`)
+> **Extracted at Gate 1 into two sibling plans:** the read/view limit-constant cleanup
+> (`2026-06-04-201014-read-view-emission-spill-cap.md`) and the L2 force-spill tail protection that carries
+> the visibility guarantee — "the model must see what it just read" —
+> (`2026-06-05-150129-l2-spill-tail-protection.md`). The prose below is the original ISSUE-5 framing,
+> superseded by those plans.
+
 A large read lands fully inline (up to `_READ_MAX_LINES=2000 × _READ_MAX_LINE_CHARS=2000`); only the
 next request's `spill_largest_tool_results` force-spills it. A single read can dominate the middle between
 passes.

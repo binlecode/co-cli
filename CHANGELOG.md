@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.307]
+
+### l2-spill-tail-protection — L2 force-spill now preserves the recent tail (model sees what it just read)
+
+The L2 force-spill processor `spill_largest_tool_results` collected every string `ToolReturnPart` with no recency protection and spilled largest-first — so a freshly-read large document, the biggest and newest return, was the prime spill target and got stubbed to a `<persisted-output>` placeholder on the very request that was supposed to carry it back to the model. The model never saw the content it just asked for. L3 (`proactive_window_processor`) and overflow recovery already protect a recent tail via `plan_compaction_boundaries`; L2 ran first and pre-empted it. This makes L2 respect the same tail.
+
+- **Tail exclusion.** `spill_largest_tool_results` computes `tail_start` from the **same** `plan_compaction_boundaries(messages, resolve_compaction_budget(deps), cfg.tail_fraction)` boundary L3 and overflow recovery use (budget = `model_max_ctx`, **not** `spill_threshold_tokens` — no drift), and excludes `ToolReturnPart`s at message index `>= tail_start` from the spillable set. When the planner returns `None` (fewer than 2 turn groups) every candidate stays spillable — pre-tail-protection behavior.
+- **Invariant.** A tool result is visible to the model at least once — on the request immediately following its production — before it becomes spill-eligible. The freshest read lives in the last turn group, which `plan_compaction_boundaries` always retains (`_MIN_RETAINED_TURN_GROUPS=1`).
+- **Unchanged.** The spill trigger (`spill_threshold_tokens`), `_spill_largest_first`, L3, and the HTTP-400 overflow path are untouched. `_collect_tool_return_candidates` now returns `(index, part)`; the OTEL event gains `request.tail_start` / `request.tail_protected_count`.
+- **Source.** `context/history_processors.py`.
+- **Tests.** `tests/test_flow_compaction_spill_largest_tool_results.py` — fresh read in last turn group survives while an aged read spills; protected tail alone over threshold defers without stubbing; single turn group → no protection (None fallback).
+- **Specs.** `compaction.md` (§2.4 Scope corrected — the "no protected tail at this stage" claim was inverted; §1.2 L2 row, algorithm step 3, span attribute list, test-coverage map).
+
 ## [0.8.306]
 
 ### rename-enforce-request-size — L2 history processor renamed to `spill_largest_tool_results`

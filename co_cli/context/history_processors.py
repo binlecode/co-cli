@@ -43,14 +43,20 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.context._compaction_boundaries import _find_last_turn_start
+from co_cli.context._compaction_boundaries import (
+    _find_last_turn_start,
+    plan_compaction_boundaries,
+)
 from co_cli.context._dedup_tool_results import (
     build_dedup_part,
     dedup_key,
     is_dedup_candidate,
 )
 from co_cli.context._tool_result_markers import is_cleared_marker, semantic_marker
-from co_cli.context.summarization import estimate_message_tokens
+from co_cli.context.summarization import (
+    estimate_message_tokens,
+    resolve_compaction_budget,
+)
 from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.observability.tracing import current_span
@@ -309,15 +315,21 @@ def evict_old_tool_results(
     return _rewrite_tool_returns(messages, boundary, replacement_for=replacement_for)
 
 
-def _collect_tool_return_candidates(messages: list[ModelMessage]) -> list[ToolReturnPart]:
-    """Collect every string-content ``ToolReturnPart`` across the message list."""
-    candidates: list[ToolReturnPart] = []
-    for msg in messages:
+def _collect_tool_return_candidates(
+    messages: list[ModelMessage],
+) -> list[tuple[int, ToolReturnPart]]:
+    """Collect every string-content ``ToolReturnPart`` with its message index.
+
+    The message index lets ``spill_largest_tool_results`` exclude returns inside
+    the protected tail (index ``>= tail_start``) from the spillable set.
+    """
+    candidates: list[tuple[int, ToolReturnPart]] = []
+    for index, msg in enumerate(messages):
         if not isinstance(msg, ModelRequest):
             continue
         for part in msg.parts:
             if isinstance(part, ToolReturnPart) and isinstance(part.content, str):
-                candidates.append(part)
+                candidates.append((index, part))
     return candidates
 
 
@@ -379,7 +391,14 @@ def spill_largest_tool_results(
          realtime-local count (no provider-reported floor; peer-aligned with hermes/openclaw).
       2. If ``total <= deps.spill_threshold_tokens``, fast-path.
       3. Collect ``ToolReturnPart`` candidates with string content; filter
-         spillable (content does not start with ``PERSISTED_OUTPUT_TAG``).
+         spillable (index ``< tail_start`` and content does not start with
+         ``PERSISTED_OUTPUT_TAG``). ``tail_start`` comes from the SAME
+         ``plan_compaction_boundaries(messages, resolve_compaction_budget(deps),
+         cfg.tail_fraction)`` boundary L3 and overflow-recovery use, so the
+         freshest tool return — the content the model is about to read — is
+         preserved for one round before becoming spill-eligible. When the
+         planner returns ``None`` (too few turns to form a tail), every
+         candidate is spillable, matching pre-tail-protection behavior.
       4. Sort spillable largest-first by ``len(content)``.
       5. Force-spill via ``spill_if_oversized(..., force=True)`` until aggregate
          falls to or below the threshold or candidates exhaust.
@@ -397,8 +416,19 @@ def spill_largest_tool_results(
 
     local_total = estimate_message_tokens(messages)
     trigger = deps.static_floor_tokens + local_total
+
+    budget = resolve_compaction_budget(deps)
+    cfg = deps.config.compaction
+    boundary = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
+    tail_start = boundary[1] if boundary else len(messages)
+
     candidates = _collect_tool_return_candidates(messages)
-    spillable = [p for p in candidates if not p.content.startswith(PERSISTED_OUTPUT_TAG)]
+    spillable = [
+        part
+        for index, part in candidates
+        if index < tail_start and not part.content.startswith(PERSISTED_OUTPUT_TAG)
+    ]
+    tail_protected_count = sum(1 for index, _ in candidates if index >= tail_start)
 
     event_attrs: dict[str, Any] = {
         "budget.context_window_tokens": deps.model_max_ctx,
@@ -406,6 +436,8 @@ def spill_largest_tool_results(
         "request.tokens_before": trigger,
         "request.local_tokens": local_total,
         "request.static_floor_tokens": deps.static_floor_tokens,
+        "request.tail_start": tail_start,
+        "request.tail_protected_count": tail_protected_count,
         "request.candidates_count": len(candidates),
         "request.spillable_count": len(spillable),
     }

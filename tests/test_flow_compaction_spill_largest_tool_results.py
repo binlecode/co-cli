@@ -252,6 +252,99 @@ def test_small_realtime_no_spill_despite_high_provider_usage(tmp_path: Path):
     assert deps.runtime.current_request_tokens_estimate <= 8_000
 
 
+@pytest.mark.asyncio
+async def test_fresh_tail_return_survives_while_aged_return_spills(tmp_path: Path):
+    """The freshest read (last turn group) is preserved; an equally large aged read spills.
+
+    Two turn groups, each with a 32K-char (~8K-token) tool return. Aggregate
+    (~16K tokens) trips the 5K threshold. The protected tail spans the last
+    turn group, so the fresh return at index 5 must NOT be stubbed even under
+    pressure, while the aged return at index 2 (before ``tail_start``) does.
+    This is the model-visibility invariant: a read is seen once before it
+    becomes spill-eligible.
+    """
+    aged = "a" * 32_000
+    fresh = "f" * 32_000
+    messages: list[ModelMessage] = [
+        _user_request("turn one — old work"),
+        _tool_response("shell_exec", "tc_aged"),
+        _tool_request("shell_exec", "tc_aged", aged),
+        _user_request("turn two — read this"),
+        _tool_response("shell_exec", "tc_fresh"),
+        _tool_request("shell_exec", "tc_fresh", fresh),
+    ]
+    deps = _make_deps(tmp_path, threshold_tokens=5_000)
+
+    out = spill_largest_tool_results(_ctx(deps), messages)
+
+    returns = _collect_returns(out)
+    assert not returns["tc_fresh"].startswith(PERSISTED_OUTPUT_TAG), (
+        "freshest read in the last turn group must survive L2"
+    )
+    assert PERSISTED_OUTPUT_TAG in returns["tc_aged"], (
+        "aged read before tail_start must still spill"
+    )
+
+
+@pytest.mark.asyncio
+async def test_protected_tail_alone_over_threshold_defers_without_stubbing(tmp_path: Path):
+    """When the only large return is the protected tail, L2 leaves it for the overflow path.
+
+    The older turn's return is already a persisted stub, so nothing before
+    ``tail_start`` is spillable. The fresh return (~15K tokens) sits in the
+    protected tail and alone exceeds the 4K threshold. L2 must return without
+    stubbing it — deferring to the HTTP-400 overflow-recovery path — rather
+    than spilling the content the model is about to read.
+    """
+    stub = (
+        f"{PERSISTED_OUTPUT_TAG}\n"
+        f"tool: shell\nfile: /tmp/old.txt\npreview:\n{'p' * 800}\n"
+        f"</persisted-output>"
+    )
+    fresh = "f" * 60_000
+    messages: list[ModelMessage] = [
+        _user_request("turn one"),
+        _tool_response("shell_exec", "tc_old"),
+        _tool_request("shell_exec", "tc_old", stub),
+        _user_request("turn two — read this big file"),
+        _tool_response("shell_exec", "tc_fresh"),
+        _tool_request("shell_exec", "tc_fresh", fresh),
+    ]
+    deps = _make_deps(tmp_path, threshold_tokens=4_000)
+
+    out = spill_largest_tool_results(_ctx(deps), messages)
+
+    returns = _collect_returns(out)
+    assert not returns["tc_fresh"].startswith(PERSISTED_OUTPUT_TAG), (
+        "protected tail must not be stubbed even when it alone exceeds the threshold"
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_turn_group_has_no_tail_protection(tmp_path: Path):
+    """With only one turn group the planner returns None: a fresh large read still spills.
+
+    ``plan_compaction_boundaries`` needs at least two turn groups to form a
+    tail. A single-turn transcript yields ``None``, so ``tail_start`` falls back
+    to ``len(messages)`` and every candidate is spillable — pre-tail-protection
+    behavior. This pins the second clause of TASK-1's done_when.
+    """
+    fresh = "f" * 40_000
+    messages: list[ModelMessage] = [
+        _user_request("only turn — read this"),
+        _tool_response("shell_exec", "tc_fresh"),
+        _tool_request("shell_exec", "tc_fresh", fresh),
+    ]
+    deps = _make_deps(tmp_path, threshold_tokens=4_000)
+
+    out = spill_largest_tool_results(_ctx(deps), messages)
+
+    returns = _collect_returns(out)
+    assert PERSISTED_OUTPUT_TAG in returns["tc_fresh"], (
+        "without a second turn group there is no tail to protect — the read spills"
+    )
+
+
 def test_large_realtime_spills_and_post_spill_estimate_is_realtime(tmp_path: Path):
     """Spill fires on realtime payload; post-spill estimate is realtime, not floored.
 
