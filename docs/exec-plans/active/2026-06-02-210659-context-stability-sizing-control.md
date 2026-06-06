@@ -172,37 +172,18 @@ lever is **deferring more ALWAYS tools**, not squeezing docstrings that are alre
 - **success_signal:** per-call prefill on a trivial turn measures below the current ~11.4k-tok floor.
 
 ### ISSUE-5 — `file_read`/`*_view` exempt from per-emission spill (`spill_threshold_chars = ∞`)
-> **Extracted at Gate 1 into two sibling plans:** the read/view limit-constant cleanup
-> (`2026-06-04-201014-read-view-emission-spill-cap.md`) and the L2 force-spill tail protection that carries
-> the visibility guarantee — "the model must see what it just read" —
-> (`2026-06-05-150129-l2-spill-tail-protection.md`). The prose below is the original ISSUE-5 framing,
-> superseded by those plans.
-
-A large read lands fully inline (up to `_READ_MAX_LINES=2000 × _READ_MAX_LINE_CHARS=2000`); only the
-next request's `spill_largest_tool_results` force-spills it. A single read can dominate the middle between
-passes.
-
-**Fix.** Replace `∞` with a high-but-finite per-emission spill threshold for `file_read` (and the
-`*_view` tools), so a single oversized read spills to disk at emission rather than injecting a large
-inline block. Keep the threshold high enough that normal ranged reads stay inline.
-
-**Peer validation (clearest "co is behind" case).** **Every** surveyed peer caps *live* tool output
-(openclaw `TOOL_RESULT_MAX_CHARS=8000` head-only, opencode `TOOL_OUTPUT_MAX_CHARS=2000` in-place);
-co's `∞` exemption makes it the **lone outlier with an uncapped live-output path**. The fix brings co
-to parity *and* preserves co's unique edge — co spills to disk (**recoverable** behind a placeholder +
-preview) where peers **truncate** (lossy). So this is parity on bounding plus a retained advantage.
-
-**Implementation.**
-- **Files:** `co_cli/tools/files/read.py`, `co_cli/tools/memory/view.py`, `co_cli/tools/session/view.py`,
-  `co_cli/tools/system/skills.py`, `co_cli/tools/tool_io.py`, `tests/test_flow_files_read.py`.
-- **Action:** Replace `spill_threshold_chars=math.inf` (at `read.py:397`, `memory/view.py:22`,
-  `session/view.py:25`, `system/skills.py:37`) with a high finite threshold; verify normal ranged reads
-  stay inline and an oversized read spills at emission.
-- **prerequisites:** none.
-- **done_when:** an oversized `file_read` returns a persisted-output reference (spilled); a normal ranged
-  read returns inline; `uv run pytest tests/test_flow_files_read.py -x` passes.
-- **success_signal:** a single full-file `file_read` no longer injects a >threshold inline block into the
-  middle in the loop-stability eval.
+> **Extracted at Gate 1 into two sibling plans — this block is now a stub:**
+> - **Read/view limit-constant cleanup** (`2026-06-04-201014-read-view-emission-spill-cap.md`): dedup the
+>   three line-count caps into one `READ_MAX_LINES` pagination cap and return verbatim `session_view` turns.
+>   Resolved that the emission cap is *not* the fix — read tools keep `spill_threshold_chars=∞` so they land
+>   inline, and `_READ_MAX_LINE_CHARS=2000` is kept (peer-aligned per-line clip).
+> - **L2 force-spill tail protection** (`2026-06-05-150129-l2-spill-tail-protection.md`): carries the
+>   visibility guarantee — "the model must see what it just read" — by preserving the recent tail in
+>   `spill_largest_tool_results`, mirroring L3.
+>
+> The original "replace ∞ with a finite emission cap" framing was traced to be wrong (a low cap re-breaks
+> visibility; a high one is inert) and dropped at Gate 1. The dedup vs visibility split lives entirely in the
+> two plans above.
 
 ### Loop-stability eval — cross-cutting validation
 Validates the combined behavior of ISSUE-3/5 and the shipped tail+floor work; not tied to a single issue.
@@ -212,12 +193,13 @@ Validates the combined behavior of ISSUE-3/5 and the shipped tail+floor work; no
   conversation (real LLM, real tools, large tool outputs) past the trigger and assert no
   context-overflow error, bounded number of compaction passes, post-pass total stays below the trigger,
   and that spill-to-disk passes precede LLM-summarization passes under tool-output pressure (drop-reported
-  trigger / ISSUE-5 emission cap). A tool-output-heavy middle has spillable `ToolReturnPart` candidates, so this
+  trigger + L2 tail-protection — read tools land inline, not emission-capped). A tool-output-heavy middle has spillable `ToolReturnPart` candidates, so this
   phase exercises spill before summarize — the opposite of the extracted plan's text-heavy phase. Real
   everything (per `feedback_eval_real_world_data`).
 - **prerequisites:** the drop-reported plan
   (`docs/exec-plans/active/2026-06-04-130800-drop-reported-realtime-trigger.md`, which superseded ISSUE-3)
-  and ISSUE-5 fixes required. The extracted ISSUE-2 plan must ship first (it
+  and the two extracted ISSUE-5 sibling plans (`2026-06-04-201014-read-view-emission-spill-cap.md` +
+  `2026-06-05-150129-l2-spill-tail-protection.md`) required. The extracted ISSUE-2 plan must ship first (it
   creates the eval file and lands the anti-thrash fix this eval's bounded-loop assertion relies on).
   (ISSUE-1 + ISSUE-1.5 already shipped; this eval is also the **hard coherence gate** for the shipped
   `tail_fraction 0.10` — the extracted plan deliberately logs coherence rather than gating, leaving the

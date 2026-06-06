@@ -10,12 +10,9 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.session.transcript import extract_messages
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.tool_io import tool_error, tool_output
+from co_cli.tools.tool_io import READ_MAX_LINES, tool_error, tool_output
 
 logger = logging.getLogger(__name__)
-
-_SESSION_TURN_MAX_LINES = 200
-_SESSION_TURN_MAX_BYTES = 16 * 1024
 
 
 @agent_tool(
@@ -37,10 +34,11 @@ async def session_view(
     chunk-level snippet. Line numbers are 1-indexed JSONL lines as reported in
     the search hit's start_line/end_line.
 
-    Refuses ranges over 200 lines or content over 16KB to keep context tight.
+    Clamps ranges over READ_MAX_LINES turns to keep context tight; turns are
+    returned verbatim with no per-turn char clip.
 
     Returns: {session_id, lines: [...], truncated: bool}
-        lines[i] = {line, role, content_preview, tool_name|None}
+        lines[i] = {line, role, content, tool_name|None}
 
     Args:
         session_id: 8-char session UUID suffix.
@@ -67,8 +65,8 @@ async def session_view(
     requested_lines = end_line - start_line + 1
     truncated = False
     effective_end = end_line
-    if requested_lines > _SESSION_TURN_MAX_LINES:
-        effective_end = start_line + _SESSION_TURN_MAX_LINES - 1
+    if requested_lines > READ_MAX_LINES:
+        effective_end = start_line + READ_MAX_LINES - 1
         truncated = True
 
     all_messages = extract_messages(jsonl_path)
@@ -77,30 +75,21 @@ async def session_view(
     in_range = [m for m in all_messages if lo <= m.line_index <= hi]
 
     output_lines: list[dict[str, Any]] = []
-    total_bytes = 0
     for msg in in_range:
-        preview = msg.content[:200]
         entry: dict[str, Any] = {
             "line": msg.line_index + 1,
             "role": msg.role,
-            "content_preview": preview,
+            "content": msg.content,
             "tool_name": msg.tool_name,
         }
-        entry_bytes = len(preview.encode("utf-8"))
-        if total_bytes + entry_bytes > _SESSION_TURN_MAX_BYTES:
-            truncated = True
-            break
         output_lines.append(entry)
-        total_bytes += entry_bytes
 
     display_lines = [f"Session {session_id} — lines {start_line}–{effective_end}"]
     if truncated:
         display_lines.append(f"(truncated — showing {len(output_lines)} entries)")
     for entry in output_lines:
         tool_tag = f" [{entry['tool_name']}]" if entry["tool_name"] else ""
-        display_lines.append(
-            f"  L{entry['line']} {entry['role']}{tool_tag}: {entry['content_preview']}"
-        )
+        display_lines.append(f"  L{entry['line']} {entry['role']}{tool_tag}: {entry['content']}")
 
     return tool_output(
         "\n".join(display_lines),

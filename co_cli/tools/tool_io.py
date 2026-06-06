@@ -48,6 +48,12 @@ SPILL_THRESHOLD_CHARS = 4_000
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
 
+# Pagination cap for the read/view tools that page over a source (file_read,
+# session_view). One read returns <= READ_MAX_LINES lines/turns; the continuation
+# hint pages forward. 500 of typical source (~52 chars/line incl. line-number
+# prefix) is ~26k chars — inline and (via the L2 tail-protection sibling) visible.
+READ_MAX_LINES = 500
+
 
 def _generate_preview(content: str, max_chars: int) -> tuple[str, bool]:
     """Truncate at the last newline within max_chars when it lies past halfway; else hard-cut.

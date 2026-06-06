@@ -22,10 +22,8 @@ from co_cli.tools.files.fs_guards import (
     safe_mtime,
 )
 from co_cli.tools.shell_env import build_subprocess_env
-from co_cli.tools.tool_io import tool_error, tool_output
+from co_cli.tools.tool_io import READ_MAX_LINES, tool_error, tool_output
 
-_READ_DEFAULT_LIMIT_LINES = 500
-_READ_MAX_LINES = 2000
 _READ_MAX_LINE_CHARS = 2000
 _READ_MAX_FILE_BYTES = 500_000
 
@@ -39,10 +37,10 @@ def _compute_read_slice(
     if start_line is not None or end_line is not None:
         lo = (start_line - 1) if start_line is not None else 0
         requested_hi = end_line if end_line is not None else total_line_count
-        hi = min(requested_hi, lo + _READ_MAX_LINES)
+        hi = min(requested_hi, lo + READ_MAX_LINES)
         return lo, hi, True
     lo = 0
-    hi = min(total_line_count, _READ_DEFAULT_LIMIT_LINES)
+    hi = min(total_line_count, READ_MAX_LINES)
     return lo, hi, hi < total_line_count
 
 

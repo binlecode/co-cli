@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.308]
+
+### read-view-emission-spill-cap — dedup read/view line caps into one pagination cap; verbatim session_view turns
+
+The four read/view tools (`spill_threshold_chars=∞`) had each grown their own ad-hoc line-count caps — three different values (`500`/`2000`/`200`) doing the same job across two tools — plus `session_view`'s byte cap and a 200-char per-turn preview that defeated the tool's stated "exact turn content" purpose. This dedupes the line-count caps into one shared pagination constant and makes `session_view` return verbatim turns. The emission cap originally proposed for ISSUE-5 was traced to be the wrong fix (a low cap re-breaks first-sight visibility; a high one is inert) and dropped — read tools keep `∞` so they land inline, and the sibling L2 tail-protection (v0.8.307) keeps them visible.
+
+- **One pagination cap.** New `READ_MAX_LINES = 500` in `tools/tool_io.py` replaces `_READ_DEFAULT_LIMIT_LINES` (500), `_READ_MAX_LINES` (2000), and `_SESSION_TURN_MAX_LINES` (200). `file_read` uses it for both the no-range default and the ranged ceiling; the continuation hint pages forward.
+- **`session_view` returns verbatim.** Removed `_SESSION_TURN_MAX_BYTES` + the byte-accumulation loop and the 200-char preview; the structured-return field `content_preview` is renamed to `content` (breaking, zero-backward-compat) and holds the full turn. Bounded only by `READ_MAX_LINES` turn count + L2/HTTP-400 recovery, with no per-turn char clip.
+- **Kept (peer-aligned).** `file_read`'s per-line clip `_READ_MAX_LINE_CHARS = 2000` (bounds a pathological single 400 KB line that pagination cannot), the `_READ_MAX_FILE_BYTES` full-file I/O guard, and `spill_threshold_chars=∞` on all four read/view decorators are unchanged.
+- **Source.** `tools/tool_io.py`, `tools/files/read.py`, `tools/session/view.py`.
+- **Tests.** `tests/test_flow_files_read.py` (pagination at `READ_MAX_LINES` for both read modes, normal read stays inline, >2000-char line clipped), `tests/test_flow_session_view.py` (turn past 200 chars returned verbatim; `content_preview`→`content`).
+- **Specs.** `tools.md` (corrected stale file-path attribution: `session_search`/`session_view` live under `tools/session/`, not `tools/memory/`).
+
 ## [0.8.307]
 
 ### l2-spill-tail-protection — L2 force-spill now preserves the recent tail (model sees what it just read)

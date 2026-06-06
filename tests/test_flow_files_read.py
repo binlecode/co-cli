@@ -13,21 +13,34 @@ from tests._settings import SETTINGS
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
 from co_cli.tools.files.read import file_read, file_search
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, READ_MAX_LINES
 
 
-def _make_deps(workspace: Path) -> CoDeps:
+def _make_deps(workspace: Path, tool_results_dir: Path | None = None) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
         session=CoSessionState(),
         workspace_dir=workspace,
+        tool_results_dir=tool_results_dir or workspace / "tool_results",
     )
 
 
-def _ctx(deps: CoDeps) -> RunContext[CoDeps]:
-    return RunContext(deps=deps, model=None, usage=RunUsage())
+def _ctx(deps: CoDeps, tool: object | None = None) -> RunContext[CoDeps]:
+    """Build a RunContext. Pass a decorated tool to apply its real spill threshold.
+
+    Without it, the tool-name lookup misses and tool_output falls back to the 4000-char
+    default — fine for small outputs, but file_read's math.inf (keep reads inline) only
+    takes effect when tool_name + tool_index reflect the registered ToolInfo.
+    """
+    if tool is None:
+        return RunContext(deps=deps, model=None, usage=RunUsage())
+    info = getattr(tool, AGENT_TOOL_ATTR)
+    deps.tool_index[info.name] = info
+    return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name=info.name)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +187,85 @@ async def test_file_read_rejects_directory_path(tmp_path: Path) -> None:
 
     assert result.metadata is not None
     assert result.metadata.get("error") is True
+
+
+@pytest.mark.asyncio
+async def test_file_read_pages_at_read_max_lines(tmp_path: Path) -> None:
+    """A read of a file longer than READ_MAX_LINES returns exactly READ_MAX_LINES lines
+    plus a continuation hint, for both a no-range and a ranged read.
+
+    Failure mode: an unbounded line count lets one read inject the whole file inline.
+    """
+    total = READ_MAX_LINES + 50
+    f = tmp_path / "long.txt"
+    f.write_text("".join(f"line {i}\n" for i in range(1, total + 1)))
+
+    deps = _make_deps(tmp_path)
+    ctx = _ctx(deps, file_read)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        no_range = await file_read(ctx, path="long.txt")
+
+    assert no_range.metadata is not None
+    assert no_range.metadata.get("error") is not True
+    body = no_range.return_value
+    assert f"line {READ_MAX_LINES}" in body
+    assert f"line {READ_MAX_LINES + 1}" not in body
+    assert f"start_line={READ_MAX_LINES + 1}" in body, "no-range read must page at READ_MAX_LINES"
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        ranged = await file_read(ctx, path="long.txt", start_line=1, end_line=total)
+
+    ranged_body = ranged.return_value
+    assert f"line {READ_MAX_LINES}" in ranged_body
+    assert f"line {READ_MAX_LINES + 1}" not in ranged_body
+    assert f"start_line={READ_MAX_LINES + 1}" in ranged_body, (
+        "ranged read must clamp at READ_MAX_LINES"
+    )
+
+
+@pytest.mark.asyncio
+async def test_file_read_normal_read_is_inline(tmp_path: Path) -> None:
+    """A normal small read returns content inline — never spilled to a persisted-output ref.
+
+    Failure mode: an emission cap on the read tool would spill a normal read, breaking
+    the model's first-sight visibility the read tool exists to provide.
+    """
+    f = tmp_path / "small.txt"
+    f.write_text("alpha\nbeta\ngamma\n")
+
+    deps = _make_deps(tmp_path)
+    ctx = _ctx(deps, file_read)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await file_read(ctx, path="small.txt")
+
+    assert result.metadata is not None
+    assert result.metadata.get("error") is not True
+    assert PERSISTED_OUTPUT_TAG not in result.return_value, "normal read must stay inline"
+    assert "alpha" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_file_read_clips_pathological_long_line(tmp_path: Path) -> None:
+    """A single line longer than 2000 chars is clipped (the retained _READ_MAX_LINE_CHARS guard).
+
+    Failure mode: dropping the per-line clip lets one minified-JS line land inline unbounded.
+    """
+    tail_marker = "PAST_CHAR_2000_MARKER_jx4z"
+    long_line = "A" * 2500 + tail_marker
+    f = tmp_path / "minified.txt"
+    f.write_text(long_line + "\n")
+
+    deps = _make_deps(tmp_path)
+    ctx = _ctx(deps, file_read)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await file_read(ctx, path="minified.txt")
+
+    body = result.return_value
+    assert "...[truncated]" in body, "a >2000-char line must be clipped"
+    assert tail_marker not in body, "content past char 2000 must be absent after clip"
 
 
 # ---------------------------------------------------------------------------

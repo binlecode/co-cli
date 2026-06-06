@@ -284,8 +284,10 @@ on shared mutation keys is a complementary guard — both layers apply.
 | `co_cli/tools/shell_policy.py` | `shell_exec` and `task_start` command-safety policy |
 | `co_cli/tools/files/read.py` | `file_read`, `file_search` |
 | `co_cli/tools/files/write.py` | `file_write`, `file_patch` |
-| `co_cli/tools/memory/recall.py` | `memory_search`, `session_search` |
-| `co_cli/tools/memory/view.py` | `memory_view`, `session_view` |
+| `co_cli/tools/memory/recall.py` | `memory_search` |
+| `co_cli/tools/memory/view.py` | `memory_view` |
+| `co_cli/tools/session/recall.py` | `session_search` |
+| `co_cli/tools/session/view.py` | `session_view` |
 | `co_cli/tools/memory/manage.py` | `memory_create`, `memory_append`, `memory_replace`, `memory_delete` |
 | `co_cli/tools/system/skills.py` | `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` |
 | `co_cli/tools/web/search.py` | `web_search` |

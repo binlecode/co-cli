@@ -152,10 +152,8 @@ async def test_session_view_verbatim_content_preserved(tmp_path: Path) -> None:
 
     output_lines = result.metadata.get("lines", [])
     assert output_lines, "expected at least one line in output"
-    content_preview = output_lines[0].get("content_preview", "")
-    assert unique_text in content_preview, (
-        f"verbatim content must appear in output: {content_preview!r}"
-    )
+    content = output_lines[0].get("content", "")
+    assert unique_text in content, f"verbatim content must appear in output: {content!r}"
 
 
 @pytest.mark.asyncio
@@ -184,7 +182,33 @@ async def test_session_view_shows_tool_call_arguments(tmp_path: Path) -> None:
 
     output_lines = result.metadata.get("lines", [])
     assert output_lines, "expected the tool-call turn in output"
-    content_preview = output_lines[0].get("content_preview", "")
-    assert "DEPLOY_77" in content_preview, (
-        f"tool-call args must appear in the view: {content_preview!r}"
+    content = output_lines[0].get("content", "")
+    assert "DEPLOY_77" in content, f"tool-call args must appear in the view: {content!r}"
+
+
+@pytest.mark.asyncio
+async def test_session_view_returns_full_turn_past_200_chars(tmp_path: Path) -> None:
+    """A turn longer than 200 chars is returned verbatim, not clipped to a 200-char snippet.
+
+    Failure mode: a per-turn 200-char preview re-introduces the snippet view that
+    session_view exists to replace, hiding the tail of long commands / tool args.
+    """
+    sessions_dir = tmp_path / "sessions"
+    uuid8 = "longturn"
+    head = "X" * 250
+    tail_marker = "TAIL_MARKER_past_char_200_ks7q"
+    long_turn = head + tail_marker
+    _make_session_file(sessions_dir, uuid8, [long_turn])
+
+    deps = _make_deps(tmp_path, sessions_dir=sessions_dir)
+    ctx = _ctx(deps)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_view(ctx, session_id=uuid8, start_line=1, end_line=1)
+
+    output_lines = result.metadata.get("lines", [])
+    assert output_lines, "expected the long turn in output"
+    content = output_lines[0].get("content", "")
+    assert tail_marker in content, (
+        f"content past char 200 must be returned verbatim (no clip): {content!r}"
     )
