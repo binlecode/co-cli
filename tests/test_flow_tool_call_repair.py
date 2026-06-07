@@ -1,32 +1,27 @@
-"""Tests for _repair_json_args and CoToolLifecycle.before_tool_validate."""
+"""Tests for syntactic tool-call arg repair, relocated into SurrogateRecoveryModel.
+
+Two layers:
+  - _repair_json_args / _repair_response: the syntactic repair, applied to each
+    string ToolCallPart.args on a ModelResponse before pydantic validation.
+  - SurrogateRecoveryModel.request gating: repair runs on the Ollama-backed model
+    (repair_tool_args=True) and is a no-op on the Gemini path (default False).
+"""
 
 import json
 
 import pytest
-from pydantic_ai import RunContext
-from pydantic_ai.usage import RunUsage
-from tests._settings import SETTINGS_NO_MCP
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
-from co_cli.tools.lifecycle import CoToolLifecycle, _repair_json_args
-from co_cli.tools.shell_backend import ShellBackend
-
-
-def _make_deps() -> CoDeps:
-    return CoDeps(
-        shell=ShellBackend(),
-        config=SETTINGS_NO_MCP,
-        session=CoSessionState(),
-        runtime=CoRuntimeState(),
-    )
-
-
-def _ctx(deps: CoDeps) -> RunContext:
-    return RunContext(deps=deps, model=None, usage=RunUsage(), run_step=1)
-
+from co_cli.llm.surrogate_recovery_model import (
+    SurrogateRecoveryModel,
+    _repair_json_args,
+    _repair_response,
+)
 
 # ---------------------------------------------------------------------------
-# _repair_json_args unit tests
+# _repair_json_args — syntactic repair passes
 # ---------------------------------------------------------------------------
 
 
@@ -49,11 +44,9 @@ def test_trailing_comma_stripped():
 
 
 def test_control_chars_escaped():
-    # Literal tab inside a string value — json.loads(strict=True) rejects this
     raw = '{"cmd": "git\tstatus"}'
     result = _repair_json_args(raw)
-    parsed = json.loads(result)
-    assert parsed["cmd"] == "git\tstatus"
+    assert json.loads(result)["cmd"] == "git\tstatus"
 
 
 def test_unclosed_brace_balanced():
@@ -77,24 +70,58 @@ def test_combined_trailing_comma_and_unclosed():
 
 
 # ---------------------------------------------------------------------------
-# CoToolLifecycle.before_tool_validate
+# _repair_response — repair must not corrupt already-valid tool calls
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_before_tool_validate_dict_passes_through():
-    lc = CoToolLifecycle()
-    deps = _make_deps()
-    ctx = _ctx(deps)
-    args = {"cmd": "ls"}
-    result = await lc.before_tool_validate(ctx, call=None, tool_def=None, args=args)
-    assert result is args
+def test_repair_response_leaves_valid_and_dict_args_intact():
+    """Valid string args and dict args survive repair unchanged (no corruption)."""
+    response = ModelResponse(
+        parts=[
+            ToolCallPart(tool_name="a", args='{"x": 1}', tool_call_id="c1"),
+            ToolCallPart(tool_name="b", args={"y": 2}, tool_call_id="c2"),
+        ],
+        model_name="fn",
+    )
+    repaired = _repair_response(response)
+    parts = [p for p in repaired.parts if isinstance(p, ToolCallPart)]
+    assert json.loads(parts[0].args) == {"x": 1}
+    assert parts[1].args == {"y": 2}
+
+
+# ---------------------------------------------------------------------------
+# SurrogateRecoveryModel.request — gated repair on the non-stream path
+# ---------------------------------------------------------------------------
+
+
+def _malformed_tool_call_model() -> FunctionModel:
+    """A FunctionModel that emits a tool call with a trailing-comma args string."""
+
+    def respond(messages, info: AgentInfo) -> ModelResponse:
+        return ModelResponse(
+            parts=[ToolCallPart(tool_name="shell_exec", args='{"cmd": "ls",', tool_call_id="c1")],
+            model_name="fn",
+        )
+
+    async def fn(messages, info: AgentInfo) -> ModelResponse:
+        return respond(messages, info)
+
+    return FunctionModel(fn)
 
 
 @pytest.mark.asyncio
-async def test_before_tool_validate_repairs_malformed_string():
-    lc = CoToolLifecycle()
-    deps = _make_deps()
-    ctx = _ctx(deps)
-    result = await lc.before_tool_validate(ctx, call=None, tool_def=None, args='{"cmd": "ls",')
-    assert json.loads(result) == {"cmd": "ls"}
+async def test_ollama_path_repairs_malformed_args():
+    """repair_tool_args=True (Ollama) produces valid JSON args ready for validation."""
+    model = SurrogateRecoveryModel(_malformed_tool_call_model(), repair_tool_args=True)
+    response = await model.request([], None, ModelRequestParameters())
+    (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
+    assert json.loads(part.args) == {"cmd": "ls"}
+
+
+@pytest.mark.asyncio
+async def test_gemini_path_leaves_args_untouched():
+    """Default repair_tool_args=False (Gemini) passes the model output through verbatim."""
+    model = SurrogateRecoveryModel(_malformed_tool_call_model())
+    response = await model.request([], None, ModelRequestParameters())
+    (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
+    assert part.args == '{"cmd": "ls",'

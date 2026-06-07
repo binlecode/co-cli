@@ -23,9 +23,8 @@ class OrchestratorSpec:
     """Declarative spec for the always-present primary agent.
 
     Singleton — toolset is read from deps.toolset by build_orchestrator (no
-    factory field). Output type is fixed [str, DeferredToolRequests];
-    capabilities is fixed [CoToolLifecycle()]; retries from
-    deps.config.tool_retries.
+    factory field). Output type is fixed [str, DeferredToolRequests]; retries
+    from deps.config.tool_retries.
     """
 
     name: str

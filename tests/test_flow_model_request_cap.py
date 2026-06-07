@@ -14,15 +14,15 @@ import pytest
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
+from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
 
+from co_cli.agent.toolset import _RoutingToolset
 from co_cli.config.core import load_config
 from co_cli.config.llm import DEFAULT_MAX_MODEL_REQUESTS_PER_TURN, LlmSettings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
-from co_cli.observability.capability import ObservabilityCapability
-from co_cli.tools.lifecycle import CoToolLifecycle
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
@@ -111,18 +111,19 @@ def _make_model_request_cap_agent() -> Agent:
         else:
             yield "done"
 
-    agent: Agent = Agent(
-        FunctionModel(stream_function=stream_fn),
-        deps_type=CoDeps,
-        output_type=[str, DeferredToolRequests],
-        capabilities=[ObservabilityCapability(), CoToolLifecycle()],
-    )
+    toolset: FunctionToolset = FunctionToolset()
 
-    @agent.tool(requires_approval=True)
     async def needs_approval(ctx: RunContext[CoDeps]) -> str:
         return "approved"
 
-    return agent
+    toolset.add_function(needs_approval, requires_approval=True)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_RoutingToolset(toolset)],
+    )
 
 
 @pytest.mark.asyncio
@@ -159,8 +160,8 @@ async def test_model_request_cap_fires_after_approval_loop() -> None:
 #
 # Strategy: one approval-required tool (initial segment), then 3 rounds of
 # MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1 noop calls in the resume segment.
-# Each round triggers after_node_run with a violation.  After 3 consecutive
-# violations, _run_approval_loop sets tool_cap_hard_stop and breaks.
+# Each over-cap round increments the streak in the routing wrapper.  After 3
+# consecutive violations, _run_approval_loop sets tool_cap_hard_stop and breaks.
 # ---------------------------------------------------------------------------
 
 
@@ -196,22 +197,23 @@ def _make_hard_stop_agent() -> Agent:
         else:
             yield "done"
 
-    agent: Agent = Agent(
-        FunctionModel(stream_function=stream_fn),
-        deps_type=CoDeps,
-        output_type=[str, DeferredToolRequests],
-        capabilities=[ObservabilityCapability(), CoToolLifecycle()],
-    )
+    toolset: FunctionToolset = FunctionToolset()
 
-    @agent.tool(requires_approval=True)
     async def needs_approval(ctx: RunContext[CoDeps]) -> str:
         return "approved"
 
-    @agent.tool
     async def noop(ctx: RunContext[CoDeps], x: int) -> str:
         return f"noop {x}"
 
-    return agent
+    toolset.add_function(needs_approval, requires_approval=True)
+    toolset.add_function(noop, requires_approval=False)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_RoutingToolset(toolset)],
+    )
 
 
 @pytest.mark.asyncio
@@ -240,3 +242,77 @@ async def test_hard_stop_fires_after_consecutive_violations() -> None:
     assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
         f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
     )
+
+
+def _make_over_then_under_cap_agent() -> Agent:
+    """Agent: one over-cap request followed by an under-cap request, then text.
+
+    Protocol:
+      model call 1 — approval-required call (initial segment → DeferredToolRequests)
+      model call 2 — MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls (one over cap)
+      model call 3 — exactly 1 noop call (under cap → request behaves)
+      model call 4 — text "done"
+
+    The under-cap final tool request must reset the streak at the segment boundary,
+    so the hard-stop never fires and the turn completes normally.
+    """
+    call_count = {"n": 0}
+    _OVER = MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1
+
+    async def stream_fn(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        call_count["n"] += 1
+        n = call_count["n"]
+        if n == 1:
+            yield {0: DeltaToolCall(name="needs_approval", json_args="{}", tool_call_id="c0")}
+        elif n == 2:
+            for i in range(_OVER):
+                yield {
+                    i: DeltaToolCall(name="noop", json_args=f'{{"x":{i}}}', tool_call_id=f"a{i}")
+                }
+        elif n == 3:
+            yield {0: DeltaToolCall(name="noop", json_args='{"x":0}', tool_call_id="b0")}
+        else:
+            yield "done"
+
+    toolset: FunctionToolset = FunctionToolset()
+
+    async def needs_approval(ctx: RunContext[CoDeps]) -> str:
+        return "approved"
+
+    async def noop(ctx: RunContext[CoDeps], x: int) -> str:
+        return f"noop {x}"
+
+    toolset.add_function(needs_approval, requires_approval=True)
+    toolset.add_function(noop, requires_approval=False)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_RoutingToolset(toolset)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_under_cap_request_after_over_cap_does_not_hard_stop() -> None:
+    """A single over-cap request followed by an under-cap one must NOT hard-stop.
+
+    Proves per-request granularity: the streak is finalized to 0 at the segment
+    boundary because the last tool-issuing request stayed within the cap.
+    """
+    deps = _make_capped_deps(max_model_requests=90)
+    agent = _make_over_then_under_cap_agent()
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="over then under",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue", f"expected normal completion; got {turn.outcome!r}"
+    assert turn.output == "done"

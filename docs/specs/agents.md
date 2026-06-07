@@ -1,6 +1,6 @@
 # Co CLI — Agents
 
-> For tool registration, approval flow, and lifecycle hooks: [tools.md](tools.md). For the orchestration loop and segment/turn semantics: [core-loop.md](core-loop.md). For orchestrator static-instruction composition: [prompt-assembly.md](prompt-assembly.md). For daemon callers and curation hooks: [skills.md](skills.md). For span record shape and the `ObservabilityCapability`: [observability.md](observability.md).
+> For tool registration, approval flow, and the per-call routing wrapper: [tools.md](tools.md). For the orchestration loop and segment/turn semantics: [core-loop.md](core-loop.md). For orchestrator static-instruction composition: [prompt-assembly.md](prompt-assembly.md). For daemon callers and curation hooks: [skills.md](skills.md). For the span record shape and the agent/model/tool span seams: [observability.md](observability.md).
 
 ## 1. Functional Architecture
 
@@ -42,9 +42,9 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
 
 ### Shared entry points
 
-`build_orchestrator(spec, deps)` (`co_cli/agent/build.py`) composes the orchestrator. Static instructions are assembled by calling each `spec.static_instruction_builders` closure in order and joining with double newlines; per-turn instructions are registered via `agent.instructions(...)`; history processors are attached as a list. Output type is fixed `[str, DeferredToolRequests]`; capabilities `[ObservabilityCapability(), CoToolLifecycle()]` — Observability first so it brackets `CoToolLifecycle`'s `after_*` hooks (see [observability.md](observability.md) for the ordering invariant); retries from `deps.config.tool_retries`. Toolset comes from `deps.toolset` directly — orchestrator is a singleton, no factory abstraction.
+`build_orchestrator(spec, deps)` (`co_cli/agent/build.py`) composes the orchestrator. Static instructions are assembled by calling each `spec.static_instruction_builders` closure in order and joining with double newlines; per-turn instructions are registered via `agent.instructions(...)`; history processors are attached as a list. Output type is fixed `[str, DeferredToolRequests]`; retries from `deps.config.tool_retries`. No `capabilities=[...]` attachment — the tool span, per-request cap, and MCP spill ride the `_RoutingToolset` wrapper on the toolset, and the model span + arg repair ride `SurrogateRecoveryModel` (see [tools.md](tools.md) and [observability.md](observability.md)). Toolset comes from `deps.toolset` directly — orchestrator is a singleton, no factory abstraction.
 
-`build_task_agent(spec, deps, model)` (`co_cli/agent/build.py`) resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME` (populated by `@agent_tool` at import time), filters through `_config_requirement_met` to drop integration tools whose credentials are absent, and registers each resolved tool with `requires_approval=False`. Unknown names raise `ValueError` at build time. When `spec.include_skill_manifest=True`, the rendered skill manifest is prepended to `spec.instructions(deps)`.
+`build_task_agent(spec, deps, model)` (`co_cli/agent/build.py`) resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME` (populated by `@agent_tool` at import time), filters through `_config_requirement_met` to drop integration tools whose credentials are absent, and adds each resolved tool to a `FunctionToolset` with `requires_approval=False`, wrapped in `_RoutingToolset` so subagent tool calls get the same span/cap/spill seam as the orchestrator. Unknown names raise `ValueError` at build time. When `spec.include_skill_manifest=True`, the rendered skill manifest is prepended to `spec.instructions(deps)`.
 
 `run_standalone(spec, deps, prompt, budget, model_settings)` (`co_cli/agent/run.py`) is the daemon task-agent runner and the only task-agent runner — every task agent runs as a top-level daemon.
 
@@ -89,15 +89,17 @@ instructions = spec.instructions(deps)
 if spec.include_skill_manifest:
     instructions = render_skill_manifest(...) + "\n\n" + instructions
 
+toolset = FunctionToolset()
+for fn in tool_fns:
+    toolset.add_function(fn, requires_approval=False)   # task agents auto-approve own calls
+
 agent = Agent(
     model, deps_type=CoDeps,
     output_type=spec.output_type,
     instructions=instructions,
     retries=deps.config.tool_retries,
-    capabilities=[CoToolLifecycle()],
+    toolsets=[_RoutingToolset(toolset)],   # same span/cap/spill seam as the orchestrator
 )
-for fn in tool_fns:
-    agent.tool(fn, requires_approval=False)   # task agents auto-approve own calls
 return agent
 ```
 

@@ -32,9 +32,9 @@ def enforce_read_boundary(path: Path, roots: list[Path]) -> tuple[Path, Path]:
 def enforce_write_boundary(path: Path, workspace_dir: Path) -> Path:
     """Resolve path against workspace_dir and verify it stays within.
 
-    Defense in depth: CoToolLifecycle.before_tool_execute pre-resolves paths,
-    but this function handles both pre-resolved (absolute) and raw (relative)
-    paths as a safety net.
+    Handles both absolute and workspace-relative paths: ``(workspace_dir / path)``
+    leaves an absolute path unchanged and joins a relative one, so file_write /
+    file_patch land at the correct absolute location with no pre-resolution step.
 
     Raises ValueError if path escapes workspace.
     """

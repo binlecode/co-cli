@@ -237,6 +237,8 @@ class CoRuntimeState:
         self.compaction_applied_this_turn = False
         self.current_request_tokens_estimate = None
         self.consecutive_tool_cap_violations = 0
+        self.tool_call_limit_run_step = -1
+        self.tool_calls_in_model_request = 0
 
 
 def _resource_lock_store_factory() -> ResourceLockStore:

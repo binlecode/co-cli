@@ -223,27 +223,21 @@ def _events_on(log: Path, span_name: str) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_request_recovery_emits_event_on_active_span(isolated_spans_log: Path):
-    """A request-path recovery attaches a surrogate_recovery event to the active span."""
+async def test_request_recovery_emits_event_on_chat_span(isolated_spans_log: Path):
+    """A request-path recovery attaches a surrogate_recovery event to the chat span
+    the model pushes for its own request."""
     fake = _FakeModel(raise_n_times=1)
     wrapper = SurrogateRecoveryModel(fake)
-    tracing.push_span("test_parent", kind="model")
-    try:
-        await wrapper.request(_surrogate_msg(), None, _mrp())
-    finally:
-        tracing.pop_span()
-    assert "surrogate_recovery" in _events_on(isolated_spans_log, "test_parent")
+    await wrapper.request(_surrogate_msg(), None, _mrp())
+    assert "surrogate_recovery" in _events_on(isolated_spans_log, "chat fake")
 
 
 @pytest.mark.asyncio
-async def test_request_stream_recovery_emits_event_on_active_span(isolated_spans_log: Path):
-    """A stream-path recovery attaches a surrogate_recovery event to the active span."""
+async def test_request_stream_recovery_emits_event_on_chat_span(isolated_spans_log: Path):
+    """A stream-path recovery attaches a surrogate_recovery event to the chat span
+    the model pushes for its own request."""
     fake = _FakeModel(raise_n_times=1)
     wrapper = SurrogateRecoveryModel(fake)
-    tracing.push_span("test_parent", kind="model")
-    try:
-        async with wrapper.request_stream(_surrogate_msg(), None, _mrp()) as stream:
-            assert isinstance(stream, StreamedResponse)
-    finally:
-        tracing.pop_span()
-    assert "surrogate_recovery" in _events_on(isolated_spans_log, "test_parent")
+    async with wrapper.request_stream(_surrogate_msg(), None, _mrp()) as stream:
+        assert isinstance(stream, StreamedResponse)
+    assert "surrogate_recovery" in _events_on(isolated_spans_log, "chat fake")

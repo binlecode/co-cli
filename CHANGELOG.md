@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.312]
+
+### drop-capability-api — remove pydantic-ai capability SDK coupling
+
+co attached two pydantic-ai capabilities (`ObservabilityCapability`, `CoToolLifecycle`) to every agent — a general loop-spanning middleware justified by only one of six behaviors, carrying a comment-only LIFO ordering invariant with silent `_NoOpSpan` failure on reorder, and making co the lone peer using a capability-style abstraction. All capability-API coupling is removed; the behaviors are reimplemented with explicit mechanics on seams co already owns.
+
+- **Routing `WrapperToolset`** (`agent/toolset.py`) — a single `call_tool` seam hosting the `tool` span + `co.tool.*` attributes, the per-turn tool-call cap, and MCP oversized-result spill, as straight-line ordered code (no LIFO puzzle, no global-span bridge).
+- **Cap ported with per-request granularity** — immediate increment at the `(cap+1)`-th call of a run_step, delayed reset on run_step change, plus a one-line segment-boundary finalize in `orchestrate.py`; the `orchestrate.py` hard-stop consumer is preserved bit-for-bit.
+- **Model/chat span** moved into `SurrogateRecoveryModel` on both the streaming (`request_stream`) and non-stream (`request`) paths; streamed-turn token attributes asserted non-zero.
+- **JSON arg repair** relocated into `SurrogateRecoveryModel`, gated to the Ollama-backed model (Gemini unaffected); peer-aligned (hermes/openclaw repair, opencode does not).
+- **Usage recording** moved to run-result boundaries, recorded once per run (orchestrator turn-end `finally`, `run_standalone`, unchanged `llm/call.py`) — no cumulative-`RunUsage` double-count, error/interrupted/cap-stopped turns still ledgered.
+- **Path normalization** dropped — `enforce_write_boundary` already resolves relative→absolute; `PATH_NORMALIZATION_TOOLS` deleted. Tool-call dedup deleted (agentic loop tolerates duplicates).
+- **Deleted** `observability/capability.py`, `tools/lifecycle.py`; `capabilities=[...]` removed from both agent builders; `serialize_messages`/`serialize_response` relocated to `observability/serialize.py`.
+- **Fix (review):** `reset_for_turn()` now zeroes the sibling cap-state fields (`tool_call_limit_run_step`, `tool_calls_in_model_request`), closing a rare cross-turn run_step collision.
+- Span-tree (`co tail`/`co trace`), token-ledger, and hard-stop parity verified live.
+
 ## [0.8.310]
 
 ### tool-view-load-by-name — name-addressed deferred-tool loader, fully SDK-decoupled

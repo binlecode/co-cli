@@ -8,34 +8,51 @@ coverage, keeping the flow deterministic.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai import Agent, DeferredToolRequests, RunContext
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
+from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
+from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RequestUsage
 from tests._settings import SETTINGS
 
-from co_cli.context.orchestrate import TurnResult
+from co_cli.agent.toolset import _RoutingToolset
+from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.daemons.dream._loop import _flush_daemon_usage
 from co_cli.deps import CoDeps, CoSessionState, fork_deps
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.call import llm_call
 from co_cli.main import _apply_command_outcome, _finalize_turn
-from co_cli.observability.capability import ObservabilityCapability
 from co_cli.session.usage import aggregate, record_usage
 from co_cli.tools.shell_backend import ShellBackend
 
 
-def _make_deps(tmp_path: Path) -> CoDeps:
+def _make_deps(tmp_path: Path, *, max_model_requests: int = 90) -> CoDeps:
     session_path = tmp_path / "sessions" / "2026-06-04T120000.000-abcd1234.jsonl"
+    config = SETTINGS.model_copy(
+        update={
+            "llm": SETTINGS.llm.model_copy(
+                update={"max_model_requests_per_turn": max_model_requests}
+            )
+        }
+    )
     return CoDeps(
         shell=ShellBackend(),
-        config=SETTINGS,
+        config=config,
         session=CoSessionState(session_path=session_path),
         sessions_dir=tmp_path / "sessions",
         usage_log_path=tmp_path / "usage.jsonl",
+        model_max_ctx=config.llm.max_ctx,
     )
 
 
@@ -43,23 +60,81 @@ def _ledger_lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+def _make_approval_then_text_agent(approval_requests: int) -> Agent:
+    """Agent that issues ``approval_requests`` approval-tool calls, then text.
+
+    Each approval call ends a segment with DeferredToolRequests; the approval loop
+    resumes for the next. Drives ``approval_requests + 1`` model requests across as
+    many segments, with cumulative RunUsage carried forward between them.
+    """
+    call_count = {"n": 0}
+
+    async def stream_fn(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        call_count["n"] += 1
+        n = call_count["n"]
+        if n <= approval_requests:
+            yield {0: DeltaToolCall(name="needs_approval", json_args="{}", tool_call_id=f"c{n}")}
+        else:
+            yield "done"
+
+    toolset: FunctionToolset = FunctionToolset()
+
+    async def needs_approval(ctx: RunContext[CoDeps]) -> str:
+        return "approved"
+
+    toolset.add_function(needs_approval, requires_approval=True)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_RoutingToolset(toolset)],
+    )
+
+
 @pytest.mark.asyncio
-async def test_after_model_request_hook_bumps_accumulator(tmp_path: Path) -> None:
-    """ObservabilityCapability.after_model_request records the response's usage."""
+async def test_multi_segment_turn_records_final_usage_once(tmp_path: Path) -> None:
+    """A 2-segment approval-resume turn records the turn's FINAL cumulative usage
+    once. Because RunUsage is cumulative, recording per-segment would push the
+    accumulator above the final usage — so accumulator == turn.usage proves no
+    double-count."""
     deps = _make_deps(tmp_path)
-    response = ModelResponse(
-        parts=[TextPart(content="hi")],
-        model_name="fn",
-        usage=RequestUsage(input_tokens=42, output_tokens=7),
-    )
-    ctx = SimpleNamespace(deps=deps)
+    agent = _make_approval_then_text_agent(approval_requests=1)
 
-    await ObservabilityCapability().after_model_request(
-        ctx, request_context=None, response=response
+    turn = await run_turn(
+        agent=agent,
+        user_input="ping",
+        deps=deps,
+        message_history=[],
+        frontend=HeadlessFrontend(approval_response="y"),
     )
 
-    assert deps.usage_accumulator.input_tokens == 42
-    assert deps.usage_accumulator.output_tokens == 7
+    assert turn.outcome == "continue"
+    assert turn.usage is not None
+    assert turn.usage.input_tokens > 0
+    assert deps.usage_accumulator.input_tokens == turn.usage.input_tokens
+    assert deps.usage_accumulator.output_tokens == turn.usage.output_tokens
+
+
+@pytest.mark.asyncio
+async def test_error_outcome_turn_still_records_usage(tmp_path: Path) -> None:
+    """A cap-stopped (error-outcome) turn still appends its usage — the record sits
+    in the finally block that catches every return path, not the happy path only."""
+    deps = _make_deps(tmp_path, max_model_requests=2)
+    agent = _make_approval_then_text_agent(approval_requests=2)
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="ping",
+        deps=deps,
+        message_history=[],
+        frontend=HeadlessFrontend(approval_response="y"),
+    )
+
+    assert turn.outcome == "error"
+    assert deps.usage_accumulator.input_tokens > 0, "usage must be recorded even on error outcome"
 
 
 @pytest.mark.asyncio

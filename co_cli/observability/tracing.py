@@ -166,10 +166,10 @@ def current_span() -> _Span | _NoOpSpan:
 
 
 def push_span(name: str, *, kind: str = "co", attributes: dict | None = None) -> dict:
-    """Push a span onto the stack. Returns the span dict (for direct access by
-    capability hooks). The decorator and ``ObservabilityCapability.before_*``
-    are the intended callers — business code uses ``@trace`` or
-    ``current_span().add_event(...)`` instead."""
+    """Push a span onto the stack. Returns the span dict. The ``@trace`` decorator,
+    the ``SurrogateRecoveryModel`` chat span, the routing tool wrapper, and the
+    agent-span call sites are the intended callers — other business code uses
+    ``@trace`` or ``current_span().add_event(...)`` instead."""
     parent_stack = _SPAN_STACK.get()
     parent_span_id = parent_stack[-1]["span_id"] if parent_stack else None
     trace_id = _TRACE_ID.get()

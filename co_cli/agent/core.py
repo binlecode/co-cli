@@ -52,8 +52,14 @@ def assemble_routing_toolset(
     native_toolset: AbstractToolset[CoDeps],
     mcp_toolsets: list[AbstractToolset[CoDeps]],
 ) -> AbstractToolset[CoDeps]:
-    """Combine native + connected MCP toolsets and apply the per-turn visibility filter."""
-    from co_cli.agent.toolset import _tool_visibility_filter
+    """Combine native + MCP toolsets, apply the visibility filter, wrap the call_tool seam.
+
+    The routing wrapper sits outermost so its ``call_tool`` hosts the tool span,
+    per-model-request cap, and MCP-result spill over every dispatched tool, while
+    ``get_tools`` (and thus per-turn visibility) still flows through the filter.
+    """
+    from co_cli.agent.toolset import _RoutingToolset, _tool_visibility_filter
 
     combined = CombinedToolset([native_toolset, *mcp_toolsets])
-    return combined.filtered(_tool_visibility_filter)
+    filtered = combined.filtered(_tool_visibility_filter)
+    return _RoutingToolset(filtered)

@@ -18,7 +18,7 @@ graph LR
     end
     subgraph Orchestrator
         D -->|"toolset"| E["Orchestrator Agent"]
-        E --> F["CoToolLifecycle\nbefore_node_run\nbefore_tool_validate\nbefore_tool_execute\nafter_tool_execute"]
+        E --> F["_RoutingToolset.call_tool\ntool span + co.tool.*\nper-request cap\nMCP-result spill"]
         F -->|"DeferredToolRequests"| G["Approval Loop\n_collect_deferred_tool_approvals\n+ resume segment"]
     end
 ```
@@ -58,7 +58,7 @@ The seven Google tools register unconditionally but are **hidden per turn** unti
 
 ### Shared Entry Points
 
-`CoToolLifecycle` (`co_cli/tools/lifecycle.py`) is the pydantic-ai capability registered on the orchestrator agent. It fires four hooks per tool call: `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute`. All tool instrumentation and safety guards run through these hooks — no inline per-tool branching.
+`_RoutingToolset` (`co_cli/agent/toolset.py`) is a `WrapperToolset` applied over the combined native+MCP toolset in `assemble_routing_toolset` (and over the task agent's tools in `build_task_agent`). Its `call_tool` is the single seam for the three cross-cutting concerns that must live at the per-call boundary, as straight-line ordered code: the `tool` span with `co.tool.*` attributes, the per-model-request tool-call cap, and MCP-result spill. There is no pydantic-ai capability and no inter-component ordering invariant. Syntactic tool-arg JSON repair and the `chat` model span live one level out in `SurrogateRecoveryModel` (see [observability.md](observability.md)); usage recording happens at run-result boundaries (see [agents.md](agents.md) and [core-loop.md](core-loop.md)).
 
 Task-agent lifecycle — `fork_deps`, `build_task_agent`, `run_standalone` — is owned by [agents.md](agents.md). Tool-side concerns end at `fork_deps`: it forwards `tool_index` for approval and span-attribute lookup and explicitly excludes `toolset` so the orchestrator's combined routing surface never propagates to a task agent.
 
@@ -98,54 +98,42 @@ Implementation: `co_cli/tools/shell/execute.py` (`shell_exec`), `co_cli/tools/sh
 
 ## 2. Core Logic
 
-### Lifecycle Hooks
+### `_RoutingToolset.call_tool` (the single per-call seam)
+
+Tool-arg JSON repair runs one level out, on the model response in `SurrogateRecoveryModel` before pydantic validation (gated to the Ollama path); see [observability.md](observability.md). Tool-call dedup and arg path-normalization were removed — the agent loop tolerates duplicate calls, and `enforce_write_boundary` already resolves relative→absolute for `file_write`/`file_patch`. What remains is the linear `call_tool` body:
 
 ```
-tool call received
+call_tool(name, args, ctx, tool)
       │
       ▼
-before_node_run  [CallToolsNode only]
-  ┌──────────────────────────────────────┐
-  │  for each part in model response:    │
-  │    ToolCallPart?                     │
-  │      (name, args) seen before?       │
-  │        yes ──► DROP                  │
-  │        no  ──► keep, mark seen       │
-  │    TextPart / ThinkingPart           │
-  │        ──► pass through unchanged    │
-  └──────────────────────────────────────┘
+cap accounting  [per ctx.run_step == per model request]
+  ┌──────────────────────────────────────────────────────┐
+  │  run_step changed? reset per-request count;           │
+  │    if prior request stayed ≤ cap → reset streak       │
+  │  count += 1                                            │
+  │  count == cap+1 ? streak += 1  (immediate, once)      │
+  └──────────────────────────────────────────────────────┘
       │
       ▼
-before_tool_validate
-  ┌──────────────────────────────────────┐
-  │  args is str?                        │
-  │    yes ──► repair_json               │
-  │            trailing comma            │
-  │            unclosed brace            │
-  │            control chars             │
-  │            bare None                 │
-  │    no (dict) ──► pass through        │
-  └──────────────────────────────────────┘
+push span "tool {name}"  (co.tool.name, co.tool.args, co.tool.args_chars)
       │
       ▼
-before_tool_execute
-  ┌──────────────────────────────────────┐
-  │  for each path-type arg:             │
-  │    relative ──► absolute system path │
-  └──────────────────────────────────────┘
+  count > cap ?
+    yes ──► result = exceeded payload (tool does NOT execute)
+    no  ──► result = await super().call_tool(...)
+              │
+              ▼
+            MCP-source str over threshold? ──► spill_with_span(...)
       │
       ▼
-  [ tool executes ]
+span ← co.tool.result, co.tool.result_size
+tool_name in tool_index? ──► span ← co.tool.source, co.tool.requires_approval
       │
       ▼
-after_tool_execute
-  ┌────────────────────────────────────────────┐
-  │  span ← co.tool.result_size (all tools)    │
-  │  tool_name in tool_index? (native only)    │
-  │    yes ──► span ← co.tool.source           │
-  │            span ← co.tool.requires_approval│
-  └────────────────────────────────────────────┘
+pop span   (ERROR + re-raise if the tool raised)
 ```
+
+The consecutive-over-cap streak (`consecutive_tool_cap_violations`) increments immediately at the `(cap+1)`-th call and resets on the next request when the prior one behaved; the orchestrator finalizes the last request's reset at the segment boundary before the hard-stop check. See [core-loop.md](core-loop.md) for the hard-stop consumer.
 
 ### Approval Loop
 
@@ -256,7 +244,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 
 | Symbol | Source | Contract |
 |--------|--------|----------|
-| `CoToolLifecycle(AbstractCapability[CoDeps])` | `co_cli/tools/lifecycle.py` | pydantic-ai capability — fires `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute` on every tool call |
+| `_RoutingToolset(WrapperToolset[CoDeps])` | `co_cli/agent/toolset.py` | Wraps the routing toolset; `call_tool` hosts the `tool` span + `co.tool.*`, the per-model-request cap, and MCP-result spill as linear ordered code |
 | `resolve_approval_subject(tool_name, args) -> ApprovalSubject` | `co_cli/tools/approvals.py` | Maps a tool call to its approval-subject kind (`shell`, `path`, `domain`, `tool`) |
 | `ApprovalSubject`, `SessionApprovalRule`, `ApprovalKindEnum` | `co_cli/deps.py` | Approval-subject record types and remembered-rule shape |
 | `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt stub list (one `` - `name`: one-liner `` per DEFERRED tool) grouped by integration family under sub-headers (native primitives first with no sub-header, then e.g. `Google Workspace (load before use):`) telling the model to load a tool via `tool_view` (by exact name) first; emitted via `deferred_tool_awareness_prompt` in `co_cli/agent/_instructions.py` |
@@ -274,9 +262,8 @@ on shared mutation keys is a complementary guard — both layers apply.
 | File | Role |
 |------|------|
 | `co_cli/agent/core.py` | `build_native_toolset()`, `build_mcp_entries()`, `assemble_routing_toolset()` |
-| `co_cli/agent/toolset.py` | `_build_native_toolset()`, `_approval_resume_filter()`, `_config_requirement_met()` |
+| `co_cli/agent/toolset.py` | `_build_native_toolset()`, `_tool_visibility_filter()`, `_config_requirement_met()`, `_RoutingToolset` (per-call span + cap + MCP spill) |
 | `co_cli/agent/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` |
-| `co_cli/tools/lifecycle.py` | `CoToolLifecycle` — all four per-call hooks |
 | `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
 | `co_cli/tools/deferred_prompt.py` | per-tool awareness stub list for DEFERRED tools, grouped by integration family under sub-headers |
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator, `TOOL_REGISTRY` self-populating list, `TOOL_REGISTRY_BY_NAME` lookup dict |

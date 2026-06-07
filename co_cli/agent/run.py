@@ -38,6 +38,8 @@ async def run_standalone(
         model_settings: Optional override; defaults to deps.model.settings.
     """
     from co_cli.agent.build import build_task_agent
+    from co_cli.observability.tracing import pop_span, push_span
+    from co_cli.session.usage import record_usage
 
     if deps.model is None:
         raise ValueError(f"{spec.name}: run_standalone requires deps.model to be set.")
@@ -45,16 +47,39 @@ async def run_standalone(
     settings = model_settings if model_settings is not None else deps.model.settings
     agent = build_task_agent(spec, deps, deps.model.model)
 
-    result = await agent.run(
-        prompt,
-        deps=deps,
-        usage_limits=UsageLimits(request_limit=request_limit),
-        model_settings=settings,
-        metadata={
-            "session_id": deps.session.session_path.stem[-8:],
-            "role": spec.name,
-            "request_limit": request_limit,
+    agent_name = getattr(agent, "name", None) or "<unknown>"
+    push_span(
+        f"invoke_agent {agent_name}",
+        kind="agent",
+        attributes={
+            "co.agent.role": spec.name,
+            "co.agent.model": getattr(deps.model.model, "model_name", str(deps.model.model)),
+            "co.agent.request_limit": request_limit,
         },
     )
+    try:
+        result = await agent.run(
+            prompt,
+            deps=deps,
+            usage_limits=UsageLimits(request_limit=request_limit),
+            model_settings=settings,
+            metadata={
+                "session_id": deps.session.session_path.stem[-8:],
+                "role": spec.name,
+                "request_limit": request_limit,
+            },
+        )
+    except BaseException as exc:
+        pop_span(status="ERROR", status_msg=str(exc))
+        raise
     usage = result.usage()
+    # Record this run's final cumulative usage once at the run boundary, into the
+    # caller-forked accumulator (daemon-origin) — path-agnostic, no RunContext needed.
+    record_usage(deps, usage)
+    pop_span(
+        attributes={
+            "co.agent.requests_used": getattr(usage, "requests", None),
+            "co.agent.final_result": str(result.output),
+        },
+    )
     return result.output, copy(usage), result.run_id

@@ -73,7 +73,8 @@ from co_cli.context.compaction import is_context_overflow, recover_overflow_hist
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
 from co_cli.display.stream_renderer import StreamRenderer
-from co_cli.observability.tracing import current_span, trace
+from co_cli.observability.tracing import current_span, pop_span, push_span, trace
+from co_cli.session.usage import record_usage
 from co_cli.tools.approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -81,7 +82,10 @@ from co_cli.tools.approvals import (
     resolve_approval_subject,
 )
 from co_cli.tools.display import format_for_display, get_tool_start_args_display
-from co_cli.tools.tool_call_limit import TOOL_CAP_HARD_STOP_CONSECUTIVE
+from co_cli.tools.tool_call_limit import (
+    MAX_TOOL_CALLS_PER_MODEL_REQUEST,
+    TOOL_CAP_HARD_STOP_CONSECUTIVE,
+)
 
 type SessionAgent = Agent[CoDeps, str | DeferredToolRequests]
 type SessionRunResult = AgentRunResult[str | DeferredToolRequests]
@@ -357,30 +361,46 @@ async def _execute_stream_segment(
     result: SessionRunResult | None = None
     renderer = StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)
     _t0 = time.monotonic()
+    agent_name = getattr(agent, "name", None) or "<unknown>"
+    push_span(
+        f"invoke_agent {agent_name}",
+        kind="agent",
+        attributes={
+            "co.agent.role": "orchestrator",
+            "co.agent.model": getattr(deps.model.model, "model_name", str(deps.model.model))
+            if deps.model
+            else None,
+            "co.agent.request_limit": None,
+        },
+    )
     try:
-        async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
-            async for event in agent.run_stream_events(
-                turn_state.current_input,
-                deps=deps,
-                message_history=message_history
-                if message_history is not None
-                else turn_state.current_history,
-                model_settings=model_settings,
-                usage=turn_state.latest_usage,
-                usage_limits=UsageLimits(request_limit=None),
-                deferred_tool_results=turn_state.tool_approval_decisions,
-                metadata={
-                    "session_id": deps.session.session_path.stem[-8:],
-                    "role": "orchestrator",
-                    "request_limit": None,
-                },
-            ):
-                event_result = _handle_stream_event(event, renderer, deps, frontend)
-                if event_result is not None:
-                    result = event_result
-            renderer.finish()
-    finally:
-        frontend.cleanup()
+        try:
+            async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
+                async for event in agent.run_stream_events(
+                    turn_state.current_input,
+                    deps=deps,
+                    message_history=message_history
+                    if message_history is not None
+                    else turn_state.current_history,
+                    model_settings=model_settings,
+                    usage=turn_state.latest_usage,
+                    usage_limits=UsageLimits(request_limit=None),
+                    deferred_tool_results=turn_state.tool_approval_decisions,
+                    metadata={
+                        "session_id": deps.session.session_path.stem[-8:],
+                        "role": "orchestrator",
+                        "request_limit": None,
+                    },
+                ):
+                    event_result = _handle_stream_event(event, renderer, deps, frontend)
+                    if event_result is not None:
+                        result = event_result
+                renderer.finish()
+        finally:
+            frontend.cleanup()
+    except BaseException as exc:
+        pop_span(status="ERROR", status_msg=str(exc))
+        raise
     elapsed = time.monotonic() - _t0
     logger.debug("LLM segment elapsed: %.1fs", elapsed)
     if elapsed >= _LLM_SEGMENT_WARN_SECS:
@@ -389,6 +409,7 @@ async def _execute_stream_segment(
         )
 
     if result is None:
+        pop_span(status="ERROR", status_msg="segment ended without AgentRunResultEvent")
         raise RuntimeError(
             "_execute_stream_segment: stream ended without AgentRunResultEvent — segment contract violated"
         )
@@ -399,6 +420,23 @@ async def _execute_stream_segment(
     turn_state.latest_streamed_text = renderer.streamed_text
     turn_state.latest_usage = result.usage()
     turn_state.tool_approval_decisions = None
+
+    try:
+        requests_used = getattr(result.usage(), "requests", None)
+    except (AttributeError, TypeError):
+        requests_used = None
+    pop_span(
+        attributes={
+            "co.agent.requests_used": requests_used,
+            "co.agent.final_result": str(result.output),
+        },
+    )
+
+    # Segment-boundary cap finalize (idempotent with the in-wrapper transition reset):
+    # if the last model request of this segment stayed within the cap, clear the streak
+    # so the orchestrate.py hard-stop check sees only genuinely-consecutive violations.
+    if deps.runtime.tool_calls_in_model_request <= MAX_TOOL_CALLS_PER_MODEL_REQUEST:
+        deps.runtime.consecutive_tool_cap_violations = 0
 
 
 async def _run_approval_loop(
@@ -808,6 +846,15 @@ async def run_turn(
                 return _build_interrupted_turn_result(turn_state)
 
     finally:
+        # Record the turn's FINAL cumulative usage exactly once, here at the sole
+        # point that catches every return path (success, cap hard-stop, HTTP/API/
+        # malformed errors, interrupt). RunUsage is cumulative within a turn — the
+        # orchestrator carries prior segments forward via run_stream_events(usage=...),
+        # so recording per-segment would double-count; recording latest_usage once
+        # does not. Forked subagent/summarizer tokens roll into the same accumulator
+        # via their own once-per-run boundaries.
+        if turn_state.latest_usage is not None:
+            record_usage(deps, turn_state.latest_usage)
         span.set_attribute("turn.outcome", turn_state.outcome)
         span.set_attribute("turn.interrupted", turn_state.interrupted)
         span.set_attribute(

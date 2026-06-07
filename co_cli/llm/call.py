@@ -8,7 +8,7 @@ from pydantic_ai.direct import model_request
 from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart, TextPart
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.observability.capability import serialize_messages, serialize_response
+from co_cli.observability.serialize import serialize_messages, serialize_response
 from co_cli.observability.tracing import pop_span, push_span
 from co_cli.session.usage import record_usage
 

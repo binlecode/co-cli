@@ -1,19 +1,21 @@
-"""Tests for tool-result spill — both the per-call helper and the MCP lifecycle path.
+"""Tests for tool-result spill — both the per-call helper and the routing-wrapper path.
 
 Two layers:
   - spill_if_oversized(): direct helper API used by native tools.
-  - CoToolLifecycle.after_tool_execute(): MCP-source results coerced through the helper;
-    native results pass through (their tools call the helper themselves).
+  - _RoutingToolset.call_tool(): MCP-source results (plain strings that bypass
+    tool_output) are coerced through the helper; native results pass through
+    (their tools call the helper themselves).
 """
 
 from pathlib import Path
 
 import pytest
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
+from co_cli.agent.toolset import _RoutingToolset
 from co_cli.deps import (
     CoDeps,
     CoRuntimeState,
@@ -22,7 +24,6 @@ from co_cli.deps import (
     ToolSourceEnum,
     VisibilityPolicyEnum,
 )
-from co_cli.tools.lifecycle import CoToolLifecycle
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import (
     PERSISTED_OUTPUT_TAG,
@@ -82,11 +83,11 @@ def test_force_spill_above_preview_size_spills(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# CoToolLifecycle.after_tool_execute — MCP spill enforcement
+# _RoutingToolset.call_tool — MCP spill enforcement
 # ---------------------------------------------------------------------------
 
 
-def _make_lifecycle_deps(tool_results_dir: Path) -> CoDeps:
+def _make_routing_deps(tool_results_dir: Path) -> CoDeps:
     mcp_info = ToolInfo(
         name="mcp_test_tool",
         description="test",
@@ -108,31 +109,32 @@ def _make_lifecycle_deps(tool_results_dir: Path) -> CoDeps:
         runtime=CoRuntimeState(),
         tool_results_dir=tool_results_dir,
         tool_index={"mcp_test_tool": mcp_info, "native_test_tool": native_info},
+        model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
     )
 
 
-def _ctx(deps: CoDeps) -> RunContext:
-    return RunContext(deps=deps, model=None, usage=RunUsage(), run_step=1)
+async def _call_through_wrapper(deps: CoDeps, tool_name: str, payload: str) -> str:
+    """Register a tool returning ``payload`` and call it through _RoutingToolset."""
+    inner: FunctionToolset = FunctionToolset()
 
+    async def emit() -> str:
+        return payload
 
-def _call(tool_name: str) -> ToolCallPart:
-    return ToolCallPart(tool_name=tool_name, args={}, tool_call_id="c1")
+    emit.__name__ = tool_name
+    inner.add_function(emit, requires_approval=False)
+    routing = _RoutingToolset(inner)
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), run_step=1)
+    tool = (await routing.get_tools(ctx))[tool_name]
+    return await routing.call_tool(tool_name, {}, ctx, tool)
 
 
 @pytest.mark.asyncio
 async def test_mcp_result_over_threshold_is_spilled(tmp_path: Path):
     tool_results_dir = tmp_path / "tool_results"
-    deps = _make_lifecycle_deps(tool_results_dir)
-    lc = CoToolLifecycle()
+    deps = _make_routing_deps(tool_results_dir)
     oversized = "x" * (SPILL_THRESHOLD_CHARS + 1)
 
-    result = await lc.after_tool_execute(
-        _ctx(deps),
-        call=_call("mcp_test_tool"),
-        tool_def=None,
-        args={},
-        result=oversized,
-    )
+    result = await _call_through_wrapper(deps, "mcp_test_tool", oversized)
 
     assert PERSISTED_OUTPUT_TAG in result
     spilled_files = list(tool_results_dir.glob("*.txt"))
@@ -142,37 +144,23 @@ async def test_mcp_result_over_threshold_is_spilled(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_mcp_result_under_threshold_passes_through(tmp_path: Path):
     tool_results_dir = tmp_path / "tool_results"
-    deps = _make_lifecycle_deps(tool_results_dir)
-    lc = CoToolLifecycle()
+    deps = _make_routing_deps(tool_results_dir)
     small = "x" * (SPILL_THRESHOLD_CHARS - 1)
 
-    result = await lc.after_tool_execute(
-        _ctx(deps),
-        call=_call("mcp_test_tool"),
-        tool_def=None,
-        args={},
-        result=small,
-    )
+    result = await _call_through_wrapper(deps, "mcp_test_tool", small)
 
     assert result == small
     assert not tool_results_dir.exists()
 
 
 @pytest.mark.asyncio
-async def test_native_result_over_threshold_not_coerced_by_lifecycle(tmp_path: Path):
+async def test_native_result_over_threshold_not_coerced_by_wrapper(tmp_path: Path):
     tool_results_dir = tmp_path / "tool_results"
-    deps = _make_lifecycle_deps(tool_results_dir)
-    lc = CoToolLifecycle()
+    deps = _make_routing_deps(tool_results_dir)
     oversized = "x" * (SPILL_THRESHOLD_CHARS + 1)
 
-    result = await lc.after_tool_execute(
-        _ctx(deps),
-        call=_call("native_test_tool"),
-        tool_def=None,
-        args={},
-        result=oversized,
-    )
+    result = await _call_through_wrapper(deps, "native_test_tool", oversized)
 
-    # lifecycle defers to tool_output() for native tools — no spill here
+    # The wrapper defers to tool_output() for native tools — no spill here.
     assert result == oversized
     assert not tool_results_dir.exists()

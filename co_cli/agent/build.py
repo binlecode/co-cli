@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING, Any
 from pydantic_ai import Agent, DeferredToolRequests
 
 from co_cli.deps import CoDeps
-from co_cli.observability.capability import ObservabilityCapability
-from co_cli.tools.lifecycle import CoToolLifecycle
 
 if TYPE_CHECKING:
     from co_cli.agent.spec import OrchestratorSpec, TaskAgentSpec
@@ -19,9 +17,10 @@ def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> Agent[CoDeps, An
 
     Composes static instructions by calling each builder in order, registers
     per-turn instructions via agent.instructions(...), and attaches history
-    processors. Toolset is read from deps.toolset directly (singleton).
-    Output type is fixed [str, DeferredToolRequests]; capabilities is fixed
-    [CoToolLifecycle()]; retries from deps.config.tool_retries.
+    processors. Toolset is read from deps.toolset directly (singleton) — the
+    routing wrapper on that toolset hosts the tool span, per-request cap, and
+    MCP spill. Output type is fixed [str, DeferredToolRequests]; retries from
+    deps.config.tool_retries.
     """
     if deps.toolset is None:
         raise ValueError("build_orchestrator requires deps.toolset to be set.")
@@ -47,11 +46,6 @@ def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> Agent[CoDeps, An
         output_type=[str, DeferredToolRequests],
         history_processors=list(spec.history_processors),
         toolsets=[deps.toolset],
-        # IMPORTANT: keep ObservabilityCapability FIRST — its before_* opens the
-        # span outermost so CoToolLifecycle.after_tool_execute can attach
-        # attributes via current_span() before the span closes (LIFO after_*).
-        # See co_cli.observability.capability module docstring.
-        capabilities=[ObservabilityCapability(), CoToolLifecycle()],
     )
 
     for per_turn in spec.per_turn_instructions:
@@ -77,7 +71,9 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
         deps: Runtime deps — used for config lookups and skill manifest rendering.
         model: Raw pydantic-ai model (not LlmModel).
     """
-    from co_cli.agent.toolset import _config_requirement_met
+    from pydantic_ai.toolsets import FunctionToolset
+
+    from co_cli.agent.toolset import _config_requirement_met, _RoutingToolset
     from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY_BY_NAME
 
     tool_fns: list[Any] = []
@@ -98,18 +94,19 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
         if manifest:
             instructions = f"{manifest}\n\n{instructions}"
 
+    # Route the task agent's tools through the same call_tool wrapper as the
+    # orchestrator so subagent tool calls get the tool span, per-call cap, and
+    # co.tool.* attributes (parity with the deleted capability on task agents).
+    toolset: FunctionToolset[CoDeps] = FunctionToolset()
+    for fn in tool_fns:
+        toolset.add_function(fn, requires_approval=False)
+
     agent: Agent[CoDeps, Any] = Agent(
         model,
         deps_type=CoDeps,
         output_type=spec.output_type,
         instructions=instructions,
         retries=deps.config.tool_retries,
-        # IMPORTANT: keep ObservabilityCapability FIRST — its before_* opens the
-        # span outermost so CoToolLifecycle.after_tool_execute can attach
-        # attributes via current_span() before the span closes (LIFO after_*).
-        # See co_cli.observability.capability module docstring.
-        capabilities=[ObservabilityCapability(), CoToolLifecycle()],
+        toolsets=[_RoutingToolset(toolset)],
     )
-    for fn in tool_fns:
-        agent.tool(fn, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match
     return agent

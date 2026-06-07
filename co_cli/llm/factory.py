@@ -57,7 +57,8 @@ def build_model(llm: LlmSettings) -> LlmModel:
             OpenAIChatModel(
                 llm.model,
                 provider=OllamaProvider(base_url=f"{llm.host}/v1", http_client=_http_client),
-            )
+            ),
+            repair_tool_args=True,
         )
         return LlmModel(
             model=model,

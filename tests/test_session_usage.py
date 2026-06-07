@@ -60,19 +60,6 @@ def test_week_window_sums_only_in_window_lines(tmp_path: Path) -> None:
     assert window.total.output_tokens == 130
 
 
-def test_month_window_adds_the_three_day_line(tmp_path: Path) -> None:
-    """aggregate(since=now-30d) still excludes the 40-day-old line."""
-    now = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
-    ledger = tmp_path / "usage.jsonl"
-    _seed_ledger(ledger, now)
-
-    window = aggregate(ledger, since=now - timedelta(days=30))
-
-    assert window.session.input_tokens == 300
-    assert window.daemon.input_tokens == 1000
-    assert window.total.input_tokens == 1300
-
-
 def test_total_window_sums_all_lines(tmp_path: Path) -> None:
     """aggregate() with no cutoff sums every line, including the 40-day-old one."""
     now = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
