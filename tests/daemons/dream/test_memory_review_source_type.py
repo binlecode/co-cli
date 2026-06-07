@@ -1,7 +1,7 @@
-"""Verify the memory review prompt directs the reviewer to tag items with source_type='session_review'.
+"""Verify the memory_create tool accepts and persists source_type='session_review'.
 
-Also verifies the memory_create tool actually accepts and persists source_type —
-the prompt directive is useless if the tool surface rejects the parameter.
+The daemon's memory reviewer tags items with source_type='session_review'; this
+verifies the tool surface actually accepts and round-trips that parameter.
 """
 
 from pathlib import Path
@@ -15,22 +15,6 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.memory.item import load_memory_item
 from co_cli.tools.memory.manage import memory_create
 from co_cli.tools.shell_backend import ShellBackend
-
-
-def test_memory_review_prompt_sets_source_type_session_review() -> None:
-    prompt_path = (
-        Path(__file__).resolve().parents[3]
-        / "co_cli"
-        / "daemons"
-        / "dream"
-        / "prompts"
-        / "memory_review.md"
-    )
-    text = prompt_path.read_text(encoding="utf-8")
-    assert "source_type='session_review'" in text, (
-        "memory_review.md must explicitly instruct the reviewer to set "
-        "source_type='session_review' on every memory_create call"
-    )
 
 
 @pytest.mark.asyncio

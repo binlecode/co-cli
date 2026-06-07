@@ -29,6 +29,15 @@ def _restore_co_home() -> Generator[None, None, None]:
         os.environ.pop("CO_HOME", None)
     else:
         os.environ["CO_HOME"] = original
+    # _make_deps reloads config.core and main against the temp CO_HOME; reload them back
+    # so module-level USER_DIR / DREAM_QUEUE_DIR bindings don't leak the temp dir to later tests.
+    import importlib
+
+    import co_cli.config.core as core_mod
+    import co_cli.main as main_mod
+
+    importlib.reload(core_mod)
+    importlib.reload(main_mod)
 
 
 def _make_deps(tmp_path: Path, *, review_enabled: bool = True, with_model: bool = True):

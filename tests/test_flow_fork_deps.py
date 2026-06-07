@@ -1,4 +1,4 @@
-"""Tests for fork_deps and fork_deps_for_reviewer factories."""
+"""Tests for the fork_deps factory."""
 
 from tests._settings import SETTINGS_NO_MCP
 
@@ -6,7 +6,6 @@ from co_cli.deps import (
     CoDeps,
     CoRuntimeState,
     fork_deps,
-    fork_deps_for_reviewer,
 )
 
 
@@ -26,13 +25,6 @@ def test_fork_deps_increments_agent_depth() -> None:
     assert parent.runtime.agent_depth == 0
 
     child = fork_deps(parent)
-    assert child.runtime.agent_depth == 1
-
-
-def test_fork_deps_for_reviewer_increments_agent_depth() -> None:
-    """fork_deps_for_reviewer delegates to fork_deps — agent_depth is incremented."""
-    parent = _make_deps()
-    child = fork_deps_for_reviewer(parent)
     assert child.runtime.agent_depth == 1
 
 

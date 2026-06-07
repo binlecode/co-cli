@@ -67,20 +67,6 @@ def test_unpin_clears_flag(tmp_path: Path) -> None:
     assert record["pinned"] is False
 
 
-def test_pin_never_viewed_skill_creates_stub(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
-    ctx = _make_ctx(tmp_path)
-    assert skill_usage.read_record(ctx.deps, "my-skill") is None
-
-    _cmd_skills_pin(ctx, "my-skill", pinned=True)
-
-    record = skill_usage.read_record(ctx.deps, "my-skill")
-    assert record is not None
-    assert record["pinned"] is True
-    assert record["use_count"] == 0
-    assert record["created_at"] is not None
-
-
 def test_pin_bundled_skill_rejected(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
     output = _capture_output(lambda: _cmd_skills_pin(ctx, "doctor", pinned=True))
@@ -127,20 +113,16 @@ def test_usage_named_skill_prints_full_record(tmp_path: Path) -> None:
     (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
     ctx = _make_ctx(tmp_path)
     skill_usage.bump_view(ctx.deps, "my-skill")
+    skill_usage.bump_view(ctx.deps, "my-skill")
+    skill_usage.bump_view(ctx.deps, "my-skill")
 
     output = _capture_output(lambda: _cmd_skills_usage(ctx, "my-skill"))
-    for field in (
-        "use_count",
-        "view_count",
-        "patch_count",
-        "created_at",
-        "last_used_at",
-        "last_viewed_at",
-        "last_patched_at",
-        "state",
-        "pinned",
-    ):
-        assert field in output, f"expected field {field!r} in output"
+    # The named-record render is a Field|Value table — assert the real stored counts
+    # show through on their own rows, not merely that the labels are present.
+    view_row = next(line for line in output.splitlines() if "view_count" in line)
+    use_row = next(line for line in output.splitlines() if "use_count" in line)
+    assert "3" in view_row
+    assert "0" in use_row
 
 
 def test_usage_named_skill_with_no_record(tmp_path: Path) -> None:

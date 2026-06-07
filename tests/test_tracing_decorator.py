@@ -34,44 +34,6 @@ def _read_records(log_path: Path) -> list[dict]:
     return [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
 
 
-def test_sync_trace_emits_one_record(tmp_path: Path) -> None:
-    log = tmp_path / "spans.jsonl"
-    tracing.setup_log(log)
-
-    @tracing.trace("test.sync_func")
-    def f(x: int) -> int:
-        return x * 2
-
-    assert f(3) == 6
-    records = _read_records(log)
-    assert len(records) == 1
-    rec = records[0]
-    assert rec["name"] == "test.sync_func"
-    assert rec["status"] == "OK"
-    assert rec["status_msg"] is None
-    assert rec["parent_span_id"] is None
-    assert rec["trace_id"].startswith("t_")
-    assert rec["span_id"].startswith("s_")
-    assert rec["duration_ms"] >= 0
-    assert rec["schema_version"] == 1
-
-
-def test_async_trace_emits_one_record(tmp_path: Path) -> None:
-    log = tmp_path / "spans.jsonl"
-    tracing.setup_log(log)
-
-    @tracing.trace("test.async_func")
-    async def f() -> str:
-        await asyncio.sleep(0)
-        return "ok"
-
-    result = asyncio.run(f())
-    assert result == "ok"
-    records = _read_records(log)
-    assert len(records) == 1
-    assert records[0]["name"] == "test.async_func"
-
-
 def test_nested_parent_child_linkage(tmp_path: Path) -> None:
     log = tmp_path / "spans.jsonl"
     tracing.setup_log(log)

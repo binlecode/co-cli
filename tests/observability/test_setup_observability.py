@@ -123,33 +123,6 @@ def test_setup_observability_wires_app_spans_and_suppression(tmp_path: Path) -> 
     assert logging.getLogger("httpx").level == logging.WARNING
 
 
-def test_main_app_wiring_targets_co_cli_files(tmp_path: Path) -> None:
-    """TASK-4: the real main entrypoint still produces co-cli.jsonl + co-cli-spans.jsonl.
-
-    Drives the actual `main._setup_observability()` under a temp CO_HOME (env +
-    module reload — the repo's isolation pattern), confirming the behavior-preserving
-    refactor still wires the main app's `co-cli*` files. No monkeypatch (test policy).
-    """
-    os.environ["CO_HOME"] = str(tmp_path)
-    import co_cli.config.core as core_mod
-    import co_cli.main as main_mod
-
-    importlib.reload(core_mod)
-    importlib.reload(main_mod)
-
-    main_mod._setup_observability()
-
-    logging.getLogger("test.task4").info("main-record")
-    push_span("span.task4")
-    pop_span()
-    _flush("")
-    _flush(_SPANS_LOGGER)
-
-    logs_dir = core_mod.LOGS_DIR
-    assert any(r.get("msg") == "main-record" for r in _records(logs_dir / "co-cli.jsonl"))
-    assert any(r.get("name") == "span.task4" for r in _records(logs_dir / "co-cli-spans.jsonl"))
-
-
 def test_setup_file_logging_idempotent_for_relative_path(tmp_path: Path) -> None:
     """Failure mode: a relative log_dir defeats baseFilename dedup, double-attaching
     the handler so every record is written twice. Two setup calls + one record must

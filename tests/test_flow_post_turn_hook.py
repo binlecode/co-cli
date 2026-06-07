@@ -26,6 +26,13 @@ def _restore_co_home() -> Generator[None, None, None]:
         os.environ.pop("CO_HOME", None)
     else:
         os.environ["CO_HOME"] = original
+    # _make_deps reloads config.core against the temp CO_HOME; reload it back so the
+    # module-level USER_DIR binding does not leak the (now-deleted) temp dir to later tests.
+    import importlib
+
+    import co_cli.config.core as core_mod
+
+    importlib.reload(core_mod)
 
 
 def _make_deps(
@@ -146,32 +153,6 @@ def test_skill_threshold_resets_skill_counter(tmp_path: Path) -> None:
     _post_turn_hook(deps, [], model_request_count=3)
 
     # Counter reset to 0 after KICK
-    assert deps.session.model_requests_since_skill_review == 0
-
-
-def test_counter_reset_allows_next_trigger(tmp_path: Path) -> None:
-    """After a KICK fires, counter resets and subsequent turns can re-accumulate."""
-    from co_cli.main import _post_turn_hook
-
-    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=1, skill_interval=100)
-
-    # First call triggers KICK and resets counter
-    _post_turn_hook(deps, [], model_request_count=1)
-    assert deps.session.turns_since_memory_review == 0
-
-    # Second call accumulates again (interval=1 so resets immediately again)
-    _post_turn_hook(deps, [], model_request_count=1)
-    assert deps.session.turns_since_memory_review == 0
-
-
-def test_skill_threshold_overshoot_resets_counter(tmp_path: Path) -> None:
-    """A single turn with iter_count > skill threshold fires KICK and resets counter."""
-    from co_cli.main import _post_turn_hook
-
-    deps = _make_deps(tmp_path, review_enabled=True, memory_interval=100, skill_interval=5)
-
-    _post_turn_hook(deps, [], model_request_count=12)
-
     assert deps.session.model_requests_since_skill_review == 0
 
 

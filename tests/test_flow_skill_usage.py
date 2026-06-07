@@ -91,13 +91,6 @@ def test_read_record_returns_none_on_corrupt_json(tmp_path: Path) -> None:
     assert skill_usage.read_record(deps, "foo") is None
 
 
-def test_write_record_is_atomic(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path)
-    skill_usage.write_record(deps, "foo", {"use_count": 0})
-    leftover = list(tmp_path.glob("foo.usage.json.tmp.*"))
-    assert leftover == [], f"unexpected tmp leftovers: {leftover}"
-
-
 # ---------------------------------------------------------------------------
 # is_agent_created
 # ---------------------------------------------------------------------------

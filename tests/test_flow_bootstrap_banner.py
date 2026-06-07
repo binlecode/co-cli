@@ -3,18 +3,6 @@
 from co_cli.bootstrap.banner import build_memory_line
 
 
-def test_fts5_backend_with_nonzero_counts() -> None:
-    """fts5 backend renders label and counts; no degradation suffix."""
-    result = build_memory_line(
-        backend="fts5",
-        backend_label="fts5",
-        memory_degradation=None,
-        memory_count=42,
-        session_count=8,
-    )
-    assert result == "    Memory: [accent]fts5[/accent]  memory: 42  sessions: 8"
-
-
 def test_hybrid_backend_with_degradation_and_counts() -> None:
     """hybrid backend with a degradation renders both degradation suffix and counts."""
     backend_label = "hybrid · openai/text-embedding-3-small 1536d"

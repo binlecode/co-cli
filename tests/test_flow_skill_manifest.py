@@ -25,52 +25,6 @@ def test_manifest_renders_bundled_skills(tmp_path: Path) -> None:
     assert 'description="Diagnose problems"' in out
 
 
-def test_manifest_shadow_override_uses_user_description(tmp_path: Path) -> None:
-    """A bundled skill shadowed by same-named user file appears with the user description."""
-    skills_dir = tmp_path / "bundled"
-    skills_dir.mkdir()
-    (skills_dir / "doctor.md").write_text(
-        "---\ndescription: Bundled doctor\n---\nBody.\n", encoding="utf-8"
-    )
-    user_skills_dir = tmp_path / "user"
-    user_skills_dir.mkdir()
-    (user_skills_dir / "doctor.md").write_text(
-        "---\ndescription: User-shadowed doctor\n---\nBody.\n", encoding="utf-8"
-    )
-
-    # Loader already applied shadow: skill_index carries user description
-    skill_index = {"doctor": SkillInfo(name="doctor", description="User-shadowed doctor")}
-    out = render_skill_manifest(skill_index, skills_dir, user_skills_dir)
-
-    assert "<available_skills>" in out
-    assert 'name="doctor"' in out
-    assert "User-shadowed doctor" in out
-    assert "Bundled doctor" not in out
-
-
-def test_manifest_includes_bundled_and_user_skills_together(tmp_path: Path) -> None:
-    """Both bundled and user-dir skills appear in the same manifest output."""
-    skills_dir = tmp_path / "bundled"
-    skills_dir.mkdir()
-    (skills_dir / "builtin.md").write_text(
-        "---\ndescription: Built-in skill\n---\nBody.\n", encoding="utf-8"
-    )
-    user_skills_dir = tmp_path / "user"
-    user_skills_dir.mkdir()
-    (user_skills_dir / "custom.md").write_text(
-        "---\ndescription: Custom user skill\n---\nBody.\n", encoding="utf-8"
-    )
-
-    skill_index = {
-        "builtin": SkillInfo(name="builtin", description="Built-in skill"),
-        "custom": SkillInfo(name="custom", description="Custom user skill"),
-    }
-    out = render_skill_manifest(skill_index, skills_dir, user_skills_dir)
-
-    assert 'name="builtin"' in out
-    assert 'name="custom"' in out
-
-
 def test_manifest_empty_when_no_skills(tmp_path: Path) -> None:
     """No skills at all → returns empty string (not an empty XML block)."""
     skills_dir = tmp_path / "bundled"

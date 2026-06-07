@@ -1,7 +1,6 @@
 """Behavioural tests for the /filescope slash command.
 
 Covers:
-  - /filescope is registered as a builtin
   - Output lists every resolved read root plus the write anchor
   - A read root that does not exist on disk is flagged (missing)
 """
@@ -14,7 +13,6 @@ import pytest
 from tests._settings import SETTINGS
 
 from co_cli.agent.core import build_native_toolset
-from co_cli.commands.core import BUILTIN_COMMANDS
 from co_cli.commands.filescope import _cmd_filescope
 from co_cli.commands.types import CommandContext
 from co_cli.deps import CoDeps, CoSessionState
@@ -40,10 +38,6 @@ def _make_ctx(workspace_dir: Path, file_search_roots: list[Path]) -> CommandCont
         frontend=HeadlessFrontend(),
         completer=None,
     )
-
-
-def test_filescope_is_registered() -> None:
-    assert "filescope" in BUILTIN_COMMANDS
 
 
 @pytest.mark.asyncio

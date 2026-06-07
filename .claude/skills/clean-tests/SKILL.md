@@ -23,6 +23,8 @@ description: Keep the suite focused on functional behavior verification. Purge d
 
 Run once across all in-scope test files before touching individual tests.
 
+`tests/` is **not flat** — it has nested dirs (`tests/tools/`, `tests/daemons/`, `tests/integration/`, `tests/observability/`, `tests/commands/`, `tests/skills/`). Every detector below scans the **full tree** (`grep -r --include="test_*.py" … tests/`, recursive glob). A flat `tests/test_*.py` glob silently drops ~20% of the suite — never use one.
+
 ### 0a — Broken imports
 
 ```bash
@@ -34,12 +36,12 @@ BROKEN file → every test in it is Rule 4. Fix the import or delete the file ou
 ### 0b — Bad patterns
 
 ```bash
-grep -l "monkeypatch\|unittest\.mock\|from unittest import mock\|patch\b" tests/test_*.py
-grep -l "assert True\b\|assert result\b\|assert result\." tests/test_*.py
-grep -l "from.*_legacy\|from.*_compat\|from.*_old\b" tests/test_*.py
-grep -l "inspect\.signature\|hasattr(" tests/test_*.py
-grep -l '"--help"\|CliRunner.*--help\|exit_code == 0' tests/test_*.py
-grep -l "assert.*\" in prompt\|assert.*\" in result\b" tests/test_*.py
+grep -rl --include="test_*.py" "monkeypatch\|unittest\.mock\|from unittest import mock\|patch\b" tests/
+grep -rl --include="test_*.py" "assert True\b\|assert result\b\|assert result\." tests/
+grep -rl --include="test_*.py" "from.*_legacy\|from.*_compat\|from.*_old\b" tests/
+grep -rl --include="test_*.py" "inspect\.signature\|hasattr(" tests/
+grep -rl --include="test_*.py" '"--help"\|CliRunner.*--help\|exit_code == 0' tests/
+grep -rl --include="test_*.py" "assert.*\" in prompt\|assert.*\" in result\b" tests/
 ```
 
 Pre-tag files `SUSPECT_MOCK`, `SUSPECT_STRUCTURAL`, or `SUSPECT_LIB`. Does not replace reading.
@@ -49,7 +51,7 @@ Pre-tag files `SUSPECT_MOCK`, `SUSPECT_STRUCTURAL`, or `SUSPECT_LIB`. Does not r
 ### 0c — Clustered test names (rule 6 trigger)
 
 ```bash
-grep -h "^def test_" tests/test_*.py | sed 's/(.*$//' | sed 's/^def //' | \
+grep -rhE --include="test_*.py" "^(async )?def test_" tests/ | sed -E 's/^(async )?def //; s/\(.*$//' | \
   awk -F_ '{print $1"_"$2"_"$3}' | sort | uniq -c | sort -rn | head -20
 ```
 
@@ -63,7 +65,7 @@ Flag any 3-part prefix with count ≥ 2. During Pass 1, read both bodies side-by
 # python3 - << 'EOF'
 import glob, re
 files = {}
-for f in sorted(glob.glob("tests/test_*.py")):
+for f in sorted(glob.glob("tests/**/test_*.py", recursive=True)):
     mods = set()
     for line in open(f):
         line = line.strip()
@@ -86,17 +88,20 @@ Merge candidate: ≥50% of tests in each file call from the **same** production 
 ### 0e — Zero-coverage tool surfaces
 
 ```bash
-grep -rn -E '^\s*@agent_tool' co_cli/tools/ | grep "def " | sed 's/.*def //' | sed 's/(.*$//'
+grep -rh -A8 -E '^\s*@agent_tool' co_cli/tools/ | \
+  awk '/def [a-z]/{sub(/.*def /,""); sub(/\(.*/,""); print}' | sort -u
 ```
 
-Cross-reference against `ls tests/test_flow_*.py`. Any `@agent_tool` function with no corresponding test file is a coverage gap — record for Pass 2 backfill.
+(The `-A8` window spans multi-line decorators; the `def [a-z]` match covers `async def`. A plain `grep '@agent_tool' | grep def` finds nothing — the decorator and `def` are on separate lines.)
+
+Cross-reference each name against the **full** test tree — `grep -rl --include="test_*.py" "\b<tool>\b" tests/` — not just `tests/test_flow_*.py`. Coverage often lives in a nested dir (e.g. `tests/tools/memory/`), so a flat-glob check produces false zero-coverage hits. Any `@agent_tool` function with no test invocation anywhere is a real coverage gap — record for Pass 2 backfill.
 
 ### 0f — Mechanical bloat signals (deterministic modules only)
 
 Two **objective** detectors find bloat without reading. Run them only on **pure-logic** modules (parsers, classifiers, math, state machines, formatters); skip real-LLM, subprocess, and integration tests — too slow / nondeterministic to attribute or mutate.
 
 - **Per-test coverage overlap** — run the module's tests with per-test coverage contexts (`pytest --cov=<module> --cov-context=test`), then compute each test's *unique* contribution. A test that adds **zero** lines/branches no sibling covers is an objective subsumption candidate (rule 5/6). Confirm the observable differs before deleting — a test can re-cover the same lines yet assert a distinct value.
-- **Mutation survival** — mutate the module; a test that kills **no** mutant catches nothing (rule 2/4 — delete or strengthen), and a mutant **no** test kills is a coverage gap (Pass 2 backfill). This is the definitive oracle; line-coverage % is not (fully-covered lines can still kill zero mutants).
+- **Mutation survival** — mutate the module (no mutation tool is a project dependency; run one on demand, e.g. `uvx mutmut run` / `uvx cosmic-ray`). A test that kills **no** mutant catches nothing (rule 2/4 — delete or strengthen), and a mutant **no** test kills is a coverage gap (Pass 2 backfill). It is the strongest oracle when run, but is opt-in, not part of a bare `pytest` pass; line-coverage % is not a substitute (fully-covered lines can still kill zero mutants).
 
 What these **do not** catch: a low-criticality test can have unique coverage *and* kill unique mutants (a distinct-but-trivial branch). Mechanical signals detect noise and subsumption; the **Criticality gate** is still the only filter for real-but-low-value tests. Treat all three as candidate-generators — the deletion test and same-branch proof decide.
 
@@ -106,7 +111,7 @@ What these **do not** catch: a low-criticality test can have unique coverage *an
 
 Process in **batches of 5 files**.
 
-**Large suite (> ~30 files):** fan the *read + annotate + private-call inventory* out to **read-only** audit subagents, one per cohesive domain group. Each returns its annotation table + cross-file subsumption notes and must NOT edit, delete, or write any file. The orchestrator resolves cross-file subsumption and executes **every** deletion/fix itself — keeping source-verification and cross-file safety in one place. Subagents systematically over-flag rule 6; treat their DELETE rows as candidates, not decisions, and re-verify each against source (see Same-branch proof) before removing.
+**Large suite (> ~30 files):** fan the *read + annotate + private-call inventory* out to **read-only** audit subagents, one per cohesive domain group. Each returns its annotation table + cross-file subsumption notes and must NOT edit, delete, or write any file. The orchestrator resolves cross-file subsumption and executes **every** deletion/fix itself — keeping source-verification and cross-file safety in one place. Subagents systematically over-flag rules 4, 5, and 6; treat their DELETE rows as candidates, not decisions, and re-verify each against source (see Same-branch proof) before removing. The recurring false positives: (rule 5) deleting the *sole* test that proves component A invokes B; (rule 4) mislabeling a computed-relationship or distinct-branch assertion as "shape"; (rule 6) deleting an "all-fields-present" test that is in fact the *inclusion* half of an inclusion/exclusion pair whose sibling tests only assert exclusion.
 
 **For each batch:**
 

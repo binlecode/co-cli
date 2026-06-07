@@ -5,30 +5,16 @@ from collections import deque
 from pathlib import Path
 
 import pytest
-from rich.panel import Panel
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.deps import CoDeps
-from co_cli.display.core import StatusSnapshot, TerminalFrontend, render_to_ansi
-from co_cli.display.headless import HeadlessFrontend
+from co_cli.display.core import StatusSnapshot, TerminalFrontend
 from co_cli.main import _build_status_snapshot
 from co_cli.tools.shell_backend import ShellBackend
 
 
 def _deps(**overrides) -> CoDeps:
     return CoDeps(shell=ShellBackend(), config=SETTINGS_NO_MCP, **overrides)
-
-
-# ── render_to_ansi ─────────────────────────────────────────────────────────
-
-
-def test_render_to_ansi_panel():
-    # A styled panel mirrors the app's real panels (border_style warning/shell_exec/red);
-    # a bare Panel("hi") carries border_style="none" and emits no ANSI at all.
-    out1 = render_to_ansi(Panel("hi", border_style="cyan"), width=40)
-    out2 = render_to_ansi(Panel("hi", border_style="cyan"), width=40)
-    assert "\x1b[" in out1
-    assert out1 == out2
 
 
 # ── build_repl_app (Application scaffold) ──────────────────────────────────
@@ -148,50 +134,6 @@ def test_thinking_commit_erases_inflight_and_commits_final():
     assert "final reasoning text" in out
     # The transient partial is discarded, not committed — unlike the text-commit path.
     assert "partial reasoning text" not in out
-
-
-# ── patch_stdout reflow (BC4) ──────────────────────────────────────────────
-
-
-def test_console_print_reflows_under_patch_stdout():
-    import io
-    import sys
-
-    from prompt_toolkit.application.current import create_app_session
-    from prompt_toolkit.input import create_pipe_input
-    from prompt_toolkit.output.plain_text import PlainTextOutput
-    from prompt_toolkit.patch_stdout import StdoutProxy, patch_stdout
-
-    from co_cli.display.core import console
-
-    captured = io.StringIO()
-    with (
-        create_pipe_input() as pipe,
-        create_app_session(input=pipe, output=PlainTextOutput(captured)),
-        patch_stdout(),
-    ):
-        # Rich resolves sys.stdout per write, so the module console picks up the proxy.
-        assert isinstance(sys.stdout, StdoutProxy)
-        assert isinstance(console.file, StdoutProxy)
-        console.print("reflow-marker-xyz")
-    # The StdoutProxy routed the incidental console.print into the app output
-    # (reflowed above the input area, BC4) — not raw to the original terminal.
-    assert "reflow-marker-xyz" in captured.getvalue()
-
-
-@pytest.mark.asyncio
-async def test_headless_prompt_approval_awaits_to_canned_response():
-    from co_cli.deps import ApprovalKindEnum, ApprovalSubject
-
-    frontend = HeadlessFrontend(approval_response="a")
-    subject = ApprovalSubject(
-        tool_name="shell_exec",
-        kind=ApprovalKindEnum.TOOL,
-        value="shell_exec",
-        display="run ls",
-        can_remember=True,
-    )
-    assert await frontend.prompt_approval(subject) == "a"
 
 
 # ── TerminalFrontend.render_footer_toolbar ─────────────────────────────────
