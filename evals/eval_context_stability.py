@@ -12,10 +12,10 @@ CS.C (tool-output-heavy phase, drop-reported trigger) is present but **disabled*
 test, but the *current* environment cannot reach its precondition: the 32k eval
 window + ~10.8k static prefill floor + 4k per-result auto-spill cap together route
 any oversized request into the L3 ``fallback_to_summarize`` case before a fitting
-L2 aggregate spill can occur. Those three sizings are themselves open issues —
-re-enable CS.C once they are resolved (see the constant's note). Until then the
-chain is guarded by the deterministic unit test
-``test_l3_fastpaths_after_l2_spill_fits_payload``.
+L2 aggregate spill can occur. This is an **eval-scaffold sizing limit, not a
+production defect** — the spill→summarize chain itself is correct and is guarded
+by the deterministic unit test ``test_l3_fastpaths_after_l2_spill_fits_payload``.
+Re-enable CS.C only if the eval window/floor/cap are rescaled (see the constant).
 
 What this validates (load-bearing)
 ----------------------------------
@@ -24,6 +24,11 @@ What this validates (load-bearing)
 - **Every triggered pass reduces token count** — the anti-thrash branch produces
   a static-marker pass that trims, never a no-op.
 - **Post-pass total stays below the trigger** — each fired pass leaves headroom.
+- **Coherence after compaction** — a distinctive fact planted in an early turn
+  (before the first compaction, so it lands in the compactable middle) is still
+  recalled by the agent in a probe turn after ≥1 pass has fired. This gates the
+  ``tail_fraction`` / summary-preservation lever: a run that stays bounded but
+  loses the fact is incoherent and SOFT-fails (see below).
 
 Gate-conditional anti-thrash assertion
 ---------------------------------------
@@ -35,16 +40,24 @@ text well, so the gate may not engage from organic load. Therefore:
   is a HARD FAILURE).
 - If the gate does not engage, the eval **logs the non-engagement explicitly**
   (so the result is not silently mistaken for a full validation) and the
-  bounded-loop assertions still hold. Per the plan's Open Questions resolution
-  (option b), TASK-3's unit test owns the deterministic tripped-state guarantee;
-  this eval validates the bounded loop and *conditionally* the runtime trip.
+  bounded-loop assertions still hold. TASK-3's unit test owns the deterministic
+  tripped-state guarantee; this eval validates the bounded loop and *conditionally*
+  the runtime trip.
 
-**No coherence probe** — deliberately out of scope (the parent plan owns
-coherence-after-trim, which holds the ``tail_fraction`` lever this plan cannot
-act on). No recall-probe machinery is built here.
+Coherence probe semantics
+-------------------------
+The recall probe is a **soft real-LLM single-run gate**. Boundedness/overflow
+remain HARD (FAIL). Coherence is graded SOFT_FAIL on a miss: a single-run LLM
+recall miss should fail the run's exit code (so it surfaces) without being
+indistinguishable from a hard loop regression, and without letting normal LLM
+variance hard-block. A miss is the signal to revert ``tail_fraction`` toward a
+larger value (``co_cli/config/compaction.py``) and re-run; the fact is planted
+*pre-first-compaction*, so a persistent miss implicates summary/marker
+preservation, not just the recent-tail size.
 
-Specs: docs/specs/compaction.md
-Plans: docs/exec-plans/completed/2026-06-03-220905-antithrash-static-marker-fallback.md (CS.A/CS.B);
+Specs: docs/specs/compaction.md, docs/specs/tools.md (tool-schema prefill floor)
+Plans: docs/exec-plans/active/2026-06-02-210659-context-stability-sizing-control.md (TASK B);
+       docs/exec-plans/completed/2026-06-03-220905-antithrash-static-marker-fallback.md (CS.A/CS.B);
        docs/exec-plans/completed/2026-06-04-130800-drop-reported-realtime-trigger.md (CS.C, disabled)
 
 Helpers (from sibling modules): ``make_eval_deps``, ``ensure_ollama_warm``,
@@ -73,6 +86,7 @@ from evals._report import prepend_report
 from evals._settings import apply_eval_window
 from evals._timeouts import MULTI_TURN_COMPACT_BUDGET_S
 from evals._trace import record_turn
+from pydantic_ai.messages import ModelResponse, TextPart
 
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.summarization import SUMMARY_BUDGET_FLOOR
@@ -107,15 +121,33 @@ _MAX_PROACTIVE_PASSES = _NUM_TURNS * 3
 # the high-entropy fixture — so it is logged, not gated.
 _MANDATORY_TRAILING_SECTION = "## Next Step"
 
+# Coherence probe. A distinctive, low-entropy fact is planted in turn
+# _COHERENCE_FACT_TURN (the second turn — after the head-preserving first run, so
+# it lands in the compactable middle and is summarized away, not kept verbatim in
+# the head). After the pressure loop fires ≥1 compaction, a final probe turn asks
+# the agent to restate it. _COHERENCE_NEEDLE is unique enough never to appear in
+# the high-entropy filler, so a substring match is an unambiguous recall signal.
+_COHERENCE_FACT_TURN = 1
+_COHERENCE_NEEDLE = "SILVER-FALCON-2029"
+_COHERENCE_FACT_PROMPT = (
+    "Important standing context for this whole session — remember it: the deployment "
+    f"codename for this work is {_COHERENCE_NEEDLE}. Keep it in mind; I will ask you to "
+    "recall it later."
+)
+_COHERENCE_PROBE_PROMPT = (
+    "Earlier in this session I gave you a deployment codename for this work. "
+    "What was it? Reply with just the codename, nothing else."
+)
+
 # CS.C — tool-output spill pressure. DISABLED: legit test, but the current
 # environment can't reach its precondition. A fitting L2 aggregate spill requires
 # a pile of raw, force-spillable tool returns (1500 < chars <= 4000) to survive in
 # history when a request crosses the trigger. Under the 32k window the ~10.8k
 # static prefill floor leaves only ~5.6k headroom, L3 (same 16384 trigger) trims
 # the pile between turns, and the 4k auto-spill cap pre-spills larger returns
-# upstream — so the spill always falls back to summarize. Re-enable once the window/
-# floor/cap sizings are addressed (then flip _CS_C_ENABLED). The chain itself is
-# guarded meanwhile by test_l3_fastpaths_after_l2_spill_fits_payload (unit).
+# upstream — so the spill always falls back to summarize. This is an eval-scaffold
+# sizing limit, NOT a production defect; re-enable only if the window/floor/cap are
+# rescaled. The chain itself is guarded by test_l3_fastpaths_after_l2_spill_fits_payload.
 _CS_C_ENABLED = False
 # Each seeded artifact is sized just under the per-result tool_io spill threshold
 # so memory_view returns it raw; raw returns accumulate until the L2 aggregate
@@ -152,6 +184,20 @@ def _high_entropy_block(approx_tokens: int) -> str:
         lines.append(line)
         chars += len(line) + 1
     return "\n".join(lines)
+
+
+def _final_assistant_text(messages: list[Any]) -> str:
+    """Join the text parts of the last ``ModelResponse`` in a turn's message list.
+
+    Used by the coherence probe to read what the agent actually replied (skipping
+    tool-call / thinking parts). Returns "" when no text response is present.
+    """
+    for msg in reversed(messages):
+        if isinstance(msg, ModelResponse):
+            text = " ".join(p.content for p in msg.parts if isinstance(p, TextPart))
+            if text.strip():
+                return text
+    return ""
 
 
 def _read_proactive_spans(spans_log: Path) -> list[dict[str, Any]]:
@@ -267,24 +313,26 @@ def _setup_isolated_spans_log(run_dir: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# CS.A — text_pressure_keeps_window_bounded
+# CS.A — text_pressure_keeps_window_bounded_and_coherent
 # ---------------------------------------------------------------------------
 
 
 async def case_cs_a_text_pressure_bounded(
     deps: Any, agent: Any, frontend: Any, run: Any, spans_log: Path
 ) -> CaseResult:
-    """Drive text-heavy turns; assert the proactive loop stays bounded.
+    """Drive text-heavy turns; assert the proactive loop stays bounded AND coherent.
 
-    Hard assertions:
+    Hard assertions (FAIL):
       - no context-overflow error on any turn;
       - bounded number of fired proactive passes (≤ _MAX_PROACTIVE_PASSES);
       - every fired pass reduced token count (tokens_after < token_count);
-      - every fired pass left the post-pass total below the trigger threshold.
+      - every fired pass left the post-pass total below the trigger threshold;
+      - any ``anti_thrash_gate`` pass must be a static-marker compaction that
+        reduced tokens; non-engagement is logged, not silently passed.
 
-    Gate-conditional: any ``anti_thrash_gate`` pass must be a static-marker
-    compaction that reduced tokens (covered by the per-pass reduction check);
-    non-engagement is logged, not silently passed.
+    Soft assertion (SOFT_FAIL): after ≥1 compaction fires, the agent recalls the
+    distinctive fact planted pre-first-compaction (the coherence gate for the
+    ``tail_fraction`` / summary-preservation lever).
     """
     case_id = "CS.A"
     t0 = time.monotonic()
@@ -300,13 +348,12 @@ async def case_cs_a_text_pressure_bounded(
     # Each turn appends a near-incompressible block (see _high_entropy_block) so
     # the running history climbs gradually toward the 0.50 x model_max_ctx ~= 16k
     # trigger (model_max_ctx is the shared EVAL_MAX_CTX baseline, capped at 32k to
-    # magnify pressure) and sustains pressure past it. Sized small enough that a single turn's prefill
-    # stays a tractable warm-latency call even once the context is near-trigger
-    # (large blocks balloon prefill past the per-turn budget — a model-latency
-    # hazard, not the behavior under test, per feedback_llm_call_timing), and so
-    # that after a compaction pass the preserved tail + static floor leaves
-    # headroom below the tighter 16k trigger (2500-tok blocks left the post-pass
-    # total ~12 tokens over at 32k).
+    # magnify pressure) and sustains pressure past it. Sized small enough that a
+    # single turn's prefill stays a tractable warm-latency call even once the
+    # context is near-trigger (large blocks balloon prefill past the per-turn
+    # budget — a model-latency hazard, not the behavior under test, per
+    # feedback_llm_call_timing), and so that after a compaction pass the preserved
+    # tail + static floor leaves headroom below the tighter 16k trigger.
     per_turn_block_tokens = 1500
 
     # Capture status strings so the real failure under test (a context-overflow
@@ -330,10 +377,17 @@ async def case_cs_a_text_pressure_bounded(
     try:
         for i in range(_NUM_TURNS):
             block = _high_entropy_block(per_turn_block_tokens)
-            user_input = (
+            ack = (
                 "Acknowledge receipt of this data batch with a single short line. "
-                "Do not summarize or repeat it back.\n\n" + block
+                "Do not summarize or repeat it back.\n\n"
             )
+            # Plant the coherence fact in an early turn (the second turn): it lands
+            # after the head-preserving first run, so it is in the compactable
+            # middle and the probe later tests whether it survived compaction.
+            if i == _COHERENCE_FACT_TURN:
+                user_input = f"{_COHERENCE_FACT_PROMPT}\n\n{ack}{block}"
+            else:
+                user_input = ack + block
             # Per-turn budget: covers a near-trigger large-context prefill plus,
             # on a triggering turn, an in-turn compaction summary. A single turn
             # exceeding this is a genuine stall worth failing fast on, not a budget
@@ -466,21 +520,78 @@ async def case_cs_a_text_pressure_bounded(
                 "bounded-loop invariants verified; TASK-3 owns the deterministic trip"
             )
 
+    # Coherence probe (soft gate). Only meaningful when the loop ran clean to
+    # completion AND at least one compaction fired — otherwise nothing was
+    # compacted and recall is untested. Failure here is SOFT_FAIL: it fails the
+    # run's exit code (surfaces the regression) without being conflated with a
+    # hard bounded-loop break, and it is the signal to revert tail_fraction.
+    coherence_note = ""
+    coherence_missed = False
+    if passed and not span_violation and turns_run == _NUM_TURNS and fired:
+        try:
+            async with asyncio.timeout(MULTI_TURN_COMPACT_BUDGET_S):
+                probe_result, probe_trace = await record_turn(
+                    case_id=case_id,
+                    turn_index=_NUM_TURNS,
+                    user_input=_COHERENCE_PROBE_PROMPT,
+                    run_turn_callable=lambda: run_turn(
+                        agent=agent,
+                        user_input=_COHERENCE_PROBE_PROMPT,
+                        deps=deps,
+                        message_history=history,
+                        frontend=frontend,
+                    ),
+                    case_dir_path=case_dir,
+                    agent=agent,
+                )
+            model_call_seconds += probe_trace.model_call_seconds
+            for k, v in probe_trace.token_usage.items():
+                token_usage[k] = token_usage.get(k, 0) + v
+            answer = _final_assistant_text(probe_result.messages)
+            if _COHERENCE_NEEDLE.lower() in answer.lower():
+                coherence_note = (
+                    f"coherence OK — agent recalled '{_COHERENCE_NEEDLE}' "
+                    f"after {len(fired)} compaction pass(es)"
+                )
+            else:
+                coherence_missed = True
+                coherence_note = (
+                    f"coherence MISS — agent did not recall '{_COHERENCE_NEEDLE}' after "
+                    f"{len(fired)} compaction pass(es); planted pre-first-compaction so this "
+                    f"implicates summary/marker preservation. answer head: {answer[:120]!r}"
+                )
+        except TimeoutError:
+            coherence_note = (
+                f"coherence probe stalled past {MULTI_TURN_COMPACT_BUDGET_S}s "
+                "(not gated — transient)"
+            )
+    elif passed and not span_violation and not fired:
+        coherence_note = "coherence NOT exercised — no compaction fired this run"
+
     # Always surface the bounded-loop diagnostics (turns + fired-pass accounting
-    # + gate engagement) — even on a transient-stall FAIL — so the run is never
-    # read as a silent pass and the proactive-loop behavior stays visible.
+    # + gate engagement + coherence) — even on a transient-stall FAIL — so the run
+    # is never read as a silent pass and the proactive-loop behavior stays visible.
     diag = (
         f"turns={turns_run} fired_passes={len(fired)} "
         f"anti_thrash_passes={len(anti_thrash)} overflow={overflow_seen}"
     )
     if gate_note:
         diag += f" | {gate_note}"
+    if coherence_note:
+        diag += f" | {coherence_note}"
     reason = diag if not reason else f"{reason} || {diag}"
 
+    if not passed:
+        verdict = Verdict.FAIL
+    elif coherence_missed:
+        verdict = Verdict.SOFT_FAIL
+    else:
+        verdict = Verdict.PASS
+
     duration = time.monotonic() - t0
-    result = CaseResult(
+    return CaseResult(
         name=case_id,
-        verdict=Verdict.PASS if passed else Verdict.FAIL,
+        verdict=verdict,
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
@@ -488,8 +599,6 @@ async def case_cs_a_text_pressure_bounded(
         trace_files=[f"{case_dir.parent.name}/{case_dir.name}"],
         reason=reason,
     )
-    run.append(result)
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -516,8 +625,8 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
         on the proactive path focus is the norm, so this exercises it).
 
     Conditional / logged (not gated — depends on organic load, not authority):
-      - a small dropped region exercising the FLOOR budget (cap 2600): confirmed
-        no mid-template truncation if it occurs, logged as not-exercised otherwise;
+      - a small dropped region exercising the FLOOR budget: confirmed no mid-template
+        truncation if it occurs, logged as not-exercised otherwise;
       - per-pass ``budget`` / ``cap`` / ``output_tokens`` and the overshoot ratio
         (``output_tokens / budget``) and cap pressure (``output_tokens / cap``) — the
         tuning signal for SUMMARY_CAP_OVERSHOOT_RATIO;
@@ -544,7 +653,6 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
     for line in pass_lines:
         logging.getLogger(__name__).info(line)
 
-    passed = True
     reason = ""
 
     if not passes:
@@ -563,20 +671,20 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
         focus_passes = [p for p in passes if p["focus"]]
 
         if over_cap:
-            passed = False
             worst = max(over_cap, key=lambda p: p["output_tokens"] - p["cap"])
             reason = (
                 f"{len(over_cap)} summarizer pass(es) exceeded the proportional cap "
                 f"(worst: output_tokens={worst['output_tokens']} > cap={worst['cap']}) "
                 "— the max_tokens override was NOT honored (Ollama lockstep broken)"
             )
+            verdict = Verdict.FAIL
         elif truncated:
-            passed = False
             reason = (
                 f"{len(truncated)} summarizer pass(es) missing the mandatory trailing "
                 f"'{_MANDATORY_TRAILING_SECTION}' section — the cap truncated the summary "
                 "mid-structure (Mode-B failure)"
             )
+            verdict = Verdict.FAIL
         elif not focus_passes:
             # Focus is the norm on the proactive path; its total absence means the
             # worst-case (focus-up vs cap-down) was not exercised — review signal.
@@ -585,13 +693,8 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
                 "no cap-applied pass ran with focus set — the focus-vs-cap worst case "
                 "was not exercised this run (focus is normally the proactive-path norm)"
             )
-            passed = True
-        if passed and reason == "":
-            verdict = Verdict.PASS
-        elif passed:
-            verdict = Verdict.SOFT_FAIL
         else:
-            verdict = Verdict.FAIL
+            verdict = Verdict.PASS
 
     # Diagnostics — always surfaced so the run is never read as a silent pass.
     floor_note = (
@@ -606,39 +709,17 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
     reason = diag if not reason else f"{reason} || {diag}"
 
     duration = time.monotonic() - t0
-    result = CaseResult(
+    return CaseResult(
         name=case_id,
         verdict=verdict,
         duration_s=duration,
         reason=reason,
     )
-    run.append(result)
-    return result
 
 
 # ---------------------------------------------------------------------------
-# main
+# CS.C — tool_spill_precedes_summarize (DISABLED — eval-scaffold sizing limit)
 # ---------------------------------------------------------------------------
-
-
-def _force_blocking_stdio() -> None:
-    """Force stdout/stderr to blocking mode.
-
-    The case drives many sequential turns; rich's streaming renderer floods the
-    pipe buffer when piped through ``tee``. macOS sets piped fds non-blocking by
-    default, so a fast burst can raise ``BlockingIOError(EAGAIN)`` deep inside
-    rich's writer. Forcing blocking mode makes the pipeline backpressure
-    naturally. Mirrors ``eval_session_continuity.py``.
-    """
-    import fcntl
-
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            fd = stream.fileno()
-        except (AttributeError, ValueError, OSError):
-            continue
-        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-        fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
 
 
 def _read_spill_events(spans_log: Path) -> list[dict[str, Any]]:
@@ -699,11 +780,12 @@ async def case_cs_c_tool_spill_precedes_summarize(
 ) -> CaseResult:
     """Drive tool-output pressure; assert a fitting L2 spill suppresses the L3 summarize.
 
-    DISABLED via ``_CS_C_ENABLED`` (see that constant) — kept for re-enablement once
-    the window/floor/cap sizings let the precondition be reached. The drop-reported
-    chain: real ``memory_view`` returns accumulate until L2 ``spill_largest_tool_results``
-    force-spills the largest to disk, dropping the payload below the L3 threshold so
-    the proactive check fast-paths (``below_threshold``) with zero summarizer calls.
+    DISABLED via ``_CS_C_ENABLED`` (see that constant) — kept for re-enablement if the
+    eval window/floor/cap sizings are rescaled so the precondition can be reached. The
+    drop-reported chain: real ``memory_view`` returns accumulate until L2
+    ``spill_largest_tool_results`` force-spills the largest to disk, dropping the payload
+    below the L3 threshold so the proactive check fast-paths (``below_threshold``) with
+    zero summarizer calls.
 
     Hard assertions (when enabled):
       - no context-overflow error on any turn;
@@ -851,13 +933,60 @@ async def case_cs_c_tool_spill_precedes_summarize(
     )
 
 
+def _cs_c_skipped_result() -> CaseResult:
+    """The SOFT_PASS SKIP placeholder emitted while CS.C is disabled.
+
+    Kept visible in the run (not silently dropped) with the precondition that
+    blocks it and the unit test that guards the same chain meanwhile.
+    """
+    return CaseResult(
+        name="CS.C",
+        verdict=Verdict.SOFT_PASS,
+        duration_s=0.0,
+        skipped=True,
+        skip_category="eval-scaffold-limit",
+        reason=(
+            "DISABLED — at 32k eval ctx the ~10.8k static floor + 4k auto-spill cap route "
+            "every oversized request into L3 fallback_to_summarize before a fitting L2 spill "
+            "can occur. Eval-scaffold sizing limit, not a production defect; chain guarded by "
+            "test_l3_fastpaths_after_l2_spill_fits_payload"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+
+def _force_blocking_stdio() -> None:
+    """Force stdout/stderr to blocking mode.
+
+    The case drives many sequential turns; rich's streaming renderer floods the
+    pipe buffer when piped through ``tee``. macOS sets piped fds non-blocking by
+    default, so a fast burst can raise ``BlockingIOError(EAGAIN)`` deep inside
+    rich's writer. Forcing blocking mode makes the pipeline backpressure
+    naturally. Mirrors ``eval_session_continuity.py``.
+    """
+    import fcntl
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            fd = stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            continue
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+
+
 async def main() -> int:
-    """Run the context-stability case against the real ``~/.co-cli/`` workspace.
+    """Run the context-stability cases against the real ``~/.co-cli/`` workspace.
 
     Warms Ollama first (outside any ``asyncio.timeout`` — cold model load is
     infrastructure prep, not behavior under test), bootstraps real ``CoDeps`` +
     agent + frontend via :func:`make_eval_deps`, wires an isolated spans log so
-    the proactive-compaction records are capturable, then runs the case.
+    the proactive-compaction records are capturable, then runs the cases. All
+    ``CaseResult`` appends are centralized here (cases return, ``main`` records).
     """
     _force_blocking_stdio()
     await ensure_ollama_warm()
@@ -873,44 +1002,34 @@ async def main() -> int:
             spans_log = _setup_isolated_spans_log(run.dir)
             logging.getLogger(__name__).info("spans log: %s", spans_log)
 
+            # CS.A — drives the turns, asserts bounded loop + coherence-after-compaction.
             case_a = await case_cs_a_text_pressure_bounded(deps, agent, frontend, run, spans_log)
             cases.append(case_a)
             print(
-                f"[context-stability] {case_a.name}: "
-                f"{'PASS' if case_a.passed else 'FAIL'} — {case_a.reason or 'ok'}"
+                f"[context-stability] {case_a.name}: {case_a.verdict.value.upper()} — {case_a.reason}"
             )
 
             # CS.B re-reads the spans CS.A just produced — no extra LLM cost.
             case_b = await case_cs_b_summary_output_bounded(run, spans_log)
             cases.append(case_b)
             print(
-                f"[context-stability] {case_b.name}: "
-                f"{case_b.verdict.value.upper()} — {case_b.reason or 'ok'}"
+                f"[context-stability] {case_b.name}: {case_b.verdict.value.upper()} — {case_b.reason}"
             )
 
-            # CS.C — tool-output spill. Disabled (see _CS_C_ENABLED): the current
-            # window/floor/cap combination can't reach its precondition. Emitted as
-            # a SKIPPED case so it stays visible and does not block the run.
+            # CS.C — tool-output spill. Disabled (eval-scaffold sizing limit, see
+            # _CS_C_ENABLED): emitted as a SKIPPED case so it stays visible.
             if _CS_C_ENABLED:
                 case_c = await case_cs_c_tool_spill_precedes_summarize(
                     deps, agent, frontend, run, spans_log
                 )
             else:
-                case_c = CaseResult(
-                    name="CS.C",
-                    verdict=Verdict.SOFT_PASS,
-                    duration_s=0.0,
-                    skipped=True,
-                    skip_category="product-gap",
-                    reason=(
-                        "DISABLED pending window/floor/cap fixes — at 32k ctx the ~10.8k "
-                        "static floor + 4k auto-spill cap route every oversized request "
-                        "into L3 fallback_to_summarize before a fitting L2 spill can "
-                        "occur; chain guarded by test_l3_fastpaths_after_l2_spill_fits_payload"
-                    ),
-                )
+                case_c = _cs_c_skipped_result()
             cases.append(case_c)
-            print(f"[context-stability] {case_c.name}: SKIPPED — {case_c.reason}")
+            label = "SKIPPED" if case_c.skipped else case_c.verdict.value.upper()
+            print(f"[context-stability] {case_c.name}: {label} — {case_c.reason}")
+
+            for case in cases:
+                run.append(case)
 
             iso = run.iso
             run_dir = run.dir

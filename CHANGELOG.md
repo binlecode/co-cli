@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.316]
+
+### context-stability TASK B — coherence gate + compaction production-logic audit
+
+Completes the context-stability-sizing-control plan. Closes the coherence half of the loop-stability
+guarantee (the eval previously validated boundedness only) and captures the audit's durable knowledge.
+
+- **`evals/eval_context_stability.py` rewritten** — adds a **coherence gate**: a distinctive fact is planted
+  pre-first-compaction (so it lands in the compactable middle), the bounded-loop pressure turns run, then the
+  agent is asked to restate it after ≥1 compaction pass. A bounded-but-incoherent run grades SOFT_FAIL;
+  boundedness/overflow stay HARD. House style reconciled (`run.append` centralized in `main()`); proven
+  span-readers preserved. Real-LLM run: **coherence passes at `tail_fraction 0.10`** (fact recalled after 7
+  compaction passes) — `tail_fraction` pinned 0.10, no revert. CS.C remains a documented eval-scaffold SKIP.
+- **Spec knowledge-baking** — `docs/specs/tools.md` gains a "Tool-schema prefill floor" section (the
+  ALWAYS-vs-DEFERRED budget criterion + guard, from the A1/A2 audit); `docs/specs/compaction.md`
+  cross-references it from the `static_floor_tokens` definition.
+- **`docs/ISSUE-compaction-production-logic.md`** (new) — 7 compaction production-logic findings surfaced by
+  the adversarial trace done during the rewrite, all verified cold with concrete fixes (led by no-convergence
+  guard + prompt-only marker preservation). Reported for a separate fix plan; none fixed here.
+
 ## [0.8.314]
 
 ### defer-recall-and-skill-edit-tools — shrink the ALWAYS tool-schema floor (context-stability A2)

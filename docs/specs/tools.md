@@ -38,6 +38,32 @@ graph LR
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 
+### Tool-schema prefill floor — the ALWAYS vs DEFERRED budget
+
+Visibility is not a per-tool preference; it is governed by a **prefill-floor budget**. Every ALWAYS tool's
+schema (name + description + minified-parameters JSON) is sent on *every* request, so the sum of ALWAYS
+schemas is an uncompactable floor: subtracted from the working middle on every turn, and a direct
+prefill-latency tax (trivial turns are prefill-bound). On a small local model with a fixed 64k window this
+floor directly bounds usable headroom, so the ALWAYS bucket is **capped and guarded**:
+
+- `measure_always_schema_budget(deps)` (`co_cli/bootstrap/schema_budget.py`) sums the ALWAYS bucket; the
+  guard `tests/test_orchestrator_schema_budget.py` pins `ALWAYS_BUCKET_CEILING` (a docstring re-bloat or a
+  new ALWAYS tool that breaches it fails the test).
+- The same measurement feeds `deps.static_floor_tokens` at bootstrap — the floor half of the realtime
+  compaction trigger (see [compaction.md](compaction.md) §1.5). Deferring a tool shrinks both at once.
+- **Current state:** 19 ALWAYS tools = **17,224 chars** (ceiling `17_700`).
+
+**The ALWAYS ↔ DEFERRED criterion.** A tool stays ALWAYS when the model reasons *with* it on most turns
+(`file_read`, `shell_exec`, `file_search`, `memory_search`, the planning + interaction primitives). A tool
+is DEFERRED when it is **episodic** — needed occasionally, not on the typical turn — so its schema should
+not ride the floor every turn. DEFERRED is *not* removal: a per-turn stub keeps the model aware of it
+(`build_deferred_tool_awareness_prompt`), and it loads its full schema on demand via `tool_view`. The trade
+is deliberate: a one-time `tool_view` round-trip on the rare turns the tool fires, in exchange for a smaller
+floor on every other turn. This is why cross-session recall (`session_search`/`session_view`), skill writes
+(all four `skill_*` write tools), background jobs (`task_*`), and the Google family are DEFERRED while the
+high-frequency primitives are not. The per-tool size × criticality tiering, usage-frequency grounding, and
+the full deferral cost model are in [`docs/REPORT-always-tool-schema-audit.md`](../REPORT-always-tool-schema-audit.md).
+
 ### Google credential setup & tool visibility
 
 The seven Google tools register unconditionally but are **hidden per turn** until a credential exists on disk. `_google_available` (`co_cli/tools/google/_auth.py`) is wired as each tool's `check_fn` (a pydantic-ai `prepare` hook), so **visibility, not registration, gates them** — a user with no Google setup never sees them, and a freshly-authorized token surfaces them on the next `co chat` with no settings.json edit.

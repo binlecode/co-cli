@@ -1,5 +1,45 @@
 # REPORT: context-stability
 
+## Run 2026-06-07T15:33:04+00:00
+
+**Summary:** 2 PASS · 0 FAIL · 1 SOFT_PASS · 0 SOFT_FAIL · 1 SKIP (total 3)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| CS.A | PASS | 287.40s | 287.39s | 270390 | turns=10 fired_passes=7 anti_thrash_passes=2 overflow=False | anti-thrash gate ENGAGED on 2 pass(es), each a static-marker compaction that reduced tokens | coherence OK — agent recalled 'SILVER-FALCON-2029' after 7 compaction pass(es) |
+| CS.B | PASS | 0.00s | 0.00s | - | summarizer_passes=5 focus_passes=5 | FLOOR-budget pass exercised (budget=2000, no mid-template truncation)
+  pass 0: budget=2000 cap=2600 output_tokens=623 focus=True overshoot=0.31 cap_pressure=0.24 savings_pct=6.9 critical_ctx=True
+  pass 1: budget=2000 cap=2600 output_tokens=653 focus=True overshoot=0.33 cap_pressure=0.25 savings_pct=9.1 critical_ctx=True
+  pass 2: budget=2000 cap=2600 output_tokens=521 focus=True overshoot=0.26 cap_pressure=0.20 savings_pct=6.8 critical_ctx=False
+  pass 3: budget=2000 cap=2600 output_tokens=527 focus=True overshoot=0.26 cap_pressure=0.20 savings_pct=9.2 critical_ctx=False
+  pass 4: budget=2000 cap=2600 output_tokens=515 focus=True overshoot=0.26 cap_pressure=0.20 savings_pct=6.7 critical_ctx=True |
+| CS.C | SKIP:eval-scaffold-limit | 0.00s | 0.00s | - | DISABLED — at 32k eval ctx the ~10.8k static floor + 4k auto-spill cap route every oversized request into L3 fallback_to_summarize before a fitting L2 spill can occur. Eval-scaffold sizing limit, not a production defect; chain guarded by test_l3_fastpaths_after_l2_spill_fits_payload |
+
+### Review signals
+
+- **CS.C** [SKIP:eval-scaffold-limit] — DISABLED — at 32k eval ctx the ~10.8k static floor + 4k auto-spill cap route every oversized request into L3 fallback_to_summarize before a fitting L2 spill can occur. Eval-scaffold sizing limit, not a production defect; chain guarded by test_l3_fastpaths_after_l2_spill_fits_payload
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | CS.A | 287.39s |
+
+### Regression vs prior run
+
+- CS.A: model-call ↑ 154.4s → 287.4s (+133.0s)
+- CS.C: new case (no prior run)
+
+### Trace files
+
+- **CS.A** — [case_CS.A.jsonl](../evals/_outputs/context-stability-20260607T153304Z/case_CS.A.jsonl) · `co trace t_af8fda412b2e0ab4`
+- **CS.B** — _(no trace)_
+- **CS.C** — _(no trace)_
+
+---
+
 ## Run 2026-06-05T03:53:09+00:00
 
 **Summary:** 2 PASS · 1 FAIL · 0 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 3)
