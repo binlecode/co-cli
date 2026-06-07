@@ -1,5 +1,53 @@
 # REPORT: memory
 
+## Run 2026-06-07T13:44:41+00:00
+
+**Summary:** 7 PASS · 0 FAIL · 0 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 7)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| W3.A | PASS | 18.63s | 18.63s | 22101 | agent saved eval-w3-fact-981fa7e0.md; FTS rows=1 |
+| W3.B | PASS | 15.66s | 15.66s | 79713 | W3.A hit at rank 1/1; snippet contains STG_DEPLOY_42 |
+| W3.C | PASS | 26.45s | 26.44s | 45217 | 2 session_search call(s); at least one returned hits |
+| W3.D | PASS | 0.02s | 0.00s | - | /memory list enumerates 'eval-w3-fact-981fa7e0' among 24 artifacts |
+| W3.E | PASS | 0.01s | 0.00s | - | file removed; FTS rows for eval-w3-fact-981fa7e0.md cleared |
+| W3.F | PASS | 32.34s | 0.00s | - | both tokens preserved across survivors+archive; merged=2 |
+| W3.G | PASS | 13.42s | 12.34s | 68114 | seed_deleted=True | judge.score=10 [judge_model_same_as_agent] The agent correctly reported no results after the memory item was deleted, confirming the deletion was successful. |
+
+### Review signals
+
+_(no review signals this run)_
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | W3.C | 26.44s |
+| 2 | W3.A | 18.63s |
+| 3 | W3.B | 15.66s |
+
+### Regression vs prior run
+
+- W3.A: model-call ↓ 40.3s → 18.6s (-21.6s)
+- W3.B: model-call ↓ 21.4s → 15.7s (-5.7s)
+- W3.C: model-call ↑ 8.8s → 26.4s (+17.6s)
+- W3.G: verdict SOFT_FAIL → PASS
+- W3.G: model-call ↓ 80.5s → 12.3s (-68.1s)
+
+### Trace files
+
+- **W3.A** — [case_W3.A.jsonl](../evals/_outputs/memory-20260607T134441Z/case_W3.A.jsonl)
+- **W3.B** — [case_W3.B.jsonl](../evals/_outputs/memory-20260607T134441Z/case_W3.B.jsonl)
+- **W3.C** — [case_W3.C.jsonl](../evals/_outputs/memory-20260607T134441Z/case_W3.C.jsonl)
+- **W3.D** — [case_W3.D.jsonl](../evals/_outputs/memory-20260607T134441Z/case_W3.D.jsonl)
+- **W3.E** — [case_W3.E.jsonl](../evals/_outputs/memory-20260607T134441Z/case_W3.E.jsonl)
+- **W3.F** — [case_W3.F.jsonl](../evals/_outputs/memory-20260607T134441Z/case_W3.F.jsonl)
+- **W3.G** — [case_W3.G.jsonl](../evals/_outputs/memory-20260607T134441Z/case_W3.G.jsonl)
+
+---
+
 ## Run 2026-06-03T13:13:09+00:00
 
 **Summary:** 6 PASS · 0 FAIL · 0 SOFT_PASS · 1 SOFT_FAIL · 0 SKIP (total 7)

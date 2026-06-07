@@ -1,5 +1,45 @@
 # REPORT: skills
 
+## Run 2026-06-07T13:43:10+00:00
+
+**Summary:** 4 PASS · 0 FAIL · 1 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 5)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| W4.A | PASS | 19.50s | 18.53s | 22156 | token + args present; judge score=10 [judge_model_same_as_agent] |
+| W4.B | PASS | 0.00s | 0.00s | - | env restored and active_skill_name cleared |
+| W4.C | PASS | 1.07s | 0.00s | - | create + patch + delete all observed on disk |
+| W4.D | PASS | 0.02s | 0.00s | - | built-in /help ran; user skill did not shadow |
+| W4.E | SOFT_PASS | 51.57s | 51.56s | 104628 | discovery 3/3 (gate PASS, need ≥2) — keep DEFERRED; stub_prompt=1832c; t0=HIT[load=1,manage=1,disk=1,fw=0], t1=HIT[load=1,manage=1,disk=1,fw=0], t2=HIT[load=1,manage=1,disk=1,fw=0] |
+
+### Review signals
+
+- **W4.E** [SOFT_PASS] — discovery 3/3 (gate PASS, need ≥2) — keep DEFERRED; stub_prompt=1832c; t0=HIT[load=1,manage=1,disk=1,fw=0], t1=HIT[load=1,manage=1,disk=1,fw=0], t2=HIT[load=1,manage=1,disk=1,fw=0]
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | W4.E | 51.56s |
+| 2 | W4.A | 18.53s |
+
+### Regression vs prior run
+
+- W4.A: model-call ↓ 34.0s → 18.5s (-15.4s)
+- W4.E: model-call ↓ 149.1s → 51.6s (-97.5s)
+
+### Trace files
+
+- **W4.A** — [case_W4.A.jsonl](../evals/_outputs/skills-20260607T134310Z/case_W4.A.jsonl) · `co trace t_5b6fff2f75ba8b5f`
+- **W4.B** — [case_W4.B.jsonl](../evals/_outputs/skills-20260607T134310Z/case_W4.B.jsonl)
+- **W4.C** — [case_W4.C.jsonl](../evals/_outputs/skills-20260607T134310Z/case_W4.C.jsonl)
+- **W4.D** — [case_W4.D.jsonl](../evals/_outputs/skills-20260607T134310Z/case_W4.D.jsonl)
+- **W4.E** — [case_W4.E.jsonl](../evals/_outputs/skills-20260607T134310Z/case_W4.E.jsonl)
+
+---
+
 ## Run 2026-06-03T13:00:33+00:00
 
 **Summary:** 4 PASS · 0 FAIL · 1 SOFT_PASS · 0 SOFT_FAIL · 0 SKIP (total 5)
